@@ -32,5 +32,8 @@ resolves to it — locally, use `make up-dev` and talk to the control plane on
    string instead of failing: the database starts with an empty password and
    nothing errors. Every Make target passes it, and every variable is written
    `${VAR:?...}` so the failure is loud.
-2. **`docker compose down -v` deletes the database volume.** It is not in any
-   Make target except `e2e-down`, where the data is disposable by design.
+2. **`docker compose down -v` deletes the database volume.** It is in exactly one
+   Make target, `e2e-down` — and that is safe only because the e2e stack is a
+   separate compose project (`-p hashi-e2e`, its own volumes, its own host ports
+   8100/55532). The dev and production stacks use project `hashi`. Merge the two
+   projects and `make e2e-down` starts wiping live data.

@@ -52,10 +52,10 @@ If Xavier reports the defect spans zones → stop, tell the owner, suggest
 
 ---
 
-## Phase 2 — Fix (developer, or lead → developer)
+## Phase 2 — Fix (the zone's developer, directly)
 
-Zone with a lead: spawn the lead to write the single developer task, then the
-developer. Zone without: spawn the developer directly.
+This project has no leads — every zone has exactly one developer, so Xavier's fix
+task goes straight to them. Spawn that developer.
 ```
 task-id: <task-id>
 Fix your task: docs/tracker/<task-id>/tasks/<from>-to-<dev>-fix-<task-id>.md

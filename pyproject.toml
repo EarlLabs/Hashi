@@ -39,3 +39,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Without importlib mode, two test modules with the same basename in different
+# directories (tests/control/test_scaffold.py and tests/edge/test_scaffold.py, or
+# two zones' e2e scenarios) collide with "import file mismatch".
+addopts = "--import-mode=importlib"

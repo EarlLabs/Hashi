@@ -53,15 +53,18 @@ test-infra:
 	$(PY) -m ruff check tests/infra
 	$(PY) -m pytest tests/infra -q
 
-# Acceptance scenarios. Needs a running stack (`make up-dev`) — it does not boot
-# one for you, because a target that boots and tears down hides which state a
-# failure came from. Scenarios live in tests/e2e/<zone>/, owned by that zone's
-# developer.
+# Acceptance scenarios, run against the disposable e2e stack (`make e2e-up`) —
+# never against your dev stack, and this target does not boot one for you,
+# because a target that boots and tears down hides which state a failure came
+# from. Scenarios live in tests/e2e/<zone>/, owned by that zone's developer.
+# Exit code 5 is pytest's "no tests ran": on a fresh clone there are no scenarios
+# yet, and that is a true statement rather than a failure.
 test-e2e:
 	$(need_venv)
-	@curl -fsS http://127.0.0.1:$${DEV_API_PORT:-8000}/healthz >/dev/null 2>&1 || { \
-	  echo "no stack on 127.0.0.1:$${DEV_API_PORT:-8000} — run: make up-dev"; exit 1; }
-	$(PY) -m pytest tests/e2e -q
+	@curl -fsS http://127.0.0.1:$(E2E_API_PORT)/healthz >/dev/null 2>&1 || { \
+	  echo "no e2e stack on 127.0.0.1:$(E2E_API_PORT) — run: make e2e-up"; exit 1; }
+	@$(PY) -m pytest tests/e2e -q; status=$$?; \
+	  if [ $$status -eq 5 ]; then echo "no e2e scenarios yet"; exit 0; fi; exit $$status
 
 lint:
 	$(need_venv)
@@ -88,10 +91,23 @@ ps:
 
 ## --- e2e (see .e2e/profile.yml) ---------------------------------------------
 
-e2e-up: up-dev
+# The e2e stack is a SEPARATE compose project with its own volumes and its own
+# host ports. That is what makes `down -v` safe here and nowhere else: it
+# destroys `hashi-e2e_*` volumes, never the `hashi_*` ones your dev stack uses.
+# Sharing a project between the two would mean one `make e2e-down` wipes the
+# database you were working against.
+E2E_PROJECT  := hashi-e2e
+E2E_API_PORT ?= 8100
+E2E_DB_PORT  ?= 55532
+COMPOSE_E2E  := docker compose --env-file .env -p $(E2E_PROJECT) \
+                -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml
+E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT)
+
+e2e-up: env
+	$(E2E_PORTS) $(COMPOSE_E2E) up -d --build
 
 e2e-down:
-	$(COMPOSE_DEV) down -v
+	$(E2E_PORTS) $(COMPOSE_E2E) down -v
 
 # Isolation is per-run (the stack is torn down with its volumes), so there is
 # nothing to reset between scenarios. Kept as a target so the profile can name it.

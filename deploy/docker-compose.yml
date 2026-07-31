@@ -8,6 +8,12 @@
 # HOW:  always run through the Makefile, which passes --env-file. Without it,
 #       ${VAR} resolves to "" instead of failing — hence ${VAR:?...} below.
 
+# Without this, the project name comes from the directory (`deploy`) — which
+# tells an operator nothing, and collides with every other project scaffolded
+# from this kit on the same host. The e2e stack deliberately overrides it with
+# `-p hashi-e2e` so its volumes are separate and disposable.
+name: hashi
+
 services:
   db:
     image: postgres:16.4-alpine

@@ -31,6 +31,9 @@ invariants §5), so a developer who needs one asks rather than edits.
    ```bash
    git checkout develop && git pull origin develop && git merge origin/main --no-edit
    ```
+   **This repository has no `origin` yet.** Until one exists, the local
+   equivalent is `git checkout develop && git merge main --no-edit` — and if you
+   skip it you will branch from a tree that is missing everything merged since.
 5. Before merging, the agent self-reviews its own PR diff and fixes what it finds.
 6. After merging, report to the project owner via `scripts/notify.sh`.
 7. **Merge conflicts are never auto-resolved and never reverted.** Report and stop.

@@ -87,8 +87,9 @@ Rules for every new surface:
   Unit tests in `tests/control/` only for pure branchy logic — token derivation,
   subscription serialisation, revocation fan-out.
 - **`make test-control` does not run the scenarios** (they need a booted stack).
-  Run `make up-dev` then `make test-e2e`, and say in your status file which of the
-  two you ran. "Verified" meaning only the fast one is how an unproven criterion
+  Run `make e2e-up` then `make test-e2e` — the e2e stack is a separate compose
+  project, so it never touches your dev database. Say in your status file which of
+  the two you ran. "Verified" meaning only the fast one is how an unproven criterion
   reaches acceptance.
 - The database in tests is a real Postgres (the dev compose stack), not SQLite.
   *Why: async drivers, JSONB and constraints all behave differently, and a test

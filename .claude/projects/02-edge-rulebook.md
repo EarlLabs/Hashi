@@ -80,9 +80,9 @@ plane to know its name has broken the charter's "new protocol is one package".
 - Unit tests only for pure branchy logic: parameter validation, port allocation,
   client-fragment serialisation.
 - Acceptance scenarios go in **`tests/e2e/edge/`** — owned by this zone, so two
-  developers never meet in one file. `make test-edge` does not run them: start a
-  stack with `make up-dev`, then `make test-e2e`, and say in your status file
-  which of the two you actually ran.
+  developers never meet in one file. `make test-edge` does not run them: start the
+  disposable stack with `make e2e-up`, then `make test-e2e`, and say in your
+  status file which of the two you actually ran.
 - Fixtures use **fake keys and reserved example domains** (`example.com`,
   `192.0.2.0/24`, `2001:db8::/32`). Never a real decoy host, never a real key.
 

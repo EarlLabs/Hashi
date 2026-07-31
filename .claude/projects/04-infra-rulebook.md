@@ -80,8 +80,8 @@ Adding a verb is fine; changing what an existing verb means is not.
   *Why: these are exactly the mistakes that are invisible until the day the stack
   is exposed to the internet.*
 - Acceptance scenarios go in **`tests/e2e/infra/`** — owned by this zone.
-  `make test-infra` does not run them; `make test-e2e` does, against a stack you
-  started with `make up-dev`.
+  `make test-infra` does not run them; `make test-e2e` does, against the stack
+  `make e2e-up` starts.
 - A test that needs Docker must **skip loudly** when the daemon is absent rather
   than pass vacuously.
 
@@ -113,5 +113,9 @@ restore — booting is `make up`, and a backup nobody has restored is not a back
 - **Backups are encrypted before they leave the host, and the private key never
   lives on the host.** A backup of this database is a copy of every user
   credential and every node key.
-- **`docker compose down -v` deletes the database volume.** It is never part of a
-  Make target, and never suggested to the owner as a fix for a stuck stack.
+- **`docker compose down -v` deletes the database volume.** It appears in exactly
+  one Make target, `e2e-down`, and only because the e2e stack is a **separate
+  compose project** (`-p hashi-e2e`) whose volumes are disposable by design. It is
+  never used against the `hashi` project, and never suggested to the owner as a
+  fix for a stuck stack. If you ever make the two share a project, this target
+  starts destroying live data — check the project name before touching it.
