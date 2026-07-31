@@ -1,0 +1,23 @@
+# hashi — reverse proxy.
+#
+# WHAT: TLS termination in front of the control plane.
+# WHY:  the access log is disabled deliberately. Request paths contain
+#       subscription tokens, and a subscription token is a bearer credential —
+#       logging one writes a live key to disk. See
+#       .claude/projects/04-infra-rulebook.md (Traps) and the matching rule in
+#       the control zone: both are needed, neither is sufficient alone.
+# HOW:  the admin endpoint stays on loopback so the healthcheck can reach it
+#       without exposing configuration to the network.
+
+{
+	email {$CADDY_ACME_EMAIL}
+	admin 127.0.0.1:2019
+}
+
+{$HASHI_PUBLIC_HOST} {
+	log {
+		output discard
+	}
+
+	reverse_proxy control:8000
+}

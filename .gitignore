@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Secrets: .env is real, .env.example is the template that is committed.
+.env
+*.key
+*.pem
+secrets/
+
+# e2e artifacts are per-run output, never history.
+.e2e/artifacts/
+
+.DS_Store

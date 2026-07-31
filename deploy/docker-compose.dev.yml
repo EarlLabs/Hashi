@@ -1,0 +1,21 @@
+# hashi — development overlay.
+#
+# WHAT: the ONLY file in this repo that publishes ports.
+# WHY:  keeping publication out of the base file means a production deployment
+#       cannot accidentally inherit an open database. If a port needs to be
+#       reachable in production, that is a deliberate decision made where the
+#       stack is deployed — never a leftover from someone's laptop.
+# HOW:  `make up-dev`. Every binding is pinned to 127.0.0.1: even on a laptop on
+#       a café network, nothing here is reachable from outside the machine.
+#       Host ports are overridable and default off the standard numbers, because
+#       a developer running another project's Postgres on 5432 should not have to
+#       stop it to work on this one.
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DEV_DB_PORT:-55432}:5432"
+
+  control:
+    ports:
+      - "127.0.0.1:${DEV_API_PORT:-8000}:8000"

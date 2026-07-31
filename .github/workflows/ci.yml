@@ -1,0 +1,28 @@
+# WHAT: lint and test every zone on push and pull request.
+# WHY:  the fleet verifies its own zone before review; CI is what catches the
+#       combination nobody ran locally.
+# HOW:  one job per zone, so a red build names the zone that broke.
+
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        zone: [control, edge, infra]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: setup
+        run: make setup
+      - name: verify ${{ matrix.zone }}
+        run: make test-${{ matrix.zone }}

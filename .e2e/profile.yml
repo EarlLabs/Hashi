@@ -1,0 +1,45 @@
+# hashi — how THIS project does e2e.
+#
+# WHAT: the five answers an e2e agent needs, as commands rather than concepts.
+# WHY:  written now, while the deployment shape is fresh, so it is accurate when
+#       something finally consumes it.
+# HOW:  nothing reads this file yet. The `/e2e` method file it pairs with does
+#       not exist in this repo (see docs/e2e/README.md §10 in the Kaizen repo —
+#       the command, the host script and the profile template are all still to be
+#       written). Treat this as a description, not as working automation.
+kit_version: 1
+
+env:
+  mode: local
+  isolation: per-run
+
+boot:
+  up:      "make e2e-up"
+  ready:   "curl -fsS http://127.0.0.1:8000/healthz"
+  timeout: 120
+  reset:   "make e2e-reset"     # isolation is per-run; nothing to reset
+  down:    "make e2e-down"
+
+run:
+  all:       ".venv/bin/pytest tests/e2e -q"
+  one:       ".venv/bin/pytest {file}::{name} -q"
+  write_to:  "tests/e2e/"
+  report:    "junit:.e2e/artifacts/{run}/results.xml"
+  artifacts: ".e2e/artifacts/{run}/"
+  on_fail:
+    - "docker compose --env-file .env -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml logs --no-color"
+
+needs:
+  - key:   HASHI_SECRET_KEY
+    where: host-env
+    why:   "the control plane refuses to boot without it"
+
+# The honesty section. Copy it into each scenario's docstring.
+boundary:
+  real:     [control, postgres]
+  stubbed:  []
+  external: []
+  # Deliberately absent, and the most important line here: NO real node, no real
+  # tunnel and no Russian network are part of any e2e run. Charter criterion 1
+  # ("survives a whitelist shutdown") cannot be proven by this suite — only by a
+  # real device on a real mobile network. Never report it as covered.

@@ -1,0 +1,71 @@
+# hashi — base stack (production shape).
+#
+# WHAT: the services the control plane needs to run.
+# WHY:  this file NEVER publishes a port. Everything reaches everything else on
+#       the internal network; only Caddy is meant to face the world, and only
+#       once a real deployment maps it. The dev overlay is the only file that
+#       opens anything, and only on 127.0.0.1.
+# HOW:  always run through the Makefile, which passes --env-file. Without it,
+#       ${VAR} resolves to "" instead of failing — hence ${VAR:?...} below.
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    volumes:
+      - hashi-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  control:
+    build:
+      context: ..
+      dockerfile: deploy/docker/control.Dockerfile
+    restart: unless-stopped
+    environment:
+      HASHI_SECRET_KEY: ${HASHI_SECRET_KEY:?set HASHI_SECRET_KEY in .env}
+      HASHI_PUBLIC_HOST: ${HASHI_PUBLIC_HOST:?set HASHI_PUBLIC_HOST in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  caddy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    environment:
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?set CADDY_ACME_EMAIL in .env}
+      HASHI_PUBLIC_HOST: ${HASHI_PUBLIC_HOST:?set HASHI_PUBLIC_HOST in .env}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      control:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  hashi-db:
+  caddy-data:
+  caddy-config:
