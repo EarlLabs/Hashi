@@ -12,7 +12,7 @@ PY          := $(VENV)/bin/python
 COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
-.PHONY: setup env test test-control test-edge test-infra lint \
+.PHONY: setup env test test-control test-edge test-infra test-e2e lint \
         up up-dev down logs ps e2e-up e2e-down e2e-reset
 
 ## --- setup ------------------------------------------------------------------
@@ -33,6 +33,9 @@ endef
 
 ## --- verification -----------------------------------------------------------
 
+# Static verification of all three zones. Deliberately does NOT include e2e:
+# those need a booted stack, and a `make test` that silently requires Docker is a
+# `make test` that agents start skipping. Run `make test-e2e` separately.
 test: test-control test-edge test-infra
 
 test-control:
@@ -49,6 +52,16 @@ test-infra:
 	$(need_venv)
 	$(PY) -m ruff check tests/infra
 	$(PY) -m pytest tests/infra -q
+
+# Acceptance scenarios. Needs a running stack (`make up-dev`) — it does not boot
+# one for you, because a target that boots and tears down hides which state a
+# failure came from. Scenarios live in tests/e2e/<zone>/, owned by that zone's
+# developer.
+test-e2e:
+	$(need_venv)
+	@curl -fsS http://127.0.0.1:$${DEV_API_PORT:-8000}/healthz >/dev/null 2>&1 || { \
+	  echo "no stack on 127.0.0.1:$${DEV_API_PORT:-8000} — run: make up-dev"; exit 1; }
+	$(PY) -m pytest tests/e2e -q
 
 lint:
 	$(need_venv)

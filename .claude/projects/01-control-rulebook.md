@@ -82,9 +82,14 @@ Rules for every new surface:
 ## Testing
 
 - **pytest** + **pytest-asyncio**, `httpx.AsyncClient` against the ASGI app.
-- One e2e scenario per acceptance criterion in `tests/e2e/`. Unit tests in
-  `tests/control/` only for pure branchy logic — token derivation, subscription
-  serialisation, revocation fan-out.
+- One e2e scenario per acceptance criterion in **`tests/e2e/control/`** — this
+  zone owns that directory, which is why two developers never meet in one file.
+  Unit tests in `tests/control/` only for pure branchy logic — token derivation,
+  subscription serialisation, revocation fan-out.
+- **`make test-control` does not run the scenarios** (they need a booted stack).
+  Run `make up-dev` then `make test-e2e`, and say in your status file which of the
+  two you ran. "Verified" meaning only the fast one is how an unproven criterion
+  reaches acceptance.
 - The database in tests is a real Postgres (the dev compose stack), not SQLite.
   *Why: async drivers, JSONB and constraints all behave differently, and a test
   suite that passes on SQLite proves nothing about production.*

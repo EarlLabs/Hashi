@@ -45,7 +45,8 @@ leftover from a laptop.
 | `make test-control` | the control plane — API, panel, delivery, persistence |
 | `make test-edge` | the data plane — transport profiles, rendering, bootstrap |
 | `make test-infra` | the deployment description — exposure, healthchecks, pinning |
-| `make test` | all three |
+| `make test` | all three, statically — no Docker needed |
+| `make test-e2e` | acceptance scenarios, against a stack you started with `make up-dev` |
 
 A green suite proves the code holds together. It proves nothing about whether a
 transport survives DPI, and nothing about the charter's first success criterion —

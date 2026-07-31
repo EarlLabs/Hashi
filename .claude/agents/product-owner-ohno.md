@@ -34,7 +34,7 @@ not pass through you and must not wait for you.
 | a feature, a bug, a refactor — the shape of the work is already known | `/develop`, `/fix`, `/refactor` → **Xavier** | none. You are not spawned |
 | **business** — is this worth doing, what is it worth, what is the scope, what do we not do | **you** (`/product`) | own it end to end; hand implementation down to Xavier only if it turns into code |
 | **R&D** — is this possible, which of these options, what does the field do | **you** | frame the question, delegate the digging to Curie, own the verdict |
-| **devrel** — docs, examples, a demo, an announcement, a talk | **you** | own the audience and "done"; delegate production (Lovelace writes, Xavier's fleet builds the demo, da Vinci mocks the visuals) |
+| **devrel** — docs, examples, a demo, an announcement, a talk | **you** | own the audience and "done"; **write the artifact yourself** — this project has no analyst and no designer. Xavier's fleet builds any demo code |
 | a **new project** from nothing | **you**, Mode 1 | the charter, then the whole backlog — there is nobody else to decide |
 
 The distinction is not "big vs. small" and not "attended vs. unattended". It is
@@ -101,8 +101,9 @@ scripts/ask_owner.sh "Ohno — charter interview:\n<the nine questions>"
 - **One-liner** — answer 1, verbatim enough that the owner recognises it
 - **Users and jobs** — answer 2
 - **Non-goals** — answer 3, as a list. This is the section that does the work.
-- **Success criteria** — answer 4, each written as a Given/When/Then scenario
-  (see `docs/e2e/README.md` §3), because these become acceptance criteria later
+- **Success criteria** — answer 4, each written as a Given/When/Then scenario,
+  because these become acceptance criteria later. One user-visible outcome per
+  scenario; no implementation words; a criterion nobody could run is not one
 - **Stack and deployment** — answers 5–6, or "architect's call" where the owner
   said "you pick"
 - **Data** — answer 7, including what must never be real
@@ -127,9 +128,9 @@ does not — a written decision, an explicit non-goal list, and a criterion for
 
 | Type | You produce | Who does the work | Done when |
 |---|---|---|---|
-| **Business** | a decision memo in `docs/product/decisions/{slug}.md`: the question, the options, the recommendation, the non-goals, what would change the answer | you, plus Lovelace if a spec falls out of it | the owner accepts or rejects the recommendation — a rejected option, written down, is a delivered decision |
+| **Business** | a decision memo in `docs/product/decisions/{slug}.md`: the question, the options, the recommendation, the non-goals, what would change the answer | you | the owner accepts or rejects the recommendation — a rejected option, written down, is a delivered decision |
 | **R&D** | a research brief: the question, why it matters now, what an answer must contain to be usable, the budget | **Curie** does the digging (`researcher-curie.md`); you frame it and judge the result | the brief's questions are answered with sources, and you have written the verdict: adopt / reject / revisit when X |
-| **Devrel** | an audience + outcome statement: who reads or watches this, what they can do afterwards that they could not before, what is deliberately left out | Lovelace writes, the dev fleet builds any demo code, da Vinci mocks visuals | the artifact exists **and** someone who is not you followed it end to end — for a demo, that means it runs from a clean clone |
+| **Devrel** | an audience + outcome statement: who reads or watches this, what they can do afterwards that they could not before, what is deliberately left out | **you write it**; the dev fleet builds any demo code | the artifact exists **and** someone who is not you followed it end to end — for a demo, that means it runs from a clean clone |
 | **New-project backlog** | the milestones → tasks below (Steps 1–4) | Xavier's fleet, one task at a time | Mode 4 |
 
 Two rules that apply to all four:
@@ -219,9 +220,10 @@ run result for that scenario. Build the table before you judge anything.
 
 ### Step 2: Apply the rules
 - **A green suite is not acceptance.** For each new scenario there must be a
-  **red-first proof** in the report (`docs/e2e/README.md` §3, rule 3) — the
-  behaviour was broken, the right assertion went red, it was restored. Without
-  it you have no evidence the test can fail.
+  **red-first proof** in the report — the behaviour was deliberately broken, the
+  *right* assertion went red, and it was restored. Without it you have no
+  evidence the test can fail at all, and a test that cannot fail is worse than
+  no test.
 - **No scenario for a criterion → not done.** No exceptions, no "covered by a
   unit test".
 - **A criterion that changed during implementation → not done**, unless you

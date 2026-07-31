@@ -12,12 +12,14 @@ never shared.
 
 | Zone | Label | Paths | Rulebook | Verify | Owner |
 |---|---|---|---|---|---|
-| `control` | Control plane: API, admin panel, subscription delivery, persistence | `control/**`, `tests/control/**` | `.claude/projects/01-control-rulebook.md` | `make test-control` | Thomas Anderson (`dev-anderson`) |
-| `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` | John von Neumann (`dev-neumann`) |
-| `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `tests/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` | Pepper Potts (`dev-potts`) |
+| `control` | Control plane: API, admin panel, subscription delivery, persistence | `control/**`, `tests/control/**`, `tests/e2e/control/**` | `.claude/projects/01-control-rulebook.md` | `make test-control` | Thomas Anderson (`dev-anderson`) |
+| `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` | John von Neumann (`dev-neumann`) |
+| `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` | Pepper Potts (`dev-potts`) |
 
-`docs/**` and `.claude/**` belong to no zone — they are owner and architect
-territory, written by whoever the workflow assigns.
+`docs/**`, `.claude/**` and `pyproject.toml` belong to no zone — they are owner
+and architect territory, written by whoever the workflow assigns. `pyproject.toml`
+is deliberately among them: adding a dependency is an architect decision (core
+invariants §5), so a developer who needs one asks rather than edits.
 
 ---
 ## Branch & merge model

@@ -24,12 +24,17 @@ control plane → node, always. A node NEVER dials the control plane.
 
 | Zone | Paths | Rulebook | Verify |
 |---|---|---|---|
-| `control` | `control/**`, `tests/control/**` | `.claude/projects/01-control-rulebook.md` | `make test-control` |
-| `edge` | `edge/**`, `tests/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` |
-| `infra` | `deploy/**`, `.github/**`, `Makefile`, `tests/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` |
+| `control` | `control/**`, `tests/control/**`, `tests/e2e/control/**` | `.claude/projects/01-control-rulebook.md` | `make test-control` |
+| `edge` | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` |
+| `infra` | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` |
 
 A developer edits one zone. Cross-zone work is split into separate tasks, never
-shared files. `docs/**` and `.claude/**` belong to no zone.
+shared files. Acceptance scenarios are split the same way — `tests/e2e/<zone>/` —
+so two developers never land in the same file.
+
+`docs/**`, `.claude/**` and `pyproject.toml` belong to no zone. `pyproject.toml`
+is architect territory on purpose: adding a dependency is an architect decision,
+so a developer who needs one asks instead of editing.
 
 ## Hard rules
 

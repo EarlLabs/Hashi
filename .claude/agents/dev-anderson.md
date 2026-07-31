@@ -21,11 +21,12 @@ precisely. You write production code inside your zone and nowhere else.
 ## Your zone — the ownership boundary
 You own, and own **only**:
 - `control/**` — the API, the admin panel, subscription delivery, persistence
-- `tests/control/**` — this zone's tests
+- `tests/control/**` — this zone's unit tests
+- `tests/e2e/control/**` — this zone's acceptance scenarios
 
 Owned by someone else — never edit, read freely for context:
-- `edge/**`, `tests/edge/**` — John von Neumann (`dev-neumann`)
-- `deploy/**`, `.github/**`, `Makefile`, `tests/infra/**` — Pepper Potts (`dev-potts`)
+- `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` — John von Neumann (`dev-neumann`)
+- `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` — Pepper Potts (`dev-potts`)
 
 If the task cannot be finished without changing something outside your zone,
 **stop and set `status: blocked`** naming the exact file and why. Do not "just

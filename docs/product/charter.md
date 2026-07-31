@@ -79,7 +79,7 @@ proven data-plane software; the data plane itself is upstream code we configure.
 
 | Layer | Choice | Why |
 |---|---|---|
-| Control plane | Python 3.12, FastAPI, SQLAlchemy async, PostgreSQL | Matches what the owner already reads and maintains in Kaizen; one language across the repo means fewer rulebooks and no context switch |
+| Control plane | Python 3.14, FastAPI, SQLAlchemy async, PostgreSQL | Matches what the owner already reads and maintains in Kaizen; one language across the repo means fewer rulebooks and no context switch. **3.14, not the 3.12 named at approval**: 3.12 is not installed on the owner's machine and 3.14 is, and a local venv on a different minor than the container is the trap where "works locally" and "works in the stack" quietly diverge |
 | Admin panel | Server-rendered Jinja + HTMX | An internal panel for one operator. Keeps the panel inside the `control` zone instead of buying a frontend zone, a build pipeline and two more agents |
 | Data plane (primary) | Xray-core: **VLESS + Reality + XTLS-Vision** | The only family reported working reliably against TSPU in 2026: Reality borrows a real third-party TLS handshake, so active probing sees the decoy site, not us |
 | Data plane (fallback) | **AmneziaWG** (obfuscated WG), VLESS+WS+TLS behind a camouflage site | Independent failure modes: when TLS handshakes are being degraded, a UDP-shaped transport may live, and vice versa |
@@ -137,9 +137,9 @@ documentation, local compose changes, anything runnable on the owner's machine.
 
 | Key | Label | Paths | Rulebook | Verify |
 |---|---|---|---|---|
-| `control` | Control plane: API, admin panel, subscription delivery, persistence | `control/**`, `tests/control/**` | `01-control-rulebook.md` | `make test-control` |
-| `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**` | `02-edge-rulebook.md` | `make test-edge` |
-| `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `tests/infra/**` | `04-infra-rulebook.md` | `make test-infra` |
+| `control` | Control plane: API, admin panel, subscription delivery, persistence | `control/**`, `tests/control/**`, `tests/e2e/control/**` | `01-control-rulebook.md` | `make test-control` |
+| `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `02-edge-rulebook.md` | `make test-edge` |
+| `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `04-infra-rulebook.md` | `make test-infra` |
 
 `docs/**` and `.claude/**` belong to no zone: they are owner and architect
 territory, written by whoever the workflow assigns.

@@ -8,10 +8,20 @@
 #       the control zone: both are needed, neither is sufficient alone.
 # HOW:  the admin endpoint stays on loopback so the healthcheck can reach it
 #       without exposing configuration to the network.
-
 {
 	email {$CADDY_ACME_EMAIL}
 	admin 127.0.0.1:2019
+
+	# Silences the DEFAULT logger, which is not the same thing as the per-site
+	# one below. Without this, any request that does not match the site block —
+	# by IP, or by another name resolving here — is written to stderr with its
+	# full URI, and so is every http.log.error (a 502 while the control plane
+	# restarts is exactly when a friend is refreshing a subscription). Both
+	# paths end up in the container log on disk, and the URI contains a live
+	# subscription token.
+	log {
+		output discard
+	}
 }
 
 {$HASHI_PUBLIC_HOST} {

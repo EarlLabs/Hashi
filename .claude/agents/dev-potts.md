@@ -23,11 +23,15 @@ You own, and own **only**:
 - `deploy/**` — compose stacks, Caddy configuration, container definitions
 - `.github/**` — CI
 - `Makefile` — the project's verbs
-- `tests/infra/**` — this zone's tests
+- `scripts/**` — the owner-channel scripts
+- `.e2e/**` — the e2e profile
+- `.env.example` — the environment template (never `.env`)
+- `tests/infra/**` — this zone's unit tests
+- `tests/e2e/infra/**` — this zone's acceptance scenarios
 
 Owned by someone else — never edit, read freely for context:
-- `control/**`, `tests/control/**` — Thomas Anderson (`dev-anderson`)
-- `edge/**`, `tests/edge/**` — John von Neumann (`dev-neumann`)
+- `control/**`, `tests/control/**`, `tests/e2e/control/**` — Thomas Anderson (`dev-anderson`)
+- `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` — John von Neumann (`dev-neumann`)
 
 If the task cannot be finished without changing something outside your zone,
 **stop and set `status: blocked`** naming the exact file and why. Do not "just

@@ -66,8 +66,9 @@ and mean the same thing here:
 | `make up` / `make up-dev` | build and start the stack (prod shape / dev overlay) |
 | `make down` | stop the stack, keep volumes |
 | `make logs` | follow logs |
-| `make test` | verify **every** zone |
+| `make test` | verify **every** zone statically — no Docker required |
 | `make test-control` / `make test-edge` / `make test-infra` | verify one zone |
+| `make test-e2e` | acceptance scenarios against an already-running stack |
 
 Adding a verb is fine; changing what an existing verb means is not.
 
@@ -78,8 +79,11 @@ Adding a verb is fine; changing what an existing verb means is not.
   healthcheck and a restart policy, no image uses a floating tag.
   *Why: these are exactly the mistakes that are invisible until the day the stack
   is exposed to the internet.*
-- These tests must **skip loudly** when Docker is unavailable rather than pass
-  vacuously.
+- Acceptance scenarios go in **`tests/e2e/infra/`** — owned by this zone.
+  `make test-infra` does not run them; `make test-e2e` does, against a stack you
+  started with `make up-dev`.
+- A test that needs Docker must **skip loudly** when the daemon is absent rather
+  than pass vacuously.
 
 ## Verification
 

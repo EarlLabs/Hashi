@@ -65,4 +65,5 @@ Switched to develop. Ready for next command."
 
 - This command ONLY discards local changes. It does NOT delete remote branches or close PRs.
 - If a PR was already created, notify the project owner so they can close it manually if needed.
-- After abort, the task goes back to `idle` — it can be picked up again by `/next`.
+- After abort, the task's tracker directory stays on the record. To pick the work
+  up again, re-run `/develop <task-id>` — there is no queue in this project.
