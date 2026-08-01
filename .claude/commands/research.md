@@ -39,6 +39,27 @@ scripts/notify.sh "🔬 Начинаю исследование: \"$TOPIC\"
 
 ---
 
+## Phase 0 — Who owns this question
+
+**Whoever frames the brief judges the answer.** So decide the owner before
+spawning anybody:
+
+- **Technical** — which library, which algorithm, does this API support X, what
+  does it cost to run, is it feasible → **Xavier**, continue below.
+- **Product** — is this worth doing, which option serves users better, what does
+  the field do, what should we build next → **the Product Owner**. If
+  `product-owner-ohno` is installed here, **stop and tell the owner to run
+  `/product`** instead. Do not answer it through Xavier: the verdict on a product
+  research question is a decision about *what*, and routing it through the
+  architect quietly makes them the product owner.
+- **No PO installed** → both kinds are Xavier's. That is the fallback, not the
+  norm.
+
+If the question is genuinely both, split it: the product half to `/product`, the
+technical half here, each with its own brief.
+
+---
+
 ## Phase 1 — Scope & Clarifying Questions (Xavier)
 
 Spawn sub-agent `architect-xavier` with:
@@ -48,7 +69,7 @@ task-id: <task-id>
 
 This is a /research pipeline. Analyze the topic.
 If the topic is clear — skip questions, write the research task for Curie immediately.
-If the topic is ambiguous — form clarifying questions and send them via notify.sh.
+If the topic is ambiguous — form clarifying questions and send them via scripts/notify.sh.
 
 Your deliverable: docs/tracker/<task-id>/tasks/xavier-to-curie-<task-id>.md
 Also update: docs/tracker/<task-id>/status/architect-xavier.yml

@@ -15,10 +15,12 @@ env:
 
 boot:
   # The e2e stack is its own compose project (hashi-e2e) on its own ports, so it
-  # never shares a volume with the dev stack. Probe 8100, not 8000 — 8000 is the
-  # dev stack, and probing it would report "ready" for a stack that is not up.
+  # never shares a volume with the dev stack. Probe 58100, not 58000 — 58000 is
+  # the dev stack, and probing it would report "ready" for a stack that is
+  # not up. Neither is a service default: the host already runs something on
+  # 8000.
   up:      "make e2e-up"
-  ready:   "curl -fsS http://127.0.0.1:8100/healthz"
+  ready:   "curl -fsS http://127.0.0.1:58100/healthz"
   timeout: 120
   reset:   "make e2e-reset"     # isolation is per-run; nothing to reset
   down:    "make e2e-down"

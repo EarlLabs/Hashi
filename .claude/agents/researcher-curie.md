@@ -96,13 +96,13 @@ Write the report in English — the headings above are the structure, not the wo
 ### Step 4: Update Status
 Update `docs/tracker/{task-id}/status/researcher-curie.yml`:
 ```yaml
-agent: curie
+agent: researcher-curie
 role: researcher
 task: "{research topic}"
-status: done
+state: done
 output: "docs/research/{task-id}/research.md"
 search_queries: {count}
-updated: {timestamp}
+updated_at: {timestamp}
 ```
 
 ---

@@ -143,7 +143,7 @@ TRACKER_ID=$(echo "$TASK_RECORD" | python3 -c 'import json,sys; print(json.load(
 {{TRACKER_CMD}} task:status "$TRACKER_ID" in_progress
 ```
 
-Remember `$TRACKER_ID` — use it for all `tracker.sh task:*` calls throughout this pipeline.""",
+Remember `$TRACKER_ID` — use it for all `{{TRACKER_CMD}} task:*` calls throughout this pipeline.""",
      """**This project has no tracker service and no queue.** The decomposition lands in
 the backlog that Ohno owns (`docs/product/backlog.md`), and tasks are started one
 at a time with `/develop`. There is nothing to register and no id to remember."""),
@@ -356,10 +356,6 @@ record is what stops the same work being restarted blindly next week."""),
   *right* assertion went red, and it was restored. Without it you have no
   evidence the test can fail at all, and a test that cannot fail is worse than
   no test."""),
-
-    ("agents/product-owner-ohno.md",
-     "- **The owner channel.** Here it is `ask_user.sh` / `notify.sh`. In a project",
-     "- **The owner channel.** Here it is `scripts/ask_owner.sh` / `scripts/notify.sh`. In a project"),
 
     # ----------------------------------------------------------------- holmes
     ("agents/security-holmes.md",

@@ -17,7 +17,8 @@ business questions, R&D questions, devrel work, or a brand-new project.
 | "clean up W" | `/refactor` |
 | "break this epic into tasks" | `/epic` |
 | "should we do X / what is it worth / what is the scope" | `/product` |
-| "is X possible / which of A, B, C" | `/product` (R&D) |
+| "is this worth doing / which option serves users" | `/product` (R&D) |
+| "which library / does this API support X / is it technically feasible" | `/research` — the architect frames and judges technical questions |
 | "docs, an example, a demo, an announcement" | `/product` (devrel) |
 | "start a new project from nothing" | `/product` (charter) |
 
@@ -78,7 +79,7 @@ Produce the deliverable for this type (Mode 2, Step 0 table):
 - devrel   → audience + outcome statement: who, what they can do afterwards,
              what is deliberately excluded
 - new project → docs/product/charter.md (approved first) then docs/product/backlog.md
-Send the plan to the owner for confirmation via notify.sh.
+Send the plan to the owner for confirmation via scripts/notify.sh.
 ```
 
 **STOP. Wait for confirmation.** Changes requested → re-spawn Ohno, repeat.
@@ -89,7 +90,8 @@ Send the plan to the owner for confirmation via notify.sh.
 
 Ohno does not produce the artifact. Spawn the agent that does:
 
-**R&D** → `researcher-curie`:
+**R&D** (product-shaped only — a purely technical question belongs to
+`/research`, where the architect frames and judges it) → `researcher-curie`:
 ```
 task-id: <task-id>
 Research brief: docs/tracker/<task-id>/tasks/ohno-to-curie-<task-id>.md

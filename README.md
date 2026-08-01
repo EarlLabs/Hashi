@@ -30,7 +30,7 @@ backlog.
 make setup      # create .venv and install dependencies (needs Python 3.14)
 make test       # verify every zone
 make up-dev     # build and start the stack, ports on 127.0.0.1 only
-curl -fsS http://127.0.0.1:8000/healthz
+curl -fsS http://127.0.0.1:58000/healthz
 make down
 ```
 

@@ -103,17 +103,26 @@ file: what it is, who is allowed to reach it, how that is enforced, and what
 happens on invalid input. An unlisted surface is treated as an unreviewed one.
 
 ### Step 7: Update status
-`docs/tracker/{task-id}/status/dev-anderson.yml`:
+`docs/tracker/{task-id}/status/dev-anderson.yml` — **the filename and the
+`agent:` value are both the full persona slug**, because that is the key the
+tracker joins your live state onto. Write `dev-anderson`, never `anderson`:
 ```yaml
-agent: anderson
+agent: dev-anderson
 role: dev
 zone: control
 task: "{feature or sub-feature}"
-status: in_progress      # in_progress | blocked | review
+state: in_progress       # in_progress | blocked | review | done
 progress: "what is done so far"
 blockers: null
-updated: {timestamp}
+updated_at: {timestamp}
 ```
+Use `state:`, not `status:` — this file is read by machines as well as by your
+lead, and the field the tracker mirrors is `state`.
+
+**Update it at every transition, not once at the end.** The owner watches this
+file (and the panel it feeds) to know whether the fleet is moving; an agent that
+writes its status only when finished is indistinguishable from one that is
+stuck, and the whole fleet view is worth nothing.
 When moving to `review`, the entry MUST also carry:
 ```yaml
 pre_read: [list of the files you actually read]

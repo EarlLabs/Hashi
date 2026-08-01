@@ -152,6 +152,16 @@ Xavier verifies that the sum of the changes matches the original request: every
 criterion has a corresponding change, contracts are consistent, no zone was
 edited by two owners, verification passes. This is the **technical** check.
 
+### Reporting cadence and merge authority
+How often the owner hears from the fleet, and whether it may merge its own PRs,
+is one setting: the **autonomy level** in `.claude/git-workflow.md`
+(L0 review each PR · L1 batch · L2 autonomous merge into
+`develop`). `main` is never agent-merged at any level.
+
+Batching lowers the noise, never the escalation: a blocked agent, a red gate, an
+exhausted budget or a question for the owner goes out immediately at every level,
+and stops the queue.
+
 ### Phase 8: Acceptance (Taiichi Ohno) — only for work the PO dispatched
 Independent product-level accept/reject: each acceptance criterion traced to the
 e2e scenario that proves it and the run result, **including the red-first proof**
@@ -178,18 +188,25 @@ with its reason — that is the record of a decision.
 acceptance criteria — never implementation code.
 
 ### Status files
-`docs/tracker/{task-id}/status/{agent-file-name}.yml`:
+`docs/tracker/{task-id}/status/{agent-slug}.yml`:
 ```yaml
-agent: anderson
+agent: dev-anderson      # the FULL persona slug — same as the filename
 role: dev
 zone: control
 task: "Feature or sub-feature name"
-status: in_progress
+state: in_progress
 progress: "What is done so far"
 blockers: null
-updated: 2026-01-01T12:00:00Z
+updated_at: 2026-01-01T12:00:00Z
 ```
-Status values: `idle` / `pending` / `in_progress` / `blocked` / `review` / `done`.
+State values: `idle` / `pending` / `in_progress` / `blocked` / `review` / `done`.
+
+**These field names are a contract, not a style.** A project connected to the
+tracker relays these files upstream, and the panel joins them on the slug: write
+`status:` instead of `state:`, or the short handle instead of the full slug, and
+the agent shows as **idle forever** while it works. Update the file at every
+transition — an agent that writes its status once, at the end, looks stalled for
+as long as it is busy.
 
 Developers moving to `review` must also carry `pre_read`, `verified` and
 `surfaces` (see the dev persona).

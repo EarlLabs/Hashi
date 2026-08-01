@@ -105,6 +105,20 @@ GLOBAL = {
     "NOTIFY_CMD": "scripts/notify.sh",
     "ASK_OWNER_CMD": "scripts/ask_owner.sh",
     "VERIFY_ALL_CMD": "make test",
+    # The charter's autonomy answer is "ask before anything that leaves the
+    # machine" — that is L0, and MANIFEST §3 forbids inferring anything higher.
+    "AUTONOMY_LEVEL": (
+        "L0 — review each PR: the fleet opens a PR and stops, and you hear from "
+        "it after every task"
+    ),
+    "GIT_CREDENTIALS": """**This project has no remote; there is nothing to authenticate.**
+Work stays in the working tree and Phase 9 reports which files changed instead
+of a PR link. Do not create a remote to "finish properly" — that is the owner's
+call, and the charter lists publishing as always-ask.
+
+When a remote is added, this section becomes the real thing: a fine-grained
+token in `GH_TOKEN`, scoped to this repository only, with `contents: write` and
+`pull_requests: write` and nothing else.""",
     "ZONE_TABLE": ZONE_TABLE,
     "ZONE_KEYS": "control, edge, infra",
     "ZONE_KEY_EXAMPLE": "control",
@@ -282,6 +296,9 @@ def main():
     slots = dict(GLOBAL)
     slots["VERIFY_CMD"] = "the zone's verify command (see the zone table above)"
     (OUT / "workflow.md").write_text(render(wf, slots))
+
+    gw = (KIT / "git-workflow.md").read_text()
+    (OUT / "git-workflow.md").write_text(render(gw, dict(GLOBAL)))
 
     shutil.copyfile(KIT / "VERSION", OUT / "KIT_VERSION")
     print("rendered", len(AGENTS), "agents,", len(COMMANDS), "commands, workflow, KIT_VERSION")

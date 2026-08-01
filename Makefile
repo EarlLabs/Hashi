@@ -132,7 +132,7 @@ warden-logs:
 # Sharing a project between the two would mean one `make e2e-down` wipes the
 # database you were working against.
 E2E_PROJECT  := hashi-e2e
-E2E_API_PORT ?= 8100
+E2E_API_PORT ?= 58100
 E2E_DB_PORT  ?= 55532
 COMPOSE_E2E  := docker compose --env-file .env -p $(E2E_PROJECT) \
                 -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml

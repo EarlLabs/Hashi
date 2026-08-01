@@ -87,13 +87,17 @@ KIND_TO_COMMAND = {
 }
 
 # The Warden's own slug. It reports separately from the fleet so the panel can
-# tell "the pipeline is thinking" from "nothing is happening".
+# tell "the pipeline is thinking" from "nothing is happening". It is in the
+# roster below because live status joins on slug — a status push for a slug the
+# manifest never declared has nothing to attach to.
 WARDEN = "warden"
 
-# The real roster from .claude/agents/. Kept in sync by hand; it is display
-# metadata for the panel's Team tab, not something the pipeline reads.
+# The real roster. Every slug is a persona FILENAME verbatim (`dev-anderson`,
+# not `anderson`), because that is the join key for live status — see
+# docs/agents/adopt-the-kit.md §7 in the Kaizen repo.
 ARCHITECT = "architect-xavier"
 ROSTER = [
+    {"slug": WARDEN, "name": "Warden", "role": "Dispatch bridge", "model": "—"},
     {"slug": "product-owner-ohno", "name": "Taiichi Ohno", "role": "Product Owner",
      "model": "opus"},
     {"slug": ARCHITECT, "name": "Charles Xavier", "role": "Solution Architect",
@@ -204,14 +208,18 @@ async def _mirror_statuses(job: DirectiveJob) -> None:
     while True:
         try:
             for slug, data in job.files.read_all_statuses().items():
+                # `state`, not `status`: that is the key wardenkit writes and the
+                # personas now use. Reading the wrong one silently reports every
+                # agent as in_progress forever — it fails as wrong data, not as
+                # an error, which is the worst way for this to break.
                 fingerprint = (
-                    data.get("status", ""), data.get("progress", ""), data.get("blockers", "")
+                    data.get("state", ""), data.get("progress", ""), data.get("blockers", "")
                 )
                 if seen.get(slug) == fingerprint:
                     continue
                 seen[slug] = fingerprint
                 await job.hub.push_status(
-                    job.id, slug, data.get("status", "in_progress"),
+                    job.id, slug, data.get("state", "in_progress"),
                     task_id=job.task_id,
                     role=data.get("role", ""),
                     phase=data.get("phase", ""),

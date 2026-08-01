@@ -9,6 +9,7 @@ HOW:  parses the YAML directly — no Docker required, so this runs in CI and on
 """
 
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -16,6 +17,17 @@ import yaml
 DEPLOY = pathlib.Path(__file__).resolve().parents[2] / "deploy"
 BASE = DEPLOY / "docker-compose.yml"
 DEV = DEPLOY / "docker-compose.dev.yml"
+
+# Ports the host is likely to already be using. Publishing on one is how two
+# projects collide on the same laptop, and the collision shows up as a confusing
+# "port is already allocated" mid-build. Inside the compose network defaults are
+# fine — this is only about what we publish.
+SERVICE_DEFAULTS = {
+    80, 443, 3000, 3306, 5000, 5432, 5672, 6379, 8000, 8080,
+    8443, 9000, 9090, 9200, 15672, 27017,
+}
+# "127.0.0.1:${DEV_API_PORT:-58000}:8000" or "127.0.0.1:58000:8000"
+HOST_PORT = re.compile(r"^127\.0\.0\.1:(?:\$\{\w+:-(\d+)\}|(\d+)):\d+$")
 
 
 def load(path: pathlib.Path) -> dict:
@@ -60,6 +72,22 @@ def test_dev_overlay_binds_loopback_only() -> None:
             assert str(mapping).startswith("127.0.0.1:"), (
                 f"{name}: port mapping {mapping!r} is not pinned to loopback"
             )
+
+
+def test_published_ports_avoid_service_defaults() -> None:
+    """A published port must not be one the host probably already runs."""
+    offenders = []
+    for name, service in load(DEV)["services"].items():
+        for mapping in service.get("ports", []):
+            match = HOST_PORT.match(str(mapping))
+            assert match, f"{name}: cannot read a host port out of {mapping!r}"
+            port = int(match.group(1) or match.group(2))
+            if port in SERVICE_DEFAULTS:
+                offenders.append(f"{name}:{port}")
+    assert offenders == [], (
+        f"published ports on a service default: {offenders} — pick something the "
+        "host is not already using"
+    )
 
 
 def test_required_env_vars_fail_loudly() -> None:

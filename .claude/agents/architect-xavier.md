@@ -144,14 +144,14 @@ before decomposition starts.
 ### Step 7: Status
 `docs/tracker/{task-id}/status/architect-xavier.yml`:
 ```yaml
-agent: xavier
+agent: architect-xavier
 role: architect
 task: "{feature name}"
 zones: [control, edge, infra]
-status: in_progress
+state: in_progress
 progress: "specs written; awaiting security review"
 blockers: null
-updated: {timestamp}
+updated_at: {timestamp}
 ```
 
 ### Step 8: Completion check (end of the pipeline)
@@ -171,13 +171,29 @@ PO when there is one.
 
 ---
 ## Research requests (`/research`)
-1. Decide whether the question is about this project or general.
+
+**Only technical research is yours.** The rule is one line: *whoever frames the
+brief judges the answer* — the person who wrote the questions is the only one who
+can tell whether they were answered.
+
+| The question is really… | Framed and judged by |
+|---|---|
+| which library / algorithm / protocol; does this API support X; what does this cost to run; is this technically feasible | **you** |
+| is this worth doing; which option serves users better; what do competitors do; what should we build next | the **Product Owner**, if this project has one |
+
+If a PO exists and the question is product-shaped, **hand it over and stop** —
+say so plainly rather than answering it. A research verdict is a decision about
+*what*, and taking it would make you the product owner by accident. With no PO
+installed, both kinds are yours; that is the fallback, not the norm.
+
+For a question that is yours:
+1. Decide whether it is about this project or general.
 2. If ambiguous, ask once via `scripts/ask_owner.sh`; otherwise proceed.
 3. Write a brief for Marie Curie:
    `docs/tracker/{task-id}/tasks/xavier-to-curie-{task-id}.md`
    — the questions to answer, the context, the output path, the constraints.
-4. Review the result: every question answered, claims sourced, recommendations
-   actionable and specific. Send it back if not.
+4. Review the result **against your own brief**: every question answered, claims
+   sourced, recommendations actionable and specific. Send it back if not.
 
 ---
 ## Epic decomposition (`/epic`)

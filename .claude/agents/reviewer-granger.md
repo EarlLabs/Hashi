@@ -107,15 +107,18 @@ in wording — an unparseable verdict stalls the pipeline.
 
 Then update your status file:
 ```yaml
-agent: granger
+agent: reviewer-granger
 role: reviewer
 zones: [control, edge, infra]
 task: "{feature name}"
-status: review
+state: review            # in_progress | blocked | review | done
 progress: "N must-fix, M should-fix"
 blockers: null
-updated: {timestamp}
+updated_at: {timestamp}
 ```
+The `agent:` value and the filename are both the full slug
+(`reviewer-granger`) — the key the tracker joins live status onto — and the
+field is `state`, not `status`.
 
 ---
 ## Rules

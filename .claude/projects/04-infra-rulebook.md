@@ -42,6 +42,11 @@ or `edge`.
 - **The base compose file publishes no ports.** Not the database, not the API,
   not Caddy's admin endpoint. `expose` is fine; `ports:` in the base file is a
   finding. Only `docker-compose.dev.yml` publishes, and only to `127.0.0.1`.
+- **A published port is never a service's default** — not `5432`, `8000`, `6379`,
+  `3000`. The host already runs something, and the collision surfaces as an
+  opaque "port is already allocated" halfway through a build. Inside the compose
+  network, defaults are fine and preferred. Enforced by
+  `tests/infra/test_compose.py::test_published_ports_avoid_service_defaults`.
 - **Every required environment variable uses `${VAR:?message}`.** See Traps — a
   bare `${VAR}` silently becomes an empty string.
 - **Every service declares a `healthcheck` and a `restart` policy.** A service
