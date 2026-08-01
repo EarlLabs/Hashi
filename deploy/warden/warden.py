@@ -440,9 +440,24 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
                                  "nothing was queued; read the decomposition and "
                                  "dispatch the pieces yourself")
 
-    summary = f"{command} finished. "
-    summary += f"{len(dirty.splitlines())} file(s) uncommitted. " if dirty else ""
-    summary += f"Commits:\n{diffstat}" if diffstat else ""
+    # Point at the artifact, not at a diffstat. The owner reads this in Telegram,
+    # and a wall of `git diff --stat` is unreadable there — worse, the range
+    # `before..after` catches ANY commit made while the run was going, including
+    # the owner's own, which then reads as "the fleet wrote 4000 lines".
+    artifacts = []
+    if job.files is not None and job.files.tasks_dir.exists():
+        artifacts = sorted(
+            str(f.relative_to(REPO_ROOT)) for f in job.files.tasks_dir.glob("*.md")
+        )
+    summary = f"{command} finished."
+    if artifacts:
+        summary += "\nWrote:\n" + "\n".join(f"  {a}" for a in artifacts)
+    if dirty:
+        summary += f"\n{len(dirty.splitlines())} file(s) uncommitted in the tree."
+    if diffstat:
+        n = len(diffstat.strip().splitlines())
+        summary += (f"\n{n} file(s) committed during the run — note this window "
+                    "can include your own commits, not only the fleet's.")
     # `review`, never `done`: the changes are in the working tree and no human
     # has looked at them. Only the owner closes that gap.
     return JobResult(state="review", summary=summary.strip())
