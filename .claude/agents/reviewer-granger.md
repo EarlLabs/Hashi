@@ -60,9 +60,7 @@ it was not fixed — re-raise it, do not assume you misread it last round.
 4. **Verification — run it, do not trust it.** Run the zone's command
    yourself:
    ```bash
-   make test-control    # whichever zones the diff actually touches
-make test-edge
-make test-infra
+   make test-control   # and/or test-edge, test-infra — whichever zones the diff actually touches
    ```
    A failure is **automatically Must Fix**, whatever the developer's status file
    claims. This is the cheapest finding you will ever make and the one most often
