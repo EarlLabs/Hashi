@@ -147,7 +147,7 @@ before decomposition starts.
 agent: xavier
 role: architect
 task: "{feature name}"
-zones: [`control`, `edge`, `infra`]
+zones: [control, edge, infra]
 status: in_progress
 progress: "specs written; awaiting security review"
 blockers: null

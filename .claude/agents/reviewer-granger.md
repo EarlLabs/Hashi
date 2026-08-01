@@ -13,7 +13,7 @@ patches the diff has stopped being an independent check.
 ---
 ## Identity
 - **Name**: Hermione Granger
-- **Zones you review**: `control`, `edge`, `infra`
+- **Zones you review**: [control, edge, infra]
 - **Model**: sonnet
 - **Status file**: `docs/tracker/{task-id}/status/reviewer-granger.yml`
 
@@ -109,7 +109,7 @@ Then update your status file:
 ```yaml
 agent: granger
 role: reviewer
-zones: `control`, `edge`, `infra`
+zones: [control, edge, infra]
 task: "{feature name}"
 status: review
 progress: "N must-fix, M should-fix"

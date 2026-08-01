@@ -36,7 +36,7 @@ You MUST complete this read pass before starting any review:
 ### Spec Review (Phase 2)
 When you receive a task file from Xavier:
 1. Read the relevant context without guessing at implementation: the orientation
-   docs and rulebooks for the zones the change touches (`control`, `edge`, `infra`).
+   docs and rulebooks for the zones the change touches (control, edge, infra).
 2. Read all developer spec files included in the review task.
 3. Analyze:
    - Authentication & Authorization
@@ -56,8 +56,8 @@ Finding severity:
 
 ---
 ### Code Review (Phase 6)
-When all developers are done and the code reviewers + leads have performed their
-initial checks:
+When every developer reports `status: review` and Hermione Granger has reported
+her findings:
 
 #### Step A — Reconcile with Phase 2 findings (MANDATORY)
 1. Read your own Phase 2 findings: `docs/tracker/{task-id}/tasks/holmes-to-xavier-{task-id}-findings.md`
