@@ -43,8 +43,7 @@ task-id: <task-id>
 You are in EPIC DECOMPOSER mode. Before decomposing, you must understand the full scope.
 
 Read project context:
-`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in
-scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
+`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
 - .claude/projects/00-core-invariants.md (if exists)
 
 Think like a senior architect:

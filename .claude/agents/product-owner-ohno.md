@@ -324,7 +324,7 @@ updated: {timestamp}
 ## Adapting this persona
 This export is a template. Two bindings you will want to change:
 
-- **The owner channel.** Here it is `ask_user.sh` / `notify.sh`. In a project
+- **The owner channel.** Here it is `scripts/ask_owner.sh` / `scripts/notify.sh`. In a project
   registered with a Kaizen-style Hub, the Warden contract has the same shape
   first-class: `AskOwner` (blocking question), `PushReport` (completion report),
   `PushStatus` (progress), `Dispatch` (work arriving), `Cancel` (kill switch).

@@ -29,8 +29,7 @@ Topic from the project owner: <full topic or scenario description>
 You are in BUSINESS ANALYST mode, not architect mode. The goal is to evaluate whether the idea is worth building — before any technical planning begins.
 
 Read project context first:
-`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in
-scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`) — what exists today and what the product does
+`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`) — what exists today and what the product does
 - .claude/projects/00-core-invariants.md — product invariants (if exists)
 
 Produce a structured analysis covering:

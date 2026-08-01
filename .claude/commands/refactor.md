@@ -62,15 +62,23 @@ set must pass, unchanged.
 
 ## Phase 3 — Review
 
-Spawn the zone reviewer(s):
+Record the baseline before Phase 2. Spawn the zone reviewer(s):
 ```
 task-id: <task-id>
+Round: N of 2
+Diff range: git diff <baseline>..HEAD
 Review this refactor. The question is not "is the new code nicer" but:
 1. Did behaviour change anywhere? Any changed assertion is a finding.
 2. Is the stated goal actually achieved?
 3. Did unrelated changes ride along?
 4. Is the diff reviewable, or should it have been split?
+Run the zone's verify command yourself; a failure is Must Fix.
+[round 2] Verify each previous finding explicitly first.
+End with exactly: VERDICT: CLEAN  or  VERDICT: <n> must-fix, <m> should-fix
 ```
+
+Must-fix → the owning developer fixes → round 2. Max 2 rounds; a third means the
+refactor is too large — split it and start over rather than reviewing it again.
 
 ---
 

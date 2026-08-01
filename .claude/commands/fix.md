@@ -67,15 +67,25 @@ Add the regression scenario that would have caught this.
 
 ---
 
-## Phase 3 — Review
+## Phase 3 — Review (max 2 rounds)
 
-Spawn the zone's reviewer:
+Record the baseline before Phase 2 (`git rev-parse HEAD`) so the reviewer reads a
+diff rather than the developer's account of it. Then spawn the zone's reviewer:
 ```
 task-id: <task-id>
-Review the fix. Confirm: the reproduction now passes, a regression scenario
-exists and can fail, the change is minimal and inside the zone, no unrelated
-refactoring rode along.
+Round: N of 2
+Diff range: git diff <baseline>..HEAD
+Review the fix. Run the zone's verify command yourself — a failure is Must Fix.
+Confirm: the reproduction now passes, a regression scenario exists and CAN fail,
+the change is minimal and inside the zone, no unrelated refactoring rode along.
+[round 2] Verify each previous finding explicitly before reviewing again.
+End with exactly: VERDICT: CLEAN  or  VERDICT: <n> must-fix, <m> should-fix
 ```
+
+Must-fix → the **owning developer** fixes (never the orchestrator) → round 2.
+Still must-fix after round 2, or a round re-reporting an earlier round's fix →
+stop and ask the owner. A bug fix that needs three review rounds is not a bug
+fix; it is a design problem wearing one.
 
 Spawn `security-holmes` **only** if the bug or its fix touches auth, input
 handling, secrets or an externally reachable surface.

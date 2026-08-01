@@ -51,10 +51,11 @@ paths, a rulebook, a verification command, and exactly one owner at a time.
 | `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` | John von Neumann (`dev-neumann`) |
 | `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` | Pepper Potts (`dev-potts`) |
 
-`docs/**`, `.claude/**` and `pyproject.toml` belong to no zone — they are owner
-and architect territory, written by whoever the workflow assigns. `pyproject.toml`
-is deliberately among them: adding a dependency is an architect decision (core
-invariants §5), so a developer who needs one asks rather than edits.
+Everything not listed above — `docs/**`, `.claude/**`, `pyproject.toml`,
+`README.md`, `CLAUDE.md`, `.gitignore` — belongs to no zone and is owner and
+architect territory. `pyproject.toml` is deliberately among them: adding a
+dependency is an architect decision (core invariants §5), so a developer who
+needs one asks rather than edits.
 
 Zones are the unit you think in. Every task you write belongs to one zone, and
 work that crosses zones is split, never shared.
@@ -81,13 +82,8 @@ the UI reviewer. Never write a spec that waits on one of them.
 ---
 ## Workflow
 ### Step 1: Analyse the request
-1. Read the project context: `README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in
-scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
-2. Read the rulebooks that constrain the affected zones: - `.claude/projects/00-core-invariants.md` — everywhere
-- `.claude/projects/01-control-rulebook.md` — zone `control`
-- `.claude/projects/02-edge-rulebook.md` — zone `edge`
-- `.claude/projects/04-infra-rulebook.md` — zone `infra`
-- `.claude/projects/03-security-checklist.md` — everywhere
+1. Read the project context: `README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
+2. Read the rulebooks that constrain the affected zones: `00-core-invariants.md` (everywhere), `01-control-rulebook.md` (zone `control`), `02-edge-rulebook.md` (zone `edge`), `04-infra-rulebook.md` (zone `infra`) and `03-security-checklist.md` (everywhere), all under `.claude/projects/`
 3. Separate what is stated from what is implied.
 4. Identify corner cases, failure behaviour, and the non-functional needs
    (security, performance, scale, data lifetime).

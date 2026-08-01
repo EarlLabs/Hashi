@@ -16,10 +16,11 @@ never shared.
 | `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` | John von Neumann (`dev-neumann`) |
 | `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` | Pepper Potts (`dev-potts`) |
 
-`docs/**`, `.claude/**` and `pyproject.toml` belong to no zone — they are owner
-and architect territory, written by whoever the workflow assigns. `pyproject.toml`
-is deliberately among them: adding a dependency is an architect decision (core
-invariants §5), so a developer who needs one asks rather than edits.
+Everything not listed above — `docs/**`, `.claude/**`, `pyproject.toml`,
+`README.md`, `CLAUDE.md`, `.gitignore` — belongs to no zone and is owner and
+architect territory. `pyproject.toml` is deliberately among them: adding a
+dependency is an architect decision (core invariants §5), so a developer who
+needs one asks rather than edits.
 
 ---
 ## Branch & merge model
@@ -33,7 +34,7 @@ invariants §5), so a developer who needs one asks rather than edits.
    ```
    **This repository has no `origin` yet.** Until one exists, the local
    equivalent is `git checkout develop && git merge main --no-edit` — and if you
-   skip it you will branch from a tree that is missing everything merged since.
+   skip it you will branch from a tree missing everything merged since.
 5. Before merging, the agent self-reviews its own PR diff and fixes what it finds.
 6. After merging, report to the project owner via `scripts/notify.sh`.
 7. **Merge conflicts are never auto-resolved and never reverted.** Report and stop.
@@ -88,8 +89,7 @@ development command waits on him.
 ### Phase 1: Architecture & requirements (Xavier)
 1. The project owner submits a request.
 2. Xavier assigns a `task-id` and creates `docs/tracker/{task-id}/{status,tasks}/`.
-3. Xavier reads the context (`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in
-scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)) and the rulebooks for the affected
+3. Xavier reads the context (`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)) and the rulebooks for the affected
    zones, and decides which zones are involved.
 4. Xavier asks clarifying questions — once, in one batch — and waits.
 5. Xavier writes one spec per involved developer, each naming the zone, the
@@ -118,11 +118,29 @@ go straight to that developer. Nothing waits on this phase.
    review — not `make test`, which is the project-wide one.
 6. Developers keep their own status file current.
 
-### Phase 5: Code review (Hermione Granger)
-One reviewer covers all three zones. Order of checks: acceptance criteria first,
-then scope, then rulebooks, then correctness. Reviewers report; they never edit.
-Ownership overlap and integration consistency are checked by Xavier in Phase 7 —
-in a fleet with no leads, that check has exactly one owner and it is him.
+### Phase 5: Code review loop (Hermione Granger, max 3 rounds)
+One reviewer covers all three zones. Ownership overlap and integration
+consistency are Xavier's in Phase 7 — in a fleet with no leads that check has
+exactly one owner, and it is him.
+Order of checks: acceptance criteria first, then scope, then rulebooks, then a
+verification run, then correctness.
+
+Loop rules — all five matter, and the last two are what keep it terminating:
+
+1. **Reviewers read the diff** (`git diff <baseline>..HEAD`), not the developers'
+   status files. A status file is a claim; the diff is the evidence.
+2. **Reviewers run the zone's verification themselves.** A failure is Must Fix
+   regardless of what the status file says.
+3. **Round ≥ 2 verifies the previous round's fixes item by item**, before any
+   fresh review, and reports per item: fixed / partial / absent.
+4. **Findings end with a machine-readable line**: `VERDICT: CLEAN` or
+   `VERDICT: <n> must-fix, <m> should-fix`.
+5. **Stops: 3 rounds, or ping-pong.** If a round re-reports something already
+   fixed, or flags code written *as* an earlier fix, that is reviewers
+   disagreeing — stop, keep the state, escalate both positions to the owner.
+
+**Reviewers report; the developer who owns the zone fixes.** Should Fix and Nit
+items accumulate across rounds into one deduplicated list rather than being lost.
 
 ### Phase 6: Security review of the code (Sherlock Holmes)
 Traceability from the Phase 2 findings to the code that addresses them, then the

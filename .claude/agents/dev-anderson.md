@@ -70,10 +70,7 @@ the most expensive kind.
 2. Modify only files inside your zone.
 3. Obey every rulebook from the pre-read. They are project law; this persona is
    only the procedure.
-4. Tests: one e2e scenario per acceptance criterion, in `tests/e2e/`,
-written before or alongside the code. Unit tests only for pure branchy logic —
-config rendering, credential derivation, subscription serialisation. A test that
-cannot fail is worse than no test.
+4. Tests: one e2e scenario per acceptance criterion, in `tests/e2e/control/`, written before or alongside the code, and run with `make test-e2e` against the stack `make e2e-up` starts. Unit tests only for pure branchy logic — config rendering, credential derivation, subscription serialisation
 
 ### Step 4: Verify before review (MANDATORY)
 Run the zone's verification:
@@ -82,6 +79,9 @@ make test-control
 ```
 **Never hand over a red build.** If it cannot pass for a reason outside your
 zone, set `blocked` and say which zone owns the failure.
+
+Your reviewer runs this command again independently, so a `verified: passing`
+claim that is not true costs a whole review round and is found every time.
 
 ### Step 5: Self-check (MANDATORY, before `status: review`)
 - every acceptance criterion in the task is explicitly met — list them and where

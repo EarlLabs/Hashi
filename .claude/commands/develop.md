@@ -31,8 +31,16 @@ cat > docs/tracker/{task-id}/README.md <<'EOF'
 **Goal:** {1–2 sentences: what this achieves and why}
 EOF
 ```
-**This project has no tracker service.** The tracker is the directory tree above
-and nothing else — there is no queue to register with and no id to remember.
+4. **This project has no tracker service.** The tracker is the directory tree
+   above and nothing else — there is no queue to register with and no id to
+   remember.
+
+5. **Record the review baseline** — every later review reads a diff, not a
+   developer's account of its own work:
+```bash
+git rev-parse HEAD    # remember this ref as <baseline>
+```
+If the tree is dirty with unrelated changes, say so before going further.
 
 ---
 
@@ -90,9 +98,9 @@ Critical findings → re-spawn `architect-xavier` with them, then re-run Phase 2
 
 ## Phase 3 — Decomposition
 
-**This project has no leads.** Every zone has exactly one developer, so Xavier's
-specs are already developer tasks: they go straight to the zone's developer.
-Skip to Phase 4.
+**This project has no leads.** Every zone has exactly one developer,
+so Xavier's specs are already developer tasks: they go straight to the zone's
+developer. Skip to Phase 4.
 
 ---
 
@@ -110,18 +118,51 @@ Wait until every spawned developer reports `status: review`. A developer at
 
 ---
 
-## Phase 5 — Code review (parallel, by zone)
+## Phase 5 — Code review loop (max 3 rounds)
 
-Read the developer status files to see which zones actually changed. Spawn
-`reviewer-granger` once, covering every changed zone:
+Reviewers **report**; the **developer who owns the zone fixes**. Never patch a
+developer's zone yourself — that is how ownership, and the next agent's diff, get
+destroyed.
+
+### Round N
+Announce it: "Review round N of max 3". Read the developer status files to see
+which zones actually changed. Spawn `reviewer-granger` — one reviewer covers all
+three zones here — as a **fresh** agent each round:
 ```
 task-id: <task-id>
-Review the <zone> changes. Read every status file in
-docs/tracker/<task-id>/status/ to see what was implemented.
+Round: N of 3
+Review the <zone> changes.
+Diff range: git diff <baseline>..HEAD   ← review THIS, not the status files
+Run the zone's verify command yourself; a failure is automatically Must Fix.
 Check acceptance criteria first, then scope, then the rulebooks.
+[round ≥ 2] Previous findings: docs/tracker/<task-id>/tasks/<reviewer>-findings-<task-id>.md
+            Verify EACH previous item explicitly before your own review, and
+            report per item whether it is fixed, partial, or absent.
+Write findings to docs/tracker/<task-id>/tasks/<reviewer>-findings-<task-id>.md
+ending with exactly: VERDICT: CLEAN  or  VERDICT: <n> must-fix, <m> should-fix
 ```
 
-**Must Fix** findings → re-spawn the affected developers, then re-run Phase 5.
+### Decide from the verdict lines
+- **Every reviewer `VERDICT: CLEAN`** → Phase 6.
+- **Any must-fix** → re-spawn only the developers who own those findings, then
+  start a **new round** with fresh reviewers.
+
+### Stop conditions — both are mandatory
+- **Round cap: 3.** At round 3 with must-fix findings remaining, stop. Keep every
+  fix made so far, list what is unresolved, and tell the owner. The pipeline
+  already has Xavier's completion check and a security review; a fourth
+  code-review round is reviewers arguing, not defects being found.
+- **Ping-pong detection.** Keep a ledger of findings as `file + one-line
+  description` across rounds. If a round re-reports something an earlier round
+  already fixed, or flags code that exists *because* of an earlier finding, that
+  is reviewer disagreement, not progress: **stop immediately**, keep the current
+  state, and put both positions to the owner. Loops like this converge on nothing
+  and cost a full fleet spawn per round.
+
+### Carry-over
+Accumulate every **Should Fix** and **Nit** from every round into one
+deduplicated list. Fresh reviewers will not re-find them, and they must not be
+lost between rounds — report them at the end for the owner to decide.
 
 ---
 

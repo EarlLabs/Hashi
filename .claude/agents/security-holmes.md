@@ -29,8 +29,7 @@ You review every zone. Security is the one role that is never scoped to one.
 You MUST complete this read pass before starting any review:
 1. `.claude/projects/03-security-checklist.md`
 2. `.claude/projects/00-core-invariants.md`
-3. The orientation docs of every zone in scope: `README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in
-scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
+3. The orientation docs of every zone in scope: `README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
 
 ---
 ## Workflow
@@ -57,8 +56,8 @@ Finding severity:
 
 ---
 ### Code Review (Phase 6)
-When every developer reports `status: review` and Hermione Granger has reported
-her findings:
+When all developers are done and the code reviewers + leads have performed their
+initial checks:
 
 #### Step A — Reconcile with Phase 2 findings (MANDATORY)
 1. Read your own Phase 2 findings: `docs/tracker/{task-id}/tasks/holmes-to-xavier-{task-id}-findings.md`
