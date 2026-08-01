@@ -80,14 +80,31 @@ ALLOWED_TOOLS = os.environ.get(
 )
 
 # Directive kind -> the slash command that already implements it.
+#
+# The keys are the HUB's vocabulary, not ours: develop, fix, refactor, research,
+# review, epic, brainstorm, analyze. Anything outside it can never arrive, so an
+# entry for it is dead weight that reads like a supported route — `product` was
+# exactly that, which left the PO unreachable from the tracker while looking
+# reachable.
+#
+# `brainstorm` -> `/product` is the load-bearing line. "What is worth doing and
+# what do we start with" is the Product Owner's question, and this project has
+# one; sending it to `/brainstorm` would put the architect in business-analyst
+# mode and quietly bypass Ohno, who owns the backlog.
 KIND_TO_COMMAND = {
     "develop": "/develop",
     "fix": "/fix",
     "refactor": "/refactor",
     "epic": "/epic",
-    "review": "/review",
     "research": "/research",
-    "product": "/product",
+    "review": "/review",
+    "brainstorm": "/product",
+}
+# `analyze` is in the Hub's vocabulary but needs `analyst-lovelace`, which this
+# project does not install. Refusing it by name beats running something adjacent.
+UNSUPPORTED_KINDS = {
+    "analyze": "no analyst-lovelace in this fleet — use `brainstorm` for planning "
+               "or `research` for a question",
 }
 
 # The Warden's own slug, used ONLY for the file it writes into the task's status
@@ -130,7 +147,18 @@ ROSTER = [
 
 DESCRIPTION = """hashi — self-hosted multi-protocol VPN (control plane + node fleet).
 
-Directive kinds: develop, fix, refactor, epic, review, research, product.
+Which kind to send — this is the part that goes wrong:
+  brainstorm  PLANNING. Goes to the Product Owner (Ohno): what is worth doing,
+              what is next, slice the backlog. Use this for "выдай план".
+  epic        break one big ask into ordered tasks.
+  develop     build one thing. fix — one bug. refactor — no behaviour change.
+  research    a question to answer with sources; produces a report, no code.
+  review      CODE review of work already done. NOT "review my plan" — sending a
+              planning ask here runs the code-review pipeline over whatever
+              happens to be in the diff, which is how you get a review of
+              somebody else's commit.
+  analyze     not supported here (no analyst in this fleet).
+
 The intent is passed to the matching slash command verbatim, so phrase it the
 way you would type it: "add the VLESS+Reality transport profile".
 
@@ -240,6 +268,12 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     """Translate one Directive into one slash-command run of the real fleet."""
     logger.info("=== #%s (%s) task '%s': %s", job.id, job.kind, job.task_id, job.intent)
 
+    if job.kind in UNSUPPORTED_KINDS:
+        return JobResult(
+            state="failed",
+            summary=f"hashi does not run {job.kind!r} Directives",
+            error=UNSUPPORTED_KINDS[job.kind],
+        )
     command = KIND_TO_COMMAND.get(job.kind)
     if command is None:
         return JobResult(
@@ -312,7 +346,7 @@ async def main() -> None:
         NAME,
         purpose="Self-hosted multi-protocol VPN: control plane, node fleet, admin panel",
         description=DESCRIPTION,
-        kinds=sorted(KIND_TO_COMMAND),
+        kinds=sorted(KIND_TO_COMMAND),   # only what we can actually run
         roster=ROSTER,
         max_concurrent=MAX_CONCURRENT,
         grpc_addr=GRPC_ADDR,
