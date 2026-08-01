@@ -14,7 +14,7 @@ COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
 .PHONY: setup env test test-control test-edge test-infra test-e2e lint \
         up up-dev down logs ps e2e-up e2e-down e2e-reset \
-        warden-sync warden-up warden-down warden-logs
+        warden-sync warden-up warden-down warden-logs warden-scenarios
 
 ## --- setup ------------------------------------------------------------------
 
@@ -122,6 +122,19 @@ warden-up:
 
 warden-down:
 	$(COMPOSE_WARDEN) down
+
+# Drive every Warden<->Hub path through the real Hub API. Runs the Warden in
+# fake-pipeline mode, so it costs no fleet runs; the token is taken from the
+# tracker container's environment and never read out of .env.
+warden-scenarios:
+	$(need_venv)
+	WARDEN_FAKE_PIPELINE=1 $(COMPOSE_WARDEN) up -d --build
+	@sleep 6
+	@TRACKER_ADMIN_TOKEN=$$(docker exec kaizen-tracker printenv TRACKER_ADMIN_TOKEN) \
+	  $(PY) deploy/warden/scenarios.py; status=$$?; \
+	  echo "restoring the real pipeline..."; \
+	  $(COMPOSE_WARDEN) up -d --build >/dev/null 2>&1; \
+	  exit $$status
 
 warden-logs:
 	$(COMPOSE_WARDEN) logs -f --tail=100

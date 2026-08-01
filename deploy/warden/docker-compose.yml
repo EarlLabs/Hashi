@@ -42,6 +42,13 @@ services:
       STATE_DIR: "/state"
       CLAUDE_CONFIG_DIR: "/state/claude"
       CLAUDE_MODEL: "opus"
+      # Contract test mode — see deploy/warden/scenarios.py. Empty in normal
+      # use; `WARDEN_FAKE_PIPELINE=1 make warden-up` simulates the fleet so the
+      # protocol paths can be proven without spending a real run. A Directive
+      # under this flag reports success having built nothing, so it must never
+      # be left on.
+      WARDEN_FAKE_PIPELINE: "${WARDEN_FAKE_PIPELINE:-}"
+      WARDEN_FAKE_STEP_S: "${WARDEN_FAKE_STEP_S:-3}"
       # Git identity and credential for the fleet. The entrypoint turns these
       # into git config and a `gh` login at boot; no agent ever reads the value.
       # Empty GH_TOKEN is a supported mode — the fleet stays local-only and

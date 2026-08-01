@@ -30,6 +30,7 @@
 # =============================================================================
 
 import asyncio
+import json
 import logging
 import os
 import shlex
@@ -69,6 +70,15 @@ IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT_S", "600"))
 # makes them look busy in the panel instead of idle.
 STATUS_POLL = int(os.environ.get("STATUS_POLL_S", "5"))
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "opus")
+# Exercise the CONTRACT without spending a fleet run. Every scenario below —
+# dispatch, cancel, at-capacity, restart, requeue, epic children — is about the
+# Warden<->Hub protocol, not about what the agents write, and proving those with
+# real `claude` runs costs minutes and quota per assertion. With this set the
+# handler simulates a pipeline and keys off words in the intent, exactly the way
+# modules/tracker/example/dummy-project does. NEVER set it in production: the
+# Directive would report success having built nothing.
+FAKE_PIPELINE = os.environ.get("WARDEN_FAKE_PIPELINE", "") == "1"
+FAKE_STEP = float(os.environ.get("WARDEN_FAKE_STEP_S", "3"))
 
 # The fleet needs to read, write, run tests and spawn its own subagents — this
 # is a development fleet in its own repo, not an assistant handling untrusted
@@ -251,6 +261,75 @@ def _note(job: DirectiveJob, state: str, progress: str) -> None:
         )
 
 
+
+async def _fake_pipeline(job: DirectiveJob) -> JobResult:
+    """Simulate a run. Behaviour is driven by keywords in the intent so every
+    case is reachable from the API without rebuilding this file between them:
+    `hang`, `fail`, `block`, `quick`, and `children` for an epic."""
+    intent = (job.intent or "").lower()
+    _note(job, "in_progress", f"FAKE {job.kind}: starting")
+    await job.status(ARCHITECT, "in_progress", role="architect", phase="design",
+                     progress="fake: working out what to build")
+
+    if "hang" in intent:
+        logger.info("#%s: hanging on purpose — cancel me or restart me", job.id)
+        await asyncio.Event().wait()
+
+    await asyncio.sleep(FAKE_STEP)
+
+    if "fail" in intent:
+        await job.status(ARCHITECT, "done", role="architect", progress="fake: build failed")
+        return JobResult(state="failed", summary="fake failure",
+                         error="FAKE BUILD LOG\n  error: nothing was really built")
+    if "block" in intent:
+        return JobResult(state="blocked", summary="fake: needs a decision from the owner")
+
+    if job.kind == "epic":
+        pieces = [
+            {"title": f"fake piece {n}", "intent": f"{job.intent}: step {n}", "kind": "develop"}
+            for n in (1, 2, 3)
+        ]
+        await job.status(ARCHITECT, "done", role="architect",
+                         progress=f"fake: {len(pieces)} pieces")
+        return JobResult(state="done", summary=f"fake epic split into {len(pieces)}",
+                         children=pieces)
+
+    await job.status(ARCHITECT, "done", role="architect", phase="design", progress="fake: done")
+    _note(job, "done", f"FAKE {job.kind}: finished")
+    if "quick" in intent:
+        return JobResult(state="done", summary="fake: nothing to review")
+    return JobResult(state="review", summary="fake: pretend a PR is open")
+
+
+def _read_children(job: DirectiveJob) -> list[dict]:
+    """Children an /epic decomposition declared, or [].
+
+    Parsed from a JSON file the epic prompt asks for rather than from the prose
+    decomposition: the Hub queues whatever comes back, so guessing task
+    boundaries out of markdown would turn a formatting slip into real queued
+    work. A missing file means the epic produced prose only — that is reported,
+    not invented.
+    """
+    if job.files is None:
+        return []
+    path = job.files.dir / "children.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as e:
+        logger.warning("#%s: children.json is unreadable (%s) — reporting none", job.id, e)
+        return []
+    out = []
+    for item in data if isinstance(data, list) else []:
+        title = str(item.get("title") or "").strip()
+        intent = str(item.get("intent") or title).strip()
+        kind = str(item.get("kind") or "develop").strip()
+        if title and kind in KIND_TO_COMMAND:
+            out.append({"title": title[:255], "intent": intent, "kind": kind})
+    return out
+
+
 async def _git(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "git", "-C", REPO_ROOT, *args,
@@ -285,15 +364,33 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     if job.files is not None:
         job.files.ensure()
 
+    if FAKE_PIPELINE:
+        return await _fake_pipeline(job)
+
     # The fleet picks its own task-id by default; pin it to the Directive's so
     # the Handoffs and Status land in the tree the Hub is already watching.
+    extra = ""
+    if job.kind == "epic":
+        # The Hub queues whatever `children` we return, so ask for a file we can
+        # parse instead of reading task boundaries out of prose.
+        extra = (
+            f"\nWhen the decomposition is approved, also write "
+            f"docs/tracker/{job.task_id}/children.json — a JSON array of "
+            f'{{"title", "intent", "kind"}} objects in dependency order, kind being '
+            f"one of {', '.join(sorted(KIND_TO_COMMAND))}. That file is what gets "
+            f"queued as real work, so include exactly the tasks you mean.\n"
+        )
     prompt = (
         f"{command} {job.intent}\n\n"
         f"Use task-id `{job.task_id}` for this work — the tracker directory "
         f"docs/tracker/{job.task_id}/ already exists and is being watched.\n"
-        f"You are running unattended: nobody can answer a question right now. "
-        f"If you hit a decision that genuinely needs the owner, stop and report "
-        f"it rather than guessing."
+        f"UNATTENDED RUN — nobody is at the keyboard and scripts/ask_owner.sh "
+        f"cannot return an answer. Do NOT stop to ask, and do not wait for a "
+        f"reply that will never come: a pipeline that halts at its question gate "
+        f"produces nothing at all, which is worse than a decision made in the "
+        f"open. Where a choice is genuinely the owner's, take the most "
+        f"conservative option, write the assumption down in your report under "
+        f"'Assumptions', and carry on to the end. Deliver the artifact.{extra}"
     )
 
     before = await _git("rev-parse", "HEAD")
@@ -331,6 +428,17 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
         # A clean run that changed nothing is a real outcome, not a failure —
         # a `/review` or a `/research` Directive ends exactly here.
         return JobResult(state="done", summary=f"{command} finished; no changes to the tree")
+
+    if job.kind == "epic":
+        children = _read_children(job)
+        if children:
+            return JobResult(state="done", children=children,
+                             summary=f"decomposed into {len(children)} task(s); "
+                                     "they are queued under this Directive")
+        return JobResult(state="review",
+                         summary="decomposition written, but no children.json — "
+                                 "nothing was queued; read the decomposition and "
+                                 "dispatch the pieces yourself")
 
     summary = f"{command} finished. "
     summary += f"{len(dirty.splitlines())} file(s) uncommitted. " if dirty else ""
