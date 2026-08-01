@@ -95,7 +95,11 @@ ps:
 # Where Kaizen lives, for the vendored kit. Override: make warden-sync KAIZEN=…
 KAIZEN        ?= $(HOME)/stuff/projects/Kaizen
 WARDEN_VENDOR := deploy/warden/vendor
-COMPOSE_WARDEN := docker compose -f deploy/warden/docker-compose.yml
+# --env-file is not optional: without it compose looks for `.env` NEXT TO the
+# compose file (deploy/warden/.env), the root .env is never read, and every
+# ${VAR:-} silently becomes empty — which is how GH_TOKEN stayed unset while
+# sitting correctly in .env the whole time.
+COMPOSE_WARDEN := docker compose --env-file .env -f deploy/warden/docker-compose.yml
 
 # Refresh the vendored copy of Kaizen's project-side kit. Vendored rather than
 # imported because hashi is a separate repository and there is no package index

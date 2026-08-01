@@ -29,8 +29,13 @@ if [ -n "${GH_TOKEN:-}" ]; then
     git config --global credential.helper store
     printf 'https://oauth2:%s@github.com\n' "$GH_TOKEN" > "$HOME/.git-credentials"
     chmod 600 "$HOME/.git-credentials"
-    printf '%s' "$GH_TOKEN" | gh auth login --with-token
+    # NO `gh auth login --with-token` here. `gh` already authenticates from
+    # GH_TOKEN in the environment, and refuses to store credentials while that
+    # variable is set — it exits non-zero, `set -e` kills the entrypoint, and
+    # `restart: unless-stopped` turns that into a restart loop that looks like
+    # a broken image rather than one redundant command.
     echo "git credentials configured for $(git config --global user.name)"
+    gh auth status 2>&1 | grep -i 'logged in' || true
 else
     echo "GH_TOKEN is empty — local-only mode: the fleet will report changed"
     echo "files instead of opening a PR. Set it in .env to enable pushing."
