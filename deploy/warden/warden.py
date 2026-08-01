@@ -90,10 +90,13 @@ KIND_TO_COMMAND = {
     "product": "/product",
 }
 
-# The Warden's own slug. It reports separately from the fleet so the panel can
-# tell "the pipeline is thinking" from "nothing is happening". It is in the
-# roster below because live status joins on slug — a status push for a slug the
-# manifest never declared has nothing to attach to.
+# The Warden's own slug, used ONLY for the file it writes into the task's status
+# directory. It is deliberately NOT in the roster: the roster is the fleet, and
+# the panel draws it as an org chart, so a dispatch bridge listed there renders
+# as a person — and since none of the five tiers describes infrastructure, any
+# tier we gave it would be a lie. What the project is doing is already visible
+# as the Directive's own state; what the CLI is doing is in this file and in
+# `make warden-logs`.
 WARDEN = "warden"
 
 # The real roster. Every slug is a persona FILENAME verbatim (`dev-anderson`,
@@ -101,7 +104,6 @@ WARDEN = "warden"
 # docs/agents/adopt-the-kit.md §7 in the Kaizen repo.
 ARCHITECT = "architect-xavier"
 ROSTER = [
-    {"slug": WARDEN, "name": "Warden", "role": "Dispatch bridge", "model": "—"},
     # tier "product", never "owner": `owner` is the HUMAN the work is for. The
     # Hub seeds that row itself, and claiming it makes the seeding check find a
     # row and never add you — so the owner would be missing from the chart and
@@ -205,6 +207,22 @@ async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
     return proc.returncode or 0, "\n".join(tail[-20:])
 
 
+def _note(job: DirectiveJob, state: str, progress: str) -> None:
+    """Record what the Warden itself is doing, in the task's status directory.
+
+    Deliberately `files.write_status` and not `job.status()`: the latter also
+    pushes a row to the Hub, and the Hub joins those rows onto roster members.
+    The Warden is not one — pushing under a slug the manifest never declared
+    either lands on nobody or, if declared, draws plumbing onto the fleet's org
+    chart. The file is the right home: greppable, in the repo, next to the
+    agents' own.
+    """
+    if job.files is not None:
+        job.files.write_status(
+            WARDEN, state=state, role="warden", phase="dispatch", progress=progress
+        )
+
+
 async def _git(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "git", "-C", REPO_ROOT, *args,
@@ -245,8 +263,7 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     )
 
     before = await _git("rev-parse", "HEAD")
-    await job.status(WARDEN, "in_progress", role="warden", phase="dispatch",
-                     progress=f"running {command}")
+    _note(job, "in_progress", f"running {command}")
 
     # No status mirroring here on purpose: wardenkit's own status relay polls
     # docs/tracker/{task_id}/status/ every `status_poll_seconds` for the life of
@@ -256,16 +273,14 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     try:
         code, tail = await _run_claude(prompt, job)
     except TimeoutError:
-        await job.status(WARDEN, "done", role="warden", phase="dispatch",
-                         progress="timed out")
+        _note(job, "done", "timed out")
         return JobResult(
             state="failed",
             summary=f"{command} did not finish within the time limit",
             error="the CLI was killed after the run or idle timeout expired",
         )
 
-    await job.status(WARDEN, "done", role="warden", phase="dispatch",
-                     progress=f"{command} exited {code}")
+    _note(job, "done", f"{command} exited {code}")
 
     if code != 0:
         return JobResult(
