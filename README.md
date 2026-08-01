@@ -30,7 +30,7 @@ backlog.
 make setup      # create .venv and install dependencies (needs Python 3.14)
 make test       # verify every zone
 make up-dev     # build and start the stack, ports on 127.0.0.1 only
-curl -fsS http://127.0.0.1:58000/healthz
+curl -fsS http://127.0.0.1:54100/healthz
 make down
 ```
 
@@ -52,6 +52,17 @@ A green suite proves the code holds together. It proves nothing about whether a
 transport survives DPI, and nothing about the charter's first success criterion —
 that is a field observation on a real Russian mobile network, and no test in this
 repository can stand in for it.
+
+## Ports
+
+Published ports live in the block **54100–54299**, bound to `127.0.0.1` only and
+driven from `.env`. Nothing here uses a service's default, so this stack can run
+alongside any other project on the same machine.
+
+| | dev | e2e |
+|---|---|---|
+| control HTTP | `54100` | `54200` |
+| Postgres | `54132` | `54232` |
 
 ## Layout
 

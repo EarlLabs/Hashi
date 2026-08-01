@@ -42,6 +42,15 @@ services:
       STATE_DIR: "/state"
       CLAUDE_CONFIG_DIR: "/state/claude"
       CLAUDE_MODEL: "opus"
+      # Git identity and credential for the fleet. The entrypoint turns these
+      # into git config and a `gh` login at boot; no agent ever reads the value.
+      # Empty GH_TOKEN is a supported mode — the fleet stays local-only and
+      # reports changed files instead of a PR. `-` defaults keep the stack
+      # bootable from a bare .env.
+      GH_TOKEN: "${GH_TOKEN:-}"
+      GIT_USER_NAME: "${GIT_USER_NAME:-hashi fleet}"
+      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-fleet@example.com}"
+      REPO_URL: "${REPO_URL:-}"
     volumes:
       # The real repository, read-write: the fleet's whole job is to change it.
       # This is the one mount worth thinking twice about — an unattended fleet

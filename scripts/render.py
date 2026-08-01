@@ -111,14 +111,31 @@ GLOBAL = {
         "L0 — review each PR: the fleet opens a PR and stops, and you hear from "
         "it after every task"
     ),
-    "GIT_CREDENTIALS": """**This project has no remote; there is nothing to authenticate.**
-Work stays in the working tree and Phase 9 reports which files changed instead
-of a PR link. Do not create a remote to "finish properly" — that is the owner's
-call, and the charter lists publishing as always-ask.
+    "GIT_CREDENTIALS": """The fleet runs inside the Warden container
+(`deploy/warden/`), and `deploy/warden/entrypoint.sh` wires its credentials
+there once at boot, from the environment:
 
-When a remote is added, this section becomes the real thing: a fine-grained
-token in `GH_TOKEN`, scoped to this repository only, with `contents: write` and
-`pull_requests: write` and nothing else.""",
+```sh
+git config --global --add safe.directory /repo
+git config --global user.name  "$GIT_USER_NAME"
+git config --global user.email "$GIT_USER_EMAIL"
+git config --global credential.helper store
+printf 'https://oauth2:%s@github.com\\n' "$GH_TOKEN" > ~/.git-credentials
+printf '%s' "$GH_TOKEN" | gh auth login --with-token
+```
+
+The values come from `.env` (see `.env.example`), which is never committed and
+never read into an agent's context. **You never need `GH_TOKEN` yourself**: git
+and `gh` already hold it, so `git push` and `gh pr create` simply work. If you
+find yourself wanting to read it, you are about to do something wrong.
+
+**`GH_TOKEN` empty is a supported mode, not a broken one.** The project is then
+local-only: work stays in the working tree and Phase 9 reports which files
+changed instead of a PR link. Say that plainly rather than half-pushing.
+
+The token is fine-grained and scoped to this repository, with `contents: write`
+and `pull_requests: write`. The owner creates it; nobody pastes it into a chat.""",
+
     "ZONE_TABLE": ZONE_TABLE,
     "ZONE_KEYS": "control, edge, infra",
     "ZONE_KEY_EXAMPLE": "control",

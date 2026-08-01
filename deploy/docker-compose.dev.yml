@@ -14,8 +14,8 @@
 services:
   db:
     ports:
-      - "127.0.0.1:${DEV_DB_PORT:-55432}:5432"
+      - "127.0.0.1:${DEV_DB_PORT:-54132}:5432"
 
   control:
     ports:
-      - "127.0.0.1:${DEV_API_PORT:-58000}:8000"
+      - "127.0.0.1:${DEV_API_PORT:-54100}:8000"

@@ -64,6 +64,25 @@ so a developer who needs one asks instead of editing.
 - Every module gets a WHAT/WHY/HOW header comment; the owner is learning from
   this codebase, so explain non-obvious decisions where they are made.
 
+## Published ports and credentials
+
+This project's published-port block is **54100–54299, loopback only**, driven
+from `.env`: `+00` app HTTP, `+32` Postgres, `+90` gRPC; the e2e stack takes the
+next hundred so both can run at once. Inside the compose network services keep
+their standard ports — those never collide. **Never publish a service default**
+(`5432`, `6379`, `8000`, `3000`): the host already runs something, and Kaizen's
+own dev overlay publishes `127.0.0.1:5432`.
+
+| | dev | e2e |
+|---|---|---|
+| control HTTP | `54100` | `54200` |
+| Postgres | `54132` | `54232` |
+
+The fleet's git credential is `GH_TOKEN` in `.env`, wired into git and `gh` by
+`deploy/warden/entrypoint.sh` at boot. **No agent ever reads it** — `git push`
+and `gh pr create` already work. Empty `GH_TOKEN` is a supported mode: the
+project stays local-only and reports changed files instead of a PR.
+
 ## Commands
 
 - `make setup` — create `.venv` and install dependencies (Python 3.14)
