@@ -63,7 +63,11 @@ MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
 RUN_TIMEOUT = float(os.environ.get("RUN_TIMEOUT_S", "5400"))
 # No stream event for this long means the CLI is wedged rather than working.
 IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT_S", "600"))
-STATUS_POLL = float(os.environ.get("STATUS_POLL_S", "5"))
+# How often the kit's status relay sweeps docs/tracker/{task_id}/status/ and
+# pushes what changed. The fleet's sub-agents write those files with a file tool
+# and cannot call back into this process, so this poll is the ONLY thing that
+# makes them look busy in the panel instead of idle.
+STATUS_POLL = int(os.environ.get("STATUS_POLL_S", "5"))
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "opus")
 
 # The fleet needs to read, write, run tests and spawn its own subagents — this
@@ -98,10 +102,16 @@ WARDEN = "warden"
 ARCHITECT = "architect-xavier"
 ROSTER = [
     {"slug": WARDEN, "name": "Warden", "role": "Dispatch bridge", "model": "—"},
+    # tier "product", never "owner": `owner` is the HUMAN the work is for. The
+    # Hub seeds that row itself, and claiming it makes the seeding check find a
+    # row and never add you — so the owner would be missing from the chart and
+    # the PO would be labelled human.
     {"slug": "product-owner-ohno", "name": "Taiichi Ohno", "role": "Product Owner",
-     "model": "opus"},
+     "tier": "product", "model": "opus"},
+    # The chart reads owner → PO → architect → developers: Ohno decides WHAT,
+    # Xavier decides HOW.
     {"slug": ARCHITECT, "name": "Charles Xavier", "role": "Solution Architect",
-     "tier": "architect", "model": "opus"},
+     "tier": "architect", "model": "opus", "reports_to": "product-owner-ohno"},
     {"slug": "dev-anderson", "name": "Thomas Anderson", "role": "Control-plane Developer",
      "tier": "developer", "area": "control", "model": "opus", "reports_to": ARCHITECT},
     {"slug": "dev-neumann", "name": "John von Neumann", "role": "Data-plane Developer",
@@ -195,44 +205,6 @@ async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
     return proc.returncode or 0, "\n".join(tail[-20:])
 
 
-async def _mirror_statuses(job: DirectiveJob) -> None:
-    """Forward the fleet's own status files to the Hub as they change.
-
-    The agents write `docs/tracker/{task_id}/status/*.yml` because that is what
-    their personas do; none of them can reach the Hub. Polling the directory
-    keeps the panel live without teaching eight personas a network protocol.
-    """
-    if job.files is None or job.hub is None:
-        return
-    seen: dict[str, tuple] = {}
-    while True:
-        try:
-            for slug, data in job.files.read_all_statuses().items():
-                # `state`, not `status`: that is the key wardenkit writes and the
-                # personas now use. Reading the wrong one silently reports every
-                # agent as in_progress forever — it fails as wrong data, not as
-                # an error, which is the worst way for this to break.
-                fingerprint = (
-                    data.get("state", ""), data.get("progress", ""), data.get("blockers", "")
-                )
-                if seen.get(slug) == fingerprint:
-                    continue
-                seen[slug] = fingerprint
-                await job.hub.push_status(
-                    job.id, slug, data.get("state", "in_progress"),
-                    task_id=job.task_id,
-                    role=data.get("role", ""),
-                    phase=data.get("phase", ""),
-                    progress=data.get("progress", ""),
-                    blockers=data.get("blockers", ""),
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:                     # never let the mirror kill the job
-            logger.exception("#%s: status mirror hiccup", job.id)
-        await asyncio.sleep(STATUS_POLL)
-
-
 async def _git(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "git", "-C", REPO_ROOT, *args,
@@ -276,7 +248,11 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     await job.status(WARDEN, "in_progress", role="warden", phase="dispatch",
                      progress=f"running {command}")
 
-    mirror = asyncio.create_task(_mirror_statuses(job))
+    # No status mirroring here on purpose: wardenkit's own status relay polls
+    # docs/tracker/{task_id}/status/ every `status_poll_seconds` for the life of
+    # the job and sweeps once more after it ends. Running a second poller
+    # alongside it would double-push and race it — and the kit's handles the
+    # `status:`/`updated:` aliases and change-detection that this one did not.
     try:
         code, tail = await _run_claude(prompt, job)
     except TimeoutError:
@@ -287,8 +263,6 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
             summary=f"{command} did not finish within the time limit",
             error="the CLI was killed after the run or idle timeout expired",
         )
-    finally:
-        mirror.cancel()
 
     await job.status(WARDEN, "done", role="warden", phase="dispatch",
                      progress=f"{command} exited {code}")
@@ -333,7 +307,8 @@ async def main() -> None:
     # approves, and a project registered but not yet listening is
     # indistinguishable from one that is down.
     servicer = WardenServicer(
-        manifest, run_pipeline, hub=hub, repo_root=REPO_ROOT, heartbeat_seconds=10
+        manifest, run_pipeline, hub=hub, repo_root=REPO_ROOT, heartbeat_seconds=10,
+        status_poll_seconds=STATUS_POLL,
     )
     server = await serve(servicer, BIND_ADDR)
     logger.info("hashi Warden listening on %s, enrolling with %s", BIND_ADDR, HUB_ADDR)

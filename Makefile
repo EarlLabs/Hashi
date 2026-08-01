@@ -110,8 +110,10 @@ warden-sync:
 	cp -R "$(KAIZEN)/infra/proto/gen"      $(WARDEN_VENDOR)/infra/proto/gen
 	cp -R "$(KAIZEN)/infra/wardenkit"      $(WARDEN_VENDOR)/infra/wardenkit
 	find $(WARDEN_VENDOR) -name __pycache__ -type d -prune -exec rm -rf {} +
-	@git -C "$(KAIZEN)" rev-parse --short HEAD > $(WARDEN_VENDOR)/KAIZEN_COMMIT 2>/dev/null \
-	  || echo "unknown" > $(WARDEN_VENDOR)/KAIZEN_COMMIT
+	@# `-dirty` matters: the kit is usually edited before it is committed, so a
+	@# bare hash would claim two different vendored copies are the same one.
+	@{ git -C "$(KAIZEN)" describe --always --dirty --abbrev=7 2>/dev/null \
+	   || echo "unknown"; } > $(WARDEN_VENDOR)/KAIZEN_COMMIT
 	@echo "vendored from Kaizen @ $$(cat $(WARDEN_VENDOR)/KAIZEN_COMMIT)"
 
 # The Kaizen stack must be up first — this joins its network.

@@ -223,13 +223,31 @@ class TrackerFiles:
         return loads(path.read_text(encoding="utf-8"))
 
     def read_all_statuses(self) -> dict[str, dict]:
-        """Every agent's latest Status for this task, keyed by agent slug."""
+        """Every agent's latest Status for this task, keyed by agent slug.
+
+        WHY the FILENAME is the key and the `agent:` field is not: the filename
+        is what `status_path()` derives from the slug, so it is the one value
+        guaranteed to be the slug the roster declared — and the roster slug is
+        what the Hub joins live status onto. A fleet of Claude sub-agents writes
+        these files by hand, and a persona that writes `agent: anderson` inside
+        `dev-anderson.yml` would otherwise mirror its state onto a member that
+        does not exist, leaving the real one showing `idle` while it works.
+
+        `state` is also accepted as `status`, for the same reason: a hand-written
+        file is going to use whichever word the persona's example showed, and
+        silently ignoring one of them is the same invisible failure.
+        """
         if not self.status_dir.exists():
             return {}
         out: dict[str, dict] = {}
         for path in sorted(self.status_dir.glob("*.yml")):
             data = loads(path.read_text(encoding="utf-8"))
-            out[data.get("agent") or path.stem] = data
+            if not data.get("state") and data.get("status"):
+                data["state"] = data["status"]
+            if not data.get("updated_at") and data.get("updated"):
+                data["updated_at"] = data["updated"]
+            data.setdefault("agent", path.stem)
+            out[path.stem] = data
         return out
 
 

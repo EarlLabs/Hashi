@@ -34,6 +34,8 @@
 
 import asyncio
 import logging
+import os
+import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +47,11 @@ from infra.wardenkit.client import CHANNEL_OPTIONS, HubClient
 from infra.wardenkit.trackerfiles import TrackerFiles, slugify
 
 logger = logging.getLogger(__name__)
+
+# Exit code for a scope="self" restart. Distinct from 0 and 1 so a supervisor's
+# logs say "asked to restart" rather than "crashed" — the two need different
+# reactions from whoever reads them at 3am.
+_EXIT_RESTART = 42
 
 # The two rejection reasons the Hub branches on (warden.proto DispatchAck).
 REASON_AT_CAPACITY = "at_capacity"
@@ -208,12 +215,25 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
         hub: HubClient | None = None,
         repo_root: str | Path = ".",
         heartbeat_seconds: int = 30,
+        status_poll_seconds: int = 5,
+        restart_hook=None,
+        restart_cooldown_seconds: int = 60,
     ) -> None:
         self._manifest = manifest
         self._handler = handler
         self._hub = hub
         self._repo_root = Path(repo_root)
         self._heartbeat_seconds = heartbeat_seconds
+        self._status_poll_seconds = status_poll_seconds
+        # What the status relay last pushed, per directive, per agent — so a
+        # sweep only sends what CHANGED. Dropped when the job ends.
+        self._relayed: dict[int, dict[str, tuple]] = {}
+        # Optional project-defined restart. Called with the RestartRequest after
+        # in-flight work is dropped; a project that knows how to re-exec its own
+        # pipeline runner does it here instead of taking the process down.
+        self._restart_hook = restart_hook
+        self._restart_cooldown = restart_cooldown_seconds
+        self._last_restart = 0.0
         # An empty `kinds` list means "this project accepts anything" — a fresh
         # project shouldn't have to enumerate its pipelines before it can be
         # given its first Directive.
@@ -331,6 +351,7 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
     async def _run(self, job: DirectiveJob) -> None:
         """Run one handler, heartbeating throughout, and report the outcome."""
         beat = asyncio.create_task(self._heartbeat_loop(job))
+        relay = asyncio.create_task(self._status_relay_loop(job))
         try:
             result = await self._handler(job)
             outcome = result if isinstance(result, JobResult) else JobResult()
@@ -363,8 +384,77 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
                 )
         finally:
             beat.cancel()
+            relay.cancel()
+            # One last sweep AFTER the loop is cancelled: the most interesting
+            # transitions (the last `review`, the final `done`) happen in the
+            # closing seconds of a job, and a poll loop that simply stops would
+            # leave the panel showing whatever it saw one tick earlier — the
+            # fleet frozen mid-flight forever.
+            await self._relay_statuses(job)
             self._jobs.pop(job.id, None)
             self._task_ids.pop(job.id, None)
+            self._relayed.pop(job.id, None)
+
+    async def Restart(self, request, context):
+        """Drop in-flight work and (optionally) take this process down.
+
+        The owner asks, through the Hub. We decide — and refusing is a real
+        answer, not an error: a restart storm against a project that is merely
+        slow costs more than the wedge it was meant to clear, so a second
+        request inside the cooldown is declined with a reason rather than
+        obeyed.
+
+        `scope=jobs` (the default) is the cheap one: everything running is
+        cancelled, the process stays up with its logs intact, and the Hub
+        requeues what we dropped. `scope=self` additionally exits, leaving the
+        container's restart policy to bring up a fresh process — for the case
+        where the Warden's own state is the problem.
+        """
+        now = time.monotonic()
+        if now - self._last_restart < self._restart_cooldown:
+            wait = int(self._restart_cooldown - (now - self._last_restart))
+            logger.warning("Refusing restart: asked again %ds ago", int(now - self._last_restart))
+            return warden_pb2.RestartAck(
+                accepted=False,
+                reason=f"restarted less than {self._restart_cooldown}s ago; try again in {wait}s",
+            )
+        self._last_restart = now
+
+        scope = (request.scope or "jobs").strip().lower()
+        if scope not in ("jobs", "self"):
+            return warden_pb2.RestartAck(accepted=False, reason=f"unknown scope '{scope}'")
+
+        dropped = list(self._jobs.keys())
+        logger.warning(
+            "Restart requested by %s (scope=%s): %s — dropping %d job(s)",
+            request.requested_by or "unknown", scope, request.reason or "no reason given",
+            len(dropped),
+        )
+        for did in dropped:
+            task = self._jobs.pop(did, None)
+            self._task_ids.pop(did, None)
+            self._relayed.pop(did, None)
+            if task is not None and not task.done():
+                task.cancel()
+        # Let the cancellations unwind before answering, so "dropped" is true by
+        # the time the Hub hears it rather than merely requested.
+        await asyncio.sleep(0)
+
+        if self._restart_hook is not None:
+            try:
+                await self._restart_hook(request)
+            except Exception:
+                logger.exception("restart_hook failed")
+
+        if scope == "self":
+            # Ack FIRST, exit after: an RPC that dies with the process reaches
+            # the Hub as an unavailable channel, which is indistinguishable from
+            # the project being down for a bad reason.
+            asyncio.get_running_loop().call_later(1.0, lambda: os._exit(_EXIT_RESTART))
+            return warden_pb2.RestartAck(
+                accepted=True, restarting_in_sec=1, dropped_directives=dropped
+            )
+        return warden_pb2.RestartAck(accepted=True, dropped_directives=dropped)
 
     async def _heartbeat_loop(self, job: DirectiveJob) -> None:
         """Keep this Directive's lease alive for as long as the job exists."""
@@ -373,6 +463,75 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
         while True:
             await asyncio.sleep(self._heartbeat_seconds)
             await self._hub.heartbeat(job.id, job.task_id)
+
+    async def _status_relay_loop(self, job: DirectiveJob) -> None:
+        """Mirror the Status FILES this job's agents write up to the Hub.
+
+        WHY this exists: `job.status()` writes the file and pushes the row in
+        one call, which is right for a pipeline written in Python. But the
+        fleets this kit was built for are Claude sub-agents — they write
+        `docs/tracker/{task_id}/status/{agent}.yml` with a file-write tool and
+        cannot call back into this process. Without a relay every one of them
+        stays `idle` in the panel no matter how much work it is doing, which is
+        precisely the symptom that says "the tracker is lying" and makes the
+        whole fleet view worthless.
+
+        Polling, not a filesystem watcher: the tree is a handful of small files,
+        the interval is seconds, and inotify/FSEvents differ per platform and
+        miss writes through some editors and containers' bind mounts. A poll
+        that is a few seconds late is fine; a watcher that silently misses an
+        event is the same bug again.
+        """
+        if self._hub is None or job.files is None:
+            return
+        while True:
+            await asyncio.sleep(self._status_poll_seconds)
+            await self._relay_statuses(job)
+
+    async def _relay_statuses(self, job: DirectiveJob) -> None:
+        """Push every Status file that CHANGED since the last sweep.
+
+        Only changes: a Directive with a dozen agents would otherwise push a
+        dozen identical rows every few seconds for hours, and the Hub would
+        rewrite `updated_at` on each — making a stalled agent look freshly
+        active, which is the opposite of what this view is for.
+        """
+        if self._hub is None or job.files is None:
+            return
+        try:
+            statuses = job.files.read_all_statuses()
+        except OSError as e:  # a half-written file, a vanished dir — try later
+            logger.debug("Status relay could not read %s: %s", job.task_id, e)
+            return
+        seen = self._relayed.setdefault(job.id, {})
+        for slug, data in statuses.items():
+            state = str(data.get("state") or "").strip()
+            if not state:
+                continue  # a file with no state says nothing worth pushing
+            finger = (
+                state,
+                str(data.get("phase") or ""),
+                str(data.get("progress") or ""),
+                str(data.get("blockers") or ""),
+                str(data.get("updated_at") or ""),
+            )
+            if seen.get(slug) == finger:
+                continue
+            try:
+                await self._hub.push_status(
+                    job.id, slug, state, task_id=job.task_id,
+                    role=str(data.get("role") or ""),
+                    progress=str(data.get("progress") or ""),
+                    blockers=str(data.get("blockers") or ""),
+                    phase=str(data.get("phase") or ""),
+                )
+            except Exception as e:
+                # The Hub being briefly unreachable must never kill the job that
+                # is doing the actual work. Leave the fingerprint unrecorded so
+                # the next sweep retries this agent.
+                logger.warning("Status relay failed for %s: %s", slug, e)
+                continue
+            seen[slug] = finger
 
 
 async def serve(

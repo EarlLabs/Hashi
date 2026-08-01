@@ -57,6 +57,11 @@ class WardenStub:
                 request_serializer=warden__pb2.HealthRequest.SerializeToString,
                 response_deserializer=warden__pb2.WardenHealth.FromString,
                 _registered_method=True)
+        self.Restart = channel.unary_unary(
+                '/kaizen.warden.Warden/Restart',
+                request_serializer=warden__pb2.RestartRequest.SerializeToString,
+                response_deserializer=warden__pb2.RestartAck.FromString,
+                _registered_method=True)
 
 
 class WardenServicer:
@@ -100,6 +105,23 @@ class WardenServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Restart(self, request, context):
+        """Ask the project to restart itself. The OWNER asks; the Hub only relays.
+
+        WHY the project restarts ITSELF rather than the Hub restarting it: the Hub
+        dials projects across a network and has no business holding a Docker socket
+        or an ssh key for someone else's host — that is root-equivalent power over
+        every machine that ever registered. Here the blast radius stays inside the
+        project: it decides what "restart" means for it, and it may refuse.
+
+        It exists because a wedged fleet is otherwise unrecoverable without the
+        owner walking to the host: the process is alive (so nothing expires) but
+        nothing is moving.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_WardenServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -122,6 +144,11 @@ def add_WardenServicer_to_server(servicer, server):
                     servicer.Health,
                     request_deserializer=warden__pb2.HealthRequest.FromString,
                     response_serializer=warden__pb2.WardenHealth.SerializeToString,
+            ),
+            'Restart': grpc.unary_unary_rpc_method_handler(
+                    servicer.Restart,
+                    request_deserializer=warden__pb2.RestartRequest.FromString,
+                    response_serializer=warden__pb2.RestartAck.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -235,6 +262,33 @@ class Warden:
             '/kaizen.warden.Warden/Health',
             warden__pb2.HealthRequest.SerializeToString,
             warden__pb2.WardenHealth.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Restart(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kaizen.warden.Warden/Restart',
+            warden__pb2.RestartRequest.SerializeToString,
+            warden__pb2.RestartAck.FromString,
             options,
             channel_credentials,
             insecure,
