@@ -1,0 +1,66 @@
+agent: product-owner-ohno
+role: product-owner
+task: "ohno-6 — close the review loop: apply Xavier's review to the plan, bring
+  the backlog into line with it, and give the owner a route he can say yes to"
+status: review
+progress: >-
+  Done in this run (the two previous runs died on context limits, both of them
+  after correcting research.md and before touching the durable backlog):
+
+  1. docs/product/backlog.md is now in exact line with
+  docs/research/product-owner-ohno-4/research.md revision 3. It gained item 0
+  (infra-env-out-of-warden-mount, blocked on the owner) as an out-of-milestone
+  queue-jumper; item 3 became edge-transport-vless-ws-tls (was
+  edge-transport-amneziawg, blocker B2) with the move of AmneziaWG to M4 item 16
+  recorded as a move, not a cancellation; the three items created in revision 2
+  are in place in their correct order — 1a infra-upstream-checkers in M1, 3a
+  infra-control-runtime-wiring before item 4, 6a control-key-material between 6
+  and 7; items 7 and 8 now declare their dependency on item 1 (finding F8 — this
+  is the fix research.md section 8.5 already claimed was written here and was
+  not); M5 gained sketch 25 edge-transport-amneziawg-client in status blocked;
+  the traceability table carries the "half" qualifier for items 8 and 9 (nit N5)
+  and rows for 0, 3a, 6a and 25; charter amendment E was added to the pending
+  table; the always-on rules gained "a scenario may not assert on a diff" (F1)
+  and "all M1-M2 acceptance runs on one developer's laptop" (F7 / Q9). Nothing
+  was deleted — every change is in the decision log with its reason. The
+  roadmap table needed no change: no milestone was re-ordered by the review.
+
+  2. docs/tracker/ohno-6/tasks/ohno-plan-for-the-owner.md re-checked against the
+  corrected backlog and research.md, and its drift fixed: it now opens the "what
+  to start with" section with item 0 before item 1 (it named only item 1, while
+  the plan names two items in that order); the queue line carries the real ids;
+  amendment E moved out of "what I decided myself" into the owner's decision
+  table where it belongs; the three new backlog items are named for the owner.
+
+  3. Two small drifts fixed inside research.md itself: section 7 pointed at
+  docs/tracker/ohno-6/plan-for-the-owner.md (wrong path), and the summary list
+  of what the owner must answer had six entries while section 7 had seven —
+  Q10 was missing from the summary.
+blockers: >-
+  NOTHING DISPATCHED. No ohno-to-xavier task file was written, no developer was
+  spawned: the owner asked for the plan, not for the build to start, and the WIP
+  limit of one stands. Item 1 is not dispatched because the route is not
+  confirmed.
+
+  Awaiting the owner, in the order the plan puts them: yes/no on the route
+  M1 -> M5; Q2 (move the real .env out of the warden mount — this is item 0 and
+  it needs one action from him, which is why item 0 sits in blocked and not
+  queued); Q10 (lift the write protection on .claude/** so Xavier can apply the
+  three rulebook corrections whose final text is already written in
+  docs/tracker/ohno-5/tasks/xavier-blocked-edits-ohno-5.md); Q1 (does he have
+  working bypass access right now — the only answer that re-orders the whole
+  route); charter amendment C (criterion 1 gets owner-executed acceptance);
+  Q9 (accept that M1-M2 acceptance lives on one developer's laptop); Q3 (is the
+  remote repository public). Q7 is needed before item 8, Q4/Q5/Q6 one iteration
+  before M3, amendment E by M4 — none of them block M1 or M2.
+
+  I ran unattended, so none of the above could be asked. Nothing was guessed
+  into the plan as settled: every one of them is recorded as pending.
+
+  One thing I could not verify and did not claim: Xavier was applying sections
+  A, B and C of his blocked-edits file to .claude/** in parallel with this run.
+  I did not touch .claude/** and I do not know whether he succeeded. If he did,
+  the warning I left in the backlog under M1 ("the rulebooks in the tree still
+  carry the old wording") stops being true and should be struck before item 1 is
+  specified.
+updated_at: 2026-08-01T00:00:00Z

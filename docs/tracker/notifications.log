@@ -1,0 +1,20 @@
+[2026-08-01T05:03:29Z] 🔬 Начинаю исследование: "Позови product owner (ohno) — хочу услышать его план по проекту, куда он предлагает двигаться и с чего начать"
+⏱ Ожидаемое время: 5-15 минут.
+task-id: product-owner-ohno-4
+[2026-08-01T05:09:30Z] 📄 Curie: survey done — docs/research/product-owner-ohno-4/state-of-the-repo.md (0/6 charter criteria met, 14 tests green, 0 e2e scenarios)
+[2026-08-01T05:29:47Z] Xavier отревьюил план ohno: approved-with-changes. 4 блокера (B1 сериализация URI в edge, B2 AmneziaWG не представим в URI-подписке — решение за ohno, B3 META в registry.py, B4 в M2 не хватает infra-задачи под Postgres). ohno вносит правки.
+[2026-08-01T18:00:00Z] План готов и доведён до конца (ohno-6). Ничего не диспатчено.
+
+Читать: docs/tracker/ohno-6/tasks/ohno-plan-for-the-owner.md — маршрут M1→M5 и с чего начать.
+
+Что доделано в этом прогоне:
+- Бэклог приведён в соответствие с планом (docs/product/backlog.md): пункт 3 стал edge-transport-vless-ws-tls (блокер B2, AmneziaWG перенесён в M4, не отменён); заведены 1a infra-upstream-checkers, 3a infra-control-runtime-wiring, 6a control-key-material; пункты 7 и 8 теперь зависят от пункта 1 (F8); заведён пункт 0 infra-env-out-of-warden-mount в статусе blocked.
+- Xavier повторно проверил свои три правки: якоря точны на HEAD, применить их — механика.
+
+ОДИН ГЕЙТ, ЗАБЛОКИРОВАН ВТОРОЙ РАЗ: .claude/** защищён от записи (Edit и Write, включая несуществующий пробный путь — это path-scoped запрет, а не сбой инструмента). Три правки Xavier не применены. Пока 02-edge-rulebook.md говорит render_client -> dict и безусловный запрет на edge/registry.py, пункт 1 нельзя спекать — разработчик прочитает текст, противоположный заданию. Разблокировать: дать запись на .claude/** на один прогон, ИЛИ применить руками секции A, B, C и D1 из docs/tracker/ohno-5/tasks/xavier-blocked-edits-ohno-5.md.
+
+От тебя ждём (до диспатча пункта 1): да/нет маршруту M1→M5; Q2 (.env вынести из read-write монтирования warden — риск живой сейчас); Q10 (запись в .claude/**); Q1 (есть ли рабочий обход прямо сейчас); амендмент C; Q9 (приёмка M1–M2 на одном ноутбуке); Q3 (публичность репозитория).
+
+Новое от Xavier: коммит 62f0b8b завёл рабочие git-креды флоту, но .claude/git-workflow.md нигде не повторяет, что push — always-ask по чартеру. Скажи: разрешение на push пер-задача или постоянное для develop.
+
+Статусы: docs/tracker/ohno-6/status/{product-owner-ohno,architect-xavier}.yml

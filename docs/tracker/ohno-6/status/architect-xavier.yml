@@ -1,0 +1,207 @@
+agent: architect-xavier
+role: architect
+task: "Apply the architect-owned §7 corrections (A, B, C) and re-verify D"
+zones: [control, edge, infra]
+status: blocked
+state: blocked
+verdict: still-blocked-on-the-same-permission
+progress: >-
+  Second attempt at the same three corrections. All anchors re-verified against
+  HEAD 907813a and every one of them is exact and unmoved — .claude/workflow.md
+  and .claude/projects/02-edge-rulebook.md are byte-identical to b48ef90
+  (`git diff b48ef90..HEAD` reports no change to either file), so the text in
+  docs/tracker/ohno-5/tasks/xavier-blocked-edits-ohno-5.md still applies
+  verbatim. None of it could be written: .claude/** is still write-protected,
+  for both Edit and Write, including a path that does not exist. I did not route
+  around it with a shell command. Only file written this run is this status file.
+permission_probe:
+  conclusion: "path-scoped on .claude/**, not a tool quirk and not a per-file lock"
+  refusals:
+    - tool: Edit
+      path: ".claude/projects/02-edge-rulebook.md"
+      intent: "correction A1 — render_client's return type in the layout block"
+      result: "Permission to use Edit has been denied"
+    - tool: Edit
+      path: ".claude/workflow.md"
+      intent: "correction C — rule 4's sync command"
+      result: "Permission to use Edit has been denied"
+    - tool: Edit
+      path: ".claude/git-workflow.md"
+      intent: "correction D1 — drop `git pull origin develop` from the branch flow"
+      result: "Permission to use Edit has been denied"
+    - tool: Write
+      path: ".claude/.xavier-write-probe-ohno-6"
+      intent: "probe: a path that does not exist, to separate file-lock from path-lock"
+      result: "Permission to use Write has been denied"
+  what_the_owner_owes: >-
+    A write grant on .claude/** for one run, or applying
+    docs/tracker/ohno-5/tasks/xavier-blocked-edits-ohno-5.md sections A, B and C
+    by hand. Nothing else about these three corrections is open — no decision, no
+    ambiguity, no anchor drift.
+corrections:
+  A_B1:
+    document: ".claude/projects/02-edge-rulebook.md"
+    section_of_blocked_edits_file: "A (A1–A4)"
+    anchors_reverified_at_head: true
+    anchors_moved: none
+    applied: false
+    blocked_by: "Edit denied on .claude/projects/02-edge-rulebook.md"
+    file_still_says: "render_client(node, credential) -> dict at :30 and :66"
+    should_say: >-
+      render_client(node, credential) -> ClientEntry. The transport owns its URI
+      serialisation end to end and returns the finished client entry: `entry`
+      (one line, no display label), plus protocol-agnostic metadata —
+      `display_label`, `country_label` (from the node record's location label,
+      never a geo lookup) and `node_id`. control orders, composes the display
+      text, appends it as the URI fragment, joins, base64-encodes, and treats
+      every field as opaque text. Test of the contract: adding a transport adds
+      zero lines to the subscription renderer.
+  B_B3:
+    document: ".claude/projects/02-edge-rulebook.md"
+    section_of_blocked_edits_file: "B (B1–B2)"
+    anchors_reverified_at_head: true
+    anchors_moved: none
+    applied: false
+    blocked_by: "Edit denied on .claude/projects/02-edge-rulebook.md"
+    file_still_says: >-
+      an unqualified prohibition at :37-39 — any change needing an edit in
+      registry.py means the contract is too narrow
+    should_say: >-
+      Adding the default port range to TransportMeta and adding ClientEntry to
+      edge/registry.py is authorised inside M1 item 1
+      (edge-transport-contract-vless-reality) and only there: the contract being
+      completed for the first time, not widened for a special case. From the
+      second transport onward the rule applies unchanged and without appeal.
+  C_N2:
+    document: ".claude/workflow.md"
+    section_of_blocked_edits_file: "C"
+    anchors_reverified_at_head: true
+    anchors_moved: none
+    applied: false
+    blocked_by: "Edit denied on .claude/workflow.md"
+    file_still_says: >-
+      `git pull origin develop` at :33 and the false bold claim "This repository
+      has no `origin` yet" at :35
+    git_state_reverified_at_head: >-
+      origin = https://github.com/earlzdev/Hashi.git; the only remote branch is
+      remotes/origin/main; local main tracks it and is ahead 5; develop exists
+      locally only and currently sits on the same commit as main.
+    one_nuance_found_this_run: >-
+      Local main is ahead of origin/main by 5 commits, so section C's optional
+      `git merge --ff-only origin/main` is a no-op today rather than an error.
+      The advice stays correct — it is a guard, not an instruction to run — and
+      the text needs no change. Recorded so nobody reads "already up to date" as
+      a symptom.
+d_reverification:
+  status: "proposed, not decided — unchanged in kind, reduced in size"
+  document: ".claude/git-workflow.md"
+  what_changed_under_me: >-
+    Commit 62f0b8b rewrote only the Credentials section (git diff b48ef90..HEAD
+    touches nothing else in this file). Everything above it kept its line
+    numbers; everything below shifted by +16.
+  D1:
+    point: "branch flow at :29-34 still runs `git pull origin develop`"
+    still_open: true
+    permission_question: none
+    reasoning: >-
+      Purely factual drift. There is no origin/develop, so the command fails
+      literally; replacing it with the local `git merge main --no-edit` changes
+      which command works, not what an agent is allowed to do. This is the one
+      point of D I judged applicable without the owner, and I would have applied
+      it this run.
+    applied: false
+    blocked_by: "Edit denied on .claude/git-workflow.md"
+  D2:
+    point: "\"This project has no remote; there is nothing to authenticate\""
+    still_open: false
+    superseded_by: "62f0b8b"
+    reasoning: >-
+      Confirmed gone. GH_TOKEN wiring via deploy/warden/entrypoint.sh is now
+      documented, and empty GH_TOKEN is stated as a supported local-only mode.
+      CLAUDE.md carries the same. D2 is withdrawn — do not apply it.
+  D2_successor:
+    point: >-
+      NEW, opened by 62f0b8b: the Credentials section now says git push and
+      gh pr create "simply work", and the file's own flow says the orchestrator
+      pushes at Phase 9 — but neither restates that pushing is on the charter's
+      always-ask list (docs/product/charter.md, Autonomy: "creating a remote
+      repository, pushing, or publishing anything").
+    still_open: true
+    permission_question: yes
+    reasoning: >-
+      While there was no working credential this was latent. It is now live: the
+      mechanism works, and the only thing standing between a fleet run and a push
+      is a sentence that is in the charter but not in the file agents read before
+      touching git. I am not resolving a charter always-ask by editing my own
+      workflow document. The owner states which it is — per-task authorisation
+      (my reading of the charter) or standing authorisation for develop — and I
+      write it down.
+    applied: false
+  D3:
+    point: "`gh pr create --base develop` at :52-57 cannot succeed today"
+    still_open: true
+    permission_question: yes
+    reasoning: >-
+      Verified against HEAD: develop is local only, so there is no base branch on
+      the remote to target. The factual half is settled. The fix is not, because
+      the fix is a gate — publish develop, and authorise the push for that task —
+      and both halves of that gate are the owner's call, not mine.
+    applied: false
+  D4:
+    point: "section title \"When there is no remote\", now at :150-154"
+    still_open: true
+    permission_question: partial
+    reasoning: >-
+      The title is factually wrong (a remote exists) while the behaviour it
+      prescribes — report which files changed instead of a PR link — is still
+      right. Retitling to "When there is no PR target" is factual. Restating the
+      condition that triggers it is not: with credentials working, that condition
+      is now "empty GH_TOKEN, or develop unpublished, or the push not authorised
+      for this task", and the third clause is exactly the D2-successor question.
+      So D4 is applied together with D3, or not at all.
+    applied: false
+item_1_readiness:
+  open_architect_questions: 0
+  gate: >-
+    One unapplied architect edit, unchanged from ohno-5 and now confirmed at
+    HEAD. Until .claude/projects/02-edge-rulebook.md is updated, the developer who
+    builds M1 item 1 reads `-> dict` at :30 and :66 and an unqualified
+    prohibition on touching edge/registry.py at :37-39, and he will correctly
+    stop and escalate on day one. Item 1 is not speccable until A and B are in
+    the file, or the spec would have to contradict the rulebook it tells him to
+    obey.
+  also_required_in_the_item_1_spec: >-
+    edge/AGENTS.md:30-32 repeats the unqualified registry prohibition. That file
+    is in the edge zone and is Neumann's, not mine — item 1's spec must carry the
+    authorisation explicitly and instruct him to bring edge/AGENTS.md into line
+    in the same run. Re-confirmed this run; not acted on, deliberately.
+  not_done_deliberately:
+    - "item 1 spec not written and nothing dispatched — the owner has not confirmed the M1..M5 route and ohno's WIP limit of one stands"
+    - "no security review opened"
+    - "pyproject.toml auto-discovery fix (§7.1) not made — lands inside item 1 as a developer handoff"
+    - "edge/registry.py and edge/AGENTS.md not touched — both are Neumann's under item 1"
+scope_held:
+  - "wrote exactly one file: docs/tracker/ohno-6/status/architect-xavier.yml"
+  - "did not touch docs/product/backlog.md, docs/research/** or docs/tracker/ohno-6/tasks/ohno-plan-for-the-owner.md — ohno is editing those in parallel"
+  - "edited no zone path in control/**, edge/** or deploy/**"
+  - "no commit, no push, no PR"
+blockers: >-
+  BLOCKED ON PERMISSION, second run: .claude/** is write-protected for Edit and
+  Write alike, including a non-existent probe path. Corrections A, B and C are
+  final, anchor-verified at HEAD 907813a, and mechanical to apply; D1 is now
+  established as purely factual and equally ready. All four need either a write
+  grant on .claude/** or a hand-application of
+  docs/tracker/ohno-5/tasks/xavier-blocked-edits-ohno-5.md. This is the only
+  architect-side gate on M1 item 1.
+owner_decisions_pending:
+  - "STILL OPEN, now twice-blocked: grant .claude/** write access for one run, or apply blocked-edits sections A, B and C by hand — this is the single gate on item 1 being speccable"
+  - "D1 needs no decision, only the same write grant — factual drift, no permission question, ready to apply"
+  - "D2 is WITHDRAWN — 62f0b8b fixed it; nothing owed"
+  - "NEW (D2-successor): the Credentials section documents that push and gh pr create work, but nothing in .claude/git-workflow.md restates that pushing is charter always-ask. Say which applies — per-task authorisation, or standing authorisation for develop — and I will write it down. I will not resolve a charter always-ask by editing my own workflow file"
+  - "D3 + D4 travel together: publish develop and authorise the push, or keep the local-only ending and retitle the section. Either is coherent; choosing is yours"
+  - "B2: AmneziaWG vs the base64 subscription format — ohno's what-call, in flight this run"
+  - "ohno's Q7 (which clients friends actually use) raised in priority to before item 8"
+  - "ohno's Q2 (.env inside the warden read-write mount) — endorse option (a), now"
+  - "whether M1-M2 acceptance being local-only (F7) is accepted explicitly — the trade-off should be named out loud rather than inherited silently"
+  - "confirmation of the M1..M5 route itself — everything above waits on it"
+updated_at: 2026-08-01T18:00:00Z
