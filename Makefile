@@ -13,7 +13,8 @@ COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
 .PHONY: setup env test test-control test-edge test-infra test-e2e lint \
-        up up-dev down logs ps e2e-up e2e-down e2e-reset
+        up up-dev down logs ps e2e-up e2e-down e2e-reset \
+        warden-sync warden-up warden-down warden-logs
 
 ## --- setup ------------------------------------------------------------------
 
@@ -50,7 +51,7 @@ test-edge:
 
 test-infra:
 	$(need_venv)
-	$(PY) -m ruff check tests/infra
+	$(PY) -m ruff check tests/infra deploy/warden
 	$(PY) -m pytest tests/infra -q
 
 # Acceptance scenarios, run against the disposable e2e stack (`make e2e-up`) —
@@ -88,6 +89,40 @@ logs:
 
 ps:
 	$(COMPOSE) ps
+
+## --- warden: the tracker integration (see deploy/warden/README.md) ----------
+
+# Where Kaizen lives, for the vendored kit. Override: make warden-sync KAIZEN=…
+KAIZEN        ?= $(HOME)/stuff/projects/Kaizen
+WARDEN_VENDOR := deploy/warden/vendor
+COMPOSE_WARDEN := docker compose -f deploy/warden/docker-compose.yml
+
+# Refresh the vendored copy of Kaizen's project-side kit. Vendored rather than
+# imported because hashi is a separate repository and there is no package index
+# to install it from — see deploy/warden/README.md.
+warden-sync:
+	@test -d "$(KAIZEN)/infra/wardenkit" || { \
+	  echo "no Kaizen at $(KAIZEN) — run: make warden-sync KAIZEN=/path/to/Kaizen"; exit 1; }
+	rm -rf $(WARDEN_VENDOR)/infra
+	mkdir -p $(WARDEN_VENDOR)/infra/proto
+	cp "$(KAIZEN)/infra/__init__.py"       $(WARDEN_VENDOR)/infra/
+	cp "$(KAIZEN)/infra/proto/__init__.py" $(WARDEN_VENDOR)/infra/proto/
+	cp -R "$(KAIZEN)/infra/proto/gen"      $(WARDEN_VENDOR)/infra/proto/gen
+	cp -R "$(KAIZEN)/infra/wardenkit"      $(WARDEN_VENDOR)/infra/wardenkit
+	find $(WARDEN_VENDOR) -name __pycache__ -type d -prune -exec rm -rf {} +
+	@git -C "$(KAIZEN)" rev-parse --short HEAD > $(WARDEN_VENDOR)/KAIZEN_COMMIT 2>/dev/null \
+	  || echo "unknown" > $(WARDEN_VENDOR)/KAIZEN_COMMIT
+	@echo "vendored from Kaizen @ $$(cat $(WARDEN_VENDOR)/KAIZEN_COMMIT)"
+
+# The Kaizen stack must be up first — this joins its network.
+warden-up:
+	$(COMPOSE_WARDEN) up -d --build
+
+warden-down:
+	$(COMPOSE_WARDEN) down
+
+warden-logs:
+	$(COMPOSE_WARDEN) logs -f --tail=100
 
 ## --- e2e (see .e2e/profile.yml) ---------------------------------------------
 

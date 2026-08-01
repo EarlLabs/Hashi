@@ -32,6 +32,9 @@ packages = ["control", "control.app", "edge", "edge.transports"]
 [tool.ruff]
 target-version = "py314"
 line-length = 100
+# Vendored from Kaizen (see deploy/warden/README.md) — not ours to reformat, and
+# a lint failure there would be a false signal about this repo's code.
+exclude = ["deploy/warden/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

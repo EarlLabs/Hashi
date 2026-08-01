@@ -75,6 +75,11 @@ Open a session in this directory — the agent fleet lives in *this* repo's
 - `/develop <task>` — build one backlog item, end to end
 - `/fix <bug>`, `/refactor <target>`, `/research <question>`
 
+Or drive it remotely: `deploy/warden/` registers hashi with Kaizen's tracker, so
+Кая and the panel can dispatch work to this fleet. See
+[`deploy/warden/README.md`](deploy/warden/README.md). Work arrives by dispatch,
+which is why there is no `/next` here — nothing polls a queue.
+
 ## Legal note
 
 Running a VPN for personal use is not an offence in Russia. Two things are:

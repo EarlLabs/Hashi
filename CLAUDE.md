@@ -70,6 +70,9 @@ so a developer who needs one asks instead of editing.
 - `make test` / `make test-control` / `make test-edge` / `make test-infra`
 - `make up` (production shape, nothing published) / `make up-dev` (loopback ports)
 - `make down`, `make logs`, `make ps`
+- `make warden-sync` / `warden-up` / `warden-down` / `warden-logs` — the tracker
+  integration (`deploy/warden/`), independent of the product stack. Work arrives
+  from the Hub by dispatch; there is no `/next` and nothing polls a queue.
 - Compose always runs with `--env-file` — the Makefile does it for you. Running
   it by hand without that flag turns every `${VAR}` into an empty string and
   nothing errors.

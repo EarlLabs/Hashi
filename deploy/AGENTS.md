@@ -16,6 +16,7 @@ host in an afternoon — which the charter treats as a survival property.
 | `docker-compose.dev.yml` | the only file that publishes ports, loopback only |
 | `docker/` | Dockerfiles, one per service |
 | `caddy/Caddyfile` | reverse proxy; access logging deliberately discarded |
+| `warden/` | the tracker integration — its own stack, its own README |
 
 The `Makefile` and `.github/workflows/` also belong to this zone.
 
