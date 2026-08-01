@@ -1,0 +1,25 @@
+# WHAT: what never enters the Docker build context.
+# WHY:  the context is the repo root, so without this every build ships ~74 MB
+#       to the daemon — and, more importantly, ships `.env`. Nothing copies it
+#       today (the Dockerfile takes only pyproject.toml, control/ and edge/), but
+#       the first `COPY . .` anyone writes would bake real secrets into a layer.
+#       This is the structural guard behind "never baked into an image layer"
+#       in .claude/projects/04-infra-rulebook.md.
+# HOW:  deny the risky and the useless; the Dockerfile names what it wants.
+
+.env
+*.key
+*.pem
+secrets/
+
+.venv/
+.git/
+.github/
+.claude/
+docs/
+tests/
+.e2e/
+*_cache/
+__pycache__/
+*.egg-info/
+.DS_Store
