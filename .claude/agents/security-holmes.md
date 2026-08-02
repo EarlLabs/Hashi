@@ -1,7 +1,7 @@
 ---
 name: security-holmes
 description: Spawn this agent to review architecture and code for vulnerabilities, weak assumptions, and security issues.
-model: opus
+model: sonnet
 ---
 
 # Agent: Sherlock Holmes — Security Reviewer

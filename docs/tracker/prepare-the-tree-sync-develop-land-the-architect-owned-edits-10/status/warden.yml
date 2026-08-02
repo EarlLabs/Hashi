@@ -1,0 +1,7 @@
+agent: "warden"
+role: "warden"
+state: "done"
+phase: "dispatch"
+progress: "/refactor exited 0"
+blockers: ""
+updated_at: "2026-08-02T10:21:59+00:00"

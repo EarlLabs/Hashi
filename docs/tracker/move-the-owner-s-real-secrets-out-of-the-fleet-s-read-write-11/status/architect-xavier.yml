@@ -1,0 +1,56 @@
+agent: architect-xavier
+role: architect
+task: "move the owner's real secrets out of the fleet's read-write mount (epic directive-90be25f3-9, task 2 of 18, backlog item 0 infra-env-out-of-warden-mount)"
+zones: [infra]
+state: in_progress
+progress: >-
+  Specs written in one combined unattended run (phase 1 ask + phase 1b specs).
+  Eleven clarifying questions formed and answered with the most conservative
+  option available; each recorded with its justification under
+  "## Questions and defaults in force" in the Potts spec. Implementation spec for
+  dev-potts and the security-review task for security-holmes are on disk.
+  Awaiting implementation, then security review, then the phase-7 completion check.
+decisions_taken:
+  - "Q1: the project's single env file moves wholesale; every compose invocation
+     (product, dev, e2e, warden) reads it from the new path. Moving only a
+     warden-specific file would leave HASHI_SECRET_KEY and POSTGRES_PASSWORD under
+     the agent's read-write mount and fail frozen scenario S1 as written."
+  - "Q2: HASHI_ENV_FILE ?= $(HOME)/.config/hashi/hashi.env — outside every mount
+     and the build context, overridable, no absolute host path baked in."
+  - "Q3: warden-up and warden-scenarios are guarded; warden-down and warden-logs
+     are not and must work without the file — an owner must always be able to stop
+     an unattended agent container."
+  - "Q4: deploy/warden/docker-compose.yml is edited in the volumes: comment block
+     only; no non-comment line may change. A comment that lies about a security
+     control is a defect."
+  - "Q5: the .env.example:/repo/.env:ro overlay is KEPT and held by a test
+     assertion. It is a real mitigation and it is not sufficient for S1."
+  - "Q6: S1 lives in tests/infra/test_warden_env_location.py (new file), asserting
+     only on configuration text; the frozen out-of-scope line on warden tests means
+     tests exercising warden's runtime and Python code, which this is not."
+  - "Q7: S2 is an unconditionally skipped test naming `make warden-up` on a machine
+     with Docker, plus -rs on make test-infra so the reason prints."
+  - "Q10: the seven ${VAR:?set VAR in .env} messages in deploy/docker-compose.yml
+     are a leak-back path, not cosmetics, and are corrected."
+  - "Q11: deploy/warden/entrypoint.sh:54 is left stale deliberately and reported."
+verified_facts:
+  - "Makefile:102 already carries --env-file (commit 303f1a0). The remaining work
+     is the path, not the flag; Potts may not claim it."
+  - "deploy/warden/docker-compose.yml:79 already overlays .env.example onto
+     /repo/.env:ro. Good mitigation, insufficient for S1."
+  - ".dockerignore:10 already excludes .env from the build context; the warden
+     Dockerfile has no COPY . . — asserted as a sentinel, not edited."
+artifacts:
+  - docs/tracker/move-the-owner-s-real-secrets-out-of-the-fleet-s-read-write-11/tasks/xavier-to-potts-move-the-owner-s-real-secrets-out-of-the-fleet-s-read-write-11.md
+  - docs/tracker/move-the-owner-s-real-secrets-out-of-the-fleet-s-read-write-11/tasks/xavier-to-holmes-move-the-owner-s-real-secrets-out-of-the-fleet-s-read-write-11-review.md
+blockers: null
+risks_escalated:
+  - "Residual risk is NOT removed by this task: the owner must still move the file.
+     Until he does, the real .env is inside the fleet's read-write mount."
+  - "Q1 widens the change beyond the warden stack to the product-stack Make
+     targets. Deliberate and required by S1, but it is the largest blast radius in
+     this task."
+  - "README.md and CLAUDE.md at the repo root describe the env file's location and
+     belong to no zone — architect follow-up, not Potts's."
+  - "S2 cannot execute here (no container runtime). Must never be reported green."
+updated_at: 2026-08-02T10:33:27Z
