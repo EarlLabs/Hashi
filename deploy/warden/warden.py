@@ -117,6 +117,31 @@ UNSUPPORTED_KINDS = {
                "or `research` for a question",
 }
 
+# Kinds that are a CONVERSATION, not a pipeline: the owner asks, a persona
+# answers, and the ANSWER ITSELF is the deliverable.
+#
+# Mapped to a persona rather than to a slash command on purpose. Every command
+# in `.claude/commands/` runs a pipeline — it creates a tracker directory,
+# spawns a fleet and writes files — and then reports a list of paths. That is
+# the right shape for "build this" and the wrong shape for "what's the status?",
+# where the owner wants a sentence back on their phone and nothing else to
+# happen. Sending that through `/research` costs minutes of fleet time and
+# still does not answer the question, because a path is not an answer.
+ASK_KINDS = {"ask": "product-owner-ohno"}
+# A question is answered in seconds. Anything past this is not a slow answer,
+# it is a pipeline that started despite being told not to.
+ASK_TIMEOUT = float(os.environ.get("ASK_TIMEOUT_S", "600"))
+# Read-only, and this is the load-bearing part: with no Write, Edit or Bash the
+# run CANNOT touch the tree, so an `ask` can never leave uncommitted changes
+# behind, never comes back as `review`, and never needs a PR. The guarantee is
+# the tool list, not the prompt — a prompt is a request, a missing tool is a
+# fact.
+ASK_TOOLS = os.environ.get("ASK_TOOLS", "Read Glob Grep Task")
+# Telegram cuts a message at 4096 characters and the Hub wraps this summary in
+# its own header. Cut it here, where we can say we did, rather than have it
+# truncated mid-word downstream by something that cannot explain why.
+ASK_SUMMARY_LIMIT = 3500
+
 # The Warden's own slug, used ONLY for the file it writes into the task's status
 # directory. It is deliberately NOT in the roster: the roster is the fleet, and
 # the panel draws it as an org chart, so a dispatch bridge listed there renders
@@ -158,6 +183,12 @@ ROSTER = [
 DESCRIPTION = """hashi — self-hosted multi-protocol VPN (control plane + node fleet).
 
 Which kind to send — this is the part that goes wrong:
+  ask         A CONVERSATION. The owner's question, answered in text and
+              nothing else: "в каком статусе проект?", "что дальше?", "это
+              уже сделано?". Writes no files, runs no pipeline, opens no PR.
+              When in doubt between this and `brainstorm`: if the owner wants
+              to READ an answer, it is `ask`; if they want a PLAN written
+              down, it is `brainstorm`.
   brainstorm  PLANNING. Goes to the Product Owner (Ohno): what is worth doing,
               what is next, slice the backlog. Use this for "выдай план".
   epic        break one big ask into ordered tasks.
@@ -193,8 +224,24 @@ def _env() -> dict:
     return env
 
 
-async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
-    """Run one slash command to completion. Returns (returncode, output tail).
+async def _run_claude(
+    prompt: str,
+    job: DirectiveJob,
+    *,
+    tools: str = ALLOWED_TOOLS,
+    timeout: float = RUN_TIMEOUT,
+) -> tuple[int, str, str]:
+    """Run one CLI invocation to completion.
+
+    Returns ``(returncode, tail, answer)``:
+      ``tail``    the last lines of output, for a failure report
+      ``answer``  the text of the stream's final ``result`` event, or ``""`` if
+                  it never emitted one
+
+    ``answer`` is captured on the happy path, not only on failure: for an `ask`
+    Directive the model's closing text IS the deliverable, and it used to be
+    read into ``tail`` and then dropped everywhere except the ``code != 0``
+    branch.
 
     Idle timeout rather than a flat one: a working pipeline streams tool events
     continuously, so silence is the signal that it is stuck. A legitimate
@@ -203,7 +250,7 @@ async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
     cmd = [
         "claude", "-p", prompt,
         "--model", CLAUDE_MODEL,
-        "--allowedTools", ALLOWED_TOOLS,
+        "--allowedTools", tools,
         "--output-format", "stream-json",
         "--verbose",
     ]
@@ -213,12 +260,20 @@ async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
         cwd=REPO_ROOT,
         env=_env(),
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        # Merged into stdout rather than a pipe of its own. Two reasons, both
+        # learned the hard way: a second pipe that nobody reads fills its
+        # buffer and wedges the child, and every failure the CLI reports
+        # BEFORE it can emit any JSON — not logged in, bad flag, missing
+        # binary — goes to stderr. That is precisely the text a `failed`
+        # Directive needs in order to explain itself, and it was going nowhere.
+        stderr=asyncio.subprocess.STDOUT,
         limit=8 * 1024 * 1024,
     )
     tail: list[str] = []
+    answer = ""
     try:
         async def drain() -> None:
+            nonlocal answer
             assert proc.stdout is not None
             while True:
                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=IDLE_TIMEOUT)
@@ -227,8 +282,19 @@ async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
                 text = line.decode("utf-8", "replace").rstrip()
                 tail.append(text)
                 del tail[:-40]          # keep only what a failure report needs
+                # The stream's closing event carries the final text. Parsed
+                # defensively and only when the key is present: stderr shares
+                # this pipe now, so most lines are not JSON at all, and a
+                # json.loads on every one of them would be the hot path.
+                if '"result"' in text:
+                    try:
+                        event = json.loads(text)
+                    except ValueError:
+                        continue
+                    if isinstance(event, dict) and event.get("type") == "result":
+                        answer = str(event.get("result") or "")
 
-        await asyncio.wait_for(drain(), timeout=RUN_TIMEOUT)
+        await asyncio.wait_for(drain(), timeout=timeout)
         await proc.wait()
     except (TimeoutError, asyncio.CancelledError):
         # Both paths must kill the child: wait_for only cancels our reader, and
@@ -242,7 +308,7 @@ async def _run_claude(prompt: str, job: DirectiveJob) -> tuple[int, str]:
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
-    return proc.returncode or 0, "\n".join(tail[-20:])
+    return proc.returncode or 0, "\n".join(tail[-20:]), answer
 
 
 def _note(job: DirectiveJob, state: str, progress: str) -> None:
@@ -330,6 +396,62 @@ def _read_children(job: DirectiveJob) -> list[dict]:
     return out
 
 
+async def _run_ask(job: DirectiveJob) -> JobResult:
+    """Answer a question and return the answer. No pipeline, no files, no PR.
+
+    Deliberately does NOT call ``job.files.ensure()``. An `ask` leaves nothing
+    behind by design, and creating ``docs/tracker/<id>/`` for every question the
+    owner ever typed would litter the tree the fleet has to read past — the
+    tracker directory is for work, and this is not work.
+
+    The read-only tool list is what makes all of that true. The prompt asks the
+    model not to touch anything; the missing tools mean it cannot.
+    """
+    persona = ASK_KINDS[job.kind]
+    prompt = (
+        f"Answer the owner's question, then stop.\n"
+        f"Consult {persona} via the Agent tool (subagent_type={persona}) and "
+        f"relay what they say.\n\n"
+        f"This is a CONVERSATION, not a task. Do not run any slash command, do "
+        f"not create tracker directories, do not write or edit any file, do not "
+        f"branch or commit. You have no tools to do those things — do not look "
+        f"for a way around it, and do not report work you did not do.\n"
+        f"Answer in the language the question was asked in. Be concrete and "
+        f"short: this is read on a phone. If you do not know, say so and say "
+        f"what would tell you.\n\n"
+        f"Question: {job.intent}"
+    )
+    try:
+        code, tail, answer = await _run_claude(
+            prompt, job, tools=ASK_TOOLS, timeout=ASK_TIMEOUT
+        )
+    except TimeoutError:
+        return JobResult(
+            state="failed",
+            summary=f"{job.kind} did not answer within the time limit",
+            error="the CLI was killed after the ask or idle timeout expired",
+        )
+
+    if code != 0:
+        return JobResult(
+            state="failed",
+            summary=f"{job.kind} exited with code {code}",
+            error=tail or "no output captured",
+        )
+    if not answer.strip():
+        # A clean exit with no closing event means there is nothing to relay.
+        # Reporting `done` here would hand the owner an empty message and call
+        # it an answer — the one outcome worse than a visible failure.
+        return JobResult(
+            state="failed",
+            summary=f"{job.kind} finished but produced no answer",
+            error=tail or "no output captured",
+        )
+    # `done`, never `review`: nothing was written, so there is nothing to look
+    # at and nobody to close a gap. This is the one kind that ends clean.
+    return JobResult(state="done", summary=answer.strip()[:ASK_SUMMARY_LIMIT])
+
+
 async def _git(*args: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "git", "-C", REPO_ROOT, *args,
@@ -346,6 +468,14 @@ async def _git(*args: str) -> str:
 async def run_pipeline(job: DirectiveJob) -> JobResult:
     """Translate one Directive into one slash-command run of the real fleet."""
     logger.info("=== #%s (%s) task '%s': %s", job.id, job.kind, job.task_id, job.intent)
+
+    # A conversation, not a pipeline. Checked first: it is the cheapest route
+    # and the only one that touches nothing, so nothing below it should be able
+    # to claim the kind by accident.
+    if job.kind in ASK_KINDS:
+        if FAKE_PIPELINE:
+            return JobResult(state="done", summary=f"fake: answered {job.kind}")
+        return await _run_ask(job)
 
     if job.kind in UNSUPPORTED_KINDS:
         return JobResult(
@@ -402,7 +532,7 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     # alongside it would double-push and race it — and the kit's handles the
     # `status:`/`updated:` aliases and change-detection that this one did not.
     try:
-        code, tail = await _run_claude(prompt, job)
+        code, tail, _answer = await _run_claude(prompt, job)
     except TimeoutError:
         _note(job, "done", "timed out")
         return JobResult(
@@ -469,7 +599,11 @@ async def main() -> None:
         NAME,
         purpose="Self-hosted multi-protocol VPN: control plane, node fleet, admin panel",
         description=DESCRIPTION,
-        kinds=sorted(KIND_TO_COMMAND),   # only what we can actually run
+        # Only what we can actually run — the pipelines plus the conversation
+        # kinds. The Hub validates a Directive against this AND its own
+        # vocabulary, so `ask` also has to exist in Kaizen's DIRECTIVE_KINDS
+        # before one can ever arrive.
+        kinds=sorted(set(KIND_TO_COMMAND) | set(ASK_KINDS)),
         roster=ROSTER,
         max_concurrent=MAX_CONCURRENT,
         grpc_addr=GRPC_ADDR,
