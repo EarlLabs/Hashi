@@ -63,6 +63,20 @@ services:
       # This is the one mount worth thinking twice about — an unattended fleet
       # has the same write access to this tree that you do.
       - ../..:/repo
+      # ...but NOT the real .env. The template is mounted over it, so inside the
+      # container `/repo/.env` holds the same fake values as `.env.example`.
+      #
+      # WHY a mount and not a rule: "NEVER read or print .env" lives in CLAUDE.md
+      # and in every persona, and it is a REQUEST — the fleet has Read and Bash
+      # against a read-write mount, so nothing enforces it. One agent that greps
+      # the tree for a hostname, one `cat` in a debugging step, and a live
+      # GH_TOKEN and the key that encrypts every node credential are in a
+      # transcript. This line makes the rule true instead of asked for.
+      #
+      # Nothing breaks: the Warden receives GH_TOKEN and friends through
+      # `environment:` above, resolved from the REAL .env on the host by
+      # `--env-file`. Only processes INSIDE the container see the template.
+      - ../../.env.example:/repo/.env:ro
       # Enrollment secret, the issued Hub token, and the claude CLI's login.
       # Named volume so a `docker compose down` does not force a re-login.
       - hashi-warden-state:/state
