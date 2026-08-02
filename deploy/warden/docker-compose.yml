@@ -42,6 +42,17 @@ services:
       STATE_DIR: "/state"
       CLAUDE_CONFIG_DIR: "/state/claude"
       CLAUDE_MODEL: "opus"
+      # Conversation runs cheaper than construction. Seven of the eight personas
+      # are opus and a pipeline spends several per Directive, so the plan's
+      # limit — not the machine — is what decides how often the fleet can run.
+      CLAUDE_ASK_MODEL: "${CLAUDE_ASK_MODEL:-sonnet}"
+      # low | medium | high | xhigh | max. `low` while the fleet writes plans and
+      # decisions; RAISE IT before M1 starts producing code — effort bought back
+      # in review costs more than effort spent writing.
+      CLAUDE_EFFORT: "${CLAUDE_EFFORT:-low}"
+      CLAUDE_ASK_EFFORT: "${CLAUDE_ASK_EFFORT:-low}"
+      # A run silent this long never started: no quota, no credential, bad flag.
+      FIRST_OUTPUT_TIMEOUT_S: "${FIRST_OUTPUT_TIMEOUT_S:-120}"
       # Contract test mode — see deploy/warden/scenarios.py. Empty in normal
       # use; `WARDEN_FAKE_PIPELINE=1 make warden-up` simulates the fleet so the
       # protocol paths can be proven without spending a real run. A Directive

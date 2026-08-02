@@ -70,6 +70,28 @@ IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT_S", "600"))
 # makes them look busy in the panel instead of idle.
 STATUS_POLL = int(os.environ.get("STATUS_POLL_S", "5"))
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "opus")
+# Conversation runs on the cheaper model. Seven of the eight personas are opus
+# and a pipeline spends several of them per Directive, so the subscription is
+# the real constraint on how often the fleet can be used at all. An `ask` reads
+# the tree and relays a persona's answer — it is not where opus earns its cost,
+# and it is the kind the owner fires most often.
+ASK_MODEL = os.environ.get("CLAUDE_ASK_MODEL", "sonnet")
+# Reasoning effort: low | medium | high | xhigh | max. Owner's call, 2026-08-02
+# — the subscription, not the machine, is what limits how often the fleet runs,
+# and effort is the cheapest dial that does not change who does the work.
+#
+# Raise CLAUDE_EFFORT the moment the fleet starts building rather than planning:
+# `low` buys throughput by thinking less, and a developer that thinks less
+# writes code a reviewer has to think more about. It is the right default while
+# the work is documents and decisions, and the wrong one for M1.
+CLAUDE_EFFORT = os.environ.get("CLAUDE_EFFORT", "low")
+# Conversation never needs more than this, whatever the pipelines are set to.
+ASK_EFFORT = os.environ.get("CLAUDE_ASK_EFFORT", "low")
+# A run that has not emitted its FIRST line this long is not working slowly, it
+# is wedged before it started: no credential, no quota, a bad flag. Separate
+# from IDLE_TIMEOUT because ten minutes is the right patience for a pipeline
+# mid-thought and the wrong patience for one that never began.
+FIRST_OUTPUT_TIMEOUT = float(os.environ.get("FIRST_OUTPUT_TIMEOUT_S", "120"))
 # Exercise the CONTRACT without spending a fleet run. Every scenario below —
 # dispatch, cancel, at-capacity, restart, requeue, epic children — is about the
 # Warden<->Hub protocol, not about what the agents write, and proving those with
@@ -245,12 +267,27 @@ def _env() -> dict:
     return env
 
 
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _effort(level: str) -> str:
+    """A valid effort level, falling back loudly rather than silently."""
+    if level in _EFFORT_LEVELS:
+        return level
+    logger.warning(
+        "CLAUDE_EFFORT=%r is not one of %s — using 'low'", level, ", ".join(_EFFORT_LEVELS)
+    )
+    return "low"
+
+
 async def _run_claude(
     prompt: str,
     job: DirectiveJob,
     *,
     tools: str = ALLOWED_TOOLS,
     timeout: float = RUN_TIMEOUT,
+    model: str = "",
+    effort: str = "",
 ) -> tuple[int, str, str]:
     """Run one CLI invocation to completion.
 
@@ -270,7 +307,11 @@ async def _run_claude(
     """
     cmd = [
         "claude", "-p", prompt,
-        "--model", CLAUDE_MODEL,
+        "--model", model or CLAUDE_MODEL,
+        # An unknown value is only a warning upstream — the run continues at the
+        # default effort — so a typo here costs quota silently rather than
+        # failing. Validated on the way in instead.
+        "--effort", _effort(effort or CLAUDE_EFFORT),
         "--allowedTools", tools,
         "--output-format", "stream-json",
         "--verbose",
@@ -297,7 +338,8 @@ async def _run_claude(
             nonlocal answer
             assert proc.stdout is not None
             while True:
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=IDLE_TIMEOUT)
+                patience = FIRST_OUTPUT_TIMEOUT if not tail else IDLE_TIMEOUT
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=patience)
                 if not line:
                     return
                 text = line.decode("utf-8", "replace").rstrip()
@@ -330,6 +372,36 @@ async def _run_claude(
             proc.kill()
             await proc.wait()
     return proc.returncode or 0, "\n".join(tail[-20:]), answer
+
+
+# What the CLI says when the subscription is spent. Matched loosely and on
+# several phrasings because this string is upstream's to change, and the cost of
+# a false negative is the whole point of this function: without it a spent quota
+# looks exactly like a broken build, and the owner goes looking for a bug that
+# is a clock.
+_QUOTA_MARKERS = (
+    "usage limit reached",
+    "rate limit",
+    "limit will reset",
+    "resets at",
+    "429",
+    "quota",
+)
+
+
+def _quota_exhausted(tail: str) -> str:
+    """The line that says the subscription ran out, or "" if it did not.
+
+    Returned rather than a bool: the reset time is in that line, and it is the
+    only thing that turns "it broke" into "come back at 19:00".
+    """
+    lowered = tail.lower()
+    if not any(m in lowered for m in _QUOTA_MARKERS):
+        return ""
+    for line in tail.splitlines():
+        if any(m in line.lower() for m in _QUOTA_MARKERS):
+            return line.strip()[:300]
+    return tail.strip()[:300]
 
 
 def _note(job: DirectiveJob, state: str, progress: str) -> None:
@@ -454,7 +526,8 @@ async def _run_ask(job: DirectiveJob) -> JobResult:
     before = set((await _git("status", "--porcelain")).splitlines())
     try:
         code, tail, answer = await _run_claude(
-            prompt, job, tools=ASK_TOOLS, timeout=ASK_TIMEOUT
+            prompt, job, tools=ASK_TOOLS, timeout=ASK_TIMEOUT,
+            model=ASK_MODEL, effort=ASK_EFFORT,
         )
     except TimeoutError:
         return JobResult(
@@ -464,6 +537,12 @@ async def _run_ask(job: DirectiveJob) -> JobResult:
         )
 
     if code != 0:
+        if spent := _quota_exhausted(tail):
+            return JobResult(
+                state="blocked",
+                summary=f"the subscription is spent — {spent}",
+                error=tail,
+            )
         return JobResult(
             state="failed",
             summary=f"{job.kind} exited with code {code}",
@@ -588,6 +667,18 @@ async def run_pipeline(job: DirectiveJob) -> JobResult:
     _note(job, "done", f"{command} exited {code}")
 
     if code != 0:
+        # `blocked`, not `failed`: nothing is wrong with the code or the task,
+        # and the Hub treats blocked as "waiting on the owner" rather than as a
+        # run that produced a bad result. Re-dispatch it after the reset and it
+        # runs unchanged.
+        if spent := _quota_exhausted(tail):
+            _note(job, "done", "subscription spent")
+            return JobResult(
+                state="blocked",
+                summary=f"the subscription is spent — {spent}\n"
+                        f"Nothing is broken: re-send this Directive after the reset.",
+                error=tail,
+            )
         return JobResult(
             state="failed",
             summary=f"{command} exited with code {code}",

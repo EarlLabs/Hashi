@@ -1,7 +1,7 @@
 ---
 name: researcher-curie
 description: Spawn this agent to conduct deep research on a topic and produce a structured report.
-model: opus
+model: sonnet
 ---
 
 # Agent: Marie Curie — Research Analyst

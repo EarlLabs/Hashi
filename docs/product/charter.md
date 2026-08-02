@@ -234,13 +234,22 @@ Eight agents. Kit v1 identities, assigned in order.
 | Agent | Role | Zone | Model |
 |---|---|---|---|
 | `architect-xavier` | Architect; also acts as every dev's lead | all | opus |
-| `security-holmes` | Security | all | opus |
+| `security-holmes` | Security | all | sonnet |
 | `product-owner-ohno` | Product owner — owns the backlog from this charter | — | opus |
-| `researcher-curie` | Researcher — what still works against TSPU this month | — | opus |
+| `researcher-curie` | Researcher — what still works against TSPU this month | — | sonnet |
 | `dev-anderson` | Developer | `control` | opus |
 | `dev-neumann` | Developer | `edge` | opus |
 | `dev-potts` | Developer (infra identity) | `infra` | opus |
 | `reviewer-granger` | Reviewer | all three zones | sonnet |
+
+**Models and effort are a budget decision, revisited 2026-08-02.** The
+subscription — not the machine — is what limits how often the fleet can run at
+all, so three of eight personas are sonnet, conversation (`ask`) runs on sonnet,
+and reasoning effort defaults to `low` (`CLAUDE_EFFORT` in
+`deploy/warden/docker-compose.yml`). That is the right setting while the fleet
+writes plans, decisions and research. **Raise the effort before M1 starts
+producing code:** effort not spent writing is effort a reviewer pays back with
+interest. Xavier and the three developers stay on opus for the same reason.
 
 **Deliberately omitted:**
 
