@@ -131,12 +131,24 @@ ASK_KINDS = {"ask": "product-owner-ohno"}
 # A question is answered in seconds. Anything past this is not a slow answer,
 # it is a pipeline that started despite being told not to.
 ASK_TIMEOUT = float(os.environ.get("ASK_TIMEOUT_S", "600"))
-# Read-only, and this is the load-bearing part: with no Write, Edit or Bash the
-# run CANNOT touch the tree, so an `ask` can never leave uncommitted changes
-# behind, never comes back as `review`, and never needs a PR. The guarantee is
-# the tool list, not the prompt — a prompt is a request, a missing tool is a
-# fact.
-ASK_TOOLS = os.environ.get("ASK_TOOLS", "Read Glob Grep Task")
+# The same tools a pipeline gets. An earlier version handed `ask` a read-only
+# subset so a question could never touch the tree — but that also meant it could
+# not run `gh pr list`, so a question about live state got answered by
+# reconstructing from the working tree, and a reconstruction is confidently
+# wrong exactly when it matters (Ohno reported PR #1 open and #2 absent when the
+# truth was the reverse).
+#
+# The boundary that actually matters is the CONTAINER, not the tool list: no
+# docker socket, no route off the kaizen network, and `/repo/.env` masked by the
+# template (see docker-compose.yml). Inside that, an agent answering a question
+# may do whatever it needs.
+#
+# The cost is honesty, and it is paid below: `_run_ask` no longer ASSUMES the
+# tree is untouched, it checks and says so.
+ASK_TOOLS = os.environ.get("ASK_TOOLS", ALLOWED_TOOLS)
+
+# Never handed to the CLI — see `_env()` for why each one is here.
+_STRIPPED_FROM_CLI = ("ANTHROPIC_API_KEY", "GH_TOKEN")
 # Telegram cuts a message at 4096 characters, and the Hub clips the whole event
 # at 3500 (`modules/tracker/notify.py:_MAX_TEXT`) — the whole event, not the
 # summary: an icon, the project, the Directive id, the title and any artifact
@@ -216,8 +228,14 @@ time against the working tree."""
 
 def _env() -> dict:
     """Environment for the CLI. Two settings here are load-bearing."""
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    # Strip the API key so the CLI uses the Max login rather than API billing.
+    # ANTHROPIC_API_KEY: stripped so the CLI uses the Max login rather than API
+    # billing.
+    # GH_TOKEN: stripped because the fleet has full Bash in this container, and
+    # anything in this environment is one `printenv` away from a transcript.
+    # Nothing needs it here — `entrypoint.sh` has already put it where the tools
+    # look: git reads the credential store, `gh` reads its own config. If PRs
+    # suddenly stop opening, check the entrypoint's `gh auth login`, not this.
+    env = {k: v for k, v in os.environ.items() if k not in _STRIPPED_FROM_CLI}
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR", f"{STATE}/claude")
     env["CLAUDE_CONFIG_DIR"] = config_dir
     env["PATH"] = f"{config_dir}/local:" + env.get("PATH", "")
@@ -415,15 +433,25 @@ async def _run_ask(job: DirectiveJob) -> JobResult:
         f"Answer the owner's question, then stop.\n"
         f"Consult {persona} via the Agent tool (subagent_type={persona}) and "
         f"relay what they say.\n\n"
-        f"This is a CONVERSATION, not a task. Do not run any slash command, do "
-        f"not create tracker directories, do not write or edit any file, do not "
-        f"branch or commit. You have no tools to do those things — do not look "
-        f"for a way around it, and do not report work you did not do.\n"
+        f"This is a CONVERSATION, not a task. You DO have the tools to change "
+        f"things — use them to LOOK, not to act. Read files, inspect the tree, "
+        f"run `gh` and `git` queries: a reconstructed answer about live state is "
+        f"confidently wrong exactly when it matters. But do not run a slash "
+        f"command, do not create tracker directories, do not write or edit "
+        f"files, do not branch or commit. Whatever you do change is reported to "
+        f"the owner alongside your answer, so do not report work you did not "
+        f"do.\n"
         f"Answer in the language the question was asked in. Be concrete and "
         f"short: this is read on a phone. If you do not know, say so and say "
         f"what would tell you.\n\n"
         f"Question: {job.intent}"
     )
+    # Snapshot first: the owner's own uncommitted work is almost always sitting
+    # in this tree, and reporting THAT back as "answering your question changed
+    # 3 files" is the same mistake the diffstat below `run_pipeline` warns
+    # about — a window that catches somebody else's edits and bills them to the
+    # fleet. Only what appears between these two reads is ours.
+    before = set((await _git("status", "--porcelain")).splitlines())
     try:
         code, tail, answer = await _run_claude(
             prompt, job, tools=ASK_TOOLS, timeout=ASK_TIMEOUT
@@ -450,9 +478,22 @@ async def _run_ask(job: DirectiveJob) -> JobResult:
             summary=f"{job.kind} finished but produced no answer",
             error=tail or "no output captured",
         )
-    # `done`, never `review`: nothing was written, so there is nothing to look
-    # at and nobody to close a gap. This is the one kind that ends clean.
-    return JobResult(state="done", summary=answer.strip()[:ASK_SUMMARY_LIMIT])
+    summary = answer.strip()[:ASK_SUMMARY_LIMIT]
+
+    # An `ask` has the same tools a pipeline does, so it CAN leave changes —
+    # checking a branch out, writing a scratch file. Usually it does not, and
+    # then this ends `done` with nothing to review. But reporting `done` over a
+    # dirty tree would hide edits nobody asked for behind an answer to a
+    # question, which is the worst place to hide them.
+    new = sorted(set((await _git("status", "--porcelain")).splitlines()) - before)
+    if new:
+        summary += (
+            f"\n\n⚠ answering this left {len(new)} file(s) changed in the tree:\n"
+            + "\n".join(f"  {line}" for line in new[:10])
+            + ("\n  …" if len(new) > 10 else "")
+        )
+        return JobResult(state="review", summary=summary)
+    return JobResult(state="done", summary=summary)
 
 
 async def _git(*args: str) -> str:

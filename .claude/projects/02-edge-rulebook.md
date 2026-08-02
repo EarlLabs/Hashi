@@ -27,7 +27,7 @@ edge/
       meta.py        TransportMeta: name, family, needs_tls, default ports
       params.py      Pydantic model for this transport's parameters
       render.py      render_server(node, params) -> str
-                     render_client(node, credential) -> dict
+                     render_client(node, credential) -> ClientEntry
       server.j2      the server config template
   registry.py        discovers transports/<name>/ packages — never a hardcoded list
   bootstrap/         SSH: install, place compose files, start, verify
@@ -36,7 +36,8 @@ edge/
 
 **Where a new file goes:** a new protocol is a new directory under `transports/`
 and nothing else. If a change needs an edit in `registry.py`, the profile
-contract is too narrow — say so instead of special-casing.
+contract is too narrow — say so instead of special-casing. One exception exists,
+scoped to the first transport only — see *Completing the contract* below.
 
 ## Idioms — how code is written here
 
@@ -63,10 +64,67 @@ package under `transports/` provides exactly:
 | `META` | `TransportMeta` | unique `name`, protocol family, whether it needs TLS, default port range |
 | `Params` | Pydantic model | every knob validated: ports in range, hostnames resolvable-shaped, no free-text passed to a shell |
 | `render_server(node, params) -> str` | pure | deterministic; identical inputs → identical bytes |
-| `render_client(node, credential) -> dict` | pure | a fragment the subscription renderer can serialise without knowing the protocol |
+| `render_client(node, credential) -> ClientEntry` | pure | the transport's own finished serialisation of one client entry, plus protocol-agnostic metadata — see below |
 
 `control` consumes only this contract. A transport that requires the control
 plane to know its name has broken the charter's "new protocol is one package".
+
+### What `render_client` returns, and why it is not a dict of parts
+
+The v1 subscription format is a base64-encoded list of client-entry URIs
+(`docs/product/charter.md`, amendment A). Every part of a VLESS + Reality URI is
+protocol-specific: the scheme *is* the protocol name, and the query carries
+`security`, `pbk`, `sid`, `fp`, `sni`, `flow`. If `control` assembled that URI
+from a dict of parts it would have to branch on the protocol — breaking core
+invariants §1 and the charter's fourth success criterion in the same move.
+
+So the transport owns its serialisation end to end. `render_client` returns a
+`ClientEntry` carrying:
+
+| Field | What it is |
+|---|---|
+| `entry` | the complete serialised client entry for this node × this transport — one line, ready to place in the subscription, **without a display label** |
+| `display_label` | the human-readable name this entry should show in a client |
+| `country_label` | the exit country, taken from the node record's location label — **never** a geo lookup on the node's address |
+| `node_id` | which node this entry points at, so `control` can order, filter and revoke without ever parsing `entry` |
+
+`control`'s half of the contract, and all of it: order the entries, compose the
+display text from `display_label` and `country_label`, append it as the URI
+fragment, join, base64-encode. It treats every field as opaque text — it never
+parses `entry`, never branches on any value, and never compares a label or a
+transport name against a literal. Labelling stays in `control` deliberately: the
+fragment is a property of the *subscription format*, shared by every scheme in
+it, so the charter's one-link-many-countries behaviour is written once instead of
+once per transport.
+
+The test of this contract is arithmetic: adding a transport adds **zero** lines
+to the subscription renderer.
+
+A transport whose serialisation cannot carry an externally appended display
+label is not deliverable in the v1 subscription format. That is a question about
+*which transport to ship*, and it belongs to the PO — it is not a licence to move
+assembly back into `control`.
+
+### Completing the contract — authorised once, in the first transport
+
+Two symbols in the table are ahead of the code, and closing that gap is a
+deliberate, single, architect-authorised act:
+
+- `TransportMeta` (`edge/registry.py`) carries `name`, `family` and `needs_tls`,
+  and **not** the default port range the table requires;
+- `ClientEntry` does not exist yet.
+
+Adding both to `edge/registry.py` is authorised **inside M1 item 1
+(`edge-transport-contract-vless-reality`) and only there** — architect decision,
+recorded in §7.2–§7.3 of
+`docs/tracker/product-owner-ohno-4/tasks/xavier-review-ohno-product-owner-ohno-4.md`.
+This is the contract being completed for the first time, not widened to fit a
+special case, which is why it is not the failure the rule above describes.
+
+From the second transport onward that rule applies unchanged and without appeal:
+**a transport that needs an edit to `registry.py` is a contract failure.** Stop
+and raise it with the architect. The contract is fixed by its first
+implementation; every transport after it is one directory and nothing else.
 
 ## Testing
 
@@ -78,7 +136,7 @@ plane to know its name has broken the charter's "new protocol is one package".
   Never silently pass — a skipped validation that reads as green is how a broken
   config reaches a node.
 - Unit tests only for pure branchy logic: parameter validation, port allocation,
-  client-fragment serialisation.
+  client-entry serialisation.
 - Acceptance scenarios go in **`tests/e2e/edge/`** — owned by this zone, so two
   developers never meet in one file. `make test-edge` does not run them: start the
   disposable stack with `make e2e-up`, then `make test-e2e`, and say in your

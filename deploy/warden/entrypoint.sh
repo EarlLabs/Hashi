@@ -29,13 +29,26 @@ if [ -n "${GH_TOKEN:-}" ]; then
     git config --global credential.helper store
     printf 'https://oauth2:%s@github.com\n' "$GH_TOKEN" > "$HOME/.git-credentials"
     chmod 600 "$HOME/.git-credentials"
-    # NO `gh auth login --with-token` here. `gh` already authenticates from
-    # GH_TOKEN in the environment, and refuses to store credentials while that
-    # variable is set — it exits non-zero, `set -e` kills the entrypoint, and
-    # `restart: unless-stopped` turns that into a restart loop that looks like
-    # a broken image rather than one redundant command.
-    echo "git credentials configured for $(git config --global user.name)"
-    gh auth status 2>&1 | grep -i 'logged in' || true
+    # `gh` is made to hold the token in its OWN config rather than read it from
+    # the environment, because warden.py now strips GH_TOKEN before handing the
+    # environment to the CLI: the fleet has full Bash inside this container, and
+    # a token it can `printenv` is a token in the next transcript. Without this
+    # login, stripping it would leave `gh pr create` with no credential at all.
+    #
+    # `env -u GH_TOKEN` is required, not cosmetic: gh refuses to store a token
+    # while that variable is set and exits non-zero.
+    #
+    # Not fatal on failure. `git push` works from the credential store above
+    # regardless, so a bad token should cost the fleet its PRs and say so —
+    # not kill the entrypoint and turn `restart: unless-stopped` into a loop
+    # that reads as a broken image.
+    if printf '%s' "$GH_TOKEN" | env -u GH_TOKEN gh auth login --with-token 2>/dev/null; then
+        echo "git credentials configured for $(git config --global user.name)"
+        env -u GH_TOKEN gh auth status 2>&1 | grep -i 'logged in' || true
+    else
+        echo "WARNING: gh auth login failed — check GH_TOKEN. git push will still"
+        echo "work from the credential store; opening PRs will not."
+    fi
 else
     echo "GH_TOKEN is empty — local-only mode: the fleet will report changed"
     echo "files instead of opening a PR. Set it in .env to enable pushing."
