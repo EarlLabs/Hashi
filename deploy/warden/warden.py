@@ -137,10 +137,13 @@ ASK_TIMEOUT = float(os.environ.get("ASK_TIMEOUT_S", "600"))
 # the tool list, not the prompt — a prompt is a request, a missing tool is a
 # fact.
 ASK_TOOLS = os.environ.get("ASK_TOOLS", "Read Glob Grep Task")
-# Telegram cuts a message at 4096 characters and the Hub wraps this summary in
-# its own header. Cut it here, where we can say we did, rather than have it
-# truncated mid-word downstream by something that cannot explain why.
-ASK_SUMMARY_LIMIT = 3500
+# Telegram cuts a message at 4096 characters, and the Hub clips the whole event
+# at 3500 (`modules/tracker/notify.py:_MAX_TEXT`) — the whole event, not the
+# summary: an icon, the project, the Directive id, the title and any artifact
+# links are prepended before that limit applies. Budget for that header here, so
+# the answer arrives whole rather than losing its last paragraph to a truncation
+# nobody can see the reason for.
+ASK_SUMMARY_LIMIT = 3000
 
 # The Warden's own slug, used ONLY for the file it writes into the task's status
 # directory. It is deliberately NOT in the roster: the roster is the fleet, and
