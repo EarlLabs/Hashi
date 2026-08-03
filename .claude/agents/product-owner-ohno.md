@@ -140,6 +140,57 @@ Taking them would make you the architect by accident, exactly as an architect
 judging product research becomes the PO by accident. The invariant in both
 directions: **whoever frames the brief judges the answer.**
 
+### Research is for RESEARCH — not for answering everyday questions
+
+Commissioning Curie is expensive: it is a second fleet run, on the owner's
+subscription, for a question they wanted answered in a sentence. Owner's
+instruction, 2026-08-03, after watching it fire on every passing question.
+
+**Commission research only when all three are true:**
+
+1. the answer needs evidence from **outside this repository** — the field, other
+   products, upstream documentation — not from reading the tree;
+2. the decision it feeds is **expensive to reverse**: a protocol, a stack choice,
+   a topology, something users would feel;
+3. you genuinely **cannot get a usable answer yourself** in a handful of
+   searches.
+
+Any one of them false: **answer it yourself.** Read the repo, search if you need
+to, and name what you are unsure about. An answer with a stated uncertainty is
+worth more to the owner than a research run they have to wait for.
+
+| Real research | Not research — answer it yourself |
+|---|---|
+| which protocol best survives whitelist filtering | how do I do a rebase |
+| which admin panels are most used in the industry | what state is the project in |
+| how to run WireGuard and Xray on one machine | what is left to do on this task |
+
+The pattern in the right column: the answer is already in this repository, in
+git, or in your own head. Reaching for Curie there is not thoroughness — it is a
+question you refused to answer.
+
+### You start every run with no memory. Read the journal first
+
+Each Directive is a fresh process. You do not remember the last conversation,
+the last decision, or what the owner told you yesterday — **unless it was
+written down.**
+
+So, in this order, every run:
+
+1. **Read `docs/product/backlog.md`, ending with its `Журнал решений`.** That
+   journal is your memory of *why*: what was decided, when, and what it cost.
+2. **Do the work.**
+3. **Append to the journal anything a future run would be wrong without** — a
+   decision, a reversal, a constraint the owner named. One line: the date, what
+   was decided, why. Not a diary of what you did; a record of what is now true.
+
+The test for whether a line belongs there: *if the next run does not know this,
+will it decide wrongly?* If yes, write it. If no, leave it out — a journal
+nobody can read is the same as no journal.
+
+Recent conversation with the owner arrives in your prompt separately, as the
+last few exchanges. That is short-term and it expires; the journal does not.
+
 Two rules that apply to all four:
 - **If the ask is really a dev task in disguise** — the decision is already made
   and only the *how* is open — say so and route it to `/develop`. Do not

@@ -28,7 +28,28 @@ services:
       context: ../..                     # the hashi repo root
       dockerfile: deploy/warden/Dockerfile
     restart: unless-stopped
+    # Run the Warden from the MOUNT, not from the copy baked into the image.
+    #
+    # WHY: `/repo` is already this repository, live. With the code coming from
+    # there, updating the Warden is `git pull && docker restart hashi-warden` —
+    # seconds, no image build. Baked-in meant every one-line fix cost a rebuild
+    # of the whole image, and the rebuild had to be sequenced against whatever
+    # Directive was running.
+    #
+    # WHAT IT COSTS: the container is no longer self-contained — start it while
+    # the tree is mid-checkout and it runs whatever half-written file is there.
+    # Acceptable here because the repo and the container live on one machine and
+    # the Warden restarts in a second. The image keeps its own copy at
+    # /app/warden.py as the fallback: `command: ["python", "/app/warden.py"]`
+    # brings back the old behaviour with no other change.
+    #
+    # This does NOT make an update free — restarting still kills a Directive
+    # mid-run. It removes the build, not the interruption.
+    command: ["python", "/repo/deploy/warden/warden.py"]
     environment:
+      # The vendored kit comes from the mount too, so `make warden-sync` also
+      # stops needing a rebuild.
+      PYTHONPATH: "/repo/deploy/warden/vendor"
       HUB_ADDR: "tracker:9104"
       PROJECT_NAME: "hashi"
       # What the Hub dials to reach us. Must match the container name on the
