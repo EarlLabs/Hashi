@@ -41,7 +41,12 @@ or `edge`.
 
 - **The base compose file publishes no ports.** Not the database, not the API,
   not Caddy's admin endpoint. `expose` is fine; `ports:` in the base file is a
-  finding. Only `docker-compose.dev.yml` publishes, and only to `127.0.0.1`.
+  finding. Only `docker-compose.dev.yml` publishes, and its bind address
+  defaults to `127.0.0.1` — `${DEV_BIND_ADDR:-127.0.0.1}`. The override exists
+  for one case: an engine that is not the machine you are sitting at (the
+  fleet's isolated dind, where `127.0.0.1` is dind's own loopback and no test
+  runner can reach the stack). Changing the *default*, or writing a literal
+  `0.0.0.0`, is still a finding — and `tests/infra/test_compose.py` fails on it.
 - **A published port is never a service's default** — not `5432`, `8000`, `6379`,
   `3000`. The host already runs something, and the collision surfaces as an
   opaque "port is already allocated" halfway through a build. Inside the compose
