@@ -1,5 +1,7 @@
 # /fix — Bug Fix Pipeline (hashi)
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT fix anything yourself.
 `subagent_type` = the filename in `.claude/agents/` without `.md`.
 
@@ -52,10 +54,10 @@ If Xavier reports the defect spans zones → stop, tell the owner, suggest
 
 ---
 
-## Phase 2 — Fix (the zone's developer, directly)
+## Phase 2 — Fix (developer, or lead → developer)
 
-This project has no leads — every zone has exactly one developer, so Xavier's fix
-task goes straight to them. Spawn that developer.
+Zone with a lead: spawn the lead to write the single developer task, then the
+developer. Zone without: spawn the developer directly.
 ```
 task-id: <task-id>
 Fix your task: docs/tracker/<task-id>/tasks/<from>-to-<dev>-fix-<task-id>.md
@@ -69,23 +71,18 @@ Add the regression scenario that would have caught this.
 
 ## Phase 3 — Review (max 2 rounds)
 
-Record the baseline before Phase 2 (`git rev-parse HEAD`) so the reviewer reads a
-diff rather than the developer's account of it. Then spawn the zone's reviewer:
-```
-task-id: <task-id>
-Round: N of 2
-Diff range: git diff <baseline>..HEAD
-Review the fix. Run the zone's verify command yourself — a failure is Must Fix.
-Confirm: the reproduction now passes, a regression scenario exists and CAN fail,
-the change is minimal and inside the zone, no unrelated refactoring rode along.
-[round 2] Verify each previous finding explicitly before reviewing again.
-End with exactly: VERDICT: CLEAN  or  VERDICT: <n> must-fix, <m> should-fix
-```
-
-Must-fix → the **owning developer** fixes (never the orchestrator) → round 2.
-Still must-fix after round 2, or a round re-reporting an earlier round's fix →
-stop and ask the owner. A bug fix that needs three review rounds is not a bug
-fix; it is a design problem wearing one.
+Record the baseline before Phase 2 (`git rev-parse HEAD`). Run the
+**review-loop** skill (`.claude/skills/review-loop/`): task = the bug
+report, round cap = 2, starting point = **Already done**
+with that baseline, reviewer = the zone's reviewer persona. **The owning
+developer fixes findings — never you, the
+orchestrator** (the skill's generic "orchestrator fixes" rule does not apply
+here; ownership belongs to whoever owns the zone). Beyond the skill's own
+checks, this review must confirm: the reproduction now passes, a regression
+scenario exists and CAN fail, the change is minimal and inside the zone, no
+unrelated refactoring rode along. Still failing at the round cap, or a round
+re-reporting an earlier fix — the skill stops and escalates; a bug fix that
+needs that many rounds is not a bug fix, it is a design problem wearing one.
 
 Spawn `security-holmes` **only** if the bug or its fix touches auth, input
 handling, secrets or an externally reachable surface.
@@ -95,7 +92,7 @@ handling, secrets or an externally reachable surface.
 ## Phase 4 — Verify
 
 ```bash
-make test
+make test-control && make test-edge && make test-infra
 ```
 Green, plus the reproduction now passing. Then deliver as in `/develop` Phase 9.
 

@@ -1,5 +1,7 @@
 # /develop — Feature Development Pipeline (hashi)
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT implement anything yourself.
 Spawn each agent with the Agent tool; `subagent_type` = the filename in
 `.claude/agents/` without `.md`.
@@ -31,9 +33,11 @@ cat > docs/tracker/{task-id}/README.md <<'EOF'
 **Goal:** {1–2 sentences: what this achieves and why}
 EOF
 ```
-4. **This project has no tracker service.** The tracker is the directory tree
-   above and nothing else — there is no queue to register with and no id to
-   remember.
+4. Register the task, if this project has a tracker service:
+```bash
+ task:create "feature: {task-id}" "{description}" "feature" "Pipeline: /develop"
+```
+Remember the returned id for the status updates below.
 
 5. **Record the review baseline** — every later review reads a diff, not a
    developer's account of its own work:
@@ -96,11 +100,18 @@ Critical findings → re-spawn `architect-xavier` with them, then re-run Phase 2
 
 ---
 
-## Phase 3 — Decomposition
+## Phase 3 — Decomposition (leads, in parallel)
 
-**This project has no leads.** Every zone has exactly one developer,
-so Xavier's specs are already developer tasks: they go straight to the zone's
-developer. Skip to Phase 4.
+For **each** spec file addressed to a lead, spawn that lead simultaneously:
+```
+task-id: <task-id>
+Read and decompose: docs/tracker/<task-id>/tasks/xavier-to-<lead>-<task-id>.md
+Create developer task files in docs/tracker/<task-id>/tasks/.
+Developer scopes must not overlap in files.
+```
+
+**Skip this phase for zones with no lead** — those specs go straight to the
+developer. Wait for all leads before Phase 4.
 
 ---
 
@@ -120,49 +131,27 @@ Wait until every spawned developer reports `status: review`. A developer at
 
 ## Phase 5 — Code review loop (max 3 rounds)
 
-Reviewers **report**; the **developer who owns the zone fixes**. Never patch a
-developer's zone yourself — that is how ownership, and the next agent's diff, get
-destroyed.
+Run the **review-loop** skill (`.claude/skills/review-loop/`): task = the
+original feature request, round cap = 3, starting point
+= **Already done** with baseline = the ref from "Before you start". It owns
+the loop itself — reading the diff,
+`VERDICT:` parsing, ping-pong detection, the medium/low carry-over. What's
+specific to `/develop` and not covered by the skill's generic "who reviews"
+rule:
 
-### Round N
-Announce it: "Review round N of max 3". Read the developer status files to see
-which zones actually changed. Spawn `reviewer-granger` — one reviewer covers all
-three zones here — as a **fresh** agent each round:
-```
-task-id: <task-id>
-Round: N of 3
-Review the <zone> changes.
-Diff range: git diff <baseline>..HEAD   ← review THIS, not the status files
-Run the zone's verify command yourself; a failure is automatically Must Fix.
-Check acceptance criteria first, then scope, then the rulebooks.
-[round ≥ 2] Previous findings: docs/tracker/<task-id>/tasks/<reviewer>-findings-<task-id>.md
-            Verify EACH previous item explicitly before your own review, and
-            report per item whether it is fixed, partial, or absent.
-Write findings to docs/tracker/<task-id>/tasks/<reviewer>-findings-<task-id>.md
-ending with exactly: VERDICT: CLEAN  or  VERDICT: <n> must-fix, <m> should-fix
-```
-
-### Decide from the verdict lines
-- **Every reviewer `VERDICT: CLEAN`** → Phase 6.
-- **Any must-fix** → re-spawn only the developers who own those findings, then
-  start a **new round** with fresh reviewers.
-
-### Stop conditions — both are mandatory
-- **Round cap: 3.** At round 3 with must-fix findings remaining, stop. Keep every
-  fix made so far, list what is unresolved, and tell the owner. The pipeline
-  already has Xavier's completion check and a security review; a fourth
-  code-review round is reviewers arguing, not defects being found.
-- **Ping-pong detection.** Keep a ledger of findings as `file + one-line
-  description` across rounds. If a round re-reports something an earlier round
-  already fixed, or flags code that exists *because* of an earlier finding, that
-  is reviewer disagreement, not progress: **stop immediately**, keep the current
-  state, and put both positions to the owner. Loops like this converge on nothing
-  and cost a full fleet spawn per round.
-
-### Carry-over
-Accumulate every **Should Fix** and **Nit** from every round into one
-deduplicated list. Fresh reviewers will not re-find them, and they must not be
-lost between rounds — report them at the end for the owner to decide.
+- Read the developer status files to see which zones actually changed. For
+  each changed zone, the reviewer round includes **both** its reviewer
+  persona **and** its lead (if it has one), in parallel, each getting a
+  **fresh** agent instance every round.
+- Reviewers **report**; the **developer who owns the zone fixes**. Never
+  patch a developer's zone yourself (the skill's orchestrator) — that is how
+  ownership, and the next agent's diff, get destroyed.
+- Findings and the round's `VERDICT:` line go to
+  `docs/tracker/<task-id>/tasks/<reviewer>-findings-<task-id>.md`, so a
+  round ≥ 2 review can point at the exact file instead of re-deriving it.
+- The pipeline already has a lead and a Phase 6 security review — a stalled
+  code-review round is reviewers arguing, not defects being found; the
+  skill's round cap and ping-pong stop exist for exactly that.
 
 ---
 
@@ -195,7 +184,7 @@ Read every task and status file.
 
 Run the project-wide verification (it covers every zone):
 ```bash
-make test
+make test-control && make test-edge && make test-infra
 ```
 If only one zone changed, its own command is faster and enough — see the zone
 table in `.claude/workflow.md`.
@@ -216,8 +205,7 @@ implemented and which files changed.
 
 ## Global rules
 
-- Reviewers never edit code; Xavier never implements. Scope questions go to the
-  owner (or to Ohno if `/product` dispatched this task), never to a developer.
+- Leads never write implementation code; reviewers never edit code.
 - Any agent returning `blocked` stops the pipeline — notify the owner immediately.
 - Never spawn an agent whose zone this feature does not touch.
 - The git iron rules apply throughout: never `main`, never `git revert`,

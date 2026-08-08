@@ -1,7 +1,7 @@
 # /doc — Doc-Comment Writer (hashi)
 
 Writes and edits doc comments on existing code, in this project's own convention
-(Python docstrings (PEP 257) on every public module, class and function, plus a WHAT / WHY / HOW header comment at the top of every module), in English.
+(docstrings), in Russian.
 
 This command documents what the code **does**. It never changes what it does — a
 doc pass that "fixes a small thing along the way" makes a documentation diff
@@ -21,7 +21,7 @@ directory or glob patterns. Ambiguous input → ask which symbols, once.
    usually means another.
 2. **Analyse** each symbol: purpose, parameters, return, errors/exceptions,
    invariants, threading/lifetime expectations, side effects.
-3. **Write** doc comments in Python docstrings (PEP 257) on every public module, class and function, plus a WHAT / WHY / HOW header comment at the top of every module. Standard tags only — no invented
+3. **Write** doc comments in docstrings. Standard tags only — no invented
    ones, no house formatting.
 4. **Validate** against the checklist below.
 
@@ -47,7 +47,7 @@ directory or glob patterns. Ambiguous input → ask which symbols, once.
 - [ ] preconditions and side effects stated
 - [ ] no code changed — the diff contains comments only
 - [ ] the convention matches the rest of the file, not a different style
-- [ ] text is in English
+- [ ] text is in Russian
 
 ## Report
 List which files were touched, which symbols were documented, and anything the

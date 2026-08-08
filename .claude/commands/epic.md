@@ -1,5 +1,7 @@
 # /epic — Epic Decomposition Pipeline (hashi)
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT decompose anything yourself.
 Spawn each agent using the Agent tool. `subagent_type` = filename in `.claude/agents/` without `.md`.
 
@@ -27,9 +29,18 @@ cat > docs/tracker/{task-id}/README.md <<'EOF'
 EOF
 ```
 
-**This project has no tracker service and no queue.** The decomposition lands in
-the backlog that Ohno owns (`docs/product/backlog.md`), and tasks are started one
-at a time with `/develop`. There is nothing to register and no id to remember.
+4. Register the task in the SQLite tracker:
+```bash
+TASK_RECORD=$( task:create \
+  "epic: {epic title}" \
+  "{epic description from arguments}" \
+  "epic" \
+  "Pipeline: /epic")
+TRACKER_ID=$(echo "$TASK_RECORD" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+ task:status "$TRACKER_ID" in_progress
+```
+
+Remember `$TRACKER_ID` — use it for all ` task:*` calls throughout this pipeline.
 
 ---
 
@@ -43,7 +54,7 @@ task-id: <task-id>
 You are in EPIC DECOMPOSER mode. Before decomposing, you must understand the full scope.
 
 Read project context:
-`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)
+`README.md`, `CLAUDE.md`, `control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`
 - .claude/projects/00-core-invariants.md (if exists)
 
 Think like a senior architect:
@@ -62,7 +73,7 @@ Update: docs/tracker/<task-id>/status/architect-xavier.yml
 
 **After Xavier returns: STOP the pipeline.**
 ```bash
-scripts/notify.sh "Xavier has clarifying questions about the epic. Reply here."
+scripts/notify.sh "Xavier asked clarifying questions about the epic. Reply here."
 ```
 Wait for the project owner's reply before continuing.
 
@@ -104,50 +115,51 @@ If the project owner requests changes → re-spawn Xavier with feedback, repeat 
 
 ---
 
-## Phase 3 — Hand the tasks to the backlog (Ohno)
+## Phase 3 — Load tasks into tracker
 
-After the project owner confirms (any affirmative reply), spawn
-`product-owner-ohno` to fold the decomposition into the backlog he owns:
+After the project owner confirms (any affirmative reply), read the decomposition file and create each task in order:
 
-```
-task-id: <task-id>
-Mode 2 — the epic decomposition at
-docs/tracker/<task-id>/tasks/xavier-epic-decomposition-<task-id>.md is approved
-by the owner. Add each task to docs/product/backlog.md in order, with acceptance
-criteria written as Given/When/Then e2e scenarios, out-of-scope, depends_on and
-status: queued. Do not re-scope the tasks; if one does not trace to a line in
-docs/product/charter.md, say so instead of adding it.
+```bash
+# Repeat for each task (they will be queued in creation order = FIFO priority):
+ task:create \
+  "<task title>" \
+  "<task description>" \
+  "<type>" \
+  "Epic: <epic slug>. <notes>"
 ```
 
-**Xavier does not write the backlog** — it is Ohno's file, and a decomposition
-that edits it directly would put an architect in charge of scope.
+This loads them into the tracker queue. `/next` will execute them in FIFO order.
 
 ---
 
-## Phase 4 — Show the queue
+## Phase 4 — Show final queue
 
-Display the queued items from `docs/product/backlog.md` in chat, in order, so the
-project owner can see what will be built and in what sequence.
+```bash
+ task:list pending
+```
+
+Display the pending queue in chat so the project owner can see the order.
 
 ---
 
 ## Phase 5 — Notify & Complete
 
 ```bash
-scripts/notify.sh "Epic decomposed: <epic title>
+ task:status "$TRACKER_ID" done
+scripts/notify.sh "Epic loaded: <epic title>
 
-Tasks in backlog: N
+Tasks queued: N
 <numbered list: 1. title, 2. title, ...>
 
-Start the first one with /develop <task-id>."
+Run /next to start execution."
 ```
 
 ---
 
 ## Rules
 
-- Do NOT start implementing anything — this command only fills the backlog.
+- Do NOT start implementing anything — this command only populates the queue.
 - Do NOT skip the clarifying questions phase — better to ask now than discover blockers during implementation.
-- Task descriptions must be self-contained — the fleet running `/develop <task-id>` will only see the task, not this conversation.
+- Task descriptions must be self-contained — the agent running `/next` will only see the task, not this conversation.
 - If the project owner rejects the decomposition, revise and re-confirm before loading.
 - Each task's notes must mention which previous task it depends on (if any).

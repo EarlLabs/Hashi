@@ -44,7 +44,7 @@ git checkout -b task/{task-id}
   message saying what changed and why.
 - **Developers never push and never open PRs.** They implement and update their
   status file. This is what stops five agents racing to publish one branch.
-- **Only the orchestrator (or Charles Xavier acting as it) pushes**, once,
+- **Only the orchestrator (or Ohno acting as it) pushes**, once,
   at Phase 9 — after review, security and verification have passed.
 
 ## Opening the PR
@@ -61,7 +61,7 @@ anyone to look at it.
 
 ## Merging — the autonomy level
 
-This project runs at: **L0 — review each PR: the fleet opens a PR and stops, and you hear from it after every task**
+This project runs at: **L0 — review each PR: a PR per task, the owner merges**
 
 | Level | The fleet | You hear from it |
 |---|---|---|
@@ -78,7 +78,7 @@ single rule is what makes an unattended night recoverable: the worst case is a
 A PR may be merged by an agent only when **every** one is green:
 1. the review loop converged on `VERDICT: CLEAN` (not "only nits left");
 2. the security review is clean;
-3. `make test` passes;
+3. `make test-control && make test-edge && make test-infra` passes;
 4. every acceptance criterion has an e2e scenario **with its red-first proof**;
 5. the PR merges cleanly — no conflict, no `--force`, nothing skipped;
 6. the task is inside its budget.
@@ -107,30 +107,7 @@ An autonomy level lowers the noise, not the escalation.
 
 ## Credentials
 
-The fleet runs inside the Warden container
-(`deploy/warden/`), and `deploy/warden/entrypoint.sh` wires its credentials
-there once at boot, from the environment:
-
-```sh
-git config --global --add safe.directory /repo
-git config --global user.name  "$GIT_USER_NAME"
-git config --global user.email "$GIT_USER_EMAIL"
-git config --global credential.helper store
-printf 'https://oauth2:%s@github.com\n' "$GH_TOKEN" > ~/.git-credentials
-printf '%s' "$GH_TOKEN" | gh auth login --with-token
-```
-
-The values come from `.env` (see `.env.example`), which is never committed and
-never read into an agent's context. **You never need `GH_TOKEN` yourself**: git
-and `gh` already hold it, so `git push` and `gh pr create` simply work. If you
-find yourself wanting to read it, you are about to do something wrong.
-
-**`GH_TOKEN` empty is a supported mode, not a broken one.** The project is then
-local-only: work stays in the working tree and Phase 9 reports which files
-changed instead of a PR link. Say that plainly rather than half-pushing.
-
-The token is fine-grained and scoped to this repository, with `contents: write`
-and `pull_requests: write`. The owner creates it; nobody pastes it into a chat.
+`GH_TOKEN` comes from the owner's `deploy/warden/.env` through compose. The container's entrypoint writes it into `~/.git-credentials` and into `gh`'s own config, then **drops it from the environment** — so `printenv GH_TOKEN` returns nothing and you never need the value. `git push` and `gh` both just work. If they do not, the fleet is local-only: report a file list, not a PR.
 
 Rules that hold however the token is supplied:
 

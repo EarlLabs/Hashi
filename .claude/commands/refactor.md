@@ -1,5 +1,7 @@
 # /refactor — Refactoring Pipeline (hashi)
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT refactor anything yourself.
 `subagent_type` = the filename in `.claude/agents/` without `.md`.
 
@@ -46,7 +48,7 @@ reviewed, cannot be bisected, and cannot be safely reverted.
 
 ---
 
-## Phase 2 — Execute (the zone's developer, directly)
+## Phase 2 — Execute (leads → developers, or developers directly)
 
 ```
 task-id: <task-id>
@@ -60,32 +62,28 @@ set must pass, unchanged.
 
 ---
 
-## Phase 3 — Review
+## Phase 3 — Review (max 2 rounds)
 
-Record the baseline before Phase 2. Spawn the zone reviewer(s):
-```
-task-id: <task-id>
-Round: N of 2
-Diff range: git diff <baseline>..HEAD
-Review this refactor. The question is not "is the new code nicer" but:
+Record the baseline before Phase 2. Run the **review-loop** skill
+(`.claude/skills/review-loop/`): task = the refactor's stated goal, round
+cap = 2, starting point = **Already done** with that
+baseline, reviewer = the zone's reviewer persona. **The owning developer
+fixes findings — never you, the orchestrator** (same carve-out as `/fix`).
+The question for this review is not "is the new code nicer" but:
 1. Did behaviour change anywhere? Any changed assertion is a finding.
 2. Is the stated goal actually achieved?
 3. Did unrelated changes ride along?
 4. Is the diff reviewable, or should it have been split?
-Run the zone's verify command yourself; a failure is Must Fix.
-[round 2] Verify each previous finding explicitly first.
-End with exactly: VERDICT: CLEAN  or  VERDICT: <n> must-fix, <m> should-fix
-```
 
-Must-fix → the owning developer fixes → round 2. Max 2 rounds; a third means the
-refactor is too large — split it and start over rather than reviewing it again.
+Hitting the round cap means the refactor is too large — split it and start
+over rather than reviewing it again.
 
 ---
 
 ## Phase 4 — Verify
 
 ```bash
-make test
+make test-control && make test-edge && make test-infra
 ```
 Plus the safety-net scenarios, **unchanged**. A refactor that required editing its
 own tests to stay green has changed behaviour — send it back and make that the

@@ -1,5 +1,7 @@
 # /research — Deep Research Pipeline (hashi)
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT research anything yourself.
 Spawn each agent using the Agent tool. `subagent_type` = filename in `.claude/agents/` without `.md`.
 
@@ -28,13 +30,21 @@ cat > docs/tracker/{task-id}/README.md <<'EOF'
 EOF
 ```
 
-**This project has no tracker service** — the tracker directories above are the
-whole record. Nothing to register.
+4. Register the task in the SQLite tracker:
+```bash
+TASK_RECORD=$( task:create \
+  "research: {topic}" \
+  "{topic description from arguments}" \
+  "research" \
+  "Pipeline: /research")
+TRACKER_ID=$(echo "$TASK_RECORD" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+ task:status "$TRACKER_ID" in_progress
+```
 
 5. Notify the project owner:
 ```bash
-scripts/notify.sh "🔬 Начинаю исследование: \"$TOPIC\"
-⏱ Ожидаемое время: 5-15 минут."
+scripts/notify.sh "🔬 Starting research: \"$TOPIC\"
+⏱ Estimated time: 5-15 minutes."
 ```
 
 ---
@@ -77,7 +87,7 @@ Also update: docs/tracker/<task-id>/status/architect-xavier.yml
 
 **If Xavier asks clarifying questions:** STOP the pipeline.
 ```bash
-scripts/notify.sh "Xavier задал уточняющие вопросы по исследованию. Ответьте здесь."
+scripts/notify.sh "Xavier asked clarifying questions about the research. Reply here."
 ```
 Wait for the project owner's reply, then re-spawn Xavier with answers to finalize the task file for Curie.
 

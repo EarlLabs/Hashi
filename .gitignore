@@ -14,4 +14,9 @@ secrets/
 # e2e artifacts are per-run output, never history.
 .e2e/artifacts/
 
+# e2e secrets: generated (throwaway) and live (real, spend-capped) — both
+# real, never .example. See docs/e2e/README.md §8 and CLAUDE.md.
+.env.e2e.generated
+.env.e2e.live.secrets
+
 .DS_Store

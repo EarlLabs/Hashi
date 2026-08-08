@@ -16,20 +16,13 @@ If already on `develop` or `main` → notify the project owner "Already on devel
 
 ---
 
-## Step 2 — Record the abort in the tracker files
+## Step 2 — Update tracker (if applicable)
 
-This project has no tracker service, so the record is the task's own directory.
-If a task-id can be identified, write the reason into every status file under
-`docs/tracker/{task-id}/status/` that is not already `done`:
-
-```yaml
-status: blocked
-progress: "Aborted by the project owner."
-blockers: "Aborted by the project owner — <reason, if given>."
+If a task-id can be identified:
+```bash
+ task:status "$TASK_ID" idle
+ task:notes "$TASK_ID" "Aborted by the project owner. Returned to queue."
 ```
-
-**Never delete the task directory.** An aborted task with its reason on the
-record is what stops the same work being restarted blindly next week.
 
 ---
 
@@ -65,5 +58,4 @@ Switched to develop. Ready for next command."
 
 - This command ONLY discards local changes. It does NOT delete remote branches or close PRs.
 - If a PR was already created, notify the project owner so they can close it manually if needed.
-- After abort, the task's tracker directory stays on the record. To pick the work
-  up again, re-run `/develop <task-id>` — there is no queue in this project.
+- After abort, the task goes back to `idle` — it can be picked up again by `/next`.

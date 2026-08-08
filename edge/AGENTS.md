@@ -3,7 +3,7 @@
 The data plane: transport profiles, node bootstrap, config rendering and health
 probing. This is the zone that decides whether a node survives a censor.
 
-**Zone owner:** John von Neumann (`dev-neumann`).
+**Zone owner:** Ohno (`alfred`) — solo topology, see docs/product/charter.md §Fleet.
 **Rules:** `.claude/projects/02-edge-rulebook.md` — read it before editing.
 **Verify:** `make test-edge`.
 

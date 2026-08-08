@@ -28,9 +28,10 @@ control plane → node, always. A node NEVER dials the control plane.
 | `edge` | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` |
 | `infra` | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` |
 
-A developer edits one zone. Cross-zone work is split into separate tasks, never
-shared files. Acceptance scenarios are split the same way — `tests/e2e/<zone>/` —
-so two developers never land in the same file.
+Solo topology: Ohno owns every zone (no per-zone developer). Cross-zone work
+still stays in separate tasks, never mixed in one diff — the zone split exists
+for `CLAUDE.md`'s own table and for how acceptance scenarios are organized
+(`tests/e2e/<zone>/`), not to hand a zone to a second agent.
 
 `docs/**`, `.claude/**` and `pyproject.toml` belong to no zone. `pyproject.toml`
 is architect territory on purpose: adding a dependency is an architect decision,
@@ -38,7 +39,10 @@ so a developer who needs one asks instead of editing.
 
 ## Hard rules
 
-- **NEVER read or print `.env`** — real secrets. Use `.env.example`.
+- **NEVER read or print `.env`** — real secrets. Use `.env.example`. Same rule
+  for `.env.e2e.live.secrets` (real, spend-capped e2e `live`-tier credentials —
+  see `docs/e2e/README.md` §8 in Kaizen): edit via its `.example` template,
+  never read the real file. `.env.e2e.generated` is throwaway and fine to read.
 - **Never log who connected to what.** No connection, traffic or DNS logs, at any
   level, including debug and including "temporarily, while debugging". This is a
   charter non-goal and the one record that can hurt a real person.
@@ -78,7 +82,8 @@ own dev overlay publishes `127.0.0.1:5432`.
 | control HTTP | `54100` | `54200` |
 | Postgres | `54132` | `54232` |
 
-The fleet's git credential is `GH_TOKEN` in `.env`, wired into git and `gh` by
+The fleet's git credential is `GH_TOKEN` in `deploy/warden/.env` (its own env
+file, separate from this project's root `.env`), wired into git and `gh` by
 `deploy/warden/entrypoint.sh` at boot. **No agent ever reads it** — `git push`
 and `gh pr create` already work. Empty `GH_TOKEN` is a supported mode: the
 project stays local-only and reports changed files instead of a PR.
@@ -89,9 +94,12 @@ project stays local-only and reports changed files instead of a PR.
 - `make test` / `make test-control` / `make test-edge` / `make test-infra`
 - `make up` (production shape, nothing published) / `make up-dev` (loopback ports)
 - `make down`, `make logs`, `make ps`
-- `make warden-sync` / `warden-up` / `warden-down` / `warden-logs` — the tracker
-  integration (`deploy/warden/`), independent of the product stack. Work arrives
-  from the Hub by dispatch; there is no `/next` and nothing polls a queue.
+- `cd deploy/warden && make up` / `login` / `down` / `logs` / `vendor-kit` — the
+  tracker integration, its own stack with its own Makefile and `.env`,
+  independent of the product stack. Work arrives from the Hub by dispatch;
+  there is no `/next` and nothing polls a queue.
+- `make e2e-secrets` / `e2e-secrets-live` — regenerate e2e tokens (see
+  `.e2e/profile.yml` and `docs/e2e/README.md` in Kaizen).
 - Compose always runs with `--env-file` — the Makefile does it for you. Running
   it by hand without that flag turns every `${VAR}` into an empty string and
   nothing errors.

@@ -3,7 +3,7 @@
 The control plane: the API, the admin panel, subscription delivery, and the
 database that is the single source of truth for nodes, transports and users.
 
-**Zone owner:** Thomas Anderson (`dev-anderson`).
+**Zone owner:** Ohno (`alfred`) — solo topology, see docs/product/charter.md §Fleet.
 **Rules:** `.claude/projects/01-control-rulebook.md` — read it before editing.
 **Verify:** `make test-control`.
 

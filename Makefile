@@ -14,7 +14,7 @@ COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
 .PHONY: setup env test test-control test-edge test-infra test-e2e lint \
         up up-dev down logs ps e2e-up e2e-down e2e-reset \
-        warden-sync warden-up warden-down warden-logs warden-scenarios
+        e2e-secrets e2e-secrets-live
 
 ## --- setup ------------------------------------------------------------------
 
@@ -51,7 +51,7 @@ test-edge:
 
 test-infra:
 	$(need_venv)
-	$(PY) -m ruff check tests/infra deploy/warden
+	$(PY) -m ruff check tests/infra deploy/warden .e2e
 	$(PY) -m pytest tests/infra -q
 
 # Acceptance scenarios, run against the disposable e2e stack (`make e2e-up`) —
@@ -60,10 +60,15 @@ test-infra:
 # from. Scenarios live in tests/e2e/<zone>/, owned by that zone's developer.
 # Exit code 5 is pytest's "no tests ran": on a fresh clone there are no scenarios
 # yet, and that is a true statement rather than a failure.
+# E2E_API_HOST defaults to the host loopback; the fleet's own /e2e run
+# overrides it to hashi-dind, since a published port there lands on the
+# isolated dind engine, never on 127.0.0.1 — see .e2e/profile.yml.
+E2E_API_HOST ?= 127.0.0.1
+
 test-e2e:
 	$(need_venv)
-	@curl -fsS http://127.0.0.1:$(E2E_API_PORT)/healthz >/dev/null 2>&1 || { \
-	  echo "no e2e stack on 127.0.0.1:$(E2E_API_PORT) — run: make e2e-up"; exit 1; }
+	@curl -fsS http://$(E2E_API_HOST):$(E2E_API_PORT)/healthz >/dev/null 2>&1 || { \
+	  echo "no e2e stack on $(E2E_API_HOST):$(E2E_API_PORT) — run: make e2e-up"; exit 1; }
 	@$(PY) -m pytest tests/e2e -q; status=$$?; \
 	  if [ $$status -eq 5 ]; then echo "no e2e scenarios yet"; exit 0; fi; exit $$status
 
@@ -92,56 +97,21 @@ ps:
 
 ## --- warden: the tracker integration (see deploy/warden/README.md) ----------
 
-# Where Kaizen lives, for the vendored kit. Override: make warden-sync KAIZEN=…
-KAIZEN        ?= $(HOME)/stuff/projects/Kaizen
-WARDEN_VENDOR := deploy/warden/vendor
-# --env-file is not optional: without it compose looks for `.env` NEXT TO the
-# compose file (deploy/warden/.env), the root .env is never read, and every
-# ${VAR:-} silently becomes empty — which is how GH_TOKEN stayed unset while
-# sitting correctly in .env the whole time.
-COMPOSE_WARDEN := docker compose --env-file .env -f deploy/warden/docker-compose.yml
-
-# Refresh the vendored copy of Kaizen's project-side kit. Vendored rather than
-# imported because hashi is a separate repository and there is no package index
-# to install it from — see deploy/warden/README.md.
-warden-sync:
-	@test -d "$(KAIZEN)/infra/wardenkit" || { \
-	  echo "no Kaizen at $(KAIZEN) — run: make warden-sync KAIZEN=/path/to/Kaizen"; exit 1; }
-	rm -rf $(WARDEN_VENDOR)/infra
-	mkdir -p $(WARDEN_VENDOR)/infra/proto
-	cp "$(KAIZEN)/infra/__init__.py"       $(WARDEN_VENDOR)/infra/
-	cp "$(KAIZEN)/infra/proto/__init__.py" $(WARDEN_VENDOR)/infra/proto/
-	cp -R "$(KAIZEN)/infra/proto/gen"      $(WARDEN_VENDOR)/infra/proto/gen
-	cp -R "$(KAIZEN)/infra/wardenkit"      $(WARDEN_VENDOR)/infra/wardenkit
-	find $(WARDEN_VENDOR) -name __pycache__ -type d -prune -exec rm -rf {} +
-	@# `-dirty` matters: the kit is usually edited before it is committed, so a
-	@# bare hash would claim two different vendored copies are the same one.
-	@{ git -C "$(KAIZEN)" describe --always --dirty --abbrev=7 2>/dev/null \
-	   || echo "unknown"; } > $(WARDEN_VENDOR)/KAIZEN_COMMIT
-	@echo "vendored from Kaizen @ $$(cat $(WARDEN_VENDOR)/KAIZEN_COMMIT)"
-
-# The Kaizen stack must be up first — this joins its network.
-warden-up:
-	$(COMPOSE_WARDEN) up -d --build
-
-warden-down:
-	$(COMPOSE_WARDEN) down
-
-# Drive every Warden<->Hub path through the real Hub API. Runs the Warden in
-# fake-pipeline mode, so it costs no fleet runs; the token is taken from the
-# tracker container's environment and never read out of .env.
-warden-scenarios:
-	$(need_venv)
-	WARDEN_FAKE_PIPELINE=1 $(COMPOSE_WARDEN) up -d --build
-	@sleep 6
-	@TRACKER_ADMIN_TOKEN=$$(docker exec kaizen-tracker printenv TRACKER_ADMIN_TOKEN) \
-	  $(PY) deploy/warden/scenarios.py; status=$$?; \
-	  echo "restoring the real pipeline..."; \
-	  $(COMPOSE_WARDEN) up -d --build >/dev/null 2>&1; \
-	  exit $$status
-
-warden-logs:
-	$(COMPOSE_WARDEN) logs -f --tail=100
+# The Warden fleet is its OWN stack now, with its own Makefile and its own
+# .env — run it from deploy/warden/, never from here:
+#   cd deploy/warden && make up            # start the fleet (dev)
+#   cd deploy/warden && make login         # one-time claude CLI /login
+#   cd deploy/warden && make vendor-kit    # refresh the vendored Kaizen kit
+#   cd deploy/warden && make down / logs / ps
+# The Kaizen stack (`cd ~/stuff/projects/Kaizen && make up`) must be up first
+# — the Warden joins its network to reach the Hub.
+#
+# `warden-scenarios` (WARDEN_FAKE_PIPELINE-driven contract tests against the
+# real Hub) is RETIRED as of the kit v4 warden.py: that env var no longer
+# exists upstream (the hand-rolled pipeline it hooked into was replaced by
+# ClaudeRunner). `deploy/warden/scenarios.py` is kept but currently has no
+# fake-pipeline mode to drive it — needs a follow-up decision, not silently
+# patched back in here.
 
 ## --- e2e (see .e2e/profile.yml) ---------------------------------------------
 
@@ -167,3 +137,15 @@ e2e-down:
 # nothing to reset between scenarios. Kept as a target so the profile can name it.
 e2e-reset:
 	@echo "isolation is per-run — nothing to reset"
+
+# Regenerate throwaway e2e tokens into .env.e2e.generated (flow/contract
+# tiers — no real credentials involved, see docs/e2e/README.md §8). Edit
+# .env.e2e.generated.example, not the script, to change which keys this
+# project generates.
+e2e-secrets:
+	@$(PYTHON) .e2e/e2e_gen_secrets.py
+
+# Same, but also checks .env.e2e.live.secrets exists and has the expected
+# keys — required for the manual `live` tier only, never an automatic gate.
+e2e-secrets-live:
+	@$(PYTHON) .e2e/e2e_gen_secrets.py --live

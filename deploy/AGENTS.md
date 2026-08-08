@@ -4,7 +4,7 @@ Deployment and operations: the compose stacks, Caddy, CI, backups and secret
 handling. This zone decides whether the control plane can be moved to another
 host in an afternoon — which the charter treats as a survival property.
 
-**Zone owner:** Pepper Potts (`dev-potts`).
+**Zone owner:** Ohno (`alfred`) — solo topology, see docs/product/charter.md §Fleet.
 **Rules:** `.claude/projects/04-infra-rulebook.md` — read it before editing.
 **Verify:** `make test-infra`.
 

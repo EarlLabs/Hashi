@@ -229,45 +229,42 @@ Path sets checked pairwise — no overlap.
 
 ## Fleet
 
-Eight agents. Kit v1 identities, assigned in order.
+**Solo topology** (revisited 2026-08-09, moving off the original 8-agent "kit
+v1" crew): one persona, `alfred` — display name "Ohno" (opus), plus the kit's always-installed
+`reviewer-strict` (sonnet, report-only — no `Write`/`Edit` at all, so review
+independence is enforced by its tool list, not just its instructions).
 
 | Agent | Role | Zone | Model |
 |---|---|---|---|
-| `architect-xavier` | Architect; also acts as every dev's lead | all | opus |
-| `security-holmes` | Security | all | sonnet |
-| `product-owner-ohno` | Product owner — owns the backlog from this charter | — | opus |
-| `researcher-curie` | Researcher — what still works against TSPU this month | — | sonnet |
-| `dev-anderson` | Developer | `control` | opus |
-| `dev-neumann` | Developer | `edge` | opus |
-| `dev-potts` | Developer (infra identity) | `infra` | opus |
-| `reviewer-granger` | Reviewer | all three zones | sonnet |
+| `alfred` (shown as "Ohno") | Owns design, implementation and every zone | all | opus |
+| `reviewer-strict` | Independent reviewer — every task closes through it, never self-review | — | sonnet |
 
-**Models and effort are a budget decision, revisited 2026-08-02.** The
-subscription — not the machine — is what limits how often the fleet can run at
-all, so three of eight personas are sonnet, conversation (`ask`) runs on sonnet,
-and reasoning effort defaults to `low` (`CLAUDE_EFFORT` in
-`deploy/warden/docker-compose.yml`). That is the right setting while the fleet
-writes plans, decisions and research. **Raise the effort before M1 starts
-producing code:** effort not spent writing is effort a reviewer pays back with
-interest. Xavier and the three developers stay on opus for the same reason.
+**Why solo, and not the original crew:** this is a single-owner project with
+no genuinely parallel work streams — three zones existed for path/rulebook/
+verify organization, not because three developers coordinating was ever
+cheaper than one. Every hop between agents in the old crew (architect → dev →
+reviewer, PO → architect) was coordination cost paid in tokens, not work done.
+The one thing that does NOT collapse into solo is the review step: it stays a
+fully separate, tool-restricted agent in both topologies, because that is the
+check that catches what the author already believes is correct.
 
-**Deliberately omitted:**
+This also means the "deliberately omitted" roles from the old crew (leads, a
+second reviewer, `analyst-lovelace`, `designer-davinci`/`ui-reviewer-rams`,
+`product-owner-ohno`, `researcher-curie`) aren't a per-role decision anymore —
+solo doesn't have per-zone developers or a lead layer to begin with, and the
+rationale for each is now moot rather than "omitted".
 
-- **No leads.** Three zones with one developer each; a lead would have one report
-  and add a hop. The architect is each developer's escalation path instead.
-- **No second reviewer.** One reviewer holds all three zones. If `control`
-  (Python service) and `edge` (network/proxy configuration) prove too far apart
-  in practice, `reviewer-mcgonagall` is the documented next addition.
-- **No `analyst-lovelace`.** The owner wants a product layer, not living specs;
-  the PO's backlog is the source of truth.
-- **No `designer-davinci` / `ui-reviewer-rams`.** There is a UI, but no design
-  system — and an operator panel for one person does not justify one.
+**Reasoning effort defaults `low`** (`REASONING_EFFORT` in
+`deploy/warden/.env`) while the fleet writes plans, decisions and research; a
+separate `CODE_REASONING_EFFORT` (default `medium`) applies to the
+code-producing kinds. **Raise both before M1 starts producing real code:**
+effort not spent writing is effort a reviewer pays back with interest.
 
-**Commands installed:** `/product`, `/develop`, `/fix`, `/refactor`, `/epic`,
-`/brainstorm`, `/review`, `/abort`, `/doc`, `/research`.
-**Not installed:** `/analyze` (needs the analyst), `/design` (needs the design
-personas), `/next` (needs a tracker *service*; this project has tracker files
-only, so there is no queue to pop).
+**Commands installed:** `/develop`, `/fix`, `/refactor`, `/epic`,
+`/brainstorm`, `/review`, `/abort`, `/doc`, `/research`, `/analyze`, `/e2e`.
+**Not installed:** `/product`, `/design` (both need two personas checking each
+other — structurally impossible in solo), `/next` (needs a tracker *service*;
+this project has tracker files only, so there is no queue to pop).
 
 ## Defaults assumed
 

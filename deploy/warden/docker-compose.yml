@@ -1,22 +1,24 @@
 # =============================================================================
 # hashi Warden stack — deploy/warden/docker-compose.yml
 # =============================================================================
-# WHAT: runs this project's Warden as its OWN stack, joined to the Kaizen
-#       network so it can reach the Hub at tracker:9104 and be dialled back at
-#       hashi-warden:9200.
+# WHAT: Runs this project's Warden and its agent fleet, joined to the Kaizen
+#       network so it can reach the Hub at tracker:9104 and the Hub can dial it
+#       back at hashi-warden:9200.
 #
-# WHY separate from deploy/docker-compose.yml: the product stack (control plane,
-#       Postgres, Caddy) and the agent fleet have nothing to do with each other.
-#       You will often want one without the other — the Warden running while the
-#       VPN is down is the normal case for a project under construction.
+# HOW:  ALWAYS with --env-file, from THIS directory (deploy/warden/):
+#         cd deploy/warden && docker compose --env-file .env -f docker-compose.yml up -d
+#       `make up`, run from this same directory, does this for you — see
+#       deploy/warden/Makefile. `--env-file` is resolved relative to the
+#       CURRENT DIRECTORY, so running compose from anywhere else (e.g. the
+#       repo root) reads the wrong `.env` — or none — and every ${VAR:-}
+#       silently becomes empty, dropping the fleet to local-only with no
+#       error anywhere. The volume mounts below (`../..`, `../../...`) are
+#       resolved relative to THIS FILE's own directory regardless of where
+#       compose is invoked from, so those stay correct either way.
 #
-# HOW:
-#   make warden-sync          # refresh the vendored kit from Kaizen
-#   make warden-up            # build and start (enrolls, then waits for approval)
-#   # approve it: ask Кая, use the panel's Fleet view, or:
-#   #   curl -X POST -H "Authorization: Bearer $TRACKER_ADMIN_TOKEN" \
-#   #        http://localhost:8770/projects/hashi/approve
-#   make warden-logs
+#       Note also that compose substitutes from the SHELL environment too, and
+#       the shell wins over the file. A variable exported in your shell silently
+#       overrides `.env`.
 # =============================================================================
 
 name: hashi-warden
@@ -25,101 +27,137 @@ services:
   warden:
     container_name: hashi-warden
     build:
-      context: ../..                     # the hashi repo root
-      dockerfile: deploy/warden/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
-    # Run the Warden from the MOUNT, not from the copy baked into the image.
+
+    # Run the Warden FROM THE MOUNT rather than from the image's copy.
     #
-    # WHY: `/repo` is already this repository, live. With the code coming from
-    # there, updating the Warden is `git pull && docker restart hashi-warden` —
-    # seconds, no image build. Baked-in meant every one-line fix cost a rebuild
-    # of the whole image, and the rebuild had to be sequenced against whatever
-    # Directive was running.
+    # WHY: with `COPY warden.py` + `CMD ["python","warden.py"]`, the running
+    # process uses a snapshot while the mounted repo holds the current source —
+    # two files silently diverging, and `git pull` appearing to do nothing.
+    # Every one-line fix then needed an image rebuild, sequenced against
+    # whatever Directive was running, because recreating the container kills the
+    # CLI mid-run and the Hub requeues the work. From the mount, an update is
+    # `git pull && docker restart`.
     #
-    # WHAT IT COSTS: the container is no longer self-contained — start it while
-    # the tree is mid-checkout and it runs whatever half-written file is there.
-    # Acceptable here because the repo and the container live on one machine and
-    # the Warden restarts in a second. The image keeps its own copy at
-    # /app/warden.py as the fallback: `command: ["python", "/app/warden.py"]`
-    # brings back the old behaviour with no other change.
-    #
-    # This does NOT make an update free — restarting still kills a Directive
-    # mid-run. It removes the build, not the interruption.
+    # THE COST, stated rather than discovered: the container is no longer
+    # self-contained. Start it mid-checkout and it runs a half-written file.
+    # That is acceptable when the repo and the container share a machine, and
+    # not otherwise — the image's own copy stays as the documented fallback:
+    #   command: ["python", "/app/warden.py"]
+    # This removes the REBUILD, not the mid-run interruption.
     command: ["python", "/repo/deploy/warden/warden.py"]
+
+    # Run as the owner's uid/gid, not root.
+    #
+    # WHY: the fleet works in a bind mount. As root, every file and git object
+    # it creates is root-owned, and the owner's next `git add` fails with
+    # "insufficient permission for adding an object to repository database
+    # .git/objects" — an error that names none of this. `sudo chown -R` fixes it
+    # until the next Directive commits.
+    #
+    # HOST_UID/HOST_GID come from .env (the Makefile fills them from `id -u`).
+    # The state volume is created root-owned, so it needs a ONE-TIME:
+    #   docker run --rm -v hashi-warden-state:/state alpine chown -R $(id -u):$(id -g) /state
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+
     environment:
-      # The vendored kit comes from the mount too, so `make warden-sync` also
-      # stops needing a rebuild.
-      PYTHONPATH: "/repo/deploy/warden/vendor"
       HUB_ADDR: "tracker:9104"
       PROJECT_NAME: "hashi"
       # What the Hub dials to reach us. Must match the container name on the
       # shared network, or dispatch silently never arrives.
       GRPC_ADDR: "hashi-warden:9200"
       BIND_ADDR: "0.0.0.0:9200"
-      # One Directive at a time: the fleet edits a real working tree with no
-      # worktree isolation, so two at once would interleave their diffs.
-      MAX_CONCURRENT: "1"
       REPO_ROOT: "/repo"
       STATE_DIR: "/state"
+      MAX_CONCURRENT: "1"
+      # The vendored kit lives in the MOUNT too, so re-vendoring also stops
+      # needing a rebuild.
+      PYTHONPATH: "/repo/deploy/warden/vendor"
+      # HOME must be somewhere the non-root user above can actually write —
+      # git config, ~/.git-credentials, gh's config and the CLI's state all
+      # live under it.
+      HOME: "/state"
       CLAUDE_CONFIG_DIR: "/state/claude"
-      CLAUDE_MODEL: "opus"
-      # Conversation runs cheaper than construction. Seven of the eight personas
-      # are opus and a pipeline spends several per Directive, so the plan's
-      # limit — not the machine — is what decides how often the fleet can run.
-      CLAUDE_ASK_MODEL: "${CLAUDE_ASK_MODEL:-sonnet}"
-      # low | medium | high | xhigh | max. `low` while the fleet writes plans and
-      # decisions; RAISE IT before M1 starts producing code — effort bought back
-      # in review costs more than effort spent writing.
-      CLAUDE_EFFORT: "${CLAUDE_EFFORT:-low}"
-      CLAUDE_ASK_EFFORT: "${CLAUDE_ASK_EFFORT:-low}"
-      # A run silent this long never started: no quota, no credential, bad flag.
-      FIRST_OUTPUT_TIMEOUT_S: "${FIRST_OUTPUT_TIMEOUT_S:-120}"
-      # Contract test mode — see deploy/warden/scenarios.py. Empty in normal
-      # use; `WARDEN_FAKE_PIPELINE=1 make warden-up` simulates the fleet so the
-      # protocol paths can be proven without spending a real run. A Directive
-      # under this flag reports success having built nothing, so it must never
-      # be left on.
-      WARDEN_FAKE_PIPELINE: "${WARDEN_FAKE_PIPELINE:-}"
-      WARDEN_FAKE_STEP_S: "${WARDEN_FAKE_STEP_S:-3}"
-      # Git identity and credential for the fleet. The entrypoint turns these
-      # into git config and a `gh` login at boot; no agent ever reads the value.
-      # Empty GH_TOKEN is a supported mode — the fleet stays local-only and
-      # reports changed files instead of a PR. `-` defaults keep the stack
-      # bootable from a bare .env.
+      # CRITICAL: without this the CLI "migrates" itself into the mounted config
+      # directory, and the next volume wipe deletes the binary.
+      DISABLE_AUTOUPDATER: "1"
+      REASONING_EFFORT: "${REASONING_EFFORT:-low}"
       GH_TOKEN: "${GH_TOKEN:-}"
-      GIT_USER_NAME: "${GIT_USER_NAME:-hashi fleet}"
-      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-fleet@example.com}"
-      REPO_URL: "${REPO_URL:-}"
+      GIT_USER_NAME: "${GIT_USER_NAME:-}"
+      GIT_USER_EMAIL: "${GIT_USER_EMAIL:-}"
+      DOCKER_HOST: "tcp://hashi-dind:2375"
+
     volumes:
-      # The real repository, read-write: the fleet's whole job is to change it.
-      # This is the one mount worth thinking twice about — an unattended fleet
-      # has the same write access to this tree that you do.
       - ../..:/repo
-      # ...but NOT the real .env. The template is mounted over it, so inside the
-      # container `/repo/.env` holds the same fake values as `.env.example`.
+
+      # The owner's real `.env` files sit inside that read-write mount, and the
+      # rule "never read or print .env" is enforced by nothing. One `grep`
+      # across the tree for a hostname, one `cat` in a debugging step, and a
+      # live GH_TOKEN is in a transcript. There are TWO real `.env` files to
+      # cover — the app's at the repo root and the Warden's own, right next to
+      # this compose file — and both land inside /repo through the mount above.
       #
-      # WHY a mount and not a rule: "NEVER read or print .env" lives in CLAUDE.md
-      # and in every persona, and it is a REQUEST — the fleet has Read and Bash
-      # against a read-write mount, so nothing enforces it. One agent that greps
-      # the tree for a hostname, one `cat` in a debugging step, and a live
-      # GH_TOKEN and the key that encrypts every node credential are in a
-      # transcript. This line makes the rule true instead of asked for.
+      # So mount the TEMPLATE over each: inside the container /repo/.env and
+      # /repo/deploy/warden/.env both hold committed fake values. Nothing
+      # breaks — the Warden receives its real variables through `environment:`
+      # above, resolved from the real deploy/warden/.env on the host by
+      # --env-file.
       #
-      # Nothing breaks: the Warden receives GH_TOKEN and friends through
-      # `environment:` above, resolved from the REAL .env on the host by
-      # `--env-file`. Only processes INSIDE the container see the template.
+      # A rule an agent is asked to follow is a request; a mount is a fact.
       - ../../.env.example:/repo/.env:ro
-      # Enrollment secret, the issued Hub token, and the claude CLI's login.
-      # Named volume so a `docker compose down` does not force a re-login.
+      - ./.env.example:/repo/deploy/warden/.env:ro
+
+      # Enrollment secret, issued token, conversation window, CLI login.
       - hashi-warden-state:/state
+
     networks:
       - kaizen
+      - dind-net
+    depends_on:
+      dind:
+        condition: service_healthy
+
+  # Isolated docker engine — see dind_slots() in infra/agentkit/render.py
+  # for why this exists instead of mounting the host's docker.sock.
+  # No port published to the host; reachable only from `warden`, over
+  # `dind-net`, which nothing outside this compose file joins.
+  dind:
+    container_name: hashi-dind
+    image: docker:27-dind
+    privileged: true
+    restart: unless-stopped
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - hashi-dind-data:/var/lib/docker
+    networks:
+      - dind-net
 
 networks:
   kaizen:
-    # Created by the Kaizen stack; this project only joins it.
+    # Created by the main Kaizen stack; this project only joins it.
     name: kaizen_default
     external: true
+  dind-net:
+    # Not external, not shared with any other compose project —
+    # created and owned entirely by this file.
+    name: hashi-dind-net
 
 volumes:
   hashi-warden-state:
+    # Pinned so the volume is CALLED what every document says it is called.
+    # Without this, the top-level `name:` prefixes it
+    # (hashi-warden_hashi-warden-state), and the one-time chown
+    # command in the README silently creates-and-chowns a brand-new empty
+    # volume while the real one stays root-owned — the crash loop continues
+    # and the owner believes the fix was applied.
+    name: hashi-warden-state
+  hashi-dind-data:
+    name: hashi-dind-data

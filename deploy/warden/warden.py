@@ -1,48 +1,39 @@
 # =============================================================================
 # hashi Warden — deploy/warden/warden.py
 # =============================================================================
-# WHAT: The project side of Kaizen's tracker v2 contract. It enrolls with the
-#       Hub, accepts Directives, runs THIS repo's real agent fleet by invoking
-#       the `claude` CLI with the matching slash command, mirrors the fleet's
-#       own status files to the Hub, and reports the outcome.
+# WHAT: The project side of the Kaizen tracker. It accepts Directives from the
+#       Hub, turns each one into a `claude` CLI run, and reports the outcome.
+#       Everything fiddly — enrollment, heartbeats, capacity, cancellation, the
+#       status relay, the CLI itself — lives in `infra.wardenkit`.
 #
-# WHY it runs the CLI instead of reimplementing a pipeline: the fleet already
-#       exists in `.claude/` — personas, commands, rulebooks, the review loop.
-#       A Warden that re-encoded any of that would be a second, worse copy that
-#       drifts the first time someone edits a persona. Its whole job is
-#       translation: Directive in, slash command out, Status back.
+# WHY this file is rendered from the kit and not written per project: the first
+#       project that wrote it by hand shipped six defects in this one file
+#       (a failing run reporting `done`, failure reasons discarded, the answer
+#       thrown away on success, a prompt starting with `-` killing the run, a
+#       spent subscription looking like a crash, and GH_TOKEN readable by every
+#       agent). They are fixed in the kit now; do not re-derive them here.
 #
-# WHY status is MIRRORED rather than pushed by the agents: the fleet writes
-#       `docs/tracker/{task_id}/status/*.yml` because that is what its personas
-#       already do (and what `infra/wardenkit/trackerfiles.py` standardises).
-#       Those agents cannot reach the Hub and should not learn how. So the
-#       Warden tails the directory and forwards what changed — one integration
-#       point instead of eight.
-#
-# WHY there is no `/next` in this project: work ARRIVES by Dispatch. `/next`
-#       polls a tracker CLI for a queue to pop, and hashi has no such CLI — the
-#       Hub pushes, the Warden runs. Installing it would mean two competing
-#       sources of work.
-#
-# HOW:  docker compose -f deploy/warden/docker-compose.yml up -d --build
-#       then approve the project (Кая, the panel's Fleet view, or curl).
-#       See deploy/warden/README.md.
+# HOW to change it: edit `infra/agentkit/templates/` in KAIZEN and re-render.
+#       Editing this copy makes this project quietly diverge from every other
+#       one, and nobody can tell later which projects predate a fix.
 # =============================================================================
 
 import asyncio
-import datetime
 import json
 import logging
 import os
-import pathlib
-import shlex
+import subprocess
+from pathlib import Path
 
 from infra.wardenkit import (
+    ClaudeRunner,
+    ConversationLog,
     DirectiveJob,
     HubClient,
     JobResult,
     WardenServicer,
     make_manifest,
+    run_conversation,
     serve,
 )
 
@@ -57,908 +48,300 @@ GRPC_ADDR = os.environ.get("GRPC_ADDR", "hashi-warden:9200")
 BIND_ADDR = os.environ.get("BIND_ADDR", "0.0.0.0:9200")
 REPO_ROOT = os.environ.get("REPO_ROOT", "/repo")
 STATE = os.environ.get("STATE_DIR", "/state")
-# One Directive at a time by default. The fleet edits a real working tree and
-# has no worktree isolation, so two concurrent Directives would interleave
-# their diffs — the merge-conflict problem the tracker exists to avoid.
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
-# A `/develop` run is an architect, a security pass, a developer and up to three
-# review rounds. Minutes, not seconds — but not unbounded either.
-RUN_TIMEOUT = float(os.environ.get("RUN_TIMEOUT_S", "5400"))
-# No stream event for this long means the CLI is wedged rather than working.
-IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT_S", "600"))
-# How often the kit's status relay sweeps docs/tracker/{task_id}/status/ and
-# pushes what changed. The fleet's sub-agents write those files with a file tool
-# and cannot call back into this process, so this poll is the ONLY thing that
-# makes them look busy in the panel instead of idle.
-STATUS_POLL = int(os.environ.get("STATUS_POLL_S", "5"))
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "opus")
-# Conversation runs on the cheaper model. Seven of the eight personas are opus
-# and a pipeline spends several of them per Directive, so the subscription is
-# the real constraint on how often the fleet can be used at all. An `ask` reads
-# the tree and relays a persona's answer — it is not where opus earns its cost,
-# and it is the kind the owner fires most often.
-ASK_MODEL = os.environ.get("CLAUDE_ASK_MODEL", "sonnet")
-# Reasoning effort: low | medium | high | xhigh | max. Owner's call, 2026-08-02
-# — the subscription, not the machine, is what limits how often the fleet runs,
-# and effort is the cheapest dial that does not change who does the work.
-#
-# Raise CLAUDE_EFFORT the moment the fleet starts building rather than planning:
-# `low` buys throughput by thinking less, and a developer that thinks less
-# writes code a reviewer has to think more about. It is the right default while
-# the work is documents and decisions, and the wrong one for M1.
-CLAUDE_EFFORT = os.environ.get("CLAUDE_EFFORT", "low")
-# Conversation never needs more than this, whatever the pipelines are set to.
-ASK_EFFORT = os.environ.get("CLAUDE_ASK_EFFORT", "low")
-# A run that has not emitted its FIRST line this long is not working slowly, it
-# is wedged before it started: no credential, no quota, a bad flag. Separate
-# from IDLE_TIMEOUT because ten minutes is the right patience for a pipeline
-# mid-thought and the wrong patience for one that never began.
-FIRST_OUTPUT_TIMEOUT = float(os.environ.get("FIRST_OUTPUT_TIMEOUT_S", "120"))
-# Exercise the CONTRACT without spending a fleet run. Every scenario below —
-# dispatch, cancel, at-capacity, restart, requeue, epic children — is about the
-# Warden<->Hub protocol, not about what the agents write, and proving those with
-# real `claude` runs costs minutes and quota per assertion. With this set the
-# handler simulates a pipeline and keys off words in the intent, exactly the way
-# modules/tracker/example/dummy-project does. NEVER set it in production: the
-# Directive would report success having built nothing.
-FAKE_PIPELINE = os.environ.get("WARDEN_FAKE_PIPELINE", "") == "1"
-FAKE_STEP = float(os.environ.get("WARDEN_FAKE_STEP_S", "3"))
 
-# The fleet needs to read, write, run tests and spawn its own subagents — this
-# is a development fleet in its own repo, not an assistant handling untrusted
-# messages. We still allow-list rather than using --dangerously-skip-permissions:
-# that flag is refused when running as root, and an explicit list is something a
-# reviewer can actually check.
-ALLOWED_TOOLS = os.environ.get(
-    "ALLOWED_TOOLS", "Read Write Edit Bash Glob Grep Task TodoWrite WebSearch WebFetch"
-)
+# Reasoning effort, declared rather than inherited — and LOW by default.
+# The caveat belongs right here, where it is set: low is right while the fleet
+# writes plans, briefs and decisions, and WRONG once it produces code. Effort
+# not spent writing is effort a reviewer pays back with interest. Raise it for
+# the code-producing kinds below, not globally.
+EFFORT = os.environ.get("REASONING_EFFORT", "low")
+CODE_EFFORT = os.environ.get("CODE_REASONING_EFFORT", "medium")
 
-# Directive kind -> the slash command that already implements it.
-#
-# The keys are the HUB's vocabulary, not ours: develop, fix, refactor, research,
-# review, epic, brainstorm, analyze. Anything outside it can never arrive, so an
-# entry for it is dead weight that reads like a supported route — `product` was
-# exactly that, which left the PO unreachable from the tracker while looking
-# reachable.
-#
-# `brainstorm` -> `/product` is the load-bearing line. "What is worth doing and
-# what do we start with" is the Product Owner's question, and this project has
-# one; sending it to `/brainstorm` would put the architect in business-analyst
-# mode and quietly bypass Ohno, who owns the backlog.
-KIND_TO_COMMAND = {
+# Which slash command each kind runs. The Hub's vocabulary is fixed and small,
+# so anything not in here is refused BY NAME rather than routed to something
+# adjacent — a planning ask answered by the code-review pipeline produces a
+# confident review of somebody else's commit.
+KIND_COMMANDS = {
     "develop": "/develop",
     "fix": "/fix",
     "refactor": "/refactor",
-    "epic": "/epic",
-    "research": "/research",
     "review": "/review",
-    "brainstorm": "/product",
-}
-# `analyze` is in the Hub's vocabulary but needs `analyst-lovelace`, which this
-# project does not install. Refusing it by name beats running something adjacent.
-UNSUPPORTED_KINDS = {
-    "analyze": "no analyst-lovelace in this fleet — use `brainstorm` for planning "
-               "or `research` for a question",
+    "epic": "/epic",
+    "brainstorm": "/brainstorm",
+    "research": "/research"
 }
 
-# Kinds that are a CONVERSATION, not a pipeline: the owner asks, a persona
-# answers, and the ANSWER ITSELF is the deliverable.
-#
-# Mapped to a persona rather than to a slash command on purpose. Every command
-# in `.claude/commands/` runs a pipeline — it creates a tracker directory,
-# spawns a fleet and writes files — and then reports a list of paths. That is
-# the right shape for "build this" and the wrong shape for "what's the status?",
-# where the owner wants a sentence back on their phone and nothing else to
-# happen. Sending that through `/research` costs minutes of fleet time and
-# still does not answer the question, because a path is not an answer.
-ASK_KINDS = {"ask": "product-owner-ohno"}
-# A question is answered in seconds. Anything past this is not a slow answer,
-# it is a pipeline that started despite being told not to.
-ASK_TIMEOUT = float(os.environ.get("ASK_TIMEOUT_S", "600"))
-# The same tools a pipeline gets. An earlier version handed `ask` a read-only
-# subset so a question could never touch the tree — but that also meant it could
-# not run `gh pr list`, so a question about live state got answered by
-# reconstructing from the working tree, and a reconstruction is confidently
-# wrong exactly when it matters (Ohno reported PR #1 open and #2 absent when the
-# truth was the reverse).
-#
-# The boundary that actually matters is the CONTAINER, not the tool list: no
-# docker socket, no route off the kaizen network, and `/repo/.env` masked by the
-# template (see docker-compose.yml). Inside that, an agent answering a question
-# may do whatever it needs.
-#
-# The cost is honesty, and it is paid below: `_run_ask` no longer ASSUMES the
-# tree is untouched, it checks and says so.
-# Read, run, and edit — but the editing tools are pointed at the documents this
-# consultation is allowed to touch. `Edit(...)`, not `Write(...)`: the CLI does
-# not match Write rules against paths at all and says so, while Edit rules cover
-# every file-editing tool.
-#
-# This is a GUARDRAIL, NOT A FENCE. Bash is in the list on the owner's
-# instruction — inside this container the fleet may do what it needs — and
-# `echo > file` obeys no Edit rule. What actually protects the tree is the
-# report: `_run_ask` diffs it before and after and puts everything that changed
-# into the answer, so an edit outside these paths is visible rather than
-# prevented.
-ASK_TOOLS = os.environ.get(
-    "ASK_TOOLS",
-    "Read Glob Grep Task TodoWrite WebSearch WebFetch Bash "
-    "Edit(docs/product/**) Edit(docs/tracker/**)",
-)
+# `ask` is the exception, and deliberately so: it maps to a PERSONA, not a
+# command. Every slash command runs a pipeline, creates directories and reports
+# paths, and "what is the status of the project?" must cost one persona-turn.
+ASK_PERSONA = "alfred"
 
-# --- what Ohno remembers -----------------------------------------------------
-#
-# Every run is a fresh process with no memory of the last one. Rather than
-# resuming a CLI session — which would carry the whole history into every
-# request and grow without bound, on a subscription that is already the binding
-# constraint — the last few exchanges are kept HERE and replayed into the
-# prompt. Owner's decision, 2026-08-03.
-#
-# In `/state`, not in the repo: this is conversation, not a project artifact,
-# and committing every question the owner ever typed would put it in the PR
-# history of a repo about privacy. Read it with:
-#   docker exec hashi-warden cat /state/ohno-history.yml
-ASK_HISTORY = os.environ.get("ASK_HISTORY_PATH", f"{STATE}/ohno-history.yml")
-ASK_HISTORY_TURNS = int(os.environ.get("ASK_HISTORY_TURNS", "30"))
-# Answers are stored clipped. 30 turns × the full 3000-char answer limit would
-# put ~25k tokens in front of every question asked — the exact cost this design
-# exists to avoid. Enough to recall what was said, not enough to re-read it.
-ASK_HISTORY_ANSWER_CHARS = int(os.environ.get("ASK_HISTORY_ANSWER_CHARS", "1200"))
+# Where each kind's real deliverable lands. Globbed for the report, so the owner
+# is told the name of the thing that was produced. The tracker tree alone is not
+# enough: /research writes to docs/research/<id>/, and a report that listed only
+# the briefs never named the actual report.
+ARTIFACT_GLOBS = {
+    "*": [
+        "docs/tracker/{task_id}/tasks/*.md"
+    ],
+    "research": [
+        "docs/research/{task_id}/*.md"
+    ],
+    "brainstorm": [
+        "docs/product/*.md"
+    ],
+    "analyze": [
+        "docs/specs/*.md"
+    ]
+}
 
-# Never handed to the CLI — see `_env()` for why each one is here.
-_STRIPPED_FROM_CLI = ("ANTHROPIC_API_KEY", "GH_TOKEN")
-# Telegram cuts a message at 4096 characters, and the Hub clips the whole event
-# at 3500 (`modules/tracker/notify.py:_MAX_TEXT`) — the whole event, not the
-# summary: an icon, the project, the Directive id, the title and any artifact
-# links are prepended before that limit applies. Budget for that header here, so
-# the answer arrives whole rather than losing its last paragraph to a truncation
-# nobody can see the reason for.
-ASK_SUMMARY_LIMIT = 3000
-
-# The Warden's own slug, used ONLY for the file it writes into the task's status
-# directory. It is deliberately NOT in the roster: the roster is the fleet, and
-# the panel draws it as an org chart, so a dispatch bridge listed there renders
-# as a person — and since none of the five tiers describes infrastructure, any
-# tier we gave it would be a lie. What the project is doing is already visible
-# as the Directive's own state; what the CLI is doing is in this file and in
-# `make warden-logs`.
-WARDEN = "warden"
-
-# The real roster. Every slug is a persona FILENAME verbatim (`dev-anderson`,
-# not `anderson`), because that is the join key for live status — see
-# docs/agents/adopt-the-kit.md §7 in the Kaizen repo.
-ARCHITECT = "architect-xavier"
 ROSTER = [
-    # tier "product", never "owner": `owner` is the HUMAN the work is for. The
-    # Hub seeds that row itself, and claiming it makes the seeding check find a
-    # row and never add you — so the owner would be missing from the chart and
-    # the PO would be labelled human.
-    {"slug": "product-owner-ohno", "name": "Taiichi Ohno", "role": "Product Owner",
-     "tier": "product", "model": "opus"},
-    # The chart reads owner → PO → architect → developers: Ohno decides WHAT,
-    # Xavier decides HOW.
-    {"slug": ARCHITECT, "name": "Charles Xavier", "role": "Solution Architect",
-     "tier": "architect", "model": "opus", "reports_to": "product-owner-ohno"},
-    {"slug": "dev-anderson", "name": "Thomas Anderson", "role": "Control-plane Developer",
-     "tier": "developer", "area": "control", "model": "opus", "reports_to": ARCHITECT},
-    {"slug": "dev-neumann", "name": "John von Neumann", "role": "Data-plane Developer",
-     "tier": "developer", "area": "edge", "model": "opus", "reports_to": ARCHITECT},
-    {"slug": "dev-potts", "name": "Pepper Potts", "role": "Infrastructure Developer",
-     "tier": "developer", "area": "infra", "model": "opus", "reports_to": ARCHITECT},
-    {"slug": "reviewer-granger", "name": "Hermione Granger", "role": "Code Reviewer",
-     "tier": "reviewer", "model": "sonnet"},
-    {"slug": "security-holmes", "name": "Sherlock Holmes", "role": "Security Reviewer",
-     "tier": "reviewer", "model": "opus"},
-    {"slug": "researcher-curie", "name": "Marie Curie", "role": "Research Analyst",
-     "model": "opus"},
+    {
+        "slug": "alfred",
+        "name": "Ohno",
+        "role": "Overseer",
+        "tier": "architect",
+        "model": "opus"
+    },
+    {
+        "slug": "reviewer-strict",
+        "name": "Strict Reviewer",
+        "role": "Independent Reviewer",
+        "tier": "reviewer",
+        "model": "sonnet"
+    }
 ]
 
-DESCRIPTION = """hashi — self-hosted multi-protocol VPN (control plane + node fleet).
-
-Which kind to send — this is the part that goes wrong:
-  ask         A CONVERSATION. The owner's question, answered in text and
-              nothing else: "в каком статусе проект?", "что дальше?", "это
-              уже сделано?". Writes no files, runs no pipeline, opens no PR.
-              When in doubt between this and `brainstorm`: if the owner wants
-              to READ an answer, it is `ask`; if they want a PLAN written
-              down, it is `brainstorm`.
-  brainstorm  PLANNING. Goes to the Product Owner (Ohno): what is worth doing,
-              what is next, slice the backlog. Use this for "выдай план".
-  epic        break one big ask into ordered tasks.
-  develop     build one thing. fix — one bug. refactor — no behaviour change.
-  research    A REAL research question — one whose answer needs evidence from
-              OUTSIDE this repository and feeds a decision that is expensive to
-              reverse. "Which protocol survives whitelist filtering", "which
-              admin panels does the industry use", "can WireGuard and Xray share
-              a machine". Produces a report with sources, no code.
-              NOT for "what is the status", "what is left on this task", "how do
-              I rebase" — those are `ask`, and sending them here spends a whole
-              fleet run to answer something already in the repo.
-  review      CODE review of work already done. NOT "review my plan" — sending a
-              planning ask here runs the code-review pipeline over whatever
-              happens to be in the diff, which is how you get a review of
-              somebody else's commit.
-  analyze     not supported here (no analyst in this fleet).
-
-The intent is passed to the matching slash command verbatim, so phrase it the
-way you would type it: "add the VLESS+Reality transport profile".
-
-No leads and no queue: the Hub dispatches, the Warden runs one Directive at a
-time against the working tree."""
+# The kinds this fleet can actually run. Declaring one you cannot run means the
+# Hub sends work nobody handles.
+KINDS = ["ask", "brainstorm", "develop", "epic", "fix", "refactor", "research", "review"]
 
 
-# --------------------------------------------------------------------------
-# Running the fleet
-# --------------------------------------------------------------------------
-
-def _env() -> dict:
-    """Environment for the CLI. Two settings here are load-bearing."""
-    # ANTHROPIC_API_KEY: stripped so the CLI uses the Max login rather than API
-    # billing.
-    # GH_TOKEN: stripped because the fleet has full Bash in this container, and
-    # anything in this environment is one `printenv` away from a transcript.
-    # Nothing needs it here — `entrypoint.sh` has already put it where the tools
-    # look: git reads the credential store, `gh` reads its own config. If PRs
-    # suddenly stop opening, check the entrypoint's `gh auth login`, not this.
-    env = {k: v for k, v in os.environ.items() if k not in _STRIPPED_FROM_CLI}
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", f"{STATE}/claude")
-    env["CLAUDE_CONFIG_DIR"] = config_dir
-    env["PATH"] = f"{config_dir}/local:" + env.get("PATH", "")
-    # CRITICAL: without this the CLI "migrates" itself into the mounted config
-    # dir, and the next volume wipe deletes the binary.
-    env["DISABLE_AUTOUPDATER"] = "1"
-    return env
-
-
-_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-
-
-def _effort(level: str) -> str:
-    """A valid effort level, falling back loudly rather than silently."""
-    if level in _EFFORT_LEVELS:
-        return level
-    logger.warning(
-        "CLAUDE_EFFORT=%r is not one of %s — using 'low'", level, ", ".join(_EFFORT_LEVELS)
-    )
-    return "low"
-
-
-async def _run_claude(
-    prompt: str,
-    job: DirectiveJob,
-    *,
-    tools: str = ALLOWED_TOOLS,
-    timeout: float = RUN_TIMEOUT,
-    model: str = "",
-    effort: str = "",
-) -> tuple[int, str, str]:
-    """Run one CLI invocation to completion.
-
-    Returns ``(returncode, tail, answer)``:
-      ``tail``    the last lines of output, for a failure report
-      ``answer``  the text of the stream's final ``result`` event, or ``""`` if
-                  it never emitted one
-
-    ``answer`` is captured on the happy path, not only on failure: for an `ask`
-    Directive the model's closing text IS the deliverable, and it used to be
-    read into ``tail`` and then dropped everywhere except the ``code != 0``
-    branch.
-
-    Idle timeout rather than a flat one: a working pipeline streams tool events
-    continuously, so silence is the signal that it is stuck. A legitimate
-    `/develop` run is long.
-    """
-    # A prompt whose first character is a dash is parsed as an OPTION, not as
-    # the value of -p: the CLI exits 1 with `unknown option '<your whole
-    # prompt>'` before emitting a single line, which reads as "the fleet is
-    # broken" rather than "the text started with a dash". Cheap to prevent here,
-    # once, for every caller — a leading newline changes nothing about how the
-    # prompt is read by the model.
-    if prompt.startswith("-"):
-        prompt = "\n" + prompt
-
-    cmd = [
-        "claude", "-p", prompt,
-        "--model", model or CLAUDE_MODEL,
-        # An unknown value is only a warning upstream — the run continues at the
-        # default effort — so a typo here costs quota silently rather than
-        # failing. Validated on the way in instead.
-        "--effort", _effort(effort or CLAUDE_EFFORT),
-        "--allowedTools", tools,
-        "--output-format", "stream-json",
-        "--verbose",
-    ]
-    logger.info("#%s: %s", job.id, " ".join(shlex.quote(c) for c in cmd[:4]))
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
+def _runner(*, effort: str, agent: str = "") -> ClaudeRunner:
+    return ClaudeRunner(
         cwd=REPO_ROOT,
-        env=_env(),
-        stdout=asyncio.subprocess.PIPE,
-        # Merged into stdout rather than a pipe of its own. Two reasons, both
-        # learned the hard way: a second pipe that nobody reads fills its
-        # buffer and wedges the child, and every failure the CLI reports
-        # BEFORE it can emit any JSON — not logged in, bad flag, missing
-        # binary — goes to stderr. That is precisely the text a `failed`
-        # Directive needs in order to explain itself, and it was going nowhere.
-        stderr=asyncio.subprocess.STDOUT,
-        limit=8 * 1024 * 1024,
+        model=os.environ.get("CLAUDE_MODEL", "sonnet") if agent else os.environ.get("CLAUDE_MODEL", "opus"),
+        effort=effort,
+        config_dir=os.environ.get("CLAUDE_CONFIG_DIR", f"{STATE}/claude"),
+        # Without a mode, `claude -p` AUTO-DENIES every Write/Edit and still
+        # exits 0 — so a /develop "succeeds" having produced nothing but a
+        # polite apology, and run.ok reads it as done. Bypass is the honest
+        # mode for this container: it runs non-root, /repo/.env is the mounted
+        # template, and GH_TOKEN is already stripped from the environment.
+        permission_mode="bypassPermissions",
     )
-    tail: list[str] = []
-    answer = ""
+
+
+def _tree_fingerprint() -> str:
+    """`git status --porcelain`, or "" when this is not a checkout.
+
+    Used to DISCLOSE what a run changed rather than assume it changed nothing.
+    A consulted persona that is allowed to act is more useful than a read-only
+    one — a read-only mode cannot even run `gh pr list`, and answers questions
+    about live state by reconstructing it from the tree, which is how one PR was
+    reported open and another absent when the truth was the reverse. Allowed to
+    act, obliged to disclose.
+    """
     try:
-        async def drain() -> None:
-            nonlocal answer
-            assert proc.stdout is not None
-            while True:
-                patience = FIRST_OUTPUT_TIMEOUT if not tail else IDLE_TIMEOUT
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=patience)
-                if not line:
-                    return
-                text = line.decode("utf-8", "replace").rstrip()
-                tail.append(text)
-                del tail[:-40]          # keep only what a failure report needs
-                # The stream's closing event carries the final text. Parsed
-                # defensively and only when the key is present: stderr shares
-                # this pipe now, so most lines are not JSON at all, and a
-                # json.loads on every one of them would be the hot path.
-                if '"result"' in text:
-                    try:
-                        event = json.loads(text)
-                    except ValueError:
-                        continue
-                    if isinstance(event, dict) and event.get("type") == "result":
-                        answer = str(event.get("result") or "")
-
-        await asyncio.wait_for(drain(), timeout=timeout)
-        await proc.wait()
-    except (TimeoutError, asyncio.CancelledError):
-        # Both paths must kill the child: wait_for only cancels our reader, and
-        # a cancelled Directive that leaves the CLI running keeps burning quota
-        # and editing the repo behind us.
-        logger.warning("#%s: killing the CLI (timeout or cancellation)", job.id)
-        proc.kill()
-        await proc.wait()
-        raise
-    finally:
-        if proc.returncode is None:
-            proc.kill()
-            await proc.wait()
-    return proc.returncode or 0, "\n".join(tail[-20:]), answer
-
-
-# What the CLI says when the subscription is spent. Matched loosely and on
-# several phrasings because this string is upstream's to change, and the cost of
-# a false negative is the whole point of this function: without it a spent quota
-# looks exactly like a broken build, and the owner goes looking for a bug that
-# is a clock.
-_QUOTA_MARKERS = (
-    "usage limit reached",
-    "rate limit",
-    "limit will reset",
-    "resets at",
-    "429",
-    "quota",
-)
-
-
-def _quota_exhausted(tail: str) -> str:
-    """The line that says the subscription ran out, or "" if it did not.
-
-    Returned rather than a bool: the reset time is in that line, and it is the
-    only thing that turns "it broke" into "come back at 19:00".
-    """
-    lowered = tail.lower()
-    if not any(m in lowered for m in _QUOTA_MARKERS):
-        return ""
-    for line in tail.splitlines():
-        if any(m in line.lower() for m in _QUOTA_MARKERS):
-            return line.strip()[:300]
-    return tail.strip()[:300]
-
-
-def _note(job: DirectiveJob, state: str, progress: str) -> None:
-    """Record what the Warden itself is doing, in the task's status directory.
-
-    Deliberately `files.write_status` and not `job.status()`: the latter also
-    pushes a row to the Hub, and the Hub joins those rows onto roster members.
-    The Warden is not one — pushing under a slug the manifest never declared
-    either lands on nobody or, if declared, draws plumbing onto the fleet's org
-    chart. The file is the right home: greppable, in the repo, next to the
-    agents' own.
-    """
-    if job.files is not None:
-        job.files.write_status(
-            WARDEN, state=state, role="warden", phase="dispatch", progress=progress
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
         )
+        return out.stdout if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
-def _note_outcome(job: DirectiveJob, result: JobResult, progress: str) -> JobResult:
-    """Write the Warden's FINAL status from the result itself, and return it.
+def _artifacts(job: DirectiveJob) -> list[dict]:
+    """Everything this Directive's command actually wrote, as report artifacts."""
+    found: list[dict] = []
+    for pattern in ARTIFACT_GLOBS.get(job.kind, []) + ARTIFACT_GLOBS.get("*", []):
+        for path in sorted(Path(REPO_ROOT).glob(pattern.replace("{task_id}", job.task_id))):
+            if path.is_file():
+                found.append({"type": "file", "url": str(path.relative_to(REPO_ROOT))})
+    return found
 
-    Takes the JobResult rather than a state string, and every terminal path goes
-    through it, because the two used to be written separately and drifted: the
-    file said `done` — meaning "the Warden finished dispatching" — while the
-    Directive it described had failed. `done` next to `progress: /develop exited
-    1`, in one record.
 
-    That is worse than a plain failure. The Directive's own state was correct,
-    so whichever half a reader trusted decided whether the work looked finished:
-    an epic reported its children done while every one of them had exited 1, and
-    the integration branch had nothing in it to merge. A status that contradicts
-    itself is read as success, because success is the half people act on.
+async def _fail(job: DirectiveJob, agent: str, run, *, phase: str) -> JobResult:
+    """One terminal failure path, used by every kind.
 
-    Passing the result makes the two impossible to disagree. Returning it lets a
-    caller write `return _note_outcome(job, JobResult(...), "…")` so there is no
-    shape of this function that records one thing and reports another.
+    Quota is reported TERMINALLY and never as `blocked`: `blocked` is a leased
+    state meaning "an agent asked the owner a question and is holding the job
+    open". A Warden that returns it and stops heartbeating leaves the lease to
+    expire, the sweeper requeues, the quota is still spent, and the Directive
+    loops every two and a half minutes for the whole outage — notifying the
+    owner every turn.
     """
-    _note(job, result.state, progress)
+    return await job.finish(
+        agent,
+        JobResult(state="failed", summary=run.failure_summary(), error=run.tail[-2000:]),
+        phase=phase, progress=run.failure_summary()[:200], usage=run.usage,
+    )
+
+
+async def run_ask(job: DirectiveJob) -> JobResult:
+    """A conversation: the owner's question, answered in TEXT.
+
+    No pipeline, no directories, no PR. The summary the owner reads in Telegram
+    IS the deliverable — a report that says "see docs/tracker/…/plan.md" has
+    moved the work of reading to the person who asked.
+    """
+    log = ConversationLog(f"{STATE}/conversation.jsonl")
+    await job.status(ASK_PERSONA, "in_progress", role="consultant", phase="ask",
+                     progress="читаю вопрос")
+
+    # `===` and never `---`: a prompt whose first character is a dash is parsed
+    # as an option name. The kit guards it anyway, but a template that cannot
+    # trigger the bug is better than one that relies on the guard.
+    history = log.render()
+    prompt = (
+        (history + "\n\n" if history else "")
+        + "=== Вопрос владельца ===\n"
+        + job.intent
+        + "\n\n=== Как отвечать ===\n"
+        + "Ответь ТЕКСТОМ, на языке вопроса. Не запускай пайплайн, не создавай "
+        + "директории, не открывай PR. Читай репозиторий и живое состояние "
+        + "(gh pr list, git log) — не реконструируй его по файлам. Мелкие правки "
+        + "под docs/ разрешены; если что-то поменял — скажи об этом прямо.\n"
+        + "Прочитай docs/decisions.md первым делом; если по ходу принято решение, "
+        + "которое следующий запуск обязан знать, допиши туда одну строку."
+    )
+    before = _tree_fingerprint()
+    run = await _runner(effort=EFFORT, agent=ASK_PERSONA).run(prompt, agent=ASK_PERSONA)
+    if not run.ok:
+        return await _fail(job, ASK_PERSONA, run, phase="ask")
+
+    log.append(job.intent, run.answer)
+    changed = _tree_fingerprint() != before
+    # `review` and not `done` when it touched the tree: the owner is told there
+    # is something to look at, in the one place they are already looking.
+    return await job.finish(
+        ASK_PERSONA,
+        JobResult(
+            state="review" if changed else "done",
+            summary=run.answer + ("\n\n⚠️ Файлы в репозитории изменились — посмотри diff." if changed else ""),
+            artifacts=_artifacts(job) if changed else [],
+        ),
+        phase="ask", progress="ответил", usage=run.usage,
+    )
+
+
+async def run_converse(job: DirectiveJob) -> JobResult:
+    """A live conversation ("позови альфреда") — the owner talks to this
+    persona directly, turn by turn, instead of one-shot AskOwner questions.
+
+    Shares `ask`'s ConversationLog (same file, same window) and never returns
+    on its own — see infra.wardenkit.conversemode for why. It ends only when
+    the Directive is Cancelled (the owner said "выход")."""
+    log = ConversationLog(f"{STATE}/conversation.jsonl")
+    return await run_conversation(
+        job, _runner(effort=EFFORT, agent=ASK_PERSONA), ASK_PERSONA, log,
+        repo_root=REPO_ROOT, role="consultant",
+    )
+
+
+async def run_epic(job: DirectiveJob) -> JobResult:
+    """Decompose, and return the pieces — the Hub queues them, we never do.
+
+    The children are parsed from a FILE the pipeline writes, never from its
+    prose: the Hub queues whatever we return, so a formatting slip in markdown
+    would become real queued work.
+    """
+    result = await run_command(job, effort=EFFORT)
+    if result.state == "failed":
+        return result
+    path = Path(REPO_ROOT) / "docs" / "tracker" / job.task_id / "children.json"
+    if not path.exists():
+        result.summary += "\n\n⚠️ children.json не появился — в очередь ничего не поставлено."
+        return result
+    try:
+        children = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        result.summary += f"\n\n⚠️ children.json нечитаем ({e}) — в очередь ничего не поставлено."
+        return result
+    result.children = [
+        {"title": c.get("title", ""), "intent": c.get("intent", ""),
+         "kind": c.get("kind", "develop")}
+        for c in children if isinstance(c, dict) and c.get("title")
+    ]
+    result.summary += f"\n\nРазбил на {len(result.children)} задач — они уже в очереди."
     return result
 
 
+async def run_command(job: DirectiveJob, *, effort: str = "") -> JobResult:
+    """The default shape: run this kind's slash command over the repository."""
+    command = KIND_COMMANDS.get(job.kind)
+    # The SLUG, not the handle: status pushes join on the roster's slug, and a
+    # row pushed as "xavier" matches nothing — the panel would show the
+    # architect idle for the whole run.
+    agent = "alfred"
+    if command is None:
+        return await job.finish(
+            agent,
+            JobResult(state="failed",
+                      summary=f"Проект не умеет '{job.kind}'. Умеет: {', '.join(sorted(KIND_COMMANDS))}, ask."),
+            phase=job.kind, progress="kind не поддержан",
+        )
+    await job.status(agent, "in_progress", role="architect", phase=job.kind,
+                     progress=f"запускаю {command}")
 
-async def _fake_pipeline(job: DirectiveJob) -> JobResult:
-    """Simulate a run. Behaviour is driven by keywords in the intent so every
-    case is reachable from the API without rebuilding this file between them:
-    `hang`, `fail`, `block`, `quick`, and `children` for an epic."""
-    intent = (job.intent or "").lower()
-    _note(job, "in_progress", f"FAKE {job.kind}: starting")
-    await job.status(ARCHITECT, "in_progress", role="architect", phase="design",
-                     progress="fake: working out what to build")
+    prompt = f"{command} {job.intent}\n\n=== Контекст ===\ntask_id: {job.task_id}"
+    run = await _runner(effort=effort or CODE_EFFORT).run(prompt)
+    if not run.ok:
+        return await _fail(job, agent, run, phase=job.kind)
 
-    if "hang" in intent:
-        logger.info("#%s: hanging on purpose — cancel me or restart me", job.id)
-        await asyncio.Event().wait()
-
-    await asyncio.sleep(FAKE_STEP)
-
-    if "fail" in intent:
-        await job.status(ARCHITECT, "done", role="architect", progress="fake: build failed")
-        return JobResult(state="failed", summary="fake failure",
-                         error="FAKE BUILD LOG\n  error: nothing was really built")
-    if "block" in intent:
-        return JobResult(state="blocked", summary="fake: needs a decision from the owner")
-
-    if job.kind == "epic":
-        pieces = [
-            {"title": f"fake piece {n}", "intent": f"{job.intent}: step {n}", "kind": "develop"}
-            for n in (1, 2, 3)
-        ]
-        await job.status(ARCHITECT, "done", role="architect",
-                         progress=f"fake: {len(pieces)} pieces")
-        return JobResult(state="done", summary=f"fake epic split into {len(pieces)}",
-                         children=pieces)
-
-    await job.status(ARCHITECT, "done", role="architect", phase="design", progress="fake: done")
-    _note(job, "done", f"FAKE {job.kind}: finished")
-    if "quick" in intent:
-        return JobResult(state="done", summary="fake: nothing to review")
-    return JobResult(state="review", summary="fake: pretend a PR is open")
-
-
-def _read_children(job: DirectiveJob) -> list[dict]:
-    """Children an /epic decomposition declared, or [].
-
-    Parsed from a JSON file the epic prompt asks for rather than from the prose
-    decomposition: the Hub queues whatever comes back, so guessing task
-    boundaries out of markdown would turn a formatting slip into real queued
-    work. A missing file means the epic produced prose only — that is reported,
-    not invented.
-    """
-    if job.files is None:
-        return []
-    path = job.files.dir / "children.json"
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as e:
-        logger.warning("#%s: children.json is unreadable (%s) — reporting none", job.id, e)
-        return []
-    out = []
-    for item in data if isinstance(data, list) else []:
-        title = str(item.get("title") or "").strip()
-        intent = str(item.get("intent") or title).strip()
-        kind = str(item.get("kind") or "develop").strip()
-        if title and kind in KIND_TO_COMMAND:
-            out.append({"title": title[:255], "intent": intent, "kind": kind})
-    return out
-
-
-def _now_iso() -> str:
-    return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
-
-
-def _history_load() -> list[dict]:
-    """The stored exchanges, oldest first, or [] if there are none.
-
-    Hand-parsed rather than with PyYAML, which this image does not carry — the
-    Warden's whole runtime dependency set is grpcio and protobuf, and wardenkit
-    hand-rolls its own reader for the same reason. Every value is written as a
-    JSON string, which is also a valid YAML double-quoted scalar, so the file
-    reads correctly in any YAML tool while the parser here stays four lines and
-    cannot be surprised by a colon or a newline in an answer.
-    """
-    path = pathlib.Path(ASK_HISTORY)
-    if not path.exists():
-        return []
-    turns: list[dict] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- at:"):
-                turns.append({"at": json.loads(stripped[5:].strip())})
-            elif stripped.startswith(("q:", "a:")) and turns:
-                turns[-1][stripped[0]] = json.loads(stripped[2:].strip())
-    except (ValueError, OSError) as e:
-        # A corrupt history is not worth failing an answer over — the owner
-        # asked a question, and losing yesterday's context is the smaller harm.
-        logger.warning("history at %s is unreadable (%s) — starting empty", ASK_HISTORY, e)
-        return []
-    return [t for t in turns if "q" in t and "a" in t]
-
-
-def _history_append(question: str, answer: str) -> None:
-    """Record one exchange, keeping only the newest ASK_HISTORY_TURNS.
-
-    Trimmed on write as well as on read: the file is the storage, so letting it
-    grow and slicing later would mean an unbounded file that merely LOOKS
-    bounded from the outside.
-    """
-    turns = _history_load()
-    turns.append({
-        "at": _now_iso(),
-        "q": question,
-        "a": answer[:ASK_HISTORY_ANSWER_CHARS],
-    })
-    turns = turns[-ASK_HISTORY_TURNS:]
-    lines = []
-    for t in turns:
-        lines.append(f"- at: {json.dumps(t['at'], ensure_ascii=False)}")
-        lines.append(f"  q: {json.dumps(t['q'], ensure_ascii=False)}")
-        lines.append(f"  a: {json.dumps(t['a'], ensure_ascii=False)}")
-    try:
-        path = pathlib.Path(ASK_HISTORY)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except OSError as e:
-        logger.warning("could not write history to %s: %s", ASK_HISTORY, e)
-
-
-def _history_prompt() -> str:
-    """The stored exchanges as prompt text, or "" on the first ever question."""
-    turns = _history_load()
-    if not turns:
-        return ""
-    body = "\n\n".join(
-        f"[{t['at']}]\nowner: {t['q']}\nyou: {t['a']}" for t in turns
-    )
-    # `===`, not `---`. A prompt that BEGINS with a dash is read by the CLI's
-    # argument parser as an option — `error: unknown option '--- what the owner
-    # …'` — and the run dies before it starts, with the whole prompt echoed back
-    # as the option name. `_run_claude` guards against this too; this keeps the
-    # text from ever getting there.
-    return (
-        f"=== what the owner and you have already said (last {len(turns)} "
-        f"exchange(s), oldest first) ===\n"
-        f"This is your ONLY memory of the conversation: every run starts a fresh\n"
-        f"session, and older exchanges have been dropped. Anything that must\n"
-        f"outlive it belongs in the journal in docs/product/backlog.md.\n"
-        f"Older answers are stored clipped, so quote them cautiously.\n\n"
-        f"{body}\n"
-        f"=== end of earlier conversation ===\n\n"
+    # The model's own closing text, on SUCCESS. For a kind whose deliverable is
+    # prose this IS the deliverable; for one that writes code it is the summary
+    # the owner reads on a phone. Either way it is not a path.
+    return await job.finish(
+        agent,
+        JobResult(state="review", summary=run.answer or f"{command} завершился.",
+                  artifacts=_artifacts(job)),
+        phase=job.kind, progress=f"{command} завершился", usage=run.usage,
     )
 
-
-async def _run_ask(job: DirectiveJob) -> JobResult:
-    """Answer a question and return the answer. No pipeline, no files, no PR.
-
-    Deliberately does NOT call ``job.files.ensure()``. An `ask` leaves nothing
-    behind by design, and creating ``docs/tracker/<id>/`` for every question the
-    owner ever typed would litter the tree the fleet has to read past — the
-    tracker directory is for work, and this is not work.
-
-    The read-only tool list is what makes all of that true. The prompt asks the
-    model not to touch anything; the missing tools mean it cannot.
-    """
-    persona = ASK_KINDS[job.kind]
-    prompt = (
-        f"{_history_prompt()}"
-        f"Answer the owner's question, then stop.\n"
-        f"Consult {persona} via the Agent tool (subagent_type={persona}) and "
-        f"relay what they say.\n\n"
-        f"This is a CONSULTATION. Answering is the job — but where the answer IS "
-        f"a small change, make it: update the backlog, record a decision, fix a "
-        f"stale line. You may edit anything under docs/product/ and docs/tracker/.\n"
-        f"Read and inspect freely — run `gh` and `git` queries rather than "
-        f"reconstructing live state from the tree, because a reconstruction is "
-        f"confidently wrong exactly when it matters.\n"
-        f"Do NOT: touch control/, edge/, deploy/ or .claude/ — those go through "
-        f"a pipeline with review; run a slash command; create a branch; commit; "
-        f"or push. Anything bigger than a small edit is a task for the fleet, "
-        f"and saying so IS the answer.\n"
-        f"Everything you change is diffed and reported to the owner with your "
-        f"answer, so do not report work you did not do.\n"
-        f"Answer in the language the question was asked in. Be concrete and "
-        f"short: this is read on a phone. If you do not know, say so and say "
-        f"what would tell you.\n\n"
-        f"Question: {job.intent}"
-    )
-    # Snapshot first: the owner's own uncommitted work is almost always sitting
-    # in this tree, and reporting THAT back as "answering your question changed
-    # 3 files" is the same mistake the diffstat below `run_pipeline` warns
-    # about — a window that catches somebody else's edits and bills them to the
-    # fleet. Only what appears between these two reads is ours.
-    before = set((await _git("status", "--porcelain")).splitlines())
-    try:
-        code, tail, answer = await _run_claude(
-            prompt, job, tools=ASK_TOOLS, timeout=ASK_TIMEOUT,
-            model=ASK_MODEL, effort=ASK_EFFORT,
-        )
-    except TimeoutError:
-        return JobResult(
-            state="failed",
-            summary=f"{job.kind} did not answer within the time limit",
-            error="the CLI was killed after the ask or idle timeout expired",
-        )
-
-    if code != 0:
-        # Terminal, for the same reason as the pipeline path below: `blocked` is
-        # leased, and a Warden that has stopped heartbeating turns it into a
-        # requeue loop rather than a pause.
-        if spent := _quota_exhausted(tail):
-            return JobResult(
-                state="failed",
-                summary=f"⏳ the subscription is spent — {spent}\n"
-                        f"Ask again after the reset.",
-                error=tail,
-            )
-        return JobResult(
-            state="failed",
-            summary=f"{job.kind} exited with code {code}",
-            error=tail or "no output captured",
-        )
-    if not answer.strip():
-        # A clean exit with no closing event means there is nothing to relay.
-        # Reporting `done` here would hand the owner an empty message and call
-        # it an answer — the one outcome worse than a visible failure.
-        return JobResult(
-            state="failed",
-            summary=f"{job.kind} finished but produced no answer",
-            error=tail or "no output captured",
-        )
-    summary = answer.strip()[:ASK_SUMMARY_LIMIT]
-    # Recorded only once there is a real answer: the failure branches above
-    # return before this, so a spent quota or a crash does not enter the
-    # conversation as if it had been said.
-    _history_append(job.intent or "", summary)
-
-    # An `ask` has the same tools a pipeline does, so it CAN leave changes —
-    # checking a branch out, writing a scratch file. Usually it does not, and
-    # then this ends `done` with nothing to review. But reporting `done` over a
-    # dirty tree would hide edits nobody asked for behind an answer to a
-    # question, which is the worst place to hide them.
-    new = sorted(set((await _git("status", "--porcelain")).splitlines()) - before)
-    if new:
-        summary += (
-            f"\n\n⚠ answering this left {len(new)} file(s) changed in the tree:\n"
-            + "\n".join(f"  {line}" for line in new[:10])
-            + ("\n  …" if len(new) > 10 else "")
-        )
-        return JobResult(state="review", summary=summary)
-    return JobResult(state="done", summary=summary)
-
-
-async def _git(*args: str) -> str:
-    proc = await asyncio.create_subprocess_exec(
-        "git", "-C", REPO_ROOT, *args,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-    )
-    out, _ = await proc.communicate()
-    return out.decode("utf-8", "replace").strip()
-
-
-# --------------------------------------------------------------------------
-# The handler
-# --------------------------------------------------------------------------
 
 async def run_pipeline(job: DirectiveJob) -> JobResult:
-    """Translate one Directive into one slash-command run of the real fleet."""
     logger.info("=== #%s (%s) task '%s': %s", job.id, job.kind, job.task_id, job.intent)
-
-    # A conversation, not a pipeline. Checked first: it is the cheapest route
-    # and the only one that touches nothing, so nothing below it should be able
-    # to claim the kind by accident.
-    if job.kind in ASK_KINDS:
-        if FAKE_PIPELINE:
-            return JobResult(state="done", summary=f"fake: answered {job.kind}")
-        return await _run_ask(job)
-
-    if job.kind in UNSUPPORTED_KINDS:
-        return JobResult(
-            state="failed",
-            summary=f"hashi does not run {job.kind!r} Directives",
-            error=UNSUPPORTED_KINDS[job.kind],
-        )
-    command = KIND_TO_COMMAND.get(job.kind)
-    if command is None:
-        return JobResult(
-            state="failed",
-            summary=f"kind {job.kind!r} is not something hashi knows how to run",
-            error=f"supported kinds: {', '.join(sorted(KIND_TO_COMMAND))}",
-        )
-
-    if job.files is not None:
-        job.files.ensure()
-
-    if FAKE_PIPELINE:
-        return await _fake_pipeline(job)
-
-    # The fleet picks its own task-id by default; pin it to the Directive's so
-    # the Handoffs and Status land in the tree the Hub is already watching.
-    extra = ""
+    if job.kind == "ask":
+        return await run_ask(job)
+    if job.kind == "converse":
+        return await run_converse(job)
     if job.kind == "epic":
-        # The Hub queues whatever `children` we return, so ask for a file we can
-        # parse instead of reading task boundaries out of prose.
-        extra = (
-            f"\nWhen the decomposition is approved, also write "
-            f"docs/tracker/{job.task_id}/children.json — a JSON array of "
-            f'{{"title", "intent", "kind"}} objects in dependency order, kind being '
-            f"one of {', '.join(sorted(KIND_TO_COMMAND))}. That file is what gets "
-            f"queued as real work, so include exactly the tasks you mean.\n"
-        )
-    prompt = (
-        f"{command} {job.intent}\n\n"
-        f"Use task-id `{job.task_id}` for this work — the tracker directory "
-        f"docs/tracker/{job.task_id}/ already exists and is being watched.\n"
-        f"UNATTENDED RUN — nobody is at the keyboard and scripts/ask_owner.sh "
-        f"cannot return an answer. Do NOT stop to ask, and do not wait for a "
-        f"reply that will never come: a pipeline that halts at its question gate "
-        f"produces nothing at all, which is worse than a decision made in the "
-        f"open. Where a choice is genuinely the owner's, take the most "
-        f"conservative option, write the assumption down in your report under "
-        f"'Assumptions', and carry on to the end. Deliver the artifact.{extra}"
-    )
-
-    before = await _git("rev-parse", "HEAD")
-    _note(job, "in_progress", f"running {command}")
-
-    # No status mirroring here on purpose: wardenkit's own status relay polls
-    # docs/tracker/{task_id}/status/ every `status_poll_seconds` for the life of
-    # the job and sweeps once more after it ends. Running a second poller
-    # alongside it would double-push and race it — and the kit's handles the
-    # `status:`/`updated:` aliases and change-detection that this one did not.
-    try:
-        code, tail, _answer = await _run_claude(prompt, job)
-    except TimeoutError:
-        return _note_outcome(
-            job,
-            JobResult(
-                state="failed",
-                summary=f"{command} did not finish within the time limit",
-                error="the CLI was killed after the run or idle timeout expired",
-            ),
-            f"{command}: killed on timeout",
-        )
-
-    if code != 0:
-        # `failed`, and deliberately NOT `blocked`. `blocked` is the Hub's state
-        # for "an agent asked the owner a question and is holding the job open"
-        # — it is a LEASED state, and this Warden stops heartbeating the moment
-        # it returns. The lease (120s) would expire, the sweeper (every 30s)
-        # would requeue, the quota would still be spent, and the Directive would
-        # loop every two and a half minutes for as long as the limit lasts,
-        # notifying the owner on every turn.
-        #
-        # Terminal and clearly labelled is the honest shape: nothing retries,
-        # and the message carries the one fact that makes it actionable.
-        if spent := _quota_exhausted(tail):
-            return _note_outcome(
-                job,
-                JobResult(
-                    state="failed",
-                    summary=f"⏳ the subscription is spent — {spent}\n"
-                            f"Nothing is broken and nothing was lost. This does not "
-                            f"retry by itself: re-send this Directive after the reset "
-                            f"and it runs unchanged.",
-                    error=tail,
-                ),
-                f"{command}: subscription spent, nothing was built",
-            )
-        return _note_outcome(
-            job,
-            JobResult(
-                state="failed",
-                summary=f"{command} exited with code {code}",
-                error=tail or "no output captured",
-            ),
-            f"{command} exited {code} — the run FAILED",
-        )
-
-    after = await _git("rev-parse", "HEAD")
-    dirty = await _git("status", "--porcelain")
-    diffstat = await _git("diff", "--stat", f"{before}..{after}") if after != before else ""
-
-    if after == before and not dirty:
-        # A clean run that changed nothing is a real outcome, not a failure —
-        # a `/review` or a `/research` Directive ends exactly here.
-        return _note_outcome(
-            job,
-            JobResult(state="done", summary=f"{command} finished; no changes to the tree"),
-            f"{command} exited 0 — no changes to the tree",
-        )
-
-    if job.kind == "epic":
-        children = _read_children(job)
-        if children:
-            return _note_outcome(
-                job,
-                JobResult(state="done", children=children,
-                          summary=f"decomposed into {len(children)} task(s); "
-                                  "they are queued under this Directive"),
-                f"decomposed into {len(children)} task(s)",
-            )
-        return _note_outcome(
-            job,
-            JobResult(state="review",
-                      summary="decomposition written, but no children.json — "
-                              "nothing was queued; read the decomposition and "
-                              "dispatch the pieces yourself"),
-            "decomposition written, nothing queued",
-        )
-
-    # Point at the artifact, not at a diffstat. The owner reads this in Telegram,
-    # and a wall of `git diff --stat` is unreadable there — worse, the range
-    # `before..after` catches ANY commit made while the run was going, including
-    # the owner's own, which then reads as "the fleet wrote 4000 lines".
-    artifacts = []
-    if job.files is not None and job.files.tasks_dir.exists():
-        artifacts = sorted(
-            str(f.relative_to(REPO_ROOT)) for f in job.files.tasks_dir.glob("*.md")
-        )
-    summary = f"{command} finished."
-    if artifacts:
-        summary += "\nWrote:\n" + "\n".join(f"  {a}" for a in artifacts)
-    if dirty:
-        summary += f"\n{len(dirty.splitlines())} file(s) uncommitted in the tree."
-    if diffstat:
-        n = len(diffstat.strip().splitlines())
-        summary += (f"\n{n} file(s) committed during the run — note this window "
-                    "can include your own commits, not only the fleet's.")
-    # `review`, never `done`: the changes are in the working tree and no human
-    # has looked at them. Only the owner closes that gap.
-    return _note_outcome(
-        job,
-        JobResult(state="review", summary=summary.strip()),
-        f"{command} exited 0 — changes await review",
-    )
+        return await run_epic(job)
+    return await run_command(job)
 
 
 async def main() -> None:
     hub = HubClient(HUB_ADDR, token_path=f"{STATE}/hub_token")
     manifest = make_manifest(
         NAME,
-        purpose="Self-hosted multi-protocol VPN: control plane, node fleet, admin panel",
-        description=DESCRIPTION,
-        # Only what we can actually run — the pipelines plus the conversation
-        # kinds. The Hub validates a Directive against this AND its own
-        # vocabulary, so `ask` also has to exist in Kaizen's DIRECTIVE_KINDS
-        # before one can ever arrive.
-        kinds=sorted(set(KIND_TO_COMMAND) | set(ASK_KINDS)),
+        purpose="A self-hosted, multi-protocol VPN for its owner and ~30-50 friends: a Russian entry node fronting foreign exit nodes, where both nodes and protocols are data.",
+        # This text is what the caller reads when CHOOSING a kind, so the map
+        # from kind to behaviour lives here and not only in the code.
+        description=(
+            "ask — вопрос владельца, ответ ТЕКСТОМ (пайплайн не запускается). "
+            "converse — живой разговор с владельцем, длится пока владелец не "
+            "скажет «выход» (пайплайн не запускается). "
+            "brainstorm — планирование, пишет файлы. "
+            "research — вопрос, требующий источников и письменного отчёта. "
+            + ", ".join(sorted(KIND_COMMANDS)) + " — работа по коду."
+        ),
+        kinds=KINDS,
         roster=ROSTER,
         max_concurrent=MAX_CONCURRENT,
+        repo_url="https://github.com/EarlDevTech/Hashi.git",
+        default_branch="develop",
         grpc_addr=GRPC_ADDR,
     )
-
-    # Serve before enrolling: the Hub may dispatch the moment the owner
-    # approves, and a project registered but not yet listening is
-    # indistinguishable from one that is down.
-    servicer = WardenServicer(
-        manifest, run_pipeline, hub=hub, repo_root=REPO_ROOT, heartbeat_seconds=10,
-        status_poll_seconds=STATUS_POLL,
+    # Serve BEFORE enrolling: the Hub may dispatch the moment the owner
+    # approves, and a project registered but not listening looks exactly like
+    # one that is down.
+    server = await serve(
+        WardenServicer(manifest, run_pipeline, hub=hub, repo_root=REPO_ROOT), BIND_ADDR
     )
-    server = await serve(servicer, BIND_ADDR)
-    logger.info("hashi Warden listening on %s, enrolling with %s", BIND_ADDR, HUB_ADDR)
-
+    logger.info("Warden on %s, enrolling with %s", BIND_ADDR, HUB_ADDR)
     await hub.enroll(manifest, poll_seconds=5)
     logger.info("Enrolled as '%s'. Waiting for Directives.", NAME)
     await server.wait_for_termination()

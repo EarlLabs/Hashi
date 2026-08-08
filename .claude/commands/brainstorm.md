@@ -1,5 +1,7 @@
 # /brainstorm — Business Analysis & Scenario Evaluation
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT analyze anything yourself.
 Spawn each agent using the Agent tool. `subagent_type` = filename in `.claude/agents/` without `.md`.
 
@@ -14,8 +16,8 @@ mkdir -p docs/brainstorm/<slug>
 ```
 3. Notify the project owner:
 ```bash
-scripts/notify.sh "🧠 Начинаю анализ: \"$TOPIC\"
-Xavier оценит идею с точки зрения бизнеса."
+scripts/notify.sh "🧠 Starting analysis: \"$TOPIC\"
+Xavier will evaluate the idea from a business perspective."
 ```
 
 ---
@@ -29,7 +31,7 @@ Topic from the project owner: <full topic or scenario description>
 You are in BUSINESS ANALYST mode, not architect mode. The goal is to evaluate whether the idea is worth building — before any technical planning begins.
 
 Read project context first:
-`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`) — what exists today and what the product does
+`README.md`, `CLAUDE.md`, `control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md` — what exists today and what the product does
 - .claude/projects/00-core-invariants.md — product invariants (if exists)
 
 Produce a structured analysis covering:
@@ -85,22 +87,22 @@ After Xavier returns, create a README.md for the brainstorm directory:
 cat > docs/brainstorm/<slug>/README.md <<'EOF'
 # <Title>
 
-**Дата:** <YYYY-MM-DD>
-**Вердикт:** <Proceed|Proceed with caveats|Defer|Reformulate>
+**Date:** <YYYY-MM-DD>
+**Verdict:** <Proceed|Proceed with caveats|Defer|Reformulate>
 
-## Зачем
+## Why
 
 <1-2 sentences about why this was analyzed>
 
-## Ключевые выводы
+## Key Findings
 
 <3-5 bullet points>
 
-## Файлы
+## Files
 
-| Файл | Описание |
+| File | Description |
 |------|----------|
-| `<slug>-<date>.md` | Основной анализ |
+| `<slug>-<date>.md` | Main analysis |
 EOF
 ```
 

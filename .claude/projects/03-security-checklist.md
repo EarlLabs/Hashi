@@ -1,8 +1,8 @@
 # Security checklist — hashi
 
 <!--
-WHAT: The must-check list for Sherlock Holmes and the self-check list for every
-      developer touching an externally reachable surface.
+WHAT: The self-check list for Ohno (`alfred`) when touching an externally
+      reachable surface, and the must-check list for `reviewer-strict`.
 WHY:  security review that improvises finds different things every time. A list
       makes a missing check visible.
 HOW:  pre-read by security review (design and code) and by any developer adding

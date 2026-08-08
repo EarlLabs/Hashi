@@ -1,5 +1,7 @@
 # /review — PR Review Cycle (hashi)
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 **You are the pipeline ORCHESTRATOR.** Do NOT implement fixes yourself.
 Spawn developer agents using the Agent tool.
 
@@ -16,9 +18,9 @@ Called after the project owner reviews the PR and finds issues to fix.
 
 ## Step 1 — Find the task under review
 
-Find the most recent task with a status file at `status: review`:
+Find the most recent task with `status = review`:
 ```bash
-grep -rl 'status: review' docs/tracker/*/status/ | sort
+ task:list
 ```
 
 Note the `task-id` and `pr_url`. Check `docs/tracker/{task-id}/status/` to identify which developers worked on this task (look for status files with `status: review` or `status: done`).

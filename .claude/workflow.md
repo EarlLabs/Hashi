@@ -4,23 +4,17 @@ How the agent fleet coordinates work in this repository. Every persona in
 `.claude/agents/` follows this document; where the two disagree, this document
 wins and the persona is the bug.
 
+> **Solo project.** There is only one persona here — `alfred`. Ignore every "spawn `<agent>`" instruction below **except the one phase that says "Run the review-loop skill"** (do not confuse this with a phase that merely has "Review" in its title, such as a Quality Review that spawns Xavier — that one is not the exception; collapse it into your own work like every other spawn instruction): do every other phase's work yourself, in this same context, one phase after another, and skip any step that exists only to hand work between separate agents (Handoff files, cross-agent status pushes). The review-loop phase still happens — the review-loop skill (`.claude/skills/review-loop/`) spawns `reviewer-strict`, a second, independent, edit-incapable agent, for every development task, and in solo YOU (the orchestrator) apply its findings yourself, same as the skill's default rule. This is not optional and self-review is never a substitute for it — see `alfred.md`.
+
 ---
 ## Zones
 A **zone** is the unit of ownership: a set of paths, a rulebook, a verification
 command, and exactly one owner at a time. Work that crosses zones is **split**,
 never shared.
 
-| Zone | Label | Paths | Rulebook | Verify | Owner |
-|---|---|---|---|---|---|
-| `control` | Control plane: API, admin panel, subscription delivery, persistence | `control/**`, `tests/control/**`, `tests/e2e/control/**` | `.claude/projects/01-control-rulebook.md` | `make test-control` | Thomas Anderson (`dev-anderson`) |
-| `edge` | Data plane: transport profiles, node bootstrap, config rendering, health | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `.claude/projects/02-edge-rulebook.md` | `make test-edge` | John von Neumann (`dev-neumann`) |
-| `infra` | Deployment and operations: compose stacks, Caddy, CI, backups, secrets | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `.claude/projects/04-infra-rulebook.md` | `make test-infra` | Pepper Potts (`dev-potts`) |
-
-Everything not listed above — `docs/**`, `.claude/**`, `pyproject.toml`,
-`README.md`, `CLAUDE.md`, `.gitignore` — belongs to no zone and is owner and
-architect territory. `pyproject.toml` is deliberately among them: adding a
-dependency is an architect decision (core invariants §5), so a developer who
-needs one asks rather than edits.
+| `control` | Control plane (FastAPI) | `control/**`, `tests/control/**`, `tests/e2e/control/**` | `01-control-rulebook.md` | `make test-control` | Ohno |
+| `edge` | Edge (pure config-rendering library) | `edge/**`, `tests/edge/**`, `tests/e2e/edge/**` | `02-edge-rulebook.md` | `make test-edge` | Ohno |
+| `infra` | Deploy / CI / infra | `deploy/**`, `.github/**`, `Makefile`, `scripts/**`, `.e2e/**`, `.env.example`, `tests/infra/**`, `tests/e2e/infra/**` | `04-infra-rulebook.md` | `make test-infra` | Ohno |
 
 ---
 ## Branch & merge model
@@ -32,9 +26,6 @@ needs one asks rather than edits.
    ```bash
    git checkout develop && git pull origin develop && git merge origin/main --no-edit
    ```
-   **This repository has no `origin` yet.** Until one exists, the local
-   equivalent is `git checkout develop && git merge main --no-edit` — and if you
-   skip it you will branch from a tree missing everything merged since.
 5. Before merging, the agent self-reviews its own PR diff and fixes what it finds.
 6. After merging, report to the project owner via `scripts/notify.sh`.
 7. **Merge conflicts are never auto-resolved and never reverted.** Report and stop.
@@ -55,55 +46,45 @@ artifacts are never deleted** — not after completion, not after a cancellation
 
 ---
 ## Agent registry
-| Agent | File | Role | Zone | Model |
-|---|---|---|---|---|
-| Taiichi Ohno | `product-owner-ohno.md` | Product Owner — charter, backlog, accept | — | opus |
-| Charles Xavier | `architect-xavier.md` | Solution Architect — also every developer's lead | all | opus |
-| Sherlock Holmes | `security-holmes.md` | Security review (design + code) | all | opus |
-| Marie Curie | `researcher-curie.md` | Research | — | opus |
-| Thomas Anderson | `dev-anderson.md` | Developer | `control` | opus |
-| John von Neumann | `dev-neumann.md` | Developer | `edge` | opus |
-| Pepper Potts | `dev-potts.md` | Developer | `infra` | opus |
-| Hermione Granger | `reviewer-granger.md` | Code review | `control`, `edge`, `infra` | sonnet |
-
-**Not installed in this project**, so nothing may wait on them: team leads
-(each zone has one developer — Xavier is the escalation path), a second
-reviewer, the analyst, the designer and the UI reviewer.
+| `alfred` | Ohno | Overseer | — | `opus` |
+| `reviewer-strict` | Strict Reviewer | Independent Reviewer | — | `sonnet` |
 
 ---
 ## Workflow phases
-### Phase 0: Product intake (Taiichi Ohno) — `/product` only
+### Phase 0: Product intake (—) — `/product` only
+<!-- Renderer: delete this phase entirely if no Product Owner is installed. -->
 **Skipped by every development command.** `/develop`, `/fix`, `/refactor` and
 `/epic` start at Phase 1. Phase 0 exists for asks where *what is worth doing* is
 still open: business questions, R&D, devrel, and a new project's charter.
 
 Anything that turns into code leaves Phase 0 as a task, never as an
-implementation: the PO writes `ohno-to-xavier-{task-id}.md` with fixed
+implementation: the PO writes `—-to-xavier-{task-id}.md` with fixed
 acceptance criteria, and Phase 1 runs unchanged.
 
-Ohno is reached **only** through `/product`. This project has
-no tracker service and no Hub: the slash command spawns him, he reads and writes
-`docs/product/`, and he exits. Nothing dispatches to him automatically, and no
-development command waits on him.
+This project has no Product Owner — the owner drives every task.
 
 ### Phase 1: Architecture & requirements (Xavier)
 1. The project owner submits a request.
 2. Xavier assigns a `task-id` and creates `docs/tracker/{task-id}/{status,tasks}/`.
-3. Xavier reads the context (`README.md`, `CLAUDE.md`, and the `AGENTS.md` of every zone in scope (`control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`)) and the rulebooks for the affected
+3. Xavier reads the context (`README.md`, `CLAUDE.md`, `control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`) and the rulebooks for the affected
    zones, and decides which zones are involved.
 4. Xavier asks clarifying questions — once, in one batch — and waits.
-5. Xavier writes one spec per involved developer, each naming the zone, the
-   scope, the out-of-scope list, the contracts at the boundary, and the
-   acceptance criteria.
+5. Xavier writes one spec per involved lead or direct-report developer, each
+   naming the zone, the scope, the out-of-scope list, the contracts at the
+   boundary, and the acceptance criteria.
 6. Xavier opens a security review of the design for Sherlock Holmes.
 
 ### Phase 2: Security review of the design (Sherlock Holmes)
 Findings written to `docs/tracker/{task-id}/tasks/holmes-to-xavier-{task-id}-findings.md`.
 Critical findings go back to Phase 1 before decomposition starts.
 
-### Phase 3: Decomposition — **not used in this project**
-There are no leads here: every zone has exactly one developer, so Xavier's specs
-go straight to that developer. Nothing waits on this phase.
+### Phase 3: Decomposition (leads)
+<!-- Renderer: if this project has no leads, replace this phase with one line: specs go straight to the zone's developer. -->
+Each lead decomposes its spec into **non-overlapping** developer tasks. Two
+developers assigned the same file is the most expensive mistake available at this
+step. Leads write tasks and acceptance criteria; leads do not write code.
+
+Zones with a single developer skip this phase — the spec goes straight to them.
 
 ### Phase 4: Implementation (developers)
 1. Developers implement only inside their zone.
@@ -114,33 +95,28 @@ go straight to that developer. Nothing waits on this phase.
 4. Every new externally reachable surface goes in the developer's **surface
    audit** (what it is, who may reach it, how that is enforced, behaviour on
    invalid input).
-5. The zone's own verify command (see the zone table above) passes **before**
-   review — not `make test`, which is the project-wide one.
+5. Verification (the zone's own verify command — see the zone table above)
+   passes **before** review.
 6. Developers keep their own status file current.
 
-### Phase 5: Code review loop (Hermione Granger, max 3 rounds)
-One reviewer covers all three zones. Ownership overlap and integration
-consistency are Xavier's in Phase 7 — in a fleet with no leads that check has
-exactly one owner, and it is him.
-Order of checks: acceptance criteria first, then scope, then rulebooks, then a
-verification run, then correctness.
+### Phase 5: Code review loop (reviewers + leads, max 3 rounds)
+Run the **review-loop** skill (`.claude/skills/review-loop/`) with the
+original request as its task, a round cap of 3, and
+starting point **Already done** — the baseline is the ref recorded at the
+start of `/develop`, since the implementation phases above already did the
+work the skill would otherwise do in its own Phase 0-1. It owns the loop
+mechanics from there — reading the diff, round caps, the `VERDICT:` line,
+ping-pong detection, carrying medium/low findings across rounds — so this
+phase only states what's specific to `/develop`, not the loop itself:
 
-Loop rules — all five matter, and the last two are what keep it terminating:
-
-1. **Reviewers read the diff** (`git diff <baseline>..HEAD`), not the developers'
-   status files. A status file is a claim; the diff is the evidence.
-2. **Reviewers run the zone's verification themselves.** A failure is Must Fix
-   regardless of what the status file says.
-3. **Round ≥ 2 verifies the previous round's fixes item by item**, before any
-   fresh review, and reports per item: fixed / partial / absent.
-4. **Findings end with a machine-readable line**: `VERDICT: CLEAN` or
-   `VERDICT: <n> must-fix, <m> should-fix`.
-5. **Stops: 3 rounds, or ping-pong.** If a round re-reports something already
-   fixed, or flags code written *as* an earlier fix, that is reviewers
-   disagreeing — stop, keep the state, escalate both positions to the owner.
-
-**Reviewers report; the developer who owns the zone fixes.** Should Fix and Nit
-items accumulate across rounds into one deduplicated list rather than being lost.
+- Reviewers are scoped by zone and run in parallel when several zones changed.
+- Leads verify scope compliance, ownership overlap and integration
+  consistency, on top of what the skill's reviewer already checks.
+- Order of checks: acceptance criteria first, then scope, then rulebooks,
+  then a verification run (the zone's own — a failure is `high` regardless
+  of what a status file claims), then correctness.
+- **Reviewers report; the developer who owns the zone fixes** — the skill's
+  "orchestrator only fixes" rule, applied per zone.
 
 ### Phase 6: Security review of the code (Sherlock Holmes)
 Traceability from the Phase 2 findings to the code that addresses them, then the
@@ -162,7 +138,8 @@ Batching lowers the noise, never the escalation: a blocked agent, a red gate, an
 exhausted budget or a question for the owner goes out immediately at every level,
 and stops the queue.
 
-### Phase 8: Acceptance (Taiichi Ohno) — only for work the PO dispatched
+### Phase 8: Acceptance (—) — only for work the PO dispatched
+<!-- Renderer: delete this phase entirely if no Product Owner is installed. -->
 Independent product-level accept/reject: each acceptance criterion traced to the
 e2e scenario that proves it and the run result, **including the red-first proof**
 (break the behaviour, watch the right assertion fail, restore). A criterion with
@@ -214,7 +191,7 @@ Developers moving to `review` must also carry `pre_read`, `verified` and
 ---
 ## Fix flow (`/fix`)
 1. Xavier assigns the bug to **one** zone.
-2. That zone's developer takes one fix task.
+2. The lead (or the direct-report developer) takes one fix task.
 3. The developer fixes, verifies, and moves to review. Same gates as Phase 5–7,
    scoped to the change.
 

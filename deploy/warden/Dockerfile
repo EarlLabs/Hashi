@@ -1,60 +1,72 @@
 # =============================================================================
 # hashi Warden image — deploy/warden/Dockerfile
 # =============================================================================
-# WHAT: the Warden daemon plus everything the fleet needs to actually work in
-#       this repo: the `claude` CLI, git, `gh`, and the project's own toolchain.
+# WHAT: The runtime the agent fleet works in: python + the `claude` CLI + git +
+#       gh, and nothing about this project's own stack.
 #
-# WHY it is bigger than the dummy project's image: the dummy does no work, so it
-#       needs grpcio and nothing else. This one RUNS the fleet — that means the
-#       CLI, node to host it, git and gh for the branch/PR discipline in
-#       .claude/git-workflow.md, and make/python so the agents can run
-#       `make test-<zone>` before handing over. A Warden that cannot run the
-#       zone's verify command would let every developer hand over an unverified
-#       build.
+# WHY the Warden source is NOT copied in as the thing that runs: the compose
+#       file starts `/repo/deploy/warden/warden.py` from the mount, so a fix is
+#       `git pull && docker restart` instead of a rebuild sequenced against
+#       whatever Directive is running. The copy below is kept deliberately as
+#       the documented fallback (`command: ["python", "/app/warden.py"]`) for a
+#       host where the repo and the container do not share a filesystem.
 #
-# WHY the build context is the repo root: the vendored kit lives at
-#       deploy/warden/vendor/ and the Warden imports it as `infra.*`.
-#       See deploy/warden/README.md for why it is vendored rather than installed.
+# WHY the vendored kit is committed under deploy/warden/vendor/: this project
+#       imports `infra.wardenkit` from Kaizen, and there is no package on an
+#       index to install it from. A DEPLOY HOST NEEDS NOTHING — the copy is in
+#       the repo. Re-vendoring is a development step (`make vendor-kit`), not a
+#       deployment one.
 # =============================================================================
 
-FROM python:3.14-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/vendor \
-    DISABLE_AUTOUPDATER=1
-
-# git: the fleet branches and diffs. gh: it opens the PR. make: the zone verify
-# commands. nodejs/npm: the claude CLI runs on node.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      git make curl ca-certificates gnupg \
- && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
- && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list \
- && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
- && apt-get update \
- && apt-get install -y --no-install-recommends nodejs gh \
- && npm install -g @anthropic-ai/claude-code \
- && rm -rf /var/lib/apt/lists/*
-
-# The kit's entire runtime dependency set — grpcio for the transport, protobuf
-# because the committed generated stubs import it. wardenkit deliberately
-# hand-rolls its flat-YAML reader so this list stays this short.
-RUN pip install --no-cache-dir "grpcio>=1.83,<2" "protobuf>=7.35,<8"
+    PYTHONPATH=/app/vendor
 
 WORKDIR /app
 
-# Everything this project vendors from Kaizen: the generated contract + the kit.
-COPY deploy/warden/vendor/infra /app/vendor/infra
-# ...and the project's own half.
-COPY deploy/warden/warden.py     /app/warden.py
-COPY deploy/warden/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+# git + gh for the fleet's own workflow; nodejs for the `claude` CLI; ca-certs
+# because everything above talks TLS.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
 
-# The entrypoint wires git/gh from the environment, then execs the Warden — so
-# the credential lives in git's config and never in an agent's context.
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Isolated docker engine support — see dind_slots() in
+# infra/agentkit/render.py. Only the CLI + compose plugin: this image
+# never runs its own dockerd, it talks to the `dind` sibling service
+# over DOCKER_HOST (set in docker-compose.yml), never a host socket.
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg \
+        -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+        https://download.docker.com/linux/debian bookworm stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+
+# The kit's entire runtime dependency set: grpcio for the transport, protobuf
+# because the committed generated stubs import it.
+RUN pip install --no-cache-dir "grpcio>=1.83,<2" "protobuf>=7.35,<8"
+
+# The fallback copy — see the header. `vendor/` carries infra.wardenkit and the
+# generated proto stubs; both are committed in this repo.
+COPY vendor /app/vendor
+COPY warden.py /app/warden.py
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "/app/warden.py"]

@@ -68,10 +68,15 @@ alongside any other project on the same machine.
 
 | Path | Zone | Owner |
 |---|---|---|
-| `control/` | `control` | Thomas Anderson (`dev-anderson`) |
-| `edge/` | `edge` | John von Neumann (`dev-neumann`) |
-| `deploy/`, `Makefile`, `.github/` | `infra` | Pepper Potts (`dev-potts`) |
-| `docs/` | — | the owner and the architect |
+| `control/` | `control` | Ohno (`alfred`) |
+| `edge/` | `edge` | Ohno (`alfred`) |
+| `deploy/`, `Makefile`, `.github/` | `infra` | Ohno (`alfred`) |
+| `docs/` | — | the owner and Ohno |
+
+Solo topology: one persona, Ohno, owns every zone — see
+[`docs/product/charter.md`](docs/product/charter.md) §Fleet for why. Every task
+still closes through an independent second reviewer (`reviewer-strict`, via the
+review-loop skill), never self-review.
 
 Each zone has an `AGENTS.md` next to its code and a rulebook in
 `.claude/projects/`. The fleet and how it coordinates are described in
@@ -82,9 +87,13 @@ Each zone has an `AGENTS.md` next to its code and a rulebook in
 Open a session in this directory — the agent fleet lives in *this* repo's
 `.claude/`:
 
-- `/product` — plan or re-plan the backlog from the charter
 - `/develop <task>` — build one backlog item, end to end
-- `/fix <bug>`, `/refactor <target>`, `/research <question>`
+- `/fix <bug>`, `/refactor <target>`, `/research <question>`, `/epic <goal>`,
+  `/brainstorm <topic>`, `/review`, `/analyze`, `/doc`, `/abort`, `/e2e` —
+  see [`docs/product/charter.md`](docs/product/charter.md) §Fleet for the
+  full installed/not-installed list
+- No `/product` or `/design` — both need two personas checking each other,
+  structurally impossible in solo.
 
 Or drive it remotely: `deploy/warden/` registers hashi with Kaizen's tracker, so
 Кая and the panel can dispatch work to this fleet. See

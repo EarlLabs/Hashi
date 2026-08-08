@@ -3,16 +3,35 @@
 # WHAT: the five answers an e2e agent needs, as commands rather than concepts.
 # WHY:  written now, while the deployment shape is fresh, so it is accurate when
 #       something finally consumes it.
-# HOW:  nothing reads this file yet. The `/e2e` method file it pairs with does
-#       not exist in this repo (see docs/e2e/README.md §10 in the Kaizen repo —
-#       the command, the host script and the profile template are all still to be
-#       written). Treat this as a description, not as working automation.
+# HOW:  the /e2e method file now exists (.claude/commands/e2e.md, copied
+#       byte-for-byte from Kaizen's docs/e2e/command/e2e.md) and reads this
+#       profile first (its §0). This is live automation, not a description.
 kit_version: 1
 
 env:
   mode: local
   isolation: per-run
 
+# 2026-08-09: this project's Warden now runs on `dind` (DOCKER_HOST points at
+# hashi-dind:2375) so /e2e can execute from inside the fleet container.
+# THREE consequences, none fully closed yet — flagging rather than silently
+# patching kit-owned or product files:
+#   1. `boot.ready` and `run.all` target the DIND CONTAINER's hostname, never
+#      127.0.0.1 — a published port lands on hashi-dind, not on localhost or
+#      on `warden`. `run.all` passes E2E_API_HOST=hashi-dind so the Makefile's
+#      own test-e2e readiness probe agrees with boot.ready below.
+#   2. deploy/docker-compose.yml's Caddy bind mount
+#      (./caddy/Caddyfile:/etc/caddy/Caddyfile:ro) resolves against DIND'S OWN
+#      filesystem, which has no such file — this WILL mount empty/fail under
+#      dind. Needs an architecture call (bake the Caddyfile into the image via
+#      COPY, or a named volume populated at build time) on
+#      deploy/docker-compose.yml, which is project-owned, not kit-owned.
+#   3. deploy/warden/Dockerfile (kit-rendered) installs neither `make` nor a
+#      Python matching this project's tests (`run.one` below needs `.venv`,
+#      built by the HOST's `make setup`, not present in the fleet image) — so
+#      /e2e cannot actually execute from inside the fleet container yet. This
+#      is a kit-template gap (Kaizen: infra/agentkit/templates/deploy/warden/
+#      Dockerfile), not something to hand-patch in this rendered copy.
 boot:
   # The e2e stack is its own compose project (hashi-e2e) on its own ports, so it
   # never shares a volume with the dev stack. Probe 54200, not 54100 — 54100 is
@@ -20,7 +39,7 @@ boot:
   # not up. Neither is a service default: the host already runs something on
   # 8000.
   up:      "make e2e-up"
-  ready:   "curl -fsS http://127.0.0.1:54200/healthz"
+  ready:   "curl -fsS http://hashi-dind:54200/healthz"
   timeout: 120
   reset:   "make e2e-reset"     # isolation is per-run; nothing to reset
   down:    "make e2e-down"
@@ -28,8 +47,9 @@ boot:
 run:
   # `make test-e2e` rather than raw pytest: it checks the stack is actually up
   # and turns pytest's exit 5 ("no tests ran") into an honest "no scenarios yet"
-  # instead of a failure on a fresh clone.
-  all:       "make test-e2e"
+  # instead of a failure on a fresh clone. E2E_API_HOST=hashi-dind matches
+  # boot.ready above — see the dind note near the top of this file.
+  all:       "E2E_API_HOST=hashi-dind make test-e2e"
   one:       ".venv/bin/pytest {file}::{name} -q"
   write_to:  "tests/e2e/<zone>/"     # control | edge | infra — the owning zone
   report:    "junit:.e2e/artifacts/{run}/results.xml"

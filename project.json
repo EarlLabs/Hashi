@@ -1,0 +1,50 @@
+{
+  "project": "hashi",
+  "purpose": "A self-hosted, multi-protocol VPN for its owner and ~30-50 friends: a Russian entry node fronting foreign exit nodes, where both nodes and protocols are data.",
+  "owner_language": "Russian",
+  "main_branch": "main",
+  "integration_branch": "develop",
+  "repo_url": "https://github.com/EarlDevTech/Hashi.git",
+  "max_concurrent": 1,
+  "autonomy": "L0",
+  "topology": "solo",
+  "solo_name": "Ohno",
+  "product_owner": false,
+  "researcher": false,
+  "analyst": false,
+  "design": false,
+  "e2e": true,
+  "kinds": ["develop", "fix", "refactor", "review", "epic", "brainstorm", "research", "ask"],
+  "zones": [
+    {
+      "key": "control",
+      "label": "Control plane (FastAPI)",
+      "paths": ["control/**", "tests/control/**", "tests/e2e/control/**"],
+      "verify": "make test-control",
+      "rulebook": "01-control-rulebook.md",
+      "devs": 1
+    },
+    {
+      "key": "edge",
+      "label": "Edge (pure config-rendering library)",
+      "paths": ["edge/**", "tests/edge/**", "tests/e2e/edge/**"],
+      "verify": "make test-edge",
+      "rulebook": "02-edge-rulebook.md",
+      "devs": 1
+    },
+    {
+      "key": "infra",
+      "label": "Deploy / CI / infra",
+      "paths": ["deploy/**", ".github/**", "Makefile", "scripts/**", ".e2e/**", ".env.example", "tests/infra/**", "tests/e2e/infra/**"],
+      "verify": "make test-infra",
+      "rulebook": "04-infra-rulebook.md",
+      "devs": 1
+    }
+  ],
+  "verify_all": "make test-control && make test-edge && make test-infra",
+  "doc_convention": "docstrings",
+  "context_docs": "`README.md`, `CLAUDE.md`, `control/AGENTS.md`, `edge/AGENTS.md`, `deploy/AGENTS.md`",
+  "slots": {
+    "SECURITY_ZONE_NOTES": "- never log who connected to what: no connection, traffic or DNS logs, at any level, including debug\n- never hardcode a country, provider, IP, domain or port\n- nodes and transports are data; no `if provider ==` / `if transport ==` outside a transport's own package\n- `edge` is pure and does no I/O; `control` imports it, never the reverse\n- subscription tokens are bearer credentials in a URL path — access logging is off in uvicorn and Caddy, check every new place a path could be recorded\n- never ship a shared default Reality decoy destination\n- no public signup, no billing, no advertising"
+  }
+}
