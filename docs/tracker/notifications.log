@@ -18,3 +18,4 @@ task-id: product-owner-ohno-4
 Новое от Xavier: коммит 62f0b8b завёл рабочие git-креды флоту, но .claude/git-workflow.md нигде не повторяет, что push — always-ask по чартеру. Скажи: разрешение на push пер-задача или постоянное для develop.
 
 Статусы: docs/tracker/ohno-6/status/{product-owner-ohno,architect-xavier}.yml
+[2026-08-08T23:23:13Z] hashi-e2e-e2e-113 — PR #1 open into develop (branch feat/e2e-baseline-113): https://github.com/EarlDevTech/Hashi/pull/1 — 14 e2e scenarios green from a cold boot, 5 defects found and fixed (openapi.json served the schema; Caddy bind mount broke the stack off the local engine; the control image ran a copied tree instead of the installed package and would have dropped a new transport; the e2e stack asked a public CA for the production hostname; the published port was unreachable from a remote engine). Reviewed by reviewer-strict: CLEAN. Awaiting owner review.
