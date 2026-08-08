@@ -44,6 +44,7 @@ import grpc
 
 from infra.proto.gen import warden_pb2, warden_pb2_grpc
 from infra.wardenkit.client import CHANNEL_OPTIONS, HubClient
+from infra.wardenkit.clirunner import CliUsage
 from infra.wardenkit.trackerfiles import TrackerFiles, slugify
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ class DirectiveJob:
     meta: dict[str, str] = field(default_factory=dict)
     hub: HubClient | None = None
     files: TrackerFiles | None = None
+    # Lazily created: only a `converse`-kind job ever needs an inbox, and every
+    # other kind (develop, fix, ask, ...) should pay nothing for one.
+    _inbox: "asyncio.Queue[str] | None" = field(default=None, repr=False, compare=False)
 
     async def status(
         self,
@@ -86,22 +90,81 @@ class DirectiveJob:
         phase: str = "",
         progress: str = "",
         blockers: str = "",
+        usage: CliUsage | None = None,
     ) -> None:
         """Record one agent's Status in BOTH places at once — the project's own
         file and the Hub's mirror. Doing it in one call is what keeps the two
         from drifting; a project that wrote only the file would be invisible in
         the panel, and one that pushed only the row would leave its own agents
-        unable to read each other's state."""
+        unable to read each other's state.
+
+        `usage` (set by `run_persona_turn` when a turn just finished) rides
+        along on the Hub push only — the on-disk Status file is the fleet's
+        own coordination channel and has no use for token counts."""
         if self.files is not None:
             self.files.write_status(
                 agent_slug, state=state, role=role, phase=phase,
                 progress=progress, blockers=blockers,
             )
         if self.hub is not None:
-            await self.hub.push_status(
+            ok = await self.hub.push_status(
                 self.id, agent_slug, state, task_id=self.task_id, role=role,
-                progress=progress, blockers=blockers, phase=phase,
+                progress=progress, blockers=blockers, phase=phase, usage=usage,
             )
+            if not ok:
+                # push_status returns False instead of raising (a lost status
+                # must never abort the work it describes) — but SILENT False is
+                # how a rejected state left the panel frozen at `in_progress`
+                # while the file said `failed`. Say which push vanished.
+                logger.warning(
+                    "Status push rejected/failed for #%s %s (state=%r) — "
+                    "the Hub's row keeps its previous state",
+                    self.id, agent_slug, state,
+                )
+
+    async def finish(
+        self,
+        agent_slug: str,
+        result: "JobResult",
+        *,
+        progress: str = "",
+        role: str = "",
+        phase: str = "",
+        blockers: str = "",
+        usage: CliUsage | None = None,
+    ) -> "JobResult":
+        """End a Directive: record the agent's status DERIVED FROM the result,
+        then return the result. Every terminal path in a handler goes through
+        here — `return await job.finish(DEV, JobResult(state="failed", …), …)`.
+
+        `usage` (the closing `ClaudeRunner.run()`'s `CliUsage`) rides on the
+        same Status push as everything else here — this is the real fleet
+        template's equivalent of `run_persona_turn`'s closing `status()` call,
+        so usage capture must reach the Hub through this path too, not only
+        through the dummy-project harness's more direct `status()` calls.
+
+        WHY this exists rather than a `status()` call next to a `return`: the
+        first real project wrote
+
+            _note(job, "done", f"{command} exited {code}")   # always
+            if code != 0:
+                return JobResult(state="failed", ...)        # afterwards
+
+        so `done` meant "the Warden finished dispatching", not "the task
+        succeeded". The status file is mirrored to the Hub by the relay, so
+        every reader of agent status saw success while the Directive's own state
+        said failure — one record holding both halves. It cost a milestone that
+        looked integrated and was not.
+
+        A plain failure is visible; a record that CONTRADICTS ITSELF gets read
+        as success, because success is the half people act on. There is no shape
+        of this function that reports one thing and records another.
+        """
+        await self.status(
+            agent_slug, result.state, role=role, phase=phase,
+            progress=progress, blockers=blockers, usage=usage,
+        )
+        return result
 
     def handoff(self, from_agent: str, to_agent: str, body: str) -> None:
         """Write one agent's Handoff to the next, in this Directive's tree.
@@ -131,6 +194,21 @@ class DirectiveJob:
         return await self.hub.ask_owner(
             self.id, agent_slug, text, timeout_sec=timeout_sec, suggested=suggested
         )
+
+    async def push_message(self, text: str) -> None:
+        """Feed one incoming owner turn to this job's conversation loop (see
+        infra/wardenkit/conversemode.py). Called from WardenServicer.DeliverMessage
+        — only meaningful for a `converse` Directive."""
+        if self._inbox is None:
+            self._inbox = asyncio.Queue()
+        await self._inbox.put(text)
+
+    async def next_message(self) -> str:
+        """Block until the owner sends the next turn. The `converse` handler's
+        whole loop is built on this — see conversemode.run_conversation."""
+        if self._inbox is None:
+            self._inbox = asyncio.Queue()
+        return await self._inbox.get()
 
 
 @dataclass
@@ -241,6 +319,10 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
         self._capacity = max(1, manifest.max_concurrent or 1)
         self._jobs: dict[int, asyncio.Task] = {}
         self._task_ids: dict[int, str] = {}
+        # Live DirectiveJobs by id, so DeliverMessage can reach one to feed its
+        # inbox. Separate from `_jobs` (which holds the asyncio.Task) because
+        # DeliverMessage needs the job object itself, not its task.
+        self._live_job_objects: dict[int, DirectiveJob] = {}
 
     # -- the RPCs ----------------------------------------------------------
     async def Dispatch(self, request, context):
@@ -296,9 +378,26 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
             files=TrackerFiles(self._repo_root, task_id),
         )
         self._task_ids[request.id] = task_id
+        self._live_job_objects[request.id] = job
         self._jobs[request.id] = asyncio.create_task(self._run(job))
         logger.info("Accepted Directive #%s (%s) as task '%s'", request.id, request.kind, task_id)
         return warden_pb2.DispatchAck(accepted=True, task_id=task_id)
+
+    async def DeliverMessage(self, request, context):
+        """Push one owner turn into an open `converse` Directive's inbox.
+
+        Just an inbox write, not a wait for the reply — the reply comes back
+        asynchronously over Hub.PushChatMessage once the handler's next
+        `claude` CLI turn finishes, the same reason Dispatch itself doesn't
+        block on the work it hands out.
+        """
+        job = self._live_job_objects.get(request.directive_id)
+        if job is None:
+            return warden_pb2.Ack(
+                ok=False, message=f"no live conversation for directive #{request.directive_id}"
+            )
+        await job.push_message(request.text)
+        return warden_pb2.Ack(ok=True)
 
     async def Cancel(self, request, context):
         # Read the task_id BEFORE anything unwinds: `_run`'s finally drops it
@@ -355,6 +454,7 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
         try:
             result = await self._handler(job)
             outcome = result if isinstance(result, JobResult) else JobResult()
+            self._warn_if_status_disagrees(job, outcome)
             if self._hub is not None:
                 await self._hub.push_report(
                     job.id,
@@ -394,6 +494,52 @@ class WardenServicer(warden_pb2_grpc.WardenServicer):
             self._jobs.pop(job.id, None)
             self._task_ids.pop(job.id, None)
             self._relayed.pop(job.id, None)
+            self._live_job_objects.pop(job.id, None)
+
+    def _warn_if_status_disagrees(self, job: DirectiveJob, outcome: JobResult) -> None:
+        """Say so, loudly, when the Status files contradict the Report.
+
+        `DirectiveJob.finish()` makes the two impossible to disagree — but only
+        for a handler that uses it, and the Status files a Claude sub-agent
+        writes with a file-write tool go through no Python at all. Those are
+        exactly the ones that produced `state: done` beside
+        `progress: /develop exited 1`.
+
+        A warning and not a rewrite: the Report is the Directive's own truth and
+        the files are the fleet's, and silently overwriting one with the other
+        would destroy the evidence of whichever is wrong. This is cheap, it runs
+        once per job, and it names the disagreement at the moment it is still
+        debuggable.
+        """
+        if job.files is None:
+            return
+        try:
+            statuses = job.files.read_all_statuses()
+        except OSError:
+            return
+        states = {
+            slug: str(data.get("state") or "").strip()
+            for slug, data in statuses.items()
+            if str(data.get("state") or "").strip()
+        }
+        if not states:
+            return
+        failed = {"failed", "cancelled"}
+        if outcome.state in failed and not (set(states.values()) & failed):
+            logger.error(
+                "Directive #%s reports '%s' but every agent status says %s — "
+                "the panel and Telegram will read this as SUCCESS. The handler's "
+                "terminal path is not going through job.finish().",
+                job.id, outcome.state, sorted(set(states.values())),
+            )
+        elif outcome.state == "done":
+            broke = [slug for slug, state in states.items() if state in failed]
+            if broke:
+                logger.error(
+                    "Directive #%s reports 'done' but %s reported %s — "
+                    "a failure inside a run that claims to have succeeded.",
+                    job.id, ", ".join(sorted(broke)), sorted(failed & set(states.values())),
+                )
 
     async def Restart(self, request, context):
         """Drop in-flight work and (optionally) take this process down.

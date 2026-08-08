@@ -8,6 +8,23 @@
 #         HubClient                — register / status / report / ask / heartbeat
 #         TrackerFiles             — the docs/tracker/{task_id}/ file conventions
 #         make_manifest            — build a ProjectManifest without protobuf
+#         ClaudeRunner / CliRun    — the ONE supported way to run the `claude`
+#                                    CLI: merged stderr, the answer captured on
+#                                    success, quota detection, two timeouts,
+#                                    token usage (CliUsage) parsed off the
+#                                    result event
+#         ConversationLog          — the bounded question/answer window that
+#                                    makes `ask` cheap to run repeatedly
+#         run_persona_turn         — status→run→status for one persona, the
+#                                    one place every topology (solo or crew)
+#                                    does a turn and reports its usage
+#         run_conversation         — the `converse`-kind handler: a loop that
+#                                    answers owner messages one at a time
+#                                    until the Directive is Cancelled (the
+#                                    "позови альфреда" tunnel)
+#         build_context            — a fresh docs/decisions.md + CHANGELOG +
+#                                    git-log slice for one prompt (no new
+#                                    persistent store — the repo IS memory)
 #
 # WHY a shared kit and not a copy per project (mirrors infra/modkit's role): the
 #       fiddly parts — the atomic accept/at-capacity answer, heartbeating for the
@@ -41,6 +58,11 @@
 # =============================================================================
 
 from infra.wardenkit.client import CHANNEL_OPTIONS, HubClient, HubUnauthenticated
+from infra.wardenkit.clirunner import ClaudeRunner, CliRun, CliUsage
+from infra.wardenkit.conversation import ConversationLog
+from infra.wardenkit.conversemode import run_conversation
+from infra.wardenkit.pipeline import run_persona_turn
+from infra.wardenkit.repocontext import build_context
 from infra.wardenkit.servicer import (
     REASON_AT_CAPACITY,
     REASON_UNSUPPORTED_KIND,
@@ -56,13 +78,20 @@ __all__ = [
     "CHANNEL_OPTIONS",
     "REASON_AT_CAPACITY",
     "REASON_UNSUPPORTED_KIND",
+    "ClaudeRunner",
+    "CliRun",
+    "CliUsage",
+    "ConversationLog",
     "DirectiveJob",
     "HubClient",
     "HubUnauthenticated",
     "JobResult",
     "TrackerFiles",
     "WardenServicer",
+    "build_context",
     "make_manifest",
+    "run_conversation",
+    "run_persona_turn",
     "serve",
     "slugify",
 ]

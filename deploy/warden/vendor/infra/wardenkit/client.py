@@ -51,6 +51,7 @@ from pathlib import Path
 import grpc
 
 from infra.proto.gen import warden_pb2, warden_pb2_grpc
+from infra.wardenkit.clirunner import CliUsage
 
 logger = logging.getLogger(__name__)
 
@@ -348,10 +349,16 @@ class HubClient:
         progress: str = "",
         blockers: str = "",
         phase: str = "",
+        usage: CliUsage | None = None,
     ) -> bool:
         """Mirror one agent's Status upward. Returns False instead of raising:
         a lost status update is an observability gap, never a reason to abort
-        the work it was describing."""
+        the work it was describing.
+
+        `usage` is set only by the status call that closes out an LLM turn
+        (see `run_persona_turn`) — most calls carry none, and a falsy
+        `CliUsage` (all zero) is left off the wire entirely so the Hub's
+        `HasField("usage")` stays a reliable "did this turn report cost"."""
         update = warden_pb2.StatusUpdate(
             directive_id=directive_id,
             task_id=task_id,
@@ -362,6 +369,14 @@ class HubClient:
             blockers=blockers,
             phase=phase,
         )
+        if usage:
+            update.usage.CopyFrom(warden_pb2.Usage(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+                cost_usd=usage.cost_usd,
+            ))
         try:
             ack = await self._call("PushStatus", update)
             return ack.ok
@@ -412,6 +427,31 @@ class HubClient:
             return ack.ok
         except (grpc.aio.AioRpcError, HubUnauthenticated) as e:
             logger.error("PushReport for #%s failed: %s", directive_id, e)
+            return False
+
+    async def push_chat_message(
+        self,
+        directive_id: int,
+        text: str,
+        *,
+        agent_slug: str = "",
+        closed: bool = False,
+    ) -> bool:
+        """Push one agent reply (or a close notice) up a live conversation.
+
+        Retried like push_status/push_report (default retry policy) — this is
+        a push, not a blocking question to a human, so it doesn't share
+        ask_owner's no-retry rule. Returns False instead of raising: a lost
+        reply is a nuisance for the owner, never a reason to abort the
+        conversation loop that produced it."""
+        message = warden_pb2.ChatMessage(
+            directive_id=directive_id, text=text, agent_slug=agent_slug, closed=closed,
+        )
+        try:
+            ack = await self._call("PushChatMessage", message)
+            return ack.ok
+        except (grpc.aio.AioRpcError, HubUnauthenticated) as e:
+            logger.warning("PushChatMessage for #%s failed: %s", directive_id, e)
             return False
 
     async def ask_owner(

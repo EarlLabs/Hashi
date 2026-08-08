@@ -62,6 +62,11 @@ class WardenStub:
                 request_serializer=warden__pb2.RestartRequest.SerializeToString,
                 response_deserializer=warden__pb2.RestartAck.FromString,
                 _registered_method=True)
+        self.DeliverMessage = channel.unary_unary(
+                '/kaizen.warden.Warden/DeliverMessage',
+                request_serializer=warden__pb2.ChatMessage.SerializeToString,
+                response_deserializer=warden__pb2.Ack.FromString,
+                _registered_method=True)
 
 
 class WardenServicer:
@@ -122,6 +127,17 @@ class WardenServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DeliverMessage(self, request, context):
+        """Push one turn of a live conversation into an open `converse` Directive
+        (tracker v2 follow-up: the "позови альфреда" tunnel). Ack-only from the
+        Hub's point of view — the reply arrives later over Hub.PushChatMessage,
+        since a Warden turn can take as long as a `claude` CLI call takes, the
+        same reason Dispatch above returns immediately instead of blocking.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_WardenServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -149,6 +165,11 @@ def add_WardenServicer_to_server(servicer, server):
                     servicer.Restart,
                     request_deserializer=warden__pb2.RestartRequest.FromString,
                     response_serializer=warden__pb2.RestartAck.SerializeToString,
+            ),
+            'DeliverMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeliverMessage,
+                    request_deserializer=warden__pb2.ChatMessage.FromString,
+                    response_serializer=warden__pb2.Ack.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -299,6 +320,33 @@ class Warden:
             metadata,
             _registered_method=True)
 
+    @staticmethod
+    def DeliverMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kaizen.warden.Warden/DeliverMessage',
+            warden__pb2.ChatMessage.SerializeToString,
+            warden__pb2.Ack.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
 
 class HubStub:
     """---------------------------------------------------------------------------
@@ -335,6 +383,11 @@ class HubStub:
         self.Heartbeat = channel.unary_unary(
                 '/kaizen.warden.Hub/Heartbeat',
                 request_serializer=warden__pb2.HeartbeatPing.SerializeToString,
+                response_deserializer=warden__pb2.Ack.FromString,
+                _registered_method=True)
+        self.PushChatMessage = channel.unary_unary(
+                '/kaizen.warden.Hub/PushChatMessage',
+                request_serializer=warden__pb2.ChatMessage.SerializeToString,
                 response_deserializer=warden__pb2.Ack.FromString,
                 _registered_method=True)
 
@@ -387,6 +440,15 @@ class HubServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PushChatMessage(self, request, context):
+        """Push one agent reply (or a close notice) up mid-tunnel. Mirrors
+        PushStatus's fire-and-forget shape — the Warden doesn't wait for this to
+        return before it's free to handle the next queued message.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_HubServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -413,6 +475,11 @@ def add_HubServicer_to_server(servicer, server):
             'Heartbeat': grpc.unary_unary_rpc_method_handler(
                     servicer.Heartbeat,
                     request_deserializer=warden__pb2.HeartbeatPing.FromString,
+                    response_serializer=warden__pb2.Ack.SerializeToString,
+            ),
+            'PushChatMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.PushChatMessage,
+                    request_deserializer=warden__pb2.ChatMessage.FromString,
                     response_serializer=warden__pb2.Ack.SerializeToString,
             ),
     }
@@ -553,6 +620,33 @@ class Hub:
             target,
             '/kaizen.warden.Hub/Heartbeat',
             warden__pb2.HeartbeatPing.SerializeToString,
+            warden__pb2.Ack.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PushChatMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kaizen.warden.Hub/PushChatMessage',
+            warden__pb2.ChatMessage.SerializeToString,
             warden__pb2.Ack.FromString,
             options,
             channel_credentials,
