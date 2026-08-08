@@ -1,0 +1,31 @@
+# hashi — e2e overlay.
+#
+# WHAT: the differences between the disposable e2e stack and the dev stack.
+# WHY:  the e2e stack used to inherit HASHI_PUBLIC_HOST from .env — the OWNER'S
+#       REAL delivery hostname. Two consequences, one merely wasteful and one
+#       genuinely dangerous:
+#         - Caddy cannot obtain a certificate for a name that does not point at
+#           this laptop, so it retries ACME forever and never serves a single
+#           request. Every acceptance scenario that goes through the proxy is
+#           then testing nothing, quietly.
+#         - Worse, when that name IS real, a test run asks a public CA for a
+#           certificate for the production hostname on every boot, and burns
+#           the issuance rate limit that a real deployment needs.
+#       "localhost" fixes both: Caddy issues a certificate from its own internal
+#       CA for it, with no CA on the internet involved, so the proxy actually
+#       serves and the scenarios exercise the real Caddyfile.
+# HOW:  applied by `make e2e-up` only — see COMPOSE_E2E in the Makefile. The dev
+#       and production stacks never load this file.
+
+services:
+  control:
+    environment:
+      HASHI_PUBLIC_HOST: localhost
+
+  caddy:
+    environment:
+      HASHI_PUBLIC_HOST: localhost
+      # Never used: an internal-CA certificate needs no ACME account. Present
+      # because the base file requires the variable, and a placeholder here is
+      # honest about the fact that nothing reaches a CA from this stack.
+      CADDY_ACME_EMAIL: e2e@localhost

@@ -10,12 +10,20 @@
 #       Host ports are overridable and default off the standard numbers, because
 #       a developer running another project's Postgres on 5432 should not have to
 #       stop it to work on this one.
+#
+#       DEV_BIND_ADDR exists for one case only: an engine that is NOT the machine
+#       you are sitting at. The fleet runs e2e against an isolated dind engine on
+#       an internal network, where "127.0.0.1" means dind's own loopback and the
+#       test runner therefore cannot reach the stack at all. Setting it there is
+#       an explicit, per-run opt-in (`make e2e-up E2E_BIND_ADDR=0.0.0.0`); the
+#       default stays loopback, so nothing a developer types by hand — and
+#       nothing in `make up-dev` — can put a database on a café network.
 
 services:
   db:
     ports:
-      - "127.0.0.1:${DEV_DB_PORT:-54132}:5432"
+      - "${DEV_BIND_ADDR:-127.0.0.1}:${DEV_DB_PORT:-54132}:5432"
 
   control:
     ports:
-      - "127.0.0.1:${DEV_API_PORT:-54100}:8000"
+      - "${DEV_BIND_ADDR:-127.0.0.1}:${DEV_API_PORT:-54100}:8000"

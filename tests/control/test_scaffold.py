@@ -27,12 +27,18 @@ async def test_healthz_reports_ok() -> None:
 
 
 async def test_openapi_schema_is_not_served() -> None:
-    """The panel is the highest-value target; a public schema is free recon."""
+    """The panel is the highest-value target; a public schema is free recon.
+
+    /openapi.json is included deliberately: it is the schema itself, and it kept
+    serving after docs_url/redoc_url were turned off — the two HTML viewers are
+    not what leaks.
+    """
     app = create_app(TEST_SETTINGS)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         assert (await client.get("/docs")).status_code == 404
         assert (await client.get("/redoc")).status_code == 404
+        assert (await client.get("/openapi.json")).status_code == 404
 
 
 def test_missing_secret_key_fails_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:

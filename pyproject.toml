@@ -26,8 +26,15 @@ dev = [
     "pyyaml",
 ]
 
-[tool.setuptools]
-packages = ["control", "control.app", "edge", "edge.transports"]
+# Found, not listed. An explicit list means every new transport package under
+# edge/transports/ has to remember to edit this file, and forgetting produces the
+# worst possible failure: green tests against the source tree, and a deployed
+# image whose transport registry is silently one protocol short. The charter's
+# fourth criterion is that a new protocol is one new package — so packaging has
+# to follow the directory, not a list. Pinned by
+# tests/e2e/edge/test_shipped_image_discovers_transports.py.
+[tool.setuptools.packages.find]
+include = ["control*", "edge*"]
 
 [tool.ruff]
 target-version = "py314"
