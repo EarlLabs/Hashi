@@ -82,6 +82,24 @@ def test_it_never_generates_the_secret_key(script: str) -> None:
     assert not re.search(r">>?\s*[\"']?\$\{?ENV_FILE", script), (
         "the script writes to the env file"
     )
+    # Nor assigns it by default-expansion, nor in a command prefix, nor injects it into a
+    # container without ever touching a shell variable. Each of these would slip past the
+    # line-anchored check above, which is the gap this closes.
+    assert "HASHI_SECRET_KEY:=" not in script, (
+        "the script defaults HASHI_SECRET_KEY through parameter expansion"
+    )
+    assert not re.search(r"HASHI_SECRET_KEY=\$\(", script), (
+        "the script assigns HASHI_SECRET_KEY from a command substitution"
+    )
+    assert not re.search(r"-e\s+HASHI_SECRET_KEY", script), (
+        "the script injects HASHI_SECRET_KEY into a container directly"
+    )
+    # No generator anywhere near it. The refusal message names a command for the operator
+    # to run ELSEWHERE, so this looks for the ones a script would use on itself.
+    for generator in (r"openssl rand", r"pwgen", r"head -c \d+ /dev/urandom", r"uuidgen"):
+        assert not re.search(generator, script), (
+            f"the script contains a key generator ({generator!r})"
+        )
 
 
 def test_it_refuses_rather_than_defaulting_the_other_required_keys(script: str) -> None:
@@ -173,4 +191,44 @@ def test_the_owner_has_a_make_target_for_it() -> None:
         r"^\.PHONY:.*$", makefile, re.M | re.S
     ).group(0) or re.search(r"^\.PHONY:[^\n]*panel-bootstrap", makefile, re.M), (
         "the target is not declared .PHONY"
+    )
+
+
+def test_it_refuses_an_env_file_with_an_unescaped_dollar(script: str) -> None:
+    """The trap that cost an acceptance run, and would have cost the owner their panel.
+
+    ``docker compose --env-file`` INTERPOLATES the values it reads. A scrypt password hash
+    is ``scrypt$32768$8$1$<salt>$<digest>`` — four dollars — so ``$<salt>`` is read as a
+    variable name and replaced with nothing. Whether that happens at all depends on the
+    salt's first byte: a salt starting with a letter is destroyed, one starting with a
+    digit survives. The same file therefore works on one host and silently locks the owner
+    out on the next, with "Those credentials were not accepted" as the only symptom and a
+    correct-looking hash sitting in the file.
+
+    The script must refuse and explain. It must NOT fix the file: rewriting the file that
+    holds the owner's secrets, to a value they did not choose, is worse than stopping.
+    """
+    # The mechanism: strip every doubled dollar, then anything left is unescaped.
+    assert re.search(r"sed 's/\\\$\\\$//g'", script), (
+        "the script does not look for an unescaped $ in the env file"
+    )
+    assert "unescaped" in script
+    # It names the remedy, and does not write.
+    assert "$$" in script
+    assert not re.search(r"sed -i", script), "the script edits the env file in place"
+
+
+def test_the_e2e_env_file_does_not_still_claim_env_files_are_not_interpolated() -> None:
+    """A comment that is wrong about a hazard is worse than no comment.
+
+    ``deploy/e2e.env`` used to say "an env file is not interpolated, so a `$` is a `$`".
+    It is interpolated. The next person to regenerate that hash would have followed the
+    comment and lost an afternoon.
+    """
+    text = (REPO / "deploy" / "e2e.env").read_text()
+    assert "an env file is not interpolated" not in text, (
+        "deploy/e2e.env still carries the comment that caused this"
+    )
+    assert "DOES interpolate" in text, (
+        "deploy/e2e.env does not warn the next person who regenerates the hash"
     )

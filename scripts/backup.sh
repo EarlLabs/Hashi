@@ -15,13 +15,23 @@
 #
 #       Runs pg_dump INSIDE the db container, so no Postgres client is needed on the
 #       host and the version always matches the server. Reads connection details from
-#       .env through compose, exactly like every other target.
+#       the env file through compose, exactly like every other target.
+#
+#       ENV_FILE (default .env) and COMPOSE_PROJECT_NAME select WHICH stack it acts on.
+#       That is not a convenience: until item 32 this script could only ever act on the
+#       one stack described by .env, which meant "restore" could not be exercised
+#       anywhere but on the owner's live data — and a backup that has never been
+#       restored is not a backup. The acceptance scenario installs a disposable stack and
+#       drives this script against it.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-COMPOSE=(docker compose --env-file .env -f deploy/docker-compose.yml)
+ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
+[ -f "${ENV_FILE}" ] || { echo "no env file at ${ENV_FILE}" >&2; exit 1; }
+
+COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
 SERVICE="db"
 
 usage() {
@@ -30,13 +40,16 @@ usage:
   scripts/backup.sh dump [output-path]      # default: backups/hashi-<timestamp>.sql.gz
   scripts/backup.sh restore <input-path>    # DESTRUCTIVE: replaces the current database
 
-Both read POSTGRES_* from .env via compose. The stack must be up (`make up`).
+Both read POSTGRES_* from the env file via compose. The stack must be up (`make up`).
+Set ENV_FILE and COMPOSE_PROJECT_NAME to act on a stack other than the default one.
 USAGE
   exit 2
 }
 
 # Read only the variables this script needs, and only their names — never printing the
-# file. .env holds real secrets and must not be echoed (CLAUDE.md, hard rules).
+# file. The env file holds real secrets and must not be echoed (CLAUDE.md, hard rules).
+# Asked of the RUNNING container rather than parsed out of the file, so the answer is the
+# database this stack actually has rather than the one the file describes.
 db_user() { "${COMPOSE[@]}" exec -T "${SERVICE}" printenv POSTGRES_USER | tr -d '\r\n'; }
 db_name() { "${COMPOSE[@]}" exec -T "${SERVICE}" printenv POSTGRES_DB | tr -d '\r\n'; }
 
@@ -84,8 +97,18 @@ command_restore() {
   # Interactive confirmation, because this replaces live data and there is no undo.
   # Skippable for automation with FORCE=1, which has to be set deliberately.
   if [ "${FORCE:-0}" != "1" ]; then
-    echo "This REPLACES the contents of database '${name}'. Every current node," >&2
-    echo "friend and credential is overwritten by the dump." >&2
+    # WHICH stack, named before anything else. The database is called `hashi` on every
+    # stack this project builds — dev, e2e, the disposable ones the acceptance scenarios
+    # install — so "type the database name" cannot distinguish them. Since this script
+    # learned to obey ENV_FILE and COMPOSE_PROJECT_NAME, a stale export left in a shell
+    # from an earlier session would silently aim a destructive restore somewhere else,
+    # and the confirmation would look identical. So it shows what it resolved.
+    echo "About to restore into:" >&2
+    echo "  env file: ${ENV_FILE}" >&2
+    echo "  compose project: ${COMPOSE_PROJECT_NAME:-<default: the directory name>}" >&2
+    echo "  database: ${name}" >&2
+    echo "This REPLACES its contents. Every current node, friend and credential is" >&2
+    echo "overwritten by the dump." >&2
     printf "Type the database name to confirm: " >&2
     read -r answer
     [ "${answer}" = "${name}" ] || { echo "aborted" >&2; exit 1; }

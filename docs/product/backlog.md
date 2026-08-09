@@ -324,13 +324,22 @@ URI он невыразим. Пункт заведён намеренно, чт�
 
 | # | id | Зона | depends_on | Статус |
 |---|---|---|---|---|
-| 26 | `edge-subscription-serialization-contract` | `edge` | — | `queued` |
-| 27 | `control-second-subscription-format` | `control` | 26 | `queued` |
-| 28 | `edge-transport-wireguard` | `edge` | 26, 27 | `queued` |
-| 29 | `control-criteria-2-and-3-from-the-panel` | `control` | — | `queued` |
-| 30 | `edge-criterion-4-a-brand-new-transport-package` | `edge` | — | `queued` |
-| 31 | `infra-panel-bootstrap` | `infra` | — | `queued` |
-| 32 | `infra-restore-proves-the-backup` | `infra` | 31 | `queued` |
+| 26 | `edge-subscription-serialization-contract` | `edge` | — | `done` |
+| 27 | `control-second-subscription-format` | `control` | 26 | `done` |
+| 28 | `edge-transport-wireguard` | `edge` | 26, 27 | `done` |
+| 29 | `control-criteria-2-and-3-from-the-panel` | `control` | — | `done` |
+| 30 | `edge-criterion-4-a-brand-new-transport-package` | `edge` | — | `done` |
+| 31 | `infra-panel-bootstrap` | `infra` | — | `done` |
+| 32 | `infra-restore-proves-the-backup` | `infra` | 31 | `done` |
+
+Все семь закрыты 2026-08-09 задачей
+`ohno-117-119-29-26-27-28-30-31-32-q11-120`, в порядке диспатча владельца
+29 → 26 → 27 → 28 → 30 → 31 → 32; каждый — свой коммит, свой прогон review-loop
+с независимым `reviewer-strict`. **Q11 закрыт вариантом (b)** решением владельца:
+delivery-эндпоинт отдаёт per-client конфиг-файлы за тем же токеном. Пункты 28 и 32
+имеют по второй половине в зоне `control` (панель и читаемый отказ при неверном
+ключе); зона на задачу одна, поэтому каждая половина — отдельный коммит, а не
+смешанный дифф.
 
 ### Заведено во время исполнения очереди
 
@@ -338,6 +347,7 @@ URI он невыразим. Пункт заведён намеренно, чт�
 |---|---|---|---|---|
 | 33 | `control-per-friend-tunnel-address` | `control` | 27 | `queued` |
 | 34 | `control-one-transport-two-purposes-on-one-node` | `control` | 27 | `queued` |
+| 35 | `infra-env-file-dollar-interpolation` | `infra` | — | `queued` |
 
 Оба пункта найдены при исполнении пункта 27 (задача
 `ohno-117-119-29-26-27-28-30-31-32-q11-120`) — прогоном сценариев, не чтением. Ни
@@ -361,6 +371,27 @@ URI он невыразим. Пункт заведён намеренно, чт�
 Выделение адресов — это состояние в `control` (пул на node×transport) и миграция;
 детерминированный хеш от `subject` не годится — в /24 на 30 друзей вероятность
 коллизии ~80%.
+
+**35. `docker compose --env-file` интерполирует значения, и это тихо ломает вход
+владельца в его собственную панель.** Найдено прогоном пункта 32.
+scrypt-хеш пароля — это `scrypt$32768$8$1$<соль>$<дайджест>`, четыре `$`. Compose
+читает `$<соль>` как ссылку на переменную и подставляет пустоту. Ломается это или
+нет — зависит от **первого байта соли**: соль с буквы уничтожается, соль с цифры
+выживает. Симптом один: «Those credentials were not accepted», при совершенно
+правильном хеше в файле. Комментарий в `deploy/e2e.env` утверждал прямо обратное
+(«an env file is not interpolated») — исправлен. И хеш там **не «выжил
+случайно»: он был испорчен прямо сейчас** — две его секции начинаются с букв
+(`$QO…`, `$RK2…`) и подставлялись как неопределённые переменные, так что чистый
+`make e2e-up` в чистой оболочке ломал вход оператора. Это и был источник тех
+предупреждений «The "QO" variable is not set», которые compose печатал каждый
+прогон — то есть **фрагмент значения попадал в вывод**. Хеш экранирован здесь же.
+
+Закрыто **частично, здесь и сейчас**: `scripts/panel-bootstrap.sh` отказывается
+работать с env-файлом, в котором есть неэкранированный `$`, и объясняет, что
+удвоить. Отказ, а не автоисправление: скрипт не переписывает файл с секретами
+владельца. Остаток пункта 35 — привести к тому же `.env.example` (документировать
+правило рядом с полем) и `scripts/backup.sh`, и решить, не должен ли
+`make up`/`up-dev` проверять то же самое до старта.
 
 **34. Один узел не может одновременно нести хоп и предлагать тот же транспорт
 друзьям.** `uq_node_transport` уникален по (node, transport_name) без `purpose`, а

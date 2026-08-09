@@ -117,7 +117,46 @@ if [ ${#MISSING[@]} -gt 0 ]; then
   the same value on every host that ever runs this script."
 fi
 
-say "env file ${ENV_FILE} has every required key"
+# A `$` that is not doubled. This check earns its place with a bug that cost a whole
+# acceptance run to find, and would have cost the owner their own panel.
+#
+# `docker compose --env-file` INTERPOLATES the values it reads. So a scrypt password hash
+# — `scrypt$32768$8$1$<salt>$<digest>` — arrives at the container with `$<salt>` expanded
+# as a variable name. Whether that destroys it depends on the salt's first byte: a salt
+# starting with a letter looks like a variable and is replaced with nothing, a salt
+# starting with a digit survives. So the same command works or silently locks the owner
+# out of their own panel depending on random bytes, with "Those credentials were not
+# accepted" as the only symptom and a correct-looking hash in the file.
+#
+# Escaping is `$$`. Refused rather than escaped for them: this script must not rewrite the
+# file that holds their secrets, and a value it silently "fixed" would be a value they can
+# no longer reason about.
+# Only the VALUE half of a `KEY=VALUE` line, and never a comment. The first version of
+# this check scanned whole lines and flagged the comments that explain the hazard — a
+# refusal an operator cannot act on is one they learn to work around, which is worse than
+# not checking. Real line numbers are kept, so the message points at the right line.
+UNESCAPED="$(awk '
+  /^[[:space:]]*#/ { next }
+  !/=/             { next }
+  {
+    value = substr($0, index($0, "=") + 1)
+    gsub(/\$\$/, "", value)
+    if (value ~ /\$/) printf "%d ", NR
+  }' "${ENV_FILE}")"
+if [ -n "${UNESCAPED% }" ]; then
+  fail "the env file has an unescaped \$ on line(s): ${UNESCAPED}
+
+  docker compose interpolates the values it reads from an env file, so a lone \$ starts a
+  variable reference and the rest of the value is replaced by whatever that variable
+  holds — usually nothing. A scrypt password hash is the case that bites: it contains
+  four of them, and whether the damage happens at all depends on the random salt, so the
+  same file works on one host and silently locks you out on the next.
+
+  Double every literal \$ in ${ENV_FILE} (\$ becomes \$\$) and run this again. Line
+  numbers only are named above: this script does not print the file."
+fi
+
+say "env file ${ENV_FILE} has every required key and no unescaped \$"
 
 # --- 2. bring the stack up ----------------------------------------------------
 #
@@ -201,4 +240,8 @@ until probe; do
 done
 
 say "the control plane answers on /healthz and routes /sub/{token}"
-say "done. The panel is at https://\$HASHI_PUBLIC_HOST/panel/ — the value in ${ENV_FILE}."
+# Read out of the file with the same grep the checks above use, rather than sourced:
+# this script never runs the env file, and a literal `$HASHI_PUBLIC_HOST` in the final
+# line would read as broken interpolation to the one person who most needs to trust it.
+PUBLIC_HOST="$(sed -n 's/^[[:space:]]*HASHI_PUBLIC_HOST=[[:space:]]*//p' "${ENV_FILE}" | head -1)"
+say "done. The panel is at https://${PUBLIC_HOST}/panel/"

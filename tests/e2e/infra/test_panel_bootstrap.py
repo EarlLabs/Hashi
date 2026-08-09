@@ -60,7 +60,12 @@ def env_file(directory: pathlib.Path, **overrides: str | None) -> pathlib.Path:
         "HASHI_OPERATOR_USERNAME": "owner",
         # A real hash of a throwaway password: the app rejects a malformed one at boot,
         # and this scenario is about the script, not about that.
-        "HASHI_OPERATOR_PASSWORD_HASH": hash_password("panel-bootstrap-password"),
+        #
+        # Every `$` doubled, because `docker compose --env-file` interpolates the values
+        # it reads and a scrypt hash is four `$` — see the refusal in the script itself.
+        "HASHI_OPERATOR_PASSWORD_HASH": hash_password("panel-bootstrap-password").replace(
+            "$", "$$"
+        ),
         "POSTGRES_USER": "hashi",
         "POSTGRES_PASSWORD": "panel-bootstrap-not-real",
         "POSTGRES_DB": "hashi",
