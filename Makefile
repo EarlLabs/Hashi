@@ -14,7 +14,7 @@ COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
 .PHONY: setup env test test-control test-edge test-infra test-e2e lint \
         up up-dev down logs ps e2e-up e2e-down e2e-reset \
-        e2e-secrets e2e-secrets-live
+        e2e-secrets e2e-secrets-live panel-bootstrap
 
 ## --- setup ------------------------------------------------------------------
 
@@ -94,6 +94,19 @@ logs:
 
 ps:
 	$(COMPOSE) ps
+
+## --- installing the panel on a host (see scripts/panel-bootstrap.sh) --------
+
+# The second of the charter's two deployment scripts (the first is the node
+# bootstrap in edge/bootstrap/). Bare host -> control plane, database and delivery
+# endpoint, from one env file, with a real health probe before it claims success.
+#
+# ENV_FILE exists so a host can carry more than one stack — the acceptance
+# scenarios install a throwaway one beside whatever is already there.
+.PHONY: panel-bootstrap
+
+panel-bootstrap:
+	@scripts/panel-bootstrap.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
 
 ## --- backup / restore (see scripts/backup.sh) -------------------------------
 
