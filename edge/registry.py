@@ -510,6 +510,76 @@ class Transport:
         )
 
 
+def _check_declaration(package: str, meta: object) -> TransportMeta:
+    """Refuse a package whose METADATA does not meet the contract — at DISCOVERY.
+
+    Everything checkable from ``meta.py`` alone is checked here, which is what makes the
+    failure land at the right moment. ``discover()`` is called by every screen in the
+    panel and by every subscription render, so a malformed package found here is one
+    error message on the fleet page; the same package found later is an exception inside
+    one friend's refresh, or a node configured with a transport that cannot mint a
+    credential. Backlog item 30, S2.
+
+    What is NOT checked here is anything requiring ``render.py``: importing a renderer
+    for every discovery call would make listing transports as expensive as rendering
+    them. That half is ``_check_contract``, run by ``profile()``.
+    """
+    if not isinstance(meta, TransportMeta):
+        raise ContractViolation(
+            f"edge.transports.{package}.meta.META is {type(meta).__name__}, not a "
+            "TransportMeta. Every transport declares itself through that type; nothing "
+            "else can be read by `control`."
+        )
+
+    if not meta.name:
+        raise ContractViolation(f"the transport in {package!r} declares no name")
+    if not meta.family:
+        raise ContractViolation(
+            f"transport {meta.name!r} declares no protocol family. `control` reads it to "
+            "decide nothing at all — but an operator reads it to tell UDP from TCP, and "
+            "an empty one is a blank column on the fleet page."
+        )
+
+    low, high = meta.port_range
+    if not 1 <= low <= high <= 65535:
+        raise ContractViolation(
+            f"transport {meta.name!r} declares the nonsensical port range "
+            f"{meta.port_range}. Nothing would ever validate against it."
+        )
+
+    # A per-client identity is what makes the charter's sixth criterion expressible: with
+    # nothing scoped to one consumer, a friend cannot be revoked without affecting the
+    # others, because there is no row that belongs only to them.
+    client_scoped = {
+        spec.name for spec in meta.key_material if spec.scope is KeyScope.CLIENT
+    }
+    if "subject" not in client_scoped:
+        raise ContractViolation(
+            f"transport {meta.name!r} declares no client-scoped KeySpec named 'subject', "
+            "so no friend can be given access to it individually — and therefore no "
+            "friend could be revoked from it without affecting the others."
+        )
+
+    unknown = meta.subscription_formats - set(SERIALISERS)
+    if unknown:
+        raise ContractViolation(
+            f"transport {meta.name!r} declares subscription format(s) "
+            f"{sorted(str(u) for u in unknown)} that delivery has no serialiser for."
+        )
+
+    # The one implication between the two declarations item 28 added. A package with both
+    # True compiles and reads plausibly and hands the fleet a hop that cannot come up.
+    if meta.blocked_by_inspection and meta.hop_capable:
+        raise ContractViolation(
+            f"transport {meta.name!r} declares both that a filtering network identifies "
+            "it and that it may carry an entry-to-leaf hop. That hop crosses such a "
+            "network by definition, so this combination configures both nodes correctly "
+            "and never forms a tunnel."
+        )
+
+    return meta
+
+
 def _check_contract(meta: TransportMeta, render: ModuleType) -> None:
     """Refuse a package whose declaration its own code does not keep.
 
@@ -551,7 +621,8 @@ def discover() -> dict[str, TransportMeta]:
     """Return every installed transport profile's metadata, keyed by name."""
     found: dict[str, TransportMeta] = {}
     for name in _iter_packages():
-        meta = importlib.import_module(f"edge.transports.{name}.meta").META
+        module = importlib.import_module(f"edge.transports.{name}.meta")
+        meta = _check_declaration(name, getattr(module, "META", None))
         if meta.name in found:
             raise ValueError(f"duplicate transport name: {meta.name!r}")
         found[meta.name] = meta
@@ -566,7 +637,8 @@ def profile(name: str) -> Transport:
     `control` at the wrong package.
     """
     for package in _iter_packages():
-        meta = importlib.import_module(f"edge.transports.{package}.meta").META
+        module = importlib.import_module(f"edge.transports.{package}.meta")
+        meta = _check_declaration(package, getattr(module, "META", None))
         if meta.name != name:
             continue
         render = importlib.import_module(f"edge.transports.{package}.render")
