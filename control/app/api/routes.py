@@ -278,6 +278,29 @@ async def rotate_keys(
 
 
 @router.post(
+    "/transports/{node_transport_id}/state", response_model=schemas.TransportResponse
+)
+async def set_transport_enabled(
+    node_transport_id: str,
+    payload: schemas.TransportEnabledChange,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Put a transport into, or take it out of, what friends are offered.
+
+    Criterion 3 in both directions. Enabling grants every active friend material for
+    it, so it appears at their next refresh; disabling removes it from every
+    subscription — and neither requires anyone to touch a device.
+
+    It does not reconfigure the node: re-apply to stop the daemon serving what it was
+    already given. See the service's docstring for why that distinction is not a
+    detail.
+    """
+    return await nodes.set_transport_enabled(
+        session, node_transport_id=node_transport_id, enabled=payload.enabled
+    )
+
+
+@router.post(
     "/transports/{node_transport_id}/params", response_model=schemas.RotationResponse
 )
 async def replace_params(

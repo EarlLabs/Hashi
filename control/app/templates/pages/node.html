@@ -27,12 +27,27 @@
   <button hx-post="/panel/nodes/{{ node.id }}/apply" hx-target="#outcome" hx-swap="innerHTML">apply configuration</button>
   <button hx-post="/panel/nodes/{{ node.id }}/health" hx-target="#outcome" hx-swap="innerHTML">probe health</button>
 </p>
+
+{# Criterion 2 lives on these buttons: putting a replacement node into service is
+   what makes every friend's existing link resolve to it, and it has to be doable
+   here rather than with curl. Only the legal transitions are rendered — the state
+   machine is in NodeState.allowed_from, and this page does not restate it. #}
+{% if state_options %}
+<p>
+  <span class="muted">state:</span>
+  {% for option in state_options %}
+  <button hx-post="/panel/nodes/{{ node.id }}/state" hx-vals='{"state": "{{ option }}"}'
+          hx-target="#outcome" hx-swap="innerHTML"
+          {% if option == "retired" %}hx-confirm="Retire this node? A retired node cannot be brought back — you create its replacement instead."{% endif %}>{{ option }}</button>
+  {% endfor %}
+</p>
+{% endif %}
 <div id="outcome"></div>
 
 <h2>Transports on this node</h2>
 {% if node.transports %}
 <table>
-  <tr><th>transport</th><th>parameters</th><th>last applied</th><th>rotate</th></tr>
+  <tr><th>transport</th><th>parameters</th><th>last applied</th><th>offered</th><th>rotate</th></tr>
   {% for transport in node.transports %}
   <tr>
     <td>{{ transport.transport_name }}</td>
@@ -45,6 +60,29 @@
     </td>
     <td class="muted">{{ transport.applied_at or "never" }}</td>
     <td>
+      {# The other half of criterion 3. "Offered" is about DELIVERY, not about what
+         the node is running — which is why withdrawing says so in its confirmation
+         rather than letting the operator read it as a revocation. #}
+      {% if transport.purpose == "friends" %}
+        {# The transport's name is on the button as data, not only as text in the row
+           next to it. That is what lets an acceptance scenario say "withdraw THIS
+           protocol" without parsing the table's shape — and the scenario has to drive
+           the panel, because "from the panel" is part of criterion 3. #}
+        {% if transport.enabled %}
+        <button data-transport="{{ transport.transport_name }}"
+                hx-post="/panel/transports/{{ transport.id }}/state" hx-vals='{"enabled": "false"}'
+                hx-target="#outcome" hx-swap="innerHTML"
+                hx-confirm="Take this out of every friend's subscription? The node keeps serving it until you re-apply.">withdraw</button>
+        {% else %}
+        <button data-transport="{{ transport.transport_name }}"
+                hx-post="/panel/transports/{{ transport.id }}/state" hx-vals='{"enabled": "true"}'
+                hx-target="#outcome" hx-swap="innerHTML">offer</button>
+        {% endif %}
+      {% else %}
+        <span class="muted">hop — not offered to friends</span>
+      {% endif %}
+    </td>
+    <td>
       {# Item 23. The confirm is not decoration: this re-keys every friend on this
          transport, and it is one click away from "probe health". #}
       <button hx-post="/panel/transports/{{ transport.id }}/rotate-keys"
@@ -54,7 +92,7 @@
   </tr>
   {% if editable.get(transport.transport_name) %}
   <tr>
-    <td colspan="4">
+    <td colspan="5">
       {# Item 24. A blocked Reality decoy is the case this exists for, but this form
          names no protocol and no field: the inputs come from the transport's own
          declaration, so a new package gets a working rotation form for free.

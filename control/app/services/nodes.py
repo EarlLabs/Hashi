@@ -43,6 +43,13 @@ async def list_nodes(session: AsyncSession) -> list[Node]:
     return list(result.scalars().unique())
 
 
+async def get_node_transport(session: AsyncSession, node_transport_id: str) -> NodeTransport:
+    node_transport = await session.get(NodeTransport, node_transport_id)
+    if node_transport is None:
+        raise NotFound("no such node transport")
+    return node_transport
+
+
 async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
     """Every node-transport a friend may legitimately be routed onto.
 
@@ -222,6 +229,63 @@ async def enable_transport(
     session.add(node_transport)
     await session.commit()
     logger.info("transport enabled on node %s", node.id)
+    return node_transport
+
+
+async def set_transport_enabled(
+    session: AsyncSession, *, node_transport_id: str, enabled: bool
+) -> NodeTransport:
+    """Turn one node's transport on or off for friends — charter criterion 3.
+
+    The criterion is "a transport is enabled from the panel and arrives in every
+    friend's subscription at the next refresh". Its other half is what makes it a
+    control and not just an addition: turning the transport back off has to remove it
+    from every friend's subscription again, with nobody touching their device. Until
+    this function existed, ``NodeTransport.enabled`` was written ``True`` at creation
+    and never changed by any route, so only the positive half was expressible.
+
+    Enabling grants material to every active friend, exactly as enabling a transport
+    for the first time does — otherwise a transport switched off and on again would
+    come back only for friends created in between.
+
+    Idempotent: setting the value it already has does nothing and does not re-grant.
+    A retried click is not an event.
+
+    **What this does NOT do, and must not be reported as doing:** disabling changes
+    what `control` DELIVERS, not what a node is running. A friend who already holds a
+    fetched config keeps connecting until the node is re-applied without them. Use
+    it to withdraw a protocol from the fleet's offer; use revocation (item 9) to
+    withdraw a person's access.
+    """
+    node_transport = await get_node_transport(session, node_transport_id)
+
+    # A hop end is not an offer to friends, and switching one off is not a delivery
+    # change — it is half a tunnel that stops completing a handshake while both ends
+    # still look configured. Refused by pointing at the operation that removes both.
+    if node_transport.purpose != TransportPurpose.FRIENDS:
+        raise Conflict(
+            "this transport is one end of an entry-to-leaf hop, not something "
+            "friends are offered. Switching one end off would leave a tunnel that "
+            "no longer completes while both ends still look configured — remove the "
+            "hop instead (DELETE /api/hops/{node_transport_id})."
+        )
+
+    if node_transport.enabled == enabled:
+        return node_transport
+
+    node_transport.enabled = enabled
+    await session.commit()
+    logger.info("node-transport %s enabled -> %s", node_transport.id, enabled)
+
+    if enabled:
+        # Same deferred import, same cycle, same reasoning as ``set_node_state``.
+        from control.app.services import friends  # noqa: PLC0415
+
+        for friend in await friends.list_friends(session):
+            if friend.is_active:
+                await friends.grant_everywhere(session, friend)
+        await session.commit()
+
     return node_transport
 
 

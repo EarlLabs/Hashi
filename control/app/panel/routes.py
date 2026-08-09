@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.dependencies import session_dependency
 from control.app.errors import DomainError
+from control.app.models import NodeState
 from control.app.services import (
     apply,
     friends,
@@ -124,6 +125,12 @@ async def node_detail(
         "pages/node.html",
         {
             "node": node,
+            # Only the transitions this node may actually make, so the page cannot
+            # offer a button whose only outcome is a 409. ``retired`` is absent from
+            # a retired node's list for the reason in ``NodeState.allowed_from``:
+            # bringing back a record whose host is gone puts an address that may now
+            # belong to a stranger into every friend's subscription.
+            "state_options": NodeState.allowed_from(node.state),
             # What the operator may retype on a transport already enabled here —
             # item 24's rotation form. Only transports still installed in this image
             # get one: a node running something this image no longer ships cannot be
@@ -227,6 +234,84 @@ async def apply_node(
     except DomainError as exc:
         # Shown rather than raised: a failed apply marks the node degraded, and the
         # operator needs to read why on the page they are already on.
+        message, ok = exc.message, False
+    return TEMPLATES.TemplateResponse(
+        request, "panel/outcome.html", {"message": message, "ok": ok}
+    )
+
+
+@router.post("/nodes/{node_id}/state", response_class=HTMLResponse)
+async def set_node_state(
+    node_id: str,
+    request: Request,
+    state: str = Form(...),
+    detail: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Move a node between states from the panel — charter criterion 2.
+
+    The API has had this since item 17; the panel had not, which made "the
+    replacement node is raised FROM THE PANEL" unprovable — an operator could create
+    the node and enable its protocol on a screen, then had to reach for curl to put
+    it into service. The criterion is written about the panel, so it is met here.
+
+    A fragment rather than a redirect: putting a node into service hands every
+    existing friend a credential on it, and how many is what the operator wants to
+    read without navigating away.
+    """
+    try:
+        node = await nodes.set_node_state(
+            session,
+            node_id=node_id,
+            state=NodeState(state),
+            detail=detail or None,
+        )
+        message, ok = f"{node.name} is now {node.state}.", True
+    except ValueError:
+        # An unknown string, before the service ever sees it. Names the vocabulary
+        # rather than echoing what was typed — the value came from a form.
+        message, ok = (
+            f"{state!r} is not a state a node can be in. Known states: "
+            f"{', '.join(sorted(NodeState))}."
+        ), False
+    except DomainError as exc:
+        message, ok = exc.message, False
+    return TEMPLATES.TemplateResponse(
+        request, "panel/outcome.html", {"message": message, "ok": ok}
+    )
+
+
+@router.post("/transports/{node_transport_id}/state", response_class=HTMLResponse)
+async def set_transport_enabled(
+    node_transport_id: str,
+    request: Request,
+    enabled: str = Form(...),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Offer a protocol to friends, or withdraw it — charter criterion 3.
+
+    Read as an explicit wanted value ("true"/"false") rather than a toggle, so a
+    double-submitted form does not put the fleet in the state the operator was
+    trying to leave. Anything that is not truthy is read as off, which is the safe
+    direction to be wrong in: it withdraws an offer rather than making one.
+    """
+    wanted = enabled.strip().lower() in {"1", "true", "on", "yes"}
+    try:
+        node_transport = await nodes.set_transport_enabled(
+            session, node_transport_id=node_transport_id, enabled=wanted
+        )
+        message, ok = (
+            (
+                f"{node_transport.transport_name} is offered to friends again — it is "
+                "in every active friend's subscription at their next refresh."
+            )
+            if wanted
+            else (
+                f"{node_transport.transport_name} is out of every subscription. The "
+                "node is still configured to serve it: re-apply the node to stop that."
+            )
+        ), True
+    except DomainError as exc:
         message, ok = exc.message, False
     return TEMPLATES.TemplateResponse(
         request, "panel/outcome.html", {"message": message, "ok": ok}

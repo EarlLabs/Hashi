@@ -59,7 +59,23 @@ async def fleet(client, session, reality_params):
 
 
 async def rendered_server_config(session, node_id: str) -> dict:
-    """What an apply would push for this node, through the apply path itself."""
+    """What an apply would push for this node, through the apply path itself.
+
+    ``expire_all()`` first, and it is load-bearing rather than defensive. The
+    application's sessions are built with ``expire_on_commit=False``
+    (``control/app/db.py`` — it is a deliberate trap-avoidance, not an oversight),
+    so an object this test's session has already loaded is never refreshed by
+    someone else's commit. Every rotation here is performed through ``client``, which
+    uses a DIFFERENT session per request — so without this line the render below can
+    be built from the parameters as they were BEFORE the rotation, and the assertion
+    fails while the code under test is correct.
+
+    Whether it happened at all depended on whether ``Node`` was already cached when
+    ``set_node_state`` loaded it (``Node.transports`` is ``lazy="selectin"``), which
+    made these scenarios quietly order-dependent: adding an unrelated test file to
+    the zone was enough to flip them. Reading fresh is what the assertion means.
+    """
+    session.expire_all()
     node = await nodes.get_node(session, node_id)
     configs = await apply.render_for_node(session, node)
     return json.loads(next(iter(configs.values())))

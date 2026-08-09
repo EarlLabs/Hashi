@@ -214,3 +214,16 @@ class NodeStateChange(BaseModel):
     # Only meaningful when moving to `degraded`; the service clears it otherwise, so a
     # node cannot sit in `active` carrying a stale complaint.
     detail: str | None = Field(default=None, max_length=500)
+
+
+class TransportEnabledChange(BaseModel):
+    """Switching one node-transport in or out of what friends are offered.
+
+    A required boolean rather than a toggle verb: two operators looking at the same
+    stale page must not be able to flip a transport back and forth by both clicking
+    "toggle". Stating the wanted value makes the second request a no-op.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
