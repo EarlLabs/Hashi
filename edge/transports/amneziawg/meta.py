@@ -4,7 +4,14 @@ The declaration that matters here is ``subscription_expressible=False`` — see 
 package docstring. Everything else follows the same contract as any other transport.
 """
 
-from edge.registry import ConfigFormat, KeyKind, KeyScope, KeySpec, TransportMeta
+from edge.registry import (
+    ConfigFormat,
+    KeyKind,
+    KeyScope,
+    KeySpec,
+    SubscriptionFormat,
+    TransportMeta,
+)
 
 META = TransportMeta(
     name="amneziawg",
@@ -57,9 +64,16 @@ META = TransportMeta(
         # The contract requires a client-scoped identity under the name "subject".
         KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
     ),
-    # THE declaration this package exists to demonstrate. AmneziaWG is a config file,
-    # not a link: it cannot be expressed in the v1 subscription format, and saying so
-    # here is what makes `control` refuse loudly instead of delivering a subscription
-    # that is silently one node short.
-    subscription_expressible=False,
+    # THE declaration this package exists to demonstrate, in its second and honest
+    # form. AmneziaWG is a config FILE, not a link — so it declares the file format
+    # and NOT the v1 URI list, rather than declaring "nothing".
+    #
+    # Under the old boolean those two answers were the same answer, and that is what
+    # kept item 25 blocked: a transport could say "I am not a URI" and had no way to
+    # say what it IS. It says it here. ``subscription_expressible`` is still False
+    # (derived — see TransportMeta), so `control` still refuses to offer this to
+    # friends until delivery of the second format lands as item 27. The serialiser
+    # existing is not the same as the endpoint handing it over, and this declaration
+    # does not pretend otherwise.
+    subscription_formats=frozenset({SubscriptionFormat.CLIENT_CONFIG_FILE}),
 )

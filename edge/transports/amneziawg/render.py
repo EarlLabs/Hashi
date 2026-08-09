@@ -1,15 +1,23 @@
-"""Pure rendering for AmneziaWG.
+"""Pure rendering for AmneziaWG — the node's end, and now a friend's device.
 
-``render_server`` behaves exactly like every other transport's. ``render_client`` is
-the interesting one: it REFUSES, because this transport has no URI form, and the
-contract requires that refusal to be explicit rather than a quietly malformed entry.
+``render_server`` behaves exactly like every other transport's. The other two are the
+interesting pair, and they are two rather than one on purpose:
+
+* ``render_client`` REFUSES. There is no URI form of this protocol, and the contract
+  requires that refusal to be explicit rather than a quietly malformed entry.
+* ``render_client_config`` produces the friend-facing form that DOES exist: a complete
+  wg-quick file. This is the serialisation backlog item 25 was blocked on, and item 26
+  is where the contract grew the vocabulary to express it (``SubscriptionFormat``).
+
+Together they are the honest answer to the charter's open question: not "this protocol
+cannot reach a friend", but "it reaches them as a file, and here it is".
 """
 
 import ipaddress
 from collections.abc import Mapping, Sequence
 
 from edge.node import Credential, NodeView
-from edge.registry import ClientEntry
+from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
 from edge.transports.amneziawg.meta import META
 
@@ -18,6 +26,10 @@ _TEMPLATES = environment_for(__file__)
 
 class AmbiguousPeerRoute(Exception):
     """Two peers claim the same tunnel address, so one would silently lose its route."""
+
+
+class MissingPeerMaterial(Exception):
+    """A credential arrived without the client-scoped key material this transport needs."""
 
 
 class NotExpressibleAsUri(Exception):
@@ -93,6 +105,93 @@ def render_server(
     )
 
 
+def _endpoint(address: str, port: object) -> str:
+    """``address:port``, with an IPv6 literal bracketed.
+
+    Unbracketed, an IPv6 endpoint is ambiguous with the port separator and the parser
+    rejects the whole file. The node's address is operator-supplied and may be either
+    family, so this is a real case rather than a hypothetical one.
+    """
+    try:
+        if ipaddress.ip_address(address).version == 6:
+            return f"[{address}]:{port}"
+    except ValueError:
+        # A hostname. Nothing to bracket.
+        pass
+    return f"{address}:{port}"
+
+
+def _interface_name(display_name: str) -> str:
+    """A wg-quick interface name derived from the node's operator-chosen name.
+
+    ``awg-quick`` takes the interface name from the FILENAME and refuses a name it
+    considers invalid before it ever reads the contents — so this is part of the
+    serialisation, not cosmetics. Linux caps an interface name at 15 characters, and
+    the operator's node name is free text, so it is slugged and truncated here.
+
+    Derived from the node rather than from the friend, deliberately: a friend holding
+    three files needs to tell the exits apart, and the file lands on their own device
+    where the node's name is the useful label. Nothing about which person this is goes
+    into the name.
+    """
+    slug = "".join(
+        character if character.isalnum() else "-" for character in display_name.lower()
+    ).strip("-")
+    # 4 for the prefix leaves 11, and "hashi-" would leave too little to tell two
+    # nodes apart.
+    return f"awg-{slug[:11]}" if slug else "awg-node"
+
+
+def render_client_config(
+    node: NodeView,
+    params: Mapping[str, object],
+    credential: Credential,
+) -> ClientConfig:
+    """One friend's complete AmneziaWG configuration file.
+
+    The serialisation this transport declares (``SubscriptionFormat.CLIENT_CONFIG_FILE``)
+    and the thing backlog item 25 was blocked on. It is a file rather than a line
+    because that is what this protocol family's configuration IS — see the package
+    docstring and ``client.j2``.
+
+    Pure, like every renderer here: the friend's own keypair arrives in ``credential``,
+    the node's public half in ``params``, and nothing is generated inside.
+    """
+    secrets = credential.secrets
+    private_key = secrets.get("peer_private_key")
+    if not private_key:
+        # Named rather than rendered blank. A file with an empty PrivateKey is
+        # syntactically fine and produces a tunnel that never comes up, which a friend
+        # reports as "your VPN does not work" with nothing to go on.
+        raise MissingPeerMaterial(
+            f"this credential carries no 'peer_private_key', so no {META.name} config "
+            "can be built for it. The transport declares that material at CLIENT "
+            "scope; a credential minted without it is the bug to fix, not this render."
+        )
+
+    # The friend's own address when they have one, falling back to the single address in
+    # params for the point-to-point case — the same rule, and the same reason, as
+    # render_server's peer loop.
+    tunnel_address = str(secrets.get("peer_tunnel_address") or params["peer_tunnel_address"])
+
+    content = _TEMPLATES.get_template("client.j2").render(
+        params=params,
+        peer={"private_key": private_key, "tunnel_address": tunnel_address},
+        endpoint=_endpoint(node.address, params["port"]),
+    )
+    return ClientConfig(
+        content=content,
+        filename=f"{_interface_name(node.display_name)}.conf",
+        # Plain text, not an invented type: no registered media type exists for a
+        # wg-quick config, and a made-up one makes some clients offer to download the
+        # file rather than import it.
+        media_type="text/plain; charset=utf-8",
+        display_label=node.display_name,
+        country_label=node.location_label,
+        node_id=node.id,
+    )
+
+
 def render_client(
     node: NodeView,
     params: Mapping[str, object],
@@ -116,7 +215,9 @@ def render_client(
 __all__ = [
     "META",
     "AmbiguousPeerRoute",
+    "MissingPeerMaterial",
     "NotExpressibleAsUri",
     "render_client",
+    "render_client_config",
     "render_server",
 ]

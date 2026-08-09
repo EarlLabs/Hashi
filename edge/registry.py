@@ -24,6 +24,16 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       (*Completing the contract*). From the second transport onward, a transport
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
+
+      **It has been widened twice since, both times deliberately and both times
+      recorded where they happened.** ``ConfigFormat`` came with the WireGuard
+      family (see its own docstring). ``SubscriptionFormat`` came with backlog item
+      26, authorised in the backlog's own text for that item and nowhere else: a
+      transport now declares the SET of subscription shapes it serialises into
+      rather than a yes/no about the v1 URI list, and serialises each of them
+      itself. Neither widening was a branch on a protocol — both replaced one with
+      a vocabulary — but neither was free, and a reader deserves to know the
+      contract has moved and why rather than to discover it from a diff.
 """
 
 import importlib
@@ -110,6 +120,37 @@ class ConfigFormat(StrEnum):
     WG_QUICK = "wg-quick"
 
 
+class SubscriptionFormat(StrEnum):
+    """A shape a friend's client can consume, declared by the transport that produces it.
+
+    This vocabulary replaces a boolean, and the replacement is the point. "Can this
+    transport be expressed in the v1 subscription?" had exactly one answer for every
+    transport that is not a URI — *no* — and that answer left AmneziaWG's
+    friend-facing form unbuildable rather than merely undelivered (backlog item 25,
+    blocked since 2026-08-01, and the charter's largest open question in phase 1).
+
+    A closed vocabulary rather than free-form strings, for the same reason as
+    ``KeyKind`` and ``ConfigFormat``: delivery has to dispatch on something, and
+    dispatching on the FORMAT means `control` gains one delivery arm per format, never
+    one per protocol. Two transports that both serialise to a config file share
+    delivery without either being named anywhere in `control`.
+    """
+
+    # One line in the base64 list of client-entry URIs — the v1 subscription
+    # (charter amendment A). Serialised by ``render_client`` into a ``ClientEntry``.
+    V1_URI_LIST = "v1-uri-list"
+
+    # A complete configuration file the friend's client imports. Serialised by
+    # ``render_client_config`` into a ``ClientConfig``.
+    #
+    # This is the second format the charter calls a product decision rather than an
+    # implementation detail (question Q11, answered (b) by the owner on 2026-08-09:
+    # per-client config files behind the same token). It is the honest form for a
+    # protocol family whose configuration is a file and not a link — writing a URI for
+    # it would put a line in a subscription that no client can parse.
+    CLIENT_CONFIG_FILE = "client-config-file"
+
+
 class KeyScope(StrEnum):
     """Whether a piece of material belongs to a node or to one friend."""
 
@@ -192,16 +233,38 @@ class TransportMeta:
     # ``ConfigFormat`` — including the note on when and why this field was added.
     config_format: ConfigFormat = ConfigFormat.XRAY_JSON
 
-    # Whether this transport can be serialised into the v1 subscription format —
-    # a base64 list of client-entry URIs with an appended display fragment
-    # (charter amendment A). Declared, not inferred, and this is the S6
-    # requirement from the backlog: AmneziaWG is a config *file*, not a link, so
-    # it must be able to say "not me" rather than be discovered mid-render.
+    # Every subscription format this transport serialises itself into. Declared, not
+    # inferred — the S6 requirement from the backlog, now stated as a set rather than
+    # as a yes/no: a transport says which shapes it produces, and produces exactly
+    # those. Empty means "nothing a friend can consume", which is a legitimate answer
+    # for a transport that only ever runs between our own nodes, and `control` refuses
+    # out loud to offer such a transport to friends rather than shipping a
+    # subscription that is quietly one node short.
     #
-    # `control` refuses out loud to enable a transport with False on a node it
-    # would deliver to a friend, instead of shipping a quietly short
-    # subscription. See ``control/app/services/transports.py``.
-    subscription_expressible: bool = True
+    # Defaulting to the v1 URI list rather than to the empty set is deliberate: a new
+    # transport that forgets to declare anything is then held to the format every
+    # existing one uses, and its missing ``render_client`` is caught by ``profile()``
+    # at load time — instead of the transport looking correct and being undeliverable.
+    subscription_formats: frozenset[SubscriptionFormat] = frozenset(
+        {SubscriptionFormat.V1_URI_LIST}
+    )
+
+    @property
+    def subscription_expressible(self) -> bool:
+        """Whether this transport rides in the v1 subscription — a base64 URI list.
+
+        Kept as a name of its own, derived rather than stored, because it is the
+        question `control` has been asking since item 7 and the answer has not
+        changed shape: an entry in the v1 document, or not. What changed is that "not"
+        no longer means "nothing a friend can consume" — see ``subscription_formats``.
+
+        Delivery of the second format is backlog item 27, in the `control` zone. Until
+        it lands, a transport that produces only a config file is still refused for
+        friends, which is correct: the serialiser existing is not the same as the
+        endpoint handing it over, and pretending otherwise would put a friend one
+        unreachable node short with nothing saying so.
+        """
+        return SubscriptionFormat.V1_URI_LIST in self.subscription_formats
 
     def clamp_port(self, port: int) -> int:
         """Raise unless ``port`` is inside this transport's declared range."""
@@ -239,8 +302,92 @@ class ClientEntry:
     node_id: str
 
 
+@dataclass(frozen=True)
+class ClientConfig:
+    """One friend's complete configuration FILE, serialised by the transport itself.
+
+    The second serialisation shape, and the counterpart to ``ClientEntry``: same
+    division of labour, different container. ``content`` is finished text — `control`
+    does not parse it, does not template it and does not branch on it. The other
+    fields exist so `control` can name the download, set a content type, and order or
+    label a set of files generically.
+
+    ``filename`` is a SUGGESTION the transport owns, because the name is part of what
+    makes a file importable: some clients derive the tunnel's display name from it,
+    and one family derives the interface name from it and rejects a name it considers
+    invalid before reading the contents. `control` may prefix it, and must not invent
+    it.
+    """
+
+    content: str
+
+    # A filename without a directory component, safe to place in a Content-Disposition
+    # header. Checked rather than trusted at the point of use — see ``safe_filename``.
+    filename: str
+
+    # What to serve it as. A transport's own answer, because a client that gets the
+    # wrong type for a config file offers to display it instead of importing it.
+    media_type: str
+
+    # The same three protocol-agnostic fields ``ClientEntry`` carries, for the same
+    # reason: so `control` can label, order and filter without parsing ``content``.
+    display_label: str
+    country_label: str
+    node_id: str
+
+    def safe_filename(self) -> str:
+        """``filename`` with any path component refused rather than stripped.
+
+        A transport is trusted code in this image, so this is not a defence against a
+        hostile transport — it is a defence against a plausible mistake. A filename
+        carrying a separator reaches an HTTP header and a friend's filesystem; silently
+        rewriting it would hide the bug, so it raises where it can still be read.
+        """
+        if "/" in self.filename or "\\" in self.filename or self.filename in {"", ".", ".."}:
+            raise ValueError(
+                f"{self.filename!r} is not a plain filename — a transport's suggested "
+                "name must carry no directory component"
+            )
+        return self.filename
+
+
+# Which function in a transport's ``render.py`` produces which format. The whole
+# mechanism behind "a transport declares what it serialises into and serialises it":
+# `control` asks for a FORMAT, this maps it to a call, and no caller anywhere names a
+# protocol or a function.
+SERIALISERS: Mapping[SubscriptionFormat, str] = {
+    SubscriptionFormat.V1_URI_LIST: "render_client",
+    SubscriptionFormat.CLIENT_CONFIG_FILE: "render_client_config",
+}
+
+
+class FormatNotDeclared(Exception):
+    """Asked for a shape this transport never said it produces.
+
+    Distinct from a rendering failure: reaching here means a caller ignored
+    ``TransportMeta.subscription_formats``, and the honest answer is that the request
+    was wrong rather than that the transport is broken.
+    """
+
+
+class ContractViolation(Exception):
+    """A transport package does not provide what its own declaration promises.
+
+    Raised at load time, with the missing symbol named. A declaration that obliges
+    nothing is a comment, and the failure it hides is the worst shape available: a
+    transport that looks deliverable in the panel and raises ``AttributeError`` deep
+    inside a subscription render, for one friend, at refresh time.
+    """
+
+
 class TransportProfile(Protocol):
-    """The two pure functions every transport package provides in ``render.py``."""
+    """The pure functions every transport package provides in ``render.py``.
+
+    ``render_server`` and ``render_client`` are required of every transport.
+    ``render_client_config`` is required of exactly those transports that declare
+    ``SubscriptionFormat.CLIENT_CONFIG_FILE`` — see ``SERIALISERS`` and
+    ``profile()``'s load-time check.
+    """
 
     def render_server(self, node: NodeView, params: Mapping[str, object]) -> str:
         """The node's complete config file for this transport. Deterministic."""
@@ -262,6 +409,20 @@ class TransportProfile(Protocol):
         """
         ...
 
+    def render_client_config(
+        self,
+        node: NodeView,
+        params: Mapping[str, object],
+        credential: Credential,
+    ) -> ClientConfig:
+        """One friend's complete configuration file for this node.
+
+        Same arguments as ``render_client`` and the same purity rules — a file is a
+        different serialisation of the same facts, not a different kind of operation.
+        Provided only by transports that declare ``CLIENT_CONFIG_FILE``.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class Transport:
@@ -279,6 +440,53 @@ class Transport:
         rules cannot drift away from the template that consumes them.
         """
         return self.params_model(**dict(params)).model_dump()
+
+    def serialise(
+        self,
+        subscription_format: SubscriptionFormat,
+        node: NodeView,
+        params: Mapping[str, object],
+        credential: Credential,
+    ) -> ClientEntry | ClientConfig:
+        """Produce one friend's material in ``subscription_format``.
+
+        The one call `control` needs in order to deliver a second shape without
+        learning a second protocol. It asks for a format; which function runs is
+        ``SERIALISERS``' business, and what comes back is finished text either way.
+
+        Refuses a format this transport never declared, rather than calling a function
+        that happens to exist: a transport may well grow a serialiser before it is
+        ready to be offered in that shape, and the declaration is what says it is
+        ready.
+        """
+        if subscription_format not in self.meta.subscription_formats:
+            raise FormatNotDeclared(
+                f"transport {self.meta.name!r} does not declare "
+                f"{subscription_format!r}; it declares "
+                f"{sorted(self.meta.subscription_formats) or 'no friend-facing format at all'}"
+            )
+        return getattr(self.profile, SERIALISERS[subscription_format])(
+            node, params, credential
+        )
+
+
+def _check_contract(meta: TransportMeta, render: ModuleType) -> None:
+    """Refuse a package whose declaration its own code does not keep.
+
+    Load time rather than render time, and that is the whole value: the failure this
+    prevents is a transport that looks deliverable in the panel and raises deep inside
+    one friend's subscription render at refresh time — visible to the operator as
+    "hashi is broken for Masha", days later.
+    """
+    for declared in sorted(meta.subscription_formats):
+        function = SERIALISERS[declared]
+        if not callable(getattr(render, function, None)):
+            raise ContractViolation(
+                f"transport {meta.name!r} declares subscription format {declared!r} "
+                f"but its render.py provides no callable {function!r}. Either provide "
+                "it or stop declaring the format — a declaration that obliges nothing "
+                "is a comment."
+            )
 
 
 def _package(name: str) -> ModuleType:
@@ -321,9 +529,11 @@ def profile(name: str) -> Transport:
         meta = importlib.import_module(f"edge.transports.{package}.meta").META
         if meta.name != name:
             continue
+        render = importlib.import_module(f"edge.transports.{package}.render")
+        _check_contract(meta, render)
         return Transport(
             meta=meta,
-            profile=importlib.import_module(f"edge.transports.{package}.render"),
+            profile=render,
             params_model=importlib.import_module(f"edge.transports.{package}.params").Params,
         )
     raise KeyError(f"no transport named {name!r} is installed")

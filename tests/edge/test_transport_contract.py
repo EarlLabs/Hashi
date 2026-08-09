@@ -12,15 +12,21 @@ HOW:  pure imports and pure calls. No Docker, no database, no upstream binary
 """
 
 import json
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
 
 from edge.registry import (
+    SERIALISERS,
+    ClientConfig,
     ClientEntry,
     ConfigFormat,
+    ContractViolation,
+    FormatNotDeclared,
     KeyKind,
     KeyScope,
+    SubscriptionFormat,
     TransportMeta,
     discover,
     profile,
@@ -370,3 +376,198 @@ def test_an_inexpressible_transport_still_renders_a_server_config(
 ) -> None:
     """It is unusable in a SUBSCRIPTION, not unusable. It runs the entry-to-leaf hop."""
     assert render(name, node, request).strip()
+
+
+# --- what a transport declares it serialises into, and produces (item 26) -----
+#
+# The contract used to carry one boolean: "expressible in the v1 subscription, yes or
+# no". For every transport that is not a URI the answer was no, and "no" was the end of
+# the conversation — which is precisely what kept AmneziaWG's friend-facing form
+# unbuildable rather than merely undelivered (backlog item 25). A transport now declares
+# the SET of shapes it produces, and the assertions below are about the two halves of
+# that: the declaration means something, and it obliges something.
+
+CONFIG_FILE_TRANSPORTS = sorted(
+    name
+    for name, meta in discover().items()
+    if SubscriptionFormat.CLIENT_CONFIG_FILE in meta.subscription_formats
+)
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_declared_formats_come_from_the_shared_vocabulary(name: str) -> None:
+    """A free-form string here would be a format `control` could never dispatch on."""
+    meta = discover()[name]
+    for declared in meta.subscription_formats:
+        assert isinstance(declared, SubscriptionFormat), (
+            f"{name}: {declared!r} is not a SubscriptionFormat, so delivery has "
+            "nothing to dispatch on but the transport's name"
+        )
+        assert declared in SERIALISERS, f"{name}: no serialiser is mapped for {declared!r}"
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_every_declared_format_has_the_function_that_produces_it(name: str) -> None:
+    """``profile()`` is where a declaration that obliges nothing is caught.
+
+    Loading the transport is itself the assertion: ``profile()`` refuses a package whose
+    render module does not provide the serialiser for a format it declared. Asserted
+    per transport rather than once, so a package added later cannot skip it.
+    """
+    transport = profile(name)
+    for declared in transport.meta.subscription_formats:
+        assert callable(getattr(transport.profile, SERIALISERS[declared]))
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_expressibility_is_derived_from_the_declared_formats(name: str) -> None:
+    """The name `control` has been reading since item 7 still means what it meant.
+
+    ``subscription_expressible`` is now a property over the format set. It has to keep
+    answering exactly "does this ride in the v1 URI list" — if it drifted into "is this
+    deliverable at all", the panel would start offering a transport whose delivery does
+    not exist yet, and a friend would get a subscription one node short with nothing
+    saying so.
+    """
+    meta = discover()[name]
+    assert meta.subscription_expressible == (
+        SubscriptionFormat.V1_URI_LIST in meta.subscription_formats
+    )
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_a_format_the_transport_never_declared_is_refused(name: str, node, request) -> None:
+    """Not "call whatever function happens to exist".
+
+    A transport may grow a serialiser before the fleet is ready to offer it in that
+    shape — that is exactly AmneziaWG's position between items 26 and 27 — and the
+    declaration is what says it is ready. Dispatching on the presence of a function
+    instead would make an unfinished serialiser reachable by accident.
+    """
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    credential = clients_for(name, request)[0]
+    undeclared = set(SubscriptionFormat) - transport.meta.subscription_formats
+    for subscription_format in sorted(undeclared):
+        with pytest.raises(FormatNotDeclared):
+            transport.serialise(subscription_format, node, validated, credential)
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_serialise_returns_what_the_declared_format_promises(
+    name: str, node, request
+) -> None:
+    """The dispatch produces the container the format is defined in terms of."""
+    expected = {
+        SubscriptionFormat.V1_URI_LIST: ClientEntry,
+        SubscriptionFormat.CLIENT_CONFIG_FILE: ClientConfig,
+    }
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    credential = clients_for(name, request)[0]
+    for declared in sorted(transport.meta.subscription_formats):
+        produced = transport.serialise(declared, node, validated, credential)
+        assert isinstance(produced, expected[declared]), (
+            f"{name}: {declared!r} produced {type(produced).__name__}"
+        )
+
+
+def test_a_package_that_declares_a_format_it_cannot_produce_is_refused() -> None:
+    """The load-time refusal, provoked rather than assumed.
+
+    Every installed transport keeps its declaration today, so the check above passes
+    vacuously with respect to the FAILURE. This provokes the failure directly, because
+    the value of the check is entirely in what it rejects — and what it rejects is the
+    worst shape available: a transport that looks deliverable in the panel and raises
+    an AttributeError deep inside one friend's subscription render at refresh time.
+    """
+    from types import SimpleNamespace
+
+    from edge.registry import _check_contract
+
+    meta = replace(
+        discover()[INSTALLED[0]],
+        subscription_formats=frozenset(
+            {SubscriptionFormat.V1_URI_LIST, SubscriptionFormat.CLIENT_CONFIG_FILE}
+        ),
+    )
+    with pytest.raises(ContractViolation) as refused:
+        _check_contract(meta, SimpleNamespace(render_server=lambda: None,
+                                             render_client=lambda: None))
+    # The message has to name the missing symbol, or it is a puzzle rather than a report.
+    assert "render_client_config" in str(refused.value)
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_a_client_config_file_is_complete_and_named(name: str, node, request) -> None:
+    """The metadata `control` needs in order to hand a file over generically."""
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    produced = transport.profile.render_client_config(
+        node, validated, clients_for(name, request)[0]
+    )
+
+    assert produced.content.strip(), f"{name}: an empty config file is not a config file"
+    assert produced.media_type, f"{name}: no media type, so delivery has to guess"
+    # A plain name: it reaches an HTTP header and a friend's filesystem, and one family
+    # derives the interface name from it and rejects a name it considers invalid.
+    assert produced.safe_filename() == produced.filename
+    assert produced.node_id == node.id
+    assert produced.country_label == node.location_label
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_a_client_config_file_never_carries_the_servers_private_key(
+    name: str, node, request
+) -> None:
+    """The same rule as for a client entry, and it matters more in a file.
+
+    A file is saved, synced and forwarded. The node's own private key in it would be a
+    seizure of one friend's phone compromising the node for everybody on it.
+    """
+    transport = profile(name)
+    raw = params_for(name, request)
+    validated = transport.validate(raw)
+    produced = transport.profile.render_client_config(
+        node, validated, clients_for(name, request)[0]
+    )
+    assert str(raw["private_key"]) not in produced.content
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_two_friends_get_different_config_files(name: str, node, request) -> None:
+    """Otherwise one revocation cannot be told from another, and neither is total."""
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    clients = clients_for(name, request)
+    first, second = (
+        transport.profile.render_client_config(node, validated, credential).content
+        for credential in clients[:2]
+    )
+    assert first != second
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_rendering_a_config_file_is_deterministic(name: str, node, request) -> None:
+    """Purity, asserted where it is easiest to lose: a file with more lines to drift."""
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    credential = clients_for(name, request)[0]
+    render_once = transport.profile.render_client_config(node, validated, credential)
+    render_again = transport.profile.render_client_config(node, validated, credential)
+    assert render_once == render_again
+
+
+def test_a_filename_with_a_path_component_is_refused() -> None:
+    """Refused rather than silently stripped, so the mistake is readable.
+
+    A transport is trusted code in this image, so this is not a defence against a
+    hostile package — it is a defence against a plausible mistake reaching an HTTP
+    header and a friend's filesystem.
+    """
+    for bad in ("../etc/passwd", "sub/dir.conf", "", ".", ".."):
+        with pytest.raises(ValueError):
+            ClientConfig(
+                content="x", filename=bad, media_type="text/plain",
+                display_label="l", country_label="c", node_id="n",
+            ).safe_filename()

@@ -168,6 +168,13 @@ FAKE_WG_PRIVATE_KEY = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWY="
 FAKE_WG_PUBLIC_KEY = "Z2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0w="
 FAKE_WG_PRESHARED_KEY = "bW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QUVI="
 
+# A peer's own private key, DISTINCT from the node's. Distinct on purpose rather than
+# for tidiness: reusing the node's value here made the assertion "a friend's config
+# file never carries the SERVER's private key" compare a string to itself, so it could
+# not fail. The test found this fixture, which is the right order of events.
+FAKE_WG_PEER_PRIVATE_KEY = "cGVlckFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMDE="
+FAKE_WG_PEER_PUBLIC_KEY = "cGVlclpZWFdWVVRTUlFQT05NTEtKSUhHRkVEQ0JBOTg="
+
 
 @pytest.fixture
 def awg_params() -> dict[str, object]:
@@ -207,8 +214,8 @@ def awg_credentials() -> list[Credential]:
         Credential(
             subject="cccccccc-0000-4000-8000-000000000003",
             secrets={
-                "peer_private_key": FAKE_WG_PRIVATE_KEY,
-                "peer_public_key": FAKE_WG_PUBLIC_KEY,
+                "peer_private_key": FAKE_WG_PEER_PRIVATE_KEY,
+                "peer_public_key": FAKE_WG_PEER_PUBLIC_KEY,
             },
         ),
         Credential(

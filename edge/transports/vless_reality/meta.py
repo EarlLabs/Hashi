@@ -8,7 +8,14 @@ WHY:  the declaration is how the charter's fourth criterion is kept. `control`
 HOW:  one module-level ``META``. ``edge.registry.discover()`` imports exactly this.
 """
 
-from edge.registry import ConfigFormat, KeyKind, KeyScope, KeySpec, TransportMeta
+from edge.registry import (
+    ConfigFormat,
+    KeyKind,
+    KeyScope,
+    KeySpec,
+    SubscriptionFormat,
+    TransportMeta,
+)
 
 META = TransportMeta(
     name="vless-reality",
@@ -49,6 +56,9 @@ META = TransportMeta(
         KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
     ),
     # A VLESS URI carries a fragment, so an externally appended display label
-    # survives — this transport is deliverable in the v1 subscription format.
-    subscription_expressible=True,
+    # survives — this transport is deliverable in the v1 subscription format, and in
+    # that one only. Declared explicitly rather than left to the default, so the day a
+    # second format becomes the norm this transport's answer is a decision on the
+    # record instead of whatever the default happened to be.
+    subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
 )

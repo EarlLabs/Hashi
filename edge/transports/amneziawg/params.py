@@ -34,6 +34,16 @@ class Params(BaseModel):
     public_key: str
     preshared_key: str = Field(repr=False)
 
+    # Resolvers to write into a FRIEND's config file. Empty by default and never
+    # defaulted to an address: a hardcoded resolver is an address this fleet could
+    # never rotate away from, which `CLAUDE.md` forbids for exactly that reason.
+    #
+    # Empty is a real, documented state rather than a missing feature — the device
+    # keeps its own resolver and its queries do not enter the tunnel. The client
+    # template says so in the file itself, so a friend reading their config is not left
+    # to guess. Unused by the hop, where the consumer is a node with its own resolver.
+    client_dns: tuple[str, ...] = ()
+
     # MTU. Explicit and required, never defaulted: this hop is a tunnel inside a
     # tunnel, and the default fragments. The symptom is "TLS works, large downloads
     # hang", which nobody debugs as MTU on the first day — the edge rulebook lists it
@@ -80,6 +90,27 @@ class Params(BaseModel):
                 "the node's own traffic into the tunnel"
             )
         return str(interface)
+
+    @field_validator("client_dns")
+    @classmethod
+    def _resolvers_are_addresses(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Each entry must be a bare IP address.
+
+        A hostname here cannot work: resolving it is the very thing the tunnel's DNS
+        setting is for, so the device would have to already be able to resolve in order
+        to learn how to resolve. Refused with that reason rather than written through
+        and silently ignored by the client.
+        """
+        for entry in value:
+            try:
+                ipaddress.ip_address(entry)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{entry!r} is not an IP address — a resolver written into a "
+                    "tunnel's DNS setting cannot be a name, because resolving that "
+                    "name is what the setting is for"
+                ) from exc
+        return value
 
     @field_validator("private_key", "public_key", "preshared_key")
     @classmethod

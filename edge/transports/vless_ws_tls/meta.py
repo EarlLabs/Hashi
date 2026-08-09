@@ -5,7 +5,14 @@ needs a random path and a client id, both of kinds ``control`` already generates
 so it cost `control` zero lines, which is the fourth criterion in one sentence.
 """
 
-from edge.registry import ConfigFormat, KeyKind, KeyScope, KeySpec, TransportMeta
+from edge.registry import (
+    ConfigFormat,
+    KeyKind,
+    KeyScope,
+    KeySpec,
+    SubscriptionFormat,
+    TransportMeta,
+)
 
 META = TransportMeta(
     name="vless-ws-tls",
@@ -24,5 +31,6 @@ META = TransportMeta(
         KeySpec(name="ws_path_secret", kind=KeyKind.TOKEN_32, scope=KeyScope.NODE),
         KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
     ),
-    subscription_expressible=True,
+    # A VLESS URI, same as Reality's — one format, and only that one.
+    subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
 )

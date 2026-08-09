@@ -1,7 +1,23 @@
 agent: "alfred"
-role: "architect"
+role: "solo — every zone"
 state: "in_progress"
 phase: "develop"
-progress: "запускаю /develop"
+progress: >
+  Очередь эпика #117 (пункты 26–32) в порядке владельца 29 → 26 → 27 → 28 → 30
+  → 31 → 32. Q11 = вариант (b), подтверждён владельцем.
+  ЗАКРЫТО: 29 (review-loop раунд 1 — VERDICT: CLEAN, коммит a24da1a).
+  В РАБОТЕ: 26.
 blockers: ""
-updated_at: "2026-08-09T09:50:11+00:00"
+baseline: "7b12358"
+verification:
+  note: >
+    В этом окружении НЕТ бинаря `make`, а движок docker — изолированный dind
+    (DOCKER_HOST=tcp://hashi-dind:2375). Цели Makefile выполнялись напрямую;
+    как именно — ниже, потому что бэклог требует говорить, чем именно
+    проверялось.
+  test_control: ".venv/bin/python -m ruff check control tests/control && HASHI_TEST_DATABASE_URL=postgresql+asyncpg://hashi:verify@hashi-dind:54233/hashi .venv/bin/python -m pytest tests/control -q"
+  test_edge: ".venv/bin/python -m ruff check edge tests/edge && .venv/bin/python -m pytest tests/edge -q"
+  test_infra: ".venv/bin/python -m ruff check tests/infra deploy/warden .e2e && .venv/bin/python -m pytest tests/infra -q"
+  e2e: "стек поднят compose'ом с DEV_BIND_ADDR=0.0.0.0 (dind), сценарии — E2E_API_HOST=hashi-dind E2E_API_PORT=54200 pytest tests/e2e -q"
+  last_green: "237 passed, 2 skipped (static) + 41 passed (e2e), после пункта 29"
+updated_at: "2026-08-09T10:40:00+00:00"

@@ -1,0 +1,64 @@
+{#
+  One friend's AmneziaWG configuration, in wg-quick's INI format.
+
+  WHAT: the file a friend imports into their client — their own keypair, the node as
+        the single peer, and the obfuscation values that make this AmneziaWG.
+  WHY:  this is the sketch the backlog carried as item 25 and could not build. The
+        charter calls "how does a protocol with no URI form reach a phone in one link"
+        the largest open question of phase 1, and the answer chosen by the owner
+        (question Q11, option (b), 2026-08-09) is a per-client config file behind the
+        same token. This template is that file.
+
+        Note again what is NOT here: no logging directive of any kind, exactly as in
+        server.j2. The absence is the feature.
+  HOW:  rendered by render.py's ``render_client_config``. Every value is either an
+        integer, a validated base64 key, or a parsed IP interface, so none can carry a
+        newline and break out of its line — Params is strict for that reason, not for
+        tidiness.
+
+  Two things differ from server.j2, and both are deliberate:
+
+  * **AllowedIPs is the whole internet here.** On the entry-to-leaf hop a wide route
+    would hand the far end the right to source traffic as any address and would pull
+    the node's own SSH session into the tunnel. On a friend's device the whole point
+    is that everything leaves through the node, so the full route is the correct
+    value — the same field, an opposite answer, because the consumer is different.
+  * **No ListenPort.** A client dials; it does not wait to be found. Pinning a source
+    port would also make the friend's traffic easier to correlate across networks.
+#}
+# hashi — generated for one device. Re-import after any rotation; the link never moves.
+[Interface]
+PrivateKey = {{ peer.private_key }}
+Address = {{ peer.tunnel_address }}
+MTU = {{ params.mtu }}
+{% if params.client_dns %}
+# The resolver this device should use inside the tunnel. Operator-supplied: there is
+# no default, because a hardcoded resolver would be a fixed address this fleet could
+# never rotate away from.
+DNS = {{ params.client_dns | join(", ") }}
+{% else %}
+# No DNS line: this device keeps its own resolver, and its queries do not go through
+# the tunnel. Said out loud rather than left as an absence — it is a real property of
+# the configuration a friend receives, not a forgotten field.
+{% endif %}
+
+# AmneziaWG obfuscation. These MUST match the node's values exactly — they are not
+# preferences, they are the wire format, and one mismatched header means a tunnel that
+# never comes up with nothing in any log to say why.
+Jc = {{ params.junk_packet_count }}
+Jmin = {{ params.junk_packet_min_size }}
+Jmax = {{ params.junk_packet_max_size }}
+H1 = {{ params.init_packet_magic_header }}
+H2 = {{ params.response_packet_magic_header }}
+H3 = {{ params.underload_packet_magic_header }}
+H4 = {{ params.transport_packet_magic_header }}
+
+[Peer]
+# The node. One peer, never a list: a friend's device talks to the exit it was given.
+PublicKey = {{ params.public_key }}
+PresharedKey = {{ params.preshared_key }}
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = {{ endpoint }}
+# Keeps the UDP path open through NAT and stateful middleboxes. 25s is below the
+# shortest common UDP idle timeout.
+PersistentKeepalive = 25

@@ -23,7 +23,7 @@ import json
 import pytest
 
 from edge.checker import awg_quick_binary, validate, xray_binary
-from edge.registry import ConfigFormat, discover, profile
+from edge.registry import ConfigFormat, SubscriptionFormat, discover, profile
 
 INSTALLED = sorted(discover())
 PARAMS_FIXTURE = {
@@ -36,6 +36,14 @@ CREDENTIALS_FIXTURE = {
     "vless-ws-tls": "credentials",
     "amneziawg": "awg_credentials",
 }
+
+# Transports that serialise a friend's material into a config FILE (item 26). Their
+# friend-facing artefact goes through the same upstream checker as their server config.
+CONFIG_FILE_TRANSPORTS = sorted(
+    name
+    for name, meta in discover().items()
+    if SubscriptionFormat.CLIENT_CONFIG_FILE in meta.subscription_formats
+)
 
 
 def checkable_params(name: str, request, tmp_path) -> dict[str, object]:
@@ -105,6 +113,31 @@ def test_upstream_accepts_a_config_with_no_clients(name: str, node, request, tmp
         config_format=transport.meta.config_format,
     )
     assert result.ok, f"{name}: xray rejected an empty-client config\n{result.output}"
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_upstream_accepts_a_friends_config_file(name: str, node, request, tmp_path) -> None:
+    """Item 26, S2: the file a FRIEND imports is accepted by the upstream tool.
+
+    Separate from the server-config test above and not redundant with it. The two files
+    share a format and almost nothing else: the client's has no ListenPort, carries the
+    friend's own key rather than the node's, routes everything rather than one host, and
+    may carry a DNS line the server's never does. Every one of those is a place a
+    hand-written template can be wrong in a way that parses.
+
+    Same checker, resolved the same way `control` resolves it before a push — so a green
+    result here is evidence about the real gate rather than about a test-only copy.
+    """
+    require_checker_for(name)
+    transport = profile(name)
+    validated = transport.validate(checkable_params(name, request, tmp_path))
+    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    rendered = transport.profile.render_client_config(node, validated, clients[0])
+
+    result = validate(rendered.content, config_format=transport.meta.config_format)
+    assert result.ok, (
+        f"{name}: the upstream tool rejected a friend's config file\n{result.output}"
+    )
 
 
 def test_the_checker_actually_rejects_something() -> None:

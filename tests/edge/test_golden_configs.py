@@ -17,7 +17,7 @@ import pathlib
 
 import pytest
 
-from edge.registry import ConfigFormat, discover, profile
+from edge.registry import ConfigFormat, SubscriptionFormat, discover, profile
 
 GOLDEN = pathlib.Path(__file__).parent / "golden"
 INSTALLED = sorted(discover())
@@ -36,6 +36,16 @@ CREDENTIALS_FIXTURE = {
 # Only transports with a URI form have a client entry to pin. The others refuse by
 # design — see tests/edge/test_transport_contract.py.
 DELIVERABLE = sorted(name for name, meta in discover().items() if meta.subscription_expressible)
+
+# Transports that serialise a friend's material into a FILE instead (item 26). Their
+# artefact is pinned by the same argument as a client entry, and more sharply: a
+# config file is the whole of what a friend imports, so a dropped line there is a
+# tunnel that silently never comes up rather than one setting that changed.
+CONFIG_FILE_TRANSPORTS = sorted(
+    name
+    for name, meta in discover().items()
+    if SubscriptionFormat.CLIENT_CONFIG_FILE in meta.subscription_formats
+)
 
 # The golden file's extension follows the config FORMAT, so an editor opening one gets
 # the right syntax highlighting and a reviewer is not reading an INI file called .json.
@@ -87,3 +97,32 @@ def test_client_entry_matches_its_golden_file(name: str, node, request) -> None:
         f"no golden file for {name} — run: UPDATE_GOLDEN=1 pytest {__file__}"
     )
     assert rendered == path.read_text()
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_client_config_file_matches_its_golden_file(name: str, node, request) -> None:
+    """One friend's whole configuration file, byte for byte.
+
+    The second serialisation shape (item 26). Pinned rather than merely spot-checked
+    because this file goes onto a friend's device in full: every line is either
+    load-bearing or a comment they will read, and neither kind should change by
+    accident. In particular the obfuscation values have to match the node exactly, and
+    a template that dropped one would produce a file that parses and never connects.
+    """
+    transport = profile(name)
+    validated = transport.validate(request.getfixturevalue(PARAMS_FIXTURE[name]))
+    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    rendered = transport.profile.render_client_config(node, validated, clients[0]).content
+
+    path = GOLDEN / f"{name}-client.conf"
+    if os.environ.get("UPDATE_GOLDEN"):
+        path.write_text(rendered)
+        pytest.skip(f"golden file rewritten: {path.name} ({len(rendered)} bytes)")
+
+    assert path.is_file(), (
+        f"no golden file for {name} — run: UPDATE_GOLDEN=1 pytest {__file__}"
+    )
+    assert rendered == path.read_text(), (
+        f"{name}: rendered client config differs from {path.name}. If the change is "
+        "intended, rewrite with UPDATE_GOLDEN=1 and review the diff as a decision."
+    )
