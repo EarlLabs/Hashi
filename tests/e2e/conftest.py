@@ -104,8 +104,20 @@ def base_url() -> str:
 
 @pytest.fixture
 async def client(base_url: str):
-    """An HTTP client that does not follow redirects — a 3xx is a result here."""
-    async with httpx.AsyncClient(base_url=base_url, follow_redirects=False) as c:
+    """An HTTP client that does not follow redirects — a 3xx is a result here.
+
+    The timeout is raised well above httpx's 5s default on purpose. Several operator
+    actions attempt SSH to the stub nodes in this stack — revocation re-pushes every
+    node the friend was on, and apply pushes the one it was called for — and those
+    attempts have to run out their own connect timeout before the request can answer.
+    At the default, such a scenario fails as a ``ReadTimeout``, which reads as "the
+    stack is broken" rather than as "the operator waited": the same failure the
+    Makefile's own comments warn about elsewhere. Slow is the correct answer here, and
+    it gets slower as a run adds nodes.
+    """
+    async with httpx.AsyncClient(
+        base_url=base_url, follow_redirects=False, timeout=60.0
+    ) as c:
         yield c
 
 

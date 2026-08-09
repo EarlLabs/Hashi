@@ -52,6 +52,9 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
                 needs_tls=meta.needs_tls,
                 port_range=meta.port_range,
                 subscription_expressible=meta.subscription_expressible,
+                # Sorted so the panel's column and any script reading this endpoint see
+                # a stable order rather than a set's iteration order.
+                subscription_formats=sorted(str(f) for f in meta.subscription_formats),
                 # Required fields the operator must fill in: everything the model
                 # requires minus everything we mint for them. Shared with the panel's
                 # rotation form so the two screens cannot drift apart.

@@ -176,13 +176,25 @@
 
 <h2>Transports this image ships</h2>
 <table>
-  <tr><th>name</th><th>family</th><th>ports</th><th>in a subscription</th></tr>
+  <tr><th>name</th><th>family</th><th>ports</th><th>how a friend receives it</th></tr>
   {% for transport in transports %}
   <tr>
     <td>{{ transport.name }}</td>
     <td>{{ transport.family }}</td>
     <td>{{ transport.port_range[0] }}–{{ transport.port_range[1] }}</td>
-    <td>{% if transport.subscription_expressible %}yes{% else %}<span class="bad">no — cannot be offered to friends</span>{% endif %}</td>
+    {# The formats the transport declares, not a yes/no. Since item 27 there are two
+       ways a friend can receive a transport, and collapsing them back into "yes" would
+       hide the one thing an operator needs to know here: whether this one arrives as a
+       link in their existing subscription or as a file they have to import. #}
+    <td>
+      {% if transport.subscription_formats %}
+        {# Sorted: it is a set, and an unordered column reshuffles itself between
+           reloads, which reads as the fleet changing. #}
+        {{ transport.subscription_formats | map("string") | sort | join(", ") }}
+      {% else %}
+        <span class="bad">nothing a friend can consume — hop use only</span>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>

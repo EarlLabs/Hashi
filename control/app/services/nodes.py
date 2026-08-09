@@ -170,14 +170,21 @@ async def enable_transport(
     meta = installed[transport_name]
 
     # Refused out loud rather than silently omitted later. The charter's amendment A
-    # and backlog item 7 S2a: a transport that cannot be expressed in the v1
-    # subscription would produce a friend whose config is quietly one node short,
-    # and they would have no way to notice.
-    if not meta.subscription_expressible:
+    # and backlog item 7 S2a: a transport a friend cannot receive AT ALL would produce
+    # a friend whose config is quietly one node short, and they would have no way to
+    # notice.
+    #
+    # The condition moved with item 27, and the move is the point. It used to be "not
+    # expressible in the v1 URI list", because that was the only shape delivery could
+    # produce — so a transport whose configuration is a file was refused for a reason
+    # that was about US, not about it. Now that the delivery endpoint hands out files
+    # too, the honest question is whether the transport declares ANY friend-facing
+    # format. One that declares none still cannot reach a friend, and is still refused.
+    if not meta.subscription_formats:
         raise NotDeliverable(
-            f"transport {transport_name!r} cannot be expressed in the subscription "
-            "format friends use, so enabling it would deliver an incomplete "
-            "subscription. Refusing rather than shipping a silent gap."
+            f"transport {transport_name!r} declares no format a friend's client can "
+            "consume, so enabling it would deliver an incomplete subscription. "
+            "Refusing rather than shipping a silent gap."
         )
 
     node = await get_node(session, node_id)

@@ -1,20 +1,33 @@
 """Minting subscription tokens and rendering what a friend's client fetches.
 
-WHAT: ``issue`` (a new token for a friend) and ``render`` (the base64 document the
-      delivery endpoint returns).
+WHAT: ``issue`` (a new token for a friend) and the two shapes the delivery endpoint
+      returns — ``render`` (the base64 document) and ``config_files_for`` /
+      ``archive_of`` (per-client configuration files).
 WHY:  backlog item 8, charter criterion 5, and amendment A: a v1 subscription is a
       base64-encoded list of client-entry URIs. This module is `control`'s ENTIRE
       half of the transport contract — order the entries, compose the display text,
       append it as the fragment, join, encode.
+
+      The second shape is backlog item 27, and it is the charter's largest open
+      question of phase 1 answered: the owner chose option (b) on 2026-08-09 —
+      per-client config files behind the same token, rather than betting on what a
+      third party's client will accept. Both shapes live here, behind ONE token and
+      ONE route, because the token in the path is a bearer credential and every rule
+      that protects it is written for that one route.
 HOW:  the arithmetic that proves the contract: adding a transport adds ZERO lines
-      to this file. Nothing here parses ``entry``, branches on a transport name, or
-      compares a label to a literal. It cannot, because it never learns which
-      protocol produced any given line.
+      to this file. Nothing here parses ``entry`` or a file's contents, branches on a
+      transport name, or compares a label to a literal. It cannot, because it never
+      learns which protocol produced any given line. Adding a FORMAT adds one
+      function; adding a protocol adds none.
 """
 
 import base64
+import io
+import json
 import logging
 import secrets as secrets_module
+import zipfile
+from collections.abc import Sequence
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -23,9 +36,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.models import Credential, Friend, Subscription
 from control.app.services import nodes
 from edge.node import Credential as EdgeCredential
-from edge.registry import ClientEntry, profile
+from edge.registry import ClientConfig, ClientEntry, SubscriptionFormat, profile
 
 logger = logging.getLogger(__name__)
+
+# A fixed date for every archive entry. Not "now": see ``archive_of``. 1980-01-01 is
+# the earliest a ZIP entry can express, so it reads as "deliberately none" rather than
+# as a plausible-but-wrong build time.
+ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 # 32 bytes of urlsafe entropy, per the control rulebook's ">= 32 bytes" rule. This
 # is the ONLY authentication on the delivery route, so it is sized to be
@@ -119,6 +137,15 @@ async def entries_for(session: AsyncSession, friend: Friend) -> list[ClientEntry
 
         node_transport = credential.node_transport
         transport = profile(node_transport.transport_name)
+        if SubscriptionFormat.V1_URI_LIST not in transport.meta.subscription_formats:
+            # Not this shape. Necessary since item 27 and not before it: until the
+            # endpoint could deliver a file, a transport with no URI form could not be
+            # enabled for friends at all, so this loop only ever met URI transports.
+            # Now one node can carry both, and without this line a friend holding a
+            # file transport would get a 500 on their ordinary subscription link —
+            # their whole access broken by a node they were merely also given.
+            continue
+
         rendered.append(
             transport.profile.render_client(
                 nodes.node_view(node_transport.node),
@@ -132,6 +159,98 @@ async def entries_for(session: AsyncSession, friend: Friend) -> list[ClientEntry
     # appearing and disappearing.
     rendered.sort(key=lambda entry: (entry.country_label, entry.display_label, entry.entry))
     return rendered
+
+
+async def config_files_for(session: AsyncSession, friend: Friend) -> list[ClientConfig]:
+    """Every configuration FILE this friend should currently receive — item 27.
+
+    The second representation, and `control`'s whole half of it: ask each transport
+    that declared it produces a file to produce one, then order and name the results.
+    Nothing here reads a file's contents, and nothing compares a transport name to a
+    literal — the arithmetic is the same as ``entries_for``'s, and adding a transport
+    still adds zero lines.
+
+    A friend on only URI transports gets an empty list, which is correct rather than an
+    error: they have nothing in this shape, and the endpoint says so with an empty
+    archive for the same reason ``render`` returns an empty document.
+    """
+    serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
+
+    result = await session.execute(
+        select(Credential).where(Credential.friend_id == friend.id)
+    )
+
+    produced: list[ClientConfig] = []
+    for credential in result.scalars().unique():
+        if credential.node_transport_id not in serving:
+            continue
+
+        node_transport = credential.node_transport
+        transport = profile(node_transport.transport_name)
+        if SubscriptionFormat.CLIENT_CONFIG_FILE not in transport.meta.subscription_formats:
+            # Not this shape. Skipped rather than refused: a friend with one URI
+            # transport and one file transport must get the file, not an error about
+            # the other one.
+            continue
+
+        produced.append(
+            transport.serialise(
+                SubscriptionFormat.CLIENT_CONFIG_FILE,
+                nodes.node_view(node_transport.node),
+                nodes.render_params(node_transport),
+                EdgeCredential(
+                    subject=credential.subject,
+                    secrets=json.loads(credential.secrets),
+                ),
+            )
+        )
+
+    # Same ordering rule, and the same reason, as ``entries_for``: a list that reorders
+    # itself between refreshes looks like nodes appearing and disappearing.
+    produced.sort(key=lambda config: (config.country_label, config.display_label, config.filename))
+    return produced
+
+
+def archive_of(configs: Sequence[ClientConfig]) -> bytes:
+    """Several config files as one deterministic ZIP.
+
+    One response body can hold one artefact, and a friend may have several nodes — so
+    the choice is an archive or a path per file. An archive keeps the public surface at
+    exactly one route, which is the property this endpoint is most careful about: every
+    logging rule, every cache header and the 404-for-everything behaviour are written
+    once for ``/sub/{token}`` and would have to be re-established for anything new.
+
+    Deterministic on purpose. ``ZipInfo`` defaults to the current clock, which would
+    make two refreshes of an unchanged fleet return different bytes — noise that hides
+    a real change, and a timestamp inside a file a friend stores. Fixed entry dates and
+    a sorted order instead.
+
+    Names come from the transports (``ClientConfig.filename``), because a name is part
+    of what makes a config importable. A collision between two nodes is resolved by
+    suffixing rather than by overwriting: a ZIP with two identical names is one a client
+    unpacks into a single file, and the friend would silently be missing an exit.
+    """
+    buffer = io.BytesIO()
+    used: set[str] = set()
+
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for config in configs:
+            name = config.safe_filename()
+            if name in used:
+                stem, _, suffix = name.rpartition(".")
+                # The node id, not a counter: a counter depends on iteration order, so
+                # the same fleet could name the same file differently between refreshes.
+                marker = config.node_id.replace("-", "")[:8]
+                name = f"{stem}-{marker}.{suffix}" if stem else f"{name}-{marker}"
+            used.add(name)
+
+            entry = zipfile.ZipInfo(filename=name, date_time=ARCHIVE_TIMESTAMP)
+            # 0o600: this file is a credential on the friend's disk, and an archive that
+            # unpacks world-readable on a shared machine is one more copy than intended.
+            entry.external_attr = 0o600 << 16
+            archive.writestr(entry, config.content)
+
+    return buffer.getvalue()
 
 
 async def render(session: AsyncSession, friend: Friend) -> str:

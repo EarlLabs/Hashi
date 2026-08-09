@@ -80,7 +80,17 @@ class TransportMetaResponse(BaseModel):
     family: str
     needs_tls: bool
     port_range: tuple[int, int]
+
+    # Whether it rides in the v1 base64 URI list. Kept as its own field because that is
+    # the question the existing panel column and every existing client of this endpoint
+    # were written against.
     subscription_expressible: bool
+
+    # Every shape a friend can receive this transport in — the transport's own
+    # declaration, sorted. Since item 27 "not a URI" no longer means "not deliverable",
+    # so a yes/no here would hide the thing an operator needs: whether this transport
+    # arrives inside the subscription link they already sent, or as a file to import.
+    subscription_formats: list[str]
 
     # The parameters an operator must supply, i.e. everything the transport's model
     # requires that is not generated for them. Lets the panel build a form without

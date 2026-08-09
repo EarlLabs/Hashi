@@ -23,6 +23,7 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 """
 
 import datetime
+import json
 import logging
 
 from sqlalchemy import select
@@ -85,7 +86,20 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             select(Credential).where(Credential.node_transport_id == node_transport.id)
         )
         credentials = [
-            EdgeCredential(subject=row.subject)
+            # The friend's own client-scoped material travels with the subject, and it
+            # has to. A VLESS server config needs only the subject, so this looked
+            # unnecessary until a WireGuard-family transport became friend-facing (item
+            # 27): its server config authorises each peer by the peer's PUBLIC key,
+            # which lives here. Without it, applying such a node raised KeyError deep
+            # in a renderer — and the first place that showed up was a revocation
+            # returning 500, because revocation re-pushes every node the friend was on.
+            #
+            # Handed over whole rather than filtered: which parts of its own client
+            # material belong in a server config is the transport's business, and
+            # picking them here would mean `control` recognising field names. That a
+            # friend's PRIVATE half never reaches a server config is asserted instead —
+            # see tests/control/test_second_subscription_format.py.
+            EdgeCredential(subject=row.subject, secrets=json.loads(row.secrets))
             for row in result.scalars().unique()
             # A revoked friend's rows are deleted rather than flagged, so this is a
             # belt-and-braces filter rather than the mechanism — see
@@ -97,9 +111,31 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         credentials.sort(key=lambda credential: credential.subject)
 
         transport = profile(node_transport.transport_name)
-        rendered[node_transport.transport_name] = transport.profile.render_server(
-            view, nodes.render_params(node_transport), credentials
-        )
+        try:
+            rendered[node_transport.transport_name] = transport.profile.render_server(
+                view, nodes.render_params(node_transport), credentials
+            )
+        except NodeOperationFailed:
+            raise
+        except Exception as exc:
+            # A renderer that refuses is a NODE-level failure, not a crash. Renderers
+            # refuse on purpose — the WireGuard family, for one, refuses to write two
+            # peers onto one tunnel address rather than emit a file where the second
+            # silently takes over the first's route — and the operator has to read that
+            # sentence, on the node's page, with the node left degraded.
+            #
+            # Before this, such a refusal escaped as a 500. The path it escaped through
+            # was the worst available: revocation re-pushes every node the friend was
+            # on, so an unrelated node's rendering problem made "remove this person's
+            # access" answer "internal error" — and the operator has no way to tell
+            # whether the removal happened.
+            #
+            # The message is the transport's own; nothing here interprets it. Note the
+            # rendered text is NOT included: it holds key material.
+            raise NodeOperationFailed(
+                f"{node_transport.transport_name} could not be rendered for this node "
+                f"— {type(exc).__name__}: {exc}"
+            ) from exc
 
     return rendered
 

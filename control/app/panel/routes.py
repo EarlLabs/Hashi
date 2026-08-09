@@ -98,10 +98,17 @@ async def index(request: Request, session: AsyncSession = Depends(session_depend
             "friends": await friends.list_friends(session),
             "transports": installed,
             "hops": await relay.list_hops(session),
-            # A hop's transport is one that cannot ride in a subscription — it is
-            # consumed by a node, not by a phone. Offering the deliverable ones here
-            # would invite the operator to build a tunnel out of a friend-facing
-            # protocol; offering only these makes the form say what it is for.
+            # A hop's transport is one whose configuration is consumed as a FILE by a
+            # node rather than as a link by a phone — which is what
+            # ``subscription_expressible`` being false has always meant here, and it
+            # still means it after item 27. Offering the URI ones would invite the
+            # operator to build a tunnel out of a friend-facing link; offering only
+            # these makes the form say what it is for.
+            #
+            # Note the overlap this now allows and which is correct: a transport can be
+            # in this list AND offerable to friends. AmneziaWG is exactly that — it runs
+            # the border-crossing hop, and since item 26 it also serialises a file a
+            # friend can import.
             "hop_transports": [
                 meta.name for meta in installed if not meta.subscription_expressible
             ],
@@ -146,9 +153,12 @@ async def node_detail(
                 meta.name
                 for meta in installed.values()
                 if meta.name not in {t.transport_name for t in node.transports}
-                # A transport that cannot be expressed in the subscription format is
-                # not offered at all, rather than offered and then refused.
-                and meta.subscription_expressible
+                # A transport a friend could not receive in ANY shape is not offered at
+                # all, rather than offered and then refused. Since item 27 that is a
+                # narrower set than "not a URI": a transport whose configuration is a
+                # file is deliverable now, and the panel has to stop hiding it or the
+                # second format exists and nobody can switch it on.
+                and meta.subscription_formats
             ),
         },
     )

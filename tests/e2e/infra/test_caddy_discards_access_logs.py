@@ -55,6 +55,10 @@ def test_caddy_writes_no_request_uri_to_its_log(exec_in, logs_of) -> None:
     before = len(logs_of("caddy"))
 
     request_inside_caddy(exec_in, f"https://{SITE}{PATH}")       # proxied — site logger
+    # The second delivery shape (item 27), through the proxy. A query string is a
+    # separate field in Caddy's log format from the path, so a rule that strips one can
+    # leave the other — and the token is still in the path either way.
+    request_inside_caddy(exec_in, f"https://{SITE}{PATH}?format=client-config-file")
     request_inside_caddy(exec_in, f"http://{SITE}{PATH}")        # 308 to https
     request_inside_caddy(exec_in, f"http://127.0.0.1{PATH}")     # no site matches
     request_inside_caddy(exec_in, f"https://127.0.0.1{PATH}",
