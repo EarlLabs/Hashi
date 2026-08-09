@@ -17,7 +17,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from control.app import auth, errors
+from control.app import auth, crypto, errors
 from control.app.api import delivery
 from control.app.api import routes as api_routes
 from control.app.crypto import SecretBox, session_secret
@@ -108,6 +108,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.add_exception_handler(errors.DomainError, errors.domain_error_handler)
+    # Registered BEFORE the catch-all so a wrong HASHI_SECRET_KEY is a sentence the
+    # operator can act on rather than an opaque 500. See errors.SecretsUnreadable: the
+    # moment this exists for is a restore onto a new host with the key mistyped.
+    app.add_exception_handler(crypto.SecretUnreadable, errors.secret_unreadable_handler)
     app.add_exception_handler(Exception, errors.unhandled_error_handler)
     app.add_exception_handler(auth.RedirectToLogin, auth.redirect_to_login_handler)
 

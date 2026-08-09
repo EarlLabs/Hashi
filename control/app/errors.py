@@ -62,6 +62,49 @@ class NodeOperationFailed(DomainError):
     code = "node_operation_failed"
 
 
+class SecretsUnreadable(DomainError):
+    """A stored secret cannot be decrypted with the configured key.
+
+    Its own type, and the message names ``HASHI_SECRET_KEY``, because of one specific
+    moment: the operator has just restored a database onto a new host — the very
+    situation backups exist for — and got the key wrong. Everything else about the
+    restore looks perfect. Their friends and nodes are all listed.
+
+    Before this existed the failure was an opaque 500, and the only reading available to
+    them was "the restore lost my data". They would then reasonably go looking for
+    another dump, or start over, when what they needed was one line in an env file. That
+    is the difference between a recoverable afternoon and an unrecoverable one, and it is
+    entirely down to what this response says.
+
+    Note what it does NOT say: not the ciphertext, not which row, not which node. A
+    stranger who reaches this endpoint learns only that a key does not match.
+    """
+
+    # 409 rather than 500: nothing broke. The request was answerable and the answer is
+    # that this application is configured with the wrong key for this data.
+    status_code = status.HTTP_409_CONFLICT
+    code = "secrets_unreadable"
+
+
+async def secret_unreadable_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Convert the crypto layer's own exception into the readable domain error.
+
+    A handler rather than try/except at each call site, because the raise happens inside
+    SQLAlchemy's type decorator — every read of an encrypted column, from any service, on
+    any route. There is no single call site to wrap, and wrapping every one of them is a
+    list that would go out of date on the next feature.
+    """
+    return await domain_error_handler(
+        request,
+        SecretsUnreadable(
+            "a stored secret could not be decrypted, so this operation was refused. "
+            "HASHI_SECRET_KEY does not match the one this data was encrypted with — "
+            "which is what a database restored with the wrong key looks like. The data "
+            "is intact; the key is wrong. Nothing has been changed."
+        ),
+    )
+
+
 async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
     """Render a domain error as the typed envelope."""
     # Logged at info with the CODE only — deliberately not the request path, which

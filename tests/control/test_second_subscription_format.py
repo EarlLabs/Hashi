@@ -348,3 +348,58 @@ async def test_a_renderer_that_refuses_degrades_the_node_instead_of_raising_500(
     # The transport's own explanation survives, and no key material rides along.
     assert "tunnel address" in message.lower()
     assert "PrivateKey" not in message
+
+
+# --- a database restored with the wrong key (item 32's control half) ----------
+
+async def test_an_unreadable_secret_is_a_sentence_the_operator_can_act_on(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The moment this exists for: a restore onto a new host with the key mistyped.
+
+    Everything about such a restore looks perfect — every friend and node is listed — and
+    the only thing wrong is one line in an env file. As an opaque 500 the available
+    reading was "the restore lost my data", and the operator would go looking for another
+    dump instead of fixing the key.
+
+    Provoked by making the crypto layer refuse, which is exactly what a wrong key does:
+    the raise happens inside SQLAlchemy's type decorator, on every read of an encrypted
+    column, so there is no single call site to wrap and the handler is the right shape.
+    """
+    from control.app import crypto
+    from control.app.models import base as models_base
+
+    node_id = await serving_node(
+        client, session, name="unreadable", address="192.0.2.28",
+        transport_name=URI_TRANSPORTS[0], params=reality_params,
+    )
+
+    class WrongKeyBox:
+        def decrypt(self, ciphertext: str) -> str:
+            raise crypto.SecretUnreadable(
+                "a stored secret could not be decrypted — HASHI_SECRET_KEY does not "
+                "match the one this row was written with"
+            )
+
+        def encrypt(self, plaintext: str) -> str:
+            return plaintext
+
+        def digest(self, token: str) -> str:
+            return token
+
+    monkeypatch.setattr(models_base, "secret_box", WrongKeyBox)
+
+    response = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"]["code"] == "secrets_unreadable"
+    message = body["error"]["message"]
+    # The three things the operator needs: which setting, that the data is fine, and that
+    # nothing was changed by the attempt.
+    assert "HASHI_SECRET_KEY" in message
+    assert "intact" in message
+    assert "Nothing has been changed" in message
+    # And nothing about the data itself.
+    for leak in ("BEGIN", "gAAAA", "192.0.2.28"):
+        assert leak not in message
