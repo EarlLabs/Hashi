@@ -52,13 +52,18 @@ services:
       start_period: 15s
 
   caddy:
-    image: caddy:2.8.4-alpine
+    # Built, not pulled, so the Caddyfile is IN the image: a bind mount of
+    # ./caddy/Caddyfile is resolved on the daemon's filesystem, which is not
+    # this checkout whenever the daemon is remote (the fleet's dind engine).
+    # The upstream tag is still pinned — see deploy/docker/caddy.Dockerfile.
+    build:
+      context: ..
+      dockerfile: deploy/docker/caddy.Dockerfile
     restart: unless-stopped
     environment:
       CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?set CADDY_ACME_EMAIL in .env}
       HASHI_PUBLIC_HOST: ${HASHI_PUBLIC_HOST:?set HASHI_PUBLIC_HOST in .env}
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

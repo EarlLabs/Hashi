@@ -123,9 +123,21 @@ ps:
 E2E_PROJECT  := hashi-e2e
 E2E_API_PORT ?= 54200
 E2E_DB_PORT  ?= 54232
+# Loopback by default, exactly like the dev stack. Override ONLY when the engine
+# is not the machine you are sitting at — the fleet's dind engine, where
+# 127.0.0.1 is dind's own loopback and no test runner can reach it:
+#   make e2e-up E2E_BIND_ADDR=0.0.0.0
+# dind is an isolated engine on an internal network, so 0.0.0.0 there is not the
+# same promise as 0.0.0.0 on a laptop. See deploy/docker-compose.dev.yml.
+E2E_BIND_ADDR ?= 127.0.0.1
+# docker-compose.e2e.yml is what keeps a test run away from the owner's real
+# delivery hostname — without it Caddy asks a public CA for a certificate for
+# the production domain every time someone runs e2e. See that file's header.
 COMPOSE_E2E  := docker compose --env-file .env -p $(E2E_PROJECT) \
-                -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml
-E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT)
+                -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml \
+                -f deploy/docker-compose.e2e.yml
+E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
+                DEV_BIND_ADDR=$(E2E_BIND_ADDR)
 
 e2e-up: env
 	$(E2E_PORTS) $(COMPOSE_E2E) up -d --build

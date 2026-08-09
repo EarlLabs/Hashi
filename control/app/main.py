@@ -18,9 +18,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. Pass ``settings`` in tests; production reads env."""
     settings = settings or Settings()
 
-    # docs_url/redoc_url are off: the panel is the highest-value target in the
-    # system, and a public schema of its API is free reconnaissance.
-    app = FastAPI(title="hashi control plane", docs_url=None, redoc_url=None)
+    # The panel is the highest-value target in the system, and a public schema of
+    # its API is free reconnaissance. openapi_url is the load-bearing one of the
+    # three: turning off docs_url/redoc_url only removes the two HTML viewers,
+    # while /openapi.json keeps serving the machine-readable schema those viewers
+    # were reading — every route, every parameter, every model.
+    app = FastAPI(
+        title="hashi control plane", docs_url=None, redoc_url=None, openapi_url=None
+    )
     app.state.settings = settings
 
     @app.get("/healthz")

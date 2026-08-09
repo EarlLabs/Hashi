@@ -1,0 +1,18 @@
+agent: "alfred"
+role: "architect"
+state: "review"
+phase: "develop"
+progress: >-
+  14 e2e scenarios written and green from a cold boot (control 6, infra 6,
+  edge 1, plus the proxy-serves guard). Five defects found and fixed:
+  /openapi.json served the schema; Caddy's bind mount broke the stack on any
+  non-local engine; the control image ran a copied tree instead of the
+  installed package (and the package list would have dropped a new transport);
+  the e2e stack asked a public CA for the production hostname; the published
+  port was unreachable from a remote engine. Static suites 17 passed.
+blockers: >-
+  Environment, not code: this container has no `make` and had no Python 3.14.
+  Python 3.14 was installed; the Makefile recipes were run by invoking their
+  commands directly. Recorded in .e2e/profile.yml note 3 — a kit-template gap
+  in deploy/warden/Dockerfile, not patched by hand here.
+updated_at: "2026-08-08T23:40:00+00:00"
