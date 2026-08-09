@@ -1,0 +1,1 @@
+vless://aaaaaaaa-0000-4000-8000-000000000001@192.0.2.10:8444?encryption=none&security=tls&type=ws&sni=front.example.com&host=front.example.com&path=%2FTESTwsPATHsecret0123456789

@@ -14,6 +14,11 @@ secrets/
 # e2e artifacts are per-run output, never history.
 .e2e/artifacts/
 
+# Vendored upstream data-plane binaries (scripts/fetch-upstream-checkers.sh).
+# A third party's compiled binary does not belong in our history; the script that
+# fetches it, pinned and checksummed, does.
+.tools/
+
 # e2e secrets: generated (throwaway) and live (real, spend-capped) — both
 # real, never .example. See docs/e2e/README.md §8 and CLAUDE.md.
 .env.e2e.generated

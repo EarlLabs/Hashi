@@ -1,0 +1,1 @@
+vless://aaaaaaaa-0000-4000-8000-000000000001@192.0.2.10:8443?encryption=none&flow=xtls-rprx-vision&security=reality&type=tcp&sni=www.example.com&fp=chrome&pbk=0Rf8h2v0aFVQVGxLZ0VNQmxwQVVCMFJmOGgydjBhRlY&sid=0123abcd

@@ -12,11 +12,31 @@ dependencies = [
     "uvicorn",
     "pydantic-settings",
     "jinja2",
+    # Persistence. The control database is the single source of truth for node
+    # credentials and friend identities (core invariants §3), so it arrives as a
+    # spine rather than as a cache: async SQLAlchemy over asyncpg, and Alembic
+    # because `create_all` on a changed model silently diverges from a live
+    # database and the failure mode is "every friend is locked out" (§2).
+    "sqlalchemy[asyncio]",
+    "asyncpg",
+    "alembic",
+    # Encryption of node and friend secrets at rest (§3). Fernet from
+    # `cryptography` rather than anything hand-rolled, and rather than pgcrypto:
+    # keeping it in the application means the database file, a dump and a stolen
+    # backup are all useless without HASHI_SECRET_KEY, which never enters the
+    # database's own process.
+    "cryptography",
+    # SSH is the only channel to a node, and control always dials out (§1). No
+    # agent, nothing listening on the node for us.
+    "asyncssh",
+    # Signs the operator's session cookie. Starlette's SessionMiddleware requires
+    # it; there is no unsigned mode worth having.
+    "itsdangerous",
+    # Form parsing, for the panel's login and its HTMX POSTs. FastAPI needs it
+    # present to accept a `Form(...)` parameter at all.
+    "python-multipart",
 ]
 
-# Persistence dependencies (sqlalchemy, asyncpg, alembic) are deliberately absent
-# until the control plane actually has a database. Adding a dependency is an
-# architect decision — see .claude/projects/00-core-invariants.md §5.
 [project.optional-dependencies]
 dev = [
     "pytest",
@@ -35,6 +55,21 @@ dev = [
 # tests/e2e/edge/test_shipped_image_discovers_transports.py.
 [tool.setuptools.packages.find]
 include = ["control*", "edge*"]
+
+# Templates are CODE here, not documentation: a transport's server.j2 IS its
+# renderer's output, and the panel's HTML is the admin interface. Wheels ship
+# only .py files unless told otherwise, so without this block the image builds
+# clean, boots clean, and then raises TemplateNotFound the first time an operator
+# renders a node config — at which point the only transport that "works" is the
+# one nobody used yet. Same failure class as the package list above, one level
+# down. Pinned by tests/e2e/edge/test_shipped_image_discovers_transports.py.
+#
+# Keyed on "*" — every package — and not on each transport by name, for the same
+# reason the package list above is a glob: naming them here would mean a new
+# protocol is one directory PLUS a line in this file, and forgetting the line
+# reproduces exactly the failure this block prevents.
+[tool.setuptools.package-data]
+"*" = ["*.j2", "*.html", "*.mako", "*.ini"]
 
 [tool.ruff]
 target-version = "py314"

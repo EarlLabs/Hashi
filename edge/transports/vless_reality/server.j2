@@ -1,0 +1,64 @@
+{#
+  Xray server configuration for VLESS + Reality + XTLS-Vision over TCP.
+
+  WHAT: the complete config file Xray reads on the node. Not a fragment.
+  WHY:  two things in here are load-bearing beyond "it works":
+          - `log.access: none` and `loglevel: warning`. Xray's access log records
+            who connected to what, which is the one record the charter says must
+            not exist anywhere, at any level. "none" is the string Xray wants;
+            omitting the key gives you stdout, and the container log is on disk.
+          - `sniffing.enabled: false`. Sniffing reads the destination hostname out
+            of the client's traffic so it can be logged and routed on. We do not
+            route on it and must not learn it — enabling it would reintroduce DNS
+            visibility through the back door.
+  HOW:  every interpolation goes through `tojson`, which is what makes operator
+        text safe in a JSON document: it quotes and escapes. Never write a bare
+        {{ value }} inside quotes in this file.
+#}
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "inbounds": [
+    {
+      "tag": "in",
+      "listen": "0.0.0.0",
+      "port": {{ params.port | tojson }},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+{% for client in clients %}
+          {
+            "id": {{ client.subject | tojson }},
+            "flow": "xtls-rprx-vision",
+            "email": {{ client.label | tojson }}
+          }{{ "," if not loop.last }}
+{% endfor %}
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": {{ (params.decoy_host ~ ":" ~ params.decoy_port) | tojson }},
+          "xver": 0,
+          "serverNames": {{ params.server_names | list | tojson }},
+          "privateKey": {{ params.private_key | tojson }},
+          "shortIds": {{ [params.short_id] | tojson }}
+        }
+      },
+      "sniffing": {
+        "enabled": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ]
+}

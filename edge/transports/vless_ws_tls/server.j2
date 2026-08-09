@@ -1,0 +1,65 @@
+{#
+  Xray server configuration for VLESS over WebSocket behind TLS.
+
+  Same two non-obvious settings as the first transport, for the same reasons:
+  `log.access: none` (Xray's access log is a record of who connected to what, and
+  that record must not exist) and `sniffing.enabled: false` (sniffing extracts the
+  destination hostname from a client's traffic — we neither route on it nor want
+  to learn it).
+
+  One more that is specific here: `alpn` is `http/1.1` only. WebSocket does not
+  run over HTTP/2 in this setup, and offering h2 in the handshake advertises a
+  capability the endpoint does not actually serve — a mismatch an active prober
+  can measure.
+#}
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "inbounds": [
+    {
+      "tag": "in",
+      "listen": "0.0.0.0",
+      "port": {{ params.port | tojson }},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+{% for client in clients %}
+          {
+            "id": {{ client.subject | tojson }},
+            "email": {{ client.label | tojson }}
+          }{{ "," if not loop.last }}
+{% endfor %}
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {
+          "path": {{ ws_path | tojson }}
+        },
+        "tlsSettings": {
+          "serverName": {{ params.server_name | tojson }},
+          "alpn": ["http/1.1"],
+          "certificates": [
+            {
+              "certificateFile": {{ params.certificate_path | tojson }},
+              "keyFile": {{ params.certificate_key_path | tojson }}
+            }
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "inbounds": [
+    {
+      "tag": "in",
+      "listen": "0.0.0.0",
+      "port": 8444,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "aaaaaaaa-0000-4000-8000-000000000001",
+            "email": "c-aaaaaaaa"
+          },
+          {
+            "id": "bbbbbbbb-0000-4000-8000-000000000002",
+            "email": "c-bbbbbbbb"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {
+          "path": "/TESTwsPATHsecret0123456789"
+        },
+        "tlsSettings": {
+          "serverName": "front.example.com",
+          "alpn": ["http/1.1"],
+          "certificates": [
+            {
+              "certificateFile": "/etc/hashi/certs/fullchain.pem",
+              "keyFile": "/etc/hashi/certs/privkey.pem"
+            }
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ]
+}

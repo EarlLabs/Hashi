@@ -1,0 +1,50 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "inbounds": [
+    {
+      "tag": "in",
+      "listen": "0.0.0.0",
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "aaaaaaaa-0000-4000-8000-000000000001",
+            "flow": "xtls-rprx-vision",
+            "email": "c-aaaaaaaa"
+          },
+          {
+            "id": "bbbbbbbb-0000-4000-8000-000000000002",
+            "flow": "xtls-rprx-vision",
+            "email": "c-bbbbbbbb"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "www.example.com:443",
+          "xver": 0,
+          "serverNames": ["www.example.com"],
+          "privateKey": "wEJ0aXpBQlFtNVFDbEZLTFVqRXFRUlRLZXJhcXZJZ0k",
+          "shortIds": ["0123abcd"]
+        }
+      },
+      "sniffing": {
+        "enabled": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ]
+}
