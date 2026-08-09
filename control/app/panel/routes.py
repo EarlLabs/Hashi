@@ -109,13 +109,21 @@ async def index(request: Request, session: AsyncSession = Depends(session_depend
             # in this list AND offerable to friends. AmneziaWG is exactly that — it runs
             # the border-crossing hop, and since item 26 it also serialises a file a
             # friend can import.
+            #
+            # Since item 28 the filter also drops transports that declare they cannot
+            # carry a hop at all. Both conditions are needed and neither implies the
+            # other: plain WireGuard is a config file too, so the first alone would have
+            # offered it here — and the renderer would refuse it, after the operator had
+            # filled in a form.
             "hop_transports": [
-                meta.name for meta in installed if not meta.subscription_expressible
+                meta.name
+                for meta in installed
+                if not meta.subscription_expressible and meta.hop_capable
             ],
             "hop_params": {
                 meta.name: transports.operator_params(meta.name)
                 for meta in installed
-                if not meta.subscription_expressible
+                if not meta.subscription_expressible and meta.hop_capable
             },
         },
     )

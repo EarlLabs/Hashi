@@ -55,6 +55,8 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
                 # Sorted so the panel's column and any script reading this endpoint see
                 # a stable order rather than a set's iteration order.
                 subscription_formats=sorted(str(f) for f in meta.subscription_formats),
+                blocked_by_inspection=meta.blocked_by_inspection,
+                hop_capable=meta.hop_capable,
                 # Required fields the operator must fill in: everything the model
                 # requires minus everything we mint for them. Shared with the panel's
                 # rotation form so the two screens cannot drift apart.

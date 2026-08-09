@@ -176,7 +176,7 @@
 
 <h2>Transports this image ships</h2>
 <table>
-  <tr><th>name</th><th>family</th><th>ports</th><th>how a friend receives it</th></tr>
+  <tr><th>name</th><th>family</th><th>ports</th><th>how a friend receives it</th><th>on a filtering network</th></tr>
   {% for transport in transports %}
   <tr>
     <td>{{ transport.name }}</td>
@@ -193,6 +193,22 @@
         {{ transport.subscription_formats | map("string") | sort | join(", ") }}
       {% else %}
         <span class="bad">nothing a friend can consume — hop use only</span>
+      {% endif %}
+    </td>
+    {# Backlog item 28's constraint, on the screen it is about. A transport that a
+       filtering network identifies must never read here as a working exit — otherwise
+       the owner offers a friend in Russia a protocol that cannot come up, and the friend
+       reports it as "hashi is broken". The transport declares this about itself; this
+       column does not decide it, and names no country, because which networks filter is
+       the charter's subject and not this file's. #}
+    <td>
+      {% if transport.blocked_by_inspection %}
+        <span class="bad">identified and blocked — do not offer this as a working exit</span>
+      {% else %}
+        <span class="muted">obfuscated or TLS-shaped</span>
+      {% endif %}
+      {% if not transport.hop_capable %}
+        <div class="muted">never on an entry→leaf hop</div>
       {% endif %}
     </td>
   </tr>

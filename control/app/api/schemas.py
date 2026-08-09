@@ -92,6 +92,16 @@ class TransportMetaResponse(BaseModel):
     # arrives inside the subscription link they already sent, or as a file to import.
     subscription_formats: list[str]
 
+    # Whether a filtering network identifies this protocol on the wire. The transport's
+    # own declaration; `control` passes it through and never decides it. Surfaced so the
+    # panel can refuse to present such a transport to a friend as a working exit —
+    # backlog item 28's constraint, whose declaration half lives in `edge`.
+    blocked_by_inspection: bool
+
+    # Whether it may carry an entry-to-leaf hop. Listed for the same reason: the hop form
+    # should not offer an option the renderer will refuse.
+    hop_capable: bool
+
     # The parameters an operator must supply, i.e. everything the transport's model
     # requires that is not generated for them. Lets the panel build a form without
     # knowing any protocol.
