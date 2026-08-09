@@ -22,16 +22,6 @@ from edge.registry import ConfigFormat, SubscriptionFormat, discover, profile
 GOLDEN = pathlib.Path(__file__).parent / "golden"
 INSTALLED = sorted(discover())
 
-PARAMS_FIXTURE = {
-    "vless-reality": "reality_params",
-    "vless-ws-tls": "ws_params",
-    "amneziawg": "awg_params",
-}
-CREDENTIALS_FIXTURE = {
-    "vless-reality": "credentials",
-    "vless-ws-tls": "credentials",
-    "amneziawg": "awg_credentials",
-}
 
 # Only transports with a URI form have a client entry to pin. The others refuse by
 # design — see tests/edge/test_transport_contract.py.
@@ -49,15 +39,19 @@ CONFIG_FILE_TRANSPORTS = sorted(
 
 # The golden file's extension follows the config FORMAT, so an editor opening one gets
 # the right syntax highlighting and a reviewer is not reading an INI file called .json.
-EXTENSION = {ConfigFormat.XRAY_JSON: "json", ConfigFormat.WG_QUICK: "conf"}
+EXTENSION = {
+    ConfigFormat.XRAY_JSON: "json",
+    ConfigFormat.WG_QUICK: "conf",
+    ConfigFormat.WG_QUICK_PLAIN: "conf",
+}
 
 
 @pytest.mark.parametrize("name", INSTALLED)
 def test_server_config_matches_its_golden_file(name: str, node, request) -> None:
     """The node's whole config file, byte for byte."""
     transport = profile(name)
-    validated = transport.validate(request.getfixturevalue(PARAMS_FIXTURE[name]))
-    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    validated = transport.validate(request.getfixturevalue("transport_fixture")(name, "params"))
+    clients = request.getfixturevalue("transport_fixture")(name, "credentials")
     rendered = transport.profile.render_server(node, validated, clients)
 
     path = GOLDEN / f"{name}-server.{EXTENSION[transport.meta.config_format]}"
@@ -83,8 +77,8 @@ def test_client_entry_matches_its_golden_file(name: str, node, request) -> None:
     the charter says that must never require them to re-import anything.
     """
     transport = profile(name)
-    validated = transport.validate(request.getfixturevalue(PARAMS_FIXTURE[name]))
-    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    validated = transport.validate(request.getfixturevalue("transport_fixture")(name, "params"))
+    clients = request.getfixturevalue("transport_fixture")(name, "credentials")
     entry = transport.profile.render_client(node, validated, clients[0])
     rendered = f"{entry.entry}\n"
 
@@ -110,8 +104,8 @@ def test_client_config_file_matches_its_golden_file(name: str, node, request) ->
     a template that dropped one would produce a file that parses and never connects.
     """
     transport = profile(name)
-    validated = transport.validate(request.getfixturevalue(PARAMS_FIXTURE[name]))
-    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    validated = transport.validate(request.getfixturevalue("transport_fixture")(name, "params"))
+    clients = request.getfixturevalue("transport_fixture")(name, "credentials")
     rendered = transport.profile.render_client_config(node, validated, clients[0]).content
 
     path = GOLDEN / f"{name}-client.conf"

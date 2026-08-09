@@ -34,11 +34,6 @@ from edge.registry import (
 
 INSTALLED = sorted(discover())
 
-PARAMS_FIXTURE = {
-    "vless-reality": "reality_params",
-    "vless-ws-tls": "ws_params",
-    "amneziawg": "awg_params",
-}
 
 # Transports that CAN appear in a v1 subscription. The client-entry assertions apply
 # only to these — a transport declaring itself inexpressible is required to refuse, and
@@ -47,11 +42,6 @@ DELIVERABLE = sorted(name for name, meta in discover().items() if meta.subscript
 
 # The credentials fixture differs per transport family: the WireGuard family needs a
 # peer keypair in ``Credential.secrets``, which VLESS has no use for.
-CREDENTIALS_FIXTURE = {
-    "vless-reality": "credentials",
-    "vless-ws-tls": "credentials",
-    "amneziawg": "awg_credentials",
-}
 
 
 # Every transport shipped today must be discoverable. An empty registry used to be
@@ -146,7 +136,7 @@ def test_unknown_transport_raises_rather_than_returning_none(name: str = "no-suc
 
 def params_for(name: str, request: pytest.FixtureRequest) -> dict[str, object]:
     """The frozen parameter set for one transport, from conftest."""
-    return request.getfixturevalue(PARAMS_FIXTURE[name])
+    return request.getfixturevalue("transport_fixture")(name, "params")
 
 
 def clients_for(name: str, request: pytest.FixtureRequest) -> list:
@@ -155,7 +145,7 @@ def clients_for(name: str, request: pytest.FixtureRequest) -> list:
     The WireGuard family needs a peer keypair in ``Credential.secrets``; VLESS has no
     use for one. Both are just ``Credential`` as far as the contract is concerned.
     """
-    return request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    return request.getfixturevalue("transport_fixture")(name, "credentials")
 
 
 def render(name: str, node, request, clients=None) -> str:
@@ -183,7 +173,8 @@ def authorised_subjects(name: str, config: str) -> set[str]:
             for inbound in document["inbounds"]
             for client in inbound["settings"]["clients"]
         }
-    if meta.config_format is ConfigFormat.WG_QUICK:
+    # Both WireGuard-family formats are the same INI shape: one PublicKey per peer.
+    if meta.config_format in (ConfigFormat.WG_QUICK, ConfigFormat.WG_QUICK_PLAIN):
         return {
             line.split("=", 1)[1].strip()
             for line in config.splitlines()
@@ -571,3 +562,47 @@ def test_a_filename_with_a_path_component_is_refused() -> None:
                 content="x", filename=bad, media_type="text/plain",
                 display_label="l", country_label="c", node_id="n",
             ).safe_filename()
+
+
+# --- the two constraints the charter puts on a transport, as contract fields ---
+# (backlog item 28)
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_a_transport_the_censor_identifies_is_never_allowed_on_a_hop(name: str) -> None:
+    """The one implication between the two new declarations, asserted rather than trusted.
+
+    ``blocked_by_inspection`` and ``hop_capable`` are independent fields, and for one
+    combination that independence is wrong: a protocol a filtering network identifies
+    must never be allowed to carry the entry-to-leaf hop, because that hop crosses
+    exactly such a network by definition. A package declaring both True would compile,
+    read plausibly, and hand the fleet a topology that cannot come up.
+
+    Asserted over the registry rather than about one transport, so it holds for the next
+    package too.
+    """
+    meta = discover()[name]
+    if meta.blocked_by_inspection:
+        assert not meta.hop_capable, (
+            f"{name} declares that a filtering network identifies it AND that it may "
+            "carry an entry-to-leaf hop. That hop crosses such a network, so this "
+            "combination configures both nodes correctly and never forms a tunnel."
+        )
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_each_config_format_has_a_data_plane_that_can_run_it(name: str) -> None:
+    """A rendered config nothing is pinned to run is a node that boots without a daemon.
+
+    The pin lives with the transport's FORMAT (``edge/bootstrap/node_stack.py``), so a
+    transport declaring a format with no data plane is a KeyError at apply time — on the
+    node, after the operator was told the transport was enabled. That the pinned tags
+    actually EXIST is a separate question, asked against a real registry in
+    ``tests/e2e/edge/test_every_image_pin_resolves.py``.
+    """
+    from edge.bootstrap.node_stack import DATA_PLANES
+
+    meta = discover()[name]
+    assert meta.config_format in DATA_PLANES, (
+        f"{name} renders {meta.config_format!r} and nothing is pinned to run it"
+    )
+    assert DATA_PLANES[meta.config_format].image

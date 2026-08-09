@@ -25,15 +25,18 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened twice since, both times deliberately and both times
-      recorded where they happened.** ``ConfigFormat`` came with the WireGuard
-      family (see its own docstring). ``SubscriptionFormat`` came with backlog item
-      26, authorised in the backlog's own text for that item and nowhere else: a
-      transport now declares the SET of subscription shapes it serialises into
-      rather than a yes/no about the v1 URI list, and serialises each of them
-      itself. Neither widening was a branch on a protocol — both replaced one with
-      a vocabulary — but neither was free, and a reader deserves to know the
-      contract has moved and why rather than to discover it from a diff.
+      **It has been widened three times since, each deliberately, each recorded
+      where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
+      own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
+      now declares the SET of subscription shapes it serialises into rather than a
+      yes/no about the v1 URI list, and serialises each of them itself.
+      ``hop_capable`` and ``blocked_by_inspection`` came with backlog item 28, whose
+      text states both charter constraints as "the transport must declare this
+      machine-readably" — and a declaration has nowhere else to live.
+
+      None of the three was a branch on a protocol; each replaced one with a
+      vocabulary or a property. None was free either, and a reader deserves to know
+      the contract has moved and why rather than to discover it from a diff.
 """
 
 import importlib
@@ -116,8 +119,22 @@ class ConfigFormat(StrEnum):
     # An Xray-core JSON config, validated by `xray run -test`.
     XRAY_JSON = "xray-json"
 
-    # A wg-quick INI config, validated by `awg-quick strip` from amneziawg-tools.
+    # An AmneziaWG INI config, validated by `awg-quick strip` from amneziawg-tools
+    # and run by the amneziawg data plane. Named ``wg-quick`` because that is the file
+    # format it borrows; the checker and the daemon are AmneziaWG's own.
     WG_QUICK = "wg-quick"
+
+    # A PLAIN WireGuard INI config, validated by `wg-quick strip` from wireguard-tools
+    # and run by a plain wireguard-go data plane.
+    #
+    # A second format rather than a reuse of the one above, and the difference is not
+    # pedantry. The two are checked by different binaries and run by different daemons,
+    # and a plain config handed to the AmneziaWG daemon would come up — as a working
+    # tunnel, running someone else's superset, validated by the wrong tool. That is the
+    # kind of "it works" that is discovered during an outage. One format per
+    # (checker, daemon) pair keeps both dispatches honest, which is the whole reason
+    # this vocabulary is keyed on format instead of on protocol.
+    WG_QUICK_PLAIN = "wg-quick-plain"
 
 
 class SubscriptionFormat(StrEnum):
@@ -248,6 +265,29 @@ class TransportMeta:
     subscription_formats: frozenset[SubscriptionFormat] = frozenset(
         {SubscriptionFormat.V1_URI_LIST}
     )
+
+    # Whether this transport may carry an entry-to-leaf hop. Declared rather than
+    # inferred, and it is a charter constraint rather than a capability: the hop crosses
+    # the Russian border by definition, so a transport that is protocol-blocked there
+    # would take the whole topology down while looking perfectly configured at both
+    # ends. Enforced in ``edge/relay.py`` before either end of a hop is written.
+    #
+    # Defaults to True because the constraint is the exception: most transports here are
+    # obfuscated or TLS-shaped, and a new package should have to say "not me" out loud
+    # rather than opt in to being usable.
+    hop_capable: bool = True
+
+    # Whether this protocol is known to be identified and blocked by networks that
+    # inspect traffic — a fixed, trivially fingerprinted wire format with no camouflage.
+    #
+    # No country is named here, deliberately: ``CLAUDE.md`` forbids hardcoding one in
+    # code, and the property is not "where" but "this protocol looks like itself on the
+    # wire". Which networks do the inspecting is the charter's subject, not this file's.
+    #
+    # It exists so the panel can refuse to present such a transport to a friend as a
+    # working exit. Shipping it anyway is deliberate — the charter names it first-class
+    # in phase 1, because it is the right choice on a network that is not filtering.
+    blocked_by_inspection: bool = False
 
     @property
     def subscription_expressible(self) -> bool:

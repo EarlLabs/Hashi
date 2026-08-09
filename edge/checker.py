@@ -64,6 +64,24 @@ def awg_quick_binary() -> str | None:
     return shutil.which("awg-quick")
 
 
+def wg_quick_binary() -> str | None:
+    """The PLAIN WireGuard config checker, or ``None``.
+
+    A separate locator from ``awg_quick_binary`` rather than a fallback to it, and the
+    difference is the point: ``awg-quick`` accepts a plain config too, so falling back
+    would report "validated" for a file that was checked by the wrong tool — and the
+    tool that will actually load it on the node is this one. Same resolution order and
+    same reasoning as the others.
+    """
+    override = os.environ.get("HASHI_WG_QUICK_BIN")
+    if override:
+        return override if pathlib.Path(override).is_file() else None
+    vendored = TOOLS / "wg-quick"
+    if vendored.is_file():
+        return str(vendored)
+    return shutil.which("wg-quick")
+
+
 @dataclass(frozen=True)
 class CheckResult:
     """The outcome of asking the daemon whether it would accept a config."""
@@ -95,7 +113,14 @@ def validate(
         case ConfigFormat.XRAY_JSON:
             return _validate_xray(config, timeout=timeout)
         case ConfigFormat.WG_QUICK:
-            return _validate_wg_quick(config, timeout=timeout)
+            return _validate_wg_quick(
+                config, binary=awg_quick_binary(), tool="awg-quick", timeout=timeout
+            )
+        case ConfigFormat.WG_QUICK_PLAIN:
+            # The PLAIN tool, never the obfuscated one. See ``wg_quick_binary``.
+            return _validate_wg_quick(
+                config, binary=wg_quick_binary(), tool="wg-quick", timeout=timeout
+            )
         case _:
             # Never silently "fine": an unknown format must not read as validated.
             return CheckResult(
@@ -105,23 +130,28 @@ def validate(
             )
 
 
-def _validate_wg_quick(config: str, *, timeout: int = 60) -> CheckResult:
-    """Validate a wg-quick config with ``awg-quick strip``.
+def _validate_wg_quick(
+    config: str, *, binary: str | None, tool: str, timeout: int = 60
+) -> CheckResult:
+    """Validate a wg-quick-family config with ``<tool> strip``.
+
+    The BINARY is passed in rather than looked up here, because two formats share this
+    code and must not share a checker: AmneziaWG's tool accepts a plain config, so using
+    it for both would report "validated" for a file the node's own daemon never saw.
 
     Note the sharp limit, the same one the Xray checker has: this parses, it does not
     bring an interface up. It cannot tell you the peer is reachable, and it says nothing
-    at all about whether the obfuscation defeats inspection on a real network.
+    at all about whether the traffic survives inspection on a real network.
     """
-    binary = awg_quick_binary()
     if binary is None:
         return CheckResult(
-            available=False, ok=False, output="no awg-quick binary available"
+            available=False, ok=False, output=f"no {tool} binary available"
         )
 
     import tempfile
 
     with tempfile.TemporaryDirectory() as directory:
-        # awg-quick derives the interface name from the FILENAME, and rejects a name it
+        # The tool derives the interface name from the FILENAME, and rejects a name it
         # considers invalid before it ever looks at the contents.
         path = pathlib.Path(directory) / "awg0.conf"
         path.write_text(config)
@@ -134,7 +164,7 @@ def _validate_wg_quick(config: str, *, timeout: int = 60) -> CheckResult:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            return CheckResult(available=True, ok=False, output="awg-quick strip timed out")
+            return CheckResult(available=True, ok=False, output=f"{tool} strip timed out")
 
     return CheckResult(
         available=True,

@@ -41,7 +41,7 @@ def node() -> NodeView:
 
 
 @pytest.fixture
-def credentials() -> list[Credential]:
+def vless_reality_credentials() -> list[Credential]:
     """Two friends, so a rendered client list is provably a list and ordered."""
     return [
         Credential(subject="aaaaaaaa-0000-4000-8000-000000000001"),
@@ -50,7 +50,7 @@ def credentials() -> list[Credential]:
 
 
 @pytest.fixture
-def reality_params() -> dict[str, object]:
+def vless_reality_params() -> dict[str, object]:
     """Valid VLESS + Reality parameters. `example.com` is reserved (RFC 2606)."""
     return {
         "port": 8443,
@@ -65,7 +65,18 @@ def reality_params() -> dict[str, object]:
 
 
 @pytest.fixture
-def ws_params() -> dict[str, object]:
+def vless_ws_tls_credentials(vless_reality_credentials) -> list[Credential]:
+    """The same two friends. A VLESS client needs nothing but its subject.
+
+    Named after the transport rather than shared under a generic name, so the
+    convention in ``transport_fixture`` holds without exception — an exception there
+    would be a lookup table again, one entry long.
+    """
+    return vless_reality_credentials
+
+
+@pytest.fixture
+def vless_ws_tls_params() -> dict[str, object]:
     """Valid VLESS + WS + TLS parameters.
 
     The certificate paths are FIXED, fictional node paths, not paths on this
@@ -177,7 +188,7 @@ FAKE_WG_PEER_PUBLIC_KEY = "cGVlclpZWFdWVVRTUlFQT05NTEtKSUhHRkVEQ0JBOTg="
 
 
 @pytest.fixture
-def awg_params() -> dict[str, object]:
+def amneziawg_params() -> dict[str, object]:
     """Valid AmneziaWG parameters for one end of a hop.
 
     Every obfuscation value is arbitrary-but-fixed. In production they must differ per
@@ -204,7 +215,7 @@ def awg_params() -> dict[str, object]:
 
 
 @pytest.fixture
-def awg_credentials() -> list[Credential]:
+def amneziawg_credentials() -> list[Credential]:
     """Two peers for the AmneziaWG hop, each with its own keypair.
 
     Peers rather than friends: this transport runs between our own nodes. The contract
@@ -229,3 +240,74 @@ def awg_credentials() -> list[Credential]:
             },
         ),
     ]
+
+
+@pytest.fixture
+def wireguard_params() -> dict[str, object]:
+    """Valid plain WireGuard parameters.
+
+    Shorter than AmneziaWG's by exactly the obfuscation knobs, which is the difference
+    between the two protocols rather than an omission here.
+    """
+    return {
+        "port": 51821,
+        # RFC 1918. Private is enforced by the model, not merely suggested.
+        "tunnel_address": "10.55.0.1/24",
+        "peer_tunnel_address": "10.55.0.2/24",
+        "private_key": FAKE_WG_PRIVATE_KEY,
+        "public_key": FAKE_WG_PUBLIC_KEY,
+        "preshared_key": FAKE_WG_PRESHARED_KEY,
+        "mtu": 1380,
+    }
+
+
+@pytest.fixture
+def wireguard_credentials() -> list[Credential]:
+    """Two friends, each with their own keypair and their own tunnel address.
+
+    Their own addresses, unlike the AmneziaWG hop fixture's fallback: this transport is
+    friend-facing only, and two friends sharing an address is the state the renderer
+    refuses (see backlog item 33 for why nothing allocates them yet).
+    """
+    return [
+        Credential(
+            subject="eeeeeeee-0000-4000-8000-000000000005",
+            secrets={
+                "peer_private_key": FAKE_WG_PEER_PRIVATE_KEY,
+                "peer_public_key": FAKE_WG_PEER_PUBLIC_KEY,
+                "peer_tunnel_address": "10.55.0.2/24",
+            },
+        ),
+        Credential(
+            subject="ffffffff-0000-4000-8000-000000000006",
+            secrets={
+                "peer_private_key": FAKE_WG_PRESHARED_KEY,
+                "peer_public_key": FAKE_WG_PRESHARED_KEY,
+                "peer_tunnel_address": "10.55.0.3/24",
+            },
+        ),
+    ]
+
+
+@pytest.fixture
+def transport_fixture(request):
+    """Resolve a transport's ``params`` or ``credentials`` fixture BY CONVENTION.
+
+    A CONVENTION rather than a lookup table, and the change is not tidying. Three test
+    modules each carried their own ``{"vless-reality": "reality_params", ...}`` map, so
+    adding a transport package meant editing three files outside its directory before
+    the suite would even collect it — which is the surgery charter criterion 4 is
+    written against, appearing in the tests that are supposed to prove criterion 4.
+
+    With this, a new package under ``edge/transports/`` needs two fixtures named after
+    itself in this file and nothing anywhere else.
+
+    A fixture rather than an importable helper because pytest runs with
+    ``--import-mode=importlib``, under which importing across test modules is not
+    reliable — and doing it anyway once broke an unrelated scenario in another file.
+    """
+
+    def resolve(transport_name: str, kind: str):
+        return request.getfixturevalue(f"{transport_name.replace('-', '_')}_{kind}")
+
+    return resolve

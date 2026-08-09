@@ -1,0 +1,45 @@
+{#
+  One friend's plain WireGuard configuration.
+
+  WHAT: the file a friend imports — their own keypair, this node as the single peer.
+  WHY:  a file rather than a link, because this protocol family's configuration IS a
+        file. It reaches them through the second subscription format (items 26 and 27).
+  HOW:  rendered by render.py's ``render_client_config``.
+
+  Two things differ from server.j2, and both are deliberate:
+
+  * **AllowedIPs is the whole internet here.** On a node the field is an authorisation
+    list and must name exactly one peer's address; on a friend's device the point of the
+    transport is that everything leaves through the node. Same field, opposite answer,
+    because the consumer is different.
+  * **No ListenPort.** A client dials; it does not wait to be found. Pinning a source
+    port would also make a friend's traffic easier to correlate across networks.
+#}
+# hashi — generated for one device. Re-import after any rotation; the link never moves.
+#
+# NOTE, and it is not boilerplate: plain WireGuard is identifiable on the wire. On a
+# network that inspects traffic this tunnel will not come up, and that is a property of
+# the protocol rather than a fault in this file. Use the obfuscated exit there.
+[Interface]
+PrivateKey = {{ peer.private_key }}
+Address = {{ peer.tunnel_address }}
+MTU = {{ params.mtu }}
+{% if params.client_dns %}
+# The resolver this device should use inside the tunnel. Operator-supplied: there is no
+# default, because a hardcoded resolver would be a fixed address this fleet could never
+# rotate away from.
+DNS = {{ params.client_dns | join(", ") }}
+{% else %}
+# No DNS line: this device keeps its own resolver, and its queries do not go through the
+# tunnel. Said out loud rather than left as an absence.
+{% endif %}
+
+[Peer]
+# The node. One peer, never a list: a friend's device talks to the exit it was given.
+PublicKey = {{ params.public_key }}
+PresharedKey = {{ params.preshared_key }}
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = {{ endpoint }}
+# Keeps the UDP path open through NAT and stateful middleboxes. 25s is below the
+# shortest common UDP idle timeout.
+PersistentKeepalive = 25

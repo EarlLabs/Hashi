@@ -83,6 +83,23 @@ def endpoint_of(end: HopEnd) -> str:
 
 def _check(transport_name: str, entry: HopEnd, leaf: HopEnd) -> None:
     """Refuse the hops that would render cleanly and carry nothing."""
+    # The charter's constraint, checked before anything else and before either end of the
+    # hop is written. A transport declares this about itself (``hop_capable``); nothing
+    # here recognises a protocol.
+    #
+    # It is first because it is categorical rather than a property of these two ends: the
+    # entry-to-leaf hop crosses the Russian border by definition, so a protocol that is
+    # blocked there produces two nodes each holding a valid configuration file and no
+    # tunnel between them — with nothing in any log to say why, because there is nothing
+    # wrong with either file. Backlog item 28.
+    if not profile(transport_name).meta.hop_capable:
+        raise HopNotRenderable(
+            f"transport {transport_name!r} declares that it cannot carry an "
+            "entry-to-leaf hop. That hop crosses a border where this protocol is "
+            "identified and blocked, so both ends would be configured correctly and no "
+            "tunnel would ever come up. Use an obfuscated transport for the hop."
+        )
+
     if entry.node.id == leaf.node.id:
         raise HopNotRenderable(
             "a node cannot be its own exit — this hop would send the node's traffic "

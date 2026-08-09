@@ -36,7 +36,11 @@ CONFIG_DIR = f"{NODE_ROOT}/conf"
 # The file extension each config format is written with. Not cosmetic: wg-quick
 # derives the INTERFACE NAME from the file name and refuses anything but ``.conf``,
 # so a config written as ``.json`` would be a valid file the daemon will not load.
-EXTENSION = {ConfigFormat.XRAY_JSON: "json", ConfigFormat.WG_QUICK: "conf"}
+EXTENSION = {
+    ConfigFormat.XRAY_JSON: "json",
+    ConfigFormat.WG_QUICK: "conf",
+    ConfigFormat.WG_QUICK_PLAIN: "conf",
+}
 
 
 def config_path(
@@ -64,11 +68,31 @@ def config_path(
 # daemon that runs it.
 XRAY_IMAGE = "ghcr.io/xtls/xray-core:1.8.24"
 
-# ASSUMPTION, recorded rather than hidden: this tag has never been pulled by this
-# project — no node has been deployed yet — so it is the one value here the owner must
-# confirm against a registry on the first real node. Everything else in this module is
-# exercised by tests; an image tag can only be verified by pulling it.
-AMNEZIAWG_IMAGE = "ghcr.io/amnezia-vpn/amneziawg-go:v0.2.12"
+# CORRECTED in backlog item 28, and the correction is worth reading rather than
+# glossing. This line used to say ``ghcr.io/amnezia-vpn/amneziawg-go:v0.2.12`` with an
+# honest note that the tag had never been pulled. Item 28 resolved every pin in this
+# module against a real registry, and that one does not exist — not the tag, not the
+# repository, not on that registry at all. So the note was right to be there and the
+# value was wrong: no node could ever have started on it.
+#
+# The replacement is a tag that resolves, on the registry that actually publishes this
+# project's images. Note it is a MAJOR version away from what was written (0.2.x → 3.x);
+# that is not a migration, because nothing was ever running.
+#
+# ``tests/e2e/edge/test_every_image_pin_resolves.py`` now checks every entry here, so a
+# pin that does not exist cannot sit in the tree unnoticed again.
+AMNEZIAWG_IMAGE = "docker.io/amneziavpn/amneziawg-go:3.0.3"
+
+# Plain WireGuard's data plane — its own image, because it is its own format. See
+# ``ConfigFormat.WG_QUICK_PLAIN``: running a plain config on the AmneziaWG daemon would
+# work, which is precisely the problem.
+#
+# ASSUMPTION, recorded rather than hidden: the tag resolves (checked against the
+# registry, and re-checked by the scenario named above), but this project has never
+# STARTED it — no node has been deployed. Whether this image accepts ``up <config>`` as
+# its command is the owner's field check on the first real node; a registry can confirm a
+# tag exists and nothing more.
+WIREGUARD_IMAGE = "docker.io/masipcat/wireguard-go:0.0.20230223"
 
 
 @dataclass(frozen=True)
@@ -85,6 +109,16 @@ class DataPlane:
 DATA_PLANES = {
     ConfigFormat.XRAY_JSON: DataPlane(
         image=XRAY_IMAGE, command=("run", "-config", "{config}")
+    ),
+    ConfigFormat.WG_QUICK_PLAIN: DataPlane(
+        image=WIREGUARD_IMAGE,
+        # wg-quick takes the config PATH and derives the interface name from it.
+        command=("up", "{config}"),
+        # A tunnel device cannot be created without these two, and nothing else is
+        # granted: the proxy containers beside it stay unprivileged, so a compromised
+        # data plane cannot reconfigure the node's network.
+        capabilities=("NET_ADMIN",),
+        devices=("/dev/net/tun:/dev/net/tun",),
     ),
     ConfigFormat.WG_QUICK: DataPlane(
         image=AMNEZIAWG_IMAGE,

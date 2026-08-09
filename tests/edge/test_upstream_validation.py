@@ -22,20 +22,10 @@ import json
 
 import pytest
 
-from edge.checker import awg_quick_binary, validate, xray_binary
+from edge.checker import awg_quick_binary, validate, wg_quick_binary, xray_binary
 from edge.registry import ConfigFormat, SubscriptionFormat, discover, profile
 
 INSTALLED = sorted(discover())
-PARAMS_FIXTURE = {
-    "vless-reality": "reality_params",
-    "vless-ws-tls": "ws_params",
-    "amneziawg": "awg_params",
-}
-CREDENTIALS_FIXTURE = {
-    "vless-reality": "credentials",
-    "vless-ws-tls": "credentials",
-    "amneziawg": "awg_credentials",
-}
 
 # Transports that serialise a friend's material into a config FILE (item 26). Their
 # friend-facing artefact goes through the same upstream checker as their server config.
@@ -54,12 +44,16 @@ def checkable_params(name: str, request, tmp_path) -> dict[str, object]:
     ``from .conftest import ...`` is not reliable.
     """
     materialise = request.getfixturevalue("checkable_params_for")
-    return materialise(request.getfixturevalue(PARAMS_FIXTURE[name]), tmp_path)
+    return materialise(request.getfixturevalue("transport_fixture")(name, "params"), tmp_path)
 
 # One checker per config format, resolved the same way the production code resolves it.
 CHECKERS = {
     ConfigFormat.XRAY_JSON: ("xray", xray_binary),
     ConfigFormat.WG_QUICK: ("awg-quick", awg_quick_binary),
+    # The PLAIN tool for the plain format. Deliberately not a fallback to awg-quick,
+    # which accepts a plain config too: validating with the wrong binary would report
+    # "validated" for a file the node's own daemon never saw. See edge/checker.py.
+    ConfigFormat.WG_QUICK_PLAIN: ("wg-quick", wg_quick_binary),
 }
 
 
@@ -91,7 +85,7 @@ def test_upstream_accepts_the_rendered_server_config(
     require_checker_for(name)
     transport = profile(name)
     validated = transport.validate(checkable_params(name, request, tmp_path))
-    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    clients = request.getfixturevalue("transport_fixture")(name, "credentials")
     rendered = transport.profile.render_server(node, validated, clients)
 
     result = validate(rendered, config_format=transport.meta.config_format)
@@ -131,7 +125,7 @@ def test_upstream_accepts_a_friends_config_file(name: str, node, request, tmp_pa
     require_checker_for(name)
     transport = profile(name)
     validated = transport.validate(checkable_params(name, request, tmp_path))
-    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    clients = request.getfixturevalue("transport_fixture")(name, "credentials")
     rendered = transport.profile.render_client_config(node, validated, clients[0])
 
     result = validate(rendered.content, config_format=transport.meta.config_format)
