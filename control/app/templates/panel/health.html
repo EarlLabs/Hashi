@@ -1,0 +1,22 @@
+{#
+  A node's health, as an HTMX fragment.
+
+  Note what cannot appear here, because the value does not exist upstream: no client
+  count, no addresses, no traffic figure. Health means "is this node serving", and the
+  charter's no-logging rule covers this screen too.
+#}
+<div>
+  {% if health.healthy %}
+    <p class="good">serving — {{ health.running | join(", ") or "no transports expected" }}</p>
+  {% elif not health.reachable %}
+    <p class="bad">unreachable{% if health.detail %} — {{ health.detail }}{% endif %}</p>
+  {% else %}
+    <p class="bad">reachable but not healthy — {{ health.detail }}</p>
+    {% if health.drifted %}
+      <p class="muted">
+        Drifted transports have a configuration on the node that differs from what we
+        would push. Applying again replaces it.
+      </p>
+    {% endif %}
+  {% endif %}
+</div>

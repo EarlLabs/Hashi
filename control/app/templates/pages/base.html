@@ -1,0 +1,57 @@
+{#
+  The panel's one layout.
+
+  No bundler, no framework, no CDN. The CSS is inline because this panel is for one
+  person on one screen, and a build step for it would buy a pipeline the charter
+  explicitly declined. HTMX is served from our own static route rather than a CDN:
+  the panel must work on a network where the CDN is blocked, which is the same
+  network the operator uses to fix a blocked node.
+#}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}hashi{% endblock %}</title>
+{# Nothing here should ever be indexed or previewed. #}
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<style>
+  :root { color-scheme: light dark; --line: #8883; --bad: #c0392b; --good: #1e8449; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 60rem; padding: 1.5rem; }
+  header { display: flex; align-items: baseline; gap: 1rem; border-bottom: 1px solid var(--line); padding-bottom: .5rem; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header nav { margin-left: auto; display: flex; gap: .75rem; }
+  h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; font-size: .85rem; opacity: .8; }
+  form.inline { display: inline; }
+  fieldset { border: 1px solid var(--line); margin: 1rem 0; }
+  label { display: block; margin: .4rem 0; }
+  label span { display: inline-block; min-width: 11rem; opacity: .8; }
+  input, select, textarea { font: inherit; padding: .25rem; min-width: 18rem; }
+  button { font: inherit; padding: .25rem .6rem; cursor: pointer; }
+  .state-active { color: var(--good); }
+  .state-degraded, .state-draft, .state-retired { color: var(--bad); }
+  .muted { opacity: .65; font-size: .9rem; }
+  .bad { color: var(--bad); }
+  .good { color: var(--good); }
+  code { word-break: break-all; }
+</style>
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header>
+  <h1><a href="/panel/">hashi</a></h1>
+  <span class="muted">{% block subtitle %}{% endblock %}</span>
+  <nav>
+    <form class="inline" method="post" action="/panel/logout">
+      <button type="submit">log out</button>
+    </form>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -69,7 +69,7 @@ include = ["control*", "edge*"]
 # protocol is one directory PLUS a line in this file, and forgetting the line
 # reproduces exactly the failure this block prevents.
 [tool.setuptools.package-data]
-"*" = ["*.j2", "*.html", "*.mako", "*.ini"]
+"*" = ["*.j2", "*.html", "*.mako", "*.ini", "*.js"]
 
 [tool.ruff]
 target-version = "py314"
@@ -83,6 +83,19 @@ exclude = ["deploy/warden/vendor", "deploy/warden/warden.py", ".e2e/e2e_gen_secr
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# B008 forbids a function call in an argument default, which is exactly how FastAPI
+# declares dependencies (`session: AsyncSession = Depends(...)`, `x: str = Form(...)`).
+# The rule exists to catch a mutable default evaluated once at import; here the call
+# builds a marker object that FastAPI resolves per request, so the hazard the rule
+# describes does not exist. Scoped to the route modules rather than silenced
+# globally, so a genuine mutable default elsewhere is still caught.
+"control/app/api/*.py" = ["B008"]
+"control/app/panel/*.py" = ["B008"]
+# Tests assert on exception types and use fixtures whose names shadow builtins in
+# ways that are clearer than the alternative.
+"tests/**" = ["B011"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

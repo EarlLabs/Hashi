@@ -39,6 +39,16 @@ services:
     environment:
       HASHI_SECRET_KEY: ${HASHI_SECRET_KEY:?set HASHI_SECRET_KEY in .env}
       HASHI_PUBLIC_HOST: ${HASHI_PUBLIC_HOST:?set HASHI_PUBLIC_HOST in .env}
+      # Composed from the same POSTGRES_* values the db service uses, so the two
+      # cannot drift into "the app is configured for a database that does not exist".
+      # `db` is the compose service name, and 5432 is its INSIDE-the-network port —
+      # published ports never appear here (see the ports discussion in .env.example).
+      HASHI_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # The panel's single credential, as a hash. Generate it with
+      # `python -m control.cli hash-password` — the plaintext never leaves the
+      # owner's machine and never enters this file.
+      HASHI_OPERATOR_USERNAME: ${HASHI_OPERATOR_USERNAME:?set HASHI_OPERATOR_USERNAME in .env}
+      HASHI_OPERATOR_PASSWORD_HASH: ${HASHI_OPERATOR_PASSWORD_HASH:?set HASHI_OPERATOR_PASSWORD_HASH in .env}
     depends_on:
       db:
         condition: service_healthy

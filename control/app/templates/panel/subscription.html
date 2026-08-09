@@ -1,0 +1,20 @@
+{#
+  The one fragment that displays a live bearer credential.
+
+  Shown on demand rather than sitting in the friends table, so a panel left open —
+  or a screenshot of it — does not contain every friend's key. See
+  panel/routes.py:friend_subscription.
+#}
+{% if url %}
+<div>
+  <p>Send this to <strong>{{ friend.nickname }}</strong>. It is the only thing they ever need:</p>
+  <p><code>{{ url }}</code></p>
+  <p class="muted">
+    Anyone holding this URL has {{ friend.nickname }}'s access — it is the credential,
+    not a link to one. It keeps working when nodes or protocols change, which is why
+    they never re-add anything.
+  </p>
+</div>
+{% else %}
+<p class="bad">{{ friend.nickname }} has no live subscription.</p>
+{% endif %}

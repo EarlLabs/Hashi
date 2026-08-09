@@ -24,9 +24,18 @@ RUN pip install --no-cache-dir . && rm -rf /src
 
 WORKDIR /app
 
+COPY deploy/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Runs as a non-root user. This process holds the key to every node's credentials, so
+# a remote-code-execution bug in it should not also be root on the container. Created
+# with no home and no shell: nothing here ever logs in.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin hashi
+USER hashi
+
 EXPOSE 8000
 
-# --no-access-log is not a performance choice: uvicorn's access log records the
-# request path, and subscription tokens live in the path.
-CMD ["uvicorn", "control.app.main:create_app", "--factory", \
-     "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+# Migrations run inside the entrypoint, before uvicorn — see that script for why a
+# migration that is not part of boot is a migration that is missing in production
+# exactly once.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

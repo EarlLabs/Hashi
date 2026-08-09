@@ -1,22 +1,73 @@
 """Control-plane application factory.
 
-WHAT: builds the FastAPI application. Currently a scaffold: it serves ``/healthz``
-      and nothing else.
-WHY:  a factory rather than a module-level ``app`` object, so importing this
-      module never requires the environment to be configured — tests build an app
-      with explicit settings, while the container passes ``--factory``.
-HOW:  ``create_app()`` reads Settings when called. Routers get mounted here as
-      they are built; route logic itself belongs in ``control/app/services``.
+WHAT: builds the FastAPI application and wires everything to it.
+WHY:  a factory rather than a module-level ``app`` object, so importing this module
+      never requires the environment to be configured — tests build an app with
+      explicit settings, while the container passes ``--factory``.
+HOW:  ``create_app()`` reads Settings when called. Routers get mounted here; route
+      logic itself belongs in ``control/app/services``.
 """
 
-from fastapi import FastAPI
+import contextlib
+import logging
+import pathlib
 
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+
+from control.app import auth, errors
+from control.app.api import delivery
+from control.app.api import routes as api_routes
+from control.app.crypto import SecretBox, session_secret
+from control.app.db import Database
+from control.app.models.base import bind_secret_box
+from control.app.panel import routes as panel_routes
+from control.app.services import apply
 from control.app.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
+
+
+def configure_logging() -> None:
+    """One logging setup for the process.
+
+    WARNING, not INFO, as the root level. Not a preference: at INFO, several
+    libraries in this stack log request lines and SQL with bound parameters, and a
+    request line here contains a subscription token while a bound parameter can be a
+    decrypted secret. The application's own loggers are raised to INFO explicitly,
+    because their messages are written to carry no path and no user data.
+    """
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("control").setLevel(logging.INFO)
+    logging.getLogger("edge").setLevel(logging.INFO)
+
+    # Explicitly silenced. uvicorn is also started with --no-access-log, and both are
+    # needed: the flag covers the server's own logger, this covers the case where the
+    # app is run by something else (a test harness, gunicorn, a developer's `uvicorn`
+    # invocation without the flag).
+    logging.getLogger("uvicorn.access").disabled = True
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. Pass ``settings`` in tests; production reads env."""
     settings = settings or Settings()
+    configure_logging()
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # The pool is opened here rather than at import so that building an app never
+        # dials a database — which is what lets `--factory` and the tests share a
+        # code path.
+        yield
+        await app.state.database.dispose()
 
     # The panel is the highest-value target in the system, and a public schema of
     # its API is free reconnaissance. openapi_url is the load-bearing one of the
@@ -24,13 +75,98 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # while /openapi.json keeps serving the machine-readable schema those viewers
     # were reading — every route, every parameter, every model.
     app = FastAPI(
-        title="hashi control plane", docs_url=None, redoc_url=None, openapi_url=None
+        title="hashi control plane",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
     )
     app.state.settings = settings
+
+    # Installed before anything can touch an encrypted column. A write that happened
+    # before this line would raise rather than store plaintext (see
+    # models/base.py:secret_box), but the ordering is the real guarantee.
+    box = SecretBox(settings.secret_key)
+    bind_secret_box(box)
+    app.state.secret_box = box
+    app.state.database = Database(settings.database_url)
+    apply.bind_settings(settings)
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=session_secret(settings.secret_key),
+        max_age=settings.session_max_age,
+        # The session cookie is the operator's credential for a panel that can read
+        # every node key, so: not readable from JavaScript, not sent cross-site, and
+        # https-only whenever the deployment is https.
+        https_only=settings.public_https,
+        same_site="lax",
+        # Scoped to nothing narrower than "/" because the panel and the API are both
+        # served from this app, but named distinctly so it cannot collide with another
+        # service on the same host.
+        session_cookie="hashi_operator",
+    )
+
+    app.add_exception_handler(errors.DomainError, errors.domain_error_handler)
+    app.add_exception_handler(Exception, errors.unhandled_error_handler)
+    app.add_exception_handler(auth.RedirectToLogin, auth.redirect_to_login_handler)
+
+    app.include_router(api_routes.router)
+    app.include_router(panel_routes.public)
+    app.include_router(panel_routes.router)
+    # Mounted last, and with no auth: the token in its path IS the credential. See
+    # control/app/api/delivery.py for the rules that route lives under.
+    app.include_router(delivery.router)
+
+    if STATIC_DIR.is_dir():
+        # Served by us rather than from a CDN on purpose: the panel has to work on a
+        # network where a CDN is blocked, which is the same network the operator is on
+        # when a node needs replacing.
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         """Liveness only. Says nothing about nodes, users or configuration."""
         return {"status": "ok"}
 
+    @app.get("/", include_in_schema=False)
+    async def root() -> RedirectResponse:
+        """Send a human to the panel.
+
+        Deliberately a redirect to the login page and not a landing page of any kind:
+        this host is reachable from inside Russia by anyone who guesses it, and the
+        charter forbids anything that advertises the service.
+        """
+        return RedirectResponse(url="/panel/")
+
+    @app.get("/robots.txt", include_in_schema=False)
+    async def robots() -> PlainTextResponse:
+        """Ask crawlers to stay out. Belt and braces with the per-page meta tag."""
+        return PlainTextResponse("User-agent: *\nDisallow: /\n")
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        """Headers every response carries.
+
+        The CSP is strict because the panel's own pages are the attack surface that
+        matters: node names and error strings from remote hosts are rendered there.
+        ``'unsafe-inline'`` is present for style and script only because the panel
+        deliberately has no build step — the alternative is a bundler, which the
+        charter declined, and both the inline style and the one inline script are
+        written by us and shipped in the image.
+        """
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
+
+    logger.info("control plane built")
     return app

@@ -1,0 +1,10 @@
+{#
+  An HTMX fragment: the result of one action. NOT a full document — the control
+  rulebook's trap is that returning a page here nests <html> inside the panel and the
+  bug then looks like CSS.
+
+  `ok` is false for a partial revocation as well as an outright failure, on purpose: a
+  revocation that could not reach a node is not a success, and the operator has to see
+  that in the colour as well as the text.
+#}
+<p class="{{ 'good' if ok else 'bad' }}">{{ message }}</p>

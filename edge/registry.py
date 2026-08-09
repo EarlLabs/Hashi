@@ -94,6 +94,23 @@ class KeySpec:
     kind: KeyKind
     scope: KeyScope
 
+    # For asymmetric kinds, the parameter name the PUBLIC half is delivered under.
+    # Declared by the transport because only the transport knows what its template
+    # and its client URI call it — `control` generates a keypair, stores the
+    # private half encrypted and the public half in plain parameters, and never
+    # needs to know that "public_key" means a Reality `pbk`.
+    public_name: str | None = None
+
+    # Whether the generated value itself must be encrypted at rest.
+    #
+    # Not every generated value is a secret, and treating them alike is wrong in
+    # both directions. A Reality short id is minted randomly but travels to every
+    # friend inside their subscription URI, so encrypting it buys nothing and
+    # makes it unavailable to the client renderer. A WebSocket path secret IS a
+    # secret even though it is not a key. So the transport says which, and
+    # `control` files each value accordingly.
+    secret: bool = True
+
 
 @dataclass(frozen=True)
 class TransportMeta:

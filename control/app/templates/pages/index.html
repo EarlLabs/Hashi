@@ -1,0 +1,106 @@
+{% extends "pages/base.html" %}
+{#
+  The fleet at a glance: which nodes serve, who can use them, and what this image
+  can do. One screen, because during a rotation the operator should not be
+  navigating.
+#}
+{% block title %}hashi — fleet{% endblock %}
+{% block subtitle %}{{ nodes | length }} node(s), {{ friends | selectattr("is_active") | list | length }} active friend(s){% endblock %}
+
+{% block content %}
+
+<h2>Nodes</h2>
+{% if nodes %}
+<table>
+  <tr><th>name</th><th>country</th><th>address</th><th>state</th><th>transports</th><th></th></tr>
+  {% for node in nodes %}
+  <tr>
+    <td><a href="/panel/nodes/{{ node.id }}">{{ node.name }}</a></td>
+    <td>{{ node.location_label }}</td>
+    <td><code>{{ node.address }}</code></td>
+    <td class="state-{{ node.state }}">
+      {{ node.state }}
+      {# The reason a node is degraded is the one thing that must not be hidden:
+         an unexplained degraded node is a node nobody fixes. #}
+      {% if node.state_detail %}<div class="muted">{{ node.state_detail }}</div>{% endif %}
+    </td>
+    <td>
+      {% for transport in node.transports %}
+        <div>{{ transport.transport_name }}{% if not transport.enabled %} <span class="muted">(disabled)</span>{% endif %}</div>
+      {% else %}<span class="muted">none</span>{% endfor %}
+    </td>
+    <td>
+      <button hx-post="/panel/nodes/{{ node.id }}/health" hx-target="#outcome" hx-swap="innerHTML">probe</button>
+      <button hx-post="/panel/nodes/{{ node.id }}/apply" hx-target="#outcome" hx-swap="innerHTML">apply</button>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No nodes yet. Add one below — it starts as a draft and reaches nobody until you apply it.</p>
+{% endif %}
+
+<div id="outcome"></div>
+
+<fieldset>
+  <legend>Add a node</legend>
+  <form method="post" action="/panel/nodes">
+    <label><span>name</span><input name="name" required placeholder="leaf-ams-1"></label>
+    <label><span>address clients dial</span><input name="address" required placeholder="hostname or IP"></label>
+    <label><span>exit country label</span><input name="location_label" required placeholder="Netherlands"></label>
+    <label><span>ssh host</span><input name="ssh_host" placeholder="defaults to the address above"></label>
+    <label><span>ssh user</span><input name="ssh_user" value="root"></label>
+    <label><span>ssh port</span><input name="ssh_port" type="number" value="22"></label>
+    <label><span>ssh private key</span><textarea name="ssh_private_key" rows="3" placeholder="stored encrypted; never displayed again"></textarea></label>
+    <button type="submit">add node</button>
+  </form>
+</fieldset>
+
+<h2>Friends</h2>
+{% if friends %}
+<table>
+  <tr><th>nickname</th><th>status</th><th></th></tr>
+  {% for friend in friends %}
+  <tr>
+    <td>{{ friend.nickname }}</td>
+    <td>{% if friend.is_active %}active{% else %}<span class="bad">revoked</span>{% endif %}</td>
+    <td>
+      {% if friend.is_active %}
+      <button hx-get="/panel/friends/{{ friend.id }}/subscription" hx-target="#outcome" hx-swap="innerHTML">show link</button>
+      {# hx-confirm because this is irreversible and immediate: it deletes their
+         credentials and re-pushes every node they were on. #}
+      <button hx-post="/panel/friends/{{ friend.id }}/revoke" hx-target="#outcome" hx-swap="innerHTML"
+              hx-confirm="Revoke {{ friend.nickname }} on every node and every protocol?">revoke</button>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No friends yet.</p>
+{% endif %}
+
+<fieldset>
+  <legend>Add a friend</legend>
+  <form method="post" action="/panel/friends">
+    <label><span>nickname</span><input name="nickname" required></label>
+    <p class="muted">They get one subscription URL covering every serving node. Nothing else is stored about them.</p>
+    <button type="submit">add friend</button>
+  </form>
+</fieldset>
+
+<h2>Transports this image ships</h2>
+<table>
+  <tr><th>name</th><th>family</th><th>ports</th><th>in a subscription</th></tr>
+  {% for transport in transports %}
+  <tr>
+    <td>{{ transport.name }}</td>
+    <td>{{ transport.family }}</td>
+    <td>{{ transport.port_range[0] }}–{{ transport.port_range[1] }}</td>
+    <td>{% if transport.subscription_expressible %}yes{% else %}<span class="bad">no — cannot be offered to friends</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">Discovered from the image, not listed anywhere. A new protocol appears here on its own.</p>
+
+{% endblock %}

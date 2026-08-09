@@ -21,6 +21,31 @@ services:
   control:
     environment:
       HASHI_PUBLIC_HOST: localhost
+      # The acceptance suite talks to the published control port directly, over
+      # plain HTTP, rather than through Caddy. Two things depend on this flag and
+      # both break silently without it: the operator's session cookie is
+      # `https_only` in production, so it would never be set over http and every
+      # panel scenario would look like a login failure; and subscription URLs would
+      # be rendered as https for a stack that does not serve it.
+      #
+      # It is off HERE and nowhere else. The default stays https, so no deployment
+      # can inherit this from a laptop.
+      HASHI_PUBLIC_HTTPS: "false"
+      # A fixed, obviously-fake key so the e2e stack is reproducible and its
+      # database is decryptable across runs. 48 characters to satisfy the minimum
+      # length the application enforces at boot.
+      HASHI_SECRET_KEY: e2e-not-a-real-secret-key-0000000000000000000
+      HASHI_OPERATOR_USERNAME: owner
+      # scrypt hash of "e2e-operator-password". Committed deliberately: it guards a
+      # disposable stack with no real nodes and no real friends in it. Regenerate
+      # with `python -m control.cli hash-password` if the scenarios change it.
+      #
+      # Every `$` is DOUBLED. `$` starts an interpolation in compose, so the real
+      # hash's `$32768$8$1$` would reach the container as `2768` — the login would
+      # then fail with a malformed hash, which verify_password reports as a wrong
+      # password, and the scenario would look like a credentials bug rather than a
+      # quoting one. `$$` is compose's escape and arrives as a single `$`.
+      HASHI_OPERATOR_PASSWORD_HASH: "scrypt$$32768$$8$$1$$QO/d/qvoYxARMag5H46vug==$$RK2Hhwuh2AIM0lympYvnnDhv6MrAHIyoV7KuOV4Y6pU="
 
   caddy:
     environment:

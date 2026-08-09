@@ -23,11 +23,23 @@ META = TransportMeta(
     port_range=(443, 65535),
     key_material=(
         # The server's Reality private key. Its public half goes into every
-        # client entry as `pbk`, so the generator yields both.
-        KeySpec(name="private_key", kind=KeyKind.X25519_KEYPAIR, scope=KeyScope.NODE),
+        # client entry as `pbk`, so the generator yields both and this declares
+        # what to call the public one.
+        KeySpec(
+            name="private_key",
+            kind=KeyKind.X25519_KEYPAIR,
+            scope=KeyScope.NODE,
+            public_name="public_key",
+        ),
         # Reality's short id: a client that presents an unknown one is served the
         # decoy site, which is exactly the behaviour that makes probing useless.
-        KeySpec(name="short_id", kind=KeyKind.SHORT_ID, scope=KeyScope.NODE),
+        # Not secret — it ships to every friend inside their own URI.
+        KeySpec(
+            name="short_id",
+            kind=KeyKind.SHORT_ID,
+            scope=KeyScope.NODE,
+            secret=False,
+        ),
         # One VLESS client id per friend, per node. Client-scoped, which is what
         # makes the charter's sixth criterion (total revocation) expressible:
         # deleting this row cannot leave a working copy on another node.

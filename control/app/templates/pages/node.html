@@ -1,0 +1,108 @@
+{% extends "pages/base.html" %}
+{#
+  One node: what it runs, and the form to enable another transport on it.
+
+  The form is built from the transport's OWN declared parameters, fetched from
+  /api/transports. This template names no protocol and no field — which is what makes
+  criterion 4's "selectable in the panel without modifying the control plane's core"
+  literally true of this file.
+#}
+{% block title %}hashi — {{ node.name }}{% endblock %}
+{% block subtitle %}{{ node.location_label }} · {{ node.state }}{% endblock %}
+
+{% block content %}
+
+<h2>{{ node.name }}</h2>
+<table>
+  <tr><th>address clients dial</th><td><code>{{ node.address }}</code></td></tr>
+  <tr><th>exit country label</th><td>{{ node.location_label }}</td></tr>
+  <tr><th>state</th><td class="state-{{ node.state }}">{{ node.state }}{% if node.state_detail %} — {{ node.state_detail }}{% endif %}</td></tr>
+  <tr><th>ssh</th><td><code>{{ node.ssh_user }}@{{ node.ssh_host or "—" }}:{{ node.ssh_port }}</code>
+      {# Whether a key is present, never the key itself. #}
+      <span class="muted">{% if node.ssh_private_key %}key stored{% else %}no key — apply will fail{% endif %}</span></td></tr>
+  <tr><th>host key</th><td class="muted">{% if node.ssh_host_key %}pinned{% else %}not yet pinned — learned on first connect{% endif %}</td></tr>
+</table>
+
+<p>
+  <button hx-post="/panel/nodes/{{ node.id }}/apply" hx-target="#outcome" hx-swap="innerHTML">apply configuration</button>
+  <button hx-post="/panel/nodes/{{ node.id }}/health" hx-target="#outcome" hx-swap="innerHTML">probe health</button>
+</p>
+<div id="outcome"></div>
+
+<h2>Transports on this node</h2>
+{% if node.transports %}
+<table>
+  <tr><th>transport</th><th>parameters</th><th>last applied</th></tr>
+  {% for transport in node.transports %}
+  <tr>
+    <td>{{ transport.transport_name }}</td>
+    <td>
+      {# Only the non-secret params column is rendered. The secrets column is not
+         reachable from this template, deliberately — it holds the node's private key. #}
+      {% for key, value in transport.params | dictsort %}
+        <div class="muted">{{ key }} = {{ value }}</div>
+      {% endfor %}
+    </td>
+    <td class="muted">{{ transport.applied_at or "never" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">Nothing enabled yet.</p>
+{% endif %}
+
+{% if available %}
+<fieldset>
+  <legend>Enable a transport</legend>
+  <form method="post" action="/panel/nodes/{{ node.id }}/transports" id="enable-form">
+    <label>
+      <span>transport</span>
+      <select name="transport_name" id="transport-select" required>
+        <option value="">choose…</option>
+        {% for name in available %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+      </select>
+    </label>
+    {# Filled in by the script below from the transport's own declaration. #}
+    <div id="transport-params"></div>
+    <p class="muted">Key material is generated for you and stored encrypted. Never type a key here.</p>
+    <button type="submit">enable</button>
+  </form>
+</fieldset>
+
+<script>
+// Builds the parameter inputs from /api/transports, so this page needs no knowledge
+// of any protocol's fields. A new transport package therefore gets a working form
+// with no change to this file — which is the arithmetic charter criterion 4 asks for.
+(async () => {
+  const select = document.getElementById("transport-select");
+  const target = document.getElementById("transport-params");
+  const response = await fetch("/api/transports", { credentials: "same-origin" });
+  if (!response.ok) return;
+  const transports = await response.json();
+
+  select.addEventListener("change", () => {
+    const chosen = transports.find(t => t.name === select.value);
+    target.innerHTML = "";
+    if (!chosen) return;
+    for (const field of chosen.operator_params) {
+      const label = document.createElement("label");
+      const span = document.createElement("span");
+      span.textContent = field;
+      const input = document.createElement("input");
+      input.name = field;
+      input.required = true;
+      // A hint rather than validation: the transport's own model is the authority,
+      // and duplicating its rules here would let the two drift apart.
+      if (field === "port") input.placeholder = `${chosen.port_range[0]}–${chosen.port_range[1]}`;
+      label.append(span, input);
+      target.append(label);
+    }
+  });
+})();
+</script>
+{% else %}
+<p class="muted">Every transport this image ships and can deliver is already enabled here.</p>
+{% endif %}
+
+<p><a href="/panel/">← fleet</a></p>
+{% endblock %}
