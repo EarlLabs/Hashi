@@ -6,7 +6,12 @@ each module, and so Alembic's autogenerate sees every table by importing one nam
 
 from control.app.models.base import Base
 from control.app.models.friend import Credential, Friend, Subscription
-from control.app.models.node import Node, NodeState, NodeTransport
+from control.app.models.node import (
+    Node,
+    NodeState,
+    NodeTransport,
+    TransportPurpose,
+)
 
 __all__ = [
     "Base",
@@ -15,5 +20,6 @@ __all__ = [
     "Node",
     "NodeState",
     "NodeTransport",
+    "TransportPurpose",
     "Subscription",
 ]

@@ -56,6 +56,91 @@
   </form>
 </fieldset>
 
+<h2>Hops between nodes</h2>
+{#
+  The entry→leaf tunnel — the topology the whole product is built on. Friends only
+  ever hold the ENTRY's address, which is what makes replacing a leaf invisible to
+  them: re-point the hop, apply two nodes, and nobody re-imports anything.
+#}
+{% if hops %}
+<table>
+  <tr><th>entry (dials)</th><th>leaf (exit)</th><th>transport</th><th></th></tr>
+  {% for entry, leaf in hops %}
+  <tr>
+    <td>{{ entry.node.name }}</td>
+    <td>{% if leaf %}{{ leaf.node.name }}{% else %}<span class="bad">missing — this hop leads nowhere</span>{% endif %}</td>
+    <td>{{ entry.transport_name }}</td>
+    <td>
+      <button hx-post="/panel/hops/{{ entry.id }}/dissolve" hx-target="#outcome" hx-swap="innerHTML"
+              hx-confirm="Remove both ends of this hop? The exit stops carrying traffic once both nodes are applied.">remove</button>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No hops. Every node is currently its own exit.</p>
+{% endif %}
+
+{% if hop_transports %}
+<fieldset>
+  <legend>Connect an entry node to a leaf</legend>
+  <form hx-post="/panel/hops" hx-target="#outcome" hx-swap="innerHTML" id="hop-form">
+    <label>
+      <span>entry node (friends dial this one)</span>
+      <select name="entry_node_id" required>
+        {% for node in nodes %}<option value="{{ node.id }}">{{ node.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>leaf node (traffic leaves here)</span>
+      <select name="leaf_node_id" required>
+        {% for node in nodes %}<option value="{{ node.id }}">{{ node.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>transport</span>
+      <select name="transport_name" id="hop-transport" required>
+        {% for name in hop_transports %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+      </select>
+    </label>
+    {# Both ends' parameters, from the transport's own declaration — this template
+       names no field of any protocol. Each end needs its own: the two ends of a
+       tunnel are not interchangeable. #}
+    {% for name in hop_transports %}
+    <div class="hop-fields" data-transport="{{ name }}">
+      {% for side in ["entry", "leaf"] %}
+      <fieldset>
+        <legend>{{ side }} end</legend>
+        {% for field in hop_params[name] %}
+        <label><span>{{ field }}</span><input name="{{ side }}-{{ field }}"></label>
+        {% endfor %}
+      </fieldset>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <p class="muted">Key material is generated for both ends, and the value the two must
+      share is minted once. Never type a key here.</p>
+    <button type="submit">establish hop</button>
+  </form>
+</fieldset>
+
+<script>
+// Show only the chosen transport's fields. Presentation only — the server reads
+// whatever was submitted and the transport validates it.
+(() => {
+  const select = document.getElementById("hop-transport");
+  const groups = Array.from(document.querySelectorAll(".hop-fields"));
+  const show = () => groups.forEach(group => {
+    const chosen = group.dataset.transport === select.value;
+    group.hidden = !chosen;
+    group.querySelectorAll("input").forEach(input => { input.disabled = !chosen; });
+  });
+  select.addEventListener("change", show);
+  show();
+})();
+</script>
+{% endif %}
+
 <h2>Friends</h2>
 {% if friends %}
 <table>

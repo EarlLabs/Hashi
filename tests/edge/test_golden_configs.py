@@ -17,22 +17,40 @@ import pathlib
 
 import pytest
 
-from edge.registry import discover, profile
+from edge.registry import ConfigFormat, discover, profile
 
 GOLDEN = pathlib.Path(__file__).parent / "golden"
 INSTALLED = sorted(discover())
 
-PARAMS_FIXTURE = {"vless-reality": "reality_params", "vless-ws-tls": "ws_params"}
+PARAMS_FIXTURE = {
+    "vless-reality": "reality_params",
+    "vless-ws-tls": "ws_params",
+    "amneziawg": "awg_params",
+}
+CREDENTIALS_FIXTURE = {
+    "vless-reality": "credentials",
+    "vless-ws-tls": "credentials",
+    "amneziawg": "awg_credentials",
+}
+
+# Only transports with a URI form have a client entry to pin. The others refuse by
+# design — see tests/edge/test_transport_contract.py.
+DELIVERABLE = sorted(name for name, meta in discover().items() if meta.subscription_expressible)
+
+# The golden file's extension follows the config FORMAT, so an editor opening one gets
+# the right syntax highlighting and a reviewer is not reading an INI file called .json.
+EXTENSION = {ConfigFormat.XRAY_JSON: "json", ConfigFormat.WG_QUICK: "conf"}
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_server_config_matches_its_golden_file(name: str, node, credentials, request) -> None:
+def test_server_config_matches_its_golden_file(name: str, node, request) -> None:
     """The node's whole config file, byte for byte."""
     transport = profile(name)
     validated = transport.validate(request.getfixturevalue(PARAMS_FIXTURE[name]))
-    rendered = transport.profile.render_server(node, validated, credentials)
+    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    rendered = transport.profile.render_server(node, validated, clients)
 
-    path = GOLDEN / f"{name}-server.json"
+    path = GOLDEN / f"{name}-server.{EXTENSION[transport.meta.config_format]}"
     if os.environ.get("UPDATE_GOLDEN"):
         path.write_text(rendered)
         pytest.skip(f"golden file rewritten: {path.name} ({len(rendered)} bytes)")
@@ -46,8 +64,8 @@ def test_server_config_matches_its_golden_file(name: str, node, credentials, req
     )
 
 
-@pytest.mark.parametrize("name", INSTALLED)
-def test_client_entry_matches_its_golden_file(name: str, node, credentials, request) -> None:
+@pytest.mark.parametrize("name", DELIVERABLE)
+def test_client_entry_matches_its_golden_file(name: str, node, request) -> None:
     """One friend's subscription entry, byte for byte.
 
     Pinned separately from the server config because this string goes to a
@@ -56,7 +74,8 @@ def test_client_entry_matches_its_golden_file(name: str, node, credentials, requ
     """
     transport = profile(name)
     validated = transport.validate(request.getfixturevalue(PARAMS_FIXTURE[name]))
-    entry = transport.profile.render_client(node, validated, credentials[0])
+    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    entry = transport.profile.render_client(node, validated, clients[0])
     rendered = f"{entry.entry}\n"
 
     path = GOLDEN / f"{name}-client.txt"

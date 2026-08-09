@@ -69,12 +69,19 @@ run:
   on_fail:
     # -p hashi-e2e is load-bearing: without it this collects logs from the dev
     # project and prints nothing while the failing stack sits there.
-    - "docker compose --env-file .env -p hashi-e2e -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml -f deploy/docker-compose.e2e.yml logs --no-color"
+    - "docker compose --env-file .env --env-file deploy/e2e.env -p hashi-e2e -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml -f deploy/docker-compose.e2e.yml logs --no-color"
 
 needs:
   - key:   HASHI_SECRET_KEY
     where: env-file                 # .env, passed by every Make target as --env-file
     why:   "the control plane refuses to boot without it"
+  # 2026-08-09 (e2-117): the e2e stack no longer depends on the owner's `.env`
+  # being COMPLETE. deploy/e2e.env is a second --env-file, committed and fake,
+  # supplying every variable the base compose file requires. Before it, a `.env`
+  # missing HASHI_OPERATOR_USERNAME (as the owner's was) made the whole suite
+  # unbootable, and the failure read as a compose error rather than as an
+  # incomplete environment. Anything that shells out to compose must pass BOTH
+  # files, in that order — see tests/e2e/conftest.py.
 
 # The honesty section. Copy it into each scenario's docstring.
 boundary:

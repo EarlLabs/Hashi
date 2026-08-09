@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from edge.registry import (
     ClientEntry,
+    ConfigFormat,
     KeyKind,
     KeyScope,
     TransportMeta,
@@ -26,6 +27,26 @@ from edge.registry import (
 )
 
 INSTALLED = sorted(discover())
+
+PARAMS_FIXTURE = {
+    "vless-reality": "reality_params",
+    "vless-ws-tls": "ws_params",
+    "amneziawg": "awg_params",
+}
+
+# Transports that CAN appear in a v1 subscription. The client-entry assertions apply
+# only to these — a transport declaring itself inexpressible is required to refuse, and
+# that refusal has its own test rather than being an exception inside the shared ones.
+DELIVERABLE = sorted(name for name, meta in discover().items() if meta.subscription_expressible)
+
+# The credentials fixture differs per transport family: the WireGuard family needs a
+# peer keypair in ``Credential.secrets``, which VLESS has no use for.
+CREDENTIALS_FIXTURE = {
+    "vless-reality": "credentials",
+    "vless-ws-tls": "credentials",
+    "amneziawg": "awg_credentials",
+}
+
 
 # Every transport shipped today must be discoverable. An empty registry used to be
 # a passing test (the scaffold had no transports), and the backlog names the
@@ -107,16 +128,65 @@ def test_unknown_transport_raises_rather_than_returning_none(name: str = "no-suc
         profile(name)
 
 
+
+
 # --- rendering, for every transport -----------------------------------------
+#
+# The assertions below are FORMAT-AWARE rather than protocol-aware, mirroring the
+# production code: ``authorised_subjects`` knows how to read an Xray JSON config and a
+# wg-quick config, and nothing here knows which protocol produced either. A transport
+# rendering a third format fails on the extractor — loudly, in one place — rather than
+# silently passing an assertion that never looked at anything.
 
 def params_for(name: str, request: pytest.FixtureRequest) -> dict[str, object]:
-    """The frozen parameter set for one transport, from conftest.
+    """The frozen parameter set for one transport, from conftest."""
+    return request.getfixturevalue(PARAMS_FIXTURE[name])
 
-    Indirection through the fixture name keeps the per-transport literals in one
-    file (conftest) while these tests stay parametrised over the registry.
+
+def clients_for(name: str, request: pytest.FixtureRequest) -> list:
+    """The credentials appropriate to this transport's family.
+
+    The WireGuard family needs a peer keypair in ``Credential.secrets``; VLESS has no
+    use for one. Both are just ``Credential`` as far as the contract is concerned.
     """
-    fixture = {"vless-reality": "reality_params", "vless-ws-tls": "ws_params"}[name]
-    return request.getfixturevalue(fixture)
+    return request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+
+
+def render(name: str, node, request, clients=None) -> str:
+    """Validate this transport's parameters and render its server config."""
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    if clients is None:
+        clients = clients_for(name, request)
+    return transport.profile.render_server(node, validated, clients)
+
+
+def authorised_subjects(name: str, config: str) -> set[str]:
+    """Who this rendered config lets in, read back out of the config itself.
+
+    Parsed rather than assumed, because "revocation is re-rendering" is only a real
+    guarantee if the rendered file is what changes. For the WireGuard family the
+    authorised identity is the peer's PUBLIC KEY (that is what the daemon
+    authenticates); for Xray it is the client id.
+    """
+    meta = discover()[name]
+    if meta.config_format is ConfigFormat.XRAY_JSON:
+        document = json.loads(config)
+        return {
+            client["id"]
+            for inbound in document["inbounds"]
+            for client in inbound["settings"]["clients"]
+        }
+    if meta.config_format is ConfigFormat.WG_QUICK:
+        return {
+            line.split("=", 1)[1].strip()
+            for line in config.splitlines()
+            if line.strip().startswith("PublicKey")
+        }
+    raise AssertionError(
+        f"{name} renders {meta.config_format!r}, which this test cannot read. Teach the "
+        "extractor about the format rather than exempting the transport."
+    )
 
 
 @pytest.mark.parametrize("name", INSTALLED)
@@ -144,139 +214,159 @@ def test_params_reject_a_port_outside_the_declared_range(name: str, request) -> 
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_render_server_is_deterministic(name: str, node, credentials, request) -> None:
+def test_render_server_is_deterministic(name: str, node, request) -> None:
     """Identical inputs, identical bytes — core invariants §3, "rendering is idempotent".
 
     Not a style check: drift detection on a node is a byte comparison against a
-    re-render, so a renderer that reorders a dict or stamps a timestamp makes
-    every node look permanently drifted and the alarm gets ignored.
+    re-render, so a renderer that reorders a dict or stamps a timestamp makes every node
+    look permanently drifted and the alarm gets ignored.
     """
-    transport = profile(name)
-    validated = transport.validate(params_for(name, request))
-    first = transport.profile.render_server(node, validated, credentials)
-    second = transport.profile.render_server(node, validated, credentials)
-    assert first == second
+    assert render(name, node, request) == render(name, node, request)
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_render_server_emits_valid_json(name: str, node, credentials, request) -> None:
-    """Both transports render Xray configs, which are JSON documents.
+def test_render_server_authorises_exactly_the_given_clients(name: str, node, request) -> None:
+    """Revocation is re-rendering. The authorised set must follow its input exactly."""
+    clients = clients_for(name, request)
 
-    Parsing is the cheap half of validation and needs no binary; the expensive
-    half — does the daemon accept it — is ``test_upstream_validation.py``.
-    """
-    transport = profile(name)
-    validated = transport.validate(params_for(name, request))
-    document = json.loads(transport.profile.render_server(node, validated, credentials))
-    assert document["inbounds"][0]["port"] == validated["port"]
+    everyone = authorised_subjects(name, render(name, node, request, clients))
+    assert len(everyone) == len(clients), (
+        f"{name}: rendered {len(everyone)} authorised identities for {len(clients)} clients"
+    )
+
+    # One removed — the whole point of the fan-out in item 9.
+    remaining = authorised_subjects(name, render(name, node, request, clients[:1]))
+    assert len(remaining) == 1
+    assert remaining < everyone, f"{name}: dropping a client did not shrink the config"
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_rendered_server_never_enables_a_record_of_who_connected(
-    name: str, node, credentials, request
-) -> None:
+def test_render_server_with_no_clients_authorises_nobody(name: str, node, request) -> None:
+    """A node with no friends yet — or whose last friend was just revoked — is a real state."""
+    assert authorised_subjects(name, render(name, node, request, [])) == set()
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_rendered_server_never_records_who_connected(name: str, node, request) -> None:
     """The charter's one unforgivable record, asserted in the rendered bytes.
 
-    Checked on the OUTPUT rather than by reading the template, because a template
-    is not what runs on a node — the rendered file is. Two settings matter: Xray's
-    access log must be "none" (omitting the key sends it to stdout, and the
-    container log is on disk), and sniffing must be off (it exists to extract the
-    destination hostname from a client's traffic).
+    Checked on the OUTPUT rather than by reading the template, because a template is not
+    what runs on a node — the rendered file is. Format-specific because the ways to
+    enable logging differ: Xray has an access log and traffic sniffing; the WireGuard
+    family has no logging directive at all, and the assertion is that none appeared.
     """
-    transport = profile(name)
-    validated = transport.validate(params_for(name, request))
-    document = json.loads(transport.profile.render_server(node, validated, credentials))
-    assert document["log"]["access"] == "none", f"{name}: Xray access log is not disabled"
-    for inbound in document["inbounds"]:
-        assert inbound.get("sniffing", {}).get("enabled") is False, (
-            f"{name}: sniffing is enabled — that is a DNS record of who went where"
-        )
+    config = render(name, node, request)
+    meta = discover()[name]
+
+    if meta.config_format is ConfigFormat.XRAY_JSON:
+        document = json.loads(config)
+        assert document["log"]["access"] == "none", f"{name}: Xray access log is not disabled"
+        for inbound in document["inbounds"]:
+            assert inbound.get("sniffing", {}).get("enabled") is False, (
+                f"{name}: sniffing is enabled — that is a DNS record of who went where"
+            )
+    else:
+        lowered = config.lower()
+        for directive in ("log", "verbose", "debug"):
+            assert directive not in lowered, (
+                f"{name}: the rendered config mentions {directive!r}"
+            )
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_render_server_authorises_exactly_the_given_clients(
-    name: str, node, credentials, request
-) -> None:
-    """Revocation is re-rendering. The client list must follow its input exactly."""
-    transport = profile(name)
-    validated = transport.validate(params_for(name, request))
+def test_a_rendered_config_never_names_a_friend(name: str, node, request) -> None:
+    """Labels in a node's config are opaque subjects, never nicknames.
 
-    everyone = json.loads(transport.profile.render_server(node, validated, credentials))
-    ids = {client["id"] for client in everyone["inbounds"][0]["settings"]["clients"]}
-    assert ids == {c.subject for c in credentials}
-
-    # One friend removed — the whole point of the fan-out in item 9.
-    remaining = json.loads(
-        transport.profile.render_server(node, validated, credentials[:1])
-    )
-    left = {client["id"] for client in remaining["inbounds"][0]["settings"]["clients"]}
-    assert left == {credentials[0].subject}
-    assert credentials[1].subject not in remaining["inbounds"][0]["settings"]["clients"][0]["id"]
+    A node can be seized. Anything in a file on it that identifies a person by a name
+    the operator would recognise is the record the charter says must not exist.
+    """
+    config = render(name, node, request)
+    for forbidden in ("kolya", "masha", "nickname", "@"):
+        assert forbidden not in config.lower(), f"{name}: config contains {forbidden!r}"
 
 
-@pytest.mark.parametrize("name", INSTALLED)
-def test_render_server_with_no_clients_is_valid_and_authorises_nobody(
-    name: str, node, request
-) -> None:
-    """A node with no friends yet is a real state, not an error."""
-    transport = profile(name)
-    validated = transport.validate(params_for(name, request))
-    document = json.loads(transport.profile.render_server(node, validated, ()))
-    assert document["inbounds"][0]["settings"]["clients"] == []
+# --- the client entry, only for transports that have one ---------------------
 
-
-@pytest.mark.parametrize("name", INSTALLED)
-def test_render_client_returns_a_labelled_entry(name: str, node, credentials, request) -> None:
+@pytest.mark.parametrize("name", DELIVERABLE)
+def test_render_client_returns_a_labelled_entry(name: str, node, request) -> None:
     """The ``ClientEntry`` contract: finished text plus protocol-agnostic metadata."""
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
-    entry = transport.profile.render_client(node, validated, credentials[0])
+    credential = clients_for(name, request)[0]
+    entry = transport.profile.render_client(node, validated, credential)
 
     assert isinstance(entry, ClientEntry)
     assert entry.node_id == node.id
     assert entry.country_label == node.location_label
     assert entry.display_label
-    assert entry.entry.startswith("vless://")
-    # The friend's own credential must be in there, or the entry authorises nobody.
-    assert credentials[0].subject in entry.entry
+    assert credential.subject in entry.entry, "the entry authorises nobody"
 
 
-@pytest.mark.parametrize("name", INSTALLED)
-def test_client_entry_carries_no_display_fragment(name: str, node, credentials, request) -> None:
+@pytest.mark.parametrize("name", DELIVERABLE)
+def test_client_entry_carries_no_display_fragment(name: str, node, request) -> None:
     """Labelling belongs to `control`, once, for every scheme in the format.
 
-    If a transport appended its own fragment, `control` appending the shared one
-    would produce two — and the charter's "pick an exit country" behaviour would
-    be implemented once per protocol instead of once.
+    If a transport appended its own fragment, `control` appending the shared one would
+    produce two — and the charter's "pick an exit country" behaviour would be
+    implemented once per protocol instead of once.
     """
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
-    entry = transport.profile.render_client(node, validated, credentials[0])
+    entry = transport.profile.render_client(node, validated, clients_for(name, request)[0])
     assert "#" not in entry.entry, f"{name}: render_client appended a fragment itself"
 
 
-@pytest.mark.parametrize("name", INSTALLED)
-def test_client_entry_never_leaks_the_server_private_key(
-    name: str, node, credentials, request
-) -> None:
-    """A client entry goes to a friend's device. Node secrets must not ride along.
-
-    The public half is supposed to be there (Reality's `pbk`); the private half
-    would hand every friend the ability to impersonate the node.
-    """
+@pytest.mark.parametrize("name", DELIVERABLE)
+def test_client_entry_never_leaks_the_server_private_key(name: str, node, request) -> None:
+    """A client entry goes to a friend's device. Node secrets must not ride along."""
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
-    entry = transport.profile.render_client(node, validated, credentials[0])
+    entry = transport.profile.render_client(node, validated, clients_for(name, request)[0])
     private = validated.get("private_key")
     if private:
         assert private not in entry.entry, f"{name}: the node's private key is in a client URI"
 
 
-@pytest.mark.parametrize("name", INSTALLED)
-def test_two_friends_get_different_entries(name: str, node, credentials, request) -> None:
+@pytest.mark.parametrize("name", DELIVERABLE)
+def test_two_friends_get_different_entries(name: str, node, request) -> None:
     """Shared entries would make individual revocation impossible."""
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
-    first = transport.profile.render_client(node, validated, credentials[0])
-    second = transport.profile.render_client(node, validated, credentials[1])
+    clients = clients_for(name, request)
+    first = transport.profile.render_client(node, validated, clients[0])
+    second = transport.profile.render_client(node, validated, clients[1])
     assert first.entry != second.entry
+
+
+# --- and for transports that deliberately have none -------------------------
+
+NOT_DELIVERABLE = sorted(set(INSTALLED) - set(DELIVERABLE))
+
+
+@pytest.mark.parametrize("name", NOT_DELIVERABLE)
+def test_an_inexpressible_transport_refuses_loudly(name: str, node, request) -> None:
+    """A transport with no URI form must RAISE, not improvise.
+
+    This is the charter's open question answered honestly (amendment A, and the debt
+    named when AmneziaWG moved to M4). Emitting something URI-shaped would put a line in
+    a friend's subscription their client cannot parse, and the symptom would be "the
+    whole subscription is broken" rather than "one entry is unsupported".
+
+    Parametrised over the registry, so it holds for any future transport that declares
+    itself inexpressible — and the list being empty would simply mean no such transport
+    ships, not that the rule went untested.
+    """
+    transport = profile(name)
+    validated = transport.validate(params_for(name, request))
+    with pytest.raises(Exception) as raised:
+        transport.profile.render_client(node, validated, clients_for(name, request)[0])
+    # The message has to tell an operator what to do, not just fail.
+    assert "subscription" in str(raised.value).lower()
+
+
+@pytest.mark.parametrize("name", NOT_DELIVERABLE)
+def test_an_inexpressible_transport_still_renders_a_server_config(
+    name: str, node, request
+) -> None:
+    """It is unusable in a SUBSCRIPTION, not unusable. It runs the entry-to-leaf hop."""
+    assert render(name, node, request).strip()

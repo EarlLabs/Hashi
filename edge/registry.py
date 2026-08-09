@@ -52,18 +52,62 @@ class KeyKind(StrEnum):
     on a protocol.
     """
 
-    # An X25519 keypair. Yields two values: "<name>" (private) and
-    # "<name>_public". Reality uses it; so does WireGuard. Neither is named here.
+    # An X25519 keypair, base64-URL encoded without padding — the format
+    # ``xray x25519`` emits, and the only one Reality accepts.
     X25519_KEYPAIR = "x25519-keypair"
+
+    # The same cryptographic shape, STANDARD base64 with padding — the format
+    # ``wg genkey`` emits and the WireGuard family requires.
+    #
+    # Two kinds for one primitive looks redundant and is not. The encoding is not a
+    # presentation detail here: a Reality-encoded key in a WireGuard config is
+    # rejected by the daemon, and vice versa. Making it one kind would push the
+    # choice back into `control`, which would then need to know which protocol
+    # asked — the exact branch this vocabulary exists to prevent. Splitting it keeps
+    # the decision where it belongs: in the transport's own declaration.
+    X25519_KEYPAIR_BASE64 = "x25519-keypair-base64"
 
     # A random UUID, as the canonical 8-4-4-4-12 string. VLESS client ids.
     UUID4 = "uuid4"
 
-    # 32 bytes of URL-safe randomness. Bearer-shaped secrets and pre-shared keys.
+    # 32 bytes of URL-safe randomness. Bearer-shaped secrets.
     TOKEN_32 = "token-32"
+
+    # 32 random bytes in STANDARD base64 with padding — what ``wg genkey`` emits and
+    # the only form the WireGuard family's pre-shared key accepts. The same split, and
+    # the same reasoning, as the two X25519 kinds above: a URL-safe token here is the
+    # right number of bytes in the wrong alphabet, and the daemon rejects it with a
+    # message about the config rather than about the encoding.
+    SYMMETRIC_32_BASE64 = "symmetric-32-base64"
 
     # A short lowercase hex string (8 hex chars = 4 bytes). Reality short ids.
     SHORT_ID = "short-id"
+
+
+class ConfigFormat(StrEnum):
+    """The shape of a rendered server config, and therefore which checker validates it.
+
+    A closed vocabulary for the same reason as ``KeyKind``: validation has to dispatch
+    on something, and dispatching on the FORMAT means one checker per format rather
+    than one per protocol. Two transports that both render Xray JSON share a checker
+    without either being named anywhere in ``edge/checker.py``.
+
+    **This field was added after the contract was first frozen, and that is worth
+    recording rather than glossing.** The backlog predicted the bill: moving AmneziaWG
+    to M4 left the named debt "does the contract survive a family that is not
+    expressible as a URI" (revision 2, §1.D — "счёт придёт в M4"). It came due here.
+    The contract's first implementation assumed every config was Xray JSON, because
+    both transports it was drawn from were. Adding a WireGuard-family transport needed
+    one new field and one new dispatch arm — not a branch on a protocol, but not free
+    either. Recorded so the next reader knows the contract widened once, deliberately,
+    and why.
+    """
+
+    # An Xray-core JSON config, validated by `xray run -test`.
+    XRAY_JSON = "xray-json"
+
+    # A wg-quick INI config, validated by `awg-quick strip` from amneziawg-tools.
+    WG_QUICK = "wg-quick"
 
 
 class KeyScope(StrEnum):
@@ -111,6 +155,19 @@ class KeySpec:
     # `control` files each value accordingly.
     secret: bool = True
 
+    # Whether BOTH ends of a node-to-node hop must carry the identical value.
+    #
+    # Declared rather than inferred, and this is the S6 question again in a second
+    # form: a symmetric pre-shared key minted independently at each end produces two
+    # configuration files that are individually valid and never complete a handshake.
+    # `control` cannot know which of a transport's values are symmetric without being
+    # told — knowing would mean recognising the field by name, which is exactly the
+    # protocol knowledge the contract keeps out of the control plane.
+    #
+    # Meaningful only at NODE scope and only on a hop (see ``edge/relay.py``); a
+    # friend-facing transport never has a second end to agree with.
+    shared_between_peers: bool = False
+
 
 @dataclass(frozen=True)
 class TransportMeta:
@@ -130,6 +187,10 @@ class TransportMeta:
     # Every piece of key material this transport needs, at either scope. `control`
     # walks this list to mint material; see ``KeySpec``.
     key_material: tuple[KeySpec, ...] = ()
+
+    # Which checker validates this transport's rendered server config. See
+    # ``ConfigFormat`` — including the note on when and why this field was added.
+    config_format: ConfigFormat = ConfigFormat.XRAY_JSON
 
     # Whether this transport can be serialised into the v1 subscription format —
     # a base64 list of client-entry URIs with an appended display fragment

@@ -17,8 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.api import schemas
 from control.app.auth import require_operator
 from control.app.dependencies import session_dependency
-from control.app.services import apply, friends, health, nodes, revocation
-from edge.registry import discover, profile
+from control.app.models import NodeState
+from control.app.services import (
+    apply,
+    friends,
+    health,
+    nodes,
+    relay,
+    revocation,
+    rotation,
+    transports,
+)
+from edge.registry import discover
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_operator)])
 
@@ -35,9 +45,6 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
     """
     listed = []
     for name, meta in sorted(discover().items()):
-        transport = profile(name)
-        generated = {spec.name for spec in meta.key_material}
-        generated |= {spec.public_name for spec in meta.key_material if spec.public_name}
         listed.append(
             schemas.TransportMetaResponse(
                 name=meta.name,
@@ -46,12 +53,9 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
                 port_range=meta.port_range,
                 subscription_expressible=meta.subscription_expressible,
                 # Required fields the operator must fill in: everything the model
-                # requires minus everything we mint for them.
-                operator_params=sorted(
-                    field
-                    for field, info in transport.params_model.model_fields.items()
-                    if info.is_required() and field not in generated
-                ),
+                # requires minus everything we mint for them. Shared with the panel's
+                # rotation form so the two screens cannot drift apart.
+                operator_params=transports.operator_params(name),
             )
         )
     return listed
@@ -104,6 +108,28 @@ async def enable_transport(
             await friends.grant_everywhere(session, friend)
     await session.commit()
     return node_transport
+
+
+@router.post("/nodes/{node_id}/state", response_model=schemas.NodeResponse)
+async def set_node_state(
+    node_id: str,
+    payload: schemas.NodeStateChange,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Move a node between states — backlog item 17.
+
+    Exists as an operator action, not only as something ``apply`` does, because the two
+    transitions an operator needs most cannot come from an apply: taking a node OUT of
+    rotation without destroying it (``active -> draft``, so it stops reaching friends
+    immediately) and retiring one whose host is gone. Illegal transitions are refused
+    with a 409 naming what is allowed — see ``NodeState.allowed_from``.
+    """
+    return await nodes.set_node_state(
+        session,
+        node_id=node_id,
+        state=NodeState(payload.state),
+        detail=payload.detail,
+    )
 
 
 @router.post("/nodes/{node_id}/apply", response_model=schemas.ApplyResponse)
@@ -167,5 +193,109 @@ async def revoke_friend(friend_id: str, session: AsyncSession = Depends(session_
         complete=outcome.complete,
         nodes_updated=outcome.nodes_updated,
         nodes_failed=outcome.nodes_failed,
+        summary=outcome.summary(),
+    )
+
+
+# --- hops between nodes (item 16) -------------------------------------------
+
+@router.get("/hops", response_model=list[schemas.HopResponse])
+async def list_hops(session: AsyncSession = Depends(session_dependency)):
+    """Every hop, entry end first. A half-hop is listed, not hidden."""
+    return [
+        schemas.HopResponse(
+            entry=schemas.HopEndResponse.model_validate(entry),
+            leaf=schemas.HopEndResponse.model_validate(leaf) if leaf else None,
+        )
+        for entry, leaf in await relay.list_hops(session)
+    ]
+
+
+@router.post("/hops", response_model=schemas.HopResponse, status_code=status.HTTP_201_CREATED)
+async def create_hop(
+    payload: schemas.HopCreate, session: AsyncSession = Depends(session_dependency)
+):
+    """Configure both ends of one entry→leaf tunnel.
+
+    Neither end is written unless the pair would form a working tunnel — see
+    ``services/relay.py`` for why a half-established hop is the failure worth spending
+    a validation pass to avoid.
+    """
+    entry, leaf = await relay.establish_hop(
+        session,
+        entry_node_id=payload.entry_node_id,
+        leaf_node_id=payload.leaf_node_id,
+        transport_name=payload.transport_name,
+        entry_params=payload.entry_params,
+        leaf_params=payload.leaf_params,
+    )
+    return schemas.HopResponse(
+        entry=schemas.HopEndResponse.model_validate(entry),
+        leaf=schemas.HopEndResponse.model_validate(leaf),
+    )
+
+
+@router.delete("/hops/{node_transport_id}", status_code=status.HTTP_200_OK)
+async def dissolve_hop(
+    node_transport_id: str, session: AsyncSession = Depends(session_dependency)
+):
+    """Remove both ends. Returns the nodes that now need re-applying.
+
+    Re-applying is the CALLER's next step rather than something done here: the two
+    nodes may be unreachable, and a delete that reported failure because a node was
+    down would leave the operator unable to remove a hop to a host that no longer
+    exists — which is exactly when they need to.
+    """
+    return {"needs_apply": await relay.dissolve_hop(session, node_transport_id=node_transport_id)}
+
+
+# --- rotation (items 23 and 24) ---------------------------------------------
+
+@router.post(
+    "/transports/{node_transport_id}/rotate-keys",
+    response_model=schemas.RotationResponse,
+)
+async def rotate_keys(
+    node_transport_id: str,
+    include_clients: bool = True,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Re-mint this transport's key material and push it.
+
+    Friends' subscription URLs are untouched: they re-fetch the same link and receive
+    the new material, which is what makes rotation possible without anyone touching
+    their device.
+    """
+    outcome = await rotation.rotate_keys(
+        session, node_transport_id=node_transport_id, include_clients=include_clients
+    )
+    return schemas.RotationResponse(
+        node_transport_id=outcome.node_transport_id,
+        rotated=outcome.rotated,
+        complete=outcome.complete,
+        summary=outcome.summary(),
+    )
+
+
+@router.post(
+    "/transports/{node_transport_id}/params", response_model=schemas.RotationResponse
+)
+async def replace_params(
+    node_transport_id: str,
+    payload: schemas.ParamsReplace,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Replace operator-supplied parameters — a blocked Reality decoy, for instance.
+
+    Not named after any protocol's field, deliberately: a ``/rotate-decoy`` route would
+    be this control plane knowing what a decoy is.
+    """
+    outcome = await rotation.replace_params(
+        session, node_transport_id=node_transport_id, params=payload.params
+    )
+    return schemas.RotationResponse(
+        node_transport_id=outcome.node_transport_id,
+        rotated=outcome.rotated,
+        complete=outcome.complete,
         summary=outcome.summary(),
     )

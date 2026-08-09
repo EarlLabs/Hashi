@@ -8,7 +8,7 @@ WHY:  the declaration is how the charter's fourth criterion is kept. `control`
 HOW:  one module-level ``META``. ``edge.registry.discover()`` imports exactly this.
 """
 
-from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+from edge.registry import ConfigFormat, KeyKind, KeyScope, KeySpec, TransportMeta
 
 META = TransportMeta(
     name="vless-reality",
@@ -21,6 +21,9 @@ META = TransportMeta(
     # is not a default: a fleet where every node listens on 443 is still a fleet
     # you can enumerate by probing 443. The operator picks per node.
     port_range=(443, 65535),
+    # Declared explicitly rather than left to the default: a transport validated
+    # by the wrong checker passes for the wrong reason.
+    config_format=ConfigFormat.XRAY_JSON,
     key_material=(
         # The server's Reality private key. Its public half goes into every
         # client entry as `pbk`, so the generator yields both and this declares

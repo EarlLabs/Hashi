@@ -29,8 +29,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import NodeOperationFailed
-from control.app.models import Credential, Node, NodeState, NodeTransport
-from control.app.services import nodes
+from control.app.models import (
+    Credential,
+    Node,
+    NodeState,
+    NodeTransport,
+    TransportPurpose,
+)
+from control.app.services import nodes, relay
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
@@ -46,9 +52,6 @@ logger = logging.getLogger(__name__)
 # A module constant rather than a settings field because changing it is a deliberate,
 # reviewed act with a golden-file consequence, not an environment tweak. It is the
 # one value here that is deliberately not operator-configurable at runtime.
-XRAY_IMAGE = "ghcr.io/xtls/xray-core:1.8.24"
-
-
 async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     """Every enabled transport's config for one node, keyed by transport name.
 
@@ -72,6 +75,16 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     )
 
     for node_transport in listed.scalars().unique():
+        # A hop end is rendered as a PAIR with its far end, not as a server with a list
+        # of friends — see services/relay.py. Dispatched on the stored purpose, which
+        # is topology, never on the transport's name.
+        if node_transport.purpose in TransportPurpose.relays():
+            peer = await relay.peer_of(session, node_transport)
+            rendered[node_transport.transport_name] = relay.render_end(
+                node_transport, peer
+            )
+            continue
+
         result = await session.execute(
             select(Credential).where(Credential.node_transport_id == node_transport.id)
         )
@@ -111,7 +124,7 @@ def target_for(node: Node, node_settings: Settings) -> NodeTarget:
     )
 
 
-def validate_before_push(transport_name: str, config: str) -> None:
+def validate_before_push(transport_name: str, config: str, config_format) -> None:
     """Refuse to push a config the daemon would reject.
 
     Treats "no checker installed" and "checker cannot open a referenced file" as
@@ -125,7 +138,7 @@ def validate_before_push(transport_name: str, config: str) -> None:
     rejected — a syntax or schema error, which would restart the node into a crash
     loop.
     """
-    result = checker.validate(config)
+    result = checker.validate(config, config_format=config_format)
 
     if not result.available:
         logger.warning(
@@ -164,14 +177,14 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
 
     configs = await render_for_node(session, node)
     for transport_name, config in configs.items():
-        validate_before_push(transport_name, config)
+        # The FORMAT comes from the transport's own declaration, so the right checker
+        # runs without this module knowing which protocol it is looking at.
+        validate_before_push(
+            transport_name, config, profile(transport_name).meta.config_format
+        )
 
     compose = node_stack.render_compose(
-        transports=[
-            {"name": name, "config_path": node_stack.config_path(name)}
-            for name in sorted(configs)
-        ],
-        xray_image=XRAY_IMAGE,
+        transports=node_stack.services_for(sorted(configs))
     )
 
     try:
@@ -184,7 +197,10 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             await node_stack.prepare(connection)
             for transport_name, config in configs.items():
                 await node_stack.place_config(
-                    connection, transport_name=transport_name, config=config
+                    connection,
+                    transport_name=transport_name,
+                    config=config,
+                    path=node_stack.config_path_for(transport_name),
                 )
             await node_stack.place_compose(connection, compose=compose)
             await node_stack.restart(connection)

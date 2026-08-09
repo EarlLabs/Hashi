@@ -22,10 +22,13 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+from edge.registry import ConfigFormat
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-# Where scripts/fetch-upstream-checkers.sh installs the pinned binary.
-VENDORED = REPO_ROOT / ".tools" / "xray"
+# Where scripts/fetch-upstream-checkers.sh installs the pinned binaries.
+TOOLS = REPO_ROOT / ".tools"
+VENDORED = TOOLS / "xray"
 
 
 def xray_binary() -> str | None:
@@ -45,6 +48,22 @@ def xray_binary() -> str | None:
     return shutil.which("xray")
 
 
+def awg_quick_binary() -> str | None:
+    """The AmneziaWG config checker, or ``None``.
+
+    ``awg-quick strip`` parses a wg-quick config and prints it without the wg-quick-only
+    directives — which means a parse failure is a non-zero exit, and that is exactly the
+    check we want. Same resolution order and same reasoning as ``xray_binary``.
+    """
+    override = os.environ.get("HASHI_AWG_QUICK_BIN")
+    if override:
+        return override if pathlib.Path(override).is_file() else None
+    vendored = TOOLS / "awg-quick"
+    if vendored.is_file():
+        return str(vendored)
+    return shutil.which("awg-quick")
+
+
 @dataclass(frozen=True)
 class CheckResult:
     """The outcome of asking the daemon whether it would accept a config."""
@@ -60,7 +79,71 @@ class CheckResult:
         return self.available and self.ok
 
 
-def validate(config: str, *, timeout: int = 60) -> CheckResult:
+def validate(
+    config: str,
+    *,
+    config_format: ConfigFormat = ConfigFormat.XRAY_JSON,
+    timeout: int = 60,
+) -> CheckResult:
+    """Ask the daemon that will run ``config`` whether it would accept it.
+
+    Dispatches on the FORMAT the transport declared, never on which transport asked —
+    so two transports rendering Xray JSON share this path without either being named
+    here. See ``ConfigFormat``, including the note on when that field was added.
+    """
+    match config_format:
+        case ConfigFormat.XRAY_JSON:
+            return _validate_xray(config, timeout=timeout)
+        case ConfigFormat.WG_QUICK:
+            return _validate_wg_quick(config, timeout=timeout)
+        case _:
+            # Never silently "fine": an unknown format must not read as validated.
+            return CheckResult(
+                available=False,
+                ok=False,
+                output=f"no checker is wired up for config format {config_format!r}",
+            )
+
+
+def _validate_wg_quick(config: str, *, timeout: int = 60) -> CheckResult:
+    """Validate a wg-quick config with ``awg-quick strip``.
+
+    Note the sharp limit, the same one the Xray checker has: this parses, it does not
+    bring an interface up. It cannot tell you the peer is reachable, and it says nothing
+    at all about whether the obfuscation defeats inspection on a real network.
+    """
+    binary = awg_quick_binary()
+    if binary is None:
+        return CheckResult(
+            available=False, ok=False, output="no awg-quick binary available"
+        )
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        # awg-quick derives the interface name from the FILENAME, and rejects a name it
+        # considers invalid before it ever looks at the contents.
+        path = pathlib.Path(directory) / "awg0.conf"
+        path.write_text(config)
+        path.chmod(0o600)
+        try:
+            result = subprocess.run(
+                [binary, "strip", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return CheckResult(available=True, ok=False, output="awg-quick strip timed out")
+
+    return CheckResult(
+        available=True,
+        ok=result.returncode == 0,
+        output=(result.stderr + result.stdout).strip(),
+    )
+
+
+def _validate_xray(config: str, *, timeout: int = 60) -> CheckResult:
     """Ask Xray whether it would accept ``config``.
 
     Validates syntax and schema only. It will happily accept a decoy host that

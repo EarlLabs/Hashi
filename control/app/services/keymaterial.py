@@ -52,13 +52,17 @@ class Minted:
     secrets: dict[str, str] = field(default_factory=dict)
 
 
-def _x25519_keypair() -> tuple[str, str]:
-    """A fresh X25519 keypair, encoded the way the data plane expects.
+def _x25519_keypair(*, urlsafe: bool = True) -> tuple[str, str]:
+    """A fresh X25519 keypair, encoded the way the asking data plane expects.
 
-    Base64-URL of the RAW 32 bytes, with padding stripped — which is exactly the
-    format ``xray x25519`` emits and the only one Reality accepts. PEM here would
-    be rejected by the daemon, and the error message points at the config rather
-    than at the encoding.
+    Always the RAW 32 bytes, never PEM: PEM is accepted by our own validation and
+    rejected by both daemons, with an error that points at the config rather than at
+    the encoding.
+
+    ``urlsafe`` selects the alphabet and padding. Base64-URL unpadded is what
+    ``xray x25519`` emits and the only form Reality accepts; standard padded base64
+    is what ``wg genkey`` emits and the only form the WireGuard family accepts. The
+    caller does not choose — the transport's declared ``KeyKind`` does.
     """
     private = X25519PrivateKey.generate()
     private_bytes = private.private_bytes(
@@ -71,7 +75,9 @@ def _x25519_keypair() -> tuple[str, str]:
     )
 
     def encode(raw: bytes) -> str:
-        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        if urlsafe:
+            return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        return base64.b64encode(raw).decode()
 
     return encode(private_bytes), encode(public_bytes)
 
@@ -85,12 +91,17 @@ def _generate(kind: KeyKind) -> tuple[str, str | None]:
     """
     match kind:
         case KeyKind.X25519_KEYPAIR:
-            return _x25519_keypair()
+            return _x25519_keypair(urlsafe=True)
+        case KeyKind.X25519_KEYPAIR_BASE64:
+            return _x25519_keypair(urlsafe=False)
         case KeyKind.UUID4:
             # uuid4 draws from os.urandom, so this is 122 bits of real entropy.
             return str(uuid.uuid4()), None
         case KeyKind.TOKEN_32:
             return secrets_module.token_urlsafe(32), None
+        case KeyKind.SYMMETRIC_32_BASE64:
+            # Standard base64 of 32 random bytes — 44 characters with padding.
+            return base64.b64encode(secrets_module.token_bytes(32)).decode(), None
         case KeyKind.SHORT_ID:
             # 4 bytes as 8 hex characters. Short because the protocol requires it;
             # its job is to be unguessable to a prober who has not seen a real

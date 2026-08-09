@@ -160,3 +160,65 @@ def checkable_params_for():
         return dict(params)
 
     return materialise
+
+
+# WireGuard-family keys are STANDARD base64 (44 chars, padded) — a different encoding
+# from Reality's, and the wrong one is rejected by the daemon rather than by us.
+FAKE_WG_PRIVATE_KEY = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWY="
+FAKE_WG_PUBLIC_KEY = "Z2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0w="
+FAKE_WG_PRESHARED_KEY = "bW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QUVI="
+
+
+@pytest.fixture
+def awg_params() -> dict[str, object]:
+    """Valid AmneziaWG parameters for one end of a hop.
+
+    Every obfuscation value is arbitrary-but-fixed. In production they must differ per
+    node — shared junk is itself a fingerprint — which is why the model requires them
+    and provides no defaults.
+    """
+    return {
+        "port": 51820,
+        # RFC 1918. Private is enforced by the model, not merely suggested.
+        "tunnel_address": "10.44.0.1/24",
+        "peer_tunnel_address": "10.44.0.2/24",
+        "private_key": FAKE_WG_PRIVATE_KEY,
+        "public_key": FAKE_WG_PUBLIC_KEY,
+        "preshared_key": FAKE_WG_PRESHARED_KEY,
+        "mtu": 1280,
+        "junk_packet_count": 4,
+        "junk_packet_min_size": 40,
+        "junk_packet_max_size": 80,
+        "init_packet_magic_header": 1020327352,
+        "response_packet_magic_header": 2060487442,
+        "underload_packet_magic_header": 3679305607,
+        "transport_packet_magic_header": 1436947798,
+    }
+
+
+@pytest.fixture
+def awg_credentials() -> list[Credential]:
+    """Two peers for the AmneziaWG hop, each with its own keypair.
+
+    Peers rather than friends: this transport runs between our own nodes. The contract
+    calls the scope CLIENT and does not need to know the difference.
+    """
+    return [
+        Credential(
+            subject="cccccccc-0000-4000-8000-000000000003",
+            secrets={
+                "peer_private_key": FAKE_WG_PRIVATE_KEY,
+                "peer_public_key": FAKE_WG_PUBLIC_KEY,
+            },
+        ),
+        Credential(
+            subject="dddddddd-0000-4000-8000-000000000004",
+            secrets={
+                "peer_private_key": FAKE_WG_PRESHARED_KEY,
+                "peer_public_key": FAKE_WG_PRESHARED_KEY,
+                # Its OWN tunnel address. Two peers sharing one would make the second
+                # silently take over the first's route, which the renderer refuses.
+                "peer_tunnel_address": "10.44.0.3/24",
+            },
+        ),
+    ]

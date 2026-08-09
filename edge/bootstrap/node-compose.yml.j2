@@ -1,8 +1,9 @@
 {#
   The data plane on one node.
 
-  WHAT: one container per enabled transport, all running the same pinned upstream
-        Xray image with different configs.
+  WHAT: one container per enabled transport, each running the pinned upstream image
+        its own config FORMAT declared — the two VLESS transports share one, an
+        AmneziaWG hop needs a different daemon entirely.
   WHY:  a container per transport rather than one Xray with many inbounds: a config
         error in a newly enabled protocol then cannot take down the protocol every
         existing friend is already using. Enabling a transport is supposed to be
@@ -27,10 +28,25 @@ name: hashi-node
 services:
 {% for transport in transports %}
   {{ transport.name }}:
-    image: {{ xray_image }}
+    image: {{ transport.image }}
     restart: unless-stopped
     network_mode: host
-    command: ["run", "-config", "{{ transport.config_path }}"]
+    command: [{% for argument in transport.command %}"{{ argument }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% if transport.capabilities %}
+    # Only what the transport's own format declared it needs. A tunnel device cannot
+    # be created without NET_ADMIN; nothing else gets it, so a compromised proxy
+    # container cannot reconfigure the node's network.
+    cap_add:
+{% for capability in transport.capabilities %}
+      - {{ capability }}
+{% endfor %}
+{% endif %}
+{% if transport.devices %}
+    devices:
+{% for device in transport.devices %}
+      - {{ device }}
+{% endfor %}
+{% endif %}
     volumes:
       # Read-only: the daemon has no reason to write to its own configuration, and
       # a compromised data plane must not be able to rewrite what it will load next.

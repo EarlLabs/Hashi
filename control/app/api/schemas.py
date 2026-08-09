@@ -139,3 +139,78 @@ class HealthResponse(BaseModel):
     missing: list[str]
     drifted: list[str]
     detail: str | None
+
+
+class ParamsReplace(BaseModel):
+    """New values for operator-supplied parameters on one node-transport."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Open mapping for the same reason as TransportEnable.params: the shape belongs to
+    # the transport, which validates it with its own model.
+    params: dict = Field(min_length=1)
+
+
+class RotationResponse(BaseModel):
+    """The outcome of a rotation, including the case where the push did not land."""
+
+    node_transport_id: str
+    rotated: list[str]
+    complete: bool
+    summary: str
+
+
+class HopCreate(BaseModel):
+    """One entry→leaf hop, both ends at once — backlog item 16.
+
+    Both ends in one request because a hop is only meaningful as a pair: half a hop is
+    a node holding a tunnel interface that leads nowhere, and an API that could produce
+    one would make that the operator's problem to notice.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The node friends dial. It DIALS the leaf — the direction is forced, since an
+    # entry node behind a Russian carrier NAT cannot be dialled.
+    entry_node_id: str
+    leaf_node_id: str
+    transport_name: str
+
+    # Open mappings, validated by the transport's own model, like everywhere else.
+    entry_params: dict
+    leaf_params: dict
+
+
+class HopEndResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    node_id: str
+    transport_name: str
+    purpose: str
+    # Never ``secrets``: this end's private key lives in the same row.
+    params: dict
+
+
+class HopResponse(BaseModel):
+    """A hop, as the pair it is. ``leaf`` is null when one end has been deleted."""
+
+    entry: HopEndResponse
+    leaf: HopEndResponse | None
+
+
+class NodeStateChange(BaseModel):
+    """An operator moving a node between states.
+
+    ``state`` is a plain string validated against the enum in the service rather than
+    typed as the enum here, so an unknown value produces the service's 409 with its list
+    of legal transitions rather than a bare 422 that says only "not a valid enumeration
+    member".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: str
+    # Only meaningful when moving to `degraded`; the service clears it otherwise, so a
+    # node cannot sit in `active` carrying a stale complaint.
+    detail: str | None = Field(default=None, max_length=500)

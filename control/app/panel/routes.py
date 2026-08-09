@@ -24,7 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.dependencies import session_dependency
 from control.app.errors import DomainError
-from control.app.services import apply, friends, health, nodes, revocation
+from control.app.services import (
+    apply,
+    friends,
+    health,
+    nodes,
+    relay,
+    revocation,
+    rotation,
+    transports,
+)
 from edge.registry import discover
 
 logger = logging.getLogger(__name__)
@@ -79,13 +88,27 @@ async def logout(request: Request) -> Response:
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request, session: AsyncSession = Depends(session_dependency)):
     """The one screen that answers "is my fleet up and who can use it"."""
+    installed = sorted(discover().values(), key=lambda meta: meta.name)
     return TEMPLATES.TemplateResponse(
         request,
         "pages/index.html",
         {
             "nodes": await nodes.list_nodes(session),
             "friends": await friends.list_friends(session),
-            "transports": sorted(discover().values(), key=lambda meta: meta.name),
+            "transports": installed,
+            "hops": await relay.list_hops(session),
+            # A hop's transport is one that cannot ride in a subscription — it is
+            # consumed by a node, not by a phone. Offering the deliverable ones here
+            # would invite the operator to build a tunnel out of a friend-facing
+            # protocol; offering only these makes the form say what it is for.
+            "hop_transports": [
+                meta.name for meta in installed if not meta.subscription_expressible
+            ],
+            "hop_params": {
+                meta.name: transports.operator_params(meta.name)
+                for meta in installed
+                if not meta.subscription_expressible
+            },
         },
     )
 
@@ -101,6 +124,15 @@ async def node_detail(
         "pages/node.html",
         {
             "node": node,
+            # What the operator may retype on a transport already enabled here —
+            # item 24's rotation form. Only transports still installed in this image
+            # get one: a node running something this image no longer ships cannot be
+            # re-validated here, and offering the form would promise otherwise.
+            "editable": {
+                t.transport_name: transports.operator_params(t.transport_name)
+                for t in node.transports
+                if t.transport_name in installed
+            },
             # Only transports not already on this node, so the form cannot offer an
             # action that is guaranteed to conflict.
             "available": sorted(
@@ -161,15 +193,16 @@ async def enable_transport(
     form = await request.form()
     transport_name = str(form.get("transport_name", ""))
 
-    params: dict[str, object] = {}
-    for key, value in form.multi_items():
-        if key in {"transport_name"} or value == "":
-            continue
-        # Comma-separated lists are how an HTML form expresses a tuple field such as
-        # Reality's server_names. Split here rather than in the transport, because it
-        # is a property of HTML forms, not of any protocol.
-        params[key] = [part.strip() for part in str(value).split(",")] \
-            if "," in str(value) else str(value)
+    # Reading the form is shared with the rotation form below: a field the transport
+    # declared as a sequence becomes a list whether or not the operator typed a comma.
+    params = transports.parse_form(
+        transport_name,
+        (
+            (key, str(value))
+            for key, value in form.multi_items()
+            if key != "transport_name"
+        ),
+    )
 
     await nodes.enable_transport(
         session, node_id=node_id, transport_name=transport_name, params=params
@@ -206,6 +239,130 @@ async def node_health(
 ):
     result = await health.check_node(session, node_id=node_id)
     return TEMPLATES.TemplateResponse(request, "panel/health.html", {"health": result})
+
+
+# --- hops between nodes (item 16), from the panel -----------------------------
+
+@router.post("/hops", response_class=HTMLResponse)
+async def create_hop(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Establish both ends of an entry→leaf tunnel from one form.
+
+    The form carries each end's parameters prefixed with ``entry-`` / ``leaf-``. The
+    prefix is stripped here and nowhere else: below this line the two mappings are
+    ordinary transport parameters, validated by the transport's own model, and this
+    function still names no field of any protocol.
+    """
+    form = await request.form()
+    transport_name = str(form.get("transport_name", ""))
+
+    def side(prefix: str) -> dict:
+        return transports.parse_form(
+            transport_name,
+            (
+                (key.removeprefix(prefix), str(value))
+                for key, value in form.multi_items()
+                if key.startswith(prefix)
+            ),
+        )
+
+    try:
+        await relay.establish_hop(
+            session,
+            entry_node_id=str(form.get("entry_node_id", "")),
+            leaf_node_id=str(form.get("leaf_node_id", "")),
+            transport_name=transport_name,
+            entry_params=side("entry-"),
+            leaf_params=side("leaf-"),
+        )
+        message, ok = (
+            "hop established. Apply BOTH nodes to bring the tunnel up — until then it "
+            "exists only in the database."
+        ), True
+    except DomainError as exc:
+        message, ok = exc.message, False
+    return TEMPLATES.TemplateResponse(
+        request, "panel/outcome.html", {"message": message, "ok": ok}
+    )
+
+
+@router.post("/hops/{node_transport_id}/dissolve", response_class=HTMLResponse)
+async def dissolve_hop(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Remove both ends of a hop, and say which nodes now need re-applying."""
+    try:
+        affected = await relay.dissolve_hop(session, node_transport_id=node_transport_id)
+        message, ok = (
+            f"hop removed. Re-apply {len(affected)} node(s) so they stop holding a "
+            "tunnel to an exit that is no longer configured."
+        ), True
+    except DomainError as exc:
+        message, ok = exc.message, False
+    return TEMPLATES.TemplateResponse(
+        request, "panel/outcome.html", {"message": message, "ok": ok}
+    )
+
+
+# --- rotation (items 23 and 24), from the panel -------------------------------
+
+@router.post("/transports/{node_transport_id}/rotate-keys", response_class=HTMLResponse)
+async def rotate_keys(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Re-mint this transport's key material and push it — item 23.
+
+    A fragment, not a redirect: the outcome of a rotation is the whole point of
+    pressing the button. "Rotated, but the node could not be updated" has to be
+    readable on the page, because until it is retried the node still runs the old
+    material.
+    """
+    try:
+        outcome = await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+        message, ok = outcome.summary(), outcome.complete
+    except DomainError as exc:
+        message, ok = exc.message, False
+    return TEMPLATES.TemplateResponse(
+        request, "panel/outcome.html", {"message": message, "ok": ok}
+    )
+
+
+@router.post("/transports/{node_transport_id}/params", response_class=HTMLResponse)
+async def replace_params(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Replace operator-supplied parameters — item 24, a blocked decoy being the case.
+
+    Reads the form the same way ``enable_transport`` does, and for the same reason:
+    this function must not know any protocol's field names. Only fields the operator
+    actually filled in are sent, so an untouched box means "leave it alone" rather
+    than "set it to empty".
+    """
+    form = await request.form()
+    try:
+        node_transport = await rotation.get_node_transport(session, node_transport_id)
+        params = transports.parse_form(
+            node_transport.transport_name,
+            ((key, str(value)) for key, value in form.multi_items()),
+        )
+        if not params:
+            raise DomainError("nothing was filled in, so there is nothing to change")
+        outcome = await rotation.replace_params(
+            session, node_transport_id=node_transport_id, params=params
+        )
+        message, ok = outcome.summary(), outcome.complete
+    except DomainError as exc:
+        message, ok = exc.message, False
+    return TEMPLATES.TemplateResponse(
+        request, "panel/outcome.html", {"message": message, "ok": ok}
+    )
 
 
 @router.post("/friends", response_class=HTMLResponse)

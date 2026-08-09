@@ -95,6 +95,27 @@ logs:
 ps:
 	$(COMPOSE) ps
 
+## --- backup / restore (see scripts/backup.sh) -------------------------------
+
+# The control database is the single source of truth, so it is the one thing whose
+# loss cannot be repaired by rebuilding a node. The dump is useless without
+# HASHI_SECRET_KEY — back that up separately, and see the script's own warning.
+.PHONY: backup restore checkers
+
+backup:
+	@scripts/backup.sh dump
+
+# Deliberately requires the path on the command line rather than picking the newest
+# dump: restoring is destructive and "the latest one" is not a decision a Makefile
+# should make for the operator.
+restore:
+	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz"; exit 2; }
+	@scripts/backup.sh restore "$(FROM)"
+
+# Fetch the upstream data-plane checkers, so the validation tests stop skipping.
+checkers:
+	@scripts/fetch-upstream-checkers.sh
+
 ## --- warden: the tracker integration (see deploy/warden/README.md) ----------
 
 # The Warden fleet is its OWN stack now, with its own Makefile and its own
@@ -133,7 +154,11 @@ E2E_BIND_ADDR ?= 127.0.0.1
 # docker-compose.e2e.yml is what keeps a test run away from the owner's real
 # delivery hostname — without it Caddy asks a public CA for a certificate for
 # the production domain every time someone runs e2e. See that file's header.
-COMPOSE_E2E  := docker compose --env-file .env -p $(E2E_PROJECT) \
+# TWO env files, and the order is the point: `.env` first for anything the owner has
+# set, then deploy/e2e.env, whose fake values win. Without the second one the
+# acceptance suite is unbootable whenever the owner's `.env` is missing a required key
+# — and it inherits the owner's real identity when it is not. See deploy/e2e.env.
+COMPOSE_E2E  := docker compose --env-file .env --env-file deploy/e2e.env -p $(E2E_PROJECT) \
                 -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml \
                 -f deploy/docker-compose.e2e.yml
 E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \

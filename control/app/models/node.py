@@ -54,6 +54,37 @@ class NodeState(enum.StrEnum):
     RETIRED = "retired"
 
     @classmethod
+    def allowed_from(cls, current: NodeState) -> tuple[NodeState, ...]:
+        """Which states a node may move to from ``current`` — backlog item 17.
+
+        A declared machine rather than a free-form column, because two transitions are
+        genuinely wrong and both are easy to write by accident:
+
+        * ``retired -> active`` is refused. A retired node's host has usually been
+          destroyed; re-activating the RECORD would put an address that may now belong
+          to a stranger back into every friend's subscription. Create a new node
+          instead — which is the ten-minute operation the charter is built around.
+        * ``draft -> degraded`` is refused. Degraded means "was working, now is not";
+          a node that has never been configured is not degraded, it is unconfigured,
+          and conflating them hides which nodes still need a first apply.
+
+        Everything else is permitted, including ``degraded -> active`` (a successful
+        apply after a fix) and ``active -> draft`` (taking a node out of rotation
+        without retiring it, so it stops reaching friends but keeps its configuration).
+        """
+        match current:
+            case cls.DRAFT:
+                return (cls.ACTIVE, cls.RETIRED)
+            case cls.ACTIVE:
+                return (cls.DEGRADED, cls.DRAFT, cls.RETIRED)
+            case cls.DEGRADED:
+                return (cls.ACTIVE, cls.DRAFT, cls.RETIRED)
+            case cls.RETIRED:
+                # Terminal by design. See the note above.
+                return ()
+        return ()
+
+    @classmethod
     def serving(cls) -> tuple[NodeState, ...]:
         """The states a friend may be routed onto. Defined once, here.
 
@@ -62,6 +93,39 @@ class NodeState(enum.StrEnum):
         call site.
         """
         return (cls.ACTIVE,)
+
+
+class TransportPurpose(enum.StrEnum):
+    """Who consumes a transport enabled on a node — backlog item 16.
+
+    The charter's topology is a Russian ENTRY node fronting foreign LEAF nodes, and
+    the hop between them is an ordinary transport whose consumer happens to be another
+    node rather than a friend's device. That difference has to be recorded, because
+    everything downstream reads it:
+
+    * a hop must never appear in a subscription, and must never be granted to a
+      friend — a friend handed the entry↔leaf tunnel would bypass the entry entirely;
+    * exactly one end of a hop dials the other. The entry dials, always: it sits
+      behind a Russian carrier NAT and cannot be dialled. Recording which end is which
+      is what lets ``edge.relay`` render the asymmetry.
+
+    Stored as text, and the values are about topology rather than about any protocol —
+    nothing here names a transport, and `control` still never compares a transport name
+    to a literal.
+    """
+
+    # The default, and what every existing row is: a transport friends connect to.
+    FRIENDS = "friends"
+
+    # This end of a node-to-node hop, on the node that DIALS.
+    RELAY_ENTRY = "relay-entry"
+
+    # The far end of that hop, on the node that waits.
+    RELAY_LEAF = "relay-leaf"
+
+    @classmethod
+    def relays(cls) -> tuple[str, ...]:
+        return (cls.RELAY_ENTRY, cls.RELAY_LEAF)
 
 
 class Node(Base, TimestampMixin):
@@ -150,6 +214,22 @@ class NodeTransport(Base, TimestampMixin):
     # Encrypted as a whole rather than per value so a dump reveals not even how
     # many secrets a transport has.
     secrets: Mapped[str] = mapped_column(EncryptedText(8192), nullable=False, default="{}")
+
+    # Who consumes this transport — see ``TransportPurpose``. Defaulted rather than
+    # nullable so that "not a hop" is a value rather than an absence: every query that
+    # builds a subscription filters on it, and a NULL there would be a friend routed
+    # onto an entry↔leaf tunnel.
+    purpose: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=TransportPurpose.FRIENDS, index=True
+    )
+
+    # The other end of the hop, when this row is one end of one. Self-referential and
+    # nullable: a friend-facing transport has no peer. SET NULL rather than CASCADE on
+    # delete, so removing one end leaves the other visible and obviously half a hop
+    # instead of silently disappearing with it.
+    peer_node_transport_id: Mapped[str | None] = mapped_column(
+        ForeignKey("node_transports.id", ondelete="SET NULL"), nullable=True
+    )
 
     # An operator can enable a transport without exposing it to friends yet.
     # Disabled means "configured on the node but not in anyone's subscription".

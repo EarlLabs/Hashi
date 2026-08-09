@@ -25,3 +25,7 @@ secrets/
 .env.e2e.live.secrets
 
 .DS_Store
+
+# Local database dumps (scripts/backup.sh). Encrypted, but still every node
+# credential and every friend token in one file — never in git.
+backups/

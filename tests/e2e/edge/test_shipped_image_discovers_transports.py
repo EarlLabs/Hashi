@@ -27,13 +27,29 @@ DISCOVER = (
 )
 
 
-def transport_packages_in_the_tree() -> list[str]:
-    """Every transport package a developer would expect to be shipped."""
+def packages_in_the_tree() -> list[str]:
+    """Every transport DIRECTORY in this checkout.
+
+    Directory names, not transport names: a package declares its own name in ``META``
+    and the two differ on purpose (``vless_reality`` declares ``vless-reality``), which
+    is why this count is cross-checked against discovery rather than compared to it.
+    """
     return sorted(
         path.name
         for path in EDGE_TRANSPORTS.iterdir()
         if path.is_dir() and (path / "__init__.py").exists()
     )
+
+
+def transports_in_the_tree() -> list[str]:
+    """What discovery finds in the SOURCE tree, by the names transports declare.
+
+    Run in this process against the checkout, so the comparison below is exactly
+    "source tree vs shipped artefact" — the two things that fail independently.
+    """
+    from edge.registry import discover
+
+    return sorted(discover())
 
 
 def test_the_image_ships_every_transport_in_the_tree(compose) -> None:
@@ -44,8 +60,15 @@ def test_the_image_ships_every_transport_in_the_tree(compose) -> None:
     )
     shipped = json.loads(result.stdout.strip().splitlines()[-1])
 
-    assert shipped == transport_packages_in_the_tree(), (
-        f"the image discovers {shipped}, the tree has "
-        f"{transport_packages_in_the_tree()} — a transport is missing from the "
-        "image's package list (pyproject.toml [tool.setuptools])"
+    assert shipped == transports_in_the_tree(), (
+        f"the image discovers {shipped}, the tree has {transports_in_the_tree()} — a "
+        "transport is missing from the image's package list (pyproject.toml "
+        "[tool.setuptools])"
+    )
+    # And nothing was lost between "a directory exists" and "discovery found it": a
+    # package that fails to import in this process would otherwise shrink both sides
+    # of the comparison above equally and pass.
+    assert len(shipped) == len(packages_in_the_tree()), (
+        f"the tree has {packages_in_the_tree()} but only {shipped} are discoverable — "
+        "a transport package is present and not importable"
     )

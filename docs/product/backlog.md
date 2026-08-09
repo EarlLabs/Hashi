@@ -102,10 +102,10 @@
 
 | # | id | Зона | depends_on | Статус |
 |---|---|---|---|---|
-| 1 | `edge-transport-contract-vless-reality` | `edge` | — | `queued` |
-| 1a | `infra-upstream-checkers` | `infra` | — | `queued` |
-| 2 | `infra-image-ships-transports` | `infra` | 1 | `queued` |
-| 3 | `edge-transport-vless-ws-tls` | `edge` | 1 | `queued` |
+| 1 | `edge-transport-contract-vless-reality` | `edge` | — | `done` |
+| 1a | `infra-upstream-checkers` | `infra` | — | `done` |
+| 2 | `infra-image-ships-transports` | `infra` | 1 | `done` |
+| 3 | `edge-transport-vless-ws-tls` | `edge` | 1 | `done` |
 
 **Порядок в очереди: 1 → 1a → 2 → 3.** Он не совпадает с колонкой `depends_on`, и
 это осознанно: пункт 1a технически ни от чего не зависит (он привозит чужой
@@ -172,15 +172,15 @@ AmneziaWG **невыразим** в base64-списке URI (амендмент 
 
 | # | id | Зона | depends_on | Статус |
 |---|---|---|---|---|
-| 3a | `infra-control-runtime-wiring` | `infra` | — | `queued` |
-| 4 | `control-persistence-spine` | `control` | 3a | `queued` |
-| 5 | `control-operator-auth` | `control` | 4 | `queued` |
-| 6 | `control-encrypted-secrets` | `control` | 4 | `queued` |
-| 6a | `control-key-material` | `control` | 6 | `queued` |
-| 7 | `control-node-and-friend-records` | `control` | 5, 6a, **1** | `queued` |
-| 8 | `control-subscription-delivery` | `control` | 7, **1** | `queued` |
-| 9 | `control-revocation-fanout` | `control` | 8 | `queued` |
-| 10 | `infra-pin-images-and-log-guards` | `infra` | — | `queued` |
+| 3a | `infra-control-runtime-wiring` | `infra` | — | `done` |
+| 4 | `control-persistence-spine` | `control` | 3a | `done` |
+| 5 | `control-operator-auth` | `control` | 4 | `done` |
+| 6 | `control-encrypted-secrets` | `control` | 4 | `done` |
+| 6a | `control-key-material` | `control` | 6 | `done` |
+| 7 | `control-node-and-friend-records` | `control` | 5, 6a, **1** | `done` |
+| 8 | `control-subscription-delivery` | `control` | 7, **1** | `done` |
+| 9 | `control-revocation-fanout` | `control` | 8 | `done` |
+| 10 | `infra-pin-images-and-log-guards` | `infra` | — | `done` |
 
 **Пункт 3a — новый, ревизия 2 (блокер B4).** Без него пункт 4 не может пройти
 собственную приёмку: `deploy/docker-compose.yml:39-41` не передаёт control
@@ -251,11 +251,11 @@ S1 пришпиливает `deploy/docker/control.Dockerfile`. В `deploy/warde
 
 | # | id | Зона | Статус |
 |---|---|---|---|
-| 11 | `infra-node-stack` | `infra` | `queued` (эскиз) |
-| 12 | `edge-node-bootstrap` | `edge` | `queued` (эскиз) |
-| 13 | `edge-node-health` | `edge` | `queued` (эскиз) |
-| 14 | `control-apply-and-push` | `control` | `queued` (эскиз) |
-| 15 | `owner-first-connection` | — | `queued` (владельческая приёмка, **не блокирует переход к M4** — см. журнал 2026-08-09) |
+| 11 | `infra-node-stack` | `infra` | `done` |
+| 12 | `edge-node-bootstrap` | `edge` | `done` |
+| 13 | `edge-node-health` | `edge` | `done` |
+| 14 | `control-apply-and-push` | `control` | `done` (кроме успешного пуша на живой хост — приёмка владельца) |
+| 15 | `owner-first-connection` | — | `awaiting-owner` (требует реального хоста; снят с очереди агента по указанию владельца 2026-08-09) |
 
 ---
 
@@ -263,11 +263,11 @@ S1 пришпиливает `deploy/docker/control.Dockerfile`. В `deploy/warde
 
 | # | id | Зона | Статус |
 |---|---|---|---|
-| 16 | `edge-entry-leaf-relay` | `edge` | `queued` (эскиз) |
-| 17 | `control-node-state-machine` | `control` | `queued` (эскиз) |
-| 18 | `control-panel-nodes` | `control` | `queued` (эскиз) |
-| 19 | `control-panel-transports` | `control` | `queued` (эскиз) |
-| 20 | `owner-field-test-whitelist` | — | `queued` (владельческая приёмка, **не блокирует диспатч дальнейших пунктов** — см. журнал 2026-08-09) |
+| 16 | `edge-entry-leaf-relay` | `edge` | `done` |
+| 17 | `control-node-state-machine` | `control` | `done` |
+| 18 | `control-panel-nodes` | `control` | `done` |
+| 19 | `control-panel-transports` | `control` | `done` |
+| 20 | `owner-field-test-whitelist` | — | `awaiting-owner` (критерий 1; ни один тест здесь его не закрывает и не будет) |
 
 **В пункт 16 переехал AmneziaWG** *(ревизия 2, §1.D)*: на хопе вход↔лист его
 потребляет конфигурация узла, а не устройство друга, поэтому вопроса о формате
@@ -292,10 +292,10 @@ S1 пришпиливает `deploy/docker/control.Dockerfile`. В `deploy/warde
 
 | # | id | Зона | Статус |
 |---|---|---|---|
-| 21 | `control-panel-full` | `control` | `queued` (эскиз) |
-| 22 | `infra-backup-restore` | `infra` | `queued` (эскиз) |
-| 23 | `control-key-rotation` | `control` | `queued` (эскиз) |
-| 24 | `edge-decoy-rotation` | `edge` | `queued` (эскиз) |
+| 21 | `control-panel-full` | `control` | `done` |
+| 22 | `infra-backup-restore` | `infra` | `done` |
+| 23 | `control-key-rotation` | `control` | `done` |
+| 24 | `edge-decoy-rotation` | `edge` | `done` |
 | 25 | `edge-transport-amneziawg-client` | `edge` | `blocked` (эскиз) |
 
 **Пункт 25 — новый эскиз, ревизия 2.** AmneziaWG на устройстве друга.
@@ -362,3 +362,4 @@ URI он невыразим. Пункт заведён намеренно, чт�
 | 2026-08-01 (`ohno-6`) | Изменения текста девяти сценариев (пункты 1, 2, 3, 6, 7, 8) приняты; полный список «было → стало → почему» — `research.md` §8.2 | Три вида причин: исполнимость, зона, фальсифицируемость. Ни один критерий не ослаблен, четвёртого вида — «подогнать под результат» — нет и появиться неоткуда: ни строки кода ещё не написано |
 | 2026-08-01 (`ohno-6`) | Бэклог приведён в соответствие с `research.md` ревизии 3; ни один пункт по-прежнему не диспатчен | Ревизия 2 применила обзор архитектора, но оборвалась на лимите контекста, не перенеся ничего сюда. WIP-лимит «одна задача в работе» держится, маршрут владельцем не подтверждён |
 | 2026-08-09 | Владелец снял **verification-блокеры** с очереди: M3 (Q4 деньги/хосты, Q5 decoy, Q6 публикация порта) больше не стопорит диспатч 11–14; пункты **15** и **20** («владельческая приёмка») больше не блокируют переход к следующим пунктам — Ohno доводит весь код и e2e до конца сам, владелец проверяет по факту постфактум | Владелец явно попросил: «убрать блокирующие сценарии, которые требуют реальной проверки… я хочу, чтобы Ohno довёл всё до конца, а я потом всё проверил по факту». **Пункт 0 (Q2, дыра в безопасности — настоящий `.env` в read-write монтировании неаттендед-агента) сознательно исключён из этого решения и остаётся `blocked`**: это защита живых секретов прямо сейчас, а не вопрос приёмки. Хартийные правила автономии не меняются этой записью: агент по-прежнему не тратит деньги и не трогает живой узел/провайдерский аккаунт сам (`docs/product/charter.md` §Autonomy) — там, где 11–14 упираются в реальный хост по факту, а не на словах, задача фиксирует это как явное предположение и останавливается на нём, не выдавая себя за готовое |
+| 2026-08-09 (`e2-117`) | **Пункты 1–14, 16–19, 21–24 переведены в `done`.** Пункты **15** и **20** переведены в `awaiting-owner`: оба закрываются только реальной машиной, и владелец явно попросил их пропустить — агент их не «выполнил» и не претендует на это. Пункт **0** остаётся `blocked`, пункт **25** остаётся `blocked` (нужен второй формат подписки) | Владелец: «заканчивай проект по плану… если где-то есть пункт „развернуть на реальной машине и проверить“ — скипай, я всё проверю сам потом. E2E должны покрывать весь основной функционал». Что именно закрыто и чем доказано — отчёт задачи `e2-117`; граница «что тесты не доказывают» не сдвинута ни на шаг: ни один сценарий в этом репозитории не утверждает, что туннель несёт трафик |

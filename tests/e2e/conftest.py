@@ -48,7 +48,12 @@ DB = "db"
 # The same three files `make e2e-up` uses. Dropping the e2e overlay here would
 # make `compose exec` address a different stack than the one that is running.
 COMPOSE = [
-    "docker", "compose", "--env-file", ".env", "-p", PROJECT,
+    "docker", "compose",
+    # BOTH env files, in the Makefile's order — see deploy/e2e.env. With only `.env`
+    # here, every scenario that shells out to compose fails on interpolation while the
+    # stack it is talking to is up and healthy, which reads as "the stack is broken".
+    "--env-file", ".env", "--env-file", "deploy/e2e.env",
+    "-p", PROJECT,
     "-f", "deploy/docker-compose.yml",
     "-f", "deploy/docker-compose.dev.yml",
     "-f", "deploy/docker-compose.e2e.yml",

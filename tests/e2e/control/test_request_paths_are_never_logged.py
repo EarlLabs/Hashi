@@ -27,7 +27,10 @@ async def test_no_request_path_reaches_the_control_log(client, logs_of) -> None:
 
     assert (await client.get("/healthz")).status_code == 200
     assert (await client.get(f"/sub/{FAKE_TOKEN}")).status_code == 404
-    assert (await client.get(f"/panel?token={FAKE_TOKEN}")).status_code == 404
+    # An unrouted path, with the token in the query as well. Not `/panel`, which is a
+    # real route and answers with a redirect — a redirect is handled by the router and
+    # would not exercise the 404 path this scenario is about.
+    assert (await client.get(f"/nothing-here?token={FAKE_TOKEN}")).status_code == 404
 
     # uvicorn writes its log from a background thread; give it a moment so a
     # pass cannot come from reading the log too early.

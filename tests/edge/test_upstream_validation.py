@@ -22,11 +22,20 @@ import json
 
 import pytest
 
-from edge.checker import validate, xray_binary
-from edge.registry import discover, profile
+from edge.checker import awg_quick_binary, validate, xray_binary
+from edge.registry import ConfigFormat, discover, profile
 
 INSTALLED = sorted(discover())
-PARAMS_FIXTURE = {"vless-reality": "reality_params", "vless-ws-tls": "ws_params"}
+PARAMS_FIXTURE = {
+    "vless-reality": "reality_params",
+    "vless-ws-tls": "ws_params",
+    "amneziawg": "awg_params",
+}
+CREDENTIALS_FIXTURE = {
+    "vless-reality": "credentials",
+    "vless-ws-tls": "credentials",
+    "amneziawg": "awg_credentials",
+}
 
 
 def checkable_params(name: str, request, tmp_path) -> dict[str, object]:
@@ -39,33 +48,48 @@ def checkable_params(name: str, request, tmp_path) -> dict[str, object]:
     materialise = request.getfixturevalue("checkable_params_for")
     return materialise(request.getfixturevalue(PARAMS_FIXTURE[name]), tmp_path)
 
-# The rulebook is explicit that a validation test which silently passes is how a
-# broken config reaches a node — so the skip reason names the unproven criterion
-# and the remedy, rather than saying "missing binary".
-requires_xray = pytest.mark.skipif(
-    xray_binary() is None,
-    reason=(
-        "xray binary not present — the VALIDATION half of charter criterion 4 is "
-        "NOT proven by this run. Install it: scripts/fetch-upstream-checkers.sh"
-    ),
-)
+# One checker per config format, resolved the same way the production code resolves it.
+CHECKERS = {
+    ConfigFormat.XRAY_JSON: ("xray", xray_binary),
+    ConfigFormat.WG_QUICK: ("awg-quick", awg_quick_binary),
+}
 
 
-@requires_xray
+def require_checker_for(name: str) -> None:
+    """Skip LOUDLY when this transport's checker is not installed.
+
+    Per-format rather than one blanket skip: with only Xray present, the two VLESS
+    transports are genuinely validated and AmneziaWG genuinely is not, and a single
+    marker would either fail the run or hide which of the two happened.
+
+    The rulebook is explicit that a validation test which silently passes is how a
+    broken config reaches a node, so the reason names the unproven criterion and the
+    remedy rather than saying "missing binary".
+    """
+    tool, locate = CHECKERS[discover()[name].config_format]
+    if locate() is None:
+        pytest.skip(
+            f"{tool} not present — the VALIDATION half of charter criterion 4 is NOT "
+            f"proven for {name} by this run. Install it: "
+            "scripts/fetch-upstream-checkers.sh"
+        )
+
+
 @pytest.mark.parametrize("name", INSTALLED)
 def test_upstream_accepts_the_rendered_server_config(
-    name: str, node, credentials, request, tmp_path
+    name: str, node, request, tmp_path
 ) -> None:
-    """Xray accepts every transport's rendered config, with friends on it."""
+    """The daemon that will run each config accepts it, with clients on it."""
+    require_checker_for(name)
     transport = profile(name)
     validated = transport.validate(checkable_params(name, request, tmp_path))
-    rendered = transport.profile.render_server(node, validated, credentials)
+    clients = request.getfixturevalue(CREDENTIALS_FIXTURE[name])
+    rendered = transport.profile.render_server(node, validated, clients)
 
-    result = validate(rendered)
+    result = validate(rendered, config_format=transport.meta.config_format)
     assert result.ok, f"{name}: xray rejected the rendered config\n{result.output}"
 
 
-@requires_xray
 @pytest.mark.parametrize("name", INSTALLED)
 def test_upstream_accepts_a_config_with_no_clients(name: str, node, request, tmp_path) -> None:
     """A node whose last friend was just revoked must still be a valid node.
@@ -73,13 +97,16 @@ def test_upstream_accepts_a_config_with_no_clients(name: str, node, request, tmp
     Otherwise the final revocation produces a config the daemon refuses, the node
     fails to restart, and the symptom is an outage for everyone still on it.
     """
+    require_checker_for(name)
     transport = profile(name)
     validated = transport.validate(checkable_params(name, request, tmp_path))
-    result = validate(transport.profile.render_server(node, validated, ()))
+    result = validate(
+        transport.profile.render_server(node, validated, ()),
+        config_format=transport.meta.config_format,
+    )
     assert result.ok, f"{name}: xray rejected an empty-client config\n{result.output}"
 
 
-@requires_xray
 def test_the_checker_actually_rejects_something() -> None:
     """Proof that the checker is checking — the red half of this file.
 
@@ -87,8 +114,10 @@ def test_the_checker_actually_rejects_something() -> None:
     every test above pass and mean nothing. The rulebook's red-first rule applied
     to the tool rather than to the product.
     """
+    if xray_binary() is None:
+        pytest.skip("xray not present, so the checker itself cannot be checked")
     broken = json.dumps({"inbounds": [{"protocol": "no-such-protocol", "port": 1}]})
-    result = validate(broken)
+    result = validate(broken, config_format=ConfigFormat.XRAY_JSON)
     assert result.available
     assert not result.ok, (
         "xray accepted a config with an unknown protocol — the checker is not "

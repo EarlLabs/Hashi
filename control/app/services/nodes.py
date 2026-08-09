@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict, DomainError, NotDeliverable, NotFound
-from control.app.models import Node, NodeState, NodeTransport
+from control.app.models import Node, NodeState, NodeTransport, TransportPurpose
 from control.app.services import keymaterial
 from edge.node import NodeView
 from edge.registry import KeyScope, discover, profile
@@ -55,6 +55,10 @@ async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
         select(NodeTransport)
         .join(Node)
         .where(NodeTransport.enabled.is_(True))
+        # Friend-facing rows only. An entry↔leaf hop (item 16) is a transport enabled
+        # on a node and would otherwise qualify — and a friend handed the hop would be
+        # routed straight past the entry node the whole topology exists to hide behind.
+        .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
         .where(Node.state.in_(NodeState.serving()))
         .order_by(Node.location_label, Node.name, NodeTransport.transport_name)
     )
@@ -231,6 +235,15 @@ async def set_node_state(
     node nobody fixes.
     """
     node = await get_node(session, node_id)
+
+    # A no-op is allowed and does nothing, so a retry after a failed apply is safe.
+    if state is not node.state and state not in NodeState.allowed_from(node.state):
+        raise Conflict(
+            f"a node cannot go from {node.state} to {state}. "
+            f"From {node.state} it may become: "
+            f"{', '.join(NodeState.allowed_from(node.state)) or 'nothing — this state is final'}"
+        )
+
     became_serving = state in NodeState.serving() and node.state not in NodeState.serving()
 
     node.state = state

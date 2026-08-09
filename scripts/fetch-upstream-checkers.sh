@@ -106,5 +106,29 @@ chmod +x "${TOOLS}/xray"
 
 echo "installed ${TOOLS}/xray"
 "${TOOLS}/xray" version | head -1
+
+# --- awg-quick, the AmneziaWG checker (backlog item 16) ----------------------
+#
+# Not downloadable as a pinned release binary the way Xray is: amneziawg-tools ships as
+# source and distro packages, and `awg-quick` is a shell script that depends on the
+# kernel module being present to do anything more than parse. `strip` — the only
+# subcommand we use — is pure parsing and needs neither.
+#
+# So this is deliberately NOT auto-installed: fetching a shell script from a moving
+# branch would be the unpinned dependency core invariants §5 forbids, and building the
+# tools from source is a bigger decision than a checker fetch should make. The
+# validation tests skip loudly for AmneziaWG until it is present, naming this remedy.
+if command -v awg-quick >/dev/null 2>&1; then
+  echo "found awg-quick on PATH — AmneziaWG configs will be validated too"
+elif [ -f "${TOOLS}/awg-quick" ]; then
+  echo "found ${TOOLS}/awg-quick"
+else
+  echo
+  echo "NOTE: awg-quick is not installed, so AmneziaWG configs are NOT validated."
+  echo "      Install amneziawg-tools from your distribution (it provides awg-quick),"
+  echo "      or set HASHI_AWG_QUICK_BIN to one you trust. Only \`awg-quick strip\` is"
+  echo "      used, which parses and needs no kernel module."
+fi
+
 echo
 echo "next: make test-edge   (the validation tests stop skipping now)"

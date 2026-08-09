@@ -5,7 +5,7 @@ needs a random path and a client id, both of kinds ``control`` already generates
 so it cost `control` zero lines, which is the fourth criterion in one sentence.
 """
 
-from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+from edge.registry import ConfigFormat, KeyKind, KeyScope, KeySpec, TransportMeta
 
 META = TransportMeta(
     name="vless-ws-tls",
@@ -14,6 +14,9 @@ META = TransportMeta(
     # node stack supplies the certificate; this transport only points at it.
     needs_tls=True,
     port_range=(443, 65535),
+    # Declared explicitly rather than left to the default: a transport validated
+    # by the wrong checker passes for the wrong reason.
+    config_format=ConfigFormat.XRAY_JSON,
     key_material=(
         # The WebSocket path. Random, because a guessable path turns the node into
         # something an active prober can confirm: request the path, and a VLESS

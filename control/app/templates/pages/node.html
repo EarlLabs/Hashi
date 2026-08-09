@@ -32,7 +32,7 @@
 <h2>Transports on this node</h2>
 {% if node.transports %}
 <table>
-  <tr><th>transport</th><th>parameters</th><th>last applied</th></tr>
+  <tr><th>transport</th><th>parameters</th><th>last applied</th><th>rotate</th></tr>
   {% for transport in node.transports %}
   <tr>
     <td>{{ transport.transport_name }}</td>
@@ -44,7 +44,38 @@
       {% endfor %}
     </td>
     <td class="muted">{{ transport.applied_at or "never" }}</td>
+    <td>
+      {# Item 23. The confirm is not decoration: this re-keys every friend on this
+         transport, and it is one click away from "probe health". #}
+      <button hx-post="/panel/transports/{{ transport.id }}/rotate-keys"
+              hx-target="#outcome" hx-swap="innerHTML"
+              hx-confirm="Re-mint this transport's keys and every friend's credential on it?">keys</button>
+    </td>
   </tr>
+  {% if editable.get(transport.transport_name) %}
+  <tr>
+    <td colspan="4">
+      {# Item 24. A blocked Reality decoy is the case this exists for, but this form
+         names no protocol and no field: the inputs come from the transport's own
+         declaration, so a new package gets a working rotation form for free.
+
+         Empty box = leave alone. That is why nothing is pre-filled with the current
+         value: a form that round-trips every parameter would rewrite fields the
+         operator never looked at. #}
+      <form hx-post="/panel/transports/{{ transport.id }}/params"
+            hx-target="#outcome" hx-swap="innerHTML" class="inline-form">
+        <span class="muted">replace (blank = keep):</span>
+        {% for field in editable[transport.transport_name] %}
+        <label>
+          <span>{{ field }}</span>
+          <input name="{{ field }}" placeholder="{{ transport.params.get(field, '') }}">
+        </label>
+        {% endfor %}
+        <button type="submit">replace</button>
+      </form>
+    </td>
+  </tr>
+  {% endif %}
   {% endfor %}
 </table>
 {% else %}
