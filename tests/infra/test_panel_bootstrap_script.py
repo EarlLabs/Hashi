@@ -208,9 +208,20 @@ def test_it_refuses_an_env_file_with_an_unescaped_dollar(script: str) -> None:
     The script must refuse and explain. It must NOT fix the file: rewriting the file that
     holds the owner's secrets, to a value they did not choose, is worse than stopping.
     """
-    # The mechanism: strip every doubled dollar, then anything left is unescaped.
-    assert re.search(r"sed 's/\\\$\\\$//g'", script), (
-        "the script does not look for an unescaped $ in the env file"
+    # The mechanism: strip every doubled dollar from a VALUE, and anything left is
+    # unescaped. Asserted as three properties rather than as one exact command line, so
+    # the check can be reimplemented without this test having to be rewritten — but not
+    # weakened without it noticing.
+    assert re.search(r'gsub\(/\\\$\\\$/', script), (
+        "the script does not strip doubled dollars before looking for a lone one"
+    )
+    assert "index($0" in script, (
+        "the script scans whole lines rather than the value half of KEY=VALUE — it would "
+        "then refuse an env file whose COMMENT mentions a dollar, which is a refusal the "
+        "operator cannot act on and learns to work around"
+    )
+    assert re.search(r"\^\[\[:space:\]\]\*#", script), (
+        "the script does not skip comment lines"
     )
     assert "unescaped" in script
     # It names the remedy, and does not write.
