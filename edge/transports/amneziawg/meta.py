@@ -1,7 +1,10 @@
 """What `control` may know about AmneziaWG.
 
-The declaration that matters here is ``subscription_expressible=False`` — see the
-package docstring. Everything else follows the same contract as any other transport.
+The declaration that matters here is
+``subscription_formats={SubscriptionFormat.CLIENT_CONFIG_FILE}`` — a config file and
+NOT the v1 URI list, which is why the derived ``subscription_expressible`` is still
+False. See the package docstring. Everything else follows the same contract as any
+other transport.
 """
 
 from edge.registry import (
