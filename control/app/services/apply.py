@@ -130,6 +130,17 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             # access" answer "internal error" — and the operator has no way to tell
             # whether the removal happened.
             #
+            # Logged with its traceback before it is converted, because the conversion
+            # is deliberately broad: transport exceptions share no base class (giving
+            # them one in `control` would mean importing a protocol's own module here),
+            # so this arm also catches a genuine bug in a renderer. A domain error is
+            # reported to the operator without a stack trace, so without this line a
+            # typo in a template would leave no trace anywhere. No key material can
+            # reach the log: the exception message is the transport's, and the rendered
+            # config is not passed.
+            logger.exception(
+                "rendering %s for node %s failed", node_transport.transport_name, node.id
+            )
             # The message is the transport's own; nothing here interprets it. Note the
             # rendered text is NOT included: it holds key material.
             raise NodeOperationFailed(
