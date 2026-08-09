@@ -45,13 +45,9 @@ from edge.registry import profile
 
 logger = logging.getLogger(__name__)
 
-# The pinned upstream data plane. An exact patch version, never `latest` and never a
-# bare major — core invariants §5, because an upstream that changes its default TLS
-# parameters silently changes how detectable every node is.
-#
-# A module constant rather than a settings field because changing it is a deliberate,
-# reviewed act with a golden-file consequence, not an environment tweak. It is the
-# one value here that is deliberately not operator-configurable at runtime.
+# The upstream image pins used to live here. They are now in
+# ``edge/bootstrap/node_stack.py`` (``DATA_PLANES``), keyed by config FORMAT — naming a
+# daemon is naming a protocol, and `control` is not allowed to do either.
 async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     """Every enabled transport's config for one node, keyed by transport name.
 
