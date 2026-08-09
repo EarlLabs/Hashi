@@ -1,14 +1,50 @@
 agent: "alfred"
 role: "solo — every zone"
-state: "in_progress"
+state: "review"
 phase: "develop"
 progress: >
-  Очередь эпика #117 (пункты 26–32) в порядке владельца 29 → 26 → 27 → 28 → 30
-  → 31 → 32. Q11 = вариант (b), подтверждён владельцем.
-  ЗАКРЫТО: 29 (review-loop раунд 1 — VERDICT: CLEAN, коммит a24da1a).
-  В РАБОТЕ: 26.
+  Очередь эпика #117 выполнена целиком, в порядке владельца
+  29 → 26 → 27 → 28 → 30 → 31 → 32. Q11 = вариант (b) (per-client конфиг-файлы за
+  тем же токеном) — реализован. Каждый пункт: свой коммит, свой прогон review-loop
+  с независимым `reviewer-strict`, red-first по каждому сценарию приёмки.
 blockers: ""
 baseline: "7b12358"
+items:
+  - id: 29
+    zone: control
+    commits: ["a24da1a"]
+    review: "раунд 1 — VERDICT: CLEAN"
+  - id: 26
+    zone: edge
+    commits: ["efc21c5", "9e30d3a"]
+    review: "раунд 1 — 0 critical, 0 high (1 low применён)"
+  - id: 27
+    zone: control
+    commits: ["504550c", "aa014a7"]
+    review: "раунд 1 — VERDICT: CLEAN (2 low, один применён)"
+  - id: 28
+    zone: edge
+    commits: ["e8ebb59", "2366b7d"]
+    review: "раунд 1 — VERDICT: CLEAN (вторая половина — зона control, отдельный коммит)"
+  - id: 30
+    zone: edge
+    commits: ["2b3329a"]
+    review: "раунд 1 — VERDICT: CLEAN"
+  - id: 31
+    zone: infra
+    commits: ["189f7cd"]
+    review: "раунд 1 — 0 critical, 0 high (2 low применены)"
+  - id: 32
+    zone: infra
+    commits: ["b8af007", "5bf45de", "beb1644"]
+    review: >
+      раунд 1 — 0 critical, 1 high (зоны смешаны в одном коммите; история
+      разделена), 2 medium, 1 low — все применены. Раунд 2 — 0 critical,
+      0 high, 1 low (применён). Сошлось.
+raised_during_the_run:
+  - "33 control-per-friend-tunnel-address (queued)"
+  - "34 control-one-transport-two-purposes-on-one-node (queued)"
+  - "35 infra-env-file-dollar-interpolation (частично закрыт здесь же)"
 verification:
   note: >
     В этом окружении НЕТ бинаря `make`, а движок docker — изолированный dind
@@ -18,6 +54,15 @@ verification:
   test_control: ".venv/bin/python -m ruff check control tests/control && HASHI_TEST_DATABASE_URL=postgresql+asyncpg://hashi:verify@hashi-dind:54233/hashi .venv/bin/python -m pytest tests/control -q"
   test_edge: ".venv/bin/python -m ruff check edge tests/edge && .venv/bin/python -m pytest tests/edge -q"
   test_infra: ".venv/bin/python -m ruff check tests/infra deploy/warden .e2e && .venv/bin/python -m pytest tests/infra -q"
-  e2e: "стек поднят compose'ом с DEV_BIND_ADDR=0.0.0.0 (dind), сценарии — E2E_API_HOST=hashi-dind E2E_API_PORT=54200 pytest tests/e2e -q"
-  last_green: "237 passed, 2 skipped (static) + 41 passed (e2e), после пункта 29"
-updated_at: "2026-08-09T10:40:00+00:00"
+  e2e: "стек поднят compose'ом с DEV_BIND_ADDR=0.0.0.0 (dind); сценарии — E2E_API_HOST=hashi-dind E2E_API_PORT=54200 pytest tests/e2e -q"
+  last_green: "316 passed, 6 skipped (static) + 73 passed (e2e)"
+  skips_named_out_loud: >
+    6 пропусков — это апстримные чекеры `awg-quick` и `wg-quick`. Оба в апстриме
+    вызывают `auto_su` и без root переисполняются через `sudo`; в этом окружении
+    нет ни root, ни sudo, и пункт 1a привёз только `xray`. Пропуск громкий и
+    называет лекарство. Валидационная половина закрыта вручную в root-контейнере
+    (см. отчёт): апстримный `awg-quick strip` принял friend-facing конфиг
+    AmneziaWG, апстримный `wg-quick strip` (wireguard-tools v1.0.20210914,
+    sha256 04af1ce7b9856b986dad23f7ebd47de7d4e2f48ced32eab058f648d96b801820)
+    принял и серверный, и клиентский конфиги WireGuard.
+updated_at: "2026-08-09T14:05:00+00:00"

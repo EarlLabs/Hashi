@@ -240,6 +240,19 @@ def test_the_e2e_env_file_does_not_still_claim_env_files_are_not_interpolated() 
     assert "an env file is not interpolated" not in text, (
         "deploy/e2e.env still carries the comment that caused this"
     )
-    assert "DOES interpolate" in text, (
+    assert "interpolates the values it reads" in text, (
         "deploy/e2e.env does not warn the next person who regenerates the hash"
+    )
+    # And the value is actually escaped, not merely commented about. A comment that
+    # described the pre-fix state while the line below it was fixed is how the next
+    # editor concludes that doubling is optional.
+    hash_line = next(
+        line for line in text.splitlines()
+        if line.startswith("HASHI_OPERATOR_PASSWORD_HASH=")
+    )
+    value = hash_line.split("=", 1)[1]
+    assert "$" in value, "the fixture hash has no $ at all, so this assertion is vacuous"
+    assert value.replace("$$", "") .count("$") == 0, (
+        "deploy/e2e.env's operator hash has an unescaped $ — compose will corrupt it and "
+        "operator login will fail on a clean run"
     )
