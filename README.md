@@ -38,6 +38,9 @@ make down
 is deliberate: publication is a decision made where the stack is deployed, not a
 leftover from a laptop.
 
+To put it on real hosts — which machines, which ports, and which of their wants
+collide — see [`docs/deploy/runbook.md`](docs/deploy/runbook.md).
+
 ## Verify it
 
 | Command | Covers |
