@@ -57,10 +57,19 @@ class Settings(BaseSettings):
     # panel. There is deliberately no "remember me".
     session_max_age: int = 8 * 60 * 60
 
-    # SSH connect/exec timeout when talking to a node, in seconds. A node that is
-    # blocked or seized does not refuse the connection — it hangs, so every node
-    # operation needs a ceiling or the panel blocks on a dead host.
+    # Ceiling on ONE operation over an SSH session that is already open — a command,
+    # a file transfer — in seconds. Generous, because restarting a stack or pulling an
+    # image legitimately takes time.
     node_ssh_timeout: int = 20
+
+    # Ceiling on REACHING a node at all, in seconds. Separate from and much shorter
+    # than the one above: a node that is blocked or seized does not refuse the
+    # connection, it hangs, and the operator pressing apply during a block needs an
+    # answer rather than a spinner. A setting rather than a constant because it is the
+    # one ceiling a real network can force us to raise — a node behind a link so lossy
+    # that five seconds is not enough is still a node worth reaching — and because the
+    # test suite lowers it, which is how it stays honest that the value is used.
+    node_connect_timeout: int = 5
 
     @property
     def public_base_url(self) -> str:

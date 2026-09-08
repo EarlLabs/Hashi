@@ -97,6 +97,12 @@ async def settings(clean_database, operator_password_hash: str) -> Settings:
         # The in-process client speaks http, so the session cookie must not be
         # https-only or no test could ever hold a session.
         public_https=False,
+        # No test in this zone reaches a real node: every fixture points at a reserved
+        # documentation address that never answers, so the connect ceiling is time the
+        # suite spends waiting for a certainty. One second, and the whole suite stops
+        # costing minutes — the default of five is a field value, chosen for a lossy
+        # link, and nothing here is on a link at all.
+        node_connect_timeout=1,
     )
 
 

@@ -163,6 +163,7 @@ def target_for(node: Node, node_settings: Settings) -> NodeTarget:
         username=node.ssh_user,
         private_key=node.ssh_private_key,
         host_key=node.ssh_host_key,
+        connect_timeout=node_settings.node_connect_timeout,
         timeout=node_settings.node_ssh_timeout,
     )
 
