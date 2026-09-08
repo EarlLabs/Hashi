@@ -54,3 +54,35 @@ services:
       # because the base file requires the variable, and a placeholder here is
       # honest about the fact that nothing reaches a CA from this stack.
       CADDY_ACME_EMAIL: e2e@localhost
+
+  # The acceptance agent's browser. Behind a PROFILE, so `make e2e-up` is unchanged
+  # for everyone who is not walking a milestone — the image is large and a test run
+  # that only needs HTTP should not wait for it.
+  #
+  # It publishes NOTHING. The browser reaches the control plane at `control:8000`
+  # over the compose network, which is the only place `localhost` and an Origin mean
+  # what the application thinks they mean. Putting the browser on the host instead
+  # would need a debugging port published, and this project's block is 54100–54299
+  # loopback only — a Chrome debugging port is remote code execution wearing a
+  # friendly name, and it would sit outside that block.
+  browser:
+    profiles: ["browser"]
+    image: mcr.microsoft.com/playwright/python:v1.55.0-noble
+    # Pinned like every other image in this repository. The tag carries the
+    # matching browser build, so `playwright` and Chromium never drift apart.
+    working_dir: /srv/acceptance
+    # The driver is mounted rather than baked: it is edited far more often than the
+    # stand is rebuilt, and a stale copy inside an image is the kind of thing that
+    # wastes a night. Read-only — the container has no business editing it.
+    volumes:
+      - ../scripts/acceptance:/srv/acceptance:ro
+    # Nothing to serve; it waits for `docker compose exec`. Without this the
+    # container would exit immediately and every verb would find no browser.
+    command: ["sleep", "infinity"]
+    # Chromium needs more than the default 64 MB of shared memory or it dies
+    # mid-screenshot, which reads as a flaky acceptance run rather than as a
+    # misconfigured container.
+    shm_size: "1gb"
+    depends_on:
+      control:
+        condition: service_healthy

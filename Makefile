@@ -171,7 +171,13 @@ E2E_BIND_ADDR ?= 127.0.0.1
 # set, then deploy/e2e.env, whose fake values win. Without the second one the
 # acceptance suite is unbootable whenever the owner's `.env` is missing a required key
 # — and it inherits the owner's real identity when it is not. See deploy/e2e.env.
+#
+# E2E_PROFILES names compose profiles to switch on, space separated. Only the
+# acceptance browser uses one today: its image is ~2 GB and a test run that speaks
+# nothing but HTTP should not wait for it. `scripts/acceptance/stand.sh up` passes
+# E2E_PROFILES=browser; `make e2e-up` alone stays exactly as fast as it was.
 COMPOSE_E2E  := docker compose --env-file .env --env-file deploy/e2e.env -p $(E2E_PROJECT) \
+                $(foreach p,$(E2E_PROFILES),--profile $(p)) \
                 -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml \
                 -f deploy/docker-compose.e2e.yml
 E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \

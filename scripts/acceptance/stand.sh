@@ -60,9 +60,15 @@ up() {
     die "something is still serving http://${E2E_API_HOST}:${E2E_API_PORT}/healthz after teardown — refusing to walk a stand we did not build"
   fi
 
+  # E2E_PROFILES=browser adds the acceptance agent's Chromium (see
+  # deploy/docker-compose.e2e.yml). It publishes nothing and reaches the control
+  # plane over the compose network; the driver is scripts/acceptance/drive.py.
+  # Set ACCEPTANCE_BROWSER=0 to walk the stand with curl instead — faster, and the
+  # right choice for a scenario with nothing to look at.
   say "building and starting the stand"
   make e2e-up E2E_BIND_ADDR="${E2E_BIND_ADDR:-127.0.0.1}" \
               E2E_API_PORT="$E2E_API_PORT" E2E_DB_PORT="$E2E_DB_PORT" \
+              E2E_PROFILES="$([ "${ACCEPTANCE_BROWSER:-1}" = "0" ] || echo browser)" \
     || die "the stand did not come up"
 
   say "waiting for the control plane (up to ${READY_TIMEOUT}s)"

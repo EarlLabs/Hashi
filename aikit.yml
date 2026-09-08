@@ -128,24 +128,27 @@ acceptance:
   # report that exact name, because the gate opens that directory and a capture
   # that is not on disk did not happen.
   #
-  # The MCP hands stay the default because they need nothing set up. On a headless
-  # host — an unattended overnight run — there may be no Chrome carrying the
-  # extension, and the agent finds that out by asking rather than by failing: if
-  # `list_connected_browsers` answers with nothing, fall back to the CDP driver
-  # named below. Do not decide between them in advance; ask, then use what answered.
+  # CHANGED 2026-09-08. The MCP hands drove the operator's own Chrome, which is
+  # exactly what an unattended overnight run does not have. The driver below needs
+  # no operator, no extension and no session: the browser is a container in the
+  # stand's own compose project, started by scripts/acceptance/stand.sh under the
+  # `browser` profile, publishing nothing. The MCP tools remain perfectly usable
+  # when someone is sitting at the machine — they are simply no longer the thing
+  # the pipeline depends on.
   hands:
-    kind: mcp
+    kind: command
     use: >-
-      mcp__claude-in-chrome__* — tabs_create_mcp to open a tab, navigate,
-      read_page for the accessibility tree, find, computer for click and type,
-      form_input for fields. Screenshots must be written into the evidence
-      directory under the name the report cites.
-      FALLBACK, only when no browser answers list_connected_browsers: aikit's own
-      bin/drive, which attaches over CDP to a Chromium started beside the stand
-      (`docker run -d --network host zenika/alpine-chrome --no-sandbox
-      --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222`) and writes
-      its own screenshots. It needs the `playwright` package from the dev extra,
-      and nothing else — it attaches to that browser, it does not launch one.
+      scripts/acceptance/drive.py — begin <milestone> --max-actions N --minutes M,
+      then open <url>, click <target>, fill <target> <value>, type, press <key>,
+      upload <target> <file>, back, reload, wait [seconds], snap, end.
+      A target is addressed the way the accessibility snapshot reads it:
+      `button=add user`, `link=all users`, `textbox=nickname`, `tab=Settings` —
+      role=name, straight out of the tree you were just shown. `text=`, `label=`,
+      `placeholder=` and `css=` exist for what has no role, `css=` last.
+      Every call answers with the accessibility tree and writes its screenshot to
+      .acceptance/<milestone>/<name>.png on the host; pass --name to choose the
+      name the report will cite. Do not go looking for a browser and do not install
+      one: `stand.sh up` has already started it.
   # One read-only SELECT, as a role with no write privilege — a property of the
   # database role, not an instruction. An acceptance agent able to fix the stand to
   # match its expectation eventually will, and will then report a pass.
