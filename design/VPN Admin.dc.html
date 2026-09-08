@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<link rel="stylesheet" href="_ds/industry-0106b44a-5d4e-4b85-a625-4163ceaf081b/styles.css">
+<script src="_ds/industry-0106b44a-5d4e-4b85-a625-4163ceaf081b/_ds_bundle.js"></script>
+<style>
+  body { margin: 0; background: var(--color-bg); }
+  a { color: var(--color-accent-700); }
+  a:hover { color: var(--color-accent); }
+  .app { display: grid; grid-template-columns: 218px minmax(0, 1fr); min-height: 100vh; }
+  .sidenav { border-right: 1px solid var(--color-divider); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-6); position: sticky; top: 0; align-self: start; height: 100vh; }
+  .sidenav a { display: block; padding: 7px 9px; font-size: 14px; color: var(--color-text); text-decoration: none; border: 1px solid transparent; }
+  .sidenav a:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+  .sidenav a[aria-current="page"] { border-color: var(--color-divider); background: var(--color-accent-100); color: var(--color-accent-800); }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; letter-spacing: -0.01em; }
+  .panel { padding: var(--space-6); }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-6); }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6); }
+  .app[data-density="compact"] .table td { padding: 4px var(--space-2); }
+  .app[data-density="compact"] .panel { padding: var(--space-4); }
+  .app[data-marks="off"] .corner { display: none; }
+  .table td, .table th { vertical-align: middle; }
+  @media (max-width: 900px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .sidenav { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--color-divider); gap: var(--space-2); }
+    .sidenav a { white-space: nowrap; }
+    .grid-4, .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</helmet>
+<div class="app" data-density="{{ density }}" data-marks="{{ marks }}">
+  <aside class="sidenav">
+    <div>
+      <div style="font-family: var(--font-heading); font-size: 21px; letter-spacing: -0.01em">{{ orgName }}</div>
+      <div class="text-muted" style="font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase">private mesh</div>
+    </div>
+    <nav style="display: flex; flex-direction: column; gap: 2px" role="navigation">
+      <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="8">
+        <a href="#" onClick="{{ item.go }}" aria-current="{{ item.current }}">{{ item.label }}</a>
+      </sc-for>
+    </nav>
+    <div style="margin-top: auto; display: flex; flex-direction: column; gap: var(--space-2); font-size: 12px">
+      <div class="text-muted">signed in as root</div>
+      <button class="btn btn-secondary" type="button">log out</button>
+    </div>
+  </aside>
+
+  <main style="min-width: 0">
+    <header style="display: flex; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; padding: var(--space-6) var(--space-6) var(--space-4); border-bottom: 1px solid var(--color-divider)">
+      <div style="margin-right: auto; min-width: 0">
+        <h2 style="margin: 0">{{ title }}</h2>
+        <div class="text-muted" style="font-size: 13px">{{ subtitle }}</div>
+      </div>
+      <div style="display: flex; gap: var(--space-2); flex-wrap: wrap">
+        <button class="btn btn-secondary" type="button" onClick="{{ probeAll }}">probe all nodes</button>
+        <button class="btn btn-primary blueprint" type="button" onClick="{{ openFriend }}">add user<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i></button>
+      </div>
+    </header>
+
+    <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+      <div class="panel" style="display: flex; flex-direction: column; gap: var(--space-8)">
+        <div class="grid-4">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+            <div class="card blueprint">
+              <div class="card-kicker">{{ s.kicker }}</div>
+              <div style="font-family: var(--font-heading); font-size: 38px; line-height: 1">{{ s.value }}</div>
+              <div class="card-meta">{{ s.meta }}</div>
+              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            </div>
+          </sc-for>
+        </div>
+
+        <div class="grid-2">
+          <section class="card blueprint">
+            <div style="display: flex; align-items: baseline; gap: var(--space-3)">
+              <h4 style="margin: 0">Users</h4>
+              <a href="#" onClick="{{ goFriends }}" style="margin-left: auto; font-size: 13px">all users</a>
+            </div>
+            <table class="table">
+              <thead><tr><th>nickname</th><th>status</th><th>last seen</th><th></th></tr></thead>
+              <tbody>
+                <sc-for list="{{ friendsPreview }}" as="f" hint-placeholder-count="4">
+                  <tr>
+                    <td>{{ f.nick }}</td>
+                    <td><span class="tag {{ f.tagClass }}">{{ f.status }}</span></td>
+                    <td class="text-muted">{{ f.lastSeen }}</td>
+                    <td style="text-align: right"><button class="btn btn-ghost" type="button" onClick="{{ f.showLink }}">link</button></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          </section>
+
+          <section class="card blueprint">
+            <div style="display: flex; align-items: baseline; gap: var(--space-3)">
+              <h4 style="margin: 0">Nodes</h4>
+              <a href="#" onClick="{{ goNodes }}" style="margin-left: auto; font-size: 13px">all nodes</a>
+            </div>
+            <table class="table">
+              <thead><tr><th>name</th><th>exit</th><th>state</th><th>load</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="3">
+                  <tr>
+                    <td>{{ n.name }}</td>
+                    <td class="text-muted">{{ n.country }}</td>
+                    <td><span class="tag {{ n.tagClass }}">{{ n.state }}</span></td>
+                    <td class="mono">{{ n.load }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          </section>
+        </div>
+
+        <section>
+          <h4>Recent activity</h4>
+          <table class="table">
+            <thead><tr><th style="width: 150px">time</th><th style="width: 130px">actor</th><th>event</th></tr></thead>
+            <tbody>
+              <sc-for list="{{ logs }}" as="l" hint-placeholder-count="5">
+                <tr><td class="mono text-muted">{{ l.time }}</td><td>{{ l.actor }}</td><td>{{ l.event }}</td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isFriends }}">
+      <div class="panel">
+        <table class="table">
+          <thead><tr><th>nickname</th><th>status</th><th>added</th><th>last seen</th><th>nodes served</th><th style="text-align: right">actions</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ friends }}" as="f" hint-placeholder-count="4">
+              <tr>
+                <td>{{ f.nick }}</td>
+                <td><span class="tag {{ f.tagClass }}">{{ f.status }}</span></td>
+                <td class="text-muted">{{ f.added }}</td>
+                <td class="text-muted">{{ f.lastSeen }}</td>
+                <td class="mono">{{ f.coverage }}</td>
+                <td style="text-align: right">
+                  <div style="display: inline-flex; gap: var(--space-2)">
+                    <button class="btn btn-secondary" type="button" onClick="{{ f.showLink }}">show link</button>
+                    <button class="btn btn-secondary" type="button" onClick="{{ f.revoke }}">{{ f.revokeLabel }}</button>
+                  </div>
+                </td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <p class="text-muted" style="margin-top: var(--space-4); font-size: 13px">A user gets one subscription URL covering every serving node. Nothing else is stored about them.</p>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isNodes }}">
+      <div class="panel" style="display: flex; flex-direction: column; gap: var(--space-6)">
+        <div style="display: flex; justify-content: flex-end">
+          <button class="btn btn-secondary" type="button" onClick="{{ openNode }}">add node</button>
+        </div>
+        <table class="table">
+          <thead><tr><th>name</th><th>exit country</th><th>address</th><th>state</th><th>transports</th><th style="text-align: right">actions</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="3">
+              <tr>
+                <td>{{ n.name }}</td>
+                <td class="text-muted">{{ n.country }}</td>
+                <td class="mono">{{ n.address }}</td>
+                <td><span class="tag {{ n.tagClass }}">{{ n.state }}</span></td>
+                <td>
+                  <div style="display: flex; flex-wrap: wrap; gap: 4px">
+                    <sc-for list="{{ n.transports }}" as="t" hint-placeholder-count="2">
+                      <span class="tag {{ t.tagClass }}">{{ t.label }}</span>
+                    </sc-for>
+                  </div>
+                </td>
+                <td style="text-align: right">
+                  <div style="display: inline-flex; gap: var(--space-2)">
+                    <button class="btn btn-secondary" type="button" onClick="{{ n.probe }}">probe</button>
+                    <button class="btn btn-secondary" type="button" onClick="{{ n.apply }}">apply</button>
+                  </div>
+                </td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isHops }}">
+      <div class="panel" style="display: flex; flex-direction: column; gap: var(--space-6)">
+        <div style="display: flex; align-items: center; gap: var(--space-4)">
+          <p class="text-muted" style="margin: 0; font-size: 13px; max-width: 60ch">A hop sends traffic from the node users dial into a second node that carries the exit. Nodes without a hop are their own exit.</p>
+          <button class="btn btn-secondary" style="margin-left: auto" type="button" onClick="{{ openHop }}">establish hop</button>
+        </div>
+        <table class="table">
+          <thead><tr><th>entry node</th><th>leaf node</th><th>transport</th><th>state</th><th>established</th><th style="text-align: right">actions</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ hops }}" as="h" hint-placeholder-count="2">
+              <tr>
+                <td>{{ h.entry }}</td>
+                <td>{{ h.leaf }}</td>
+                <td class="mono">{{ h.transport }}</td>
+                <td><span class="tag {{ h.tagClass }}">{{ h.state }}</span></td>
+                <td class="text-muted">{{ h.since }}</td>
+                <td style="text-align: right"><button class="btn btn-secondary" type="button" onClick="{{ h.tear }}">tear down</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTransports }}">
+      <div class="panel" style="display: flex; flex-direction: column; gap: var(--space-4)">
+        <table class="table">
+          <thead><tr><th>name</th><th>family</th><th>ports</th><th>how a user receives it</th><th>on a filtering network</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ transports }}" as="t" hint-placeholder-count="4">
+              <tr>
+                <td class="mono">{{ t.name }}</td>
+                <td class="text-muted">{{ t.family }}</td>
+                <td class="mono">{{ t.ports }}</td>
+                <td>{{ t.delivery }}</td>
+                <td>{{ t.filtering }}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <p class="text-muted" style="font-size: 13px; margin: 0">Discovered from the image, not listed anywhere. A new protocol appears here on its own.</p>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTraffic }}">
+      <div class="panel" style="display: flex; flex-direction: column; gap: var(--space-8)">
+        <section class="card blueprint">
+          <div class="card-kicker">last 14 days</div>
+          <div style="display: flex; align-items: flex-end; gap: 6px; height: 180px; margin-top: var(--space-3)">
+            <sc-for list="{{ traffic }}" as="d" hint-placeholder-count="14">
+              <div style="flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; height: 100%">
+                <div style="width: 100%; background: var(--color-accent-500); height: {{ d.h }}%"></div>
+                <div class="text-muted" style="font-size: 10px">{{ d.day }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </section>
+        <section>
+          <h4>By user, this month</h4>
+          <table class="table">
+            <thead><tr><th>nickname</th><th>down</th><th>up</th><th>sessions</th><th>busiest node</th></tr></thead>
+            <tbody>
+              <sc-for list="{{ usage }}" as="u" hint-placeholder-count="4">
+                <tr><td>{{ u.nick }}</td><td class="mono">{{ u.down }}</td><td class="mono">{{ u.up }}</td><td class="mono">{{ u.sessions }}</td><td class="text-muted">{{ u.node }}</td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isKeys }}">
+      <div class="panel" style="display: flex; flex-direction: column; gap: var(--space-4)">
+        <p class="text-muted" style="margin: 0; font-size: 13px; max-width: 70ch">Key material is generated on the node and minted once. It is never displayed again and never typed in here.</p>
+        <table class="table">
+          <thead><tr><th>scope</th><th>transport</th><th>fingerprint</th><th>minted</th><th>rotates</th><th style="text-align: right">actions</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ keys }}" as="k" hint-placeholder-count="4">
+              <tr>
+                <td>{{ k.scope }}</td>
+                <td class="mono">{{ k.transport }}</td>
+                <td class="mono text-muted">{{ k.fp }}</td>
+                <td class="text-muted">{{ k.minted }}</td>
+                <td class="text-muted">{{ k.rotates }}</td>
+                <td style="text-align: right"><button class="btn btn-secondary" type="button" onClick="{{ k.rotate }}">rotate</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isLogs }}">
+      <div class="panel">
+        <table class="table">
+          <thead><tr><th style="width: 160px">time</th><th style="width: 140px">actor</th><th>event</th><th style="width: 150px">source</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ logs }}" as="l" hint-placeholder-count="6">
+              <tr><td class="mono text-muted">{{ l.time }}</td><td>{{ l.actor }}</td><td>{{ l.event }}</td><td class="mono text-muted">{{ l.source }}</td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSettings }}">
+      <div class="panel grid-2">
+        <section class="card blueprint">
+          <h4 style="margin: 0">Admins</h4>
+          <table class="table">
+            <thead><tr><th>user</th><th>role</th><th>last login</th></tr></thead>
+            <tbody>
+              <sc-for list="{{ admins }}" as="a" hint-placeholder-count="2">
+                <tr><td>{{ a.user }}</td><td class="text-muted">{{ a.role }}</td><td class="text-muted">{{ a.last }}</td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </section>
+        <section class="card blueprint">
+          <h4 style="margin: 0">Panel</h4>
+          <div class="field" style="margin-bottom: var(--space-3)">
+            <label for="s-name">mesh name</label>
+            <input class="input" id="s-name" value="hashi" />
+          </div>
+          <div class="field" style="margin-bottom: var(--space-3)">
+            <label for="s-url">subscription base URL</label>
+            <input class="input mono" id="s-url" value="https://hashi.example/s/" />
+          </div>
+          <div class="field">
+            <label for="s-ret">log retention (days)</label>
+            <input class="input" id="s-ret" value="30" />
+          </div>
+          <div><button class="btn btn-primary" type="button" onClick="{{ saveSettings }}">save</button></div>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </section>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showFriend }}">
+      <div class="dialog-backdrop" onClick="{{ closeDialog }}">
+        <div class="dialog blueprint" style="background: var(--color-bg)" onClick="{{ stop }}" role="dialog" aria-modal="true">
+          <div class="dialog-title">Add a user</div>
+          <div class="field">
+            <label for="f-nick">nickname</label>
+            <input class="input" id="f-nick" placeholder="mira" value="{{ draftNick }}" onChange="{{ setNick }}" />
+          </div>
+          <div class="dialog-body">They get one subscription URL covering every serving node. Nothing else is stored about them.</div>
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" type="button" onClick="{{ closeDialog }}">cancel</button>
+            <button class="btn btn-primary" type="button" onClick="{{ addFriend }}">add user</button>
+          </div>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showLinkFor }}">
+      <div class="dialog-backdrop" onClick="{{ closeDialog }}">
+        <div class="dialog blueprint" style="background: var(--color-bg)" onClick="{{ stop }}" role="dialog" aria-modal="true">
+          <div class="dialog-title">{{ linkTitle }}</div>
+          <div class="dialog-body">One URL, every serving node. Sharing it again does not mint a new key.</div>
+          <div class="mono" style="padding: var(--space-3); border: 1px solid var(--color-divider); word-break: break-all; background: var(--color-surface)">{{ linkUrl }}</div>
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" type="button" onClick="{{ closeDialog }}">close</button>
+            <button class="btn btn-primary" type="button" onClick="{{ copyLink }}">copy link</button>
+          </div>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showNode }}">
+      <div class="dialog-backdrop" onClick="{{ closeDialog }}">
+        <div class="dialog blueprint" style="width: min(560px, 100%); background: var(--color-bg)" onClick="{{ stop }}" role="dialog" aria-modal="true">
+          <div class="dialog-title">Add a node</div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3)">
+            <div class="field"><label for="n-name">name</label><input class="input" id="n-name" placeholder="leaf-ams-1" /></div>
+            <div class="field"><label for="n-addr">address clients dial</label><input class="input mono" id="n-addr" placeholder="hostname or IP" /></div>
+            <div class="field"><label for="n-cty">exit country label</label><input class="input" id="n-cty" placeholder="Netherlands" /></div>
+            <div class="field"><label for="n-host">ssh host</label><input class="input mono" id="n-host" placeholder="defaults to the address above" /></div>
+            <div class="field"><label for="n-user">ssh user</label><input class="input mono" id="n-user" value="root" /></div>
+            <div class="field"><label for="n-port">ssh port</label><input class="input mono" id="n-port" value="22" /></div>
+          </div>
+          <div class="field"><label for="n-key">ssh private key</label><textarea class="input mono" id="n-key" placeholder="stored encrypted; never displayed again"></textarea></div>
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" type="button" onClick="{{ closeDialog }}">cancel</button>
+            <button class="btn btn-primary" type="button" onClick="{{ addNode }}">add node</button>
+          </div>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showHop }}">
+      <div class="dialog-backdrop" onClick="{{ closeDialog }}">
+        <div class="dialog blueprint" style="width: min(620px, 100%); max-height: 86vh; overflow: auto; background: var(--color-bg)" onClick="{{ stop }}" role="dialog" aria-modal="true">
+          <div class="dialog-title">Establish a hop</div>
+          <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3)">
+            <div class="field"><label for="h-entry">entry node</label><input class="input" id="h-entry" value="fra-1" /></div>
+            <div class="field"><label for="h-leaf">leaf node</label><input class="input" id="h-leaf" value="ams-1" /></div>
+            <div class="field"><label for="h-tr">transport</label><input class="input mono" id="h-tr" value="vless-reality" /></div>
+          </div>
+          <div class="dialog-body">Both ends are tuned from the transport defaults. Open the tuning block only to override a value.</div>
+          <details style="border: 1px solid var(--color-divider); padding: var(--space-3)">
+            <summary style="cursor: pointer; font-family: var(--font-heading); font-size: 15px">advanced tuning — 12 parameters per end</summary>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-4)">
+              <div>
+                <h6 style="margin-bottom: var(--space-2)">entry end</h6>
+                <sc-for list="{{ tuning }}" as="p" hint-placeholder-count="6">
+                  <div class="field" style="display: grid; grid-template-columns: 1fr 92px; align-items: center; gap: var(--space-2); margin-bottom: 5px">
+                    <label class="mono" style="margin: 0; font-size: 11px">{{ p.name }}</label>
+                    <input class="input mono" style="min-height: 28px" placeholder="{{ p.def }}" />
+                  </div>
+                </sc-for>
+              </div>
+              <div>
+                <h6 style="margin-bottom: var(--space-2)">leaf end</h6>
+                <sc-for list="{{ tuning }}" as="p" hint-placeholder-count="6">
+                  <div class="field" style="display: grid; grid-template-columns: 1fr 92px; align-items: center; gap: var(--space-2); margin-bottom: 5px">
+                    <label class="mono" style="margin: 0; font-size: 11px">{{ p.name }}</label>
+                    <input class="input mono" style="min-height: 28px" placeholder="{{ p.def }}" />
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </details>
+          <div class="text-muted" style="font-size: 12px">Key material is generated for both ends and minted once. Never type a key here.</div>
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" type="button" onClick="{{ closeDialog }}">cancel</button>
+            <button class="btn btn-primary" type="button" onClick="{{ addHop }}">establish hop</button>
+          </div>
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ toast }}">
+      <div class="blueprint" style="position: fixed; right: 24px; bottom: 24px; background: var(--color-accent-900); color: var(--color-bg); padding: var(--space-3) var(--space-4); font-size: 13px; box-shadow: var(--shadow-md)">
+        {{ toast }}
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      </div>
+    </sc-if>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;comfortable&quot;,&quot;compact&quot;],&quot;default&quot;:&quot;comfortable&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;registrationMarks&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;orgName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;hashi&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const ROUTES = [
+  ["overview", "Overview", "1 mesh, 3 nodes, 3 active users"],
+  ["friends", "Users", "Who can dial the mesh, and the one URL each of them holds"],
+  ["nodes", "Nodes", "Machines that serve or exit traffic"],
+  ["hops", "Hops", "Entry node to leaf node, where the exit is not the node users dial"],
+  ["transports", "Transports", "Protocols this image ships, discovered on its own"],
+  ["traffic", "Traffic", "Bandwidth by day and by user"],
+  ["keys", "Keys & configs", "Minted once, never displayed again"],
+  ["logs", "Audit log", "Every state change on the mesh"],
+  ["settings", "Settings", "Admins and panel configuration"]
+];
+
+const TUNING = [
+  ["init_packet_magic_header", "auto"], ["junk_packet_count", "4"],
+  ["junk_packet_max_size", "1280"], ["junk_packet_min_size", "40"],
+  ["mtu", "1420"], ["peer_tunnel_address", "10.8.0.2/32"],
+  ["port", "51820"], ["response_packet_magic_header", "auto"],
+  ["transport_packet_magic_header", "auto"], ["tunnel_address", "10.8.0.1/24"],
+  ["underload_packet_magic_header", "auto"]
+];
+
+class Component extends DCLogic {
+  state = {
+    route: "overview",
+    dialog: null,
+    linkFor: null,
+    draftNick: "",
+    toast: "",
+    friends: [
+      { id: "f1", nick: "foo", status: "active", added: "12 Jul 2026", lastSeen: "4 min ago", coverage: "3 / 3" },
+      { id: "f2", nick: "mira", status: "active", added: "2 Aug 2026", lastSeen: "2 h ago", coverage: "3 / 3" },
+      { id: "f3", nick: "kell", status: "active", added: "19 Aug 2026", lastSeen: "yesterday", coverage: "2 / 3" },
+      { id: "f4", nick: "testuser", status: "revoked", added: "3 Jun 2026", lastSeen: "28 Jun 2026", coverage: "—" }
+    ],
+    nodes: [
+      { name: "ams-1", country: "Amsterdam, NL", address: "45.151.69.107", state: "active", load: "31%", transports: [["amneziawg", false], ["vless-reality", true]] },
+      { name: "fra-1", country: "Frankfurt, DE", address: "91.107.204.18", state: "active", load: "12%", transports: [["vless-reality", true], ["vless-ws-tls", true]] },
+      { name: "sgp-1", country: "Singapore, SG", address: "139.180.132.44", state: "degraded", load: "68%", transports: [["shadowsocks", true]] }
+    ],
+    hops: [
+      { id: "h1", entry: "fra-1", leaf: "ams-1", transport: "vless-reality", state: "established", since: "12 Aug 2026" }
+    ]
+  };
+
+  go = (route) => (e) => { if (e) e.preventDefault(); this.setState({ route, dialog: null }); };
+  flash = (toast) => { this.setState({ toast }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: "" }), 2200); };
+  componentWillUnmount() { clearTimeout(this._t); }
+
+  tagFor(v) {
+    if (v === "active" || v === "established") return "tag-accent";
+    if (v === "degraded" || v === "pending") return "tag-outline";
+    return "tag-neutral";
+  }
+
+  renderVals() {
+    const s = this.state;
+    const meta = ROUTES.find((r) => r[0] === s.route) || ROUTES[0];
+    const linkFriend = s.friends.find((f) => f.id === s.linkFor);
+
+    const friends = s.friends.map((f) => ({
+      ...f,
+      tagClass: this.tagFor(f.status),
+      revokeLabel: f.status === "revoked" ? "restore" : "revoke",
+      showLink: () => this.setState({ dialog: "link", linkFor: f.id }),
+      revoke: () => {
+        this.setState((st) => ({
+          friends: st.friends.map((x) => x.id === f.id ? { ...x, status: x.status === "revoked" ? "active" : "revoked", coverage: x.status === "revoked" ? "3 / 3" : "—" } : x)
+        }));
+        this.flash(f.status === "revoked" ? f.nick + " restored" : f.nick + " revoked — link is dead");
+      }
+    }));
+
+    const nodes = s.nodes.map((n) => ({
+      ...n,
+      tagClass: this.tagFor(n.state),
+      transports: n.transports.map(([label, on]) => ({ label: on ? label : label + " (disabled)", tagClass: on ? "tag-accent" : "tag-neutral" })),
+      probe: () => this.flash("probing " + n.name + "…"),
+      apply: () => this.flash("config applied to " + n.name)
+    }));
+
+    const hops = s.hops.map((h) => ({
+      ...h,
+      tagClass: this.tagFor(h.state),
+      tear: () => { this.setState((st) => ({ hops: st.hops.filter((x) => x.id !== h.id) })); this.flash("hop torn down"); }
+    }));
+
+    const activeFriends = s.friends.filter((f) => f.status === "active").length;
+
+    return {
+      density: this.props.density ?? "comfortable",
+      marks: (this.props.registrationMarks ?? true) ? "on" : "off",
+      orgName: this.props.orgName ?? "hashi",
+      title: meta[1],
+      subtitle: meta[2],
+      navItems: ROUTES.map(([id, label]) => ({ label, current: s.route === id ? "page" : "false", go: this.go(id) })),
+      isOverview: s.route === "overview", isFriends: s.route === "friends", isNodes: s.route === "nodes",
+      isHops: s.route === "hops", isTransports: s.route === "transports", isTraffic: s.route === "traffic",
+      isKeys: s.route === "keys", isLogs: s.route === "logs", isSettings: s.route === "settings",
+      goFriends: this.go("friends"), goNodes: this.go("nodes"),
+      stats: [
+        { kicker: "nodes online", value: "2 / 3", meta: "sgp-1 degraded — last probe 6 min ago" },
+        { kicker: "active users", value: String(activeFriends), meta: "1 revoked" },
+        { kicker: "throughput now", value: "84 Mb/s", meta: "peak today 210 Mb/s" },
+        { kicker: "hops", value: String(s.hops.length), meta: "fra-1 → ams-1" }
+      ],
+      friends,
+      friendsPreview: friends.slice(0, 4),
+      nodes,
+      hops,
+      transports: [
+        { name: "amneziawg", family: "udp", ports: "1024–65535", delivery: "client-config-file", filtering: "obfuscated or TLS-shaped" },
+        { name: "vless-reality", family: "tcp-tls", ports: "443–65535", delivery: "v1-uri-list", filtering: "obfuscated or TLS-shaped" },
+        { name: "vless-ws-tls", family: "tcp-tls", ports: "443–65535", delivery: "v1-uri-list", filtering: "obfuscated or TLS-shaped" },
+        { name: "shadowsocks", family: "tcp", ports: "1024–65535", delivery: "v1-uri-list", filtering: "obfuscated or TLS-shaped" },
+        { name: "wireguard", family: "udp", ports: "1024–65535", delivery: "client-config-file", filtering: "identified and blocked — never offer as an exit" }
+      ],
+      traffic: [22, 31, 28, 44, 39, 61, 55, 48, 72, 66, 58, 81, 74, 63].map((h, i) => ({ h, day: String(((i + 25) % 31) + 1) })),
+      usage: [
+        { nick: "foo", down: "182 GB", up: "14 GB", sessions: "41", node: "ams-1" },
+        { nick: "mira", down: "96 GB", up: "7 GB", sessions: "23", node: "fra-1" },
+        { nick: "kell", down: "38 GB", up: "3 GB", sessions: "12", node: "sgp-1" }
+      ],
+      keys: [
+        { scope: "ams-1", transport: "vless-reality", fp: "9f3c…a17d", minted: "12 Jul 2026", rotates: "in 22 days", rotate: () => this.flash("ams-1 key rotated") },
+        { scope: "fra-1", transport: "vless-reality", fp: "4b81…c092", minted: "12 Aug 2026", rotates: "in 53 days", rotate: () => this.flash("fra-1 key rotated") },
+        { scope: "sgp-1", transport: "shadowsocks", fp: "0ce7…5f44", minted: "19 Aug 2026", rotates: "in 60 days", rotate: () => this.flash("sgp-1 key rotated") },
+        { scope: "hop fra-1 → ams-1", transport: "vless-reality", fp: "77aa…21be", minted: "12 Aug 2026", rotates: "manual", rotate: () => this.flash("hop key rotated") }
+      ],
+      logs: [
+        { time: "20:41:02", actor: "root", event: "user kell added", source: "panel" },
+        { time: "19:58:17", actor: "system", event: "sgp-1 probe failed twice — marked degraded", source: "prober" },
+        { time: "18:12:44", actor: "root", event: "hop fra-1 → ams-1 established", source: "panel" },
+        { time: "16:03:09", actor: "system", event: "amneziawg disabled on ams-1", source: "node agent" },
+        { time: "12:47:55", actor: "root", event: "user testuser revoked", source: "panel" },
+        { time: "09:21:30", actor: "system", event: "config applied to fra-1", source: "node agent" }
+      ],
+      admins: [
+        { user: "root", role: "owner", last: "today, 20:44" },
+        { user: "ops", role: "operator", last: "6 Sep 2026" }
+      ],
+      tuning: TUNING.map(([name, def]) => ({ name, def })),
+      showFriend: s.dialog === "friend",
+      showNode: s.dialog === "node",
+      showHop: s.dialog === "hop",
+      showLinkFor: s.dialog === "link" && !!linkFriend,
+      linkTitle: linkFriend ? "Subscription link — " + linkFriend.nick : "",
+      linkUrl: linkFriend ? "https://hashi.example/s/" + linkFriend.id + "-8f4c2ad91b7e6350" : "",
+      draftNick: s.draftNick,
+      setNick: (e) => this.setState({ draftNick: e.target.value }),
+      openFriend: () => this.setState({ dialog: "friend", draftNick: "" }),
+      openNode: () => this.setState({ dialog: "node" }),
+      openHop: () => this.setState({ dialog: "hop" }),
+      closeDialog: () => this.setState({ dialog: null, linkFor: null }),
+      stop: (e) => e.stopPropagation(),
+      copyLink: () => { this.setState({ dialog: null, linkFor: null }); this.flash("link copied"); },
+      probeAll: () => this.flash("probing 3 nodes…"),
+      saveSettings: () => this.flash("settings saved"),
+      addFriend: () => {
+        const nick = (s.draftNick || "").trim() || "user-" + (s.friends.length + 1);
+        const id = "f" + (s.friends.length + 1);
+        this.setState((st) => ({
+          friends: [{ id, nick, status: "active", added: "today", lastSeen: "never", coverage: "3 / 3" }, ...st.friends],
+          dialog: "link", linkFor: id, draftNick: "", route: "friends"
+        }));
+      },
+      addNode: () => { this.setState({ dialog: null }); this.flash("node queued — first probe in progress"); },
+      addHop: () => {
+        this.setState((st) => ({
+          hops: [...st.hops, { id: "h" + (st.hops.length + 1), entry: "fra-1", leaf: "ams-1", transport: "vless-reality", state: "pending", since: "today" }],
+          dialog: null, route: "hops"
+        }));
+        this.flash("hop establishing…");
+      },
+      toast: s.toast
+    };
+  }
+}
+
+</script>
+</body>
+</html>

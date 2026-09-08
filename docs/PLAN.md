@@ -29,6 +29,10 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
   second host. M1, M2, M3 and M7 are therefore field observations on rented
   hardware, and the stand cannot discharge them. Say so in the verdict rather
   than passing them on a panel that looked right.
+- **M8, M9 and M10 are the exception to that rule.** They are panel work, and the
+  stand is exactly the right instrument for them: a control plane, a database and
+  a delivery endpoint is all their scenarios need. Walk them on the stand — and
+  walk them, rather than passing them because the screenshot matched the design.
 - **`make test` never proves a tunnel carries traffic**, and it cannot prove the
   charter's first success criterion. See "What this plan does not cover".
 
@@ -386,6 +390,254 @@ back in and confirm it works.
 
 ---
 
+## → M8 — The console the owner actually lives in · planned 2026-09-08
+
+The panel today is one scrolling page plus a node detail page, dressed in twenty
+lines of inline CSS. `design/` holds a finished, high-fidelity redesign of it:
+nine screens behind a persistent sidebar, every creation flow in a dialog, and the
+24-field hop form collapsed behind a disclosure. The job it optimises for —
+*"add a user, hand them their subscription link, and see at a glance whether the
+mesh is healthy"* — is criteria 2 and 3 word for word, so this is not decoration.
+
+**The source of truth is the three written documents**, not the prototype:
+`design/README.md` (the handoff), `design/UI-PATTERNS.md` (how to add a screen
+without the panel drifting) and `design/design-system/styles.css` (the tokens).
+`design/VPN Admin.dc.html` is a reference drawing — it links a `_ds/` bundle and a
+`support.js` the handoff does not ship, so it does not even render standalone.
+Recreate the design in the stack the panel already has; do not copy its markup.
+
+**No framework arrives with this.** "Sidebar navigation swaps the main region; no
+page reload" is HTMX against a `#main` target, which is what the project already
+serves from its own `/static`. The stack rule stands: Jinja2 + HTMX, no bundler.
+
+**Three things in the design cannot be built as drawn, and one of them matters.**
+
+- *The stylesheet fetches fonts from Google.* `styles.css:2` is
+  `@import url('https://fonts.googleapis.com/…')`. The panel must not fetch
+  anything from a third party — `base.html` already refuses a CDN for HTMX,
+  because "the panel must work on a network where the CDN is blocked, which is the
+  same network the operator uses to fix a blocked node," and M7 puts the panel on
+  an interface where that request may have no route at all. It also tells a US
+  company every time the owner opens their VPN console. The `@import` goes;
+  decision 7 says what replaces it.
+- *Four cells measure people.* "throughput now" (Overview), "last seen" (Users),
+  node "load" (Nodes) and the whole **Traffic screen** — per-user down, up,
+  sessions and busiest node. The charter's non-goals name all of it: *"No traffic
+  logging, no DNS logs, no per-user analytics. Not 'off by default' — absent, so
+  there is nothing to seize or subpoena."*
+  `tests/control/test_zone_invariants.py::test_no_model_records_anything_about_a_connection`
+  turns red the moment a model grows a field for any of them. The design is right
+  about the layout and wrong about those four cells, because it was drawn without
+  the charter in hand. Decision 6 chooses what stands in their place; the layout
+  survives either way.
+- *The design renames friends to users.* Its own note says the prototype "is still
+  named `friends` internally — rename on implementation," which points the wrong
+  way for us: `friend` is the word in the models, the services, the API, the tests
+  and the charter. The recommendation is to keep `friend` in the code and decide
+  only the visible label — decision 9.
+
+This milestone lands the foundation and the two screens that carry the primary
+job. The fleet screens follow in M9, and the two that need records the project
+does not keep are M10. Until M9 lands, the sidebar keeps one entry pointing at
+today's page for everything not yet ported — a dead nav link is worse than an
+honest one.
+
+### M8.1 — Vendor the design system, minus its third-party font fetch
+
+Serve `styles.css` from `/static`. Every colour, space, radius and shadow comes
+from its variables; nothing gets hard-coded past them.
+
+### M8.2 — The shell: sidebar, header, panel body, and the 900px collapse
+
+One breakpoint, per UI-PATTERNS §12. Grids are `repeat(N, minmax(0, 1fr))` so they
+collapse under the rule that already exists rather than a new one.
+
+### M8.3 — The toast and the dialog primitive
+
+Every mutation emits a toast naming its object (`<nick> revoked — link is dead`),
+one at a time. `.dialog` needs an opaque background — the design system's is
+transparent, and the handoff says so twice.
+
+### M8.4 — Overview
+
+Four stat cards and the preview tables, carrying only facts the control plane
+already holds.
+
+### M8.5 — Users, with the add-user and subscription-link dialogs
+
+Submitting the nickname creates the user, closes, and opens the link dialog by
+itself. The link is a bearer credential: it may not reach a query string, a log
+line or an error message.
+
+### M8.6 — The states the design did not draw
+
+Empty, loading, request failure, and field-level validation — for these two
+screens. A first-time operator meets the empty state before anything else, which
+is exactly the seed the acceptance stand uses.
+
+**E2E:** the existing `tests/e2e/control/` scenarios stay green —
+`test_the_owner_issues_and_revokes_access.py` and
+`test_request_paths_are_never_logged.py` above all. Where one asserts a fact on
+the old single page, it moves to the screen that now owns that fact; relaxing the
+assertion instead is how this kind of rewrite loses its cover. One new scenario:
+**the panel fetches nothing from a third party** — no font, script or stylesheet
+from an origin that is not this host. It pins decision 7 permanently, and it is
+the only part of this milestone a test can hold. `make test-control` is the gate.
+
+**Done when**
+- [ ] The panel opens on the new console — sidebar, header, framed panel — at the
+      design's colours, type and spacing.
+- [ ] The owner adds a user in a dialog and the link dialog follows on its own,
+      with a copy button that works.
+- [ ] No screen shows a per-user or per-connection number anywhere, and no model
+      grew a field that could produce one.
+- [ ] Every page loads from this host alone, proven with the machine's outbound
+      network cut.
+- [ ] Empty, loading and failure states are drawn for both screens: a fresh
+      install shows an empty state that says what to do next, not a broken table.
+- [ ] At 900px the sidebar becomes a top scroller and nothing runs off the side of
+      the page.
+
+acceptance: yes
+On the stand, with nothing in it but the operator account, sign in. First judge it
+empty: the console has to tell a first-time owner what to do next, not show blank
+boxes. Add a user called `dima` from the header button — the link dialog should
+appear by itself; copy the link and open it in another tab. It must resolve (the
+empty stand has no node to offer yet, so an empty subscription is the correct
+answer — a 404 or an error is not). Then go looking for anything the panel claims
+to know about who connected, how long ago, or how much they used: it must not be
+there, on any screen. Last, narrow the window below 900px and check the console is
+still operable rather than merely still rendering.
+
+---
+
+## → M9 — The fleet screens, and the old page retires · planned 2026-09-08
+
+Nodes, Hops, Transports and Keys & configs, with the add-node and establish-hop
+dialogs. Same design, same rules as M8 — read its prose first, it carries the
+constraints for all three of these milestones.
+
+**The hop dialog is the biggest usability claim in the handoff.** Establishing a
+hop asks 27 parameters today, all at once, in one flat form. The design asks three
+— entry node, leaf node, transport — and puts the other 24 behind
+`<details> advanced tuning — 12 parameters per end`, every field carrying its
+transport default as a placeholder so an empty box visibly means "use the
+default". This is the form the runbook has you open during a rotation, which is
+the worst possible moment to read 27 labels.
+
+**The old pages are deleted at the end of this milestone, not at its start.**
+Until every action they carry has a new home, removing them removes the only way
+to do the job.
+
+### M9.1 — Nodes, with the add-node dialog
+
+### M9.2 — Hops, with the establish-hop dialog and its advanced-tuning disclosure
+
+### M9.3 — Transports — the read-only capability table
+
+Including the "on a filtering network" column, and the row that says a protocol is
+identified and blocked and must never be offered as an exit. That sentence is
+transport metadata, not a case statement in a template: no template may name a
+transport, which is the same hard rule the code lives under.
+
+### M9.4 — Keys & configs
+
+Fingerprints truncated, rotation in place. UI-PATTERNS §9: where key material
+could appear, the panel prints the rule instead. Nothing displays a private or
+preshared key — the API already withholds both, and the panel must not become the
+place they surface.
+
+### M9.5 — Retire `pages/index.html` and `pages/node.html`
+
+**E2E:** none new — the behaviour is unchanged and only the markup moves. The
+scenarios that already cover it must stay green against the new screens:
+`test_a_replacement_node_and_a_protocol_from_the_panel.py`,
+`test_the_panel_never_offers_a_blocked_protocol_as_working.py`,
+`test_a_hop_never_reaches_a_friend.py` and
+`test_rotation_does_not_move_the_link.py`. `make test-control` is the gate.
+
+**Done when**
+- [ ] Every action the old pages offered has a home on a new screen: add node,
+      enable and disable a transport, apply, probe, set state, establish and tear
+      down a hop, rotate keys, replace params.
+- [ ] Establishing a hop asks three questions; the other 24 parameters are behind
+      the disclosure, each showing its own transport's default as a placeholder.
+- [ ] No template names a transport, a country, an address or a port.
+- [ ] No key material appears anywhere in the panel; fingerprints are truncated.
+- [ ] `pages/index.html` and `pages/node.html` are gone and nothing links to them.
+
+acceptance: yes
+On the stand, register a node, enable a transport on it and apply — every step
+from the new screens, with no URL typed by hand. Then establish a hop between two
+nodes and check the dialog lets you answer three questions and leave the tuning
+alone. Open the transports screen: it must name a protocol the panel refuses to
+offer as an exit and say why, in words. Then hunt for a private key anywhere in
+the console — you must not find one. Applying will fail on the stand, because
+there is no real host behind the node; that is expected, and what is being judged
+is that the failure arrives on the screen in plain words instead of a blank page
+or a raw error. If the failure is the wrong message about a draft node, that is
+M4's known bug and not a finding here.
+
+---
+
+## → M10 — The two screens that need records this project does not keep · planned 2026-09-08
+
+Audit log and Settings. Both ask for something that does not exist, and one of
+them may be something the charter should refuse outright — which is why they are
+last and not folded into M9.
+
+**Audit log.** There is no audit trail anywhere in the tree; `grep -ri audit
+control edge docs` returns nothing. Building one means a new table written on
+every mutation. It is *not* a connection log — it records what the operator did,
+never who dialed what — but it is still a new durable record naming friends and
+times, sitting on the one machine most worth seizing, and the charter's whole
+argument is that such records are *absent, so there is nothing to subpoena*.
+Whether it exists at all, what it may record, and whether it keeps the operator's
+own source address, is decision 8.
+
+**Settings.** The design draws an Admins table (user / role / last login) and a
+form for mesh name, subscription base URL and log retention days. There is one
+operator, configured from the environment (`HASHI_OPERATOR_USERNAME`,
+`HASHI_OPERATOR_PASSWORD_HASH`); more than one is a charter non-goal — *"One
+operator, one fleet"* — and there is no log to retain, by construction. A form
+that saves a value the process only reads from the environment at boot is a lie
+told in a text field. The proposal is a Settings screen that shows what this
+control plane is configured with and says where each value is actually changed,
+with a single-row Admins table. Also decision 8.
+
+### M10.1 — Settle what Settings can honestly show, and what it may change
+
+### M10.2 — Settings, read-only wherever the value comes from the environment
+
+### M10.3 — The audit trail, if decision 8 says there is one
+
+### M10.4 — The audit log screen
+
+**E2E:** none new if decision 8 says no. If it says yes, one scenario asserting
+the audit trail contains no token, no subscription URL and nothing about a
+connection — a record that grows those is the failure mode worth a test.
+`make test-control` is the gate either way, and
+`test_no_model_records_anything_about_a_connection` already stands over any new
+model without being asked.
+
+**Done when**
+- [ ] Settings shows the owner what this control plane is actually configured
+      with, and names where a value is changed when the panel cannot change it.
+- [ ] Nothing on Settings claims to save a value the running process would not
+      then use.
+- [ ] Decision 8 is written down in `docs/decisions.md`, whichever way it went.
+- [ ] If an audit trail exists, it holds no token, no subscription URL and nothing
+      about who connected.
+
+acceptance: yes
+On the stand, open Settings and check that every value it shows is true of the
+control plane you are signed into, and that anything it will not let you change
+says where it is changed instead. If the audit log shipped, change two things
+about the fleet, then open it: both must be named in plain words, with no token
+and no subscription link anywhere in sight.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
@@ -395,12 +647,24 @@ back in and confirm it works.
 | 3 | Behaviour when a hop is down — fail closed, or exit locally and say so | M3 |
 | 4 | Whether to bump `xray-core` from the pinned `1.8.24` (roughly two years behind the ≥ `25.12.8` that 2026 field guidance names as the detection threshold). A data-plane pin bump has a security argument on both sides — new upstream means new defaults and new detectability | — |
 | 5 | What to do with `/var/log/ufw.log` on the live host | M6 |
+| 6 | What replaces the design's per-user numbers — "throughput now", "last seen", node "load" — and whether the Traffic screen is dropped outright. All four are charter non-goals; the design was drawn without the charter | M8 |
+| 7 | Vendor Barlow and Barlow Condensed as woff2 files in the repository (OFL, a few hundred kilobytes), or drop to a system-font fallback and accept that the console is not quite the drawing. The design system's stylesheet fetches them from Google, which the panel must not do | M8 |
+| 8 | Whether an audit log exists at all and what it may record, and what a Settings screen may change when the values come from the environment | M10 |
+| 9 | The visible word for a person who uses the mesh: the design says "users", the charter and the whole codebase say "friends". Recommended: keep `friend` in the code, decide only the label | M8 |
 
 **On decision 2, the trade-off worth restating:** Tailscale's coordination is a US
 service that may be unreachable from Russia. If it is down exactly when an
 emergency rotation is needed, you are locked out of your own panel — the failure
 lands precisely on the scenario the panel exists for. **Headscale** (self-hosted
 coordination) avoids that.
+
+**On decision 6, what I would propose if you want a default:** keep all four
+positions in the layout and fill them with facts the control plane already holds —
+nodes online, active friends, hops established and transports enabled for the stat
+cards; `added` instead of `last seen` in the friends table; drift against the
+applied digest instead of node `load`. Drop the Traffic screen outright and give
+its sidebar slot to nothing: a screen that exists to say "we do not measure this"
+is an invitation to add the measurement later.
 
 Still open from before: **C** and **E** in `docs/product/backlog.md`, both awaiting
 you, E wanted by M4.
