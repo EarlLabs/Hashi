@@ -56,6 +56,13 @@ on-disk JSON logs; `/sub/` is never recorded; uvicorn's access log is empty and
 Caddy emitted four lines across the whole deployment. No unit test could have
 established this.
 
+**Two hosts as of 2026-09-08, roles set by the owner.** The Amsterdam box is the
+**leaf** and exits traffic. A second host — 3.9 Gi RAM, in Russia — is the
+**entry**, and carries the control plane and the panel as well. That moves the
+control plane off the 957 Mi box, which had 463 Mi free while running control,
+Postgres, Caddy and a node together. It also puts every node key and every friend
+credential on a Russian host: deliberate, and the reason M7 stops being optional.
+
 **Does not work:** everything in M1–M3 below. The pattern is worth stating once,
 because it is the lesson of the whole exercise:
 
@@ -638,6 +645,62 @@ and no subscription link anywhere in sight.
 
 ---
 
+## → M11 — One script prepares a host to be a node · planned 2026-09-08
+
+`edge/bootstrap/node_stack.py:212` refuses a node that has no docker, and says
+why in as many words: *"hashi configures upstream data-plane containers and does
+not install a container runtime for you."* That is the right boundary for the
+library and it leaves a hole in the product. `scripts/panel-bootstrap.sh` brings
+a control plane up in one command; a leaf has no equivalent, so every leaf host so
+far was prepared by hand.
+
+**A hand-prepared host is a host you cannot rebuild at three in the morning** —
+which is precisely when you rebuild one. The charter's "destroy and replace in ten
+minutes" is a claim about a *script*, and there isn't one.
+
+**Owner's requirement, 2026-09-08:** every host configuration is reproducible from
+this repository, and a new leaf comes up with one script. Nothing the fleet does
+to a host by hand may stay by hand. **Sequenced first in the field run**, ahead of
+M1: the two hosts it prepares are what M1, M2 and M3 are then verified on, and
+writing the script while doing the work is the only way it ends up true.
+
+### M11.1 — `scripts/node-bootstrap.sh` — docker, the key, the firewall, nothing else
+
+No hashi code and no state. A node holds nothing that cannot be regenerated from
+the control database, and this script must not invent the first exception.
+
+### M11.2 — Make it idempotent, and say what it does not do
+
+The cloud-level firewall — a provider's security groups — sits outside the host
+and outside the script's reach. It gets named in the runbook, not silently
+assumed, because a closed security group looks exactly like a broken transport.
+
+### M11.3 — The runbook grows a leaf section
+
+### M11.4 — Prove it on a host that has never run hashi
+
+**E2E:** `tests/e2e/infra/`, following `test_panel_bootstrap.py`. The real proof is
+an untouched host, which no suite rents; the scenario asserts what can be asserted
+about the script itself. `make test-infra` is the gate.
+
+**Done when**
+- [ ] A fresh host becomes a usable node with one command, plus the provider's
+      firewall.
+- [ ] No step in the sequence survives only in someone's shell history.
+- [ ] Running the script twice on the same host changes nothing and breaks
+      nothing.
+- [ ] `ufw logging off` is part of it — a node must never start collecting the one
+      record the charter forbids.
+
+acceptance: yes
+Take a host that has never run hashi. Run the one script, then register it in the
+panel and apply — it must become a working node without a second command typed on
+the box itself. Then run the script again on that same host and check nothing
+breaks and nothing changes. If a step still has to be done by hand, this milestone
+is not done, however well the node works afterwards.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
@@ -651,6 +714,19 @@ and no subscription link anywhere in sight.
 | 7 | Vendor Barlow and Barlow Condensed as woff2 files in the repository (OFL, a few hundred kilobytes), or drop to a system-font fallback and accept that the console is not quite the drawing. The design system's stylesheet fetches them from Google, which the panel must not do | M8 |
 | 8 | Whether an audit log exists at all and what it may record, and what a Settings screen may change when the values come from the environment | M10 |
 | 9 | The visible word for a person who uses the mesh: the design says "users", the charter and the whole codebase say "friends". Recommended: keep `friend` in the code, decide only the label | M8 |
+
+**Answered by the owner on 2026-09-08**, ahead of the field run:
+
+- **1 — yes.** The panel leaves the public URL; the charter is amended.
+- **2 — Tailscale.** Chosen over Headscale with the lock-out risk below understood.
+- **3 — fail closed.** No exit at all beats a silent Russian one.
+- **5 — off and gone.** `ufw logging off`, and the existing file deleted. Both
+  hosts are test hardware and their data is expendable.
+- **6 — the proposal below**, as written.
+- **7 — vendor the woff2 files.** The panel fetches nothing from a third party.
+- **8 — a simple audit log**, and a Settings screen to match.
+- **Still open: 4** (the `xray-core` pin, which blocks nothing) and **9** (the
+  visible label, which only M8 needs).
 
 **On decision 2, the trade-off worth restating:** Tailscale's coordination is a US
 service that may be unreachable from Russia. If it is down exactly when an
