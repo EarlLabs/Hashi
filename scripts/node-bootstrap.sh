@@ -121,9 +121,9 @@ as_root() {
 
 if [ "${EUID}" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || fail \
-    "this account is not root and there is no sudo on this host. Run the script as root."
+    "this account is not root and there is no sudo(1) on this host. Run the script as root."
   sudo -n true 2>/dev/null || fail \
-    "sudo on this host wants a password, and this script must never prompt — it is run
+    "sudo(1) on this host wants a password, and this script must never prompt — it is run
   over an SSH session that may not have a terminal. Give this account passwordless sudo,
   or run the script as root."
 fi
@@ -265,18 +265,25 @@ as_root ufw logging off
 # And any file a previous life of this host left behind. It holds exactly the record we
 # refuse to keep, so leaving it in place while switching logging off would be keeping the
 # evidence and only stopping the note-taking.
+#
+# Know what this line is NOT. On a host that has already logged, the same UFW lines were
+# also written by rsyslog and journald — /var/log/syslog, /var/log/kern.log and the kernel
+# journal each hold a copy, and no cleanup here reaches all four. That is why the ordering
+# above is the real protection and this is only the obvious sweep: a host that never logs
+# has nothing to purge from anywhere. A host that already did needs the operator, not a
+# script (docs/tracker/M11/field-inventory.md).
 as_root sh -c 'rm -f /var/log/ufw.log /var/log/ufw.log.*'
-say "ufw logging is off and any log it had left is gone"
+say "ufw logging is off; the log file it may have had is gone (syslog and the journal may
+    still hold older copies — this script cannot reach those)"
 
 # Which port SSH actually arrives on, worked out rather than assumed. A literal here would
 # be a port this fleet could not move away from, and — worse — a wrong guess enables a
 # firewall that locks the operator out of the host they are in the middle of building.
 # Two independent sources: the port THIS session came in on, and every port the daemon
 # itself reports. Their union, so a host mid-migration between two ports keeps both.
+SESSION_PORT="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
 detect_ssh_ports() {
-  if [ -n "${SSH_CONNECTION:-}" ]; then
-    printf '%s\n' "${SSH_CONNECTION}" | awk '{print $4}'
-  fi
+  printf '%s\n' "${SESSION_PORT}"
   if command -v sshd >/dev/null 2>&1; then
     as_root sshd -T 2>/dev/null | awk '/^port /{print $2}' || true
   elif [ -x /usr/sbin/sshd ]; then
@@ -295,7 +302,7 @@ SSH_PORTS="$(printf '%s\n%s\n' "${SSH_PORTS// /$'\n'}" "$(detect_ssh_ports)" \
 for port in ${SSH_PORTS}; do
   as_root ufw allow "${port}/tcp" >/dev/null
 done
-say "management access allowed on: $(printf '%s ' ${SSH_PORTS})(tcp)"
+say "management access allowed on tcp: $(printf '%s' "${SSH_PORTS}" | tr '\n' ' ')"
 
 # The data plane's ports, exactly as given. Never a literal and never a guess: which port
 # a node listens on is a property of the transport enabled on it, held in the node record,
@@ -327,7 +334,10 @@ as_root ufw --force default allow outgoing >/dev/null
 # `--force` because the confirmation ufw asks for here is the exact prompt property 2
 # forbids. Only when it is not already up: a host that already has a firewall keeps the
 # rules it has, and re-enabling one is a change where a no-op was promised.
-if as_root ufw status | head -1 | grep -q 'inactive'; then
+# `grep '^Status: inactive'` and not `head -1 | grep`: with pipefail, a `head` that closes
+# the pipe early can leave the pipeline reporting ufw's SIGPIPE rather than grep's answer,
+# and the firewall would then never come up on the one host that needs it to.
+if as_root ufw status | grep -q '^Status: inactive'; then
   as_root ufw --force enable >/dev/null
   say "the firewall is now up"
 else
@@ -358,5 +368,7 @@ as_root ufw status verbose | grep -qi 'Logging: off' || fail \
   this host is used."
 
 say "ready: docker $(docker --version | awk '{print $3}' | tr -d ,), key authorised, firewall up, logging off"
-say "register it in the panel with ssh_user ${TARGET_USER} and ssh_port $(printf '%s' "${SSH_PORTS}" | head -1)"
+# The port to name is the one this session actually arrived on, when there was one: a host
+# that answers on two ports still has exactly one that is known to work from outside.
+say "register it in the panel with ssh_user ${TARGET_USER} and ssh_port ${SESSION_PORT:-$(printf '%s' "${SSH_PORTS}" | awk 'NR==1')}"
 say "nothing of hashi's was installed here — the control plane creates /opt/hashi itself when you apply"

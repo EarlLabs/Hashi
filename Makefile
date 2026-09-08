@@ -14,7 +14,7 @@ COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
 .PHONY: setup env test test-control test-edge test-infra test-e2e lint \
         up up-dev down logs ps e2e-up e2e-down e2e-reset e2e-psql \
-        e2e-secrets e2e-secrets-live panel-bootstrap
+        e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap
 
 ## --- setup ------------------------------------------------------------------
 
@@ -107,6 +107,21 @@ ps:
 
 panel-bootstrap:
 	@scripts/panel-bootstrap.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
+
+## --- preparing a host to be a node (see scripts/node-bootstrap.sh) ----------
+
+# The other half of the pair above: panel-bootstrap installs a control plane, this
+# prepares a host the control plane can then drive. It runs ON the node, and it is
+# piped there rather than copied — nothing of this repository is left on a node.
+#
+# NODE is user@host and never lives in this file: a node's address is node-record
+# data, like its country and its ports. ARGS carries the public key and one --port
+# per transport; quote it, the key contains spaces.
+.PHONY: node-bootstrap
+
+node-bootstrap:
+	@test -n "$(NODE)" || { echo "usage: make node-bootstrap NODE=user@host ARGS=\"--authorized-key '<public key>' --port <number>/udp\""; exit 2; }
+	@ssh $(if $(SSH_PORT),-p $(SSH_PORT),) $(NODE) "bash -s -- $(ARGS)" < scripts/node-bootstrap.sh
 
 ## --- backup / restore (see scripts/backup.sh) -------------------------------
 
