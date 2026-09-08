@@ -29,3 +29,8 @@ secrets/
 # Local database dumps (scripts/backup.sh). Encrypted, but still every node
 # credential and every friend token in one file — never in git.
 backups/
+
+# aikit acceptance evidence: screenshots and tree dumps, per-run output. They
+# swell the repository and leave nothing readable in the history. The tracker
+# directory (docs/tracker/) holds the verdict TEXT and IS committed.
+.acceptance/

@@ -13,7 +13,7 @@ COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
 .PHONY: setup env test test-control test-edge test-infra test-e2e lint \
-        up up-dev down logs ps e2e-up e2e-down e2e-reset \
+        up up-dev down logs ps e2e-up e2e-down e2e-reset e2e-psql \
         e2e-secrets e2e-secrets-live panel-bootstrap
 
 ## --- setup ------------------------------------------------------------------
@@ -187,6 +187,16 @@ e2e-down:
 # nothing to reset between scenarios. Kept as a target so the profile can name it.
 e2e-reset:
 	@echo "isolation is per-run — nothing to reset"
+
+# psql inside the e2e stack's database, reading SQL from stdin. Exists so
+# scripts/acceptance/stand.sh does not have to repeat COMPOSE_E2E by hand: both
+# --env-file flags and `-p hashi-e2e` are load-bearing (see their comments above),
+# and a second copy of that command is a copy that drifts. The credentials are
+# read from the container's own environment, so they cannot disagree with the ones
+# the database was created with.
+e2e-psql:
+	@$(E2E_PORTS) $(COMPOSE_E2E) exec -T db \
+	  sh -c 'psql -v ON_ERROR_STOP=1 -q -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
 # Regenerate throwaway e2e tokens into .env.e2e.generated (flow/contract
 # tiers — no real credentials involved, see docs/e2e/README.md §8). Edit

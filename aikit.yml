@@ -1,0 +1,174 @@
+# hashi — aikit's answers.
+#
+# WHAT: the one file aikit reads. Every skill, both agents and both binaries take
+#       their project-specific values from here.
+# WHY:  aikit ships a method, not templates — nothing of it is rendered into this
+#       repository, so upgrading the plugin changes nothing here. That only holds
+#       while these values are right, which is why `/aikit:init` ends by running
+#       them rather than by declaring success.
+# HOW:  hand-edited like any other config. The reference is the plugin's own
+#       docs/config.md; the harness contract is docs/harness.md.
+#
+# NOT a zone: this file, like CLAUDE.md and pyproject.toml, belongs to none of the
+# three. A change touching only unzoned files runs `verify_all`.
+version: 1
+
+# Every document in this repository — the charter, the plan, the runbook, the
+# research — is written in English, so aikit's owner-facing output is too. This
+# key controls ONLY what is written for a human; model-facing instructions are
+# always English regardless.
+language: en
+
+plan:
+  path: docs/PLAN.md
+  # The plan is prose a person reads, so aikit matches its words rather than
+  # imposing a schema. These are aikit's own shape, chosen deliberately on
+  # 2026-09-08: the plan that existed at init time used `## M1 —` headings with
+  # `### Steps` / `### Done when` subheadings, which gives step-loop no unit to
+  # iterate — its steps were list items, not headings. `/aikit:plan` rewrites the
+  # file into the shape below; the content survives, only the headings change.
+  markers:
+    # Keyed on the STATUS GLYPH, not the number. A milestone is what merges and
+    # goes through acceptance; a step is what goes through review. `^##+\s` would
+    # match both, plus every plain section like "Decisions needed from you", and
+    # a marker that matches a step silently turns every step into a milestone.
+    milestone: "^## [→✅]"
+    step: "^### M"
+    done_when: "Done when"
+    acceptance: "acceptance"
+    # Quoted KEYS on purpose: under YAML 1.1 — which PyYAML still speaks — bare
+    # `yes:` and `no:` parse as the booleans true and false, so both keys vanish
+    # and the marker lookup finds nothing, quietly.
+    "yes": "yes"
+    "no": "no"
+
+# Per-milestone artefacts. Same root the fleet's own workflow already uses
+# (`.claude/workflow.md`, "Task ID and tracker directory") — committed, never
+# deleted, not after completion and not after a cancellation.
+tracker: docs/tracker
+# Screenshots and tree dumps. Gitignored: they swell the repository and leave
+# nothing readable in the history.
+evidence: .acceptance
+
+# How this project proves itself. One entry per zone, matching CLAUDE.md's own
+# table and project.json — three sources for the same three zones, and they must
+# not drift.
+#
+# `paths` is a ROUTING KEY, not a permission fence: it answers "which verify and
+# which rulebook apply to this change". An agent is not confined to it — a zone
+# whose verify runs `pytest tests/control` is pointing AT that directory, so a
+# step writing a test there is in scope even where `paths` did not list it.
+zones:
+  - key: control
+    label: Control plane (FastAPI)
+    paths: ["control/**", "tests/control/**", "tests/e2e/control/**"]
+    rulebook: .claude/projects/01-control-rulebook.md
+    verify: "make test-control"
+  - key: edge
+    label: Edge (pure config-rendering library)
+    paths: ["edge/**", "tests/edge/**", "tests/e2e/edge/**"]
+    rulebook: .claude/projects/02-edge-rulebook.md
+    verify: "make test-edge"
+  - key: infra
+    label: Deploy / CI / infra
+    paths:
+      - "deploy/**"
+      - ".github/**"
+      - "Makefile"
+      - "scripts/**"
+      - ".e2e/**"
+      - ".env.example"
+      - "tests/infra/**"
+      - "tests/e2e/infra/**"
+    rulebook: .claude/projects/04-infra-rulebook.md
+    verify: "make test-infra"
+
+# What CI already believes "green" means: one job per zone, the same three
+# targets. Deliberately NOT `make test-e2e` — that needs a booted stack, and a
+# gate that silently requires Docker is a gate agents start skipping.
+verify_all: "make test"
+
+review:
+  # This project's own persona, not aikit's shipped one. Both are edit-incapable
+  # and both end on the same `VERDICT:` line the loop parses; this one also reads
+  # CLAUDE.md, the zone rulebooks and docs/decisions.md, which aikit's cannot know
+  # about.
+  reviewer: reviewer-strict
+  # No `model:` block. Every agent inherits the model the run is already using.
+  # The reviewer is the gate and the whole claim of this pipeline is that nothing
+  # passes on the author's own word — so if spend ever needs trimming, move the
+  # implementer first and treat lowering the reviewer as a decision to revisit.
+  rounds:
+    develop: 3
+    fix: 2
+
+acceptance:
+  rounds: 3
+  budget:
+    actions: 120
+    minutes: 45
+  # Layered over `make e2e-up` / `e2e-down` rather than beside it — a second stack
+  # with the same services diverges from the first within a milestone, and
+  # acceptance would then be checking a configuration nobody ships. See
+  # scripts/acceptance/stand.sh and .e2e/profile.yml.
+  stand:
+    up: "scripts/acceptance/stand.sh up"
+    down: "scripts/acceptance/stand.sh down"
+  # MCP hands, not a command: aikit's own bin/drive needs Playwright, which is not
+  # a dependency of this project and adding one is an architect decision (CLAUDE.md).
+  # The acceptance agent already carries these tools, so this key only says which
+  # of them reach the product — it does not have to spend budget finding them.
+  #
+  # These hands do NOT write files the way a driver does. The capture is therefore
+  # a deliberate step: screenshot into `.acceptance/<milestone>/<name>.png` and
+  # report that exact name, because the gate opens that directory and a capture
+  # that is not on disk did not happen.
+  hands:
+    kind: mcp
+    use: >-
+      mcp__claude-in-chrome__* — tabs_create_mcp to open a tab, navigate,
+      read_page for the accessibility tree, find, computer for click and type,
+      form_input for fields. Screenshots must be written into the evidence
+      directory under the name the report cites.
+  # One read-only SELECT, as a role with no write privilege — a property of the
+  # database role, not an instruction. An acceptance agent able to fix the stand to
+  # match its expectation eventually will, and will then report a pass.
+  truth:
+    kind: command
+    use: "scripts/acceptance/query.py"
+  browser:
+    # `local`, not `cdp`: the hands above drive the operator's own Chrome. Nothing
+    # attaches over CDP, so no debugging port is published and the project's
+    # 54100–54299 loopback block is untouched.
+    mode: local
+  # Addresses and human-facing notes ONLY — never a file path, never a module
+  # name. If a reader could learn from this block WHICH FILES changed, the
+  # acceptance phase is worth less. The stand is plain HTTP on purpose (the e2e
+  # overlay sets HASHI_PUBLIC_HTTPS=false) so the operator's session cookie is not
+  # https-only and panel flows actually log in.
+  entrypoints:
+    - name: "Owner panel"
+      url: "http://127.0.0.1:54200/panel/"
+      note: "sign in with the username and password the stand prints when it comes up"
+    - name: "Delivery endpoint"
+      url: "http://127.0.0.1:54200/sub/{token}"
+      note: "a friend's subscription; the token comes from the panel. Tokens shorter than 16 characters are refused on format before any lookup happens, so a short string is not a test of whether the token exists"
+  seed: >-
+    an empty control plane — the operator account exists and nothing else does:
+    no nodes, no transports, no friends, no relay hops. Every awkward first-time
+    step is still ahead of you, which is where the findings are.
+  # Empty on purpose. A run builds images and writes to .e2e/artifacts/, and every
+  # such path is already gitignored, so nothing TRACKED moves. Each entry here is a
+  # place the tripwire stops watching — if a run ever trips the gate on a file
+  # nobody edited, `verdict tree --show` names it before anything is added here.
+  tripwire_ignore: []
+
+git:
+  # `develop`, not `main`. The fleet's iron rule (.claude/workflow.md): all PRs
+  # target develop, and agents never push, merge or open a PR against main.
+  main: develop
+  branch_prefix: "task/"
+  # The credential lives in deploy/warden/.env as GH_TOKEN and is wired into git
+  # and `gh` at boot — no agent ever reads it. An empty GH_TOKEN is a supported
+  # mode: the project stays local-only and reports changed files instead.
+  pr: true
