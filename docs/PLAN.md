@@ -21,6 +21,17 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 - **M1 gates the verification of everything else.** Until `apply` takes effect, a
   correct change and an incorrect one both look broken on a live node. Order the
   work accordingly.
+- **M4 now runs BEFORE M1 — changed during the field run of 2026-09-08, with
+  evidence.** The first apply against a real host prepared by M11's script
+  returned `409: a node cannot go from draft to degraded`, and the control
+  plane's log recorded exactly one line about it: `domain error: conflict`. The
+  real reason — whatever actually failed on the node — was destroyed before it
+  could be raised, because `set_node_state(DEGRADED)` throws on the forbidden
+  transition while it is handling the original failure. M1 and M2 are diagnosed
+  by applying to a live node and reading what comes back, so M4.1 is not a
+  follow-up to them; it is the instrument they are diagnosed with. This plan
+  already said as much — *"this is how M2 hid itself on the first run"* — it
+  simply sequenced it as a consequence rather than a prerequisite.
 - **The lesson that produced this plan:** everything checkable by *rendering*
   works; everything checkable only by *running* does not. A milestone is not done
   because its output looks right.
@@ -277,6 +288,32 @@ Eager-load what it needs, or refresh explicitly, so no lazy I/O happens outside
 the greenlet context.
 
 ### M4.3 — Widen `apply_many`'s except clause
+
+### M4.4 — A node operation must not block forever · found 2026-09-08
+
+Not a message problem like the three above, but the same failure to report
+honestly: a node that accepts no packets makes the control plane wait, rather
+than telling anyone.
+
+Found while establishing a baseline for the field run.
+`tests/control/test_revocation.py::test_an_unreachable_node_makes_the_revocation_report_incomplete`
+points its fixture at `192.0.2.10` — TEST-NET-1, deliberately unroutable — and
+the whole control suite takes **7 minutes 39 seconds**, essentially all of it
+inside that one test, waiting out the kernel's TCP retry budget. There is no
+connect timeout anywhere on the path to a node.
+
+**Why this matters in the field and not only in CI.** A blackholed address is
+not a contrived test condition for this project — it is what a *blocked* node
+looks like from outside, which is the exact scenario the product exists for.
+The operator opens the panel during a block, presses apply or revoke, and the
+request hangs for minutes with no indication whether anything is happening.
+Worse, revocation is the operation whose whole point is being fast.
+
+**Done when**
+- [ ] Reaching a node has a bounded timeout, and exceeding it is a reported
+      per-node failure with a plain reason, not a hang.
+- [ ] The control suite no longer spends minutes waiting on an address that will
+      never answer.
 
 An unexpected error becomes a reported per-node failure rather than a 500 for the
 whole fan-out.
