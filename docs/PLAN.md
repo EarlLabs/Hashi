@@ -1,7 +1,7 @@
 # hashi — plan
 
 **Created:** 2026-09-08
-**Status:** draft — not confirmed by the owner
+**Status:** approved by the owner 2026-09-08 — M1–M11
 **Source:** the first real deployment. Every item below was found by *running* the
 product on a rented host, not by reading the tree. None of them is caught by
 `make test`, and none of them was visible from inside the repository.
