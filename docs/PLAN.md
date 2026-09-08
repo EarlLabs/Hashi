@@ -770,6 +770,19 @@ the stand" sent the reader to the one layer that was working.
 Prove the instrument, not just the subject: the cheapest honest check is one real
 verb through the real driver.
 
+### M12.4 — `down` must take away everything `up` started
+
+`stand.sh up` starts the browser through `E2E_PROFILES=browser`; `make e2e-down`
+runs `docker compose down -v` with **no profile**, so compose does not know the
+browser service exists and leaves it running. Observed: after a clean
+`stand.sh down`, `hashi-e2e-browser-1` was still up, holding its 1 GB of shared
+memory. Every acceptance run leaks one, on a host the plan already describes as
+short of memory.
+
+It also defeats `up`'s own safety check. `up` tears down first and then refuses
+to continue if anything still answers `/healthz` — a leaked browser answers
+nothing, so it passes that check and accumulates instead.
+
 **E2E:** `tests/infra/`, beside `test_drive.py`, which already exists and did not
 catch this — it tests the driver's argument handling on the host and never asks
 whether the container can import what the driver imports. The assertion worth
@@ -784,6 +797,7 @@ names can import `playwright`. `make test-infra` is the gate.
 - [ ] A `begin` that fails prints why, not only that it did.
 - [ ] Bringing the stand up and taking one real action is a single documented
       step, and something runs it.
+- [ ] `stand.sh down` leaves no container behind, browser included.
 
 acceptance: no
 Its own proof is a verb that works, and every acceptance run from M8 onward
