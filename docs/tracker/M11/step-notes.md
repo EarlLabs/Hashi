@@ -129,3 +129,55 @@ true on run one and run ten. There is a comment saying so; do not "fix" it.
 **Red-first was proved, not claimed.** All ten new tests were run against
 `git show ce44a7c:scripts/node-bootstrap.sh` and all ten went red — by the
 implementer and again, independently, by the reviewer.
+
+## From M11.3 — the runbook's leaf section
+
+**Two placeholder conventions, on purpose.** CAPITALS inside runnable fences
+(`NODE=USER@THE_NEW_HOST`); angle brackets in prose and in sample *output*,
+which are transcripts of what the script prints rather than commands. A test
+enforces the first —
+`test_every_command_in_the_leaf_section_survives_being_pasted`. Anything added
+to that section as a pasteable command uses capitals.
+
+**Anti-drift is now mechanical.**
+`test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it` asserts a
+list of strings appears **verbatim in both** `scripts/node-bootstrap.sh` and the
+runbook. Changing a `say` line or a flag in one now requires the same edit in
+the other. Verified load-bearing: the reviewer changed one string in the script
+alone and watched it go red.
+
+**The section fixture anchors on `^## Preparing a leaf\n`** up to the next
+`^## `. Renaming that heading breaks four tests, and Shape B/C and "What every
+box must already have" cross-reference it by name.
+
+**Port literals are checked against an explicit `KNOWN_PORTS` tuple**, not a
+bare `\d` regex — the runbook legitimately contains the number 5840, a byte
+count.
+
+## From M11.4 — what the real hosts said
+
+Run on two hosts of deliberately different shape. Both were already prepared by
+somebody else, which is the normal case and not the exceptional one.
+
+**Entry host** — non-root with passwordless sudo, docker present, `ufw`
+inactive. First run authorised the key, opened the requested ports, brought the
+firewall up with logging already off. Second run, same arguments: **every
+observed byte identical** — `authorized_keys`, `/etc/ufw/ufw.conf`,
+`/etc/default/ufw`, `/etc/ufw/user.rules` and the rule set, *mtimes included*.
+Not "no visible change": no write at all. That is the M11.2 work paying off.
+
+**Leaf host** — root, `ufw` already active carrying its own rules, and hashi
+already applied to it. Its pre-existing `80/tcp` and `443/tcp` rules survived,
+all four running containers survived, and the honesty line M11.2 added fired
+exactly where it was designed to: `an earlier apply already left /opt/hashi here
+— this run neither changed nor removed it`.
+
+**A field condition worth knowing about, and it nearly bit.** The entry host had
+**no `~/.ssh/authorized_keys` at all** and was still reachable, because its sshd
+uses an `AuthorizedKeysCommand` fed from cloud metadata. The script's key
+install works there only because that sshd *also* sets `AuthorizedKeysFile`, so
+both sources are consulted. On a host configured with `AuthorizedKeysCommand`
+**alone**, writing `authorized_keys` would succeed and the key still would not
+authenticate — and the script's own verification, which greps the file it just
+wrote, would report `ready`. Worth a check against `sshd -T` if this is ever
+seen in the wild. Recorded in `carry-over.md`.
