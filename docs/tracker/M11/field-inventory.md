@@ -107,3 +107,63 @@ This box runs a control plane, Postgres, Caddy and a data plane in 957 Mi.
    host.** `ufw` being inactive on the entry box says nothing about whether the
    cloud security group lets a packet in. M11.2 names it; this run confirms it by
    probing from the leaf rather than trusting it.
+
+---
+
+## What was changed on the hosts during this run, and what was confirmed
+
+### Entry host — cleared
+
+- Both self-hosted runner services **stopped and disabled**
+  (`systemctl is-enabled` → `disabled` for each). The backend unit's `failed`
+  state was reset. No `Runner.Listener` process survives.
+- Both compose projects **removed** (`docker compose down --remove-orphans`).
+  `docker compose ls -a` is empty and `docker ps -a` is empty.
+- **`:8000` is free.** The only listeners left are sshd and the VS Code remote
+  server on loopback, which the owner asked to keep.
+- **Their volumes were deliberately kept** — `zhurabli_backend_app_logs` and
+  `zhurabli_backend_postgres_data`. "Remove the compose projects and the runner
+  services, nothing else" is satisfied without them, and a volume is the one
+  thing here that could not be recreated if the owner turns out to want it.
+  Deleting them is a one-line follow-up whenever they say so.
+- The runner *registrations* still exist on the GitHub side and will simply
+  show as offline. Removing them needs a token, which no agent reads.
+
+### Firewall logging — both hosts, before any traffic test
+
+`ufw logging off` on both. The leaf's 5840-byte `/var/log/ufw.log` is deleted.
+Nothing this run does creates a new record.
+
+**A finding that belongs to M6, and it is the more useful half.** Deleting
+`/var/log/ufw.log` is *not sufficient*, and the runbook implies it is. The same
+lines are written by rsyslog and journald as well — on the leaf, 22 identical
+`UFW …` records with source addresses were still present in `/var/log/syslog`,
+`/var/log/kern.log` and the kernel journal after `ufw.log` was gone. They predate
+this run. **The lasting fix is not a cleanup at all**: `ufw logging off` must be
+in place *before* `ufw enable` ever runs, which is exactly what M11's script and
+M6.2's runbook line are for. A host that never logs has nothing to purge from
+four places.
+
+### Provider firewall — confirmed, not trusted
+
+Probed from the **leaf** (Amsterdam), so this is a genuinely external vantage and
+not a loopback or same-VPC shortcut. A listener was bound on the entry host, one
+port at a time, and removed afterwards:
+
+| port | result from Amsterdam |
+|---|---|
+| `22/tcp` | reachable |
+| `443/tcp` | reachable |
+| `8443/tcp` | reachable |
+| `49443/tcp` | reachable |
+| `51820/udp` | reachable — replied through the tunnel port the hop needs |
+
+The cloud security group in front of the entry host is genuinely permissive.
+**This is worth the ten minutes it cost:** a closed security group and a broken
+transport look identical from the panel, and every later failure tonight can now
+be attributed to the layer that actually caused it.
+
+`443/tcp` first appeared closed for a reason worth recording — the probe process
+was running as the non-root account and simply could not bind a privileged port.
+That is what a false negative looks like here, and it would have been read as
+"the provider blocks 443".
