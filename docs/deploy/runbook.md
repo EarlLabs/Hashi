@@ -74,6 +74,11 @@ says so (`edge/bootstrap/node_stack.py`). You do not need to collect SSH host ke
 first successful connect learns the node's host key and pins it from then on, so a later
 connection cannot be silently intercepted.
 
+**On a node, do neither of those by hand.** `scripts/node-bootstrap.sh` installs the
+runtime, authorises the key and brings the firewall up in one run that asks no questions,
+and running it again changes nothing — see *Preparing a leaf* below. The block it replaces
+is here because a control-plane box that is not also a node still does it this way:
+
 ```bash
 curl -fsSL https://get.docker.com | sh && docker version
 cat >> ~/.ssh/authorized_keys      # paste ~/.ssh/hashi-node.pub, then Ctrl-D
@@ -127,6 +132,135 @@ Caddy only. Never the database.
 
 ---
 
+## Preparing a leaf
+
+A rented host, an SSH session, and ten minutes. This section is every node — the leaf
+abroad, the entry in Russia, and the box in shape A that is also its own node — because
+they are prepared the same way: **one script, `scripts/node-bootstrap.sh`, and nothing by
+hand.** A hand-prepared host is a host you cannot rebuild at three in the morning, which
+is precisely when you rebuild one.
+
+It gives the host three things and stops: a container runtime, the one **public** key the
+control plane authenticates with, and the host firewall — with logging off before the
+firewall ever comes up. It installs **no hashi code and no hashi state**; `/opt/hashi` is
+created by the control plane on your first apply.
+
+### Run it
+
+From the machine that holds this repository and the key pair, so that nothing of the
+repository lands on the node:
+
+```bash
+make node-bootstrap NODE=<user>@<the new host> \
+  ARGS="--authorized-key '$(cat ~/.ssh/hashi-node.pub)' --port <transport port>/udp"
+```
+
+That is `ssh <host> 'bash -s -- <args>' < scripts/node-bootstrap.sh`: the script is piped
+in and never copied, which is what keeps repository code off a node. Add `SSH_PORT=<port>`
+if the host does not answer on the default one. If you are already sitting on the host,
+run `./scripts/node-bootstrap.sh` with the same arguments.
+
+| Argument | |
+|---|---|
+| `--authorized-key TEXT` | the **public** half of the pair you generated on your own machine. `--authorized-key-file <path>` reads it from a file already on the host. |
+| `--port PORT[/PROTO]` | repeatable, one per transport this node will run — the same number you will enter in the node record. |
+| `--user NAME` | the account the control plane logs in as; defaults to the invoking account (or `SUDO_USER` under sudo). |
+| `--ssh-port N` | only when the script cannot work the management port out for itself. |
+
+Progress lines start `==> `. A refusal exits **1** and starts `node-bootstrap: `; an
+argument it does not recognise exits **2** and prints the usage. It refuses rather than
+guessing in three places, and each one is a mistake you want stopped here:
+
+- **No key, or a key that is not a public key.** The private half belongs in the node
+  record, encrypted, and never on a node — a key generated or pasted on the host would sit
+  in clear on the machine most likely to be seized. Generate the pair where the control
+  plane lives (*Before any shape*, above) and pass the `.pub` half.
+- **It cannot tell which port sshd listens on.** It reads the port this session arrived on
+  and the ports `sshd -T` reports, and if neither answers it stops rather than enabling a
+  firewall it cannot prove leaves you a way back in. Pass `--ssh-port`.
+- **The account is not root and sudo wants a password.** The run is piped over SSH and must
+  never prompt, so give the account passwordless sudo or run as root.
+
+### What a finished run says
+
+```
+==> ready: docker <version>, key authorised, firewall up, logging off
+==> register it in the panel with ssh_user <user> and ssh_port <port>
+==> nothing of hashi's was installed here — the control plane creates /opt/hashi itself when you apply
+```
+
+Take the `ssh_user` and `ssh_port` from that second line — it names the port this session
+actually arrived on, which is the one port known to work from outside. Then, in the panel:
+**Add node** with those values and the contents of `~/.ssh/hashi-node` as the private key,
+enable the transport on the port you opened, and **Apply**. Nothing before the apply has
+told the fleet this host exists: the script writes nothing to the control database, and a
+node never dials the control plane.
+
+### Running it on a host somebody already prepared
+
+The normal case, not the exception — both hosts of this project's own field run already
+had docker, and one already had an active firewall carrying its own rules. A second run,
+or a first run on a host with a past, reports rather than changes:
+
+```
+==> docker is already installed — left exactly as it is
+==> the control plane's key is already authorised for <user>
+==> ufw logging was already off
+==> <port>/<proto> was already open
+==> incoming was already denied by default
+==> the firewall was already up — its existing rules were kept
+==> an earlier apply already left /opt/hashi here — this run neither changed nor removed it
+```
+
+Nothing there is a warning. What the script never does is **close** anything: the rule set
+is the union of every run, because a script that withdrew a rule could withdraw the one
+carrying the session running it. Narrowing a rule set is an operator's job, done knowingly.
+
+### The layer the script cannot see, and the evening it costs
+
+Every run ends on this line, and it is the last one for a reason:
+
+```
+==> the provider's own firewall sits in front of this host and outside this script's reach
+```
+
+The provider's security group is a **separate layer, in their console, invisible from
+inside the host**. `ufw status` on the node tells you nothing about whether a packet ever
+reaches the box. And a closed security group looks *exactly* like a broken transport: the
+host firewall allows the port, the container is up, every check the script makes is green,
+the panel says the node is fine, and the client still times out. An operator who does not
+know this layer exists debugs the transport, where there is nothing to find.
+
+**Confirm it from a machine on a different network.** Not from the host itself, and not
+from another box on the same private network — both answer a question you did not ask. In this project's field
+run the check was made from a second host in another country: bind a listener on the new
+node one port at a time, probe it from that other machine, remove the listener.
+
+**And distrust the probe before you distrust the firewall.** In that same run one
+privileged port appeared shut and was not: the probing process was running as an
+unprivileged account and could not bind that port at all. A privileged port needs a
+privileged probe on both ends. That is what a false negative looks like here, and it is
+exactly the trap that ends with someone filing a support ticket about a firewall that was
+open the whole time.
+
+### What it deliberately does not do
+
+- **It does not register the node.** When it finishes the host is drivable and the fleet
+  still does not know it exists. The node record is created by you, in the panel.
+- **It does not harden the host.** Password authentication, unattended upgrades, a ban
+  daemon, the clock and the kernel are all still yours. "Ready" here means ready to be
+  driven by the control plane, and nothing wider.
+- **It proves nothing about reachability.** Its checks ask *this host* questions and never
+  send a packet anywhere. Whether a friend inside Russia can reach this node is a field
+  observation on a real network, and no run of this script is evidence for it.
+- **Its ufw log sweep is not a cleanup.** On a host that had already logged, rsyslog,
+  `kern.log` and the kernel journal hold the same lines, and nothing done on the host
+  reaches all four. The real protection is the ordering — logging off *before* the
+  firewall comes up — which is why a host prepared by this script never writes the record
+  at all, and why a host that already did needs you rather than a script.
+
+---
+
 ## Shape A — one box
 
 One VPS abroad, carrying the control plane and one node at the same time.
@@ -138,8 +272,12 @@ git clone <this repo> /opt/hashi-control && cd /opt/hashi-control
 cp .env.example .env && "${EDITOR:-vi}" .env        # see the table above
 # write deploy/docker-compose.public.yml as shown above
 
-ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp \
-  && ufw allow 51820/udp && ufw enable
+ufw logging off                                # FIRST, always — see below
+ufw allow <the port sshd listens on>/tcp       # sshd -T | awk '/^port /{print $2}'
+ufw allow <Caddy's plain-HTTP port>/tcp        # the ACME challenge and the redirect
+ufw allow <Caddy's HTTPS port>/tcp             # the panel and the delivery endpoint
+ufw allow <this node's transport port>/udp     # the number you enter in the node record
+ufw enable
 
 make panel-bootstrap
 docker compose --env-file .env \
@@ -150,6 +288,22 @@ curl -fsS https://<your panel host>/healthz
 
 Clone to `/opt/hashi-control`, **not** `/opt/hashi` — that path is the node stack's own
 root, and on this box both live on the same disk.
+
+**`ufw logging off` comes first and is not optional.** `ufw enable` turns connection
+logging on by default and starts writing source addresses to `/var/log/ufw.log` from the
+moment the firewall comes up. That is a connection log — the one record the charter
+forbids at any level and the one that can hurt a real person (`docs/decisions.md`,
+decision 5). On this project's own leaf host it had collected 5840 bytes. Doing it after
+`enable` is too late, and deleting the file afterwards is not a repair: rsyslog,
+`kern.log` and the journal hold the same lines, and nothing on the host reaches all four.
+Off before up is the only version of this that works.
+
+**None of those ports is a number to copy from here.** They are the ports your own
+configuration uses: read them from `sshd -T`, from your Caddyfile's site addresses, and
+from the transport in the node record. A port written into a runbook becomes a port the
+fleet cannot move away from — the same rule that keeps one out of the code. On a box that
+is only a node, `scripts/node-bootstrap.sh` does this whole block for you, in the right
+order, from arguments.
 
 ### Register the box as its own node
 
@@ -188,8 +342,9 @@ with nobody touching their device.
 Everything from Shape A applies to box E, plus:
 
 1. Bootstrap the control plane on **E** exactly as in Shape A.
-2. Register **E** as a node (`ssh_host` = its own IP) and **L** as a node (`ssh_host` =
-   L's IP, reachable over SSH from E).
+2. Prepare **L** with *Preparing a leaf* above, then register **E** as a node
+   (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
+   from E).
 3. Enable a **friend-facing** transport on E.
 4. Build the hop from the panel's hop form: entry = E, leaf = L, transport =
    `amneziawg`. The entry dials the leaf, always — E sits behind a Russian carrier NAT
@@ -222,8 +377,9 @@ node. Nothing is contested and nothing is co-located.
 | **L** leaf (abroad) | one hop end (listens) | 22/tcp from C, the hop's UDP port from E | — |
 
 1. Bootstrap the control plane on **C** (the Shape A control-plane block, unchanged).
-2. Register **E** and **L** as nodes. Both `ssh_host` values are real remote addresses
-   this time; the control container needs outbound 22 to each.
+2. Prepare **E** and **L** with *Preparing a leaf* above — one script run each — and
+   register both as nodes. Both `ssh_host` values are real remote addresses this time; the
+   control container needs outbound SSH to each.
 3. Enable **`vless_reality` on E, port 443** — free here, because the panel is on another
    box. Give it a `decoy_host` of your own choosing.
 4. Build the hop: entry = E, leaf = L, transport = `amneziawg`.
