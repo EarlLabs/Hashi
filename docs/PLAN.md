@@ -913,6 +913,89 @@ exercises it. A milestone whose subject is the acceptance instrument cannot be
 judged by that instrument.
 
 ---
+## → M13 — A node the control plane logs into as anything but root · found in the field 2026-09-08
+
+**Appended during the overnight field run.** Found on the first apply to a host
+prepared by M11's own script, which is the point: the two halves of the product
+disagree, and the disagreement is invisible from either side alone.
+
+**The bug.** `edge/bootstrap/node_stack.py` prepares a node with
+
+```
+mkdir -p /opt/hashi/conf && chmod 700 /opt/hashi /opt/hashi/conf
+```
+
+over the SSH connection, with no privilege escalation. `NODE_ROOT` is `/opt/hashi`
+and `/opt` is root-owned, so on a node registered with any non-root `ssh_user`
+this is:
+
+```
+mkdir: cannot create directory '/opt/hashi': Permission denied
+```
+
+Reproduced by hand as the registered user. The node is reachable, the key works,
+docker works — and nothing of hashi's can ever be written to it.
+
+**Why it went unnoticed, and why it will not stay unnoticed.** Every host in the
+project's history was reached as `root`, and the runbook's Shape A says so. But
+`scripts/node-bootstrap.sh` — landed hours ago in M11 — deliberately supports a
+non-root account with passwordless sudo, puts that account in the `docker` group,
+and ends by printing `register it in the panel with ssh_user <user>`. It tells
+the operator to do the one thing the control plane cannot do. A cloud host whose
+default account is not root is the normal case, not the exotic one.
+
+**What made it expensive to find, and this is the part worth keeping.** The apply
+returned `409: a node cannot go from draft to degraded` — M4's bug — and the
+control plane logged one line, `domain error: conflict`. The real reason was
+destroyed while being handled. It took a node health probe, an inspection of the
+host, and reproducing the command by hand to recover a one-line permission error.
+That is the whole argument for M4 being sequenced first, made concrete.
+
+### M13.1 — Decide where the privilege boundary belongs, and write it down
+
+Three shapes, and this is a decision rather than a detail:
+
+- **The script creates the directory it will own.** `node-bootstrap.sh` already
+  runs privileged on the host and already grants the account docker access; a
+  root-owned `/opt/hashi` handed to the node's user is the same category of host
+  preparation, and it keeps `edge` free of any notion of privilege. Recommended.
+  Note the tension to resolve honestly: M11.1 says the script leaves *"no hashi
+  code and no state"*, and this is an empty directory, not state — say so where
+  it is created, or the next reader will think the rule was broken.
+- **`node_stack` escalates when the user is not root**, declared per node rather
+  than sniffed. Keeps the script minimal; puts `sudo` into the edge library.
+- **Refuse a non-root `ssh_user` at registration**, and make the script stop
+  advertising one. Honest, and the smallest change, but it gives up hosts whose
+  provider does not offer root.
+
+### M13.2 — Whichever shape wins, the two halves must agree in a test
+
+The failure was possible because the script's advertised contract and the
+library's assumption were never checked against each other. A test that pins
+them together is worth more than either fix.
+
+### M13.3 — The runbook says which accounts work
+
+**E2E:** `tests/e2e/` cannot rent a non-root host, but the assertion that the
+node root is creatable by the registered user — or that a non-root registration
+is refused — is unit-testable in whichever zone the fix lands. `make test-edge`
+or `make test-control` is the gate depending on M13.1's answer.
+
+**Done when**
+- [ ] A node registered with a non-root `ssh_user` either applies successfully,
+      or is refused at registration with a reason that names the problem.
+- [ ] `node-bootstrap.sh` and the control plane agree about which accounts work,
+      and a test fails if they stop agreeing.
+- [ ] The runbook says which accounts work.
+
+acceptance: yes
+On the entry host, which is reached as a non-root account with passwordless sudo,
+register it and apply. It must become a working node — or, if the decision was to
+refuse non-root, the refusal must arrive at registration and say why, and the
+bootstrap script must no longer tell the operator to register that account.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
