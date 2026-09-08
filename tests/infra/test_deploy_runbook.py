@@ -121,6 +121,28 @@ def test_the_leaf_section_hardcodes_no_port_provider_or_address(leaf_section: st
     )
 
 
+def test_every_command_in_the_leaf_section_survives_being_pasted(leaf_section: str) -> None:
+    """A placeholder in a runnable fence must not be a shell metacharacter.
+
+    ``NODE=<user>@<host>`` is a redirection, not a placeholder: pasted verbatim it dies on
+    ``user: No such file or directory``, which names neither the script nor the thing the
+    operator forgot to fill in. This is the one command the milestone exists to make
+    possible, typed by somebody rebuilding a node under time pressure — a loud, confusing
+    failure spends exactly the attention the script was written to save. Prose may keep
+    angle brackets; a ```bash fence may not.
+    """
+    fences = re.findall(r"^```bash\n((?:.*\n)*?)^```$", leaf_section, re.M)
+    assert fences, "the leaf section shows no command to run"
+    for fence in fences:
+        assert "<" not in fence and ">" not in fence, (
+            f"a runnable command carries a shell redirection where a placeholder was meant: "
+            f"{fence!r}"
+        )
+    assert re.search(r"\b[A-Z][A-Z_]{3,}\b", "".join(fences)), (
+        "no placeholder is recognisable in the commands, so it is not clear what to replace"
+    )
+
+
 def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
     leaf_section: str, script: str
 ) -> None:

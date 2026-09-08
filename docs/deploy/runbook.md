@@ -151,14 +151,19 @@ From the machine that holds this repository and the key pair, so that nothing of
 repository lands on the node:
 
 ```bash
-make node-bootstrap NODE=<user>@<the new host> \
-  ARGS="--authorized-key '$(cat ~/.ssh/hashi-node.pub)' --port <transport port>/udp"
+make node-bootstrap NODE=USER@THE_NEW_HOST \
+  ARGS="--authorized-key '$(cat ~/.ssh/hashi-node.pub)' --port TRANSPORT_PORT/udp"
 ```
 
-That is `ssh <host> 'bash -s -- <args>' < scripts/node-bootstrap.sh`: the script is piped
-in and never copied, which is what keeps repository code off a node. Add `SSH_PORT=<port>`
-if the host does not answer on the default one. If you are already sitting on the host,
-run `./scripts/node-bootstrap.sh` with the same arguments.
+**The words in capitals are the placeholders**, and they are capitals rather than
+`<angle brackets>` for one reason: a shell reads an angle bracket as a redirection, so a
+line pasted with the brackets still in it dies on a message that names neither this script
+nor the thing you forgot to fill in. Substitute all of them — none has a default.
+
+That is `ssh THE_NEW_HOST 'bash -s -- ARGS' < scripts/node-bootstrap.sh`: the script is
+piped in and never copied, which is what keeps repository code off a node. Add
+`SSH_PORT=THE_PORT` if the host does not answer on the default one. If you are already
+sitting on the host, run `./scripts/node-bootstrap.sh` with the same arguments.
 
 | Argument | |
 |---|---|
