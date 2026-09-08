@@ -44,6 +44,13 @@ dev = [
     "httpx",
     "ruff",
     "pyyaml",
+    # Acceptance hands, and ONLY when the operator's own Chrome is not reachable:
+    # aikit's bin/drive attaches to a browser over CDP and needs this package to do
+    # it. Approved by the owner on 2026-09-08 for unattended runs on a headless
+    # host. It is dev-only and never enters the shipped image — the control plane
+    # must not grow a browser. No `playwright install` is needed either: the driver
+    # attaches to a Chromium that is already running, it does not launch one.
+    "playwright",
 ]
 
 # Found, not listed. An explicit list means every new transport package under

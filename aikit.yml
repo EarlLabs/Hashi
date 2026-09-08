@@ -105,8 +105,12 @@ review:
 acceptance:
   rounds: 3
   budget:
-    actions: 120
-    minutes: 45
+    # Raised from 120/45 on 2026-09-08. The console milestones are nine screens and
+    # four dialogs; 120 actions is not a walk of that, it is a glance at it. A
+    # budget that runs out mid-scenario reports "could not", which is the honest
+    # answer but a wasted round.
+    actions: 220
+    minutes: 75
   # Layered over `make e2e-up` / `e2e-down` rather than beside it — a second stack
   # with the same services diverges from the first within a milestone, and
   # acceptance would then be checking a configuration nobody ships. See
@@ -123,6 +127,12 @@ acceptance:
   # a deliberate step: screenshot into `.acceptance/<milestone>/<name>.png` and
   # report that exact name, because the gate opens that directory and a capture
   # that is not on disk did not happen.
+  #
+  # The MCP hands stay the default because they need nothing set up. On a headless
+  # host — an unattended overnight run — there may be no Chrome carrying the
+  # extension, and the agent finds that out by asking rather than by failing: if
+  # `list_connected_browsers` answers with nothing, fall back to the CDP driver
+  # named below. Do not decide between them in advance; ask, then use what answered.
   hands:
     kind: mcp
     use: >-
@@ -130,6 +140,12 @@ acceptance:
       read_page for the accessibility tree, find, computer for click and type,
       form_input for fields. Screenshots must be written into the evidence
       directory under the name the report cites.
+      FALLBACK, only when no browser answers list_connected_browsers: aikit's own
+      bin/drive, which attaches over CDP to a Chromium started beside the stand
+      (`docker run -d --network host zenika/alpine-chrome --no-sandbox
+      --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222`) and writes
+      its own screenshots. It needs the `playwright` package from the dev extra,
+      and nothing else — it attaches to that browser, it does not launch one.
   # One read-only SELECT, as a role with no write privilege — a property of the
   # database role, not an instruction. An acceptance agent able to fix the stand to
   # match its expectation eventually will, and will then report a pass.
@@ -137,10 +153,13 @@ acceptance:
     kind: command
     use: "scripts/acceptance/query.py"
   browser:
-    # `local`, not `cdp`: the hands above drive the operator's own Chrome. Nothing
-    # attaches over CDP, so no debugging port is published and the project's
-    # 54100–54299 loopback block is untouched.
+    # `local` first: the hands above drive the operator's own Chrome, nothing
+    # attaches over CDP, and the project's 54100–54299 loopback block is untouched.
+    # An unattended run on a host with no operator and no Chrome uses the fallback
+    # instead — 9222 is outside this project's published block on purpose, because
+    # it belongs to the acceptance stand and not to the product.
     mode: local
+    cdp: "http://127.0.0.1:9222"
   # Addresses and human-facing notes ONLY — never a file path, never a module
   # name. If a reader could learn from this block WHICH FILES changed, the
   # acceptance phase is worth less. The stand is plain HTTP on purpose (the e2e

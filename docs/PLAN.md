@@ -725,8 +725,10 @@ is not done, however well the node works afterwards.
 - **6 — the proposal below**, as written.
 - **7 — vendor the woff2 files.** The panel fetches nothing from a third party.
 - **8 — a simple audit log**, and a Settings screen to match.
-- **Still open: 4** (the `xray-core` pin, which blocks nothing) and **9** (the
-  visible label, which only M8 needs).
+- **9 — "users".** The panel says users; `friend` stays the word in the models,
+  the services, the API and the tests. The label is a template concern and does
+  not travel into the code.
+- **Still open: 4** (the `xray-core` pin), which blocks nothing.
 
 **On decision 2, the trade-off worth restating:** Tailscale's coordination is a US
 service that may be unreachable from Russia. If it is down exactly when an
