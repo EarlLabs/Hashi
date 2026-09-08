@@ -9,10 +9,15 @@ HOW:  ``asyncssh``. ``NodeTarget`` is a plain value object so `control` can buil
 
 Two decisions worth reading before changing anything here:
 
-**Everything has a timeout.** A blocked or seized node does not refuse a
-connection — it accepts and then hangs. Without a ceiling, one dead host blocks the
-panel request that was trying to replace it, which is exactly when the operator
-needs the panel most.
+**Everything has a timeout, and reaching a node has its own short one.** A
+blocked or seized node does not refuse a connection — it accepts and then hangs.
+Without a ceiling, one dead host blocks the panel request that was trying to replace
+it, which is exactly when the operator needs the panel most. There are two ceilings
+because they answer different questions: ``connect_timeout`` bounds getting a session
+at all, ``timeout`` bounds one operation over a session that already exists. Every
+``await`` that touches the network is under one of them — including the SFTP
+transfers, which have no timeout of their own and are the way a node that answered
+once can still hang a request forever.
 
 **A secret never goes on the command line.** Arguments are world-readable in
 ``/proc`` on the node for the lifetime of the process. Configuration is written
@@ -55,7 +60,26 @@ class NodeTarget:
     # handing our SSH session to whoever answered.
     host_key: str | None = None
 
+    # The ceiling on ESTABLISHING a session: name resolution, TCP handshake and SSH
+    # key exchange. Deliberately far shorter than ``timeout`` below, because a healthy
+    # node on the other side of the world answers in well under a second and a blocked
+    # one answers never — waiting longer only makes the operator watch a spinner
+    # during exactly the outage they are trying to fix. Five seconds still covers
+    # ordinary packet loss: Linux retransmits a SYN at t=0, 1s and 3s, so a lossy path
+    # gets three attempts before we call the node unreachable.
+    connect_timeout: int = 5
+
+    # The ceiling on ONE operation over a session that already opened: a command, a
+    # file transfer. Larger on purpose — pulling an image or restarting a stack
+    # legitimately takes time, and a node that has already answered has earned the
+    # wait.
     timeout: int = 20
+
+
+# How long a closing session is given to finish tearing down. A constant rather than a
+# setting: nobody has a reason to tune it, and a session that will not close cleanly is
+# not something the operator can act on.
+CLOSE_TIMEOUT = 5
 
 
 @dataclass(frozen=True)
@@ -100,10 +124,21 @@ class NodeConnection:
             options["known_hosts"] = None
 
         try:
+            # ``wait_for`` rather than asyncssh's own connect option, because this way
+            # the ceiling covers the whole call — name resolution included, which is
+            # its own way of hanging when a node's address stops resolving.
             self._connection = await asyncio.wait_for(
-                asyncssh.connect(target.host, **options), timeout=target.timeout
+                asyncssh.connect(target.host, **options), timeout=target.connect_timeout
             )
-        except (TimeoutError, OSError, asyncssh.Error) as exc:
+        except TimeoutError as exc:
+            # A sentence, not a class name. This reaches the operator as the reason a
+            # node was left degraded, and "TimeoutError" does not tell them whether we
+            # gave up after a moment or after a minute. Listed before OSError on
+            # purpose: TimeoutError is a subclass of it.
+            raise NodeUnreachable(
+                f"the node did not answer within {target.connect_timeout}s"
+            ) from exc
+        except (OSError, asyncssh.Error) as exc:
             # The message deliberately does not include the host: it propagates
             # into operator-facing text, and core invariants §4 keeps host names out
             # of anything that crosses the API boundary.
@@ -120,7 +155,17 @@ class NodeConnection:
     async def __aexit__(self, *_exc_info) -> None:
         if self._connection is not None:
             self._connection.close()
-            await self._connection.wait_closed()
+            try:
+                await asyncio.wait_for(
+                    self._connection.wait_closed(), timeout=CLOSE_TIMEOUT
+                )
+            except (TimeoutError, OSError, asyncssh.Error):
+                # Swallowed rather than raised. We are usually unwinding a failure
+                # that the operator needs to read, and a teardown that did not
+                # complete would replace that reason with a less useful one. The
+                # socket is already closed either way; what is bounded here is only
+                # how long we wait to hear that it finished.
+                pass
 
     async def run(self, command: str, *, check: bool = True) -> CommandResult:
         """Run a command on the node.
@@ -159,13 +204,29 @@ class NodeConnection:
         """
         assert self._connection is not None
         temporary = f"{path}.incoming"
-        async with self._connection.start_sftp_client() as sftp:
-            async with sftp.open(temporary, "w") as handle:
-                await handle.write(content)
-            await sftp.chmod(temporary, mode)
-            # Atomic within a filesystem: a daemon reloading mid-write must never
-            # see a truncated config.
-            await sftp.posix_rename(temporary, path)
+
+        async def transfer() -> None:
+            async with self._connection.start_sftp_client() as sftp:
+                async with sftp.open(temporary, "w") as handle:
+                    await handle.write(content)
+                await sftp.chmod(temporary, mode)
+                # Atomic within a filesystem: a daemon reloading mid-write must never
+                # see a truncated config.
+                await sftp.posix_rename(temporary, path)
+
+        # Bounded as a whole rather than per SFTP call: SFTP carries no timeout of its
+        # own, and a node that accepted the session and then stopped reading would
+        # otherwise hang the panel request forever — the same failure this module
+        # bounds at connect time, arriving one step later.
+        try:
+            await asyncio.wait_for(transfer(), timeout=self._target.timeout)
+        except TimeoutError as exc:
+            # No path in the message: it names a file on the node, and this text is
+            # operator-facing.
+            raise NodeUnreachable(
+                f"the node stopped responding while a file was being placed on it "
+                f"(after {self._target.timeout}s)"
+            ) from exc
 
     async def read_file(self, path: str) -> str | None:
         """Read a file back, or ``None`` if it is not there.
@@ -174,9 +235,23 @@ class NodeConnection:
         render, which is only meaningful because rendering is deterministic.
         """
         assert self._connection is not None
+
+        async def fetch() -> str | None:
+            try:
+                async with self._connection.start_sftp_client() as sftp:
+                    async with sftp.open(path, "r") as handle:
+                        return str(await handle.read())
+            except (asyncssh.SFTPNoSuchFile, asyncssh.SFTPFailure):
+                return None
+
         try:
-            async with self._connection.start_sftp_client() as sftp:
-                async with sftp.open(path, "r") as handle:
-                    return str(await handle.read())
-        except (asyncssh.SFTPNoSuchFile, asyncssh.SFTPFailure):
-            return None
+            return await asyncio.wait_for(fetch(), timeout=self._target.timeout)
+        except TimeoutError as exc:
+            # Raised rather than returned as ``None``: ``None`` means "the file is not
+            # there", which is a drift answer. A node that went silent mid-read has
+            # told us nothing about the file, and reporting that as absence would make
+            # drift detection invent a difference.
+            raise NodeUnreachable(
+                f"the node stopped responding while a file was being read back "
+                f"(after {self._target.timeout}s)"
+            ) from exc
