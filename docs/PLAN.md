@@ -1,7 +1,11 @@
 # hashi — plan
 
 **Created:** 2026-09-08
-**Status:** approved by the owner 2026-09-08 — M1–M11
+**Status:** approved by the owner 2026-09-08 — M1–M11. **M12 was appended
+during the overnight field run of 2026-09-08**, under the owner's standing rule
+that a field bug no milestone covers becomes a new milestone: it concerns
+something the plan already aimed at (walking M8–M10 on the stand) and it lands
+in `infra`, so implementing it in the same run is pre-approved.
 **Source:** the first real deployment. Every item below was found by *running* the
 product on a rented host, not by reading the tree. None of them is caught by
 `make test`, and none of them was visible from inside the repository.
@@ -701,6 +705,92 @@ is not done, however well the node works afterwards.
 
 ---
 
+## → M12 — The acceptance hands must actually hold a browser · found in the field 2026-09-08
+
+**Appended during the overnight field run, not planned.** Found by running
+`scripts/acceptance/drive.py` for the first time against a stand that had just
+come up cleanly. It is the same lesson as M1, M2 and M3, one layer further out:
+everything checkable by *rendering* works, everything checkable only by *running*
+does not — and this time the thing that did not run was the instrument the plan
+intends to judge M8, M9 and M10 with.
+
+**The bug.** `deploy/docker-compose.e2e.yml:70` pins the browser service to
+`mcr.microsoft.com/playwright/python:v1.55.0-noble`. That image ships the browser
+binaries under `/ms-playwright` and it ships `pip` — it does **not** ship the
+`playwright` Python package. `drive.py` imports it at `serve()`:
+
+```
+ModuleNotFoundError: No module named 'playwright'
+```
+
+so every verb fails, and the stand around it is perfectly healthy while it does.
+
+**Why it stayed invisible, and this is the part worth keeping.** `begin` starts
+the in-container server with `stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL`
+(`drive.py:469`), then waits for a socket that never appears and reports the one
+thing it can still see:
+
+```
+[drive] action failed: the browser did not come up inside the stand
+```
+
+That message names the *symptom* and hides the *cause*, and it points at the
+stand — which was fine. An agent reading it would go and debug compose, the
+profile, the network and the health checks, all of them working, for as long as
+its patience lasted. The traceback existed the whole time and had been thrown
+away on the line above.
+
+**Confirmed, not guessed:** installing `playwright==1.55.0` inside the running
+container made `begin` and `open` succeed immediately, returning the panel's
+accessibility tree and writing its screenshot. Nothing else was wrong.
+
+### M12.1 — The browser image carries the package it is imported for
+
+Build the browser service from a small Dockerfile rather than pulling the bare
+upstream image, exactly as `deploy/docker/caddy.Dockerfile` already does and for
+the recorded reason — *config must travel with the image*. The `playwright`
+package version and the image tag are the same version and must not be able to
+drift: derive one from the other with a build argument rather than writing
+`1.55.0` twice.
+
+Installing at container start instead is the wrong shape: it puts a package
+index on the critical path of every acceptance run, and an acceptance stand that
+cannot come up without the network is one more thing to debug at three in the
+morning.
+
+### M12.2 — A failed verb must report the cause, not only the symptom
+
+`begin` discards the in-container server's stderr. Keep the diagnosis: capture it
+and print it when the socket does not appear. "The browser did not come up inside
+the stand" sent the reader to the one layer that was working.
+
+### M12.3 — A check that the hands work, before a milestone leans on them
+
+`stand.sh up` reports ready on a stand whose driver cannot take a single action.
+Prove the instrument, not just the subject: the cheapest honest check is one real
+verb through the real driver.
+
+**E2E:** `tests/infra/`, beside `test_drive.py`, which already exists and did not
+catch this — it tests the driver's argument handling on the host and never asks
+whether the container can import what the driver imports. The assertion worth
+adding is the one that would have gone red: the browser image the compose file
+names can import `playwright`. `make test-infra` is the gate.
+
+**Done when**
+- [ ] `drive.py begin` succeeds against a freshly built stand with no package
+      installed by hand.
+- [ ] The playwright package version and the browser image tag cannot drift
+      apart.
+- [ ] A `begin` that fails prints why, not only that it did.
+- [ ] Bringing the stand up and taking one real action is a single documented
+      step, and something runs it.
+
+acceptance: no
+Its own proof is a verb that works, and every acceptance run from M8 onward
+exercises it. A milestone whose subject is the acceptance instrument cannot be
+judged by that instrument.
+
+---
 ## Decisions needed from you
 
 | # | Decision | Blocks |
