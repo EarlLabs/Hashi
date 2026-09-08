@@ -742,6 +742,23 @@ and no subscription link anywhere in sight.
 
 ## → M11 — One script prepares a host to be a node · planned 2026-09-08
 
+> **Field run 2026-09-08 — steps complete and reviewed clean; acceptance is
+> half-discharged and this milestone stays open.** M11.1–M11.3 each converged in
+> one review round. M11.4 is **proven on two real hosts**: on a non-root host
+> with docker present and `ufw` inactive, and on a root host with `ufw` already
+> active carrying its own rules and hashi already applied to it. The second run
+> on the first host was **byte-identical** — `authorized_keys`, `/etc/ufw/ufw.conf`,
+> `/etc/default/ufw`, `/etc/ufw/user.rules` and the rule set, mtimes included.
+> The other host kept its own firewall rules and its four running containers.
+>
+> **What is left, and why it is not this milestone's fault.** The acceptance
+> scenario ends *"register it in the panel and apply — it must become a working
+> node"*. The node was registered and a transport enabled; the apply returned
+> `409: a node cannot go from draft to degraded`, which is **M4's known bug**, and
+> the underlying reason was destroyed with it. So the milestone closes when apply
+> works — after M4, M1 and M2 — not because anything about the script is
+> outstanding. See the reordering note in the general rules above.
+
 `edge/bootstrap/node_stack.py:212` refuses a node that has no docker, and says
 why in as many words: *"hashi configures upstream data-plane containers and does
 not install a container runtime for you."* That is the right boundary for the
