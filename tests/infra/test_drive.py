@@ -153,4 +153,25 @@ def test_the_browser_publishes_nothing() -> None:
     browser = overlay["services"]["browser"]
     assert "ports" not in browser, "the acceptance browser must publish nothing"
     assert browser["profiles"] == ["browser"], "it must not start with an ordinary e2e run"
-    assert ":ro" in browser["volumes"][0], "the driver is mounted read-only"
+
+
+def test_the_browser_is_built_not_bind_mounted() -> None:
+    """The lesson caddy.Dockerfile already paid for.
+
+    A bind mount of scripts/acceptance is resolved on the DAEMON's filesystem,
+    which is not this checkout whenever the engine is remote — dind, or an
+    overnight run driving docker on another host. The driver would be missing or
+    stale, and every verb would fail like a broken browser.
+    """
+    import yaml
+
+    overlay = yaml.safe_load((ROOT / "deploy/docker-compose.e2e.yml").read_text())
+    browser = overlay["services"]["browser"]
+    assert "volumes" not in browser, "the driver must travel in the image, not a mount"
+    assert browser["build"]["dockerfile"] == "deploy/docker/acceptance-browser.Dockerfile"
+
+    dockerfile = (ROOT / "deploy/docker/acceptance-browser.Dockerfile").read_text()
+    # The client and the bundled browsers must be the same version, or the failure
+    # arrives as "executable doesn't exist", several layers from its cause.
+    assert "v1.55.0-noble" in dockerfile and "playwright==1.55.0" in dockerfile
+    assert "COPY scripts/acceptance/drive.py" in dockerfile

@@ -67,15 +67,14 @@ services:
   # friendly name, and it would sit outside that block.
   browser:
     profiles: ["browser"]
-    image: mcr.microsoft.com/playwright/python:v1.55.0-noble
-    # Pinned like every other image in this repository. The tag carries the
-    # matching browser build, so `playwright` and Chromium never drift apart.
+    # Built, not pulled, and for the same reason caddy is: the upstream image ships
+    # the browsers but not the `playwright` package, and a BIND MOUNT of the driver
+    # would resolve on the daemon's filesystem — not this checkout — the moment the
+    # engine is remote. Both are baked. See deploy/docker/acceptance-browser.Dockerfile.
+    build:
+      context: ..
+      dockerfile: deploy/docker/acceptance-browser.Dockerfile
     working_dir: /srv/acceptance
-    # The driver is mounted rather than baked: it is edited far more often than the
-    # stand is rebuilt, and a stale copy inside an image is the kind of thing that
-    # wastes a night. Read-only — the container has no business editing it.
-    volumes:
-      - ../scripts/acceptance:/srv/acceptance:ro
     # Nothing to serve; it waits for `docker compose exec`. Without this the
     # container would exit immediately and every verb would find no browser.
     command: ["sleep", "infinity"]

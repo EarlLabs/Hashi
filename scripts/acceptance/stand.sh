@@ -138,8 +138,27 @@ SQL
 }
 
 down() {
+  # E2E_PROFILES=browser is NOT optional here. `docker compose down` only touches
+  # services whose profile is active, so a teardown without it leaves the browser
+  # container running — and the next `up` then finds a stale one holding the old
+  # image.
   say "destroying the stand and its volumes"
-  make e2e-down
+  make e2e-down E2E_PROFILES=browser
+
+  # And wait for the ports to actually close. `down` returns when the containers
+  # are gone, not when the kernel has released what they published, and autopilot
+  # runs the whole test suite immediately after acceptance tears a stand down. The
+  # control zone's tests skip when no Postgres answers and RUN when one does — so a
+  # database that is still accepting connections for another second, then vanishes
+  # mid-test, produces a red suite nobody can reproduce. Observed on 2026-09-08.
+  local waited=0
+  while nc -z "$E2E_DB_HOST" "$E2E_DB_PORT" 2>/dev/null || healthz; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ "$waited" -ge 30 ]; then
+      die "the stand's ports are still open after ${waited}s — something outlived the teardown"
+    fi
+  done
   say "gone."
 }
 

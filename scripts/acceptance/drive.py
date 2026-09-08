@@ -222,26 +222,43 @@ def evidence_dir(milestone: str) -> pathlib.Path:
     return path
 
 
-def relay(argv: list[str]) -> int:
-    """Run this same file inside the browser container, with the same arguments."""
+SHOT_LINE = re.compile(r"^\[drive\] shot (?P<name>.+\.png)$", re.MULTILINE)
+
+
+def relay(argv: list[str]) -> tuple[int, str | None]:
+    """Run this same file inside the browser container, with the same arguments.
+
+    Output is captured rather than streamed only so the shot line can be read back;
+    everything is printed unchanged, in order, so the agent sees exactly what the
+    container said.
+    """
     command = compose(
         "exec", "-T", "-e", "ACCEPTANCE_IN_CONTAINER=1", SERVICE,
         "python", IN_BOX, *argv,
     )
-    return subprocess.run(command, cwd=ROOT, env=compose_env()).returncode
-
-
-def collect(milestone: str, name: str) -> None:
-    """Copy one screenshot out of the container before the stand takes it away."""
-    target = evidence_dir(milestone) / f"{name}.png"
     result = subprocess.run(
-        compose("cp", f"{SERVICE}:{SHOTS}/{name}.png", str(target)),
+        command, cwd=ROOT, env=compose_env(), capture_output=True, text=True
+    )
+    said = result.stdout
+    match = SHOT_LINE.search(said)
+    if match:
+        said = SHOT_LINE.sub("", said).rstrip() + "\n"
+    sys.stdout.write(said)
+    sys.stderr.write(result.stderr)
+    return result.returncode, (match.group("name") if match else None)
+
+
+def collect(milestone: str, filename: str) -> None:
+    """Copy one screenshot out of the container before the stand takes it away."""
+    target = evidence_dir(milestone) / filename
+    result = subprocess.run(
+        compose("cp", f"{SERVICE}:{SHOTS}/{filename}", str(target)),
         cwd=ROOT, capture_output=True, text=True, env=compose_env(),
     )
     if result.returncode != 0:
-        say(f"warning: no screenshot came back for {name} — {result.stderr.strip()}")
+        say(f"warning: no screenshot came back for {filename} — {result.stderr.strip()}")
         return
-    say(f"evidence: .acceptance/{milestone}/{name}.png")
+    say(f"evidence: .acceptance/{milestone}/{filename}")
 
 
 def push_upload(path: str) -> str:
@@ -285,12 +302,14 @@ def on_host(args: argparse.Namespace, argv: list[str]) -> int:
             return fail(str(exc))
         argv = [a if a != args.file else args_in_box for a in argv]
 
-    code = relay(argv)
+    code, shot = relay(argv)
     # Evidence comes back even when the action failed: a screenshot of the screen
     # that would not do what was asked is the most useful one in the whole run.
-    if args.action not in {"begin", "end"}:
+    # The container decides the filename, because only it knows the action number
+    # that keeps two unnamed `fill`s from writing the same file.
+    if shot:
         with contextlib.suppress(Exception):
-            collect(current_milestone(), args.name or args.action)
+            collect(current_milestone(), shot)
     return code
 
 
@@ -429,17 +448,35 @@ def perform(page, budget: Budget, request: dict) -> dict:
     except BudgetSpent as exc:
         return {"ok": False, "error": str(exc), "spent": True}
     except Exception as exc:  # noqa: BLE001 - one line to the agent, by design
+        # Name the target. Playwright's first line is "Timeout 10000ms exceeded",
+        # which does not say WHAT was not there — and in the morning that is the
+        # only thing the log needed to say.
         message = str(exc).splitlines()[0]
-        shot = capture(page, request.get("name") or f"{action}-failed")
+        if request.get("target"):
+            message = f"{request['target']} — {message}"
+        shot = capture(page, shot_name(request, budget, failed=True))
         return {"ok": False, "error": message, "tree": snapshot(page), "shot": shot}
 
     return {
         "ok": True,
         "url": page.url,
         "tree": snapshot(page),
-        "shot": capture(page, request.get("name") or action),
+        "shot": capture(page, shot_name(request, budget)),
         "left": budget.left,
     }
+
+
+def shot_name(request: dict, budget: Budget, failed: bool = False) -> str:
+    """A name no other action in this milestone can take.
+
+    Naming an unnamed shot after its verb looked tidy until two `fill`s in one
+    scenario wrote the same file: the gate then opens .acceptance/<milestone>/ and
+    finds one screenshot where the checklist cited two. The action number is
+    already counted for the budget, so it costs nothing and cannot collide.
+    """
+    stem = request.get("name") or request["action"]
+    suffix = "-failed" if failed else ""
+    return f"{stem}-{budget.used:03d}{suffix}"
 
 
 def snapshot(page) -> str:
@@ -495,8 +532,13 @@ def in_container(args: argparse.Namespace) -> int:
     if reply.get("tree"):
         print(reply["tree"])
     if not reply.get("ok"):
+        if reply.get("shot"):
+            print(f"[drive] shot {reply['shot']}")
         return fail(reply.get("error", "unknown failure"))
     say(f"{args.action} ok — {reply['url']} · {reply['left']} actions left")
+    # The host half reads this line to know which file to copy out. It is the only
+    # machine-readable thing this CLI prints, so it goes last and stays literal.
+    print(f"[drive] shot {reply['shot']}")
     return 0
 
 
