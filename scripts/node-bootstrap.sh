@@ -50,6 +50,49 @@
 #      default and immediately begins writing source addresses — the one record the
 #      charter forbids at any level. `ufw logging off` therefore runs BEFORE the firewall
 #      can come up, not after (docs/decisions.md, decision 5).
+#
+# WHAT THIS SCRIPT DOES NOT DO, and in most cases cannot. The five properties above are
+# what it holds itself to; this is the other half of the same contract. Every item here is
+# something an operator reasonably assumes "the host is ready" already covers, and each one
+# fails in a way that points at the wrong component.
+#
+#   A. THE PROVIDER'S OWN FIREWALL IS NOT TOUCHED, AND CANNOT BE. A security group lives in
+#      the provider's control panel, in front of the host; this script runs on the host,
+#      and can neither see it nor change it. That matters more than it sounds, because a
+#      closed security group LOOKS EXACTLY LIKE A BROKEN TRANSPORT: the host firewall
+#      allows the port, the container is up, every check at the end of this run is green,
+#      and the client still times out — so the operator goes and debugs the transport,
+#      where there is nothing to find. Open the ports your transports listen on, and the
+#      management port, in the provider's console; then confirm it from a machine on a
+#      different network instead of believing the console. And beware the false negative
+#      one layer further out: in the field a probe reported a privileged port shut when it
+#      was in fact open, because the probing side was running unprivileged and could not
+#      bind that port at all. Satisfy yourself that the probe can do what you think it is
+#      doing before you conclude the security group is the problem.
+#   B. IT DOES NOT REGISTER THE NODE. When this finishes the host is drivable and the fleet
+#      still does not know it exists. Nothing here writes to the control database, and a
+#      node never dials the control plane — the direction is control plane to node, always.
+#      The node record, holding the private half of this key, is created in the panel.
+#   C. THE ufw LOG SWEEP IS NOT A CLEANUP. It removes the file ufw itself writes, and on a
+#      host that has already logged, rsyslog and journald put the same lines into the
+#      system log, into kern.log and into the kernel journal. Nothing done here reaches any
+#      of those. Switching logging off BEFORE the firewall comes up is the real protection,
+#      and it only protects a host that had not yet logged; a host that already did needs
+#      an operator, not a script (docs/tracker/M11/field-inventory.md).
+#   D. IT NEVER CLOSES ANYTHING. Runs are additive by design: a port opened by an earlier
+#      run stays open when a later run omits it, and a management port detected once keeps
+#      its rule. A script that withdrew rules could withdraw the one carrying the session
+#      running it — so the rule set is the union of every run so far, and only an operator
+#      narrows it.
+#   E. IT IS NOT HOST HARDENING. It does not disable password authentication, does not
+#      install unattended upgrades or a ban daemon, does not touch time synchronisation and
+#      does not tune the kernel. "Ready" here means ready to be driven by the control
+#      plane, and nothing wider: in particular, the account it authorises a key for may
+#      still accept a password, which belongs to whoever owns the host.
+#   F. IT PROVES NOTHING ABOUT REACHABILITY. The verification at the end asks THIS HOST
+#      questions; it never sends a packet anywhere. Whether a friend inside Russia can
+#      reach this node is a field observation on a real network, and no run of this script
+#      is evidence for it.
 set -euo pipefail
 
 # Upstream docker's own installer. Named in a variable and overridable because it is the
@@ -223,7 +266,13 @@ SSH_DIR="${TARGET_HOME}/.ssh"
 KEYS_FILE="${SSH_DIR}/authorized_keys"
 
 as_root install -d -m 700 -o "${TARGET_USER}" -g "${TARGET_GROUP}" "${SSH_DIR}"
-as_root touch "${KEYS_FILE}"
+# `touch` only when there is nothing there. On an existing file touch(1) is a write, and
+# the second run is meant to change nothing at all — not even an mtime somebody is using to
+# see when this host was last altered. The chown and chmod below are a different kind of
+# operation: they assert a state rather than change one, so running them every time
+# converges the file instead of modifying it, and re-asserting them is exactly the point —
+# sshd silently ignores an authorized_keys file that anyone else can write.
+[ -e "${KEYS_FILE}" ] || as_root touch "${KEYS_FILE}"
 as_root chown "${TARGET_USER}:${TARGET_GROUP}" "${KEYS_FILE}"
 as_root chmod 600 "${KEYS_FILE}"
 
@@ -231,7 +280,22 @@ as_root chmod 600 "${KEYS_FILE}"
 # does not append a second copy of the same key (property 1). The comment is a label; the
 # body is the identity.
 KEY_BODY="$(printf '%s' "${AUTHORIZED_KEY}" | awk '{print $1" "$2}')"
-if as_root grep -qF "${KEY_BODY}" "${KEYS_FILE}"; then
+
+# Present, and present on a line sshd will actually honour. A plain substring search over
+# the whole file also matches the key sitting in a COMMENTED-OUT entry — somebody's
+# disabled key, or a note about one — and would then report "already authorised", and pass
+# the verification at the end, for a key sshd ignores. That is the worst shape of untrue: a
+# host that says it is ready and cannot be logged into. Commented lines are therefore
+# skipped; everything else is left to sshd, which is the authority on what it accepts.
+key_is_authorised() {
+  as_root awk -v key="${KEY_BODY}" '
+    /^[[:space:]]*#/ { next }
+    index($0, key) { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "${KEYS_FILE}"
+}
+
+if key_is_authorised; then
   say "the control plane's key is already authorised for ${TARGET_USER}"
 else
   # A file whose last line has no newline would otherwise swallow the new key onto it,
@@ -261,7 +325,18 @@ fi
 # that is a connection log, the charter forbids it at any level, and it is the one record
 # that can hurt a real person. Doing this after `enable` would still create the file
 # (docs/decisions.md, decision 5).
-as_root ufw logging off
+#
+# Read before writing, because `ufw logging off` is not a no-op when logging is already
+# off: it rewrites ufw's config, reloads the firewall, and prints a line of its own into
+# the middle of ours. The check fails in the safe direction on purpose — a missing or
+# unreadable config leaves this empty, empty is not "off", and the command runs. There is
+# no arrangement of this file in which logging stays on because a probe failed.
+UFW_LOGLEVEL="$(as_root grep -m1 '^LOGLEVEL=' /etc/ufw/ufw.conf 2>/dev/null | cut -d= -f2 || true)"
+if [ "${UFW_LOGLEVEL}" = "off" ]; then
+  say "ufw logging was already off"
+else
+  as_root ufw logging off
+fi
 # And any file a previous life of this host left behind. It holds exactly the record we
 # refuse to keep, so leaving it in place while switching logging off would be keeping the
 # evidence and only stopping the note-taking.
@@ -299,6 +374,11 @@ SSH_PORTS="$(printf '%s\n%s\n' "${SSH_PORTS// /$'\n'}" "$(detect_ssh_ports)" \
 # Management first, and before `enable` below. The order is the whole safety property:
 # a firewall that comes up before its own admission rule is a locked door with the key
 # inside.
+#
+# Unlike the data-plane loop below, this one does not distinguish "added" from "already
+# there": the line it prints states the resulting STATE rather than an action, so it is
+# equally true on the first run and the tenth. ufw deduplicates the rule itself, and its
+# own chatter about that is discarded.
 for port in ${SSH_PORTS}; do
   as_root ufw allow "${port}/tcp" >/dev/null
 done
@@ -324,12 +404,51 @@ for spec in ${OPEN_PORTS[@]+"${OPEN_PORTS[@]}"}; do
       *) fail "unknown protocol in '${spec}' (expected tcp or udp)" ;;
     esac
   fi
-  as_root ufw allow "${spec}" >/dev/null
-  say "opened ${spec}"
+  # ufw refuses to add a rule it already holds and says so, and that answer is the whole
+  # difference between "opened" and "was already open" — a second run that claims it opened
+  # a port it did not touch is the script lying about its own effect. Captured rather than
+  # piped into grep: under pipefail a `grep -q` that closes the pipe early can leave the
+  # pipeline reporting ufw's SIGPIPE instead of the match. LC_ALL=C so a translated build
+  # does not move the sentence out from under the comparison; if it does anyway, the cost
+  # is one wrong word in the output and nothing else, because ufw deduplicates the rule
+  # either way. A genuine refusal still stops the run — it is not swallowed.
+  if ! opened="$(as_root env LC_ALL=C ufw allow "${spec}" 2>&1)"; then
+    fail "ufw refused to open ${spec}: ${opened}"
+  fi
+  case "${opened}" in
+    *"Skipping adding existing rule"*) say "${spec} was already open" ;;
+    *) say "opened ${spec}" ;;
+  esac
 done
 
-as_root ufw --force default deny incoming >/dev/null
-as_root ufw --force default allow outgoing >/dev/null
+# The two default policies, set only when they are not already what a node needs. Setting
+# them unconditionally was wrong twice over: `ufw default` rewrites /etc/default/ufw and
+# reloads the firewall every single time it is called, so a second run was a change; and on
+# a host whose operator had chosen a policy of their own it silently overwrote that choice
+# while the line further down still announced that the existing rules were kept. Read
+# first, then set, and say so when it really is a change.
+#
+# The file rather than the live rule table, because it is what ufw itself consults, so it
+# answers whether the firewall is up or not — the live output omits the defaults entirely
+# while ufw is inactive, which is exactly the case this script exists to fix.
+ufw_default() {
+  as_root grep -m1 "^DEFAULT_${1}_POLICY=" /etc/default/ufw 2>/dev/null \
+    | tr -d '"' | cut -d= -f2 || true
+}
+
+if [ "$(ufw_default INPUT)" = "DROP" ]; then
+  say "incoming was already denied by default"
+else
+  as_root ufw --force default deny incoming >/dev/null
+  say "incoming is now denied by default"
+fi
+
+if [ "$(ufw_default OUTPUT)" = "ACCEPT" ]; then
+  say "outgoing was already allowed by default"
+else
+  as_root ufw --force default allow outgoing >/dev/null
+  say "outgoing is now allowed by default"
+fi
 
 # `--force` because the confirmation ufw asks for here is the exact prompt property 2
 # forbids. Only when it is not already up: a host that already has a firewall keeps the
@@ -354,9 +473,9 @@ as_root docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || fail \
   "the docker daemon does not answer, so the control plane could reach this host and
   still be unable to start anything on it."
 
-as_root grep -qF "${KEY_BODY}" "${KEYS_FILE}" || fail \
-  "the control plane's key is not in ${KEYS_FILE} after all — do not register this host
-  until that is understood."
+key_is_authorised || fail \
+  "the control plane's key is not in ${KEYS_FILE} on a line sshd would honour — do not
+  register this host until that is understood."
 
 as_root ufw status verbose | grep -q 'Status: active' || fail \
   "ufw did not come up. The host is otherwise prepared, but it is exposed; fix the
@@ -372,3 +491,15 @@ say "ready: docker $(docker --version | awk '{print $3}' | tr -d ,), key authori
 # that answers on two ports still has exactly one that is known to work from outside.
 say "register it in the panel with ssh_user ${TARGET_USER} and ssh_port ${SESSION_PORT:-$(printf '%s' "${SSH_PORTS}" | awk 'NR==1')}"
 say "nothing of hashi's was installed here — the control plane creates /opt/hashi itself when you apply"
+# On a re-run of a host the control plane has already applied to, the line above reads as
+# "there is nothing of hashi's on this host", which would be false. What is true either way
+# is that THIS SCRIPT put nothing there and touched nothing that was there.
+if [ -d /opt/hashi ]; then
+  say "an earlier apply already left /opt/hashi here — this run neither changed nor removed it"
+fi
+# Said last because it is the operator's next move, and the moment they are most likely to
+# blame the wrong layer. See section A of the header: this is the boundary that costs an
+# evening, because the symptom is identical to a transport that does not work.
+say "the provider's own firewall sits in front of this host and outside this script's reach:
+    if a transport times out from outside while everything above is green, check the
+    security group before you suspect the transport"

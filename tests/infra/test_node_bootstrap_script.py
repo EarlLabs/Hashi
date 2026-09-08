@@ -12,6 +12,9 @@ HOW:  the script is read, not run. Same division as ``test_panel_bootstrap_scrip
 
       Stated plainly: nothing here proves a host becomes a node. It proves the script
       cannot do the harmful version of becoming one.
+
+      M11.2 added the second half: that a re-run changes nothing and claims nothing untrue,
+      and that the script states the boundaries an operator would otherwise assume away.
 """
 
 import pathlib
@@ -112,12 +115,50 @@ def test_the_authorized_key_lands_with_restrictive_permissions(script: str) -> N
 
 def test_installing_the_key_twice_does_not_append_it_twice(script: str) -> None:
     """Property 1, at the one place a second run would visibly accumulate state."""
-    assert re.search(r"grep -qF .*KEY_BODY", script), (
+    assert re.search(r"^key_is_authorised\(\) \{", script, re.M), (
         "the script appends the key without checking whether it is already there"
+    )
+    assert re.search(r"^if key_is_authorised; then", script, re.M), (
+        "the presence check is not the thing that decides whether to append"
     )
     assert re.search(r"KEY_BODY=.*awk", script), (
         "the key is compared whole, so re-running with a different comment appends a "
         "second copy of the same key"
+    )
+
+
+def test_a_commented_out_key_does_not_count_as_authorised(script: str) -> None:
+    """The presence check decides twice: whether to append, and whether to report success.
+
+    A plain substring search over authorized_keys also matches the key in a disabled entry
+    or in a note about one. It would then report "already authorised" AND pass the
+    verification at the end, for a key sshd ignores — a host that says it is ready and
+    cannot be logged into, which is the worst shape an untrue re-run can take.
+    """
+    guard = re.search(r"^key_is_authorised\(\) \{\n(?:.*\n)*?\}$", script, re.M)
+    assert guard, "there is no single guard, so the two callers can disagree"
+    assert "/^[[:space:]]*#/ { next }" in guard.group(0), (
+        "a commented-out entry counts as an authorisation"
+    )
+    # And the final verification asks the same question, not a looser one.
+    assert re.search(r"^key_is_authorised \|\| fail", script, re.M), (
+        "the verification uses a different, weaker check than the install did"
+    )
+    assert not re.search(r"grep -qF[^\n]*KEY_BODY", script), (
+        "a substring search over the whole file survives somewhere"
+    )
+
+
+def test_an_existing_authorized_keys_file_is_not_rewritten(script: str) -> None:
+    """touch(1) on an existing file is a write, and a second run must change nothing.
+
+    The chown and chmod beside it are deliberately unconditional: they assert a state
+    rather than change one, and sshd silently ignores a file others can write, so
+    re-asserting them every run is the point.
+    """
+    assert re.search(r'^\[ -e "\$\{KEYS_FILE\}" \] \|\| as_root touch', script, re.M), (
+        "the script touches authorized_keys unconditionally, so a second run bumps its "
+        "mtime — a change, on a run that promised none"
     )
 
 
@@ -128,7 +169,7 @@ def test_logging_is_turned_off_before_the_firewall_can_come_up(script: str) -> N
     immediately. Doing ``logging off`` afterwards still creates the record — so the order
     is the property, not the presence (docs/decisions.md, decision 5).
     """
-    logging_off = re.search(r"^as_root ufw logging off$", script, re.M)
+    logging_off = re.search(r"^\s*as_root ufw logging off$", script, re.M)
     assert logging_off, "the script does not turn ufw logging off"
     enable = re.search(r"^\s*as_root ufw --force enable", script, re.M)
     assert enable, "the script never enables the firewall"
@@ -251,6 +292,63 @@ def test_a_second_run_finds_every_step_already_done(script: str) -> None:
     assert re.search(r"ufw status[^\n]*inactive", script), (
         "the firewall is enabled without checking whether it is already up"
     )
+    assert re.search(r'^\[ -e "\$\{KEYS_FILE\}" \]', script, re.M), (
+        "authorized_keys is touched unconditionally"
+    )
+    assert re.search(r"^ufw_default\(\) \{", script, re.M), (
+        "the default policies are written without reading what they already are"
+    )
+    assert re.search(r"^UFW_LOGLEVEL=", script, re.M), (
+        "the logging level is set without reading what it already is"
+    )
+
+
+def test_no_ufw_command_that_rewrites_its_config_runs_unconditionally(script: str) -> None:
+    """The four ufw calls that are not additive, each behind a guard.
+
+    ``ufw logging`` and ``ufw default`` rewrite ufw's own config files and reload the
+    firewall EVERY time they are called, whether or not the value changes — so calling them
+    unconditionally made a second run a change, and on a host whose operator had chosen
+    their own policy it overwrote that choice while the run still announced that the
+    existing rules were kept. ``ufw allow`` is the exception and stays unguarded: it is
+    additive and ufw deduplicates it itself.
+
+    Guarded is checked as indented, which is what an ``if`` around a line does. A line at
+    column zero here is a line that runs on every host, every time.
+    """
+    for command in (
+        "ufw logging off",
+        "ufw --force default deny incoming",
+        "ufw --force default allow outgoing",
+        "ufw --force enable",
+    ):
+        found = re.findall(rf"^([ \t]*)as_root {re.escape(command)}", script, re.M)
+        assert found, f"the script never runs `{command}`"
+        for indent in found:
+            assert indent, f"`{command}` runs unconditionally, so a second run is a change"
+
+
+def test_the_logging_check_fails_towards_turning_logging_off(script: str) -> None:
+    """The one guard whose failure direction is a charter question, not a tidiness one.
+
+    Reading the current level is an optimisation — it exists so a second run does not
+    reload the firewall and print ufw's own line into the middle of ours. It must never
+    become a reason logging stays ON: an unreadable or missing config leaves the answer
+    empty, empty is not ``off``, and the command then runs. So the guard tests for
+    already-off and does the work in its ELSE branch, never the other way round.
+    """
+    guard = re.search(
+        r'^if \[ "\$\{UFW_LOGLEVEL\}" = "off" \]; then\n(?:.*\n)*?^fi$', script, re.M
+    )
+    assert guard, "the logging guard is not shaped as a test for already-off"
+    body = guard.group(0)
+    already, _, otherwise = body.partition("\nelse\n")
+    assert otherwise, "the guard has no else branch, so a failed read leaves logging alone"
+    assert "ufw logging off" in otherwise, (
+        "logging is turned off only when the config could be read — a host whose config is "
+        "missing would then keep recording who connected to it"
+    )
+    assert "ufw logging off" not in already, "the guard turns logging off when it is already off"
 
 
 def test_it_verifies_the_host_before_it_reports_success(script: str) -> None:
@@ -268,6 +366,109 @@ def test_it_verifies_the_host_before_it_reports_success(script: str) -> None:
     assert re.search(r"Logging: off", script), (
         "the script never confirms the host is not recording connections"
     )
+
+
+def test_a_re_run_does_not_claim_it_opened_a_port_that_was_already_open(script: str) -> None:
+    """"Opened" is a claim about an effect, and on a second run there is no effect.
+
+    ufw refuses to add a rule it already holds and says so; that answer is the whole
+    difference between "opened" and "was already open". The captured form also matters:
+    piping ufw into ``grep -q`` under ``pipefail`` lets the early pipe close report ufw's
+    SIGPIPE instead of the match, which is the trap M11.1 already hit once.
+    """
+    assert "Skipping adding existing rule" in script, (
+        "the script cannot tell an added rule from one that was already there"
+    )
+    assert "was already open" in script, "a second run still claims it opened the port"
+    assert re.search(r'opened="\$\(as_root env LC_ALL=C ufw allow', script), (
+        "ufw's answer is not captured under a fixed locale, so a translated build silently "
+        "falls through to the wrong message"
+    )
+    assert not re.search(r"ufw allow[^\n]*\|\s*grep", script), (
+        "ufw is piped into grep, where pipefail turns an early pipe close into a failure"
+    )
+    # A genuine refusal must still stop the run, not be swallowed by the capture.
+    assert re.search(r'if ! opened="\$\(as_root env LC_ALL=C ufw allow[^\n]*\n\s*fail ', script), (
+        "a ufw refusal is captured and discarded, so the run continues past a rule that "
+        "was never added"
+    )
+
+
+def test_it_stays_honest_about_hashi_state_on_a_host_already_applied_to(script: str) -> None:
+    """The closing line is read as "there is nothing of hashi's here", and on a re-run of a
+    live node that is false — the control plane put its directory there on the first apply.
+
+    What is true on every run is the narrower claim: THIS SCRIPT put nothing there and
+    touched nothing that was there. The extra line is what keeps the sentence above it from
+    being read as the wider one.
+    """
+    assert "nothing of hashi's was installed here" in script, (
+        "the run no longer states that it left no hashi state behind"
+    )
+    assert re.search(r"^if \[ -d /opt/hashi \]; then", script, re.M), (
+        "a re-run on a node the control plane has already applied to reports that there is "
+        "nothing of hashi's on the host, which by then is untrue"
+    )
+    assert re.search(r"neither changed nor removed it", script), (
+        "the line does not say that this run left the existing directory alone"
+    )
+
+
+def test_it_says_what_it_does_not_do(script: str) -> None:
+    """M11.2's other half, and the headline item is the one outside the host entirely.
+
+    A closed security group looks EXACTLY like a broken transport — host firewall open,
+    container up, every check in this script green, client still timing out — so an
+    operator who is not told about it debugs the transport. It sits in the provider's
+    console, beyond the reach of anything running on the host, so the only thing the script
+    can do about it is name it.
+    """
+    section = re.search(
+        r"^# WHAT THIS SCRIPT DOES NOT DO(?:.*\n)*?^set -euo pipefail$", script, re.M
+    )
+    assert section, (
+        "the script enumerates what it holds itself to and never states its boundaries, so "
+        "every gap reads as covered"
+    )
+    boundaries = section.group(0)
+    assert "security group" in boundaries, "the provider's own firewall is not named"
+    assert re.search(r"LOOKS EXACTLY LIKE A BROKEN TRANSPORT", boundaries), (
+        "the section names the security group without saying what it looks like when it is "
+        "shut, which is the only part that saves an operator an evening"
+    )
+    assert "false negative" in boundaries and "unprivileged" in boundaries, (
+        "the section does not warn that the check itself can lie — a probe that cannot bind "
+        "a privileged port reports a shut port that is in fact open"
+    )
+    assert "IT DOES NOT REGISTER THE NODE" in boundaries, (
+        "a prepared host reads as a node the fleet knows about"
+    )
+    for elsewhere in ("rsyslog", "journald", "kern.log"):
+        assert elsewhere in boundaries, (
+            f"the log sweep is not qualified: {elsewhere} holds the same lines on a host "
+            "that has already logged, and no cleanup here reaches it"
+        )
+    assert "IT NEVER CLOSES ANYTHING" in boundaries, (
+        "the rule set is the union of every run, and nothing says so"
+    )
+    assert "IT IS NOT HOST HARDENING" in boundaries, (
+        "'the host is ready' is left to cover password authentication and the rest of it"
+    )
+
+
+def test_the_run_itself_names_the_provider_firewall(script: str) -> None:
+    """A boundary only in the header is a boundary nobody piping this to a host will read.
+
+    It is said last, after success, because that is the moment the operator goes off to
+    test a transport — and the moment a shut security group starts costing them the
+    evening.
+    """
+    says = re.findall(r"^say \"(?:[^\"]*)\"", script, re.M | re.S)
+    assert says, "the script says nothing"
+    assert "security group" in says[-1], (
+        "the last thing the run says is not the one thing that is outside its reach"
+    )
+    assert "outside this script" in says[-1]
 
 
 def test_it_prints_no_rules_and_no_logs(script: str) -> None:
