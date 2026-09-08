@@ -1,7 +1,0 @@
-agent: "warden"
-role: "warden"
-state: "done"
-phase: "dispatch"
-progress: "/develop exited 1"
-blockers: ""
-updated_at: "2026-08-02T10:47:49+00:00"

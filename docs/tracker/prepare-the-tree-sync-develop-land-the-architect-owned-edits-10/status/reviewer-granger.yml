@@ -1,8 +1,0 @@
-agent: reviewer-granger
-role: reviewer
-zones: [control, edge, infra]
-task: "prepare the tree: sync develop, land the architect-owned edits, publish the decisions the rulebooks cannot carry"
-state: done
-progress: "round 2: CLEAN — both round-1 should-fix items and all 4 Holmes findings verified fixed; make test 15 passed, ruff clean; pyproject.toml untouched by fix round; no scope violations"
-blockers: null
-updated_at: 2026-08-02T10:30:00Z
