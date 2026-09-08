@@ -299,8 +299,20 @@ Found while establishing a baseline for the field run.
 `tests/control/test_revocation.py::test_an_unreachable_node_makes_the_revocation_report_incomplete`
 points its fixture at `192.0.2.10` — TEST-NET-1, deliberately unroutable — and
 the whole control suite takes **7 minutes 39 seconds**, essentially all of it
-inside that one test, waiting out the kernel's TCP retry budget. There is no
-connect timeout anywhere on the path to a node.
+waiting on addresses that will never answer.
+
+**Corrected while implementing, and the correction matters.** The first
+diagnosis above — *"there is no connect timeout anywhere"* — was wrong. There was
+one; it simply shared the 20-second budget used for *commands*, and the suite
+paid it in full **23 times** (measured with `--durations`: every node dial cost
+20.2–20.4 s). So the fix is splitting one ceiling into two, not inventing one
+from nothing.
+
+What genuinely had **no ceiling at all** was not the connect: it was the **SFTP
+transfers and the session close**. A node that completes the handshake and then
+goes quiet mid-transfer hung forever — which is a better description of a node
+being blocked than a refused connection is, and it is the failure the module
+docstring already claimed to handle.
 
 **Why this matters in the field and not only in CI.** A blackholed address is
 not a contrived test condition for this project — it is what a *blocked* node
