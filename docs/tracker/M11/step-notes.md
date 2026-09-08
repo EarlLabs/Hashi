@@ -80,3 +80,52 @@ one.
 
 `docs/deploy/runbook.md:141` still hardcodes `ufw allow 22/80/443/51820` and
 `ufw enable` **without** `ufw logging off`. That is M11.3 / M6.2 territory.
+
+## From M11.2 — idempotency, and the boundaries section
+
+**New operator-facing strings.** M11.3's runbook must match these, not invent
+its own wording:
+
+- `incoming was already denied by default`
+- `outgoing was already allowed by default`
+- `ufw logging was already off`
+- `<spec> was already open`
+- `an earlier apply already left /opt/hashi here — this run neither changed nor
+  removed it`
+- the closing line beginning `the provider's own firewall sits in front of this
+  host and outside this script's reach`
+
+All M11.1 strings above are unchanged.
+
+**Two named shell helpers** now exist and are the way to ask these questions:
+`key_is_authorised` and `ufw_default INPUT|OUTPUT`.
+
+**The regex anchor moved.** `as_root ufw logging off` is now *indented* inside
+its guard, so the ordering test anchors on `^\s*as_root ufw logging off$`. A
+later step copying M11.1's exact `^…$` regex will fail. Command-position
+anchoring still holds — that rule is intact, only the whitespace changed.
+
+**Guardedness is checked as indentation.**
+`test_no_ufw_command_that_rewrites_its_config_runs_unconditionally` reads a line
+at column zero as a line that runs every time. That is the pattern to reuse for
+any new "must not run unconditionally" rule.
+
+**One guard's failure direction is load-bearing.** The `ufw logging off` guard
+reads `LOGLEVEL` from `/etc/ufw/ufw.conf`, and on a missing or unreadable config
+it falls through to **running the command**. It must keep failing in that
+direction: a guard that failed the other way would leave logging on, which is
+the charter violation this milestone exists to prevent. Verified by review, not
+assumed.
+
+**`LC_ALL=C` is forced on exactly one command** (`ufw allow`), not exported. An
+`export LC_ALL=C` at the top would also change how docker's output parses. If a
+translated ufw ever defeats the match the cost is one wrong word, never a wrong
+rule set.
+
+**The SSH-port `ufw allow` loop is deliberately unguarded**, unlike the
+data-plane loop. Its line states the resulting *state*, not an action, so it is
+true on run one and run ten. There is a comment saying so; do not "fix" it.
+
+**Red-first was proved, not claimed.** All ten new tests were run against
+`git show ce44a7c:scripts/node-bootstrap.sh` and all ten went red — by the
+implementer and again, independently, by the reviewer.
