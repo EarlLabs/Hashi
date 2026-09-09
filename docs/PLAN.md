@@ -676,7 +676,43 @@ acceptance: no
 
 ---
 
-## → M7 — Panel off the public internet · planned 2026-09-08
+## → M7 — Panel off the public internet · planned 2026-09-08 · reshaped 2026-09-09
+
+> **Decision 2 was reversed on 2026-09-09 and this milestone changed shape with
+> it.** The panel is reached over a **dedicated WireGuard management tunnel**, not
+> Tailscale. `docs/decisions.md` carries all three lines — the original choice,
+> its reaffirmation on measurement, and the reversal — because the sequence is
+> the record. Everything below about *splitting the Caddy site* stands unchanged;
+> only the private network it binds to is different.
+>
+> **What prompted it.** Measured from the entry host:
+> `tailscale.com` fails its TLS handshake while `controlplane.tailscale.com`
+> answers in 150 ms — so Tailscale worked, and the filtering of that company is
+> nonetheless real, present and per-hostname. Today's reachability is an
+> observation, not a guarantee, and an emergency rotation is exactly when it
+> would matter. Detail in `docs/tracker/M7/field-notes.md`.
+>
+> **Three things the implementation must get right, none of them obvious:**
+>
+> 1. **The bootstrap prints the owner's config once.** The panel cannot hand you
+>    the config you need to reach the panel. This is a real chicken-and-egg and
+>    it belongs in `scripts/panel-bootstrap.sh`, which is the control plane's own
+>    bootstrap — **not** `node-bootstrap.sh`, which M11.1 fixed at docker, the key
+>    and the firewall and nothing else.
+> 2. **It must not be a `node_transports` row.** That shape carries one
+>    `peer_tunnel_address` and therefore serves exactly one device — **M17** — and
+>    an owner with a laptop and a phone needs at least two peers. The management
+>    tunnel takes N peers by construction.
+> 3. **Use the obfuscated transport, not plain WireGuard.** A plain handshake is
+>    fingerprintable, and this is the one tunnel that has to work when everything
+>    else is being blocked. (Plain WireGuard is also unusable here for unrelated
+>    reasons — **M20**.) Note the management tunnel needs no forwarding or NAT: it
+>    carries traffic *to the host*, not *through* it, so M14's rules do not apply
+>    and must not be rendered for it.
+>
+> **Still true and still the hard part:** `/sub/{token}` must stay public, because
+> a friend refreshes their config from inside Russia at exactly the moment a node
+> was blocked. The site splits in two either way.
 
 **Owner request:** reach the admin console over Tailscale rather than from a public
 address. The reasoning is sound: the panel holds every node key and every friend
@@ -695,7 +731,9 @@ moment a node was blocked. So the site has to split in two:
 
 **Blocked on two owner decisions — 1 and 2 below.** This is a charter amendment,
 and the project's own rule is consent first, then the charter, then the plan — in
-that order, never the reverse.
+that order, never the reverse. *Both are answered: 1 yes, 2 reversed on
+2026-09-09 to a WireGuard management tunnel — see the note at the top of this
+milestone.*
 
 ### M7.1 — Split the Caddy site in two
 ### M7.2 — Bind the panel and API to the private interface, with its own certificate

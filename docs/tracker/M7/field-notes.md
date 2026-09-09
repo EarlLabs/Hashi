@@ -75,3 +75,23 @@ The auth key is a bearer credential. It lives in an untracked file outside the
 repository, is read into a variable and never echoed, and ends up in
 `tailscaled`'s own state on the host — which is inherent to joining, and worth an
 operator knowing. It must never reach `.env`, a compose file or a log.
+
+---
+
+## Superseded, same day — and the notes above are why
+
+The owner reversed decision 2 after reading the measurement above: **the panel is
+reached over a dedicated WireGuard management tunnel, not Tailscale.**
+
+Tailscale has been fully removed from the entry host — logged out, daemon
+disabled, package purged, apt source and keyring removed, `/var/lib/tailscale`
+deleted, no interface left. Both data planes were still running afterwards. The
+auth key was deleted from the operator's machine; revoking it and deleting the
+device record are the owner's to do in the admin console.
+
+**The reconnaissance above is kept rather than deleted**, because it is the
+evidence the decision was taken on, and because the finding outlives the choice:
+a documented one-liner install from a vendor's own website can fail in the one
+country this product exists for, while that vendor's package repository and API
+work fine. Anything this project ever tells an operator to `curl | sh` deserves
+the same check from the host that matters.
