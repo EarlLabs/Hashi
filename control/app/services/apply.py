@@ -305,12 +305,28 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
         )
 
     now = datetime.datetime.now(datetime.UTC)
-    for node_transport in node.transports:
-        if node_transport.transport_name in configs:
-            node_transport.applied_at = now
-            node_transport.applied_digest = node_stack.digest_of(
-                configs[node_transport.transport_name]
-            )
+    # Queried rather than read off ``node.transports``, for the same reason as in
+    # ``render_for_node`` and with the same shape. On the revocation path this node did
+    # not arrive from a fresh SELECT: it was reached through the relationships the
+    # revocation's own queries loaded, so its ``transports`` collection is unloaded and
+    # touching it is lazy I/O — which on an async session raises MissingGreenlet
+    # instead of issuing a query. That error is not a NodeOperationFailed, so it
+    # escaped ``apply_many`` and the operator was handed a 500 in place of the
+    # RevocationOutcome naming which nodes still carry the withdrawn credential.
+    #
+    # Filtered on the rendered names rather than on ``enabled``: what is recorded here
+    # is what was actually pushed, and a transport disabled between the render and now
+    # must not be given an applied digest it never received.
+    applied = await session.execute(
+        select(NodeTransport)
+        .where(NodeTransport.node_id == node.id)
+        .where(NodeTransport.transport_name.in_(sorted(configs)))
+    )
+    for node_transport in applied.scalars().unique():
+        node_transport.applied_at = now
+        node_transport.applied_digest = node_stack.digest_of(
+            configs[node_transport.transport_name]
+        )
 
     node.state = NodeState.ACTIVE
     node.state_detail = None
