@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.errors import Conflict, DomainError, NotDeliverable, NotFound
 from control.app.models import Node, NodeState, NodeTransport, TransportPurpose
 from control.app.services import keymaterial
+from edge.egress import Egress
 from edge.node import NodeView
 from edge.registry import KeyScope, discover, profile
 
@@ -84,6 +85,38 @@ def node_view(node: Node) -> NodeView:
         location_label=node.location_label,
         display_name=node.name,
     )
+
+
+# What a node may do with the packets one of its transports decrypts, by the purpose the
+# row already records — M14.3. A TABLE rather than a branch: the question is topology
+# ("who is on the far end of this tunnel"), which is exactly what ``purpose`` is, and
+# `control` still compares no transport name to a literal.
+#
+# The two answers are not symmetric in how they fail, and that is why this is written
+# down rather than assumed. A friend-facing tunnel with no exit produces a friend who
+# says at once that nothing loads. A hop that exits locally produces a friend in Russia
+# whose traffic leaves in Russia, with two active nodes and a live hop on every screen —
+# so a hop end gets ``NONE`` here, and ``edge.relay`` fixes it at ``NONE`` again when it
+# renders the pair. Two independent guarantees for the failure nobody can see.
+_EGRESS: dict[str, Egress] = {
+    TransportPurpose.FRIENDS: Egress.LOCAL,
+    TransportPurpose.RELAY_ENTRY: Egress.NONE,
+    TransportPurpose.RELAY_LEAF: Egress.NONE,
+}
+
+
+def egress_for(node_transport: NodeTransport) -> Egress:
+    """The egress policy this row's purpose implies.
+
+    Unknown purposes fall to ``NONE`` rather than raising, and that is the fail-closed
+    rule rather than laziness: a purpose this table has not been taught about is a
+    topology nobody has decided the exit policy for, and the safe answer to an undecided
+    question is no exit.
+
+    Sending traffic INTO a hop rather than out of a node is the third answer, and it is
+    M3's: it belongs in this table, next to these two, and needs no new mechanism.
+    """
+    return _EGRESS.get(node_transport.purpose, Egress.NONE)
 
 
 def render_params(node_transport: NodeTransport) -> dict:

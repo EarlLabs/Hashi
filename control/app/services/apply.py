@@ -142,7 +142,15 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         transport = profile(node_transport.transport_name)
         try:
             rendered[node_transport.transport_name] = transport.profile.render_server(
-                view, nodes.render_params(node_transport), credentials
+                view,
+                nodes.render_params(node_transport),
+                credentials,
+                # Whether this tunnel's traffic may leave the node, from the purpose the
+                # row already carries — M14.3, and see ``nodes.egress_for``. Passed for
+                # every transport, including those whose data plane forwards nothing in
+                # the kernel and renders nothing for it, so this call stays blind to
+                # which is which.
+                egress=nodes.egress_for(node_transport),
             )
         except NodeOperationFailed:
             raise
