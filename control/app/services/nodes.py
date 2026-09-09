@@ -308,7 +308,16 @@ async def set_node_state(
     node = await get_node(session, node_id)
 
     # A no-op is allowed and does nothing, so a retry after a failed apply is safe.
-    if state is not node.state and state not in NodeState.allowed_from(node.state):
+    #
+    # ``!=``, never ``is not``. This line WAS an identity check, and it was always true:
+    # the column handed back a plain ``str`` and never the ``NodeState`` singleton, so
+    # the no-op branch never fired and a second failed apply was refused
+    # ``degraded -> degraded``. ``apply._record_failure`` swallows that Conflict by
+    # design, so the node kept the FIRST failure's reason and the operator retrying was
+    # shown the error they had already fixed (M4.5). The column is ``EnumText`` now and
+    # does hand back the member, but the comparison stays an equality: what this asks is
+    # "is this the same state", which is never a question about object identity.
+    if state != node.state and state not in NodeState.allowed_from(node.state):
         raise Conflict(
             f"a node cannot go from {node.state} to {state}. "
             f"From {node.state} it may become: "
@@ -318,7 +327,9 @@ async def set_node_state(
     became_serving = state in NodeState.serving() and node.state not in NodeState.serving()
 
     node.state = state
-    node.state_detail = detail if state is NodeState.DEGRADED else None
+    # ``==`` for the same reason as above: a caller handing this the raw string a route
+    # parsed would otherwise silently drop the operator's explanation on the floor.
+    node.state_detail = detail if state == NodeState.DEGRADED else None
     await session.commit()
     logger.info("node %s state -> %s", node.id, state)
 

@@ -15,6 +15,14 @@ HOW:  the same cheap unreachable-node pattern the rest of this zone uses (M4.4):
       reserved documentation address that nothing routes to, with the connect ceiling
       at one second from the ``settings`` fixture. No mock, no stub — a real SSH
       attempt that really fails, which is the only kind of failure worth asserting on.
+
+M4.5 extends the same file to the SECOND apply, because M4.1 only ever proved the
+first one. A node that is already ``degraded`` and fails again for a different reason
+must show the operator the NEW reason: ``set_node_state`` compared states by identity,
+which was always true on a column that hands back a plain ``str``, so the refused
+``degraded -> degraded`` transition raised a Conflict, ``_record_failure`` swallowed it
+by design, and ``state_detail`` kept the first failure's text. The operator retried,
+got a new error, and the panel showed them the old one.
 """
 
 import logging
@@ -32,6 +40,12 @@ UNREACHABLE_ADDRESS = "192.0.2.10"
 # The transition complaint that used to be handed to the operator instead of the real
 # reason. Asserted against by fragment, so a reworded 409 cannot quietly come back.
 TRANSITION_COMPLAINT = "cannot go from"
+
+# Obviously not a key, and never used to authenticate: asyncssh refuses to import it
+# before anything is dialled. That is the point — it is a genuinely DIFFERENT failure
+# from a node that never answers, arriving through a different arm of ``apply_node``,
+# and M4.5 is about two consecutive failures with two different causes.
+UNIMPORTABLE_PRIVATE_KEY = "not-a-real-key"
 
 
 async def a_drafted_node(client, reality_params) -> str:
@@ -154,3 +168,52 @@ async def test_a_refused_transition_never_replaces_the_reason(
     assert reason in raised.value.message
     assert not isinstance(raised.value, Conflict)
     assert (await nodes.get_node(session, node_id)).state == NodeState.RETIRED
+
+
+async def test_a_second_failure_replaces_the_first_ones_reason(
+    client, session, settings, reality_params
+) -> None:
+    """The operator retries, fails differently, and must be told the NEW reason — M4.5.
+
+    Two real applies with two real and different causes: nothing answers at the address,
+    then a key on the record that cannot be imported. The second arrives through the
+    broad catch rather than through ``NodeUnreachable``, so this also covers the case
+    where the two failures do not even share an arm of ``apply_node``.
+
+    Driven through the ROUTE, not through ``apply_node``, and that is load-bearing. Each
+    request gets its own session, so the second apply loads the node from the database
+    — which is the only way ``node.state`` is what the database hands back rather than
+    the enum member the previous call assigned in memory. Calling the service twice on
+    one session never reproduced this, and that is exactly why it survived a review.
+
+    Editing the record between the two is what an operator does between retries: they
+    change something and try again. What must not survive that is the previous reason.
+    """
+    node_id = await a_drafted_node(client, reality_params)
+
+    first = await client.post(f"/api/nodes/{node_id}/apply")
+    assert first.status_code == 502, first.text
+
+    first_reason = f"the node did not answer within {settings.node_connect_timeout}s"
+    assert (await client.get(f"/api/nodes/{node_id}")).json()["state_detail"] == first_reason
+
+    node = await nodes.get_node(session, node_id)
+    node.ssh_private_key = UNIMPORTABLE_PRIVATE_KEY
+    await session.commit()
+
+    second = await client.post(f"/api/nodes/{node_id}/apply")
+    assert second.status_code == 502, second.text
+    message = second.json()["error"]["message"]
+    assert first_reason not in message, "the second apply reported the first one's failure"
+
+    # Read back through the API, because "what the operator sees" is the panel and the
+    # node endpoint, not the exception. A degraded node whose reason is one retry old is
+    # worse than no reason: it sends them to fix something they already fixed.
+    shown = (await client.get(f"/api/nodes/{node_id}")).json()
+    assert shown["state"] == "degraded", shown
+    assert first_reason not in shown["state_detail"], (
+        "the panel is still showing the reason the PREVIOUS apply failed"
+    )
+    # Tied to the failure that was just reported rather than to a wording, so this stays
+    # true if the message for an unexpected error is ever rewritten.
+    assert shown["state_detail"] in message, shown

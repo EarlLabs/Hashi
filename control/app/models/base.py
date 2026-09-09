@@ -1,7 +1,8 @@
 """The declarative base and the column types every model shares.
 
-WHAT: ``Base``, the timestamp mixin, and ``EncryptedText`` — a column type that
-      encrypts on the way in and decrypts on the way out.
+WHAT: ``Base``, the timestamp mixin, ``EncryptedText`` — a column type that encrypts
+      on the way in and decrypts on the way out — and ``EnumText``, a text column
+      that reads back as its enum member.
 WHY:  encryption belongs in the type rather than in each service, because "we
       encrypt secrets at rest" is only true if it is impossible to forget. A
       service that assigns a plaintext string to an ``EncryptedText`` column gets
@@ -13,6 +14,7 @@ HOW:  ``EncryptedText`` needs the key, and a SQLAlchemy type cannot read
 """
 
 import datetime
+import enum
 import uuid
 
 from sqlalchemy import DateTime, String, TypeDecorator, func
@@ -103,3 +105,53 @@ class EncryptedText(TypeDecorator):
         if value is None:
             return None
         return secret_box().decrypt(value)
+
+
+class EnumText(TypeDecorator):
+    """A short text column that reads back as its enum member, not as a plain ``str``.
+
+    ``Mapped[SomeEnum]`` over a bare ``String`` is a promise SQLAlchemy does not keep:
+    it writes the member's value and hands back a ``str``, so every reader that trusts
+    the annotation is quietly wrong. What that cost (M4.5): ``set_node_state`` compared
+    ``state is not node.state``, which was therefore ALWAYS true, so the "setting a
+    state to the one it already has is a no-op" branch never fired. A second failed
+    apply was refused ``degraded -> degraded``, ``_record_failure`` swallowed the
+    Conflict by design, and the operator kept being shown the FIRST failure's reason.
+
+    Fixed in the TYPE rather than at the comparison, because one identity check was the
+    instance and the lying annotation was the class: nothing lints it, and the next
+    reader makes the same assumption. With this, ``==`` and ``is`` agree again — though
+    call sites still say ``==``, since what they mean is "the same state", not "the same
+    object".
+
+    Python-side only, deliberately. SQLAlchemy's own ``Enum`` would coerce too, but it
+    also emits a native enum type or a CHECK constraint — a migration now and another
+    one every time a member is added, for a guarantee the application already enforces
+    in ``allowed_from``. The column stays ``VARCHAR(n)`` and the DDL is unchanged.
+
+    Stored as the member's ``value``, never its ``name``: the values are what is already
+    in the database, and a member whose stored text stopped matching the subscription
+    filter would take a node out of every friend's configuration.
+
+    ``cache_ok = True`` is safe: both constructor arguments are hashable, which is what
+    SQLAlchemy's statement cache key needs from a type.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def __init__(self, enum_class: type[enum.Enum], length: int) -> None:
+        super().__init__(length)
+        self.enum_class = enum_class
+
+    def process_bind_param(self, value, dialect) -> str | None:
+        if value is None:
+            return None
+        # Raises on a value the enum does not know, and that is the point: a mistyped
+        # state fails at the write rather than becoming a row nothing can read back.
+        return self.enum_class(value).value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return self.enum_class(value)

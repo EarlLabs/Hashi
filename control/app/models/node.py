@@ -27,7 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from control.app.models.base import Base, EncryptedText, TimestampMixin, new_id
+from control.app.models.base import Base, EncryptedText, EnumText, TimestampMixin, new_id
 
 
 class NodeState(enum.StrEnum):
@@ -167,8 +167,13 @@ class Node(Base, TimestampMixin):
     # Indexed: every subscription render filters nodes by state, and that is the one
     # query that must stay fast when a node has just been blocked and every friend is
     # refreshing at once.
+    #
+    # ``EnumText`` rather than ``String(16)``, and the difference is not cosmetic: over
+    # a bare String this column is annotated ``NodeState`` and hands back a ``str``, so
+    # a reader that trusts the annotation is wrong. That is how M4.5 happened — see the
+    # type's own docstring. Same VARCHAR(16) on disk, so no migration.
     state: Mapped[NodeState] = mapped_column(
-        String(16), nullable=False, default=NodeState.DRAFT, index=True
+        EnumText(NodeState, 16), nullable=False, default=NodeState.DRAFT, index=True
     )
 
     # Why the node is degraded, for the operator. Node-level configuration
