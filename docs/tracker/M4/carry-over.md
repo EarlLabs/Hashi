@@ -50,3 +50,30 @@ intended design. Do not fix them as part of another step.
 - `NodeTransport.applied_at` stays NULL on a failed first apply — every failure
   path returns before it is set — so "which nodes have never worked" is still
   answerable without a dedicated state.
+
+## From M4.2's review
+
+- **The "harmless" claim about `nodes.py:311` was wrong, and it is now M4.5.**
+  The reviewer reproduced it: `state is not node.state` is *always* true because
+  `Node.state` is a `String(16)` carrying a plain `str`, so a second failed apply
+  raises `Conflict: degraded -> degraded`, `_record_failure` swallows it, and
+  `state_detail` keeps the **first** failure's reason. Promoted out of carry-over
+  into a step, because it defeats M4's own "done when".
+
+- **Medium/Low — the node-stack doubles are unpinned** (`tests/control/test_revocation_push.py`).
+  Well-justified and tightly scoped — only the host-touching calls are faked,
+  `render_compose` and `digest_of` stay real — but a changed signature makes the
+  double go silently green. Now M4.6.
+
+## Verified NOT a problem, recorded so it is not re-litigated
+
+- **No second lazy load survives on the revoke path.** The reviewer traced
+  `revoke_friend → friends.revoke → apply_many → apply_node → render_for_node`
+  and the untested hop/relay branch. `Node.transports` is `lazy="selectin"` (the
+  hazard); `NodeTransport.node` and `Credential.node_transport`/`.friend` are
+  `lazy="joined"` and safe. `relay.peer_of`/`hop_view` touch only the joined
+  ones, so they are not a second instance of the same bug even though this
+  step's tests do not reach them.
+- **Filtering the digest write on rendered names rather than on `enabled` is not
+  new behaviour** — the pre-fix code filtered the same way. It preserves existing
+  semantics and only removes the lazy-load hazard.

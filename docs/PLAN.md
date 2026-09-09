@@ -330,6 +330,39 @@ Worse, revocation is the operation whose whole point is being fast.
 An unexpected error becomes a reported per-node failure rather than a 500 for the
 whole fan-out.
 
+### M4.5 — A second failure must replace the first one's reason · found in review 2026-09-09
+
+Found by the reviewer of M4.2, which had recorded this as harmless. It is not,
+and it defeats this milestone's own "done when".
+
+`control/app/services/nodes.py` guards `set_node_state` with
+`state is not node.state` — an **identity** comparison. `Node.state` is
+`Mapped[NodeState]` over a plain `String(16)` column with no enum coercion, so a
+node loaded by `session.get` or a `select` carries a plain `str`, never the
+`NodeState` singleton. The comparison is therefore **always true**, and the
+"setting a state to what it already is, is allowed" branch never short-circuits.
+
+**What that costs.** Marking an already-`degraded` node `degraded` again — which
+is exactly what a second failed apply does — raises
+`Conflict: a node cannot go from degraded to degraded`. M4.1's `_record_failure`
+swallows a `Conflict` by design, so the write is silently skipped and
+**`state_detail` keeps the *first* failure's reason after a second, different
+failure.** The operator retries an apply, gets a new error, and the panel shows
+them the old one. Reproduced directly by the reviewer.
+
+This milestone's own criterion says *"a first apply that fails leaves the node
+`degraded` with the real reason in `state_detail`"*. The second one does not, so
+this is finishing M4 rather than widening it.
+
+### M4.6 — Pin the node-stack doubles to the real signatures
+
+`tests/control/test_revocation_push.py` is the first test in this zone to fake
+the SSH boundary, which was the right call — there is no honest way to reach the
+apply *success* path without one. The gap is that a stale double goes **silently
+green** rather than red if a real signature changes, and this double guards a
+charter criterion. `create_autospec`, or an `inspect.signature` parity assertion,
+turns that drift into a hard failure for a few lines.
+
 **E2E:** none from `tests/e2e/` — this is control-zone territory and the gate that
 applies is `make test-control`.
 
