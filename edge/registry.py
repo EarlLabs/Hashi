@@ -25,7 +25,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened three times since, each deliberately, each recorded
+      **It has been widened four times since, each deliberately, each recorded
       where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
       own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
       now declares the SET of subscription shapes it serialises into rather than a
@@ -34,19 +34,25 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       text states both charter constraints as "the transport must declare this
       machine-readably" — and a declaration has nowhere else to live.
 
-      None of the three was a branch on a protocol; each replaced one with a
+      ``Egress`` came with M14: a rendered tunnel has to say whether the traffic it
+      decrypts may leave the node, because the field answer was that it left nowhere
+      and nothing said so. It is a keyword on ``render_server`` with a fail-closed
+      default, so it widens the contract without making any existing call wrong.
+
+      None of the four was a branch on a protocol; each replaced one with a
       vocabulary or a property. None was free either, and a reader deserves to know
       the contract has moved and why rather than to discover it from a diff.
 """
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import ModuleType
 from typing import Protocol
 
 import edge.transports
+from edge.egress import Egress
 from edge.node import Credential, NodeView
 
 
@@ -429,8 +435,30 @@ class TransportProfile(Protocol):
     ``profile()``'s load-time check.
     """
 
-    def render_server(self, node: NodeView, params: Mapping[str, object]) -> str:
-        """The node's complete config file for this transport. Deterministic."""
+    def render_server(
+        self,
+        node: NodeView,
+        params: Mapping[str, object],
+        clients: Sequence[Credential] = (),
+        *,
+        egress: Egress = Egress.NONE,
+    ) -> str:
+        """The node's complete config file for this transport. Deterministic.
+
+        ``clients`` is every consumer this node authorises on this transport — friends
+        on a friend-facing transport, the single far node on a hop end.
+
+        ``egress`` says whether packets this transport decrypts may leave the node for
+        the internet (``edge/egress.py``, M14.3). It is a keyword with a fail-closed
+        default so that a caller which has not thought about it gets the answer that
+        fails loudly: a tunnel with no exit produces a friend who reports at once that
+        nothing loads, while a tunnel that exits where it should not produces a friend
+        who reports nothing at all.
+
+        Every transport takes it, including those whose data plane forwards no packet in
+        the kernel and therefore renders nothing for it. That is what keeps `control`
+        from having to know which is which.
+        """
         ...
 
     def render_client(

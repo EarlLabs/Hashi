@@ -9,6 +9,7 @@ result the second transport was built to demonstrate.
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
+from edge.egress import Egress
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -22,8 +23,19 @@ def render_server(
     node: NodeView,
     params: Mapping[str, object],
     clients: Sequence[Credential] = (),
+    *,
+    egress: Egress = Egress.NONE,
 ) -> str:
-    """The node's complete Xray config, authorising exactly ``clients``."""
+    """The node's complete Xray config, authorising exactly ``clients``.
+
+    ``egress`` is part of the server-rendering contract and this transport renders
+    nothing for it, which is a statement about the protocol rather than an omission.
+    Xray is a userspace proxy: it terminates a connection and ORIGINATES a new one from
+    the node itself, so no packet of a friend's is ever forwarded by the kernel and there
+    is no FORWARD or NAT rule for a policy to add or remove. What decides where such a
+    connection goes is the config's outbound, which is a routing question rather than an
+    egress one and is M3's subject.
+    """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
         params=params,

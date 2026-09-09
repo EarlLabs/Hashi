@@ -17,6 +17,7 @@ shared renderer would be one `if` away from rendering the wrong one of them.
 import ipaddress
 from collections.abc import Mapping, Sequence
 
+from edge.egress import Egress, wg_quick_hooks
 from edge.node import Credential, NodeView
 from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
@@ -89,8 +90,15 @@ def render_server(
     node: NodeView,
     params: Mapping[str, object],
     clients: Sequence[Credential] = (),
+    *,
+    egress: Egress = Egress.NONE,
 ) -> str:
     """This node's interface, authorising exactly ``clients``.
+
+    ``egress`` says whether packets decrypted onto this interface may leave the node for
+    the internet — see ``edge/egress.py``. It defaults to ``NONE``: no exit at all beats
+    a quiet local one, and a caller that has not thought about it should get the answer
+    that fails loudly rather than the one that fails silently.
 
     An empty sequence renders a valid interface that authorises nobody — the correct
     state for a node whose last friend was just revoked, and not an error. If it were,
@@ -135,7 +143,12 @@ def render_server(
         )
 
     return _TEMPLATES.get_template("server.j2").render(
-        node=node, params=params, peers=peers
+        node=node,
+        params=params,
+        peers=peers,
+        # The tunnel's own address decides the masqueraded source range, so the rule
+        # comes out of the node's record rather than out of a constant.
+        hooks=wg_quick_hooks(egress, str(params["tunnel_address"])),
     )
 
 

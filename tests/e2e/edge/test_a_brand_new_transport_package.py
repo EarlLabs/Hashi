@@ -114,6 +114,7 @@ def _package_files() -> dict[str, str]:
 
             from collections.abc import Mapping, Sequence
 
+            from edge.egress import Egress
             from edge.node import Credential, NodeView
             from edge.registry import ClientEntry
             from edge.templating import environment_for
@@ -126,7 +127,12 @@ def _package_files() -> dict[str, str]:
                 node: NodeView,
                 params: Mapping[str, object],
                 clients: Sequence[Credential] = (),
+                *,
+                egress: Egress = Egress.NONE,
             ) -> str:
+                # Part of the contract every transport takes, whether or not its data
+                # plane can act on it — see edge/egress.py. This one proxies rather than
+                # forwarding in the kernel, so it renders nothing for it.
                 return _TEMPLATES.get_template("server.j2").render(
                     node=node,
                     params=params,

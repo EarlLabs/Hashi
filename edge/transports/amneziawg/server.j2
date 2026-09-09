@@ -18,6 +18,21 @@ PrivateKey = {{ params.private_key }}
 Address = {{ params.tunnel_address }}
 ListenPort = {{ params.port }}
 MTU = {{ params.mtu }}
+{% if hooks %}
+
+# Forwarding and NAT for this tunnel, tied to the interface's own life — M14. Without
+# them a friend's packet is decrypted onto this interface and then dropped by the host's
+# FORWARD chain, having never been NATed: the handshake completes, the interface is up,
+# and nothing moves. Written here rather than into host state because a node holds
+# nothing that cannot be regenerated, and because a rule the interface did not add is a
+# rule its removal will not take away.
+#
+# No interface name appears: `%i` is wg-quick's own substitution for the interface it is
+# bringing up, and the masquerade matches "left by anything that is NOT the tunnel"
+# rather than naming an egress device that is not called the same thing on every host.
+PostUp = {{ hooks.up }}
+PostDown = {{ hooks.down }}
+{% endif %}
 
 # AmneziaWG obfuscation. Per-node values: shared ones would themselves be the
 # fingerprint that identifies the fleet.

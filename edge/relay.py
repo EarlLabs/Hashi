@@ -27,6 +27,7 @@ import ipaddress
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from edge.egress import Egress
 from edge.node import Credential, NodeView
 from edge.registry import profile
 
@@ -159,16 +160,30 @@ def render_hop(
 
     Rendered through the transport's own ``render_server`` at both ends, so a hop is
     not a second rendering path that could drift from the one under test elsewhere.
+
+    Neither end gets a local exit, and that is fixed here rather than asked of the caller
+    — M14.3. A hop carries traffic BETWEEN our own nodes: masquerading it out of the
+    entry is a friend in Russia exiting in Russia while the panel shows two active nodes
+    and a live hop, which is the quietest failure this topology has. Making it the
+    caller's decision would mean one wrong argument, anywhere, reproduces it. What the
+    LEAF end should do with traffic arriving over the hop — forward it INTO the exit
+    rather than out of the entry — is M3's subject, and it changes this call rather than
+    working around it.
     """
     _check(transport_name, entry, leaf)
     render = profile(transport_name).profile.render_server
 
     return (
         # The entry dials, so its peer block carries the leaf's endpoint.
-        render(entry.node, entry.params, [_peer(leaf, endpoint=endpoint_of(leaf))]),
+        render(
+            entry.node,
+            entry.params,
+            [_peer(leaf, endpoint=endpoint_of(leaf))],
+            egress=Egress.NONE,
+        ),
         # The leaf waits. Giving it an endpoint would have it dial a Russian address
         # that is behind carrier NAT, and the tunnel would come up only by luck.
-        render(leaf.node, leaf.params, [_peer(entry, endpoint=None)]),
+        render(leaf.node, leaf.params, [_peer(entry, endpoint=None)], egress=Egress.NONE),
     )
 
 

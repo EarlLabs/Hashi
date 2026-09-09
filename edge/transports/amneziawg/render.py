@@ -16,6 +16,7 @@ cannot reach a friend", but "it reaches them as a file, and here it is".
 import ipaddress
 from collections.abc import Mapping, Sequence
 
+from edge.egress import Egress, wg_quick_hooks
 from edge.node import Credential, NodeView
 from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
@@ -58,8 +59,18 @@ def render_server(
     node: NodeView,
     params: Mapping[str, object],
     clients: Sequence[Credential] = (),
+    *,
+    egress: Egress = Egress.NONE,
 ) -> str:
-    """This end of the hop, authorising exactly ``clients`` as peers."""
+    """This end of the hop, authorising exactly ``clients`` as peers.
+
+    ``egress`` says whether packets decrypted onto this interface may leave the node for
+    the internet — see ``edge/egress.py``. It defaults to ``NONE`` because the failure it
+    guards is silent in exactly one direction: a hop end that masquerades locally is a
+    friend in Russia exiting in Russia with every screen showing green, while a
+    friend-facing tunnel with no exit is a friend who tells you at once that nothing
+    loads.
+    """
     peers = []
     seen_routes: set[str] = set()
     for credential in clients:
@@ -101,7 +112,12 @@ def render_server(
         )
 
     return _TEMPLATES.get_template("server.j2").render(
-        node=node, params=params, peers=peers
+        node=node,
+        params=params,
+        peers=peers,
+        # The tunnel's own address decides the masqueraded source range, so the rule
+        # comes out of the node's record rather than out of a constant.
+        hooks=wg_quick_hooks(egress, str(params["tunnel_address"])),
     )
 
 

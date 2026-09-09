@@ -128,7 +128,9 @@ class DataPlane:
 
     # Every executable this data plane invokes inside the image BEYOND the first element
     # of its argv — the binaries a shell command line runs, which no reader of ``command``
-    # can see and no check of argv[0] would catch.
+    # can see and no check of argv[0] would catch. It covers what the tool runs out of the
+    # CONFIG too (M14 put ``iptables`` in a wg-quick ``PostUp``): the failure is identical
+    # either way — a binary the image does not have, discovered on a node.
     #
     # Declared rather than parsed out of the command, because parsing a shell string is
     # guesswork and a wrong guess here reads as "checked". It exists so that
@@ -221,7 +223,11 @@ DATA_PLANES = {
         # bare ``up <config>`` that was here before M2: this image declares no
         # entrypoint, so that was an argv beginning with a binary called ``up``.
         command=_wg_quick_command("wg-quick"),
-        executables=("wg-quick",),
+        # ``iptables`` is not in the command line — it is in the config's ``PostUp``,
+        # which this tool runs (M14, ``edge/egress.py``). Declared here because the
+        # consequence of the image not having it is the M2 failure exactly: the hook
+        # fails, wg-quick removes the interface it just made, and the container dies.
+        executables=("wg-quick", "iptables"),
         # ``wg-quick up /opt/hashi/conf/wireguard.conf`` brings up an interface named
         # ``wireguard`` — the config's own stem. So the transport's name reaches the
         # node's network namespace and has to be legal there.
@@ -238,7 +244,10 @@ DATA_PLANES = {
         # entrypoint script at all, so unlike its plain cousin it has never had anything
         # that could have worked.
         command=_wg_quick_command("awg-quick"),
-        executables=("awg-quick",),
+        # Same reason as its plain cousin above: the egress hooks M14 renders into the
+        # config are run by this tool, out of the file, and nothing about ``command``
+        # would ever reveal them.
+        executables=("awg-quick", "iptables"),
         # Same rule, same tool lineage — see the note on the format above.
         interface_from_config_filename=True,
         # A tunnel device cannot be created without these two, and nothing else is

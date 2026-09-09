@@ -8,7 +8,8 @@
       "entrypoint": [],
       "resolves": {
         "/bin/sh": true,
-        "awg-quick": true
+        "awg-quick": true,
+        "iptables": true
       }
     },
     "docker.io/masipcat/wireguard-go:0.0.20230223": {
@@ -19,6 +20,7 @@
       "resolves": {
         "/bin/sh": true,
         "/entrypoint.sh": true,
+        "iptables": true,
         "wg-quick": true
       }
     },
