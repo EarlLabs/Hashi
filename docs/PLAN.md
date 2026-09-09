@@ -707,7 +707,35 @@ acceptance: no
 
 ---
 
-## → M7 — Panel off the public internet · planned 2026-09-08 · reshaped 2026-09-09
+## ✅ M7 — Panel off the public internet · planned 2026-09-08 · reshaped and done 2026-09-09
+
+> **Closed in the field run, and the clearest argument in it for field
+> acceptance.** Two review rounds; round 1 returned `0 critical, 0 high` and
+> **the field then found a blocking defect no review or test could have caught**.
+> Gate at close: `make verify` green — 218 control, 230 edge (3 skipped), 147
+> infra, **140 e2e**.
+>
+> **All three "done when" discharged from Amsterdam** (`docs/tracker/M7/field-proof.md`):
+> every console path `404` publicly, the console's port unreachable from outside,
+> port 80 redirecting to the **public** host rather than handing out the console's
+> address, `/sub/{real token}` still `200` with a real body — and M7.3's fallback
+> *walked*, not described: login `303` and a friend created over the SSH forward.
+>
+> **The defect, because it is the lesson:** a TLS client sends **no SNI for an IP
+> literal**, and a WireGuard tunnel hands you an address. With several
+> certificates and no name, Caddy aborts — so the console was unreachable by every
+> route while nothing was misconfigured. The e2e stack had addressed the console
+> by **name**, and names send SNI. The **public** site had the same defect
+> already, so `/sub/{token}` was dead for any client dialling an address; nobody
+> had asked. Fixed with `default_sni` — see `docs/decisions.md` for the trade a
+> *global* option forces — and, more durably, **the test stack's console is now an
+> address rather than a name**.
+>
+> **Limits recorded, not glossed:** ACME was never exercised (the host has no DNS
+> record, so `HASHI_PUBLIC_HOST` is its IP and a public CA will not issue for a
+> bare IP at all — `/sub/{token}` needs a real name before a friend can use it),
+> and no phone on a mobile network was tested, which is the ТСПУ question the
+> owner raised and the one thing this fleet cannot answer.
 
 > **Decision 2 was reversed on 2026-09-09 and this milestone changed shape with
 > it.** The panel is reached over a **dedicated WireGuard management tunnel**, not
