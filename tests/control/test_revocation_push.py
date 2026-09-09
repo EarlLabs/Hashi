@@ -20,9 +20,20 @@ HOW:  the SSH half is replaced with a node that accepts everything. This is the 
 
       The boundary, stated plainly: this proves the control plane's bookkeeping after
       a successful push. It proves nothing about a real daemon reloading.
+
+M4.3 extends the same doubles to the FAILING half. An unexpected error — anything
+that is not a DomainError — used to escape ``apply_many`` and end the fan-out, so the
+operator learned nothing about the nodes after the first one. The two fixtures below
+break exactly one node, in the two places that behave differently: inside the push
+window, where the node may be half-configured and core invariants §4 requires it to be
+marked degraded; and outside it, where the node's recorded state is still true and must
+not be touched. Both must leave the other node updated and reported.
 """
 
+import logging
+
 import pytest
+from sqlalchemy.exc import MissingGreenlet
 
 from control.app.models import NodeState
 from edge.bootstrap import node_stack
@@ -200,3 +211,121 @@ async def test_a_pushed_node_is_left_active(
         node = await nodes.get_node(session, node_id)
         assert node.state == NodeState.ACTIVE
         assert node.state_detail is None
+
+
+@pytest.fixture
+def push_interrupted_on_one_node(accepting_nodes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FIRST node's restart raises a non-DomainError; every later node is fine.
+
+    ``MissingGreenlet`` rather than a bespoke exception because it is the error this
+    actually happened with — lazy I/O on an async session — and because it is a
+    reminder that the escaping error is usually a bug in this codebase rather than a
+    node misbehaving. Raised from ``restart`` only as a place to stand: what matters is
+    that it comes from inside the connection block, which is the one window where a node
+    can be left half-configured.
+
+    Counted rather than matched on the node, because both fixture nodes carry the same
+    (reserved) address and the fan-out's order is the revocation query's, not ours. One
+    failure and one success is all the assertions need.
+    """
+    restarts = {"count": 0}
+
+    async def restart(connection) -> None:
+        restarts["count"] += 1
+        if restarts["count"] == 1:
+            raise MissingGreenlet("greenlet_spawn has not been called")
+
+    monkeypatch.setattr(node_stack, "restart", restart)
+
+
+@pytest.fixture
+def bookkeeping_fails_on_one_node(accepting_nodes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FIRST node fails AFTER a completely successful push.
+
+    ``digest_of`` runs in the loop that records what was applied — the same statement
+    the historical MissingGreenlet came out of. Unlike the fixture above, this node was
+    configured successfully, so nothing about its state is wrong and the fan-out must
+    leave it alone.
+    """
+    digests = {"count": 0}
+    real_digest_of = node_stack.digest_of
+
+    def digest_of(config: str) -> str:
+        digests["count"] += 1
+        if digests["count"] == 1:
+            raise MissingGreenlet("greenlet_spawn has not been called")
+        return real_digest_of(config)
+
+    monkeypatch.setattr(node_stack, "digest_of", digest_of)
+
+
+async def test_an_unexpected_error_mid_push_is_reported_and_the_fan_out_continues(
+    client, session, reality_params, ws_params, push_interrupted_on_one_node, caplog
+) -> None:
+    """One node's crash must not cost the operator the outcome of the others.
+
+    This is criterion 6's reporting obligation: a fan-out that aborts on the first node
+    says nothing about the rest, and the revoked friend stays connected to every one of
+    them with nobody aware of it.
+    """
+    caplog.set_level(logging.ERROR)
+    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+
+    response = await client.post(f"/api/friends/{friend_id}/revoke")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["complete"] is False, body
+    assert len(body["nodes_failed"]) == 1, body
+    assert len(body["nodes_updated"]) == 1, body
+    assert set(body["nodes_failed"]) | set(body["nodes_updated"]) == set(node_ids)
+
+    failed_id, reason = next(iter(body["nodes_failed"].items()))
+    assert "MissingGreenlet" in reason, reason
+    # The operator gets the failure, not the internals: no address, no stack.
+    assert NODE_ADDRESS not in response.text
+    assert "Traceback" not in reason
+
+    # The traceback itself is not lost — without it an unexpected error becomes an
+    # unreproducible line in a panel.
+    assert any(record.exc_info for record in caplog.records), "no traceback was logged"
+
+    # Core invariants §4: the push was interrupted, so this node may be half-configured
+    # and must not stay in anyone's subscription. ``==`` not ``is`` — String column.
+    from control.app.services import nodes
+
+    failed_node = await nodes.get_node(session, failed_id)
+    assert failed_node.state == NodeState.DEGRADED
+    assert "MissingGreenlet" in (failed_node.state_detail or "")
+
+
+async def test_an_unexpected_error_after_the_push_leaves_the_node_alone(
+    client, session, reality_params, ws_params, bookkeeping_fails_on_one_node, caplog
+) -> None:
+    """A node that WAS configured is reported as not updated, but not degraded.
+
+    The distinction is the whole reason the widened catch lives in two places: degrading
+    a node that is serving perfectly well would take it out of every friend's
+    subscription over a bug in our own bookkeeping.
+    """
+    caplog.set_level(logging.ERROR)
+    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+
+    response = await client.post(f"/api/friends/{friend_id}/revoke")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["complete"] is False, body
+    assert set(body["nodes_failed"]) | set(body["nodes_updated"]) == set(node_ids)
+    assert len(body["nodes_updated"]) == 1, body
+
+    failed_id, reason = next(iter(body["nodes_failed"].items()))
+    assert "MissingGreenlet" in reason, reason
+    assert "state is unchanged" in reason, reason
+    assert any(record.exc_info for record in caplog.records), "no traceback was logged"
+
+    from control.app.services import nodes
+
+    failed_node = await nodes.get_node(session, failed_id)
+    assert failed_node.state == NodeState.ACTIVE
+    assert failed_node.state_detail is None

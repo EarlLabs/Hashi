@@ -29,7 +29,8 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import Conflict, NodeOperationFailed
+from control.app.crypto import SecretUnreadable
+from control.app.errors import Conflict, DomainError, NodeOperationFailed
 from control.app.models import (
     Credential,
     Node,
@@ -45,6 +46,33 @@ from edge.node import Credential as EdgeCredential
 from edge.registry import profile
 
 logger = logging.getLogger(__name__)
+
+# The boundary between "this node failed" and "stop the whole operation".
+#
+# Everything ``apply_node`` does is work for ONE node — read its record, render its
+# config, dial it, push, record what was pushed — so a failure of any kind there is a
+# fact about that node, and the operator must be told it per node rather than losing
+# the outcome for every other node to a 500 (criterion 6). The exceptions below are the
+# ones that are NOT a fact about one node: they would be raised identically for every
+# remaining node, and reporting them per node would say "3 nodes could not be updated"
+# when the truth is "this control plane cannot read its own secrets". Worse, the one
+# message that says so is written by a dedicated handler further out — catching it here
+# would destroy the diagnosis while handling it, which is the exact fault M4 exists to
+# fix, one level up.
+#
+# ``SecretUnreadable`` means HASHI_SECRET_KEY does not match the data. It is answered
+# outward as a 409 with an explanation (see errors.SecretsUnreadable), not as a 500, so
+# letting it through does not put an internal error in front of the operator.
+#
+# Note what is deliberately NOT listed: a programming error. A bug in one transport's
+# renderer is still a fact about the node that uses it, and the other nodes' outcomes
+# are worth more than an abort. It is logged with its traceback wherever it is caught,
+# so it stays as visible as it is today.
+#
+# ``BaseException`` — ``asyncio.CancelledError`` above all — is excluded by using
+# ``except Exception`` at the call sites and must stay excluded: a cancelled request or
+# a shutting-down worker is not a per-node failure, and swallowing it hangs the loop.
+_NOT_PER_NODE: tuple[type[BaseException], ...] = (SecretUnreadable,)
 
 # The upstream image pins used to live here. They are now in
 # ``edge/bootstrap/node_stack.py`` (``DATA_PLANES``), keyed by config FORMAT — naming a
@@ -295,6 +323,42 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
         raise NodeOperationFailed(
             f"the node could not be configured and has been marked degraded: {exc}"
         ) from exc
+    except NodeOperationFailed:
+        # Already carries a sentence written for the operator. Re-raised untouched so it
+        # cannot fall into the arm below and be replaced by a type name — a failure
+        # destroyed while being handled is the fault this whole milestone is about.
+        raise
+    except _NOT_PER_NODE:
+        raise
+    except Exception as exc:
+        # This block is the ONLY window in which a node can be left half-configured: the
+        # config files are placed one by one and the restart happens inside it. Core
+        # invariants §4 is unconditional there — a partially applied node is marked
+        # degraded, never left active — and it does not care whether the interruption
+        # was a node that went quiet or a bug in this file. Without this arm an
+        # unexpected error left the node ACTIVE and therefore still in every friend's
+        # subscription, pointing them at a daemon that may be mid-swap.
+        #
+        # Logged with its traceback BEFORE it is converted, for the same reason
+        # ``render_for_node`` does it: a DomainError reaches the operator without a
+        # stack, so this is the only place the bug is recoverable from. It is not new
+        # exposure — until now this exception escaped to ``unhandled_error_handler``,
+        # which logged the same traceback and answered 500.
+        logger.exception("unexpected failure while configuring node %s", node.id)
+        # Only the exception's TYPE, never ``str(exc)``, unlike the neighbouring arms.
+        # Their messages are written by us or by ``edge`` and name no host; an arbitrary
+        # exception from the SSH layer routinely carries the node's address, and this
+        # string is both an API response and a stored ``state_detail`` (core invariants
+        # §4: no host names cross the boundary). The full text is in the log above.
+        reason = (
+            f"an unexpected internal error ({type(exc).__name__}) interrupted the push, "
+            "so what reached the node is unknown; the traceback is in the control "
+            "plane's log"
+        )
+        await _record_failure(session, node, reason)
+        raise NodeOperationFailed(
+            f"the node could not be configured and has been marked degraded: {reason}"
+        ) from exc
 
     if not_running:
         detail = f"pushed, but these did not come up: {', '.join(not_running)}"
@@ -313,6 +377,8 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     # instead of issuing a query. That error is not a NodeOperationFailed, so it
     # escaped ``apply_many`` and the operator was handed a 500 in place of the
     # RevocationOutcome naming which nodes still carry the withdrawn credential.
+    # ``apply_many`` now reports such an error per node instead of ending the fan-out,
+    # but the explicit query stays: a caught bug is still a node that was not updated.
     #
     # Filtered on the rendered names rather than on ``enabled``: what is recorded here
     # is what was actually pushed, and a transport disabled between the render and now
@@ -350,11 +416,50 @@ async def apply_many(
         try:
             await apply_node(session, node_id=node_id)
             outcomes[node_id] = None
-        except NodeOperationFailed as exc:
+        except DomainError as exc:
             # Recorded, not raised: the caller needs the whole picture to tell the
             # operator which nodes still carry the revoked credential.
+            #
+            # The whole family, not just ``NodeOperationFailed``: every DomainError
+            # carries a message written for the operator, so reporting it costs nothing
+            # and reveals nothing. ``NotFound`` — the node record deleted between the
+            # revocation's query and its turn in the fan-out — used to end the fan-out
+            # in a 500 for that reason alone.
             logger.error("apply failed for node %s during fan-out", node_id)
             outcomes[node_id] = exc.message
+        except _NOT_PER_NODE:
+            raise
+        except Exception as exc:
+            # Anything unexpected from OUTSIDE the push window: the queries and the
+            # render before it, and the bookkeeping after it. ``apply_node`` handles the
+            # window itself, where a half-configured node has to be degraded; here the
+            # node is either untouched or fully configured, so its recorded state is not
+            # wrong and nothing is written to it.
+            #
+            # The historical case is the second one and it is why this milestone exists:
+            # a MissingGreenlet while recording what was applied ended the fan-out, and
+            # the operator was handed a 500 instead of the RevocationOutcome naming
+            # which nodes still carry the withdrawn credential. Every node after the
+            # first failure went unreported and, as far as the operator could tell,
+            # unattempted.
+            #
+            # Type only, no ``str(exc)``, for the reason given in ``apply_node``.
+            logger.exception("unexpected failure applying node %s during fan-out", node_id)
+            outcomes[node_id] = (
+                f"this node was not updated because of an unexpected internal error "
+                f"({type(exc).__name__}); its state is unchanged and the traceback is "
+                f"in the control plane's log"
+            )
+            # Last, deliberately: the same ordering ``_record_failure`` uses. The
+            # session is the only thing carried from one node to the next, and an
+            # unexpected error can leave it needing a rollback — after which every
+            # remaining node would fail with a database error that has nothing to do
+            # with it. Rolling back discards nothing that matters: a successful apply
+            # has already committed, and the revocation itself committed before the
+            # fan-out started. If the rollback ITSELF fails the session is gone, and
+            # that exception is left to propagate — no later node can even be read, so
+            # continuing would invent failures rather than report them.
+            await session.rollback()
     return outcomes
 
 
