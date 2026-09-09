@@ -20,9 +20,11 @@ CA for a real name, which this scenario neither has nor wants), and nothing abou
 any of it is reachable from inside Russia.
 """
 
+import functools
 import pathlib
 import shutil
 import subprocess
+import sys
 import uuid
 
 import pytest
@@ -44,6 +46,52 @@ FAKE_SECRET_KEY = "e2e-panel-bootstrap-key-not-real-000000000000000000"
 HEALTH_TIMEOUT = "150"
 FAILING_HEALTH_TIMEOUT = "20"
 
+# The password the operator of this throwaway install chose. It exists in this file, in a
+# hash of itself in a temporary directory, and nowhere else.
+OPERATOR_PASSWORD = "panel-bootstrap-password"
+
+
+@functools.cache
+def operator_hash_line() -> str:
+    """The line ``python -m control.cli hash-password`` prints, taken verbatim — M6.4.
+
+    Verbatim is the whole point. The runbook tells an operator to run that command and
+    paste its output into ``.env``, and on the live host the pasted value did not survive:
+    ``docker compose --env-file`` expands what it reads, so ``$<digest>`` was read as a
+    variable name and the digest arrived empty. This fixture stopped being
+    ``hash_password(...).replace("$", "$$")`` — which was this suite doing by hand what no
+    operator was doing at all, and therefore testing a path nobody walks.
+
+    FORCED, not sampled. A base64 digest starts with a letter about five times in six and
+    only a letter or an underscore is eaten, so a scenario that hashed one fixed password
+    would pass or fail at random and the failure would look like flakiness rather than
+    like this bug. Re-running the command until the dangerous shape comes up makes it
+    certain — and it is the ordinary shape, not an exotic one.
+
+    ``start_new_session`` detaches the child from the terminal, so ``getpass`` cannot open
+    ``/dev/tty`` and falls back to stdin. Without it this hangs on a developer's machine
+    and passes on a runner.
+    """
+    for _ in range(50):
+        result = subprocess.run(
+            [sys.executable, "-m", "control.cli", "hash-password"],
+            input=f"{OPERATOR_PASSWORD}\n{OPERATOR_PASSWORD}\n",
+            capture_output=True, text=True, timeout=120, cwd=REPO_ROOT,
+            start_new_session=True,
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
+        line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("HASHI_OPERATOR_PASSWORD_HASH=")
+        )
+        if line.rsplit("$$", 1)[-1][:1].isalpha():
+            return line
+    raise AssertionError(
+        "50 hashes in a row ended in a digit — hash-password has stopped printing base64, "
+        "or stopped printing an escaped hash, and this scenario is no longer forcing the "
+        "case it exists to force"
+    )
+
 
 def env_file(directory: pathlib.Path, **overrides: str | None) -> pathlib.Path:
     """A complete env file, with keys removable by passing ``None``.
@@ -52,20 +100,12 @@ def env_file(directory: pathlib.Path, **overrides: str | None) -> pathlib.Path:
     the script does when a key is absent — and a shared file would have to be mutated,
     which is how two scenarios start depending on their order.
     """
-    from control.app.crypto import hash_password
-
     values: dict[str, str | None] = {
         "HASHI_SECRET_KEY": FAKE_SECRET_KEY,
         "HASHI_PUBLIC_HOST": "panel-bootstrap.invalid",
         "HASHI_OPERATOR_USERNAME": "owner",
-        # A real hash of a throwaway password: the app rejects a malformed one at boot,
-        # and this scenario is about the script, not about that.
-        #
-        # Every `$` doubled, because `docker compose --env-file` interpolates the values
-        # it reads and a scrypt hash is four `$` — see the refusal in the script itself.
-        "HASHI_OPERATOR_PASSWORD_HASH": hash_password("panel-bootstrap-password").replace(
-            "$", "$$"
-        ),
+        # Pasted exactly as the command printed it, escaping and all — see above.
+        "HASHI_OPERATOR_PASSWORD_HASH": operator_hash_line().split("=", 1)[1],
         "POSTGRES_USER": "hashi",
         "POSTGRES_PASSWORD": "panel-bootstrap-not-real",
         "POSTGRES_DB": "hashi",
@@ -113,13 +153,16 @@ def _docker_host() -> str:
     return os.environ.get("DOCKER_HOST", "")
 
 
-def compose(project: str, *args: str) -> subprocess.CompletedProcess:
+def compose(
+    project: str, *args: str, stdin: str | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             "docker", "compose", "-p", project,
             "-f", str(REPO_ROOT / "deploy" / "docker-compose.yml"),
             *args,
         ],
+        input=stdin,
         capture_output=True,
         text=True,
         timeout=300,
@@ -259,6 +302,66 @@ def test_a_bare_host_becomes_a_working_panel(installed) -> None:
     # split between the two compose files exists to prevent.
     published = compose(project, "ps", "--format", "{{.Publishers}}").stdout
     assert "0.0.0.0" not in published, f"the panel install published a port: {published}"
+
+
+LOGIN_PROBE = """
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# The password arrives on stdin, never on the command line: an argument is
+# world-readable in /proc, which is the same reason `control.cli hash-password`
+# prompts instead of taking one.
+password = sys.stdin.read().strip()
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *arguments, **keywords):
+        return None
+
+
+opener = urllib.request.build_opener(NoRedirect)
+body = urllib.parse.urlencode({"username": "owner", "password": password}).encode()
+try:
+    with opener.open("http://127.0.0.1:8000/panel/login", data=body, timeout=10) as answer:
+        print(answer.status)
+except urllib.error.HTTPError as error:
+    print(error.code)
+"""
+
+
+def test_the_operator_can_log_in_with_the_hash_they_pasted(installed) -> None:
+    """M6.4's first "done when", and the one the owner would have found out the hard way.
+
+    The env file this install was built from carries the line ``control.cli hash-password``
+    printed, character for character, with a digest forced onto the shape compose eats
+    (see ``operator_hash_line``). So this asks the only question that settles it: with that
+    file, does the password still open the panel?
+
+    Asked from INSIDE the compose network, because a real install publishes no ports —
+    the same reason the script's own probe runs there. 303 is the redirect that follows a
+    successful login; a rejected one is 401 with the login form again, which is exactly
+    what a damaged hash produced on the live host, forever, with nothing to grep for.
+
+    The other half — that the escaping is what saves it, rather than compose having
+    stopped interpolating — is proved in ``tests/infra/test_operator_hash_survives_compose``
+    without booting anything, because doing it here would cost a second install.
+    """
+    _, project, _ = installed
+
+    answer = compose(
+        project, "exec", "-T", "control", "python", "-c", LOGIN_PROBE,
+        stdin=OPERATOR_PASSWORD,
+    )
+
+    assert answer.returncode == 0, answer.stderr[-2000:]
+    status = answer.stdout.strip().splitlines()[-1]
+    assert status == "303", (
+        f"the operator could not log in to the panel they just installed (HTTP {status}). "
+        "A 401 here means the hash in the env file is not the hash the control plane "
+        "loaded — which is what docker compose does to an unescaped one."
+    )
 
 
 def test_running_it_again_changes_nothing(installed) -> None:

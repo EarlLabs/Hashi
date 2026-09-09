@@ -91,7 +91,11 @@ project stays local-only and reports changed files instead of a PR.
 ## Commands
 
 - `make setup` — create `.venv` and install dependencies (Python 3.14)
-- `make test` / `make test-control` / `make test-edge` / `make test-infra`
+- `make verify` — **the gate**: the three static zones, then the e2e stand booted,
+  `tests/e2e/` run against it, and the stand torn down. Needs a docker engine and
+  **fails** without one rather than skipping
+- `make test` / `make test-control` / `make test-edge` / `make test-infra` — the
+  static half only, no Docker. `make e2e-verify` is the other half on its own
 - `make up` (production shape, nothing published) / `make up-dev` (loopback ports)
 - `make down`, `make logs`, `make ps`
 - `cd deploy/warden && make up` / `login` / `down` / `logs` / `vendor-kit` — the
@@ -106,7 +110,12 @@ project stays local-only and reports changed files instead of a PR.
 
 ## Verification
 
-`make test` proves the code holds together. It does **not** prove a tunnel
-carries traffic, and it cannot prove the charter's first success criterion —
-"survives a mobile whitelist shutdown" is a field observation on a real Russian
-network. Never report it as covered by a test run.
+`make verify` is the gate. `make test` is its static half and is a **smaller
+claim**: it excludes `tests/e2e/` on purpose, because a `make test` that silently
+needs Docker is one that gets skipped. That exclusion is fine; what was not fine
+is that for eleven milestones nothing else included those scenarios, and one of
+them had been failing since the day it was written. Gate on `make verify`.
+
+Neither proves a tunnel carries traffic, and neither can prove the charter's first
+success criterion — "survives a mobile whitelist shutdown" is a field observation
+on a real Russian network. Never report it as covered by a test run.

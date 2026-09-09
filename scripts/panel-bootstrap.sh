@@ -17,8 +17,9 @@
 #       (the acceptance scenarios do exactly that, which is why nothing below hardcodes
 #       a project name).
 #
-# The four properties the charter asks of this script, each of which is asserted by
-# tests/e2e/infra/test_panel_bootstrap.py rather than promised here:
+# The properties this script holds itself to, each of which is asserted by
+# tests/infra/test_panel_bootstrap_script.py or tests/e2e/infra/test_panel_bootstrap.py
+# rather than promised here. The first four are the charter's; the fifth is decision 5's:
 #
 #   1. IDEMPOTENT. A second run changes nothing. Nothing below deletes, recreates or
 #      re-initialises; `compose up -d` converges and leaves running containers alone.
@@ -27,9 +28,13 @@
 #      SSH session, and a prompt is a run that hangs until the session dies.
 #   3. IT VERIFIES BEFORE IT REPORTS SUCCESS. The last thing it does is ask the running
 #      control plane two real questions over HTTP. `echo ok` is how an operator ends up
-#      believing a broken panel is up.
+#      believing a broken panel is up — and so is printing a panel URL that nothing on
+#      this host serves, which is why the closing lines name what was proved and what was
+#      not. See the end of this file.
 #   4. IT NEVER GENERATES HASHI_SECRET_KEY. See the refusal below — this is the one rule
 #      here that protects a person rather than an uptime figure.
+#   5. IT NEVER TURNS CONNECTION LOGGING ON, and refuses to install onto a host whose
+#      firewall already has. See section 1b — that is a charter rule, not a preference.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -153,10 +158,70 @@ if [ -n "${UNESCAPED% }" ]; then
   same file works on one host and silently locks you out on the next.
 
   Double every literal \$ in ${ENV_FILE} (\$ becomes \$\$) and run this again. Line
-  numbers only are named above: this script does not print the file."
+  numbers only are named above: this script does not print the file.
+
+  The password hash is the one you are most likely to be looking at, and
+  \`python -m control.cli hash-password\` now prints that line already doubled — paste it
+  exactly as it comes out. A hash generated before that will need doubling by hand."
 fi
 
 say "env file ${ENV_FILE} has every required key and no unescaped \$"
+
+# --- 1b. the host must not be recording who connects ---------------------------
+#
+# The charter forbids connection logs at any level, and `ufw enable` — which the runbook
+# tells an operator to run — turns logging on by default. On the fleet's own leaf that had
+# collected source addresses within minutes (docs/decisions.md, decision 5). This host is
+# the one friends dial for their subscriptions, so its firewall log is a list of who asked
+# for a config and when.
+#
+# Checked, never changed. `scripts/node-bootstrap.sh` owns turning it off, because that
+# script is the one that brings a firewall up; this one installs a control plane and has
+# no business rewriting the firewall of a host it is standing on over SSH.
+#
+# The config is read rather than `ufw status` because that needs root, and this script
+# does not use sudo anywhere. `awk NR==1` rather than `head -1`: under `pipefail` a closed
+# pipe reads as a failed command (M11's notes).
+UFW_CONF="${UFW_CONF:-/etc/ufw/ufw.conf}"
+if ! command -v ufw >/dev/null 2>&1; then
+  say "no ufw on this host, so nothing here switches connection logging on"
+else
+  if [ -r "${UFW_CONF}" ]; then
+    UFW_LOGLEVEL="$(sed -n 's/^[[:space:]]*LOGLEVEL=//p' "${UFW_CONF}" | tr -d '"' | awk 'NR==1')"
+  else
+    # Unreadable config means unproven, and unproven is treated as on — the same
+    # direction node-bootstrap's own guard fails in, and for the same reason: the cost of
+    # being wrong the other way is the record the charter exists to not hold.
+    UFW_LOGLEVEL="unreadable (${UFW_CONF})"
+  fi
+  if [ "${UFW_LOGLEVEL}" = "off" ]; then
+    say "ufw is here and its connection logging is off"
+    if [ -e /var/log/ufw.log ]; then
+      say "note: /var/log/ufw.log exists, so this host recorded connections before logging
+  was turned off. Deleting that file does not finish the job — rsyslog, kern.log and the
+  journal hold the same lines (docs/decisions.md, decision 5). Logging being off is what
+  stops the next line, and that is the part still worth having."
+    fi
+  else
+    fail "ufw is installed on this host and its logging is not off: LOGLEVEL=${UFW_LOGLEVEL}.
+
+  The firewall writes a source address for every packet it refuses. That is a connection
+  log, and the charter forbids one at any level — it is the one record that can hurt a
+  real person, and this host is the one friends dial for their subscriptions.
+
+  Turn it off and run this again; a second run is safe:
+
+      sudo ufw logging off
+
+  This script does not do it for you. It installs a control plane and does not touch the
+  host's firewall — a deployment script that quietly rewrote a firewall over SSH is one
+  that can lock you out of the machine you are standing on.
+
+  If this host has been running with logging on, note that removing /var/log/ufw.log does
+  not finish the job either: rsyslog, kern.log and the journal hold the same lines. Off is
+  what stops the next one being written."
+  fi
+fi
 
 # --- 2. bring the stack up ----------------------------------------------------
 #
@@ -169,6 +234,16 @@ say "env file ${ENV_FILE} has every required key and no unescaped \$"
 # Note what is NOT here — no `down`, no `rm`, no `volume rm`, no `alembic` — because each
 # would make a second run destructive. Migrations run inside the container's own
 # entrypoint, which is also what makes them idempotent.
+#
+# BUILDX_NO_DEFAULT_ATTESTATIONS is what makes that true, and without it property 1 was
+# simply false. BuildKit attaches a provenance attestation to every image it exports, and
+# that attestation records when the build ran — so a FULLY CACHED rebuild still produces a
+# manifest with a new digest, which is the image ID compose compares against the running
+# container. Every service built from a Dockerfile was therefore recreated on every run,
+# with nothing in the output to explain why. The attestation itself is inert here: these
+# images are built on the host that runs them and never pushed anywhere that could check
+# a signature. Set on this one command rather than exported, so it describes the build and
+# nothing else.
 say "building and starting the stack (this is the slow part on a fresh host)"
 # A failure here does NOT end the run, and that is deliberate rather than lax.
 # `compose up -d` fails when a service it was told to wait for never becomes healthy —
@@ -179,7 +254,7 @@ say "building and starting the stack (this is the slow part on a fresh host)"
 # So the verification step below is the single place that decides whether this run
 # succeeded. That is also the charter's requirement stated exactly: success is what the
 # running control plane answers, not what an orchestrator's exit code says.
-if ! "${COMPOSE[@]}" up -d --build; then
+if ! BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${COMPOSE[@]}" up -d --build; then
   say "compose reported a problem — continuing to the verification step, which is what
   decides whether this run succeeded"
 fi
@@ -240,8 +315,21 @@ until probe; do
 done
 
 say "the control plane answers on /healthz and routes /sub/{token}"
-# Read out of the file with the same grep the checks above use, rather than sourced:
-# this script never runs the env file, and a literal `$HASHI_PUBLIC_HOST` in the final
-# line would read as broken interpolation to the one person who most needs to trust it.
-PUBLIC_HOST="$(sed -n 's/^[[:space:]]*HASHI_PUBLIC_HOST=[[:space:]]*//p' "${ENV_FILE}" | head -1)"
-say "done. The panel is at https://${PUBLIC_HOST}/panel/"
+# There is deliberately no URL on the last line, and its absence is the point.
+#
+# This script used to end with "The panel is at https://<host>/panel/". On the live host
+# that address answered nothing: the base compose file publishes no ports, so 80 and 443
+# were closed, and the only thing that had been verified was a probe run from INSIDE the
+# compose network. An address a script prints reads as an address a script checked — which
+# is the same sin as `echo ok`, one level up, and property 3 of this file forbids it.
+#
+# Publishing here instead was the other option and is not this script's to take: what a
+# host exposes to the internet is a decision about that host, the base file publishes
+# nothing on purpose, and a `ports:` in it would follow every laptop's `make up-dev` home.
+# So the run ends by naming exactly what it proved and exactly what is still missing.
+say "done. Proven: the control plane runs, answers /healthz and routes /sub/{token} —
+  all of it asked from inside the compose network."
+say "NOT proven, and not yet true: nothing here is reachable from outside this host. This
+  stack publishes no ports and this script adds none, so there is no panel address to
+  visit until Caddy's ports are published. How to do that, and what it costs to re-run
+  this script afterwards, is in docs/deploy/runbook.md under 'The port-publication gap'."

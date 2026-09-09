@@ -37,12 +37,19 @@ phone. No test in this repository claims it and none ever will.
 ```bash
 git clone <this repo> hashi && cd hashi
 make setup                                        # needs Python 3.14
+make verify                                       # the gate: static zones + tests/e2e
 
 python -c "import secrets; print(secrets.token_urlsafe(48))"   # → HASHI_SECRET_KEY
 .venv/bin/python -m control.cli hash-password                  # → HASHI_OPERATOR_PASSWORD_HASH
 
 ssh-keygen -t ed25519 -f ~/.ssh/hashi-node -C hashi-control -N ''
 ```
+
+`make verify` is the one command that answers "is this green": it runs the three static
+zones, boots the disposable e2e stack, runs `tests/e2e/` against it and tears it down. It
+needs a docker engine and **fails** without one rather than skipping — `make test` is the
+static half, and a smaller claim. Neither says anything about whether a tunnel carries
+traffic on a Russian network; nothing in this repository does.
 
 Both secrets are generated here and nowhere else, and that is not a style preference:
 
@@ -97,14 +104,19 @@ On the control-plane box, `cp .env.example .env` and fill in:
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `HASHI_DATABASE_URL` is composed from these, so the app and the database cannot drift apart |
 | `CADDY_ACME_EMAIL` | not checked by the bootstrap script; compose fails without it |
 
-**Double every `$` in the password hash.** `scrypt$32768$8$1$…` becomes
-`scrypt$$32768$$8$$1$$…`. `docker compose --env-file` interpolates the values it reads,
-so `$<salt>` is expanded as a variable name and replaced with nothing. Whether that
-destroys the hash depends on the salt's first byte — a salt starting with a letter is
-silently eaten, one starting with a digit survives — and the only symptom is "Those
-credentials were not accepted" beside a hash that looks perfectly correct. The bootstrap
-script refuses to run rather than fixing the file for you: it must not rewrite a file
-full of your secrets.
+**Paste the hash exactly as `hash-password` printed it, doubled `$$` and all.** The
+command now prints `scrypt$$32768$$8$$1$$…` rather than `scrypt$32768$8$1$…`, and the
+doubling belongs in the file: `docker compose --env-file` interpolates the values it
+reads, turns each `$$` back into one `$`, and would read a single `$<salt>` as a variable
+name and replace it with nothing. Whether that destroys the hash depends on the salt's
+first byte — one starting with a letter is silently eaten, one starting with a digit
+survives — so the same procedure worked on one host and locked the owner out of the next,
+with "Those credentials were not accepted" beside a hash that looked perfectly correct.
+**Do not double them a second time.** If you are working from a hash generated before this
+changed, double it once by hand. Two things now catch the mistake either way: the
+bootstrap script refuses an env file with a lone `$` (it will not rewrite a file full of
+your secrets), and the control plane refuses to start on a hash that is not one, rather
+than serving a login nobody can pass.
 
 ### The port-publication gap
 
@@ -113,10 +125,11 @@ take a published port back — `ports:` is a sequence and the Compose spec merge
 by appending, so a `443:443` in the base file would follow every `make up-dev` and every
 `make e2e-up` onto your laptop.
 
-The consequence today is a real defect, and you should know it before it confuses you:
-`panel-bootstrap.sh` verifies the stack from *inside* the compose network and then prints
-`The panel is at https://…/panel/` — a URL nothing in the repo makes reachable. Until
-that is fixed, write the overlay by hand on the control-plane box:
+So `panel-bootstrap.sh` installs a stack that nothing outside the host can reach, and it
+says so: it verifies the control plane from *inside* the compose network and ends by
+naming what it proved and what it did not. It used to end with `The panel is at
+https://…/panel/` — an address that answered nothing, because 80 and 443 were closed. It
+prints no address now. Publishing is still yours to do, deliberately, on the box:
 
 ```bash
 cat > deploy/docker-compose.public.yml <<'YAML'
@@ -126,9 +139,17 @@ services:
       - "80:80"
       - "443:443"
 YAML
+
+docker compose --env-file .env \
+  -f deploy/docker-compose.yml -f deploy/docker-compose.public.yml up -d
 ```
 
 Caddy only. Never the database.
+
+**And remember it after every `make panel-bootstrap`.** That script uses the base file
+alone, on purpose — so a later run brings the stack back to the base file's shape and
+takes the published ports away again. Re-run the two-file command above afterwards, or
+run that command instead of the script once the box is installed.
 
 ---
 

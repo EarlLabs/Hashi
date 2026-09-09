@@ -12,7 +12,7 @@ PY          := $(VENV)/bin/python
 COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 
-.PHONY: setup env test test-control test-edge test-infra test-e2e lint \
+.PHONY: setup env verify e2e-verify test test-control test-edge test-infra test-e2e lint \
         up up-dev down logs ps e2e-up e2e-down e2e-reset e2e-psql \
         e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap
 
@@ -34,9 +34,50 @@ endef
 
 ## --- verification -----------------------------------------------------------
 
+# THE GATE. One command, and the honest answer to "is this green".
+#
+# `make test` is deliberately not that answer and never was — see its comment
+# below. The hole was that nothing else was: "run `make test-e2e` separately" is
+# an instruction to a person, and an unattended run has no person. Eleven
+# milestones were gated on `make test` alone; tests/e2e ran three times in the
+# whole run, by accident, and a scenario that had been failing since before it
+# started was found the same way.
+#
+# So both halves keep their properties: `test` still needs no Docker and still
+# means what it meant, and `verify` needs one and says so loudly rather than
+# skipping. A gate whose absence looks like success is the thing being fixed.
+verify: test e2e-verify
+
+# The e2e half on its own, for CI, where the three zone jobs already ran `test`.
+#
+# The stand is torn down whether the scenarios passed or not, and the scenarios'
+# exit code is what this target exits with: `e2e-down` runs `down -v`, so leaving
+# it out on failure would leave a stack and its volumes behind on every red run.
+# That is the trade the Makefile's own comment on `test-e2e` warns about — you
+# lose the failed stack to inspect. Reach for `make e2e-up && make test-e2e`
+# when that is what you need; this target is for the gate, which has nobody
+# waiting to look.
+e2e-verify:
+	$(need_venv)
+	@docker info >/dev/null 2>&1 || { \
+	  echo "make verify needs a running docker engine: it boots the e2e stack and runs"; \
+	  echo "tests/e2e against it, and \`docker info\` just failed."; \
+	  echo ""; \
+	  echo "This is a failure and not a skip on purpose. A gate that passes when its"; \
+	  echo "engine is missing is how tests/e2e went unrun for eleven milestones."; \
+	  echo ""; \
+	  echo "Start docker, or run \`make test\` for the three static zones only —"; \
+	  echo "which is a smaller claim, not the same one."; \
+	  exit 1; }
+	@$(MAKE) --no-print-directory e2e-up
+	@status=0; $(MAKE) --no-print-directory test-e2e || status=$$?; \
+	  $(MAKE) --no-print-directory e2e-down >/dev/null || true; \
+	  exit $$status
+
 # Static verification of all three zones. Deliberately does NOT include e2e:
 # those need a booted stack, and a `make test` that silently requires Docker is a
-# `make test` that agents start skipping. Run `make test-e2e` separately.
+# `make test` that agents start skipping. `make verify` is the one that includes
+# them, and it fails rather than skips when there is no engine.
 test: test-control test-edge test-infra
 
 test-control:

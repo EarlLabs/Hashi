@@ -29,6 +29,39 @@ def script() -> str:
     return SCRIPT.read_text()
 
 
+@pytest.fixture(scope="module")
+def script_without_comments(script: str) -> str:
+    """The same script with its comment lines removed.
+
+    For the assertions that say "this script must not DO x", where x is also something the
+    comments explain at length. Anchoring on command position is the rule here (M11's
+    notes), and a comment that quotes the line a step deleted is prose — matching it makes
+    the test fail for describing its own reason, which teaches the next editor to delete
+    the explanation rather than keep the property.
+    """
+    return "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+@pytest.fixture(scope="module")
+def script_commands(script_without_comments: str) -> str:
+    """Comments and the bodies of ``say`` / ``fail`` removed — what the shell would run.
+
+    Needed because this script's refusals name the very commands the operator should run
+    next: the ``sudo ufw logging off`` remedy sits indented inside a ``fail "..."``, at a
+    column that reads as a command to any anchored regex. M11 solved the same problem in
+    ``node-bootstrap.sh`` by anchoring on its ``as_root`` helper; there is no such helper
+    here, because this script runs nothing as root at all.
+
+    Only those two constructs, not every quoted string: the health probe is a quoted
+    Python program and has to survive, and a general quote-stripper mis-pairs on the
+    single quotes inside it. "What does it do" and "what does it say" are two questions,
+    and they read two different fixtures.
+    """
+    return re.sub(r"\b(?:fail|say)\s+\\?\s*\"[^\"]*\"", " ", script_without_comments)
+
+
 def test_the_script_exists_and_is_executable() -> None:
     """A script that has to be invoked via `bash` is one an operator mistypes."""
     assert SCRIPT.is_file(), "the charter's second deployment script does not exist"
@@ -255,4 +288,99 @@ def test_the_e2e_env_file_does_not_still_claim_env_files_are_not_interpolated() 
     assert value.replace("$$", "") .count("$") == 0, (
         "deploy/e2e.env's operator hash has an unescaped $ — compose will corrupt it and "
         "operator login will fail on a clean run"
+    )
+
+
+def test_it_does_not_print_an_address_it_has_not_proved_reachable(
+    script: str, script_without_comments: str
+) -> None:
+    """M6.1, found on the live host: the success line named a URL nothing served.
+
+    The script verified the stack from INSIDE the compose network and then printed
+    ``The panel is at https://<host>/panel/`` while 80 and 443 were closed, because the
+    base compose file publishes nothing and this script adds nothing. An address a script
+    prints reads as an address a script checked — the same sin as ``echo ok``, which is
+    the very thing property 3 exists to prevent.
+
+    So either it publishes, or it says nothing about reachability. It says nothing, and
+    says instead what it did prove and where the missing step is written down.
+    """
+    assert "The panel is at" not in script_without_comments, (
+        "the closing line claims a panel address again, and nothing in this script makes "
+        "one reachable"
+    )
+    assert not re.search(r"https?://\$\{", script_without_comments), (
+        "the script builds a URL out of a configured host and prints it, which is a claim "
+        "about the outside world that it has not checked"
+    )
+    assert "reachable from outside" in script, (
+        "the run ends without telling the operator that nothing is reachable yet, so they "
+        "go looking for a panel that is not there"
+    )
+    assert "port-publication gap" in script, (
+        "the closing message does not point at the runbook section that says how to "
+        "publish, which leaves the operator with a problem and no next step"
+    )
+
+
+def test_it_refuses_a_host_whose_firewall_is_recording_connections(
+    script: str, script_commands: str
+) -> None:
+    """M6.2's second half. The record the charter forbids at any level.
+
+    ``ufw enable`` turns logging on by default and writes a source address for every
+    refused packet — 5840 bytes of it within minutes on the fleet's own leaf
+    (docs/decisions.md, decision 5). This host is the one friends dial for a subscription,
+    so its firewall log is a list of who asked for a config and when.
+
+    Checked, never changed: turning it off belongs to ``scripts/node-bootstrap.sh``, which
+    is the script that brings a firewall up. Anchored on command position rather than on
+    the words, exactly as ``test_node_bootstrap_script.py`` does, because the refusal
+    message legitimately contains the command it is telling the operator to run.
+    """
+    assert re.search(r"command -v ufw", script), (
+        "the script never asks whether this host has a firewall that could be logging"
+    )
+    assert "LOGLEVEL" in script, (
+        "the script does not read ufw's configured logging level, so it cannot tell an "
+        "off host from a recording one"
+    )
+    assert re.search(r"sudo ufw logging off", script), (
+        "the refusal does not name the command that fixes it"
+    )
+    # It must not run ufw itself. Command position only: `sudo ufw logging off` inside a
+    # quoted message is the instruction, not the act.
+    assert not re.search(r"^\s*(sudo\s+)?ufw\s", script_commands, re.M), (
+        "the script runs ufw itself — it installs a control plane and must not rewrite "
+        "the firewall of the host it is reached over"
+    )
+    # And there is no level of it that is allowed, not even while debugging.
+    assert not re.search(r"ufw logging (?:on|low|medium|high|full)\b", script), (
+        "the script names a ufw logging level other than off"
+    )
+    assert "not finish the job" in script, (
+        "the script offers deleting /var/log/ufw.log as a cure — rsyslog, kern.log and "
+        "the journal hold the same lines, and 22 of them survived that deletion on the "
+        "live leaf. Logging being off beforehand is the only part that protects anyone."
+    )
+
+
+def test_a_second_run_does_not_rebuild_its_way_into_recreating_containers(script: str) -> None:
+    """M6.5, and the reason property 1 was false for as long as this script has existed.
+
+    BuildKit attaches a provenance attestation to every image it exports, and that
+    attestation records when the build ran. So a FULLY CACHED rebuild still exports a
+    manifest with a new digest — which is the image ID compose compares against the
+    running container — and every service built from a Dockerfile was recreated on every
+    run, with nothing in the output to say why.
+
+    Asserted on the build command rather than on the whole file, because exporting the
+    variable would also change how anything else in the run behaves.
+    """
+    build = re.search(r"^\s*if ! ([^\n]*up -d --build)", script, re.M)
+    assert build, "the script no longer brings the stack up with a single converging build"
+    assert "BUILDX_NO_DEFAULT_ATTESTATIONS=1" in build.group(1), (
+        "the build does not disable BuildKit's default attestations, so every run exports "
+        "a new image ID and compose recreates every built container — which makes the "
+        "IDEMPOTENT property in this script's own header untrue"
     )
