@@ -89,3 +89,48 @@ The egress policy is data (`edge/egress.py`, `control/app/services/nodes._EGRESS
 on `node_transports.purpose`). M3's "route friend traffic into the hop" is a third value
 in that same table and a change to `edge.relay.render_hop`'s own call — not a new
 mechanism, and not a branch on a transport.
+
+---
+
+## Update 2026-09-09 — the plain-WireGuard limitation is no longer "likely", it is measured
+
+The owner's decision of 2026-09-09 (keep the pin, record the limitation) was
+taken on a prediction. The prediction has since been tested on the live leaf and
+is correct.
+
+**What was done.** A friend-facing `wireguard` transport was enabled on the leaf,
+applied, and dialled by a real client built from that friend's own
+`client-config-file` subscription, using an image that ships `ip6tables` so the
+client side could not be the cause.
+
+**Where the rules landed** — the split, visible on one host at one moment:
+
+```
+nft     FORWARD   -A FORWARD -o amneziawg -j ACCEPT     (and -i)
+nft     nat       -A POSTROUTING -s <hop net> ! -o amneziawg -j MASQUERADE
+legacy  FORWARD   -A FORWARD -o wireguard -j ACCEPT     (and -i)
+legacy  nat       -A POSTROUTING -s <wg net> ! -o wireguard -j MASQUERADE
+```
+
+`ufw` populates the **nft** ruleset and its FORWARD policy there is `DROP`.
+WireGuard's rules are in **legacy**, which is traversed independently and cannot
+front-run it.
+
+**What the client saw:**
+
+| | |
+|---|---|
+| handshake | **completes** — 46 seconds old |
+| client sent | 1.33 KiB |
+| client received | 188 B |
+| an address echo through the tunnel | **times out** |
+
+Precisely M14's own failure shape, on the transport M14 could not prove. So:
+**`amneziawg` is proven end to end; `wireguard` is now proven broken as a
+friend-facing exit on a ufw host.** The decision to keep the pin and record the
+limitation stands — but the limitation is a measurement now, and anyone weighing
+it later should weigh a fact rather than an inference.
+
+**A second reason `wireguard` is not usable friend-facing**, found in the same
+session and unrelated to netfilter: a WireGuard-family transport has one
+`peer_tunnel_address` and therefore serves exactly one friend. That is **M17**.
