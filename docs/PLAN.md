@@ -826,7 +826,29 @@ back in and confirm it works.
 
 ---
 
-## → M8 — The console the owner actually lives in · planned 2026-09-08
+## ✅ M8 — The console the owner actually lives in · planned 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run, and the first milestone in this plan judged by an
+> independent acceptance agent** — one that never saw the diff and drove the
+> console like a person. Gate green: 296 control, 230 edge (3 skipped), 161
+> infra, 146 e2e.
+>
+> **That layer justified itself on its first run.** It found a blocker a full
+> code review and an 801-test gate both passed: pressing Back after a sidebar
+> navigation returned the console as raw unstyled HTML, reached by the console's
+> own primary flow — issue a link, open it, come back. Chasing it surfaced
+> something worse: **htmx was writing the whole page body to `localStorage`, and
+> after the add-user flow that body holds a live subscription URL.** A bearer
+> credential in browser storage. See `docs/decisions.md`, 2026-09-09.
+>
+> **Four rounds, two of them lost to the orchestrator's own errors** — a commit
+> made during a walk, and a stand left un-rebuilt so "judge it empty" was
+> impossible. Recorded in `docs/tracker/M8/acceptance.md` rather than buried; the
+> round cap was deliberately exceeded on the reasoning that the cap protects
+> against a failing product, and this product had not failed.
+>
+> Final verdict **good**, with all eleven earlier findings confirmed fixed and two
+> clumsy ones left for the owner in `acceptance-verdict.md`.
 
 The panel today is one scrolling page plus a node detail page, dressed in twenty
 lines of inline CSS. `design/` holds a finished, high-fidelity redesign of it:

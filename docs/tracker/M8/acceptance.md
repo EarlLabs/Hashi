@@ -55,3 +55,38 @@ The duplicate-name refusal said *"a **friend** called 'dima' already exists"*
 while every other word on screen says "user". Decision 9 is explicit that no
 `friend` → `user` rename travels past the rendered page — and this is the same
 boundary in the other direction: the code's word leaking onto the page. Fixed.
+
+---
+
+## Round 4 — passed
+
+**Verdict: good, gate exit 0.** No broken behaviour, nothing that lies. **All
+eleven findings from earlier rounds confirmed fixed**, including round 1's
+blocker. Spend: 80 actions of 220, ~22 minutes of 75.
+
+Judged on a stand verified empty through the read-only role — `friends: 0`,
+`nodes: 0`, `subscriptions: 0` — which is the precondition round 3 was denied.
+
+**The empty state, the thing round 3 could not reach, passes.** Overview shows
+four zeroed cards *and* "Nothing is configured yet" with the right first move
+named: *"Start with a node. A user's subscription only ever resolves to nodes
+that are serving, so adding a user first would hand them a link to nothing."*
+Users has its own. Neither is a blank box.
+
+**The render boundary proved itself exactly as designed:** the refusal now says
+*"a user called 'dima' already exists"*, and a person actually nicknamed `friend`
+is still refused **by their own name** — *"a user called 'friend' already
+exists"*. Vocabulary translated, operator data not.
+
+**Two clumsy findings remain for the owner**, in `acceptance-verdict.md`: a
+failure still carries no error colour (it has its own treatment, but the rule is
+the same slate as the primary button — only the wording says "wrong", and the old
+page shows the palette has a danger hue available); and a revocation on one
+device leaves another open session showing that row as `active` until a reload.
+
+**A harness finding, worth its own note:** `scripts/acceptance/drive.py` pins the
+viewport at 1440×900 and neither `begin` nor `open` takes a size, so the 900px
+checklist line could not be walked with the supplied hands — the agent drove the
+same installed browser directly instead. That is a gap in M12's instrument, not
+in this milestone, and it means **the one checklist line about narrow windows
+cannot currently be discharged by the tool the plan nominates for it.**
