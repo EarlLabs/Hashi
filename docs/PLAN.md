@@ -1510,6 +1510,79 @@ decision was, the observed behaviour must match it.
 
 ---
 
+## → M17 — A WireGuard-family transport can serve exactly one friend · found in the field 2026-09-09
+
+**Found while discharging the run's one-hop instruction against the leaf.** With
+two active friends on a node, enabling a friend-facing `wireguard` transport and
+applying gives:
+
+```
+wireguard could not be rendered for this node — AmbiguousPeerRoute: two peers are
+configured with the tunnel address '10.66.0.2/32'. AllowedIPs is both the
+authorisation list and the routing table, so the second would silently take over
+the first's route. Give each peer its own tunnel address.
+```
+
+**The refusal itself is excellent and must not be weakened.** It fails closed, it
+explains the mechanism, and it is right: on a WireGuard server `AllowedIPs` is
+simultaneously "who may send as this source" and "where replies to this address
+go", so two peers sharing one tunnel address is not a duplicate — it is a silent
+hijack of the first friend's return path by the second. Rendering it anyway would
+have been the worst kind of bug this project has.
+
+**The limitation it exposes is the milestone.** `peer_tunnel_address` is a single
+operator parameter on the transport, so a WireGuard-family transport has exactly
+one peer address to give out. **One friend.** The charter's own scale is *"the
+owner and ~30–50 friends"*, and criterion 3 is adding a user without touching
+anyone's device. A transport that serves one person can do neither.
+
+**Why this was not seen before tonight.** Every earlier WireGuard-family test in
+this run happened to have exactly one active friend at that moment — including
+M14's proof that a friend carries traffic. That proof stands for what it
+measured; it was one friend, and two would not have rendered at all.
+
+### M17.1 — Decide whether a WireGuard-family transport is friend-facing at all
+
+Three honest answers, and the choice is the milestone:
+
+- **Allocate a tunnel address per credential.** The natural fix and the largest:
+  the address becomes per-friend state, minted with the credential, released on
+  revocation, and drawn from a pool the operator sizes. It is real IP-address
+  management, which this project has deliberately never had.
+- **Say WireGuard-family transports are hop-only** and stop offering them to
+  friends. `wireguard` is already `hop_capable=False`, which would make it
+  configurable and useful for nothing — so this answer probably means removing
+  it, and keeping `amneziawg` for hops where one peer per end is exactly right.
+- **Say they serve one friend, deliberately** — a personal node for the owner.
+  Honest, narrow, and it should then be refused at *enable* time for a node that
+  already has more than one friend, rather than at apply.
+
+### M17.2 — Whatever is chosen, the panel must say it before the operator commits
+
+Today an operator enables the transport, adds a second friend, and learns at
+apply. See also **M15**: the same shape, where a friend-facing transport
+permanently blocks a hop and nothing says so until the hop is attempted. These
+two are the same class of defect and may share a fix — a transport's constraints
+should be visible where it is chosen.
+
+**E2E:** `tests/e2e/control/` — enable a WireGuard-family transport on a node
+with two active friends and assert whichever behaviour M17.1 chooses. Note the
+existing suite would not have caught this: it needs *two* friends, and one is the
+natural number to test with.
+
+**Done when**
+- [ ] Either a WireGuard-family transport serves every friend on its node, or it
+      is refused before an operator can commit to it, with the reason named.
+- [ ] The charter's scale and the transport registry agree about which transports
+      can serve a fleet.
+
+acceptance: yes
+On a node with two friends, offer a WireGuard-family transport and take both
+friends onto it. Either both work, or the refusal arrived early enough that the
+operator never believed it would.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
