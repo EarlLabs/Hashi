@@ -10,9 +10,18 @@
   warning — a link handed out with nothing serving resolves to an empty config, and
   the friend reports a broken client rather than a fleet with no nodes.
 #}
+{#
+  `hx-disinherit="hx-indicator"`: the skeleton belongs to THIS element's own refresh
+  and to nothing inside it. htmx inherits hx-indicator down the tree, so without
+  this every row button — "show link", "revoke" — took the whole table away and
+  replaced it with the loading skeleton while it fetched a dialog that changes
+  nothing about the list. Disinheriting leaves each button its own default
+  indicator, which is the button itself (see .btn.htmx-request in app.css).
+#}
 <div id="friends-table" class="stack-6"
      hx-get="/panel/friends/table" hx-trigger="friends-changed from:body"
-     hx-target="this" hx-swap="outerHTML" hx-indicator="this">
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this"
+     hx-disinherit="hx-indicator">
 
   <div class="loading" aria-hidden="true">
     <div class="skeleton-row"></div>
@@ -49,7 +58,7 @@
                 {{ "active" if friend.is_active else "revoked" }}
               </span>
             </td>
-            <td class="text-muted">{{ friend.added.strftime("%d %b %Y") }}</td>
+            <td class="text-muted nowrap">{{ friend.added.strftime("%d %b %Y") }}</td>
             {#
               Coverage, not activity: how many of the serving node-transports this
               person holds a credential on. It is a fact about OUR configuration —
@@ -57,7 +66,7 @@
               don't — which is why it survives decision 6 while "last seen" does not.
               A row reading 2 / 3 is a fault in the fleet, not a habit of a person.
             #}
-            <td class="mono">
+            <td class="mono nowrap">
               {% if friend.is_active %}
                 {{ friend.nodes_served }} / {{ friend.nodes_serving }}
               {% else %}—{% endif %}

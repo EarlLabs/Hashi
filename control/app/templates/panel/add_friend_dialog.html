@@ -11,6 +11,15 @@
   Re-rendered with `error` set when the nickname is refused, so the message lands
   under the field it is about — M8.6. A toast would be wrong here: it disappears
   after 2200ms and leaves the operator looking at a form that will not submit.
+
+  NO `maxlength`. It was here, and it made the field lie: a pasted 1002-character
+  name became 64 characters in the box with no counter, no message and no hint that
+  anything had been dropped, and the person was then created under the clipped name
+  as though that were what the operator typed. The limit is now STATED under the
+  field and ENFORCED by services/friends.py, which refuses over-long input with a
+  sentence through the same 422 path as a duplicate name. Both halves matter: the
+  hint means the operator rarely meets the refusal, the refusal means they are never
+  silently given something other than what they asked for.
 #}
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
@@ -20,9 +29,11 @@
       <div class="field">
         <label for="friend-nickname">nickname</label>
         <input class="input" id="friend-nickname" name="nickname" type="text"
-               value="{{ nickname or "" }}" placeholder="mira" maxlength="64"
+               value="{{ nickname or "" }}" placeholder="mira"
                autocomplete="off" required
-               {% if error %}aria-invalid="true" aria-describedby="friend-nickname-error"{% endif %}>
+               aria-describedby="friend-nickname-hint{% if error %} friend-nickname-error{% endif %}"
+               {% if error %}aria-invalid="true"{% endif %}>
+        <div class="field-hint" id="friend-nickname-hint">64 characters or fewer</div>
         {% if error %}
         <div class="field-error" id="friend-nickname-error" role="alert">{{ error }}</div>
         {% endif %}

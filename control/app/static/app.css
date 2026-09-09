@@ -164,6 +164,19 @@
 .table td, .table th { vertical-align: middle; }
 .table .right { text-align: right; }
 
+/* A nickname is the operator's own text and may be one unbroken 64-character run —
+   the longest the add-user field accepts. Left alone, such a cell sets the table's
+   min-content width, the table outgrows its card, and .table-scroll turns into a
+   horizontal scroll with no affordance: the row's button is clipped, the date wraps
+   onto three lines, and the nickname — the only thing identifying the row — is the
+   first column to scroll out of sight, leaving rows with a blank name. Wrapping
+   inside the column costs a second line and keeps every column on screen. */
+.table td { overflow-wrap: anywhere; }
+
+/* …and the columns whose content is short and fixed keep their one line, so the
+   space a long name needs comes out of the name's own column. */
+.table .nowrap, .table .right { white-space: nowrap; }
+
 /* Below the breakpoint a wide table scrolls inside its own panel rather than
    pushing the page sideways (design/README.md, "Responsive"). */
 .table-scroll { overflow-x: auto; }
@@ -231,6 +244,12 @@
 .htmx-request .loading { display: grid; gap: var(--space-2); }
 .htmx-request > .loaded { display: none; }
 
+/* One button waiting on its own request. This is what a row action indicates now
+   that friends_table.html and overview_body.html disinherit hx-indicator: the
+   feedback is on the control that was pressed, instead of the whole list vanishing
+   into a skeleton to fetch a dialog that changes nothing about the list. */
+.btn.htmx-request { opacity: 0.55; cursor: progress; }
+
 .skeleton-row {
   height: 28px;
   background: linear-gradient(
@@ -279,12 +298,28 @@
 
 .input[aria-invalid="true"] { border-color: var(--color-accent); }
 
+/* A limit stated before it is hit. Same place and size as .field-error, muted rather
+   than accented, because it is not a complaint — it is what stops the operator ever
+   meeting one. The field used to carry `maxlength` instead, which silently discarded
+   the rest of a pasted name and then created the person under the clipped one. */
+.field-hint {
+  font-size: 12px;
+  margin-top: 5px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
 /* ── dialogs ──────────────────────────────────────────────────────────────── */
 
 /* UI-PATTERNS §5 and design/README.md, twice: the design system's .dialog is
    TRANSPARENT (styles.css blueprint layer resets its background), so a dialog
    without this rule shows the page straight through its own text. */
 .dialog { background: var(--color-bg); }
+
+/* The dialog's box is a definite width (styles.css: `min(440px, 100%)`), so a long
+   unbroken nickname does not widen it — it simply prints past its right edge, over
+   the dimmed page behind. Both of these quote a nickname: "<name>'s link" as the
+   heading, and the sentence naming whose access the URL is. */
+.dialog-title, .dialog-body { overflow-wrap: anywhere; }
 
 .dialog-wide { width: min(560px, 100%); }
 

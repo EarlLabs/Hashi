@@ -176,6 +176,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-Frame-Options", "DENY")
+
+        # Nothing this application generates may be STORED by a browser or a proxy.
+        # Two reasons, either sufficient: every /panel and /api response is a view of
+        # an operator session, and one panel fragment renders a live subscription
+        # token, which is a bearer credential and must not survive on disk.
+        #
+        # The defect that put this here was neither of those, though. A console URL
+        # has TWO representations — the whole document a browser navigates to, and
+        # the fragment htmx swaps into #main — and without a directive the browser
+        # stored the fragment under /panel/friends. A back/forward navigation reuses
+        # a stored entry WITHOUT revalidating, so pressing Back landed the operator
+        # on the bare fragment as a whole document: no <head>, therefore no
+        # stylesheets, therefore an unstyled console until a manual reload.
+        # `setdefault` so /sub/{token}'s own stricter value (delivery.py) still wins.
+        if not request.url.path.startswith("/static"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        # And the two representations are declared different even to a cache that
+        # ignores the line above: a request without HX-Request may never be answered
+        # from an entry stored for one that had it. Appended rather than assigned —
+        # SessionMiddleware runs inside this one and has already put `Cookie` there,
+        # and overwriting that would tell a cache the panel is the same for every
+        # operator session.
+        if request.url.path.startswith(panel_routes.router.prefix):
+            response.headers.add_vary_header("HX-Request")
         return response
 
     logger.info("control plane built")

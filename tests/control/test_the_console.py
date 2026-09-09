@@ -330,6 +330,164 @@ async def test_an_incomplete_revocation_stays_on_screen(client, reality_params) 
     assert "toast" not in done.text
 
 
+# --- what a browser is allowed to keep (acceptance round 1) -------------------
+
+# Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
+# defect this section stands over needs both halves of that sentence: a URL with two
+# representations, and a cache that stores one of them under the other's name.
+TWO_REPRESENTATION_URLS = ("/panel/", "/panel/friends")
+
+
+@pytest.mark.parametrize("path", TWO_REPRESENTATION_URLS)
+async def test_a_console_fragment_can_never_be_stored_under_its_page_url(
+    client, path: str
+) -> None:
+    """The acceptance defect: Back left the console as unstyled raw HTML.
+
+    The mechanism is a cache entry, not a swap. A sidebar click fetches this URL with
+    ``HX-Request`` and gets the FRAGMENT; with no cache directive the browser stores
+    that body under the plain URL, and a back/forward navigation reuses a stored
+    entry without revalidating — so Back rendered the fragment as the whole document.
+    No ``<head>``, therefore no stylesheets, therefore Times New Roman until reload.
+
+    Both headers are asserted because they close it in different places: ``no-store``
+    means no entry exists, ``Vary`` means a document request could not match one if
+    it did.
+    """
+    document = await client.get(path)
+    fragment = await client.get(path, headers={"HX-Request": "true"})
+
+    # The premise. Without two different bodies there is nothing to confuse.
+    assert "<!doctype html>" in document.text.lower()
+    assert "<!doctype html>" not in fragment.text.lower()
+
+    for response in (document, fragment):
+        assert response.headers["cache-control"] == "no-store"
+        assert "HX-Request" in response.headers["vary"]
+
+
+@pytest.mark.parametrize(
+    "path", (*TWO_REPRESENTATION_URLS, "/panel/friends/table", "/panel/friends/new")
+)
+async def test_no_panel_response_is_storable(client, path: str) -> None:
+    """Wider than the defect, and for a second reason.
+
+    One of these fragments renders a live subscription token, and a bearer credential
+    that a browser may write to its disk cache is a credential that outlives the
+    session it was shown in.
+    """
+    assert (await client.get(path)).headers["cache-control"] == "no-store"
+
+
+async def test_static_assets_are_still_cacheable(client) -> None:
+    """The guard on the rule above: it must not reach the stylesheets and fonts.
+
+    The console is opened over a management tunnel from a restricted network, and
+    re-downloading Barlow on every navigation is a real cost paid for nothing — the
+    assets carry no session and no credential.
+    """
+    response = await client.get("/static/app.css")
+
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") != "no-store"
+
+
+async def test_a_history_restore_is_answered_with_the_whole_document(client) -> None:
+    """Back, with nothing in htmx's cache to restore from.
+
+    htmx re-asks the server with ``HX-Request`` *and*
+    ``HX-History-Restore-Request``, then swaps the answer into the whole ``<body>``.
+    A fragment there replaces the shell with a bare screen — no sidebar, no header,
+    no dialog slot — which is the same "the styling is gone" report by another route.
+    """
+    response = await client.get(
+        "/panel/friends",
+        headers={"HX-Request": "true", "HX-History-Restore-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "<!doctype html>" in response.text.lower()
+    assert 'class="sidenav"' in response.text
+    assert 'id="main"' in response.text
+    assert 'id="dialog-slot"' in response.text
+
+
+async def test_the_console_is_never_snapshotted_into_local_storage(client) -> None:
+    """htmx's history cache writes the whole body to localStorage — including,
+    after the add-user flow, an open dialog holding a live subscription URL.
+
+    ``hx-history="false"`` is what stops it. A subscription URL is a bearer
+    credential and may not reach anything a browser would remember.
+    """
+    assert 'hx-history="false"' in (await client.get("/panel/")).text
+
+
+# --- a nickname the layout was not drawn for (acceptance round 1) -------------
+
+async def test_the_nickname_field_states_its_limit_instead_of_truncating(
+    client,
+) -> None:
+    """``maxlength`` made the field lie: 1002 characters pasted, 64 kept, nothing
+    said, and the person created under the clipped name.
+
+    Now the limit is written under the field and the server refuses anything longer
+    through the same 422 path a duplicate name takes.
+    """
+    dialog = await client.get("/panel/friends/new")
+
+    assert "maxlength" not in dialog.text
+    assert "64 characters or fewer" in dialog.text
+
+
+async def test_an_over_long_nickname_creates_nobody(client) -> None:
+    """The half that was confirmed against the database: 1002 submitted, 64 stored."""
+    response = await client.post("/panel/friends", data={"nickname": "n" * 1002})
+
+    assert response.status_code == 422
+    assert "64 characters or fewer" in response.text
+    assert (await client.get("/api/friends")).json() == []
+
+
+async def test_a_row_action_does_not_take_the_whole_list_away(
+    client, reality_params
+) -> None:
+    """htmx inherits ``hx-indicator`` down the tree.
+
+    So "show link" — a button whose request changes nothing about the list — pulled
+    the table's own loading skeleton over the entire table while it fetched a dialog.
+    ``hx-disinherit`` leaves each button its own indicator, itself.
+    """
+    await a_serving_node(client, reality_params)
+    await client.post("/panel/friends", data={"nickname": "mira"})
+
+    table = await client.get("/panel/friends/table")
+    overview = await client.get("/panel/overview/body")
+
+    for response in (table, overview):
+        assert 'hx-indicator="this"' in response.text
+        assert 'hx-disinherit="hx-indicator"' in response.text
+
+
+async def test_a_long_nickname_leaves_the_short_columns_alone(
+    client, reality_params
+) -> None:
+    """A 64-character name pushed the Overview's Users card into an inner horizontal
+    scroll: the date wrapped onto three lines and the button was clipped to a sliver.
+
+    The columns that must never be squeezed say so in the markup; the wrapping that
+    lets the name give way instead is ``.table td { overflow-wrap: anywhere }``.
+    """
+    await a_serving_node(client, reality_params)
+    longest = "n" * 64
+    created = await client.post("/panel/friends", data={"nickname": longest})
+    assert created.status_code == 200
+
+    for path in ("/panel/friends/table", "/panel/overview/body"):
+        body = (await client.get(path)).text
+        assert longest in body, path
+        assert 'class="text-muted nowrap"' in body, path
+
+
 def _visible_text(html: str) -> str:
     """The page with its comments, tags and attributes removed.
 

@@ -35,7 +35,21 @@
 <script src="/static/app.js" defer></script>
 </head>
 <body>
-<div class="app" data-density="comfortable">
+{#
+  `hx-history="false"` — the console is never snapshotted into localStorage.
+
+  htmx's history cache keeps the whole <body> of every screen the operator visits,
+  in localStorage, on disk. This body can contain the subscription dialog, and a
+  subscription URL is a bearer credential: "anything a browser would remember" is
+  precisely what it may not reach. The add-user flow puts one there, because the
+  dialog is still open when the `friends-created` navigation takes its snapshot.
+
+  The cost is one request when the operator presses Back instead of a read from
+  localStorage — htmx re-asks the server, which panel/routes.py:_is_htmx answers
+  with this whole document. That is the right trade on any network: the restored
+  screen is also current, rather than a picture of the fleet from ten minutes ago.
+#}
+<div class="app" data-density="comfortable" hx-history="false">
   <aside class="sidenav">
     <div>
       <a class="wordmark" href="/panel/">hashi</a>

@@ -4,11 +4,15 @@
   Swaps itself (`hx-target="this"`, `outerHTML`) so this one file is both the first
   paint and every refresh — there is no second template that could drift from it.
   `hx-indicator="this"` is what puts the skeleton on screen while the refresh is in
-  flight; see .loading/.loaded in static/app.css.
+  flight; see .loading/.loaded in static/app.css. `hx-disinherit` keeps that skeleton
+  to this element's OWN refresh — htmx inherits hx-indicator down the tree, so
+  without it the Users card's `link` button blanked the entire Overview to fetch a
+  dialog that changes nothing on it.
 #}
 <div id="overview-body" class="overview-body"
      hx-get="/panel/overview/body" hx-trigger="friends-changed from:body"
-     hx-target="this" hx-swap="outerHTML" hx-indicator="this">
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this"
+     hx-disinherit="hx-indicator">
 
   <div class="loading" aria-hidden="true">
     <div class="skeleton-row"></div>
@@ -69,7 +73,7 @@
                     {{ "active" if friend.is_active else "revoked" }}
                   </span>
                 </td>
-                <td class="text-muted">{{ friend.added.strftime("%d %b %Y") }}</td>
+                <td class="text-muted nowrap">{{ friend.added.strftime("%d %b %Y") }}</td>
                 <td class="right">
                   {% if friend.is_active %}
                   <button class="btn btn-ghost" type="button"

@@ -120,7 +120,18 @@ NAV = (
 
 
 def _is_htmx(request: Request) -> bool:
-    """Whether htmx asked for this, rather than a browser navigating or reloading."""
+    """Whether htmx asked for this, rather than a browser navigating or reloading.
+
+    A HISTORY RESTORE is the exception, and it is why this is a function rather than
+    one header lookup. When the operator presses Back, htmx re-asks the server for
+    the URL with ``HX-Request: true`` AND ``HX-History-Restore-Request: true``, then
+    swaps what comes back into the HISTORY ELEMENT — the whole ``<body>``, not
+    ``#main``. Answering that with a fragment replaces the shell with a bare screen:
+    no sidebar, no header, no dialog slot. So a restore is served the whole document,
+    exactly like a browser navigation, and htmx takes the body out of it.
+    """
+    if request.headers.get("HX-History-Restore-Request") == "true":
+        return False
     return request.headers.get("HX-Request") == "true"
 
 

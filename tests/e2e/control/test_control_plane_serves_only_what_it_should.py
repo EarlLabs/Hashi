@@ -57,3 +57,23 @@ async def test_unknown_path_is_a_plain_404(client) -> None:
     body = response.text.lower()
     for leak in ("traceback", "fastapi", "uvicorn", "starlette", "/app/"):
         assert leak not in body, f"404 body mentions {leak!r}: {response.text[:200]}"
+
+
+@pytest.mark.parametrize("path", ["/panel/login", "/panel/friends"])
+async def test_a_console_url_is_not_storable_over_real_http(client, path: str) -> None:
+    """The headers that stop a browser rendering a fragment as a whole document.
+
+    Asserted here as well as in ``tests/control/`` because this is the only place the
+    claim is made about what leaves the SOCKET: the container builds the app through
+    ``--factory``, from the installed distribution, behind a proxy — and a header set
+    by a middleware is exactly the kind of thing that survives an in-process client
+    and not a deployment.
+
+    ``/panel/friends`` needs no session for this: an unauthenticated request is
+    redirected to the login form, and the redirect is a response the browser stores
+    under that URL too.
+    """
+    response = await client.get(path)
+
+    assert response.headers["cache-control"] == "no-store"
+    assert "HX-Request" in response.headers["vary"]
