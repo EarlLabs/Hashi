@@ -15,9 +15,12 @@ WHY:  M7's first two "done when" bullets are field observations the owner makes
       the exact moment a node was blocked and they are refreshing their config.
 HOW:  requests are made from INSIDE the caddy container, because Caddy is
       deliberately unpublished — the base stack exposes it to a real deployment,
-      never to a laptop. The e2e overlay names the public site `localhost` and the
-      console `console.localhost` on its own port, so both are served by Caddy's
-      internal CA and neither reaches a CA on the internet.
+      never to a laptop. The e2e overlay names the public site `localhost` and
+      gives the console an ADDRESS on its own port — deliberately, and not a name:
+      a name sends SNI and an address does not, and a console addressed by name is
+      exactly why this milestone passed green while the console was unreachable on
+      a real host. Both are served by Caddy's internal CA, so neither reaches a CA
+      on the internet.
 
 Boundary: real caddy + control + postgres. Nothing stubbed, nothing external.
           NOT covered: reachability from a second network. Whether the console's

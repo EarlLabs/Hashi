@@ -54,9 +54,9 @@ def private_port() -> str:
 PRIVATE_NAME = e2e_env("HASHI_PRIVATE_HOST")
 
 
-# Reached by the loopback address the console's site block also answers to: the name
-# `console.localhost` does not resolve inside the container, and the address is the
-# same block either way (deploy/caddy/Caddyfile lists both).
+# Reached by the loopback address the console's site block also answers to. The
+# console is addressed by IP rather than by name throughout the e2e stack (see
+# deploy/e2e.env), and the site block lists both that address and loopback.
 PRIVATE = f"127.0.0.1:{private_port()}"
 
 
