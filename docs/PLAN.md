@@ -993,7 +993,25 @@ exercises it. A milestone whose subject is the acceptance instrument cannot be
 judged by that instrument.
 
 ---
-## → M13 — A node the control plane logs into as anything but root · found in the field 2026-09-08
+## ✅ M13 — A node the control plane logs into as anything but root · found in the field 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run.** Shape one: the bootstrap script creates
+> `/opt/hashi` empty, `0700`, owned by the account it tells the operator to
+> register; `edge` acquires no notion of privilege. One review round, clean, no
+> findings at any severity. Gate green — 169 control, 139 edge, 96 infra.
+>
+> **Acceptance discharged by field observation**, not on the stand, which has no
+> real node — the same rule this plan already applies to M1, M2, M3 and M7. On
+> the non-root entry host the apply now returns
+> `200 {"transports_applied":["vless-reality"]}`, the node is `active` and
+> `healthy`, the data-plane container is `Up` and its config is on disk owned by
+> the non-root account. Verified by the run's orchestrator rather than an
+> independent acceptance agent; see `docs/tracker/M13/outcome.md`.
+>
+> **The apply succeeded while that host's control plane was still running the
+> pre-M13 library.** The script alone made a non-root node work, which is shape
+> one's central claim demonstrated rather than argued. See
+> `docs/tracker/M13/field-proof.md`.
 
 **Appended during the overnight field run.** Found on the first apply to a host
 prepared by M11's own script, which is the point: the two halves of the product
