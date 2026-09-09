@@ -28,6 +28,15 @@ _TEMPLATES = environment_for(__file__)
 
 # Everything hashi puts on a node lives under here. One directory, so removing a
 # node's configuration is one `rm -rf` and there is nothing to hunt for.
+#
+# WHO CREATES IT is a contract with `scripts/node-bootstrap.sh` and not a detail —
+# `/opt` is root-owned on every distro, and this library never escalates (see
+# ``prepare``). The script creates this directory, owned by the account it tells the
+# operator to register as ``ssh_user``; the two halves are pinned together by
+# ``tests/infra/test_node_bootstrap_agrees_with_the_control_plane.py``, so changing
+# this value here without changing the script turns that suite red. Do not change one
+# side alone — a disagreement between them is invisible from either side, which is
+# exactly how M13 reached a real host.
 NODE_ROOT = "/opt/hashi"
 COMPOSE_PATH = f"{NODE_ROOT}/docker-compose.yml"
 CONFIG_DIR = f"{NODE_ROOT}/conf"
@@ -187,18 +196,59 @@ def render_compose(*, transports: list[dict]) -> str:
     )
 
 
+# What the operator is told when the node's directory is not there, or is there and
+# belongs to somebody else. It names the real problem, which is host preparation, and
+# the exact repair — M13, where the same fault arrived as
+# ``mkdir: cannot create directory '/opt/hashi': Permission denied`` and cost an
+# evening of debugging SSH, keys and docker, none of which were wrong.
+#
+# It names a node-side path, which operator-facing text in ``ssh.py`` deliberately does
+# not. The rule there is about a path that identifies a node or one file on it; this one
+# is a constant of the product, identical on every node and written down in this
+# repository, and without it the sentence cannot be acted on.
+HOST_NOT_PREPARED = (
+    f"{NODE_ROOT} is not there, or the account this node is driven as cannot write into "
+    "it. The control plane never escalates privilege on a node, so it cannot create that "
+    "directory itself: prepare the host with scripts/node-bootstrap.sh, which creates it "
+    "owned by the account it tells you to register — or, on a host prepared before that "
+    f"script existed, create it once as root: install -d -m 700 -o THE_SSH_USER {NODE_ROOT}"
+)
+
+
 async def prepare(connection: NodeConnection) -> None:
-    """Make a bare host ready to run a data plane.
+    """Make a prepared host ready to run a data plane.
 
     Idempotent on purpose — bootstrap gets re-run after a partial failure, and a
     step that fails the second time turns a recoverable node into a rebuild.
+
+    THE PRIVILEGE BOUNDARY IS HERE, and it is the whole of M13. This function runs as
+    the account in the node record and never as anything else: no `sudo`, no `su`, no
+    per-node "escalate" flag. That keeps every notion of privilege out of `edge`, whose
+    value is that it is a library with no policy in it — and it is affordable only
+    because ``NODE_ROOT`` arrives already owned by that account, created by
+    ``scripts/node-bootstrap.sh`` when the host was prepared.
+
+    So the first thing done here is to check that assumption instead of discovering it
+    through a failing `mkdir`. The two are not the same failure: `mkdir -p` on a
+    root-owned `/opt` reports `Permission denied`, which reads as a broken SSH account
+    and sends the operator to fix the key, the user or docker. What is actually wrong is
+    that the host was never prepared, and that is what ``HOST_NOT_PREPARED`` says.
 
     Time sync is here for a reason the edge rulebook names as a trap: skew breaks
     every TLS-based transport, and Reality handshakes then fail with errors that
     look exactly like blocking. Getting it wrong costs a day of debugging the wrong
     layer.
     """
-    await connection.run(f"mkdir -p {CONFIG_DIR} && chmod 700 {NODE_ROOT} {CONFIG_DIR}")
+    prepared = await connection.run(f"test -d {NODE_ROOT} && test -w {NODE_ROOT}", check=False)
+    if not prepared.ok:
+        raise NodeStackUnsupported(HOST_NOT_PREPARED)
+
+    # ``NODE_ROOT`` itself is deliberately NOT chmod'ed here: its mode belongs to
+    # whoever created it (the script uses 700), and an account that legitimately writes
+    # into a directory it does not own cannot chmod it — that would turn a working host
+    # into a failing apply for no gain. What must be private is what we create, and that
+    # is this one.
+    await connection.run(f"mkdir -p {CONFIG_DIR} && chmod 700 {CONFIG_DIR}")
 
     # `|| true`: a host may run systemd-timesyncd, chrony or ntpd, and we do not
     # care which — only that time is being synchronised. Failing the whole bootstrap
