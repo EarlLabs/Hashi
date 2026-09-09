@@ -47,6 +47,16 @@ services:
       - {{ device }}
 {% endfor %}
 {% endif %}
+    labels:
+      # The digest of the config THIS service loads, and the reason an apply reaches
+      # the running daemon at all. `up -d` compares the service DEFINITION against the
+      # running container, and a bind-mounted file's contents are not part of that — so
+      # without this line a new config never restarted anything, and a revoked friend
+      # stayed connected. The value also reads back through `docker inspect`, which
+      # reports the labels a container was CREATED with. Full reasoning at
+      # edge/bootstrap/node_stack.py:CONFIG_DIGEST_LABEL. It is a SHA-256 of the
+      # rendered config, so it discloses nothing to anyone reading it here.
+      {{ digest_label }}: "{{ transport.config_digest }}"
     volumes:
       # Read-only: the daemon has no reason to write to its own configuration, and
       # a compromised data plane must not be able to rewrite what it will load next.

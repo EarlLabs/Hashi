@@ -197,16 +197,17 @@ PROBE = textwrap.dedent(
     )
     credential = Credential(subject="aaaaaaaa-0000-4000-8000-000000000001")
     entry = transport.serialise(SubscriptionFormat.V1_URI_LIST, node, params, credential)
+    server_config = transport.profile.render_server(node, params, [credential])
 
     print(json.dumps({
         "discovered": sorted(found),
-        "server_config": transport.profile.render_server(node, params, [credential]),
+        "server_config": server_config,
         "entry": entry.entry,
         # What the panel's "enable a transport" form would ask the operator for. Derived
         # from the new package's own model minus what is minted for them.
         "operator_params": control_transports.operator_params(name),
         # And the daemon the node would run it under, from the format it declared.
-        "data_plane": node_stack.services_for([name])[0]["image"],
+        "data_plane": node_stack.services_for({name: server_config})[0]["image"],
     }))
     """
 )

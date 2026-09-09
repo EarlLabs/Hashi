@@ -15,7 +15,7 @@ HOW:  rendering the compose file is pure and lives here; the SSH sequences take 
 
 import hashlib
 import logging
-from collections.abc import Iterable
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from edge.bootstrap.ssh import NodeConnection
@@ -147,21 +147,72 @@ def config_path_for(transport_name: str) -> str:
     return config_path(transport_name, profile(transport_name).meta.config_format)
 
 
-def services_for(transport_names: Iterable[str]) -> list[dict]:
+# The label each transport's container carries the digest of its own config in.
+#
+# THIS LABEL IS THE WHOLE OF M1, in both directions, and it is worth reading why one
+# value does two jobs.
+#
+# Outbound: `docker compose up -d` is declarative. It compares the desired SERVICE
+# DEFINITION against the running container and does nothing when they match — and the
+# CONTENTS of a bind-mounted config file are not part of that definition. So a node
+# could be handed a new config, report every container up, and go on serving the old
+# one from a process that reads its config only at start. Putting the digest in a label
+# makes a changed config *be* a changed definition, and Compose recreates the container
+# by itself. `up -d` stays the single verb.
+#
+# Inbound: a container's labels are fixed when it is CREATED, so `docker inspect` on a
+# running container reports the digest that container was started from — not what is on
+# disk now. That is the only protocol-agnostic answer to "what did this process
+# actually load" available without asking the daemon, and asking the daemon would mean
+# a protocol's name in shared code (core invariants §1). See ``loaded_digests``.
+#
+# The name is ours (reverse-DNS, as Docker's own convention asks) rather than one of
+# Compose's `com.docker.compose.*`, which belong to Compose and could be reused by it.
+CONFIG_DIGEST_LABEL = "io.hashi.config-digest"
+
+# Compose's own label naming the service a container was created for. Not ours to
+# choose, but ours to read: it is how a container is mapped back to the transport whose
+# config it runs, without parsing container names.
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+
+# One line per container: service, digest it was created with, whether it is running.
+#
+# ``|`` rather than whitespace because both middle fields can be empty (a container
+# from before this label existed) or contain a space (Go templates print a missing map
+# key as ``<no value>``), and either would silently shift the columns.
+_INSPECT_FORMAT = (
+    f'{{{{index .Config.Labels "{COMPOSE_SERVICE_LABEL}"}}}}'
+    f'|{{{{index .Config.Labels "{CONFIG_DIGEST_LABEL}"}}}}'
+    f"|{{{{.State.Running}}}}"
+)
+
+# What a Go template prints for a label a container does not carry.
+_NO_LABEL = "<no value>"
+
+
+def services_for(configs: Mapping[str, str]) -> list[dict]:
     """One compose service per transport, each with the daemon its format needs.
 
     The one place a rendered config's PATH and the command that loads it are decided
     together — split across two callers, they drift, and the symptom is a daemon
-    running happily against a file nobody writes.
+    running happily against a file nobody writes. The config's DIGEST is decided here
+    for the same reason: the file, the command that loads it and the label that proves
+    it was loaded all describe one config, and they have to come from the same bytes or
+    the label certifies something that was never pushed.
+
+    Takes the rendered configs rather than the transport names because of that — a name
+    alone cannot produce a digest. Still pure: ``digest_of`` is a hash, and nothing here
+    touches a node.
     """
     services = []
-    for name in transport_names:
+    for name, config in configs.items():
         data_plane = DATA_PLANES[profile(name).meta.config_format]
         path = config_path_for(name)
         services.append(
             {
                 "name": name,
                 "config_path": path,
+                "config_digest": digest_of(config),
                 "image": data_plane.image,
                 "command": [part.format(config=path) for part in data_plane.command],
                 "capabilities": list(data_plane.capabilities),
@@ -185,14 +236,19 @@ def render_compose(*, transports: list[dict]) -> str:
     """The node's docker-compose.yml.
 
     Pure. ``transports`` is a list of dicts carrying ``name``, ``config_path``,
-    ``image``, ``command`` and optionally ``capabilities`` / ``devices`` — built by
-    the caller from node records and from the pinned data-plane table. This function
-    never looks up a transport or branches on its name, and it holds no image tag: a
-    literal here would be the version pin living in code instead of in configuration
-    (core invariants §5).
+    ``config_digest``, ``image``, ``command`` and optionally ``capabilities`` /
+    ``devices`` — built by ``services_for`` from node records and from the pinned
+    data-plane table. This function never looks up a transport or branches on its name,
+    and it holds no image tag: a literal here would be the version pin living in code
+    instead of in configuration (core invariants §5).
+
+    Deterministic in the strong sense M1 needs: the same configs render the same
+    compose file, and DIFFERENT configs render a different one. The second half is not
+    a nicety — it is what makes `docker compose up -d` recreate a container whose
+    config changed. See ``CONFIG_DIGEST_LABEL``.
     """
     return _TEMPLATES.get_template("node-compose.yml.j2").render(
-        transports=transports, config_dir=CONFIG_DIR
+        transports=transports, config_dir=CONFIG_DIR, digest_label=CONFIG_DIGEST_LABEL
     )
 
 
@@ -297,21 +353,84 @@ async def restart(connection: NodeConnection) -> None:
     """Bring the node's data plane up on the current configuration.
 
     ``up -d`` rather than ``restart``: it is the same command whether the stack was
-    never started, is partly running, or needs a changed config picked up. One verb
-    for every case means bootstrap and apply follow the same path, so the
-    well-tested path is the one that runs during an emergency rotation.
+    never started, is partly running, or has a genuinely changed definition. One verb
+    for every case means bootstrap and apply follow the same path, so the well-tested
+    path is the one that runs during an emergency rotation.
+
+    CORRECTED IN M1, and the correction is the milestone. This comment used to end
+    that list with "or needs a changed config picked up", which was false and was the
+    defect stated as the design: `up -d` is DECLARATIVE, and the contents of a
+    bind-mounted config file are not part of the definition it compares. A node
+    measured on 2026-09-09 had a config written 8m25s after the container meant to
+    serve it started, through an apply that returned 200. What makes the clause true
+    now is not this command — it is ``CONFIG_DIGEST_LABEL``, which puts the config's
+    digest into the definition so that a changed config is a changed definition. `up
+    -d` on its own still picks up nothing.
+
+    Rejected alternative: swapping this for `restart`. It would break the cases this
+    verb exists for — a container that was never created, a definition that genuinely
+    changed, a stack that is only partly up — and it would still say nothing about
+    whether the daemon came back on the config we pushed, which is ``loaded_digests``'
+    job either way.
     """
     await connection.run(f"cd {NODE_ROOT} && docker compose up -d --remove-orphans")
 
 
-async def running_services(connection: NodeConnection) -> list[str]:
-    """Which data-plane services the node reports as running.
+async def loaded_digests(connection: NodeConnection) -> dict[str, str]:
+    """Which config each RUNNING container was started from: service name → digest.
+
+    This is M1.2, and it replaces a check that asked whether a process exists. That
+    question is the one the bug hid behind: a stale container genuinely IS up, so
+    "running" was true and meaningless, and `apply` wrote an ``applied_digest``
+    recording a state the node was not in.
+
+    THE SHAPE, and why this one of the three that were considered:
+
+    * A container's labels are part of its definition and are fixed when it is created,
+      so ``docker inspect`` on the running container reports the digest THAT CONTAINER
+      WAS CREATED WITH — not what is on disk now, which is the thing every other check
+      here already reads. It needs no cooperation from the daemon inside, works for
+      every transport family alike, and is the same value that made Compose recreate
+      the container in the first place, so the two halves of M1 cannot disagree.
+    * Container start time versus the config's mtime is what the bug was first measured
+      with by hand. Rejected as a product check: it is a clock comparison across two
+      machines, and a node that restarts for an unrelated reason reports fresh while
+      serving whatever was on disk at that moment.
+    * Asking the daemon what it loaded is protocol-specific — a different command and a
+      different answer per transport — so it would put a transport's name into shared
+      code. Core invariants §1 forbids that, and it is the rule that keeps "a new
+      protocol is one new package" true.
 
     Reads container state only. It says nothing about who is connected, and there is
     deliberately no code path here that could — the charter's no-logging rule covers
     health too: health means "is this node serving", never "who used it".
+
+    A running container with no digest label — one created before M1 — comes back with
+    an empty digest rather than being omitted. It is up, and it is provably not on the
+    config we would push, which is exactly what a caller comparing digests concludes.
     """
+    # ``ps -q | xargs docker inspect`` rather than ``compose ps --format json``: the
+    # JSON that Compose emits has changed shape between versions (an array, then one
+    # object per line) and its ``Labels`` field is a flattened string. ``docker
+    # inspect --format`` is a stable interface, and ``-r`` keeps a node with no
+    # containers from running ``docker inspect`` with no arguments, which is an error
+    # rather than an empty answer.
     result = await connection.run(
-        f"cd {NODE_ROOT} && docker compose ps --services --filter status=running", check=False
+        f"cd {NODE_ROOT} && docker compose ps -q | "
+        f"xargs -r docker inspect --format '{_INSPECT_FORMAT}'",
+        check=False,
     )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    loaded: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) != 3:
+            continue
+        service, digest, running = fields
+        # Not everything under this compose project has to be one of ours, and a
+        # container that is present but not running is reported by its absence here —
+        # the caller's "did it come up" answer, unchanged from before M1.
+        if service in ("", _NO_LABEL) or running != "true":
+            continue
+        loaded[service] = "" if digest == _NO_LABEL else digest
+    return loaded
