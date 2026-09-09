@@ -1244,6 +1244,86 @@ were before.
 
 ---
 
+## → M15 — A transport enabled for friends locks that node out of a hop, permanently · found in the field 2026-09-09
+
+**Found while setting up M3's two-hop on the real fleet.** Establishing a hop
+between the two live nodes was refused:
+
+```
+409  'amneziawg' is already configured on node 'entry-ru'
+```
+
+**The mechanism.** `control/app/services/relay.py`'s `establish_hop` refuses when
+a `NodeTransport` row already exists for `(node, transport_name)` — **regardless
+of its `purpose`**. A friend-facing `amneziawg` row and a hop's `RELAY_ENTRY`
+`amneziawg` row are the same `(node, transport_name)` pair, so the first one
+enabled excludes the other forever.
+
+**Why "permanently" is the right word, and this is the part that matters.** There
+is no way back:
+
+- there is **no delete for a node transport** — `set_transport_enabled` only flips
+  `enabled`, and the uniqueness check does not look at that flag;
+- `dissolve_hop` refuses anything that is not already a hop end (*"that transport
+  is not part of a hop"*), so it cannot clear a friend-facing row;
+- there is **no delete for a node** either, and retiring one does not free the
+  pair.
+
+So an operator who enables `amneziawg` for friends on a box has silently decided
+that box can never be an entry node over `amneziawg`, and nothing tells them.
+The only exit is editing the database by hand.
+
+**The collision is not hypothetical — the runbook creates it.** The same runbook
+**mandates** `amneziawg` for the entry→leaf hop and **recommends** it for Shape A,
+where friends dial the same box. Following both pieces of advice in the obvious
+order produces a node that cannot host the hop the runbook requires.
+
+**Whether the uniqueness rule itself is right is a separate question.** One row
+per `(node, transport)` keeps ports and interface names unambiguous, which is a
+real argument — two `amneziawg` rows on one node would need two ports, two
+interface names and two config files, and M2 derives the interface name from the
+config filename. The defect is not necessarily the rule; it is that the rule is
+enforced at the *worst* moment, in terms of the wrong concept (`transport_name`
+rather than what actually has to be unique), with no way to undo the state that
+triggers it and no warning that it is being created.
+
+### M15.1 — Decide what actually has to be unique
+
+If it is the port and the interface name, say so and check those instead — a
+node could then run a friend-facing and a hop `amneziawg` on different ports.
+If it is genuinely one row per transport per node, then the refusal must arrive
+when the friend-facing transport is enabled, naming the consequence, rather than
+months later when a hop is attempted.
+
+### M15.2 — A node transport must be removable
+
+Disabling is not removing, and the difference is invisible until it is
+load-bearing. Removing a friend-facing transport should take its credentials with
+it, exactly as `dissolve_hop` already does for a hop end.
+
+### M15.3 — The runbook must not recommend a combination the product refuses
+
+**E2E:** `tests/e2e/control/` — establish a hop on a node that already offers that
+transport to friends, and assert whichever behaviour M15.1 chooses. The scenario
+that would have caught this is "follow the runbook's own Shape A advice, then add
+the hop it mandates". `make test-control` is the gate.
+
+**Done when**
+- [ ] Either a node can host a friend-facing and a hop end of the same transport,
+      or it is refused at the moment the *first* one is created, with the
+      consequence named.
+- [ ] A node transport can be removed, not merely disabled.
+- [ ] The runbook's Shape A advice and its hop requirement do not contradict each
+      other.
+
+acceptance: yes
+On a fleet where a node already offers a transport to friends, try to make that
+node the entry end of a hop over the same transport. Whatever the answer is, it
+must arrive with a reason an operator can act on — and if the answer is no, it
+must have been said earlier, when the friend-facing transport was enabled.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
