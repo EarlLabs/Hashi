@@ -15,8 +15,10 @@ HOW:  rendering the compose file is pure and lives here; the SSH sequences take 
 
 import hashlib
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from edge.bootstrap.ssh import NodeConnection
 from edge.registry import ConfigFormat, profile
@@ -96,11 +98,14 @@ AMNEZIAWG_IMAGE = "docker.io/amneziavpn/amneziawg-go:3.0.3"
 # ``ConfigFormat.WG_QUICK_PLAIN``: running a plain config on the AmneziaWG daemon would
 # work, which is precisely the problem.
 #
-# ASSUMPTION, recorded rather than hidden: the tag resolves (checked against the
-# registry, and re-checked by the scenario named above), but this project has never
-# STARTED it — no node has been deployed. Whether this image accepts ``up <config>`` as
-# its command is the owner's field check on the first real node; a registry can confirm a
-# tag exists and nothing more.
+# The assumption that used to be recorded here — "whether this image accepts
+# ``up <config>`` as its command is the owner's field check" — has been answered, and the
+# answer was no. M2: this image, like the AmneziaWG one, declares an EMPTY entrypoint, so
+# the compose ``command`` became the whole argv and Docker tried to exec a binary called
+# ``up``. Both containers died at ``Created`` with exit 127 and
+# ``exec: "up": executable file not found in $PATH``. See ``_WG_QUICK_SUPERVISOR`` for
+# what replaced it, and ``tests/edge/test_every_data_plane_command_is_executable.py`` for
+# the check that stops the same assumption being made again by a transport added later.
 WIREGUARD_IMAGE = "docker.io/masipcat/wireguard-go:0.0.20230223"
 
 
@@ -109,10 +114,101 @@ class DataPlane:
     """How a config in one format is actually run on a node."""
 
     image: str
-    # ``{config}`` is replaced with the path the config was placed at.
+
+    # The argv that REPLACES the image's own ``Cmd``. ``{config}`` is substituted with
+    # the path the config was placed at.
+    #
+    # Read the word "replaces" as the warning it is — it is the whole of M2. Compose's
+    # ``command:`` overrides ``Cmd`` and NOT ``Entrypoint``, so for an image that
+    # declares no entrypoint this list is the entire argv and its first element must be
+    # a binary that image ships. Two of the three images here declare none. An empty
+    # tuple is legal and means "the image's own ``Cmd`` is already right"; the compose
+    # template then emits no ``command:`` at all.
     command: tuple[str, ...]
+
+    # Every executable this data plane invokes inside the image BEYOND the first element
+    # of its argv — the binaries a shell command line runs, which no reader of ``command``
+    # can see and no check of argv[0] would catch.
+    #
+    # Declared rather than parsed out of the command, because parsing a shell string is
+    # guesswork and a wrong guess here reads as "checked". It exists so that
+    # ``tests/edge/test_every_data_plane_command_is_executable.py`` can hold every entry
+    # in this table against the image's real metadata — including one added later by
+    # someone who never read this comment.
+    executables: tuple[str, ...] = ()
+
+    # Whether the tool this data plane runs takes the network INTERFACE NAME from the
+    # config file's name — which ``wg-quick`` and ``awg-quick`` both do, and which makes
+    # the config's path part of the transport's behaviour rather than a storage detail.
+    #
+    # Declared here rather than checked centrally by format, because it is a property of
+    # the TOOL and the rule it enforces is the tool's own. ``services_for`` refuses a
+    # transport whose name would not survive it, at render time, rather than letting the
+    # node discover it — see ``INTERFACE_NAME``.
+    interface_from_config_filename: bool = False
+
     capabilities: tuple[str, ...] = ()
     devices: tuple[str, ...] = ()
+
+
+# ``wg-quick``'s own rule for an interface name, copied from its source
+# (``[[ $INTERFACE =~ ^[a-zA-Z0-9_=+.-]{1,15}$ ]]``) rather than approximated: 15 is the
+# kernel's IFNAMSIZ limit less its terminator, and the character set is what the tool
+# will accept before it looks at the file at all.
+INTERFACE_NAME = re.compile(r"^[a-zA-Z0-9_=+.-]{1,15}$")
+
+
+# What a WireGuard-family container actually runs, and the second half of M2.
+#
+# ``wg-quick up`` CONFIGURES and returns — it is not a daemon. Run as a container's whole
+# command it would exit 0 immediately, and ``restart: unless-stopped`` would then restart
+# it forever, so "the command exists" is not enough: something has to hold the container
+# open for as long as the tunnel should live, and take the tunnel down when it is stopped.
+#
+# That is what this shell does, and it is the same shape the plain-WireGuard image's own
+# entrypoint uses — deliberately, because that script is the upstream author's answer to
+# this exact problem and it has been right for years. We do not use the script itself:
+# it hardcodes one interface (``wg0``) and one path (``/etc/wireguard/wg0.conf``), and a
+# node here runs one container per transport out of one shared directory, so two
+# WireGuard-family transports on one node would both claim ``wg0`` in the host's network
+# namespace and the second would fail. Ours takes the tool as ``$0`` and the config as
+# ``$1``, so ONE line of shell serves the whole family and neither image is named in it.
+#
+# Line by line, because every clause is load-bearing:
+#
+# * ``set -e`` — if the ``up`` fails, the container must DIE. Without it the shell would
+#   go on to sleep and the node would report a container that is ``Up`` and carrying
+#   nothing, which is M2's own failure one level in.
+# * ``trap ... INT TERM`` — the interface lives in the HOST's network namespace
+#   (``network_mode: host``), so it outlives the container unless it is taken down. Without
+#   this, ``docker stop`` leaves a configured tunnel behind on a node that is no longer
+#   serving it. Its ``|| true`` is not decoration: ``set -e`` would otherwise abandon the
+#   trap at a failing ``down`` and exit 1, reporting a normal stop as a crash.
+# * the ``down`` before the ``up`` — recovery, and it is M1 that makes it necessary. A
+#   changed config now recreates the container (``CONFIG_DIGEST_LABEL``), and any stop
+#   that skipped the trap (SIGKILL, an OOM kill) leaves the old interface in place; the
+#   replacement then fails with ``wg-quick: `<name>' already exists`` and crash-loops.
+#   Measured, not imagined. Its output is discarded because on the normal path there is
+#   nothing to take down and the tool says so on stderr.
+# * ``sleep infinity & wait`` rather than a bare ``sleep`` — a shell blocked in ``sleep``
+#   does not run traps until it returns. Backgrounding it and waiting is what makes the
+#   trap fire at once; both images' shells are busybox and support ``infinity``.
+_WG_QUICK_SUPERVISOR = (
+    """set -e; trap '"$0" down "$1" || true; exit 0' INT TERM; """
+    '"$0" down "$1" >/dev/null 2>&1 || true; '
+    '"$0" up "$1"; '
+    "sleep infinity & wait $!"
+)
+
+
+def _wg_quick_command(tool: str) -> tuple[str, ...]:
+    """The argv for a data plane whose config is brought up by a wg-quick-style tool.
+
+    ``tool`` arrives as ``$0`` and the config path as ``$1``, so the script text is
+    identical for every member of the family and the only difference between two data
+    planes is the name of the binary their image ships.
+    """
+    return ("/bin/sh", "-c", _WG_QUICK_SUPERVISOR, tool, "{config}")
 
 
 DATA_PLANES = {
@@ -121,8 +217,15 @@ DATA_PLANES = {
     ),
     ConfigFormat.WG_QUICK_PLAIN: DataPlane(
         image=WIREGUARD_IMAGE,
-        # wg-quick takes the config PATH and derives the interface name from it.
-        command=("up", "{config}"),
+        # ``wg-quick``, this image's own copy — see ``_WG_QUICK_SUPERVISOR``. Not the
+        # bare ``up <config>`` that was here before M2: this image declares no
+        # entrypoint, so that was an argv beginning with a binary called ``up``.
+        command=_wg_quick_command("wg-quick"),
+        executables=("wg-quick",),
+        # ``wg-quick up /opt/hashi/conf/wireguard.conf`` brings up an interface named
+        # ``wireguard`` — the config's own stem. So the transport's name reaches the
+        # node's network namespace and has to be legal there.
+        interface_from_config_filename=True,
         # A tunnel device cannot be created without these two, and nothing else is
         # granted: the proxy containers beside it stay unprivileged, so a compromised
         # data plane cannot reconfigure the node's network.
@@ -131,11 +234,21 @@ DATA_PLANES = {
     ),
     ConfigFormat.WG_QUICK: DataPlane(
         image=AMNEZIAWG_IMAGE,
-        # wg-quick takes the config PATH and derives the interface name from it.
-        command=("up", "{config}"),
+        # AmneziaWG's own fork of the tool, under its own name. The image ships no
+        # entrypoint script at all, so unlike its plain cousin it has never had anything
+        # that could have worked.
+        command=_wg_quick_command("awg-quick"),
+        executables=("awg-quick",),
+        # Same rule, same tool lineage — see the note on the format above.
+        interface_from_config_filename=True,
         # A tunnel device cannot be created without these two, and nothing else is
         # granted: the proxy containers beside it stay unprivileged, so a compromised
         # data plane cannot reconfigure the node's network.
+        #
+        # Enough on their own: neither image needs the AmneziaWG or WireGuard kernel
+        # module, because ``awg-quick``/``wg-quick`` fall back to the userspace
+        # implementation each image ships when ``ip link add`` finds no module — which is
+        # the normal case on a rented VPS, and the reason ``/dev/net/tun`` is here.
         capabilities=("NET_ADMIN",),
         devices=("/dev/net/tun:/dev/net/tun",),
     ),
@@ -190,6 +303,39 @@ _INSPECT_FORMAT = (
 _NO_LABEL = "<no value>"
 
 
+class UnrunnableTransport(Exception):
+    """This transport cannot be run on a node as declared, and no retry will help.
+
+    Raised while RENDERING rather than on the node, because it is a property of the
+    transport package and the same on every host — so the first person to see it should
+    be whoever added the package, not an operator reading `docker ps` at three in the
+    morning.
+    """
+
+
+def _check_interface_name(transport_name: str, path: str, data_plane: DataPlane) -> None:
+    """Refuse a transport whose config filename would not be a legal interface name.
+
+    Only for a data plane that declared it derives one from the other. The check is here,
+    in the one place the path and the command are decided together, and it asks about the
+    PATH the config will be written to rather than about the transport's name — because
+    the name the tool sees is the file's stem, and that is what has to be legal.
+
+    A transport name is otherwise unconstrained, so this is a real limit and the message
+    says so: 15 characters is IFNAMSIZ, and it is not ours to widen.
+    """
+    if not data_plane.interface_from_config_filename:
+        return
+    interface = PurePosixPath(path).stem
+    if not INTERFACE_NAME.match(interface):
+        raise UnrunnableTransport(
+            f"transport {transport_name!r} runs a tool that takes the network interface "
+            f"name from its config file, so it would ask for an interface called "
+            f"{interface!r} — which is not one this kernel accepts (at most 15 characters "
+            f"from a-z A-Z 0-9 _ = + . -). Rename the transport."
+        )
+
+
 def services_for(configs: Mapping[str, str]) -> list[dict]:
     """One compose service per transport, each with the daemon its format needs.
 
@@ -208,6 +354,7 @@ def services_for(configs: Mapping[str, str]) -> list[dict]:
     for name, config in configs.items():
         data_plane = DATA_PLANES[profile(name).meta.config_format]
         path = config_path_for(name)
+        _check_interface_name(name, path, data_plane)
         services.append(
             {
                 "name": name,

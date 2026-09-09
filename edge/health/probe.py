@@ -18,7 +18,7 @@ HOW:  every field of ``NodeHealth`` is about the NODE. There is deliberately no
 import logging
 from dataclasses import dataclass, field
 
-from edge.bootstrap.node_stack import config_path, digest_of, loaded_digests
+from edge.bootstrap.node_stack import config_path_for, digest_of, loaded_digests
 from edge.bootstrap.ssh import NodeConnection, NodeUnreachable
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,14 @@ async def probe(
             # provably not running the config we would push.
             health.stale.append(transport_name)
 
-        remote = await connection.read_file(config_path(transport_name))
+        # ``config_path_for``, never ``config_path``: the latter defaults to the Xray
+        # JSON extension, so before M2 this looked for every transport's config at a
+        # ``.json`` path. Latent only while the one live transport was an Xray one —
+        # a WireGuard-family config is written ``.conf``, would never be found here,
+        # and the node would be reported as permanently drifted. Carried over from M1
+        # (docs/tracker/M1/carry-over.md) and fixed here because M2 is what makes it
+        # bite.
+        remote = await connection.read_file(config_path_for(transport_name))
         if remote is None:
             # Absent config is reported as drift rather than as "missing service":
             # the container may still be running on a config that is no longer on

@@ -1,0 +1,38 @@
+{
+  "_": "Recorded from the real images by tests/e2e/edge/test_recorded_image_facts_match_the_real_images.py. Do not hand-edit: re-record with HASHI_RECORD_IMAGE_FACTS=1.",
+  "images": {
+    "docker.io/amneziavpn/amneziawg-go:3.0.3": {
+      "cmd": [
+        "/bin/sh"
+      ],
+      "entrypoint": [],
+      "resolves": {
+        "/bin/sh": true,
+        "awg-quick": true
+      }
+    },
+    "docker.io/masipcat/wireguard-go:0.0.20230223": {
+      "cmd": [
+        "/entrypoint.sh"
+      ],
+      "entrypoint": [],
+      "resolves": {
+        "/bin/sh": true,
+        "/entrypoint.sh": true,
+        "wg-quick": true
+      }
+    },
+    "ghcr.io/xtls/xray-core:1.8.24": {
+      "cmd": [
+        "-config",
+        "/etc/xray/config.json"
+      ],
+      "entrypoint": [
+        "/usr/bin/xray"
+      ],
+      "resolves": {
+        "/usr/bin/xray": true
+      }
+    }
+  }
+}

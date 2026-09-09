@@ -31,7 +31,18 @@ services:
     image: {{ transport.image }}
     restart: unless-stopped
     network_mode: host
-    command: [{% for argument in transport.command %}"{{ argument }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% if transport.command %}
+    # Rendered through `tojson` rather than quoted by hand, which is what this line used
+    # to do. A data plane's command may legitimately be a shell command line (the
+    # WireGuard family's is), and that carries quotes and other YAML metacharacters that
+    # hand-quoting emits unescaped and unparseably. JSON is a subset of YAML, so a JSON
+    # array is a valid — and correctly escaped — compose command.
+    #
+    # Omitted entirely when the data plane declares no command, which means "the image's
+    # own Cmd is already right". An empty `command: []` would not mean that: it would
+    # override the image's Cmd with nothing and the container would refuse to start.
+    command: {{ transport.command | tojson }}
+{% endif %}
 {% if transport.capabilities %}
     # Only what the transport's own format declared it needs. A tunnel device cannot
     # be created without NET_ADMIN; nothing else gets it, so a compromised proxy
