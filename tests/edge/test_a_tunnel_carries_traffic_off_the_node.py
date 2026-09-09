@@ -241,6 +241,11 @@ def test_neither_end_of_a_hop_ever_gets_a_local_exit(name: str, node, request) -
     A hop carries traffic BETWEEN our own nodes. Masquerading it out of the entry is a
     friend in Russia exiting in Russia while every screen shows green — so ``render_hop``
     fixes the policy itself rather than trusting whatever the caller believed.
+
+    NOT a red-first test, unlike every other assertion in this file, and worth saying so
+    rather than letting it borrow their credibility: it passed against the commit before
+    this one too, because nothing rendered an exit rule anywhere yet. It is a regression
+    guard on a property that has to survive M3 rather than proof that anything changed.
     """
     transport = profile(name)
     fixture = request.getfixturevalue("transport_fixture")
