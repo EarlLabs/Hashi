@@ -150,6 +150,55 @@ def hash_password(password: str) -> str:
     )
 
 
+def _decoded(encoded: str) -> tuple[int, int, int, bytes, bytes] | None:
+    """Split a stored hash into its parts, or None if it is not one.
+
+    One parser, used by ``verify_password`` and by ``is_well_formed_hash``, so that
+    "a hash the login can check" and "a hash the boot check accepts" cannot become
+    two different answers — which would be a control plane that starts happily and
+    then rejects every password.
+
+    ``validate=True`` on the base64 matters here and is not tidiness: without it
+    ``b64decode`` silently drops characters outside the alphabet, so a value that
+    has been chewed by an interpolating tool still decodes to *something* and looks
+    like a hash. The point of this function is to notice exactly that.
+    """
+    try:
+        scheme, n, r, p, salt_b64, hash_b64 = encoded.split("$")
+        if scheme != "scrypt":
+            return None
+        salt = base64.b64decode(salt_b64, validate=True)
+        expected = base64.b64decode(hash_b64, validate=True)
+    except (ValueError, TypeError):
+        # binascii.Error is a ValueError, so a malformed base64 lands here too.
+        return None
+    if not salt or not expected:
+        # An empty field is the signature of the damage this guards against: a
+        # `$name` swallowed by an interpolating tool leaves the separators behind
+        # and takes the value.
+        return None
+    if int(n) <= 1 or int(r) < 1 or int(p) < 1:
+        return None
+    return int(n), int(r), int(p), salt, expected
+
+
+def is_well_formed_hash(encoded: str) -> bool:
+    """Whether ``encoded`` has the shape ``hash_password`` produces.
+
+    Shape only — it says nothing about which password the hash is of, which is why
+    it is safe to call at boot with no secret to hand.
+
+    It exists because the one way this value is known to arrive damaged is silent:
+    ``docker compose`` interpolates the values it reads from an env file, so an
+    undoubled ``$<salt>`` or ``$<digest>`` is read as a variable name and replaced
+    with nothing. The result still starts with ``scrypt`` and still looks plausible
+    in the file, and the only symptom is a login that answers 401 forever. Nothing
+    else in the system is in a position to notice, because verifying a password
+    cannot distinguish "wrong password" from "hash arrived in pieces".
+    """
+    return _decoded(encoded) is not None
+
+
 def verify_password(password: str, encoded: str) -> bool:
     """Check a password against a stored hash, in constant time.
 
@@ -157,18 +206,18 @@ def verify_password(password: str, encoded: str) -> bool:
     closed (core invariants §4), and a misconfigured hash must deny the login
     rather than produce a 500 that a prober can distinguish from a wrong password.
     """
+    parts = _decoded(encoded)
+    if parts is None:
+        return False
+    n, r, p, salt, expected = parts
     try:
-        scheme, n, r, p, salt_b64, hash_b64 = encoded.split("$")
-        if scheme != "scrypt":
-            return False
-        expected = base64.b64decode(hash_b64)
         derived = hashlib.scrypt(
-            password.encode(),
-            salt=base64.b64decode(salt_b64),
-            n=int(n), r=int(r), p=int(p),
-            dklen=len(expected),
-            maxmem=64 * 1024 * 1024,
+            password.encode(), salt=salt, n=n, r=r, p=p,
+            dklen=len(expected), maxmem=64 * 1024 * 1024,
         )
-    except (ValueError, TypeError):
+    except ValueError:
+        # Parameters that parse as integers but that scrypt itself refuses — an `n`
+        # that is not a power of two, a cost beyond `maxmem`. Still a denial, never
+        # a 500.
         return False
     return hmac.compare_digest(derived, expected)

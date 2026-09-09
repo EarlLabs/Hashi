@@ -9,8 +9,23 @@ HOW:  ``Settings()`` raises when a required value is absent. Nothing else in the
       codebase may read the environment directly.
 """
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from control.app.crypto import is_well_formed_hash
+
+
+class OperatorHashMalformed(RuntimeError):
+    """The configured operator hash is not a hash, so nobody could ever log in.
+
+    A plain exception rather than a pydantic ``ValueError``, and that is the whole
+    reason it exists: pydantic puts the offending INPUT into the ``ValidationError``
+    it raises, and this input is the operator's password hash. It would then be
+    printed by the container on every failed boot and kept in whatever collects
+    container output — an offline brute-force target, published by the code that was
+    trying to protect it. Raising something pydantic does not wrap keeps the message
+    to what an operator needs and no more.
+    """
 
 
 class Settings(BaseSettings):
@@ -70,6 +85,43 @@ class Settings(BaseSettings):
     # that five seconds is not enough is still a node worth reaching — and because the
     # test suite lowers it, which is how it stays honest that the value is used.
     node_connect_timeout: int = 5
+
+    @field_validator("operator_password_hash")
+    @classmethod
+    def _hash_must_be_well_formed(cls, value: str) -> str:
+        """Refuse to boot with a hash nobody could ever match.
+
+        The failure this replaces was observed on a live host and cost the owner
+        their panel: ``docker compose --env-file`` interpolates the values it reads,
+        so an undoubled ``$`` in a scrypt hash starts a variable reference and the
+        field after it is replaced with nothing. Compose exits 0, the health check
+        passes, the panel serves a login form, and every attempt answers 401 — with a
+        hash that looks perfectly correct sitting in the file. Whether it happens at
+        all depends on the random salt and digest, so the same procedure works on one
+        host and locks the owner out of the next.
+
+        Nothing further down can catch it. ``verify_password`` cannot tell a damaged
+        hash from a wrong password, and must not: authorisation fails closed. So the
+        only place the shape can be judged is here, once, before anything serves.
+        """
+        if is_well_formed_hash(value):
+            return value
+        hint = (
+            "It still has doubled dollars in it, so it was escaped for docker compose "
+            "and then handed over without compose expanding it — undouble them if this "
+            "process is not started by compose."
+            if "$$" in value
+            else "The usual cause is docker compose interpolation: compose expands the "
+            "values it reads from an env file, so each `$` in the hash must be written "
+            "`$$` in that file. `python -m control.cli hash-password` now prints the "
+            "line already escaped — paste it exactly as it comes out."
+        )
+        raise OperatorHashMalformed(
+            "HASHI_OPERATOR_PASSWORD_HASH is not a well-formed scrypt hash "
+            f"(expected scrypt$n$r$p$salt$digest). {hint} Refusing to start: a panel "
+            "that boots with a damaged hash answers 401 to its own operator forever, "
+            "and there is nothing in the logs to grep for."
+        )
 
     @property
     def public_base_url(self) -> str:

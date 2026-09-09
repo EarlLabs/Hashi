@@ -19,6 +19,34 @@ from control.app.crypto import hash_password
 from edge import checker
 
 
+def escaped_for_env_file(value: str) -> str:
+    """A value that survives being read out of an env file by docker compose.
+
+    WHY THIS IS DECIDED HERE. A scrypt hash is ``scrypt$n$r$p$salt$digest`` and
+    ``docker compose --env-file`` — which every invocation in this project uses,
+    because CLAUDE.md requires it — expands the values it reads. So ``$digest``
+    becomes a variable reference and the digest arrives empty, unless the digest
+    happens to start with a digit. Roughly five deployments in six are damaged, and
+    the damage is silent: compose exits 0, the health check passes, and the operator
+    is locked out of their own panel with a 401.
+
+    Three places could fix it and only one of them is honest. Telling the operator to
+    double the dollars is the version that was already tried — it is in the runbook —
+    and it is a rule a person copying a hash at three in the morning does not follow.
+    Having the bootstrap script rewrite their env file means a script editing the file
+    that holds their secrets, to a value they did not choose. That leaves the command
+    that prints the value: it knows exactly where the value is going, it is the only
+    step the operator cannot skip, and pre-escaping costs the reader nothing but a
+    sentence of explanation.
+
+    The one case this makes worse is the operator who exports the variable by hand
+    instead of using compose: they get a hash with doubled dollars and no expansion.
+    That is why ``Settings`` refuses to boot on a malformed hash and names this exact
+    case in its message — a loud failure at boot rather than a quiet 401 forever.
+    """
+    return value.replace("$", "$$")
+
+
 def command_hash_password(_args: argparse.Namespace) -> int:
     """Prompt for a password twice and print its hash."""
     password = getpass.getpass("operator password: ")
@@ -33,8 +61,13 @@ def command_hash_password(_args: argparse.Namespace) -> int:
         return 2
 
     print()
-    print("Put this in .env (the hash, never the password):")
-    print(f"HASHI_OPERATOR_PASSWORD_HASH={hash_password(password)}")
+    print("Put this in .env (the hash, never the password), exactly as printed:")
+    print(f"HASHI_OPERATOR_PASSWORD_HASH={escaped_for_env_file(hash_password(password))}")
+    print()
+    print("The doubled $$ are deliberate and belong in the file. docker compose")
+    print("expands the values it reads from an env file, so it turns each $$ back")
+    print("into one $ on the way to the container; a single $ there would start a")
+    print("variable reference and the rest of that field would arrive empty.")
     return 0
 
 

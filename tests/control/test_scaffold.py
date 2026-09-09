@@ -20,13 +20,19 @@ from pydantic import ValidationError
 from control.app.main import create_app
 from control.app.settings import Settings
 
+# The shape ``hash_password`` produces, with obviously fake salt and digest. It has to
+# BE that shape rather than any placeholder string: ``Settings`` refuses to build on a
+# hash that could never match a password, because a control plane that boots with a
+# damaged one answers 401 to its own operator forever (see settings.py).
+WELL_FORMED_HASH = "scrypt$32768$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g="
+
 # A complete, obviously fake configuration. The key is 48 characters because the
 # application enforces a minimum length — see the test below for why.
 TEST_SETTINGS = Settings(
     secret_key="test-only-not-a-real-key-000000000000000000000000",
     database_url="postgresql+asyncpg://unused:unused@127.0.0.1:1/unused",
     operator_username="owner",
-    operator_password_hash="scrypt$32768$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    operator_password_hash=WELL_FORMED_HASH,
 )
 
 
@@ -79,7 +85,7 @@ def test_missing_secret_key_fails_at_construction(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(ValidationError):
         Settings(
             database_url="postgresql+asyncpg://u:p@h/d",
-            operator_password_hash="x",
+            operator_password_hash=WELL_FORMED_HASH,
         )
 
 
@@ -96,7 +102,7 @@ def test_a_short_secret_key_is_refused() -> None:
         Settings(
             secret_key="too-short",
             database_url="postgresql+asyncpg://u:p@h/d",
-            operator_password_hash="x",
+            operator_password_hash=WELL_FORMED_HASH,
         )
     with pytest.raises(ValueError):
         SecretBox("too-short")
@@ -108,7 +114,7 @@ def test_missing_database_url_fails_at_construction(monkeypatch: pytest.MonkeyPa
     with pytest.raises(ValidationError):
         Settings(
             secret_key="test-only-not-a-real-key-000000000000000000000000",
-            operator_password_hash="x",
+            operator_password_hash=WELL_FORMED_HASH,
         )
 
 
@@ -128,7 +134,7 @@ def test_subscription_urls_are_https_by_default() -> None:
     settings = Settings(
         secret_key="test-only-not-a-real-key-000000000000000000000000",
         database_url="postgresql+asyncpg://u:p@h/d",
-        operator_password_hash="x",
+        operator_password_hash=WELL_FORMED_HASH,
         public_host="delivery.example.com",
     )
     assert settings.public_base_url == "https://delivery.example.com"

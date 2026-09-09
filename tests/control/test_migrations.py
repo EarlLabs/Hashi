@@ -46,7 +46,10 @@ def run_alembic(*arguments: str) -> subprocess.CompletedProcess:
         **os.environ,
         "HASHI_DATABASE_URL": DATABASE_URL,
         "HASHI_SECRET_KEY": "test-only-not-a-real-key-000000000000000000000000",
-        "HASHI_OPERATOR_PASSWORD_HASH": "unused-for-migrations",
+        # Unused by the migrations themselves, but `env.py` builds the whole Settings
+        # object to get the URL — and Settings refuses a hash that is not one, so a
+        # placeholder word here would stop every migration.
+        "HASHI_OPERATOR_PASSWORD_HASH": "scrypt$32768$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
     }
     return subprocess.run(
         [
