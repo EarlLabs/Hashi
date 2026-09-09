@@ -28,15 +28,25 @@ break exactly one node, in the two places that behave differently: inside the pu
 window, where the node may be half-configured and core invariants §4 requires it to be
 marked degraded; and outside it, where the node's recorded state is still true and must
 not be touched. Both must leave the other node updated and reported.
+
+M4.6 makes this file able to FAIL, which is the only property a test really has. Two
+gaps, one shape: a double whose real counterpart changed goes silently green rather
+than red, and the address-leak guard was injecting a ``MissingGreenlet``, which never
+carried an address in the first place. So every double now goes in through ``pinned``,
+which refuses at setup when the signatures have drifted apart, and the leak has its own
+exception that really does name the node — see
+``test_an_unexpected_error_never_carries_the_node_address_outward``.
 """
 
+import errno
+import inspect
 import logging
 
 import pytest
 from sqlalchemy.exc import MissingGreenlet
 
 from control.app.models import NodeState
-from edge.bootstrap import node_stack
+from edge.bootstrap import NodeConnection, node_stack
 
 # A reserved documentation address (RFC 5737), as everywhere else in this zone. It is
 # never dialled here — the connection is replaced — but the record has to name
@@ -46,6 +56,65 @@ NODE_ADDRESS = "192.0.2.10"
 # Obviously not a key. It only has to be non-empty: ``target_for`` refuses a node with
 # no SSH address, and the connection that would parse this never runs.
 FAKE_PRIVATE_KEY = "not-a-real-key"
+
+# The SSH port on the fixture nodes' records. Written into the record rather than left
+# to the API's default so that the fake connection error below can quote the address and
+# port that WOULD have been dialled without inventing either: what it stands in for is
+# the exception asyncio raises, which is built from exactly those two.
+NODE_SSH_PORT = 22
+
+
+def a_refused_connection() -> OSError:
+    """The exception a refused TCP connect really produces — address, port and all.
+
+    ``[Errno 111] Connect call failed ('<host>', <port>)`` is what the reviewer of M4.3
+    reproduced out of the SSH layer, and it is an ``OSError`` rather than a
+    ``NodeUnreachable``, so it reaches ``apply_node``'s broad catch unsanitised.
+
+    Built here rather than inline so the test can name its type without hardcoding the
+    class Python picks: ECONNREFUSED is re-classed to ``ConnectionRefusedError``, and
+    that name is the whole of what the operator is given.
+    """
+    return OSError(
+        errno.ECONNREFUSED, f"Connect call failed ('{NODE_ADDRESS}', {NODE_SSH_PORT})"
+    )
+
+
+def _parameters(function) -> list[tuple]:
+    """A callable's parameters as a call site depends on them: name, kind, default.
+
+    Annotations are deliberately left out. The doubles below leave ``connection``
+    untyped, because typing it would mean importing the very class they exist to stand
+    in for — and an annotation is not what breaks a caller. A renamed keyword is.
+    """
+    return [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in inspect.signature(function).parameters.values()
+    ]
+
+
+def pinned(monkeypatch: pytest.MonkeyPatch, module, name: str, double) -> None:
+    """Install a double, refusing if it and the real function have drifted apart.
+
+    The gap this closes: a double is monkeypatched in whether or not it still resembles
+    anything. Change ``place_config``'s keyword and this file keeps passing, still
+    green, no longer standing in for code that exists — and what it guards is charter
+    criterion 6, that a revocation reports per node instead of 500-ing. A stale double
+    there buys a suite that proves nothing at exactly the moment it matters.
+
+    Fails at fixture setup, naming both signatures, because a drift is a fact about the
+    test rather than about the node being simulated.
+    """
+    real = getattr(module, name)
+    assert _parameters(real) == _parameters(double), (
+        f"the double for {module.__name__}.{name} no longer matches the real one:\n"
+        f"  real:   {inspect.signature(real)}\n"
+        f"  double: {inspect.signature(double)}"
+    )
+    assert inspect.iscoroutinefunction(real) == inspect.iscoroutinefunction(double), (
+        f"{module.__name__}.{name} and its double disagree about being a coroutine"
+    )
+    monkeypatch.setattr(module, name, double)
 
 
 class AcceptingNode:
@@ -76,12 +145,34 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the five node_stack calls that touch a host, and nothing else."""
     from control.app.services import apply
 
-    monkeypatch.setattr(apply, "NodeConnection", lambda target: AcceptingNode())
+    def connection_for(target):
+        return AcceptingNode()
+
+    # ``NodeConnection`` is replaced by a factory rather than by a function, so it is
+    # pinned against the constructor it stands in for and against the surface
+    # ``apply_node`` reaches for on a live connection: the async context manager, and
+    # the host key it persists on a first successful connect. A double that lost
+    # ``learned_host_key`` would make the pinning branch quietly untestable.
+    assert _parameters(NodeConnection.__init__)[1:] == _parameters(connection_for), (
+        f"the connection double no longer matches NodeConnection.__init__:\n"
+        f"  real:   {inspect.signature(NodeConnection.__init__)}\n"
+        f"  double: {inspect.signature(connection_for)}"
+    )
+    for attribute in ("learned_host_key", "__aenter__", "__aexit__"):
+        assert hasattr(AcceptingNode, attribute), (
+            f"the connection double has no {attribute!r}, which apply_node uses"
+        )
+    monkeypatch.setattr(apply, "NodeConnection", connection_for)
 
     async def prepare(connection) -> None:
         return None
 
-    async def place_config(connection, *, transport_name: str, config: str, path: str) -> None:
+    # ``path`` carries the real function's default, which the double had already drifted
+    # away from — found by ``pinned`` the moment it was introduced, which is the whole
+    # argument for it.
+    async def place_config(
+        connection, *, transport_name: str, config: str, path: str | None = None
+    ) -> None:
         connection.placed.append(transport_name)
 
     async def place_compose(connection, *, compose: str) -> None:
@@ -93,11 +184,11 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def running_services(connection) -> list[str]:
         return list(connection.placed)
 
-    monkeypatch.setattr(node_stack, "prepare", prepare)
-    monkeypatch.setattr(node_stack, "place_config", place_config)
-    monkeypatch.setattr(node_stack, "place_compose", place_compose)
-    monkeypatch.setattr(node_stack, "restart", restart)
-    monkeypatch.setattr(node_stack, "running_services", running_services)
+    pinned(monkeypatch, node_stack, "prepare", prepare)
+    pinned(monkeypatch, node_stack, "place_config", place_config)
+    pinned(monkeypatch, node_stack, "place_compose", place_compose)
+    pinned(monkeypatch, node_stack, "restart", restart)
+    pinned(monkeypatch, node_stack, "running_services", running_services)
 
 
 async def fleet_with_friend(client, session, reality_params, ws_params):
@@ -118,6 +209,7 @@ async def fleet_with_friend(client, session, reality_params, ws_params):
                 "address": NODE_ADDRESS,
                 "location_label": country,
                 "ssh_host": NODE_ADDRESS,
+                "ssh_port": NODE_SSH_PORT,
                 "ssh_private_key": FAKE_PRIVATE_KEY,
             },
         )
@@ -235,7 +327,9 @@ def push_interrupted_on_one_node(accepting_nodes, monkeypatch: pytest.MonkeyPatc
         if restarts["count"] == 1:
             raise MissingGreenlet("greenlet_spawn has not been called")
 
-    monkeypatch.setattr(node_stack, "restart", restart)
+    # Pinned against the double ``accepting_nodes`` already installed, which was itself
+    # pinned against the real ``restart`` — so the chain still reaches the real one.
+    pinned(monkeypatch, node_stack, "restart", restart)
 
 
 @pytest.fixture
@@ -256,7 +350,7 @@ def bookkeeping_fails_on_one_node(accepting_nodes, monkeypatch: pytest.MonkeyPat
             raise MissingGreenlet("greenlet_spawn has not been called")
         return real_digest_of(config)
 
-    monkeypatch.setattr(node_stack, "digest_of", digest_of)
+    pinned(monkeypatch, node_stack, "digest_of", digest_of)
 
 
 async def test_an_unexpected_error_mid_push_is_reported_and_the_fan_out_continues(
@@ -329,3 +423,77 @@ async def test_an_unexpected_error_after_the_push_leaves_the_node_alone(
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.ACTIVE
     assert failed_node.state_detail is None
+
+
+@pytest.fixture
+def a_connection_error_naming_the_node(accepting_nodes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FIRST node fails inside the push window with an error that CARRIES its address.
+
+    The point of this fixture, and the reason it exists next to
+    ``push_interrupted_on_one_node`` rather than replacing it: that one injects a
+    ``MissingGreenlet``, whose message is about greenlets and has never named a host. So
+    the guard asserting the node's address does not reach the operator was asserting the
+    absence of something that was never present, and a later step "harmonising" the
+    broad catch's message by putting ``{exc}`` back would reintroduce the leak with this
+    suite still green.
+
+    This is the real shape. A TCP-level failure out of the SSH layer is an ``OSError``
+    whose ``str()`` is ``[Errno 111] Connect call failed ('<host>', <port>)`` — the
+    reviewer of M4.3 reproduced exactly that — and ``OSError`` is not ``NodeUnreachable``,
+    so it reaches the broad catch unsanitised. Raised from ``restart`` because that is
+    inside the connection block; where in the window it comes from is not the point.
+    """
+    restarts = {"count": 0}
+
+    async def restart(connection) -> None:
+        restarts["count"] += 1
+        if restarts["count"] == 1:
+            raise a_refused_connection()
+
+    pinned(monkeypatch, node_stack, "restart", restart)
+
+
+async def test_an_unexpected_error_never_carries_the_node_address_outward(
+    client, session, reality_params, ws_params, a_connection_error_naming_the_node, caplog
+) -> None:
+    """A node's address must not travel with the failure — M4.3's rule, now testable.
+
+    The broad catch reports ``type(exc).__name__`` and never ``str(exc)``, deliberately
+    and unlike its neighbouring arms, whose messages are written by us or by ``edge``
+    and name no host. This string is BOTH an API response and a stored ``state_detail``,
+    so both are checked: a node's address in the panel is a step towards the one record
+    the charter forbids (core invariants §4 and §6), and the database keeps it until
+    someone re-applies.
+    """
+    # The guard has teeth only if what is injected really carries the address. Asserted
+    # rather than assumed, because the version of this test that did assume it spent a
+    # milestone proving nothing.
+    assert NODE_ADDRESS in str(a_refused_connection())
+
+    caplog.set_level(logging.ERROR)
+    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+
+    response = await client.post(f"/api/friends/{friend_id}/revoke")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["nodes_failed"]) == 1, body
+    failed_id, reason = next(iter(body["nodes_failed"].items()))
+
+    # The type name has to be there, or the operator is told nothing at all. It is the
+    # whole of what they get, which is why the rest of this test is about what they must
+    # not get.
+    assert type(a_refused_connection()).__name__ in reason, reason
+    assert NODE_ADDRESS not in response.text, (
+        "the node's address reached the operator inside the failure message"
+    )
+
+    from control.app.services import nodes
+
+    failed_node = await nodes.get_node(session, failed_id)
+    assert failed_node.state == NodeState.DEGRADED
+    assert NODE_ADDRESS not in (failed_node.state_detail or ""), (
+        "the node's address was written into the database as its state detail"
+    )
+    # The full text is not lost, only kept out of operator-facing strings.
+    assert any(record.exc_info for record in caplog.records), "no traceback was logged"
