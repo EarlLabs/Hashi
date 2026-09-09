@@ -1583,6 +1583,161 @@ operator never believed it would.
 
 ---
 
+## → M18 — A node that cannot work says so before it fails · found in the field 2026-09-09
+
+Three first-run experiences found during the field run, all the same shape: the
+product knows something the operator does not, and waits until apply to say it.
+
+**Applying a node with nothing enabled gives a YAML parser error.** Register a
+node, press the obvious next button:
+
+```
+502  the node could not be configured and has been marked degraded:
+     command failed (1): 'cd /opt/hashi && docker compose up -d --remove-orphans':
+     services must be a mapping
+```
+
+and the node is left `degraded`. M4 is working exactly as designed here — that is
+the *real* error, surfaced verbatim, where before this run it would have been
+`409: a node cannot go from draft to degraded`. The problem is that the situation
+is not a failure at all: a node with nothing enabled has nothing to serve, and
+the honest answer is *"this node has no transports enabled"* or a no-op — not a
+message about mappings, and not a degraded node.
+
+**The panel offers `ssh_user` defaulting to `root` with no hint**, while
+`scripts/node-bootstrap.sh` ends by telling the operator to register a different
+account. Correct under M13's shape — root always works — but the panel is where
+that choice is made and it offers no help.
+
+**A node applied as `root` and later switched to a non-root account keeps
+root-owned files.** The script hands over the directory only; whatever an earlier
+apply left inside still belongs to `root`. Recorded in `docs/tracker/M13/carry-over.md`
+because "re-run the script" looks like it should be sufficient and is not.
+
+### M18.1 — Applying a node with no enabled transports is not an error
+### M18.2 — The panel says which account to register, where the account is chosen
+### M18.3 — Changing a node's account either carries its files or says it does not
+
+**E2E:** `tests/e2e/control/` — apply a node with nothing enabled and assert the
+answer is not a parser error. `make test-control` is the gate.
+
+**Done when**
+- [ ] Applying a node with no transports gives an answer an operator can act on,
+      and does not degrade the node.
+- [ ] The panel's node form does not silently point at an account the bootstrap
+      script did not prepare.
+
+acceptance: yes
+Register a node and press apply before enabling anything. Whatever happens, it
+must be something a first-time operator can act on. Then look at the node form
+and ask whether it tells you which account to name.
+
+---
+
+## → M19 — What a node needs that nothing checks · found in the field 2026-09-09
+
+A node has kernel-level prerequisites that neither `scripts/node-bootstrap.sh`
+nor `edge/bootstrap/node_stack.py` asserts, because neither can: `/proc/sys` is
+read-only inside the data-plane container, and the script's own header declares
+it does not tune the kernel. Every one of them was fine on the two field hosts,
+so none of this is a regression — it is a set of silent preconditions.
+
+- **`net.ipv4.ip_forward`** must be 1 for any tunnel to carry traffic off the
+  node. Nothing sets or checks it; it is 1 today only because dockerd sets it at
+  every start. Recorded in `docs/tracker/M14/carry-over.md`.
+- **`net.ipv4.conf.all.rp_filter`** must be `0` or `2` on an **entry** node, or
+  replies arriving on the hop interface are dropped by the kernel before anything
+  sees them. Both field hosts happen to ship `2`. A host shipping `1` would give
+  a two-hop that handshakes and carries nothing — M14's shape again, at a layer
+  no rule this project renders can reach. Recorded in `docs/tracker/M3/carry-over.md`.
+- **A host whose sshd uses `AuthorizedKeysCommand` alone.** `node-bootstrap.sh`
+  writes `~/.ssh/authorized_keys` and then verifies its own work *by reading back
+  the file it just wrote* — which is true whether or not sshd consults that file.
+  The entry host really does take keys from cloud metadata and works only because
+  its sshd *also* sets `AuthorizedKeysFile`. On a metadata-only host the script
+  would report `ready` with a key that cannot log in. Recorded in
+  `docs/tracker/M11/carry-over.md`. **This is a verification that cannot fail**,
+  which is the same defect class as M4.6.
+- **`ip` is not declared in `DataPlane.executables`** for the WireGuard family,
+  although `PostUp`/`PostDown` now run `ip rule` and `ip route`. M2.2's offline
+  command check would not catch a future pinned image without `iproute2`.
+  Failure mode is loud, not silent, which is why it was left.
+
+### M19.1 — Decide where a node's kernel preconditions are asserted
+
+The script says it does not tune the kernel, and that is a defensible boundary —
+but "does not tune" and "does not check" are different promises. Checking and
+refusing costs nothing and turns a silent wrong answer into a sentence.
+
+### M19.2 — A verification must be able to fail
+
+The `authorized_keys` read-back is the example. Ask sshd what it will actually
+consult (`sshd -T`), or authenticate with the key rather than reading the file.
+
+### M19.3 — Declare `ip`, and re-record the golden image facts
+
+**E2E:** `tests/infra/` for what the script asserts; `tests/edge/` for the
+executables declaration. `make test-infra` and `make test-edge` are the gates.
+
+**Done when**
+- [ ] A host missing a kernel precondition is told so by name, before it is
+      registered as a working node.
+- [ ] `node-bootstrap.sh` cannot report `ready` for a key that will not
+      authenticate.
+
+acceptance: yes
+On a host whose sshd takes keys only from a command, run the script. It must not
+say `ready`. If no such host is available, say so rather than passing it.
+
+---
+
+## → M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09
+
+**The owner has already decided not to fix this** (`docs/decisions.md`,
+2026-09-09: the image pin stays, the limitation is recorded). This milestone
+exists so the work is written down if that decision is ever revisited — it is
+**not** queued.
+
+`masipcat/wireguard-go:0.0.20230223` ships `iptables` on the **legacy** backend;
+`amneziavpn/amneziawg-go:3.0.3` ships **nft**. Every node this project
+bootstraps runs `ufw`, which populates nft with `FORWARD` policy `DROP`. M14's
+rules therefore land in a ruleset that cannot front-run it.
+
+**Measured on the live leaf**, with a real client from the friend's own
+subscription and an image that ships `ip6tables` so the client could not be the
+cause:
+
+| | |
+|---|---|
+| handshake | completes — 46 seconds old |
+| client sent / received | 1.33 KiB / 188 B |
+| address echo through the tunnel | **times out** |
+
+Rule placement on that one host at that one moment:
+
+```
+nft     -A FORWARD -o amneziawg -j ACCEPT      ← where ufw's DROP lives
+legacy  -A FORWARD -o wireguard -j ACCEPT      ← traversed independently
+```
+
+So `amneziawg` is proven end to end and `wireguard` is proven broken as a
+friend-facing exit. **Note M17 independently makes it unusable for a fleet
+anyway**, for a reason that has nothing to do with netfilter.
+
+### M20.1 — Either pin a plain-WireGuard image on the nft backend, or render backend-aware rules, or retire the transport
+
+The third is worth weighing seriously given M17: a transport that serves one
+friend and cannot forward is configurable and useful for nothing.
+
+**Done when**
+- [ ] A friend on a plain `wireguard` transport reaches the internet on a `ufw`
+      host, or the transport no longer offers itself as a friend-facing exit.
+
+acceptance: yes
+The same measurement as above, on a ufw host, with the answer changed.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
@@ -1611,6 +1766,36 @@ operator never believed it would.
   the services, the API and the tests. The label is a template concern and does
   not travel into the code.
 - **Still open: 4** (the `xray-core` pin), which blocks nothing.
+
+---
+
+## Where the field run left the plan, 2026-09-09
+
+The plan grew from 11 milestones to 20. **Nine were appended during the run**, and
+every one of them came from running the product rather than reading it:
+
+| | how it was found |
+|---|---|
+| M12 | ran the acceptance driver once — it cannot hold a browser |
+| M13 | first apply to a prepared host — the control plane needs root |
+| M14 | asked for a page, not a handshake |
+| M15 | tried to build the hop — a friend-facing transport locks the node out, permanently |
+| M16 | reviewer, minutes after the two-hop worked — the exit is Amsterdam, the DNS is still Russia |
+| M17 | added a second friend — a WireGuard transport serves exactly one |
+| M18 | pressed apply on a node with nothing enabled |
+| M19 | a host whose sshd takes keys from cloud metadata |
+| M20 | asked which netfilter ruleset the rules landed in |
+
+Plus **M4.4–M4.6** and **M6.4–M6.6** appended inside existing milestones.
+
+**Every one of them passed `make test`.** That is this plan's own thesis holding
+nine more times: *everything checkable by rendering works; everything checkable
+only by running does not.*
+
+**M6.6 is the one that explains the rest.** `make test` excludes e2e by design and
+CI runs the same three zone targets, so **nothing runs `tests/e2e/` at all** —
+which is why `panel-bootstrap.sh`'s own idempotency scenario has been failing for
+as long as it has existed. The check was written. Nothing executed it.
 
 **On decision 2, the trade-off worth restating:** Tailscale's coordination is a US
 service that may be unreachable from Russia. If it is down exactly when an
