@@ -121,6 +121,11 @@ async def test_neither_end_of_a_hop_is_told_to_let_traffic_out(client, session) 
 
     Built through the same API an operator uses and then rendered as ``apply`` would, so
     what is asserted is the text that would reach a node.
+
+    NOT a red-first test, unlike the rest of this file: it passed against the commit
+    before this one as well, because at that point nothing rendered an exit rule for any
+    purpose. It is a regression guard — the property it holds has to survive M3, which is
+    when a hop end first gets an egress policy of its own.
     """
     for name, address, label in (
         ("entry-ru", "192.0.2.20", "Testland"),

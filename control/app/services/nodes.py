@@ -95,9 +95,16 @@ def node_view(node: Node) -> NodeView:
 # The two answers are not symmetric in how they fail, and that is why this is written
 # down rather than assumed. A friend-facing tunnel with no exit produces a friend who
 # says at once that nothing loads. A hop that exits locally produces a friend in Russia
-# whose traffic leaves in Russia, with two active nodes and a live hop on every screen —
-# so a hop end gets ``NONE`` here, and ``edge.relay`` fixes it at ``NONE`` again when it
-# renders the pair. Two independent guarantees for the failure nobody can see.
+# whose traffic leaves in Russia, with two active nodes and a live hop on every screen.
+#
+# WHICH OF THE TWO RELAY ENTRIES BELOW IS LIVE TODAY: neither, and they are here on
+# purpose. ``apply.render_for_node`` never asks this function about a hop end — it
+# recognises a relay purpose first and dispatches the pair to ``relay.render_end``, which
+# reaches ``edge.relay.render_hop``, and THAT is where a hop's ``NONE`` actually comes
+# from. So the guarantee in force is ``render_hop``'s own, and these two rows are a
+# forward guard: the day something renders a hop end through the ordinary server path,
+# the answer is already decided and it is the safe one. They are unreachable, not dead —
+# do not delete them because the call graph says nothing reaches them.
 _EGRESS: dict[str, Egress] = {
     TransportPurpose.FRIENDS: Egress.LOCAL,
     TransportPurpose.RELAY_ENTRY: Egress.NONE,
