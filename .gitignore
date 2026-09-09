@@ -34,3 +34,7 @@ backups/
 # swell the repository and leave nothing readable in the history. The tracker
 # directory (docs/tracker/) holds the verdict TEXT and IS committed.
 .acceptance/
+
+# Docker CLI config. The e2e helpers run `docker` with no HOME, so it lands here
+# rather than in the operator's home directory. Nothing in it is ours.
+.docker/
