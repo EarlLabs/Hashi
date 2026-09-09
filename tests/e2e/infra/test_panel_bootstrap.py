@@ -103,6 +103,11 @@ def env_file(directory: pathlib.Path, **overrides: str | None) -> pathlib.Path:
     values: dict[str, str | None] = {
         "HASHI_SECRET_KEY": FAKE_SECRET_KEY,
         "HASHI_PUBLIC_HOST": "panel-bootstrap.invalid",
+        # M7's private site. Required by the caddy service since the Caddyfile split in
+        # two; the port is inside the container only, because this install publishes
+        # nothing (the script uses the base compose file alone).
+        "HASHI_PRIVATE_HOST": "panel-bootstrap-console.invalid",
+        "HASHI_PRIVATE_PORT": "54143",
         "HASHI_OPERATOR_USERNAME": "owner",
         # Pasted exactly as the command printed it, escaping and all — see above.
         "HASHI_OPERATOR_PASSWORD_HASH": operator_hash_line().split("=", 1)[1],
@@ -173,6 +178,8 @@ def compose(
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "HASHI_SECRET_KEY": FAKE_SECRET_KEY,
             "HASHI_PUBLIC_HOST": "panel-bootstrap.invalid",
+            "HASHI_PRIVATE_HOST": "panel-bootstrap-console.invalid",
+            "HASHI_PRIVATE_PORT": "54143",
             "HASHI_OPERATOR_USERNAME": "owner",
             "HASHI_OPERATOR_PASSWORD_HASH": "x",
             "POSTGRES_USER": "hashi",

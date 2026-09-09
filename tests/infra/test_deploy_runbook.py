@@ -22,6 +22,9 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 RUNBOOK = REPO / "docs" / "deploy" / "runbook.md"
 SCRIPT = REPO / "scripts" / "node-bootstrap.sh"
+TUNNEL_SCRIPT = REPO / "scripts" / "management-tunnel.sh"
+PANEL_SCRIPT = REPO / "scripts" / "panel-bootstrap.sh"
+CADDYFILE = REPO / "deploy" / "caddy" / "Caddyfile"
 
 # Ports that mean something to somebody, so a literal one is a value that gets copied.
 # The same list the script's own test uses, for the same reason.
@@ -287,3 +290,104 @@ def test_the_leaf_section_does_not_read_as_though_the_host_were_blank(
         "the section does not say the script never closes a port, so an operator reads a "
         "re-run as a rule set that shrinks to the arguments they just passed"
     )
+
+
+@pytest.fixture(scope="module")
+def panel_section(runbook: str) -> str:
+    """The section that takes an operator to a console that is no longer public — M7."""
+    section = re.search(r"^## Reaching the panel\n(?:.*\n)*?(?=^## )", runbook, re.M)
+    assert section, (
+        "the runbook does not say how to reach the panel now that it is off the public "
+        "hostname — which leaves the operator with a 404 and no next step"
+    )
+    return section.group(0)
+
+
+def test_the_panel_section_quotes_the_scripts_rather_than_paraphrasing_it(
+    panel_section: str,
+) -> None:
+    """Every operator-facing string in the section exists verbatim in a script.
+
+    The same mechanical anti-drift M11.3 established for the leaf section, and it is
+    what makes changing a `say` line cost the same edit in both places. Paraphrase is
+    how a runbook stops matching the thing it documents: nothing breaks, the words
+    just quietly stop being the ones on the screen.
+    """
+    quoted = {
+        TUNNEL_SCRIPT: (
+            "Its configuration follows ONCE and is not stored anywhere",
+            "already a peer of this tunnel",
+            # Kept to what fits on one line in BOTH files: the script wraps this
+            # message and so does the prose quoting it, and a fragment that spans a
+            # newline in either can never match verbatim.
+            "NOT done, and not yet true: the tunnel is not up",
+        ),
+        PANEL_SCRIPT: (
+            "generating the management tunnel the panel is reached over",
+        ),
+    }
+    for path, strings in quoted.items():
+        source = path.read_text()
+        for string in strings:
+            assert string in source, (
+                f"the runbook quotes {string!r}, which {path.name} does not print"
+            )
+            assert string in panel_section, (
+                f"{path.name} prints {string!r} and the runbook does not quote it"
+            )
+
+
+def test_the_panel_section_agrees_with_the_caddyfile_about_what_each_site_serves(
+    panel_section: str,
+) -> None:
+    """The split is the milestone, so the runbook's account of it must be the truth.
+
+    An operator reading that the console is on the public site — or that ``/sub`` moved
+    — makes exactly the wrong decision about which port to open, and a firewall opened
+    on the wrong reasoning is how the panel ends up public again.
+    """
+    caddyfile = CADDYFILE.read_text()
+    for path in ("/sub/*", "/panel/*", "/api/*", "/static/*"):
+        assert path in caddyfile, f"the Caddyfile no longer mentions {path}"
+        assert path in panel_section, (
+            f"the Caddyfile serves {path} and the runbook's table does not say where"
+        )
+
+
+def test_the_panel_section_leaves_the_way_back_in_verified_rather_than_described(
+    panel_section: str,
+) -> None:
+    """M7.3 was raised from "document" to "document and TEST" on 2026-09-09.
+
+    A fallback that has only been written down is worth nothing on the day it is
+    needed, and that day is an emergency rotation. So the section has to carry a
+    command that CHECKS the route, not only one that opens it — and it has to say what
+    a working answer looks like.
+    """
+    assert "ssh -L" in panel_section, "the section does not show how to open the forward"
+    checks = re.findall(r"curl[^\n]*", panel_section)
+    assert checks, "the section shows no command that checks the fallback actually works"
+    assert any("panel" in check for check in checks), (
+        "the section's check does not ask for the console, so it proves the forward is "
+        "open rather than that the panel answers through it"
+    )
+    assert "200" in panel_section, (
+        "the section does not say what a working answer looks like, so an operator "
+        "cannot tell a checked fallback from an unchecked one"
+    )
+
+
+def test_the_panel_section_does_not_render_forwarding_rules_into_the_admin_tunnel(
+    panel_section: str,
+) -> None:
+    """The quiet mistake the plan names, kept out of the prose an operator copies.
+
+    The management tunnel carries traffic TO the panel host and never THROUGH it, so
+    M14's `PostUp`/`PostDown` masquerade must not be rendered for it — doing so turns
+    the admin tunnel into an exit node, which is a change of what the host is, made by
+    nobody. The section says so; it must never show the rules.
+    """
+    for directive in ("PostUp", "PostDown", "MASQUERADE", "ip_forward"):
+        assert not re.search(rf"^\s*{directive}\s*=", panel_section, re.M), (
+            f"the section shows a {directive} line for the management tunnel"
+        )

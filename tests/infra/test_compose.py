@@ -17,6 +17,10 @@ import yaml
 DEPLOY = pathlib.Path(__file__).resolve().parents[2] / "deploy"
 BASE = DEPLOY / "docker-compose.yml"
 DEV = DEPLOY / "docker-compose.dev.yml"
+# The deployed shape, M7: the delivery endpoint for everyone and the console for the
+# management tunnel. It was a heredoc an operator typed onto the box until getting a
+# bind address wrong became the difference between a private console and a public one.
+PUBLIC = DEPLOY / "docker-compose.public.yml"
 
 # Ports the host is likely to already be using. Publishing on one is how two
 # projects collide on the same laptop, and the collision shows up as a confusing
@@ -135,6 +139,89 @@ def test_required_env_vars_fail_loudly() -> None:
             continue
         # `$$` is compose's escape: it reaches the container as a literal `$` and
         # is expanded there, so it is not a compose interpolation at all.
+        without_escapes = line.replace("$$", "")
+        if "${" in without_escapes and ":?" not in without_escapes:
+            bad.append(line.strip())
+    assert bad == [], f"interpolations without a :? guard: {bad}"
+
+
+def split_mapping(mapping: str) -> list[str]:
+    """Split ``bind:host:container`` on colons that are not inside a ``${…}``.
+
+    Needed because this file's interpolations carry ``:?`` guards whose MESSAGES
+    contain colons and spaces — a plain ``str.split(":")`` reads one mapping as
+    eleven fields and every assertion below then passes for the wrong reason.
+    """
+    fields, depth, current = [], 0, ""
+    for character in mapping:
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+        if character == ":" and depth == 0:
+            fields.append(current)
+            current = ""
+            continue
+        current += character
+    fields.append(current)
+    return fields
+
+
+def test_only_the_reverse_proxy_is_published_on_a_deployed_host() -> None:
+    """Caddy, and never the database.
+
+    The base file publishes nothing and cannot be made to unpublish (``ports:`` is a
+    sequence and Compose appends), so this overlay is the only place a real host opens
+    anything — which makes it the only place a database can be opened by accident.
+    """
+    services = load(PUBLIC)["services"]
+    publishing = sorted(name for name, svc in services.items() if svc.get("ports"))
+    assert publishing == ["caddy"], (
+        f"the deployed overlay publishes {publishing}; only the reverse proxy belongs "
+        "on a host that faces the internet"
+    )
+
+
+def test_the_console_is_published_on_an_address_and_never_on_everything() -> None:
+    """M7, stated as the property the milestone is actually made of.
+
+    Caddy inside the container listens on every interface it has; the console is
+    private exactly and only because this mapping names an address. A mapping with no
+    bind address — ``"54143:54143"`` — publishes the panel to the whole internet and
+    looks almost identical to the correct line.
+
+    The delivery endpoint is the deliberate exception and is checked by name: it is
+    supposed to face the world, and it serves ``/sub/*`` and a redirect and nothing
+    else (deploy/caddy/Caddyfile).
+    """
+    delivery = {"80", "443"}
+    for mapping in load(PUBLIC)["services"]["caddy"]["ports"]:
+        fields = split_mapping(str(mapping))
+        if len(fields) == 2 and fields[0] in delivery:
+            continue
+        assert len(fields) == 3, (
+            f"the mapping {mapping!r} names no bind address, so it publishes on every "
+            "interface this host has — including the public one"
+        )
+        bind = fields[0]
+        assert bind == "127.0.0.1" or ":?" in bind, (
+            f"the mapping {mapping!r} binds to {bind!r}: a deployed console is either on "
+            "loopback (the SSH fallback) or on a required variable naming the management "
+            "tunnel's address. A default here would be a default panel address."
+        )
+
+
+def test_the_deployed_overlay_fails_loudly_on_a_missing_value() -> None:
+    """Same rule as the base file, and it matters more here.
+
+    Without ``:?`` an unset ``HASHI_PRIVATE_BIND_ADDR`` interpolates to the empty
+    string, the mapping becomes ``":54143:54143"``, and docker publishes the console on
+    every interface. The stack comes up, the panel works, and it is public.
+    """
+    bad = []
+    for line in PUBLIC.read_text().splitlines():
+        if line.lstrip().startswith("#"):
+            continue
         without_escapes = line.replace("$$", "")
         if "${" in without_escapes and ":?" not in without_escapes:
             bad.append(line.strip())

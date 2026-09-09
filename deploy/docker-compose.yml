@@ -73,6 +73,15 @@ services:
     environment:
       CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?set CADDY_ACME_EMAIL in .env}
       HASHI_PUBLIC_HOST: ${HASHI_PUBLIC_HOST:?set HASHI_PUBLIC_HOST in .env}
+      # The private site — the panel and the API — from M7. The name is what the
+      # owner's device asks for over the management tunnel, and the port is where
+      # Caddy listens for it INSIDE this container; which host address that port
+      # then appears on is deploy/docker-compose.public.yml's decision, not this
+      # file's. Both are required rather than defaulted: a default private host
+      # would be the same name on every deployment, and a default port would be a
+      # port the fleet could not move away from.
+      HASHI_PRIVATE_HOST: ${HASHI_PRIVATE_HOST:?set HASHI_PRIVATE_HOST in .env}
+      HASHI_PRIVATE_PORT: ${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}
     volumes:
       - caddy-data:/data
       - caddy-config:/config

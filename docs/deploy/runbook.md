@@ -103,6 +103,10 @@ On the control-plane box, `cp .env.example .env` and fill in:
 | `HASHI_OPERATOR_PASSWORD_HASH` | the hash, never the password |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `HASHI_DATABASE_URL` is composed from these, so the app and the database cannot drift apart |
 | `CADDY_ACME_EMAIL` | not checked by the bootstrap script; compose fails without it |
+| `HASHI_PRIVATE_HOST` | the name your own devices ask for over the management tunnel — usually this host's tunnel address |
+| `HASHI_PRIVATE_PORT` | where Caddy serves the console; the same variable drives the listener and the published mapping, so they cannot drift |
+| `HASHI_PRIVATE_BIND_ADDR` | which address on **this** host the console is published on. The tunnel's, never loopback — see *Reaching the panel* |
+| `HASHI_MGMT_*` | optional: the management tunnel's own address, port, endpoint, MTU and device list. Absent means no tunnel is generated |
 
 **Paste the hash exactly as `hash-password` printed it, doubled `$$` and all.** The
 command now prints `scrypt$$32768$$8$$1$$…` rather than `scrypt$32768$8$1$…`, and the
@@ -129,27 +133,123 @@ So `panel-bootstrap.sh` installs a stack that nothing outside the host can reach
 says so: it verifies the control plane from *inside* the compose network and ends by
 naming what it proved and what it did not. It used to end with `The panel is at
 https://…/panel/` — an address that answered nothing, because 80 and 443 were closed. It
-prints no address now. Publishing is still yours to do, deliberately, on the box:
+prints no address now. Publishing is still a separate, deliberate step:
 
 ```bash
-cat > deploy/docker-compose.public.yml <<'YAML'
-services:
-  caddy:
-    ports:
-      - "80:80"
-      - "443:443"
-YAML
-
-docker compose --env-file .env \
-  -f deploy/docker-compose.yml -f deploy/docker-compose.public.yml up -d
+make up-panel
 ```
 
-Caddy only. Never the database.
+That is the base stack plus `deploy/docker-compose.public.yml`, which **ships with the
+repository** — it used to be a heredoc you typed onto the box, and that stopped being
+survivable when the file grew a mapping whose bind address is the difference between a
+private console and a public one. Caddy only. Never the database.
 
 **And remember it after every `make panel-bootstrap`.** That script uses the base file
 alone, on purpose — so a later run brings the stack back to the base file's shape and
-takes the published ports away again. Re-run the two-file command above afterwards, or
-run that command instead of the script once the box is installed.
+takes the published ports away again. Run `make up-panel` afterwards, or run it instead
+of the script once the box is installed.
+
+---
+
+## Reaching the panel
+
+**The console is not on your public hostname.** As of M7 Caddy serves two sites out of
+one container:
+
+| site | serves | reachable from |
+|---|---|---|
+| public — `HASHI_PUBLIC_HOST` on 80/443 | `/sub/*`, and a redirect to https | anywhere, which is the point: a friend refreshes their config from inside Russia at the moment a node was blocked |
+| private — `HASHI_PRIVATE_HOST` on `HASHI_PRIVATE_PORT` | `/panel/*`, `/api/*`, `/static/*` | the management tunnel, and loopback |
+
+Everything a site does not serve is `404`, with no body and nothing that says the other
+site exists. The console holds every node key and every friend credential, and there is
+deliberately **no lockout on repeated failed logins** (`control/app/auth.py`, and it is a
+recorded decision rather than an oversight) — so on a public address, password length was
+the entire defence. This is what replaces it.
+
+The console's certificate comes from Caddy's own CA, not from a public one: the private
+site has no public name and no public address, so ACME could never validate it, and
+nothing about the console's existence reaches a CA's logs. Your browser will ask about it
+once.
+
+### The management tunnel
+
+A dedicated **AmneziaWG** tunnel, not plain WireGuard and not a third-party mesh
+(`docs/decisions.md`, 2026-09-09 — decision 2 was taken, reaffirmed on measurement, and
+then reversed the same day; the sequence is the record). Two things it is not, both
+deliberate: it is not a `node_transports` row, because that shape carries one peer
+address and therefore serves one device, and you have a laptop and a phone; and it renders
+no `PostUp`, no `PostDown` and no `Table`, because it carries traffic **to** this host
+rather than **through** it, and forwarding rules would quietly turn your admin tunnel into
+an exit.
+
+Fill in the `HASHI_MGMT_*` keys and run the bootstrap. It prints one config per device,
+**once**:
+
+```bash
+make panel-bootstrap
+```
+
+You will see `generating the management tunnel the panel is reached over`, then, for each
+device, `Its configuration follows ONCE and is not stored anywhere` followed by the file
+itself. **Copy each one to its device before you close that terminal.** Nothing stores it:
+the private half of a device's key exists in that scrollback and on the device, and
+nowhere else. A device whose config was lost gets a new entry in `HASHI_MGMT_PEERS` and a
+new key — a re-run says `already a peer of this tunnel` and prints nothing, because there
+is nothing left to print.
+
+The run ends with `NOT done, and not yet true: the tunnel is not up and this host is not
+listening.` That is accurate: it wrote a file and printed text. Bringing the tunnel up is
+yours, as root, and needs `amneziawg-tools` on the host:
+
+```bash
+ufw allow <the management tunnel's UDP port>/udp   # HASHI_MGMT_PORT in your env file
+awg-quick up ~/.hashi/management/awg-mgmt.conf
+```
+
+Set `HASHI_PRIVATE_BIND_ADDR` to the tunnel address the interface now holds — that
+publication is the whole of "the console is off the public internet", because Caddy inside
+the container listens on every interface it has and the host decides which one the port
+appears on. Then `make up-panel`, and open the console from a device on the tunnel.
+
+**Never `HASHI_PRIVATE_BIND_ADDR=127.0.0.1`.** Loopback is already claimed for that port
+by the fallback below, and docker refuses the second bind with "port is already
+allocated"; `panel-bootstrap.sh` checks for it and says so, because that error names
+neither the cause nor the cure.
+
+### The way back in when the tunnel is unavailable
+
+**This route is tested, not merely described**, and the difference matters: the day you
+need it is the day of an emergency rotation, and a fallback nobody has run is a paragraph.
+It is also the route this project's own field run used all night.
+
+`make up-panel` publishes the console's port a second time, on this host's loopback only.
+Nothing off the host can reach it; anything that can already open an SSH session can
+forward it:
+
+```bash
+ssh -L PRIVATE_PORT:127.0.0.1:PRIVATE_PORT USER@THE_PANEL_HOST
+```
+
+Then, on your own machine, open `https://127.0.0.1:PRIVATE_PORT/panel/` — the same
+console, the same certificate, the same login. The site block answers to the loopback name
+as well as to the tunnel name precisely so that this arrives somewhere rather than at a
+`404`.
+
+Check it now, while nothing is on fire, and check it again after any change to the panel
+host. One command, from your own machine, with the forward open:
+
+```bash
+curl -k -o /dev/null -w "%{http_code}\n" https://127.0.0.1:PRIVATE_PORT/panel/login
+```
+
+`200` means the way back in works. Anything else means it does not, and you have found
+that out on a quiet afternoon instead of during a rotation.
+
+**What this cannot tell you.** Your machine and the panel host may share a cloud region,
+in which case traffic between them never traverses ТСПУ and an uninterrupted SSH session
+says nothing about your home or mobile network. Only you can test that, from the network
+you would actually be on.
 
 ---
 
@@ -337,21 +437,23 @@ One VPS abroad, carrying the control plane and one node at the same time.
 ```bash
 git clone <this repo> /opt/hashi-control && cd /opt/hashi-control
 cp .env.example .env && "${EDITOR:-vi}" .env        # see the table above
-# write deploy/docker-compose.public.yml as shown above
 
 ufw logging off                                # FIRST, always — see below
 ufw allow <the port sshd listens on>/tcp       # sshd -T | awk '/^port /{print $2}'
 ufw allow <Caddy's plain-HTTP port>/tcp        # the ACME challenge and the redirect
-ufw allow <Caddy's HTTPS port>/tcp             # the panel and the delivery endpoint
+ufw allow <Caddy's HTTPS port>/tcp             # the DELIVERY endpoint, not the console
 ufw allow <this node's transport port>/udp     # the number you enter in the node record
 ufw enable
 
 make panel-bootstrap
-docker compose --env-file .env \
-  -f deploy/docker-compose.yml -f deploy/docker-compose.public.yml up -d
+make up-panel
 
-curl -fsS https://<your panel host>/healthz
+curl -o /dev/null -w "%{http_code}\n" https://<your panel host>/panel/    # expect 404
 ```
+
+**That `404` is the milestone working.** The console is not on the public hostname — it is
+on the private site, reached over the management tunnel or over the SSH forward. See
+*Reaching the panel* above, which is also where the console's own port is opened.
 
 Clone to `/opt/hashi-control`, **not** `/opt/hashi` — that path is the node stack's own
 root, and on this box both live on the same disk.
@@ -374,7 +476,8 @@ order, from arguments.
 
 ### Register the box as its own node
 
-In the panel at `https://<your panel host>/panel/`:
+In the panel — reached over the management tunnel or the SSH forward, never over the
+public hostname (*Reaching the panel*):
 
 1. **Add node.** `address` and `ssh_host` are both this box's public IP — the control
    container dials out and back, which works; `172.17.0.1` is the fallback if the public

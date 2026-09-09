@@ -1,19 +1,46 @@
 # hashi — reverse proxy.
 #
-# WHAT: TLS termination in front of the control plane.
+# WHAT: TLS termination in front of the control plane, split into a PUBLIC site
+#       that serves nothing but `/sub/*` and a PRIVATE site that serves the panel
+#       and the API.
 # WHY:  the access log is disabled deliberately. Request paths contain
 #       subscription tokens, and a subscription token is a bearer credential —
 #       logging one writes a live key to disk. See
 #       .claude/projects/04-infra-rulebook.md (Traps) and the matching rule in
 #       the control zone: both are needed, neither is sufficient alone.
+#
+#       EVERY site block below discards its own log, and a new one that forgets to
+#       is a credential leak rather than an untidy file. tests/infra/test_caddyfile.py
+#       reads this file and fails on a block without it — that check exists because
+#       M7 turned one site block into three, and "remember to add the log block" is
+#       not a control.
+#
+#       The split is M7. The panel holds every node key and every friend
+#       credential, and `control/app/auth.py` deliberately has no lockout on failed
+#       logins, so password length was the entire defence for a surface anyone on
+#       the internet could reach. `/sub/{token}` cannot move with it: a friend
+#       refreshes their config from inside Russia at the exact moment a node was
+#       blocked, so that route stays on the public name, unchanged.
 # HOW:  the admin endpoint stays on loopback so the healthcheck can reach it
 #       without exposing configuration to the network.
 {
 	email {$CADDY_ACME_EMAIL}
 	admin 127.0.0.1:2019
 
+	# Automatic HTTP→HTTPS redirects are OFF, and the public one below is written
+	# out by hand instead. Not a style choice: with them on, Caddy derives a
+	# redirect for EVERY site name it serves, including the private one — so port
+	# 80, which faces the whole internet, answers a request carrying the private
+	# host header with `Location: https://<private host>:<private port>/…` and
+	# hands out the address of the console this milestone just took off the public
+	# internet. Measured against caddy:2.8.4-alpine, not assumed.
+	#
+	# ACME is unaffected: the HTTP challenge is answered by the TLS app before any
+	# site route is consulted, so the explicit redirect site cannot shadow it.
+	auto_https disable_redirects
+
 	# Silences the DEFAULT logger, which is not the same thing as the per-site
-	# one below. Without this, any request that does not match the site block —
+	# ones below. Without this, any request that does not match a site block —
 	# by IP, or by another name resolving here — is written to stderr with its
 	# full URI, and so is every http.log.error (a 502 while the control plane
 	# restarts is exactly when a friend is refreshing a subscription). Both
@@ -24,10 +51,75 @@
 	}
 }
 
+# The public name, on port 80. Exists only to send a browser to https — it proxies
+# nothing and therefore reaches no route. Written out because `auto_https
+# disable_redirects` above turns the automatic version off for every name at once,
+# and this is the one name that should still have it.
+http://{$HASHI_PUBLIC_HOST} {
+	log {
+		output discard
+	}
+
+	redir https://{host}{uri} 308
+}
+
+# PUBLIC — the delivery endpoint, and nothing else.
+#
+# A friend inside Russia reaches this and only this. Anything that is not a
+# subscription is 404, including `/`, `/healthz` and `/panel/…`: a 404 says the
+# same thing to a scanner as it does to a mistyped URL, and it says nothing about
+# what else this host runs.
 {$HASHI_PUBLIC_HOST} {
 	log {
 		output discard
 	}
 
-	reverse_proxy control:8000
+	@delivery path /sub/*
+	handle @delivery {
+		reverse_proxy control:8000
+	}
+
+	handle {
+		respond 404
+	}
+}
+
+# PRIVATE — the panel and the API, on a port that is published only on the
+# management tunnel's interface and on loopback (deploy/docker-compose.public.yml).
+#
+# The interface restriction lives in the PUBLICATION, not here: a `bind` directive
+# in this file is evaluated inside the container's own network namespace, where
+# the tunnel's address does not exist, so it would restrict nothing while looking
+# like it did. Caddy listens on this port inside the container; the host decides
+# which address the port appears on.
+#
+# Two addresses, one block, on purpose. The first is how the owner reaches the
+# panel over the management tunnel. The second is the way back in when that tunnel
+# is unavailable — `ssh -L` forwards the same port to the host's loopback, and the
+# request then arrives with `127.0.0.1` as its name. Both are served the same
+# content by the same rules; the difference is entirely in which host address the
+# port is published on. See docs/deploy/runbook.md, "Reaching the panel".
+{$HASHI_PRIVATE_HOST}:{$HASHI_PRIVATE_PORT}, https://127.0.0.1:{$HASHI_PRIVATE_PORT} {
+	log {
+		output discard
+	}
+
+	# Caddy's own CA, never a public one. This site has no public name and no
+	# public address, so ACME cannot validate it — a public issuer would retry
+	# forever and the panel would never be served, which is the same failure the
+	# e2e stack hit for its own reason (docs/decisions.md, 2026-08-08). The owner
+	# accepts this certificate once, or trusts the container's root; either way
+	# nothing about the console's existence is published to a CA's logs.
+	tls internal
+
+	# `/static/*` belongs here rather than on the public site: it is the panel's
+	# own stylesheet, fonts and one script, and nothing a friend fetches.
+	@console path /panel/* /api/* /static/*
+	handle @console {
+		reverse_proxy control:8000
+	}
+
+	handle {
+		respond 404
+	}
 }

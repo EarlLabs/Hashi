@@ -82,6 +82,8 @@ def env_file(directory: pathlib.Path, *, key: str, port: int) -> pathlib.Path:
             for name, value in {
                 "HASHI_SECRET_KEY": key,
                 "HASHI_PUBLIC_HOST": "restore.invalid",
+                "HASHI_PRIVATE_HOST": "restore-console.invalid",
+                "HASHI_PRIVATE_PORT": "54143",
                 "HASHI_OPERATOR_USERNAME": "owner",
                 "HASHI_OPERATOR_PASSWORD_HASH": escaped(hash_password(OPERATOR_PASSWORD)),
                 "POSTGRES_USER": "hashi",

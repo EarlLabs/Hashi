@@ -11,9 +11,12 @@ VENV        := .venv
 PY          := $(VENV)/bin/python
 COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
+# The deployed shape: the base stack plus the only overlay that opens a port on a
+# real host. Never the dev overlay — that publishes the database.
+COMPOSE_PANEL := $(COMPOSE) -f deploy/docker-compose.public.yml
 
 .PHONY: setup env verify e2e-verify test test-control test-edge test-infra test-e2e lint \
-        up up-dev down logs ps e2e-up e2e-down e2e-reset e2e-psql \
+        up up-dev up-panel down logs ps e2e-up e2e-down e2e-reset e2e-psql \
         e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap
 
 ## --- setup ------------------------------------------------------------------
@@ -145,6 +148,17 @@ up: env
 # Dev overlay: the only thing that publishes ports, and only to 127.0.0.1.
 up-dev: env
 	$(NO_ATTESTATIONS) $(COMPOSE_DEV) up -d --build
+
+# The deployed panel host, M7: the delivery endpoint on 80/443 for everyone, and the
+# console on the management tunnel's address and on loopback — never on a public one.
+#
+# This exists because that publication IS the milestone. It used to be a heredoc in the
+# runbook that the operator typed onto the box, which was survivable while the answer was
+# "Caddy, 80 and 443"; it is not survivable now that getting a bind address wrong is the
+# difference between a private console and a public one. Use this on a deployed host and
+# never plain `make up`, which converges the stack back to publishing nothing.
+up-panel: env
+	$(NO_ATTESTATIONS) $(COMPOSE_PANEL) up -d --build
 
 down:
 	$(COMPOSE) down

@@ -48,6 +48,9 @@ PASSWORD = "an-operator-password-that-is-only-a-fixture"
 OTHER_KEYS = {
     "HASHI_SECRET_KEY": "infra-test-not-a-real-key-000000000000000000000000",
     "HASHI_PUBLIC_HOST": "operator-hash.invalid",
+    # M7's private site block; the caddy service requires both since the split.
+    "HASHI_PRIVATE_HOST": "operator-hash-console.invalid",
+    "HASHI_PRIVATE_PORT": "54143",
     "HASHI_OPERATOR_USERNAME": "owner",
     "POSTGRES_USER": "hashi",
     "POSTGRES_PASSWORD": "operator-hash-not-real",

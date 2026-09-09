@@ -1,0 +1,47 @@
+# hashi — what a deployed panel host publishes.
+#
+# WHAT: the overlay that opens ports on a real host: the delivery endpoint to the
+#       whole internet, and the console to the management tunnel and to loopback.
+# WHY:  this file used to be a heredoc in docs/deploy/runbook.md that the operator
+#       typed onto the box. That was tolerable while the answer was "Caddy, 80 and
+#       443". M7 makes it three mappings whose CORRECTNESS IS THE MILESTONE — the
+#       console is private exactly and only because its port is published on an
+#       address the internet cannot reach — and a hand-typed file is where that
+#       goes wrong silently. So it ships, it is reviewed, and tests read it.
+#
+#       It stays an OVERLAY rather than moving into the base file, because `ports:`
+#       is a sequence and the Compose spec merges sequences by appending: a mapping
+#       in the base file cannot be taken back, and would follow every `make up-dev`
+#       and every `make e2e-up` onto a laptop. See the runbook, "The port-publication
+#       gap".
+# HOW:  `make up-panel`, which is `make up` plus this file. Never `make up` alone on
+#       a deployed host — that converges the stack back to the base file's shape and
+#       takes these ports away again.
+
+services:
+  caddy:
+    ports:
+      # The delivery endpoint, and the ACME challenge that keeps its certificate
+      # alive. Deliberately UNBOUND — every other published port in this repository
+      # names an address, and this is the one that is supposed to face the world.
+      # What is served here is `/sub/*` and a redirect to it; everything else is 404
+      # (deploy/caddy/Caddyfile).
+      - "80:80"
+      - "443:443"
+      # The console, on the management tunnel's own address on this host. This
+      # mapping is the whole of "the panel is off the public internet": Caddy inside
+      # the container listens on every interface it has, and this line is what
+      # decides that the only interface the port appears on is the tunnel's.
+      #
+      # Required with no default, and NEVER loopback here — the mapping below
+      # already claims loopback for that port, and docker refuses the second bind
+      # with "port is already allocated". scripts/panel-bootstrap.sh checks for that
+      # and says so, because the raw error names neither cause nor cure.
+      - "${HASHI_PRIVATE_BIND_ADDR:?set HASHI_PRIVATE_BIND_ADDR in .env — the management tunnel address on this host}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}"
+      # The way back in when the management tunnel is unavailable, which is the day
+      # an emergency rotation is needed. Loopback only: nothing off this host can
+      # reach it, and an operator who can already open an SSH session forwards it to
+      # their own machine with `ssh -L`. Published here rather than left to a
+      # separate emergency overlay on purpose — a fallback that has to be installed
+      # during the emergency is a fallback that does not exist.
+      - "127.0.0.1:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}"

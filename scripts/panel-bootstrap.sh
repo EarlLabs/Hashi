@@ -111,8 +111,14 @@ fi
 # fleet-wide constant. Their VALIDITY is not checked here — control/app/settings.py is
 # the single source of truth for that, and a second copy of its rules in bash is a copy
 # that will disagree with it.
+#
+# HASHI_PRIVATE_HOST and HASHI_PRIVATE_PORT joined this list in M7: the Caddyfile has
+# two site blocks now, the private one carries the panel and the API, and compose
+# interpolates both values into the caddy service. Without them the stack does not
+# start at all — this check turns that into a sentence instead of a compose error.
 MISSING=()
-for key in HASHI_PUBLIC_HOST HASHI_OPERATOR_USERNAME HASHI_OPERATOR_PASSWORD_HASH \
+for key in HASHI_PUBLIC_HOST HASHI_PRIVATE_HOST HASHI_PRIVATE_PORT \
+           HASHI_OPERATOR_USERNAME HASHI_OPERATOR_PASSWORD_HASH \
            POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do
   has_value "$key" || MISSING+=("$key")
 done
@@ -164,6 +170,27 @@ if [ -n "${UNESCAPED% }" ]; then
   \`python -m control.cli hash-password\` now prints that line already doubled — paste it
   exactly as it comes out. A hash generated before that will need doubling by hand."
 fi
+
+# The private port is published TWICE on a panel host — once on the management
+# tunnel's address and once on loopback, which is the way back in when the tunnel is
+# down (deploy/docker-compose.public.yml). Loopback for both makes docker refuse the
+# second bind with "port is already allocated", an error that names neither the cause
+# nor the cure. Checked here rather than left to be discovered during a deploy.
+PRIVATE_BIND="$(sed -n 's/^[[:space:]]*HASHI_PRIVATE_BIND_ADDR=[[:space:]]*//p' \
+  "${ENV_FILE}" | awk 'NR==1' | tr -d '"')"
+case "${PRIVATE_BIND}" in
+  127.*|localhost|::1)
+    fail "HASHI_PRIVATE_BIND_ADDR is ${PRIVATE_BIND}, which is loopback.
+
+  That variable names the address the PANEL is published on, and it is meant to be this
+  host's management-tunnel address — that publication is the whole of 'the panel is off
+  the public internet'. Loopback is already claimed for the same port by the fallback
+  mapping beside it, so docker would refuse the second bind with 'port is already
+  allocated' and you would be reading that instead of this.
+
+  If there is no management tunnel on this host yet, leave the variable unset and reach
+  the panel over SSH — docs/deploy/runbook.md, 'Reaching the panel'." ;;
+esac
 
 say "env file ${ENV_FILE} has every required key and no unescaped \$"
 
@@ -315,6 +342,28 @@ until probe; do
 done
 
 say "the control plane answers on /healthz and routes /sub/{token}"
+
+# --- 3b. the management tunnel ------------------------------------------------
+#
+# M7. The panel is no longer on the public hostname, so something has to carry the
+# owner to it — and the panel cannot hand you the config you need to reach the panel.
+# That is why the generation lives in a bootstrap script rather than in a screen, and
+# why it happens here rather than in scripts/node-bootstrap.sh: this is the control
+# plane's own network, and a node never joins it (M11.1 fixed that script at docker,
+# the key and the firewall).
+#
+# Skipped, not refused, when HASHI_MGMT_ADDRESS is absent. A host reached only over the
+# SSH fallback is a real and documented mode, and refusing to install a control plane
+# because its owner has not chosen a tunnel range yet would be this script deciding
+# something that is not its to decide. It says which mode it left the host in.
+if has_value HASHI_MGMT_ADDRESS; then
+  say "generating the management tunnel the panel is reached over"
+  "${REPO_ROOT}/scripts/management-tunnel.sh" --env-file "${ENV_FILE}"
+else
+  say "no HASHI_MGMT_ADDRESS in ${ENV_FILE}, so no management tunnel was generated. The
+  panel is then reachable only over the SSH fallback — see docs/deploy/runbook.md,
+  'Reaching the panel'. Nothing here published it either way."
+fi
 # There is deliberately no URL on the last line, and its absence is the point.
 #
 # This script used to end with "The panel is at https://<host>/panel/". On the live host
@@ -331,5 +380,6 @@ say "done. Proven: the control plane runs, answers /healthz and routes /sub/{tok
   all of it asked from inside the compose network."
 say "NOT proven, and not yet true: nothing here is reachable from outside this host. This
   stack publishes no ports and this script adds none, so there is no panel address to
-  visit until Caddy's ports are published. How to do that, and what it costs to re-run
-  this script afterwards, is in docs/deploy/runbook.md under 'The port-publication gap'."
+  visit until Caddy's ports are published — \`make up-panel\`, which is this same stack
+  plus deploy/docker-compose.public.yml. What that costs to re-run this script afterwards
+  is in docs/deploy/runbook.md under 'The port-publication gap'."

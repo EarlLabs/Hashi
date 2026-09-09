@@ -139,6 +139,11 @@ def test_it_refuses_rather_than_defaulting_the_other_required_keys(script: str) 
     """A default here would be the same value on every host that runs this script."""
     for key in (
         "HASHI_PUBLIC_HOST",
+        # M7's two: the Caddyfile has a private site block now and compose
+        # interpolates both values into the caddy service, so the stack does not
+        # start at all without them.
+        "HASHI_PRIVATE_HOST",
+        "HASHI_PRIVATE_PORT",
         "HASHI_OPERATOR_USERNAME",
         "HASHI_OPERATOR_PASSWORD_HASH",
         "POSTGRES_USER",
@@ -383,4 +388,38 @@ def test_a_second_run_does_not_rebuild_its_way_into_recreating_containers(script
         "the build does not disable BuildKit's default attestations, so every run exports "
         "a new image ID and compose recreates every built container — which makes the "
         "IDEMPOTENT property in this script's own header untrue"
+    )
+
+
+def test_it_generates_the_management_tunnel_rather_than_leaving_it_to_a_screen(
+    script_commands: str,
+) -> None:
+    """M7's chicken-and-egg, and the reason it is solved in a bootstrap script.
+
+    The panel cannot hand you the config you need to reach the panel, so the owner's
+    management-tunnel config has to be produced by something that runs before there is
+    a panel to log into. That is this script — the CONTROL PLANE's own bootstrap. It is
+    deliberately not ``scripts/node-bootstrap.sh``: a node never joins this tunnel, and
+    M11.1 fixed that script at docker, the key and the firewall.
+    """
+    assert "scripts/management-tunnel.sh" in script_commands, (
+        "the panel bootstrap does not generate the management tunnel, so the owner's "
+        "own way in is something they set up by hand"
+    )
+    assert "node-bootstrap" not in script_commands, (
+        "the panel bootstrap reaches into the node bootstrap"
+    )
+
+
+def test_it_refuses_to_publish_the_console_on_loopback(script: str) -> None:
+    """The mistake docker reports as "port is already allocated" and nothing explains.
+
+    ``HASHI_PRIVATE_BIND_ADDR`` names the address the console is published on, and it
+    is meant to be the management tunnel's. Loopback is already claimed for the same
+    port by the fallback mapping beside it, so docker refuses the second bind with an
+    error naming neither the cause nor the cure.
+    """
+    assert "HASHI_PRIVATE_BIND_ADDR" in script
+    assert re.search(r"127\.\*\|localhost\|::1", script), (
+        "the script does not check the private bind address for loopback"
     )
