@@ -57,16 +57,31 @@ class NodeState(enum.StrEnum):
     def allowed_from(cls, current: NodeState) -> tuple[NodeState, ...]:
         """Which states a node may move to from ``current`` — backlog item 17.
 
-        A declared machine rather than a free-form column, because two transitions are
-        genuinely wrong and both are easy to write by accident:
+        A declared machine rather than a free-form column, because one transition is
+        genuinely wrong and easy to write by accident:
 
         * ``retired -> active`` is refused. A retired node's host has usually been
           destroyed; re-activating the RECORD would put an address that may now belong
           to a stranger back into every friend's subscription. Create a new node
           instead — which is the ten-minute operation the charter is built around.
-        * ``draft -> degraded`` is refused. Degraded means "was working, now is not";
-          a node that has never been configured is not degraded, it is unconfigured,
-          and conflating them hides which nodes still need a first apply.
+
+        ``draft -> degraded`` was refused here too, on the reading that degraded means
+        "was working, now is not". That reading cost an evening in the field on
+        2026-09-08 and is retracted deliberately, written out so nobody restores it:
+
+        * a first apply STARTS from draft, and ``apply_node`` marks a node degraded on
+          any failure (core invariants §4). The refusal therefore fired INSIDE the
+          failure path, before the caller could raise its own message — so an operator
+          whose first apply hit a permission error on the host was told "a node cannot
+          go from draft to degraded" instead, and the real reason reached nobody, not
+          even a log.
+        * a node whose first apply failed has been dialled, and usually written to,
+          before the failure was detected. It is not a draft any more, and leaving it
+          in draft is the same silence about a half-configured node that §4 forbids.
+        * "which nodes have never been applied" is still answerable and never was this
+          column's job: ``NodeTransport.applied_at`` stays NULL until a config actually
+          landed. A state says where a node IS; whether it ever worked is history, and
+          the reason lives in ``state_detail``.
 
         Everything else is permitted, including ``degraded -> active`` (a successful
         apply after a fix) and ``active -> draft`` (taking a node out of rotation
@@ -74,7 +89,7 @@ class NodeState(enum.StrEnum):
         """
         match current:
             case cls.DRAFT:
-                return (cls.ACTIVE, cls.RETIRED)
+                return (cls.ACTIVE, cls.DEGRADED, cls.RETIRED)
             case cls.ACTIVE:
                 return (cls.DEGRADED, cls.DRAFT, cls.RETIRED)
             case cls.DEGRADED:

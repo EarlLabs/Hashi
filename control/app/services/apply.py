@@ -29,7 +29,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import NodeOperationFailed
+from control.app.errors import Conflict, NodeOperationFailed
 from control.app.models import (
     Credential,
     Node,
@@ -210,6 +210,41 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
     )
 
 
+async def _record_failure(session: AsyncSession, node: Node, reason: str) -> None:
+    """Log why an apply failed, then mark the node degraded. In that order.
+
+    The order is the whole point, and it was bought with an evening in the field on
+    2026-09-08. Recording the failure is itself a write that can fail, and when it did
+    — a first apply starts from ``draft``, which the state machine would not let become
+    ``degraded`` — the recording's own error REPLACED the failure it was recording. The
+    operator was handed "a node cannot go from draft to degraded"; the actual cause was
+    a permission error on the host, and it existed nowhere afterwards, because
+    ``domain_error_handler`` logs a code and never a message. Logging first means the
+    reason survives even when everything after this line goes wrong.
+
+    A refused transition is therefore swallowed here rather than raised. It is still
+    possible (a ``retired`` node has nowhere to go) and it is still worth a log line,
+    but the caller is about to raise the real reason and that is the more useful of the
+    two errors to put in front of an operator.
+
+    The reason is the node's own diagnostic — our command, its stderr, our timeout. It
+    names no user and no connection, which is what makes it loggable at all (core
+    invariants §6).
+    """
+    logger.error("apply failed for node %s: %s", node.id, reason)
+    try:
+        await nodes.set_node_state(
+            session, node_id=node.id, state=NodeState.DEGRADED, detail=reason[:500]
+        )
+    except Conflict:
+        logger.error(
+            "node %s could not be marked degraded from %s; its state is unchanged and "
+            "the line above is the whole record of what went wrong",
+            node.id,
+            node.state,
+        )
+
+
 async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     """Render, validate, push and verify one node. Returns what was applied.
 
@@ -256,18 +291,14 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             not_running = sorted(set(configs) - set(running))
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
-        await nodes.set_node_state(
-            session, node_id=node.id, state=NodeState.DEGRADED, detail=str(exc)[:500]
-        )
+        await _record_failure(session, node, str(exc))
         raise NodeOperationFailed(
             f"the node could not be configured and has been marked degraded: {exc}"
         ) from exc
 
     if not_running:
         detail = f"pushed, but these did not come up: {', '.join(not_running)}"
-        await nodes.set_node_state(
-            session, node_id=node.id, state=NodeState.DEGRADED, detail=detail
-        )
+        await _record_failure(session, node, detail)
         raise NodeOperationFailed(
             f"configuration was applied but the node is not serving it — marked "
             f"degraded: {detail}"
