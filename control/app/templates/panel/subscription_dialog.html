@@ -1,0 +1,46 @@
+{#
+  The one place in the console that displays a live bearer credential.
+
+  UI-PATTERNS §9: subscription URLs are the one shareable secret and they get their
+  own dialog with a copy button. Everything about how this is rendered is that rule:
+
+  * the URL is TEXT inside a block element — never an input value, never a `title`,
+    never an `href`, and never a query string on any request this panel makes. A
+    browser puts none of those three places into history, and nothing on the server
+    ever sees the token again after this render.
+  * it is shown on demand rather than sitting in the users table, so a panel left
+    open on a desk — or a screenshot of one — does not contain every user's key.
+  * copying is done from the DOM by static/app.js. The clipboard is the only place
+    the string goes.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="subscription-title">
+    <div class="dialog-title" id="subscription-title">{{ friend.nickname }}'s link</div>
+    {% if url %}
+    <div class="dialog-body">
+      One URL, every serving node. Sharing it again does not mint a new key.
+    </div>
+    <div class="mono dialog-code" id="subscription-url">{{ url }}</div>
+    <div class="dialog-body text-muted">
+      Anyone holding this URL has {{ friend.nickname }}'s access — it is the
+      credential, not a link to one. It keeps working when nodes or protocols change,
+      which is why they never re-add anything.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+      <button class="btn btn-primary" type="button"
+              data-copy-from="subscription-url">copy link</button>
+    </div>
+    {% else %}
+    <div class="dialog-body">
+      {{ friend.nickname }} has no live subscription, so there is nothing to hand
+      over. That is what a revoked user looks like.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+    </div>
+    {% endif %}
+    {% include "panel/corners.html" %}
+  </div>
+</div>

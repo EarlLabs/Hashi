@@ -1,0 +1,346 @@
+/* The console's own layer — everything the design system does not already give us.
+ *
+ * WHAT: the shell (sidebar + header + panel), the grids, the one breakpoint, the
+ *       toast, the dialog's opaque ground, and the four states the design did not
+ *       draw (empty, loading, failure, field validation).
+ * WHY:  design/UI-PATTERNS.md governs how a screen is built; this file is where that
+ *       document becomes CSS. Keeping it separate from the vendored styles.css means
+ *       re-vendoring the design system never has to be a merge.
+ * HOW:  every colour, space, radius and shadow is a var() from styles.css. There is
+ *       exactly ONE breakpoint (900px, UI-PATTERNS §12) and every multi-column grid
+ *       is `repeat(N, minmax(0, 1fr))` so it collapses under that one rule rather
+ *       than needing its own. Nothing here hard-codes a token's value.
+ *
+ * The handful of bare pixel values that ARE here are the design's own figures for
+ * things the token sheet has no scale for — the 218px sidebar, the 38px stat value,
+ * the 900px breakpoint, the 24px toast inset. They come from design/README.md and
+ * are cited where they appear.
+ */
+
+/* ── shell ────────────────────────────────────────────────────────────────── */
+
+.app {
+  display: grid;
+  /* design/README.md, "Shell": 218px sidebar, main takes the rest. minmax(0,1fr)
+     rather than 1fr so a wide table inside main cannot push the grid open. */
+  grid-template-columns: 218px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidenav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-4);
+  border-right: 1px solid var(--color-divider);
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+}
+
+.wordmark {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 21px;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--color-text);
+  text-decoration: none;
+  display: block;
+}
+
+.wordmark-kicker {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidenav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidenav-list a {
+  display: block;
+  padding: 7px 9px;
+  font-size: 14px;
+  color: var(--color-text);
+  text-decoration: none;
+  border: 1px solid transparent;
+}
+
+.sidenav-list a:hover {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.sidenav-list a[aria-current="page"] {
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+  border-color: var(--color-divider);
+}
+
+/* A nav entry that leads somewhere not yet redesigned says so, quietly. Honest
+   beats tidy here: the alternative during M8/M9 is a dead link. */
+.sidenav-list .nav-note {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.sidenav-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.console-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.console-header {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-6) var(--space-6) var(--space-4);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.console-header h2 {
+  margin: 0;
+}
+
+.console-header .subtitle {
+  font-size: 13px;
+}
+
+.console-header-titles {
+  margin-right: auto;
+  min-width: 0;
+}
+
+.console-header-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.panel {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+/* ── grids (UI-PATTERNS §12: build them so the one rule collapses them) ────── */
+
+/* Vertical rhythm inside a panel or a section, at the design's two useful gaps.
+   A class rather than an inline style so a screen template carries no CSS. */
+.stack-6 { display: flex; flex-direction: column; gap: var(--space-6); }
+.stack-8 { display: flex; flex-direction: column; gap: var(--space-8); }
+
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6); }
+.grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-6); }
+
+/* ── type and table helpers ───────────────────────────────────────────────── */
+
+/* UI-PATTERNS §7 — addresses, ports, fingerprints, URLs, parameter names and
+   ratios. The fastest way to tell "the admin typed this" from "the mesh
+   reported this". */
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.table td, .table th { vertical-align: middle; }
+.table .right { text-align: right; }
+
+/* Below the breakpoint a wide table scrolls inside its own panel rather than
+   pushing the page sideways (design/README.md, "Responsive"). */
+.table-scroll { overflow-x: auto; }
+
+/* Row actions: UI-PATTERNS §3 — inline-flex, --space-2, secondary buttons, no red. */
+.row-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+/* A row whose object can no longer be acted on. The design's revoke/restore toggle
+   is not what this product does — revocation destroys key material, so it is
+   one-way — and README says so: "replace the toggle with a confirm dialog and a
+   disabled row state". This is that state. */
+.row-inert { opacity: 0.55; }
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.card-head h4 { margin: 0; }
+.card-head .all-link { margin-left: auto; font-size: 13px; }
+
+/* The stat card's number. 38px and line-height 1 are the design's own figures. */
+.stat-value {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 38px;
+  line-height: 1;
+}
+
+.section-note {
+  font-size: 13px;
+  margin: 0;
+  max-width: 70ch;
+}
+
+/* ── the states the design did not draw ───────────────────────────────────── */
+
+/* Empty. A first-time operator meets this before anything else, so it says what to
+   do next rather than reporting an absence. */
+.empty {
+  padding: var(--space-8) var(--space-6);
+  border: 1px dashed var(--color-divider);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 14px;
+}
+
+.empty-title {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 20px;
+}
+
+.empty-body { max-width: 60ch; margin: 0; }
+
+/* Loading. htmx puts .htmx-request on the element carrying hx-indicator while its
+   request is in flight, so the skeleton is CSS and no JavaScript decides it. */
+.loading { display: none; }
+.htmx-request .loading { display: grid; gap: var(--space-2); }
+.htmx-request > .loaded { display: none; }
+
+.skeleton-row {
+  height: 28px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface),
+    color-mix(in srgb, var(--color-text) 10%, var(--color-surface)),
+    var(--color-surface)
+  );
+  background-size: 200% 100%;
+  animation: skeleton-sweep 1.1s linear infinite;
+}
+
+@keyframes skeleton-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* An operator who prefers no motion gets a flat block; it still reads as "loading"
+   because it is a row-shaped placeholder where rows belong. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row { animation: none; }
+}
+
+/* Request failure. Not red — UI-PATTERNS §4, the steel accent is the only colour and
+   severity is carried by the words. The frame is what makes it read as an alarm. */
+.banner {
+  border: 1px solid var(--color-accent);
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px;
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.banner:empty { display: none; }
+.banner-slot:empty { display: none; }
+.banner-slot { padding: 0 var(--space-6); margin-top: var(--space-4); }
+
+/* Field-level validation. Sits under the input it is about, never in a toast: a
+   toast disappears and the operator is left looking at a form that will not submit. */
+.field-error {
+  font-size: 12px;
+  margin-top: 5px;
+  color: var(--color-accent-800);
+}
+
+.input[aria-invalid="true"] { border-color: var(--color-accent); }
+
+/* ── dialogs ──────────────────────────────────────────────────────────────── */
+
+/* UI-PATTERNS §5 and design/README.md, twice: the design system's .dialog is
+   TRANSPARENT (styles.css blueprint layer resets its background), so a dialog
+   without this rule shows the page straight through its own text. */
+.dialog { background: var(--color-bg); }
+
+.dialog-wide { width: min(560px, 100%); }
+
+.dialog-code {
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  word-break: break-all;
+}
+
+.dialog-slot:empty { display: none; }
+
+/* ── toast ────────────────────────────────────────────────────────────────── */
+
+/* UI-PATTERNS §8: bottom right, one at a time, names its object. 24px inset and
+   2200ms are the design's own figures; the timer lives in app.js. */
+.toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 10;
+  background: var(--color-accent-900);
+  color: var(--color-bg);
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px;
+  box-shadow: var(--shadow-md);
+  max-width: min(420px, calc(100vw - 48px));
+}
+
+/* The registration marks are drawn in the text colour by default, which on the
+   toast's dark ground is invisible. */
+.toast > .corner { color: color-mix(in srgb, var(--color-bg) 55%, transparent); }
+
+.toast-slot:empty { display: none; }
+
+/* ── density (UI-PATTERNS §11) ────────────────────────────────────────────── */
+
+.app[data-density="compact"] .table td { padding: 4px var(--space-2); }
+.app[data-density="compact"] .panel { padding: var(--space-4); }
+
+/* ── the one breakpoint (UI-PATTERNS §12) ─────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .sidenav {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-divider);
+    gap: var(--space-2);
+  }
+  .sidenav-list { flex-direction: row; }
+  .sidenav-list a { white-space: nowrap; }
+  .sidenav-foot { margin-top: 0; margin-left: auto; flex-direction: row; align-items: center; }
+  .grid-2, .grid-4 { grid-template-columns: minmax(0, 1fr); }
+}

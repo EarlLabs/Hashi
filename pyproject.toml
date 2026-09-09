@@ -75,8 +75,16 @@ include = ["control*", "edge*"]
 # reason the package list above is a glob: naming them here would mean a new
 # protocol is one directory PLUS a line in this file, and forgetting the line
 # reproduces exactly the failure this block prevents.
+#
+# ``*.css`` and ``*.woff2`` joined the list in M8, and for exactly the reason above.
+# The redesigned console's stylesheets and its self-hosted fonts are served from
+# /static; without them here the image builds clean, boots clean, and serves an
+# unstyled panel with a 404 for every stylesheet — which looks like a CSS bug and is
+# a packaging one. Pinned by
+# tests/e2e/control/test_the_panel_fetches_nothing_from_a_third_party.py, which
+# fetches every asset the pages link and requires the bytes to arrive.
 [tool.setuptools.package-data]
-"*" = ["*.j2", "*.html", "*.mako", "*.ini", "*.js"]
+"*" = ["*.j2", "*.html", "*.mako", "*.ini", "*.js", "*.css", "*.woff2"]
 
 [tool.ruff]
 target-version = "py314"

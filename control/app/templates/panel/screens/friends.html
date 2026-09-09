@@ -1,0 +1,21 @@
+{#
+  Users — the list of people who can dial the mesh.
+
+  The label is "users" and the code says `friend` everywhere behind it. That is
+  docs/decisions.md decision 9, and the rule it carries is that the rename stops at
+  the rendered page: not a route, not a schema field, not a service name, not a test.
+  So this file says "user" and the URL it lives at is /panel/friends.
+
+  The design's `last seen` column is not here. It is one of the four cells decision 6
+  removed: a per-user record of activity is exactly what the charter says must not
+  exist, and `added` — a timestamp on a row the operator created — stands in its
+  place.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  {% include "panel/friends_table.html" %}
+  <p class="text-muted section-note">
+    A user gets one subscription URL covering every serving node. Nothing else is
+    stored about them.
+  </p>
+</div>

@@ -1,0 +1,70 @@
+{#
+  The console shell — sidebar, header, panel body. Every redesigned screen is served
+  inside this one document.
+
+  WHAT: the persistent frame from design/README.md ("Shell (all screens)"), with the
+        screen itself included into #main.
+  WHY:  "Sidebar navigation swaps the main region; no page reload." That is HTMX
+        against a #main target, which is the whole of the framework this milestone
+        adds — CLAUDE.md's stack rule is Jinja2 + HTMX, no bundler, no npm.
+  HOW:  a route renders THIS file for a browser navigation and panel/screen.html for
+        an HTMX one; both include the same screen template, so a reload and a nav
+        click cannot drift apart. `screen` is the template path, `current` is the nav
+        key, `title` and `subtitle` are the header's two lines.
+
+  Nothing on this page is fetched from anywhere but this host. The three stylesheets,
+  the two scripts and the fonts they reference are all under /static — see
+  static/fonts.css for why that is a rule rather than a preference, and
+  tests/e2e/control/test_the_panel_fetches_nothing_from_a_third_party.py for what
+  keeps it true.
+#}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hashi — {{ title }}</title>
+{# Nothing here should ever be indexed or previewed. #}
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+{# Order matters: the faces must be declared before the sheet that asks for them,
+   and the console's own layer last so it can lean on the design system's tokens. #}
+<link rel="stylesheet" href="/static/fonts.css">
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div class="app" data-density="comfortable">
+  <aside class="sidenav">
+    <div>
+      <a class="wordmark" href="/panel/">hashi</a>
+      <div class="text-muted wordmark-kicker">private mesh</div>
+    </div>
+    {% include "panel/nav.html" %}
+    <div class="sidenav-foot">
+      <div class="text-muted">signed in as {{ operator }}</div>
+      <form method="post" action="/panel/logout">
+        <button class="btn btn-secondary btn-block" type="submit">log out</button>
+      </form>
+    </div>
+  </aside>
+
+  {#
+    The region a nav click replaces. It also listens for `friends-created`, which is
+    how "on submit: create the user … and route to Users" (design/README.md) happens
+    without the add-user dialog knowing which screen it was opened from.
+  #}
+  <main class="console-main" id="main"
+        hx-get="/panel/friends" hx-trigger="friends-created from:body"
+        hx-target="#main" hx-swap="innerHTML" hx-push-url="/panel/friends">
+    {% include screen %}
+  </main>
+</div>
+
+{# Two fixed slots outside #main, so a screen change does not tear a dialog or a
+   toast out from under the operator. Both are filled by out-of-band swaps. #}
+<div class="toast-slot" id="toast-slot" aria-live="polite"></div>
+<div class="dialog-slot" id="dialog-slot"></div>
+</body>
+</html>

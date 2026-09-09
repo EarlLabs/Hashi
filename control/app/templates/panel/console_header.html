@@ -1,0 +1,25 @@
+{#
+  Every screen's header: title, one-line subtitle, and the panel's global primary
+  action.
+
+  UI-PATTERNS §1 and §2 — nothing lives here except global actions, and "add user"
+  is the ONE global primary, on every screen. A screen's own creation action is
+  secondary and sits above its own table.
+
+  The banner slot underneath is where a failed request lands (static/app.js). It is
+  inside #main on purpose: a navigation should clear a failure that was about the
+  screen the operator has just left.
+#}
+<header class="console-header">
+  <div class="console-header-titles">
+    <h2>{{ title }}</h2>
+    <div class="text-muted subtitle">{{ subtitle }}</div>
+  </div>
+  <div class="console-header-actions">
+    <button class="btn btn-primary blueprint" type="button"
+            hx-get="/panel/friends/new" hx-target="#dialog-slot" hx-swap="innerHTML">
+      add user{% include "panel/corners.html" %}
+    </button>
+  </div>
+</header>
+<div class="banner-slot" id="banner-slot"></div>

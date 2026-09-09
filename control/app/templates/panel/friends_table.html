@@ -1,0 +1,112 @@
+{#
+  The users table, on its own so a mutation can refresh it without a page load.
+
+  Swaps itself, exactly like panel/overview_body.html: one file is both the first
+  paint and every refresh, so there is no second rendering that could disagree with
+  this one about what a row says.
+
+  `serving` is how many node-transports are currently serving. It is the denominator
+  of the coverage column and it is also what decides the "no node is serving yet"
+  warning — a link handed out with nothing serving resolves to an empty config, and
+  the friend reports a broken client rather than a fleet with no nodes.
+#}
+<div id="friends-table" class="stack-6"
+     hx-get="/panel/friends/table" hx-trigger="friends-changed from:body"
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this">
+
+  <div class="loading" aria-hidden="true">
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+  </div>
+
+  <div class="loaded stack-6">
+    {% if friends %}
+    {% if not serving %}
+    <div class="banner" role="status">
+      No node is serving yet, so every link below resolves to an empty configuration.
+      Put a node into service and the same links start working — nobody re-imports
+      anything.
+    </div>
+    {% endif %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>nickname</th>
+            <th>status</th>
+            <th>added</th>
+            <th>nodes served</th>
+            <th class="right">actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for friend in friends %}
+          <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
+            <td>{{ friend.nickname }}</td>
+            <td>
+              <span class="tag {{ 'tag-accent' if friend.is_active else 'tag-neutral' }}">
+                {{ "active" if friend.is_active else "revoked" }}
+              </span>
+            </td>
+            <td class="text-muted">{{ friend.added.strftime("%d %b %Y") }}</td>
+            {#
+              Coverage, not activity: how many of the serving node-transports this
+              person holds a credential on. It is a fact about OUR configuration —
+              it does not move when they connect and it does not move when they
+              don't — which is why it survives decision 6 while "last seen" does not.
+              A row reading 2 / 3 is a fault in the fleet, not a habit of a person.
+            #}
+            <td class="mono">
+              {% if friend.is_active %}
+                {{ friend.nodes_served }} / {{ friend.nodes_serving }}
+              {% else %}—{% endif %}
+            </td>
+            <td class="right">
+              {% if friend.is_active %}
+              <span class="row-actions">
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/friends/{{ friend.id }}/subscription"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">show link</button>
+                {#
+                  UI-PATTERNS §3: a destructive action is not coloured red and it
+                  confirms in a dialog. There is no "restore" beside it, unlike the
+                  prototype's toggle — revoking destroys the key material, so it is
+                  one way, and design/README.md says to replace the toggle with a
+                  confirm dialog and a disabled row state. This is that.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/friends/{{ friend.id }}/revoke"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">revoke</button>
+              </span>
+              {% else %}
+              <span class="text-muted">no access</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {#
+      The empty state a first-time operator meets. It names the next action and the
+      order that actually works, rather than reporting that a table is empty.
+    #}
+    <div class="empty">
+      <div class="empty-title">No users yet</div>
+      <p class="empty-body text-muted">
+        {% if serving %}
+        Use "add user" in the header. You give them a nickname; they get one
+        subscription URL covering every serving node, and nothing else about them is
+        ever stored.
+        {% else %}
+        Nothing is serving yet, so a link issued now would resolve to an empty
+        configuration. Add a node and put it into service first — then "add user" in
+        the header issues a link that works immediately.
+        {% endif %}
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>

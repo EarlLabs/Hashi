@@ -70,7 +70,11 @@ async def test_the_fleet_page_marks_a_blocked_protocol_and_does_not_offer_it_for
             "so the panel has nothing to warn about and this scenario proves nothing"
         )
 
-    page = await operator.get("/panel/")
+    # /panel/fleet, not /panel/. The transports table and the hop form are still on
+    # the pre-redesign page — M9 ports them into the console's own screens, and this
+    # assertion moves again with them. Relaxing it to "somewhere in the panel" would
+    # be how a rewrite loses the cover this scenario provides.
+    page = await operator.get("/panel/fleet")
     assert page.status_code == 200, page.text
     body = page.text
 

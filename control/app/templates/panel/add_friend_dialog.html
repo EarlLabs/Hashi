@@ -1,0 +1,41 @@
+{#
+  "Add a user" — the panel's one global creation flow.
+
+  UI-PATTERNS §5: creation happens in a dialog, never inline on the page, and the
+  dialog is title → fields → one sentence on the consequence → actions with cancel
+  secondary and confirm primary, right-aligned. The opaque background is not
+  decoration: the design system's `.dialog` is TRANSPARENT (styles.css's blueprint
+  layer resets it), so `background: var(--color-bg)` in app.css is what stops the
+  page showing through the text.
+
+  Re-rendered with `error` set when the nickname is refused, so the message lands
+  under the field it is about — M8.6. A toast would be wrong here: it disappears
+  after 2200ms and leaves the operator looking at a form that will not submit.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="add-user-title">
+    <div class="dialog-title" id="add-user-title">Add a user</div>
+    <form hx-post="/panel/friends" hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="friend-nickname">nickname</label>
+        <input class="input" id="friend-nickname" name="nickname" type="text"
+               value="{{ nickname or "" }}" placeholder="mira" maxlength="64"
+               autocomplete="off" required
+               {% if error %}aria-invalid="true" aria-describedby="friend-nickname-error"{% endif %}>
+        {% if error %}
+        <div class="field-error" id="friend-nickname-error" role="alert">{{ error }}</div>
+        {% endif %}
+      </div>
+      <div class="dialog-body">
+        They get one subscription URL covering every serving node. Nothing else is
+        stored about them.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">add user</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

@@ -295,7 +295,10 @@ async def test_the_panel_offers_a_hop_form_built_from_the_transports_declaration
     """Named no protocol and no field in the template — both come from the registry."""
     await two_nodes(client)
 
-    page = (await client.get("/panel/")).text
+    # /panel/fleet, not /panel/. The redesigned console took /panel/ for its Overview
+    # in M8; the hop form is on the page that still OWNS hops until M9 ports them, and
+    # this assertion moved with the fact rather than being relaxed to "somewhere".
+    page = (await client.get("/panel/fleet")).text
 
     assert 'name="entry-tunnel_address"' in page
     assert 'name="leaf-tunnel_address"' in page

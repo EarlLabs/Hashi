@@ -104,8 +104,19 @@ async def test_the_whole_path_from_an_empty_fleet_to_a_revoked_friend(
     # --- the owner adds a node and a protocol, from the panel -----------------
     node_id = await make_serving_node(operator, unique, port=8443)
 
-    page = (await operator.get("/panel/")).text
+    # /panel/fleet, not /panel/. M8 gave /panel/ to the redesigned console's Overview,
+    # whose Nodes card is a PREVIEW of the first few — in a shared e2e database that
+    # would pass or fail on how many other scenarios ran first. The full node list is
+    # still owned by the fleet page until M9 ports the Nodes screen, so the assertion
+    # moved with the fact rather than being relaxed to "somewhere on the panel".
+    page = (await operator.get("/panel/fleet")).text
     assert f"leaf-{unique}" in page, "a node the owner added is not on their screen"
+
+    # And the console the owner actually opens is reachable and answers. The node's
+    # own row is asserted above, on the screen that owns it.
+    console = await operator.get("/panel/")
+    assert console.status_code == 200, console.text
+    assert "nodes online" in console.text
 
     # --- a friend, and the one artefact they ever hold ------------------------
     friend = await operator.post("/api/friends", json={"nickname": f"kolya-{unique}"})

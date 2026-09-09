@@ -164,6 +164,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "Content-Security-Policy",
             "default-src 'self'; style-src 'self' 'unsafe-inline'; "
             "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            # Stated rather than inherited from default-src, deliberately. The panel
+            # self-hosts Barlow because decision 7 forbade the font service the design
+            # system imported from, and this is the line a browser would enforce if
+            # that @import ever came back — a rule that is written down is one nobody
+            # widens by accident while relaxing default-src for something else.
+            "font-src 'self'; "
             "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; "
             "base-uri 'none'",
         )

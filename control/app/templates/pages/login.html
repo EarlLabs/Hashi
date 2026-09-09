@@ -1,7 +1,12 @@
 {#
-  The login screen. Deliberately does NOT extend base.html: base carries a log-out
-  button and a link into the panel, and rendering those for an unauthenticated
-  visitor is confusing at best.
+  The sign-in screen. Deliberately does NOT extend the console shell: that shell
+  carries a sidebar, a log-out button and the panel's global "add user" action, and
+  rendering those for someone who has not signed in is confusing at best.
+
+  It does load the same three stylesheets, because this is the first thing an
+  operator sees and a console that begins in a different typeface has already told
+  them the panel is two things stuck together. Nothing here comes from off this host
+  — see static/fonts.css.
 
   The error message is identical for a wrong username and a wrong password — see
   panel/routes.py:login_submit for why.
@@ -11,31 +16,48 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
 <title>hashi — sign in</title>
+<link rel="stylesheet" href="/static/fonts.css">
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/static/app.css">
 <style>
-  body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 22rem; padding: 4rem 1.5rem; color-scheme: light dark; }
-  h1 { font-size: 1.1rem; }
-  label { display: block; margin: .75rem 0; }
-  input { font: inherit; padding: .35rem; width: 100%; box-sizing: border-box; }
-  button { font: inherit; padding: .4rem .8rem; margin-top: .5rem; cursor: pointer; }
-  .bad { color: #c0392b; }
+  /* The one screen with no shell, so its centring lives here rather than in app.css
+     where every other rule is about the console. */
+  .signin { display: grid; place-items: center; min-height: 100vh; padding: var(--space-6); }
+  .signin-card { width: min(320px, 100%); gap: var(--space-4); padding: var(--space-6); }
+  .signin-form { display: flex; flex-direction: column; gap: var(--space-4); }
 </style>
 </head>
 <body>
-<h1>hashi</h1>
-{% if error %}<p class="bad">{{ error }}</p>{% endif %}
-<form method="post" action="/panel/login">
-  <label>
-    operator
-    {# autocomplete hints so a password manager fills this correctly; there is
-       exactly one account, so "username" is the right token. #}
-    <input name="username" autocomplete="username" autofocus required>
-  </label>
-  <label>
-    password
-    <input name="password" type="password" autocomplete="current-password" required>
-  </label>
-  <button type="submit">sign in</button>
-</form>
+<main class="signin">
+  <div class="signin-card card blueprint">
+    <div>
+      <div class="wordmark">hashi</div>
+      <div class="text-muted wordmark-kicker">private mesh</div>
+    </div>
+    {% if error %}
+    <div class="banner" role="alert">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/panel/login" class="signin-form">
+      <div class="field">
+        <label for="operator">operator</label>
+        {# autocomplete hints so a password manager fills this correctly; there is
+           exactly one account, so "username" is the right token. #}
+        <input class="input" id="operator" name="username" autocomplete="username"
+               autofocus required>
+      </div>
+      <div class="field">
+        <label for="password">password</label>
+        <input class="input" id="password" name="password" type="password"
+               autocomplete="current-password" required>
+      </div>
+      <div>
+        <button class="btn btn-primary" type="submit">sign in</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</main>
 </body>
 </html>

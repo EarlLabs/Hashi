@@ -1,0 +1,15 @@
+{#
+  What every console mutation answers with.
+
+  One template rather than one per action, because the SHAPE is always the same:
+  something for the dialog slot (a new dialog, or nothing — which closes it), plus at
+  most one out-of-band toast or banner. Keeping it in one place is what makes
+  "every mutation emits a toast naming its object" (UI-PATTERNS §8) checkable by
+  reading a single file.
+
+  The out-of-band elements have to be TOP-LEVEL in the response for htmx to find
+  them, which is why they are included here rather than nested inside a dialog.
+#}
+{% if dialog %}{% include dialog %}{% endif %}
+{% if toast %}{% include "panel/toast.html" %}{% endif %}
+{% if banner %}{% include "panel/banner.html" %}{% endif %}

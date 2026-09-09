@@ -1,0 +1,131 @@
+{#
+  The Overview's content, on its own so it can be re-fetched after a mutation.
+
+  Swaps itself (`hx-target="this"`, `outerHTML`) so this one file is both the first
+  paint and every refresh — there is no second template that could drift from it.
+  `hx-indicator="this"` is what puts the skeleton on screen while the refresh is in
+  flight; see .loading/.loaded in static/app.css.
+#}
+<div id="overview-body" class="overview-body"
+     hx-get="/panel/overview/body" hx-trigger="friends-changed from:body"
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this">
+
+  <div class="loading" aria-hidden="true">
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+  </div>
+
+  <div class="loaded stack-8">
+    <div class="grid-4">
+      {% for stat in overview.stats %}
+      <div class="card blueprint">
+        <div class="card-kicker">{{ stat.kicker }}</div>
+        <div class="stat-value">{{ stat.value }}</div>
+        <div class="card-meta">{{ stat.meta }}</div>
+        {% include "panel/corners.html" %}
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if not overview.nodes and not overview.friends %}
+    {#
+      The first thing a new operator ever sees. It says what to do next rather than
+      reporting an absence — and it says NODE first, deliberately: a subscription
+      only resolves to nodes that are serving, so a link handed out before there is
+      one is a link that hands the friend an empty configuration.
+    #}
+    <div class="empty">
+      <div class="empty-title">Nothing is configured yet</div>
+      <p class="empty-body text-muted">
+        Start with a node. A user's subscription only ever resolves to nodes that are
+        serving, so adding a user first would hand them a link to nothing. Add a node,
+        enable a protocol on it and put it into service — then come back and add your
+        first user from the header.
+      </p>
+      <a class="btn btn-secondary" href="/panel/fleet">add a node</a>
+    </div>
+    {% else %}
+    <div class="grid-2">
+      <section class="card blueprint">
+        <div class="card-head">
+          <h4>Users</h4>
+          <a class="all-link" href="/panel/friends"
+             hx-get="/panel/friends" hx-target="#main" hx-swap="innerHTML"
+             hx-push-url="true">all users</a>
+        </div>
+        {% if overview.friends %}
+        <div class="table-scroll">
+          <table class="table">
+            <thead><tr><th>nickname</th><th>status</th><th>added</th><th></th></tr></thead>
+            <tbody>
+              {% for friend in overview.friends[:5] %}
+              <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
+                <td>{{ friend.nickname }}</td>
+                <td>
+                  {# UI-PATTERNS §4: status is a tag, never coloured text, and there is
+                     no red — "revoked" is inert, so it is neutral. #}
+                  <span class="tag {{ 'tag-accent' if friend.is_active else 'tag-neutral' }}">
+                    {{ "active" if friend.is_active else "revoked" }}
+                  </span>
+                </td>
+                <td class="text-muted">{{ friend.added.strftime("%d %b %Y") }}</td>
+                <td class="right">
+                  {% if friend.is_active %}
+                  <button class="btn btn-ghost" type="button"
+                          hx-get="/panel/friends/{{ friend.id }}/subscription"
+                          hx-target="#dialog-slot" hx-swap="innerHTML">link</button>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted section-note">
+          No users yet. "add user" in the header issues one subscription URL covering
+          every serving node.
+        </p>
+        {% endif %}
+        {% include "panel/corners.html" %}
+      </section>
+
+      <section class="card blueprint">
+        <div class="card-head">
+          <h4>Nodes</h4>
+          <a class="all-link" href="/panel/fleet">all nodes</a>
+        </div>
+        {% if overview.nodes %}
+        <div class="table-scroll">
+          <table class="table">
+            <thead><tr><th>name</th><th>exit</th><th>state</th><th>config</th></tr></thead>
+            <tbody>
+              {% for node in overview.nodes[:5] %}
+              <tr>
+                <td>{{ node.name }}</td>
+                <td class="text-muted">{{ node.location_label }}</td>
+                <td>
+                  <span class="tag {{ 'tag-accent' if node.state == 'active' else ('tag-outline' if node.state == 'degraded' else 'tag-neutral') }}">
+                    {{ node.state }}
+                  </span>
+                </td>
+                {# Decision 6's replacement for "load". Monospace because it is a
+                   machine-reported ratio, not a human value — UI-PATTERNS §7. #}
+                <td class="mono text-muted">{{ node.drift }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted section-note">
+          No nodes yet. Until one is serving, every subscription resolves to nothing.
+        </p>
+        {% endif %}
+        {% include "panel/corners.html" %}
+      </section>
+    </div>
+    {% endif %}
+  </div>
+</div>

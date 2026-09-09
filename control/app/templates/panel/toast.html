@@ -1,0 +1,16 @@
+{#
+  One toast, swapped out-of-band into the slot in the shell.
+
+  UI-PATTERNS §8: lowercase, present tense, the object NAMED — `mira revoked — link
+  is dead`, never `Success!`. Bottom right, one at a time; the 2200ms timer that
+  clears it lives in static/app.js, and a new toast clears the pending one.
+
+  `innerHTML:#toast-slot` rather than a bare `true`, deliberately: `true` is an
+  outerHTML swap, which would replace the slot element itself and leave the observer
+  in app.js watching a node that is no longer in the document.
+#}
+<div hx-swap-oob="innerHTML:#toast-slot">
+  <div class="toast blueprint" role="status">
+    {{ toast }}{% include "panel/corners.html" %}
+  </div>
+</div>

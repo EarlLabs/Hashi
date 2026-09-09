@@ -1,0 +1,14 @@
+{#
+  A persistent message, swapped out-of-band under the header.
+
+  Used where a toast would be wrong because the operator must not miss it — a
+  revocation that could not reach every node is the case this exists for. It stays on
+  screen until the next successful request or the next navigation, both of which
+  clear it (static/app.js).
+
+  Not coloured red: UI-PATTERNS §4 — the steel accent is the only colour and severity
+  is carried by the words.
+#}
+<div hx-swap-oob="innerHTML:#banner-slot">
+  <div class="banner" role="alert">{{ banner }}</div>
+</div>

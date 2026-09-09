@@ -1,0 +1,22 @@
+{#
+  Overview — health at a glance.
+
+  The layout is the design's: four stat cards in a 4-up grid, then a two-up grid of
+  framed preview tables. What the cells CONTAIN is docs/decisions.md decision 6, and
+  the difference is the point of this screen:
+
+    * "throughput now" is gone — it is a measurement of people, and the charter's
+      non-goals put per-user analytics beyond "off by default": absent.
+    * the Users preview shows `added`, never `last seen`, for the same reason.
+    * the Nodes preview's `load` column is `config`, which reads drift against the
+      digest we last applied. It answers "is this node serving what I told it to",
+      which M1 proved is the question that matters and which nothing in the product
+      could answer at all before this run.
+
+  The design's "Recent activity" table is not here: there is no audit log to fill it
+  from, and a table of nothing is worse than no table. It arrives with M10.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  {% include "panel/overview_body.html" %}
+</div>

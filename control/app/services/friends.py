@@ -20,12 +20,16 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import Conflict, NotFound
+from control.app.errors import Conflict, DomainError, NotFound
 from control.app.models import Credential, Friend, NodeTransport, Subscription
 from control.app.services import keymaterial, nodes, subscriptions
 from edge.registry import KeyScope, discover
 
 logger = logging.getLogger(__name__)
+
+# The width of ``Friend.nickname``. Stated here because this is the layer that
+# refuses a value the column could not hold; the model is the other half of the pair.
+NICKNAME_MAX_LENGTH = 64
 
 
 async def get_friend(session: AsyncSession, friend_id: str) -> Friend:
@@ -48,6 +52,18 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
     config — which a client reports as a broken link. There is no partially
     onboarded state an operator can observe, on purpose.
     """
+    # Checked here rather than in a route so both surfaces get the same answer, and so
+    # a nickname that cannot be stored is refused with a sentence instead of arriving
+    # at the database and coming back as an opaque 500. NICKNAME_MAX_LENGTH is the
+    # column's own width — the two must not drift.
+    nickname = nickname.strip()
+    if not nickname:
+        raise DomainError("a nickname is required — it is the only thing that identifies them")
+    if len(nickname) > NICKNAME_MAX_LENGTH:
+        raise DomainError(
+            f"a nickname must be {NICKNAME_MAX_LENGTH} characters or fewer"
+        )
+
     existing = await session.execute(select(Friend).where(Friend.nickname == nickname))
     if existing.scalars().first() is not None:
         raise Conflict(f"a friend called {nickname!r} already exists")

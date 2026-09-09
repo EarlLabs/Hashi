@@ -1,0 +1,9 @@
+{#
+  What an HTMX navigation receives: the screen for #main, plus the sidebar's nav
+  list out-of-band.
+
+  NOT a full document — the control rulebook's trap is that returning a page from a
+  partial route nests <html> inside the panel and the bug then looks like CSS.
+#}
+{% include "panel/nav.html" %}
+{% include screen %}

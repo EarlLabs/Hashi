@@ -1,13 +1,28 @@
 {% extends "pages/base.html" %}
 {#
-  The fleet at a glance: which nodes serve, who can use them, and what this image
-  can do. One screen, because during a rotation the operator should not be
-  navigating.
+  The fleet: which nodes serve, the hops between them, and what this image can do.
+
+  This is the panel as it was before the redesign, and it is deliberately still here.
+  M8 ported Overview and Users into the new console; Nodes, Hops and Transports are
+  M9, and until they land this page is the screen that OWNS those three facts. The
+  console's sidebar links here and says so. M9.5 retires it, once every action it
+  carries has a new home — a dead nav link is worse than an honest one.
+
+  Its Friends section is gone: the console's Users screen owns that now, and two
+  lists of the same people, with different actions on each, is how an operator revokes
+  the wrong person.
 #}
 {% block title %}hashi — fleet{% endblock %}
-{% block subtitle %}{{ nodes | length }} node(s), {{ friends | selectattr("is_active") | list | length }} active friend(s){% endblock %}
+{% block subtitle %}{{ nodes | length }} node(s){% endblock %}
 
 {% block content %}
+
+<p><a href="/panel/">← console</a></p>
+{# Said out loud rather than left to be discovered. An operator who lands here from
+   the redesigned console and finds a different-looking page should be told which of
+   the two states they are in — the alternative is reading it as a fault. #}
+<p class="muted">Nodes, hops and transports have not been redesigned yet. This is the
+  original panel, and it is still where all three are managed.</p>
 
 <h2>Nodes</h2>
 {% if nodes %}
@@ -140,39 +155,6 @@
 })();
 </script>
 {% endif %}
-
-<h2>Friends</h2>
-{% if friends %}
-<table>
-  <tr><th>nickname</th><th>status</th><th></th></tr>
-  {% for friend in friends %}
-  <tr>
-    <td>{{ friend.nickname }}</td>
-    <td>{% if friend.is_active %}active{% else %}<span class="bad">revoked</span>{% endif %}</td>
-    <td>
-      {% if friend.is_active %}
-      <button hx-get="/panel/friends/{{ friend.id }}/subscription" hx-target="#outcome" hx-swap="innerHTML">show link</button>
-      {# hx-confirm because this is irreversible and immediate: it deletes their
-         credentials and re-pushes every node they were on. #}
-      <button hx-post="/panel/friends/{{ friend.id }}/revoke" hx-target="#outcome" hx-swap="innerHTML"
-              hx-confirm="Revoke {{ friend.nickname }} on every node and every protocol?">revoke</button>
-      {% endif %}
-    </td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}
-<p class="muted">No friends yet.</p>
-{% endif %}
-
-<fieldset>
-  <legend>Add a friend</legend>
-  <form method="post" action="/panel/friends">
-    <label><span>nickname</span><input name="nickname" required></label>
-    <p class="muted">They get one subscription URL covering every serving node. Nothing else is stored about them.</p>
-    <button type="submit">add friend</button>
-  </form>
-</fieldset>
 
 <h2>Transports this image ships</h2>
 <table>
