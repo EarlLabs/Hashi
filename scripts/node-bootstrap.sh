@@ -542,7 +542,7 @@ say "no hashi code and no hashi state was installed here — ${NODE_ROOT} is an 
 # there and it is not empty. What is true either way is that THIS SCRIPT wrote nothing
 # into it and removed nothing from it.
 if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
-  say "an earlier apply already left files in ${NODE_ROOT} — this run neither changed nor removed them, only re-asserted that ${TARGET_USER} owns the directory"
+  say "${NODE_ROOT} was already here before this run — whatever an earlier apply left in it, this run neither changed nor removed it, only re-asserted that ${TARGET_USER} owns the directory"
 fi
 # Said last because it is the operator's next move, and the moment they are most likely to
 # blame the wrong layer. See section A of the header: this is the boundary that costs an

@@ -182,8 +182,9 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
         "the firewall was already up — its existing rules were kept",
         "/opt/hashi was already here — its contents were left alone, and <user> owns the "
         "directory",
-        "an earlier apply already left files in /opt/hashi — this run neither changed nor "
-        "removed them, only re-asserted that <user> owns the directory",
+        "/opt/hashi was already here before this run — whatever an earlier apply left in "
+        "it, this run neither changed nor removed it, only re-asserted that <user> owns "
+        "the directory",
         # the boundary the run ends on
         "the provider's own firewall sits in front of this host and outside this script's "
         "reach",

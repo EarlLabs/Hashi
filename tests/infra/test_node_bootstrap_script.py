@@ -449,7 +449,7 @@ def test_it_stays_honest_about_hashi_state_on_a_host_already_applied_to(script: 
         "is always yes — the correction then fires on every run, including the first, and "
         "the closing line is wrong in the other direction"
     )
-    assert re.search(r"neither changed nor removed them", script), (
+    assert re.search(r"neither changed nor removed it", script), (
         "the line does not say that this run left the existing contents alone"
     )
     assert re.search(r"only re-asserted that \$\{TARGET_USER\} owns", script), (
