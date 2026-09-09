@@ -548,7 +548,38 @@ acceptance: no
 
 ---
 
-## → M6 — Deployment hygiene · planned 2026-09-08
+## ✅ M6 — Deployment hygiene · planned 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run, and the first milestone to close under the new
+> gate.** Six steps — three planned, three appended during the run. Two review
+> rounds: round 1 found a **Critical**, round 2 verified both fixes by
+> reproduction and returned CLEAN. `acceptance: no` per the plan.
+>
+> **Gate at close: `make verify` green** — control 218, edge 230 (3 skipped),
+> infra 110, and **130 e2e scenarios in 7m30s**, stand torn down.
+>
+> **The Critical is worth reading in full** (`docs/tracker/M6/outcome.md`): the
+> implementer built `OperatorHashMalformed` *specifically* so a malformed hash
+> could never reach a log — and left one input shape that defeated it, putting
+> the full credential into the boot-failure message. Every test covered the shape
+> they had *seen*. The fix brought a second one unprompted: a well-formed hash
+> with an enormous cost parameter boots fine and then 500s on the login route,
+> which the control rulebook says a prober must not be able to tell from a wrong
+> password.
+>
+> **M6.5's cause was not in this repository.** BuildKit's provenance attestation
+> records build time, so a fully-cached rebuild exports a new manifest digest and
+> compose recreates the container. Reproduced independently. Correction to the
+> first telling, including mine: the database is **pulled by tag, not built**, so
+> it was never recreated and no data was ever at risk — the churn is `control`
+> and `caddy`.
+>
+> **M6.6 — the gate exists now.** `make verify` = `make test` + the stand + all of
+> `tests/e2e/` + teardown; a missing Docker engine fails with an explanation
+> rather than skipping; CI has a plain job, not an advisory one. `aikit.yml`'s
+> `verify_all` points at it. Recorded plainly in the outcome: **the orchestrator
+> was itself an instance of this finding**, gating eleven milestones on `make
+> test` because that is what the config said.
 
 **`panel-bootstrap.sh` reports a URL nothing serves.** Confirmed on the live host:
 it verified the stack from inside the compose network and printed
