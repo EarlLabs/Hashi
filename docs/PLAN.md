@@ -1869,6 +1869,55 @@ The same measurement as above, on a ufw host, with the answer changed.
 
 ---
 
+## → M21 — A gate that fails at random is a gate people stop reading · found 2026-09-09
+
+`tests/control/test_node_timeouts.py::test_a_node_that_never_answers_is_reported_with_a_plain_reason`
+and `tests/control/test_first_apply_failure.py` fail intermittently, returning
+`could not establish an SSH session: OSError` where they assert the timeout
+sentence M4.4 introduced. **Observed at least twice in one session**, always
+under load, always passing on a re-run.
+
+**The cause is a test coupled to one failure mode rather than to the property.**
+M4.4 set `node_connect_timeout=1` in the `settings` fixture so an unreachable
+node costs a second instead of twenty. The fixtures point at `192.0.2.10`
+(TEST-NET-1, reserved for documentation). What that address *does* is not
+guaranteed: on a host where it is silently dropped the connect times out and the
+assertion holds; on a busy machine, or one where something answers or rejects
+sooner — this run's own operator host routes it over a `wg0` interface — the
+connection fails fast with an `OSError` instead. **Both outcomes are the same
+fact — the node could not be reached — and the test accepts only one of them.**
+
+**Why it is worth a milestone rather than a re-run.** It is the M6.6 lesson one
+layer in. A gate that goes red for reasons unrelated to the change trains
+everyone reading it to re-run rather than investigate, and the habit does not
+distinguish this flake from a real regression. `make verify` is now *the* gate;
+it takes ten minutes; a random failure in it is expensive in both time and trust.
+
+### M21.1 — Assert the property, not the sentence
+
+"The operator is told the node could not be reached, in words, without a
+traceback" is the property. Which kernel error produced it is not.
+
+### M21.2 — Stop depending on what an address happens to do
+
+A reserved address's behaviour is a property of the network the test runs on, not
+of the code. Consider a listener that accepts and never answers, or a closed port
+on loopback — something whose behaviour the test itself decides.
+
+**E2E:** none — this is a unit-level fixture question. `make test-control` is the
+gate, and the honest proof is running it repeatedly under load and getting the
+same answer every time.
+
+**Done when**
+- [ ] The unreachable-node tests give the same result on a loaded machine as on
+      an idle one.
+- [ ] The assertion names the property the operator depends on, not the errno
+      that happened to produce it.
+
+acceptance: no
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
