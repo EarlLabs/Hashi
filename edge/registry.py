@@ -25,7 +25,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened four times since, each deliberately, each recorded
+      **It has been widened five times since, each deliberately, each recorded
       where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
       own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
       now declares the SET of subscription shapes it serialises into rather than a
@@ -38,8 +38,12 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       decrypts may leave the node, because the field answer was that it left nowhere
       and nothing said so. It is a keyword on ``render_server`` with a fail-closed
       default, so it widens the contract without making any existing call wrong.
+      ``exit_via`` came with M3 and is that same keyword's missing half: a policy of
+      "out through the hop" is unactionable without the address the hop runs through,
+      and an address is the largest thing that can be said about a hop without saying
+      what it is. Same shape — a keyword, defaulting to the answer every node had before.
 
-      None of the four was a branch on a protocol; each replaced one with a
+      None of the five was a branch on a protocol; each replaced one with a
       vocabulary or a property. None was free either, and a reader deserves to know
       the contract has moved and why rather than to discover it from a diff.
 """
@@ -442,21 +446,29 @@ class TransportProfile(Protocol):
         clients: Sequence[Credential] = (),
         *,
         egress: Egress = Egress.NONE,
+        exit_via: str | None = None,
     ) -> str:
         """The node's complete config file for this transport. Deterministic.
 
         ``clients`` is every consumer this node authorises on this transport — friends
         on a friend-facing transport, the single far node on a hop end.
 
-        ``egress`` says whether packets this transport decrypts may leave the node for
-        the internet (``edge/egress.py``, M14.3). It is a keyword with a fail-closed
-        default so that a caller which has not thought about it gets the answer that
-        fails loudly: a tunnel with no exit produces a friend who reports at once that
-        nothing loads, while a tunnel that exits where it should not produces a friend
-        who reports nothing at all.
+        ``egress`` says which way out packets this transport decrypts take
+        (``edge/egress.py``, M14.3 and M3). It is a keyword with a fail-closed default so
+        that a caller which has not thought about it gets the answer that fails loudly: a
+        tunnel with no exit produces a friend who reports at once that nothing loads,
+        while a tunnel that exits where it should not produces a friend who reports
+        nothing at all.
 
-        Every transport takes it, including those whose data plane forwards no packet in
-        the kernel and therefore renders nothing for it. That is what keeps `control`
+        ``exit_via`` is the other half of the same answer and nothing more: the ADDRESS on
+        this node that the way out runs through, when the policy is ``Egress.HOP``.
+        ``None`` means this node's own route, which is what a node without a hop has
+        always had. It is an address and never a protocol, a name or an interface — which
+        is precisely what lets an entry node route friend traffic into a hop without any
+        transport learning what the hop is made of.
+
+        Every transport takes both, including those whose data plane forwards no packet in
+        the kernel and therefore renders no rule for either. That is what keeps `control`
         from having to know which is which.
         """
         ...

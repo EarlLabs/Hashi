@@ -11,6 +11,14 @@
   run over HTTP/2 in this setup, and offering h2 in the handshake advertises a
   capability the endpoint does not actually serve — a mismatch an active prober
   can measure.
+
+  One more thing is load-bearing, and it is the whole of M3: the OUTBOUND. This node
+  originates every connection a friend makes, so where that connection is opened FROM is
+  where the friend appears to be. On an entry node with a hop there is exactly one
+  outbound and it is bound to the hop's near address (`sendThrough`) — so there is no
+  outbound left that could reach the internet by this node's own route, and when the hop
+  is down the connection cannot be opened at all. Decision 3, fail closed, as a property
+  of the file rather than as a rule someone has to remember.
 #}
 {
   "log": {
@@ -56,10 +64,29 @@
       }
     }
   ],
+{% if exit_origin %}
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["in"],
+        "outboundTag": "hop"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "tag": "hop",
+      "protocol": "freedom",
+      "sendThrough": {{ exit_origin | tojson }}
+    }
+  ]
+{% else %}
   "outbounds": [
     {
       "tag": "direct",
       "protocol": "freedom"
     }
   ]
+{% endif %}
 }

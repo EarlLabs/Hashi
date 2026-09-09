@@ -131,6 +131,18 @@ def _check(transport_name: str, entry: HopEnd, leaf: HopEnd) -> None:
     if not profile(transport_name).meta.family:
         raise HopNotRenderable(f"transport {transport_name!r} declares no family")
 
+    if near.version != 4:
+        # Checked here, before either end is rendered, because since M3 a hop is not two
+        # tunnels but a relay: the leaf forwards and masquerades what arrives over it and
+        # the entry routes its friends into it, and both of those are IPv4 rules (see
+        # ``edge/egress.py``). Rendering would raise from inside a transport instead —
+        # which reaches the operator as "this node could not be rendered" rather than as
+        # "this hop cannot carry traffic", and only after the pair was accepted.
+        raise HopNotRenderable(
+            f"this hop's tunnel network is {near.network}, and the forwarding a relay "
+            "needs is rendered as IPv4 rules only. Give both ends IPv4 tunnel addresses."
+        )
+
 
 def _peer(end: HopEnd, *, endpoint: str | None) -> Credential:
     """Describe one end as the other end's single authorised peer.
@@ -161,14 +173,21 @@ def render_hop(
     Rendered through the transport's own ``render_server`` at both ends, so a hop is
     not a second rendering path that could drift from the one under test elsewhere.
 
-    Neither end gets a local exit, and that is fixed here rather than asked of the caller
-    — M14.3. A hop carries traffic BETWEEN our own nodes: masquerading it out of the
-    entry is a friend in Russia exiting in Russia while the panel shows two active nodes
-    and a live hop, which is the quietest failure this topology has. Making it the
-    caller's decision would mean one wrong argument, anywhere, reproduces it. What the
-    LEAF end should do with traffic arriving over the hop — forward it INTO the exit
-    rather than out of the entry — is M3's subject, and it changes this call rather than
-    working around it.
+    **Each end's egress policy is fixed here rather than asked of the caller** — M14.3,
+    and now M3. The two ends are not symmetric and neither answer is the safe default:
+
+    * the LEAF forwards what arrives over the hop and masquerades it out of its own
+      route. That is the exit — the foreign address a friend's traffic is supposed to
+      appear from, and the whole point of the topology;
+    * the ENTRY does the opposite. It masquerades nothing: a packet arriving over this
+      hop is a reply for a connection the entry's own proxy opened, and nothing of a
+      friend's may leave the entry by the entry's own route. What it renders instead is
+      the way OUT — a source-routed path through this tunnel, taken only by traffic
+      already sourced from the tunnel's own address (``edge/egress.py``).
+
+    Making either the caller's decision would mean one wrong argument, anywhere,
+    reproduces the failure this project is most afraid of: a friend in Russia exiting in
+    Russia while the panel shows two active nodes and a live hop.
     """
     _check(transport_name, entry, leaf)
     render = profile(transport_name).profile.render_server
@@ -179,22 +198,33 @@ def render_hop(
             entry.node,
             entry.params,
             [_peer(leaf, endpoint=endpoint_of(leaf))],
-            egress=Egress.NONE,
+            egress=Egress.HOP,
+            exit_via=exit_via(entry),
         ),
         # The leaf waits. Giving it an endpoint would have it dial a Russian address
         # that is behind carrier NAT, and the tunnel would come up only by luck.
-        render(leaf.node, leaf.params, [_peer(entry, endpoint=None)], egress=Egress.NONE),
+        render(leaf.node, leaf.params, [_peer(entry, endpoint=None)], egress=Egress.LOCAL),
     )
 
 
-def exit_address(leaf: HopEnd) -> str:
-    """The in-tunnel address the entry forwards friend traffic to.
+def exit_via(entry: HopEnd) -> str:
+    """The address on the ENTRY node that friend traffic leaves through.
 
-    The leaf's own tunnel address without its prefix: what an entry node's data plane
-    uses as its outbound target. Kept here rather than in the caller so "where does
-    traffic go once it is in the tunnel" has one answer.
+    The entry's own tunnel address without its prefix. A connection opened from it can
+    only reach the internet through the hop, and while the hop is down it cannot be
+    opened at all — which is decision 3, fail-closed, expressed as an address rather
+    than as a rule somebody has to remember to write.
+
+    **This replaces M3's own sketch, and the reason is worth having here rather than in a
+    commit message.** The plan called for the entry to target the LEAF's in-tunnel
+    address as an outbound destination. Nothing listens there: a leaf runs one hop end
+    and no proxy (see the runbook's shapes B and C), so there is no address on the leaf to
+    dial. What the leaf offers is a route — it forwards and masquerades whatever arrives
+    over the hop — and the only way to hand a packet to that route is to send it THROUGH
+    the tunnel rather than TO the far end of it. Which is what an address to send from
+    buys: the kernel does the rest, and no config anywhere learns what the hop is made of.
     """
-    return str(ipaddress.ip_interface(leaf.tunnel_address).ip)
+    return str(ipaddress.ip_interface(entry.tunnel_address).ip)
 
 
-__all__ = ["HopEnd", "HopNotRenderable", "endpoint_of", "exit_address", "render_hop"]
+__all__ = ["HopEnd", "HopNotRenderable", "endpoint_of", "exit_via", "render_hop"]

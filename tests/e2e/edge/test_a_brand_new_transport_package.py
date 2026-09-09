@@ -114,7 +114,7 @@ def _package_files() -> dict[str, str]:
 
             from collections.abc import Mapping, Sequence
 
-            from edge.egress import Egress
+            from edge.egress import Egress, exit_origin
             from edge.node import Credential, NodeView
             from edge.registry import ClientEntry
             from edge.templating import environment_for
@@ -129,13 +129,16 @@ def _package_files() -> dict[str, str]:
                 clients: Sequence[Credential] = (),
                 *,
                 egress: Egress = Egress.NONE,
+                exit_via: str | None = None,
             ) -> str:
-                # Part of the contract every transport takes, whether or not its data
-                # plane can act on it — see edge/egress.py. This one proxies rather than
-                # forwarding in the kernel, so it renders nothing for it.
+                # Both are part of the contract every transport takes, whether or not its
+                # data plane can act on them — see edge/egress.py. This one proxies rather
+                # than forwarding in the kernel, so it renders no rule; where it opens its
+                # connections FROM is the whole of its answer.
                 return _TEMPLATES.get_template("server.j2").render(
                     node=node,
                     params=params,
+                    exit_origin=exit_origin(egress, exit_via),
                     clients=[{"subject": c.subject} for c in clients],
                 )
 
@@ -165,7 +168,12 @@ def _package_files() -> dict[str, str]:
             '"port": {{ params.port | tojson }}, "settings": {"clients": '
             "[{% for client in clients %}{\"id\": {{ client.subject | tojson }}}"
             '{% if not loop.last %}, {% endif %}{% endfor %}], "decryption": "none"}}], '
+            "{% if exit_origin %}"
+            '"outbounds": [{"tag": "hop", "protocol": "freedom", "sendThrough": '
+            "{{ exit_origin | tojson }}}]}\n"
+            "{% else %}"
             '"outbounds": [{"tag": "direct", "protocol": "freedom"}]}\n'
+            "{% endif %}"
         ),
     }
 

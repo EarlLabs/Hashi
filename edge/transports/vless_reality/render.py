@@ -15,7 +15,7 @@ HOW:  the server config comes from ``server.j2``; the client entry is a URI this
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import Egress
+from edge.egress import Egress, exit_origin
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -30,6 +30,7 @@ def render_server(
     clients: Sequence[Credential] = (),
     *,
     egress: Egress = Egress.NONE,
+    exit_via: str | None = None,
 ) -> str:
     """The node's complete Xray config, with one inbound client per credential.
 
@@ -40,17 +41,27 @@ def render_server(
     nobody — the correct state for a node with no friends assigned yet, and not
     an error.
 
-    ``egress`` is part of the server-rendering contract and this transport renders
-    nothing for it, which is a statement about the protocol rather than an omission.
-    Xray is a userspace proxy: it terminates a connection and ORIGINATES a new one from
-    the node itself, so no packet of a friend's is ever forwarded by the kernel and there
-    is no FORWARD or NAT rule for a policy to add or remove. What decides where such a
-    connection goes is the config's outbound, which is a routing question rather than an
-    egress one and is M3's subject.
+    ``egress`` and ``exit_via`` together say which way out a friend's traffic takes. This
+    transport renders no forwarding or NAT rule for either, and that is a statement about
+    the protocol rather than an omission: Xray is a userspace proxy — it terminates a
+    connection and ORIGINATES a new one from the node itself, so no packet of a friend's
+    is ever forwarded by the kernel and there is nothing for a FORWARD or NAT rule to act
+    on. What decides where that new connection goes is the address it is opened FROM, and
+    that is the outbound's business — M3.
+
+    So on an entry node with a hop (``Egress.HOP`` plus the hop's near address) the config
+    carries exactly ONE outbound, bound to that address. There is no second outbound to
+    fall back to, which is decision 3 expressed structurally: when the hop is down the
+    connection cannot be opened, and a friend gets no exit rather than a Russian one.
+    With no hop, nothing changes — the same direct outbound as before, byte for byte.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
         params=params,
+        # The address every outgoing connection is opened from, or ``None`` for this
+        # node's own route. Checked by ``edge/egress.py`` rather than here: that a policy
+        # and an address agree is a question about the policy, not about this protocol.
+        exit_origin=exit_origin(egress, exit_via),
         clients=[
             # `email` in an Xray client entry is a label, and Xray uses it in
             # statistics and log lines. It gets the friend's OPAQUE subject, never

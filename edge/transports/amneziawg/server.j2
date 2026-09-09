@@ -18,14 +18,27 @@ PrivateKey = {{ params.private_key }}
 Address = {{ params.tunnel_address }}
 ListenPort = {{ params.port }}
 MTU = {{ params.mtu }}
+{% if table %}
+
+# This interface's routes are ours to install, so the tool installs none — M3. The peer
+# below is allowed every address, because AllowedIPs is WireGuard's crypto-routing table
+# as well as its authorisation list and a narrower one drops a friend's traffic on the
+# way out. What made that dangerous was never AllowedIPs but the DEFAULT ROUTE wg-quick
+# would derive from it: with `Table = off` nothing is installed in the main table, so the
+# node's own traffic — the SSH session the control plane manages it over above all —
+# keeps leaving the way it always did. Only what the PostUp rule sources from this
+# tunnel's own address goes through the tunnel.
+Table = {{ table }}
+{% endif %}
 {% if hooks %}
 
-# Forwarding and NAT for this tunnel, tied to the interface's own life — M14. Without
-# them a friend's packet is decrypted onto this interface and then dropped by the host's
-# FORWARD chain, having never been NATed: the handshake completes, the interface is up,
-# and nothing moves. Written here rather than into host state because a node holds
-# nothing that cannot be regenerated, and because a rule the interface did not add is a
-# rule its removal will not take away.
+# This tunnel's egress policy, tied to the interface's own life — M14 and M3. It is one
+# of two things and the renderer decides which: the forwarding and NAT that let a
+# decrypted packet leave this node (without them the handshake completes, the interface
+# is up, and nothing moves), or the source-routed way OUT through this tunnel that an
+# entry node's friend traffic takes. Written here rather than into host state because a
+# node holds nothing that cannot be regenerated, and because a rule the interface did not
+# add is a rule its removal will not take away.
 #
 # No interface name appears: `%i` is wg-quick's own substitution for the interface it is
 # bringing up, and the masquerade matches "left by anything that is NOT the tunnel"
@@ -54,9 +67,10 @@ PresharedKey = {{ params.preshared_key }}
 # carrier NAT and can never be dialled, so it waits and is found by the handshake.
 Endpoint = {{ peer.endpoint }}
 {% endif %}
-# Only the tunnel address, never 0.0.0.0/0: this hop carries traffic BETWEEN our own
-# nodes, and a default route here would send the node's own outbound traffic —
-# including the SSH session the control plane manages it over — into the tunnel.
+# The far end's own address, unless this tunnel is the node's way out — in which case it
+# is every address, and the `Table = off` note above says why that is safe there and only
+# there. A wide entry on any other tunnel would let that peer source traffic as any
+# address in the range.
 AllowedIPs = {{ peer.allowed_ips }}
 # Keeps the UDP path open through NAT and stateful firewalls on the way out of
 # Russia. 25s is below the shortest common UDP idle timeout.

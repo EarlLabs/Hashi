@@ -116,16 +116,20 @@ async def test_a_friend_facing_tunnel_is_told_to_let_its_traffic_out(
 
 # --- and the exit that must not ----------------------------------------------
 
-async def test_neither_end_of_a_hop_is_told_to_let_traffic_out(client, session) -> None:
-    """The quiet failure, asserted on both stored ends.
+async def test_the_entry_end_of_a_hop_is_never_told_to_let_traffic_out(
+    client, session
+) -> None:
+    """The quiet failure, asserted on the stored end that could have it.
 
     Built through the same API an operator uses and then rendered as ``apply`` would, so
     what is asserted is the text that would reach a node.
 
-    NOT a red-first test, unlike the rest of this file: it passed against the commit
-    before this one as well, because at that point nothing rendered an exit rule for any
-    purpose. It is a regression guard — the property it holds has to survive M3, which is
-    when a hop end first gets an egress policy of its own.
+    M14 wrote this as "neither end, ever", and M3 kept the half that is a safety property
+    and inverted the other. The ENTRY masquerading is a friend in Russia exiting in Russia
+    while the panel shows two active nodes and a live hop. The LEAF masquerading is the
+    exit itself — the foreign address the friend is supposed to appear from — so a leaf
+    end with no rule is a hop that carries nothing, which is why it is asserted here too
+    rather than merely allowed.
     """
     for name, address, label in (
         ("entry-ru", "192.0.2.20", "Testland"),
@@ -160,11 +164,15 @@ async def test_neither_end_of_a_hop_is_told_to_let_traffic_out(client, session) 
     )
     assert created.status_code == 201, created.text
 
+    rendered = {}
     for node_id in (ids["entry-ru"], ids["leaf-nl"]):
         node = await nodes.get_node(session, node_id)
-        config = (await apply.render_for_node(session, node))[KERNEL_TUNNELS[0]]
-        assert "MASQUERADE" not in config, node.name
-        assert "PostUp" not in config, node.name
+        rendered[node.name] = (await apply.render_for_node(session, node))[KERNEL_TUNNELS[0]]
+
+    assert "MASQUERADE" not in rendered["entry-ru"]
+    assert f"-s {ipaddress.ip_interface(LEAF_TUNNEL).network} ! -o %i -j MASQUERADE" in (
+        rendered["leaf-nl"]
+    )
 
 
 # --- the policy itself -------------------------------------------------------

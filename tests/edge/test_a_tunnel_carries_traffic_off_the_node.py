@@ -235,17 +235,19 @@ HOP_CAPABLE_FAMILY = [name for name in WG_FAMILY if profile(name).meta.hop_capab
 
 
 @pytest.mark.parametrize("name", HOP_CAPABLE_FAMILY)
-def test_neither_end_of_a_hop_ever_gets_a_local_exit(name: str, node, request) -> None:
-    """The failure the charter is most afraid of, asserted at both ends.
+def test_only_the_leaf_end_of_a_hop_exits_locally(name: str, node, request) -> None:
+    """The failure the charter is most afraid of, asserted at the end that could have it.
 
-    A hop carries traffic BETWEEN our own nodes. Masquerading it out of the entry is a
-    friend in Russia exiting in Russia while every screen shows green — so ``render_hop``
-    fixes the policy itself rather than trusting whatever the caller believed.
+    The two ends are not symmetric, and M3 is where that stopped being academic. The LEAF
+    masquerades what arrives over the hop out of its own route — that IS the exit, the
+    foreign address a friend is supposed to appear from. The ENTRY must never do it:
+    masquerading there is a friend in Russia exiting in Russia while every screen shows
+    green. ``render_hop`` fixes both rather than trusting whatever the caller believed.
 
-    NOT a red-first test, unlike every other assertion in this file, and worth saying so
-    rather than letting it borrow their credibility: it passed against the commit before
-    this one too, because nothing rendered an exit rule anywhere yet. It is a regression
-    guard on a property that has to survive M3 rather than proof that anything changed.
+    M14 left this as "neither end, ever", with a note that the property had to survive M3.
+    Half of it did not, and could not: an exit that masquerades nowhere is a hop that
+    carries nothing. What survives — and is the assertion worth having — is that the entry
+    never does.
     """
     transport = profile(name)
     fixture = request.getfixturevalue("transport_fixture")
@@ -269,9 +271,14 @@ def test_neither_end_of_a_hop_ever_gets_a_local_exit(name: str, node, request) -
         ),
     )
 
-    for config in relay.render_hop(name, entry=entry, leaf=leaf):
-        assert "MASQUERADE" not in config
-        assert "PostUp" not in config
+    entry_config, leaf_config = relay.render_hop(name, entry=entry, leaf=leaf)
+
+    assert "MASQUERADE" not in entry_config, "the entry masquerades a friend into Russia"
+    # The leaf's is the exit itself, and it is the same rule M14 measured on real
+    # hardware: FORWARD both ways, and one masquerade for the tunnel's own subnet — which
+    # is the range the entry's own tunnel address sits in.
+    assert "MASQUERADE" in leaf_config
+    assert hook_lines(leaf_config, "PostUp"), "the leaf forwards nothing, so the hop exits nowhere"
 
 
 def test_a_local_exit_over_ipv6_is_refused_rather_than_half_rendered() -> None:

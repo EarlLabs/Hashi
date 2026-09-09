@@ -20,14 +20,27 @@ PrivateKey = {{ params.private_key }}
 Address = {{ params.tunnel_address }}
 ListenPort = {{ params.port }}
 MTU = {{ params.mtu }}
+{% if table %}
+
+# This interface's routes are ours to install, so the tool installs none — M3. The peer
+# below is allowed every address, because AllowedIPs is WireGuard's crypto-routing table
+# as well as its authorisation list and a narrower one drops a friend's traffic on the
+# way out. What made that dangerous was never AllowedIPs but the DEFAULT ROUTE wg-quick
+# would derive from it: with `Table = off` nothing is installed in the main table, so the
+# node's own traffic — the SSH session the control plane manages it over above all —
+# keeps leaving the way it always did. Only what the PostUp rule sources from this
+# tunnel's own address goes through the tunnel.
+Table = {{ table }}
+{% endif %}
 {% if hooks %}
 
-# Forwarding and NAT for this tunnel, tied to the interface's own life — M14. Without
-# them a friend's packet is decrypted onto this interface and then dropped by the host's
-# FORWARD chain, having never been NATed: the handshake completes, the interface is up,
-# and nothing moves. Written here rather than into host state because a node holds
-# nothing that cannot be regenerated, and because a rule the interface did not add is a
-# rule its removal will not take away.
+# This tunnel's egress policy, tied to the interface's own life — M14 and M3. It is one
+# of two things and the renderer decides which: the forwarding and NAT that let a
+# decrypted packet leave this node (without them the handshake completes, the interface
+# is up, and nothing moves), or the source-routed way OUT through this tunnel that an
+# entry node's friend traffic takes. Written here rather than into host state because a
+# node holds nothing that cannot be regenerated, and because a rule the interface did not
+# add is a rule its removal will not take away.
 #
 # No interface name appears: `%i` is wg-quick's own substitution for the interface it is
 # bringing up, and the masquerade matches "left by anything that is NOT the tunnel"
@@ -43,6 +56,8 @@ PublicKey = {{ peer.public_key }}
 PresharedKey = {{ params.preshared_key }}
 # Exactly this peer's own address, never the whole prefix and never a default route:
 # AllowedIPs is WireGuard's authorisation list as well as its routing table, so a wide
-# entry here would let one friend source traffic as any address in the range.
+# entry here would let one friend source traffic as any address in the range. The one
+# policy that widens it belongs to a tunnel that IS a node's way out, and this transport
+# is refused on a hop (`hop_capable`), so in practice it never reaches this line.
 AllowedIPs = {{ peer.allowed_ips }}
 {% endfor %}

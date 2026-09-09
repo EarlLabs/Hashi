@@ -16,7 +16,7 @@ cannot reach a friend", but "it reaches them as a file, and here it is".
 import ipaddress
 from collections.abc import Mapping, Sequence
 
-from edge.egress import Egress, wg_quick_hooks
+from edge.egress import Egress, wg_quick_egress
 from edge.node import Credential, NodeView
 from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
@@ -61,16 +61,24 @@ def render_server(
     clients: Sequence[Credential] = (),
     *,
     egress: Egress = Egress.NONE,
+    exit_via: str | None = None,
 ) -> str:
     """This end of the hop, authorising exactly ``clients`` as peers.
 
-    ``egress`` says whether packets decrypted onto this interface may leave the node for
-    the internet — see ``edge/egress.py``. It defaults to ``NONE`` because the failure it
-    guards is silent in exactly one direction: a hop end that masquerades locally is a
-    friend in Russia exiting in Russia with every screen showing green, while a
-    friend-facing tunnel with no exit is a friend who tells you at once that nothing
-    loads.
+    ``egress`` says which way out packets decrypted onto this interface take — see
+    ``edge/egress.py``. It defaults to ``NONE`` because the failure it guards is silent in
+    exactly one direction: a hop end that masquerades locally is a friend in Russia
+    exiting in Russia with every screen showing green, while a friend-facing tunnel with
+    no exit is a friend who tells you at once that nothing loads.
+
+    ``exit_via`` names the address that way out runs through, and this transport can
+    honour it only when it is this interface's own — a kernel tunnel hands its packets to
+    the node's routing stack and cannot re-originate them somewhere else. Anything else is
+    refused rather than rendered, which is ``wg_quick_egress``'s decision and not a branch
+    here.
     """
+    plan = wg_quick_egress(egress, str(params["tunnel_address"]), exit_via)
+
     peers = []
     seen_routes: set[str] = set()
     for credential in clients:
@@ -82,7 +90,11 @@ def render_server(
         address = str(
             secrets.get("peer_tunnel_address") or params["peer_tunnel_address"]
         )
-        route = peer_allowed_ips(address)
+        # The peer's own address, unless this tunnel IS the node's way out — in which case
+        # the far end is where everything goes and everything comes back from, and a
+        # narrower route would have the interface drop a friend's traffic with nothing
+        # logging it. The policy decides, not this renderer: see ``edge/egress.py``.
+        route = plan.peer_route or peer_allowed_ips(address)
 
         # AllowedIPs is WireGuard's authorisation list AND its routing table, so two
         # peers claiming one address is not a duplicate that the daemon merges — the
@@ -115,9 +127,11 @@ def render_server(
         node=node,
         params=params,
         peers=peers,
-        # The tunnel's own address decides the masqueraded source range, so the rule
-        # comes out of the node's record rather than out of a constant.
-        hooks=wg_quick_hooks(egress, str(params["tunnel_address"])),
+        # The tunnel's own address decides the masqueraded source range and the source the
+        # way out is routed from, so both come out of the node's record rather than out of
+        # a constant.
+        hooks=plan.hooks,
+        table=plan.table,
     )
 
 

@@ -17,7 +17,7 @@ shared renderer would be one `if` away from rendering the wrong one of them.
 import ipaddress
 from collections.abc import Mapping, Sequence
 
-from edge.egress import Egress, wg_quick_hooks
+from edge.egress import Egress, wg_quick_egress
 from edge.node import Credential, NodeView
 from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
@@ -92,25 +92,37 @@ def render_server(
     clients: Sequence[Credential] = (),
     *,
     egress: Egress = Egress.NONE,
+    exit_via: str | None = None,
 ) -> str:
     """This node's interface, authorising exactly ``clients``.
 
-    ``egress`` says whether packets decrypted onto this interface may leave the node for
-    the internet — see ``edge/egress.py``. It defaults to ``NONE``: no exit at all beats
-    a quiet local one, and a caller that has not thought about it should get the answer
-    that fails loudly rather than the one that fails silently.
+    ``egress`` says which way out packets decrypted onto this interface take — see
+    ``edge/egress.py``. It defaults to ``NONE``: no exit at all beats a quiet local one,
+    and a caller that has not thought about it should get the answer that fails loudly
+    rather than the one that fails silently.
+
+    ``exit_via`` names the address that way out runs through. This transport can honour it
+    only for its own interface — a kernel tunnel hands its packets to the node's routing
+    stack and cannot re-originate them somewhere else — and this one never carries a hop
+    at all (``hop_capable`` is False, because the border it would cross identifies it). So
+    on an entry node whose exit is a hop it refuses, which is ``wg_quick_egress``'s
+    decision and not a branch here.
 
     An empty sequence renders a valid interface that authorises nobody — the correct
     state for a node whose last friend was just revoked, and not an error. If it were,
     the final revocation would produce a config the daemon refuses and the node would
     fail to restart, taking out everyone still on its other transports.
     """
+    plan = wg_quick_egress(egress, str(params["tunnel_address"]), exit_via)
+
     peers = []
     seen_routes: set[str] = set()
     for credential in clients:
         secrets = credential.secrets
         address = str(secrets.get("peer_tunnel_address") or params["peer_tunnel_address"])
-        route = peer_allowed_ips(address)
+        # The peer's own address, unless this tunnel IS the node's way out — see the same
+        # line, and the same reasoning, in the obfuscated member of this family.
+        route = plan.peer_route or peer_allowed_ips(address)
 
         # Two peers on one address is not a duplicate the daemon merges: the later peer
         # silently takes over the route and the earlier one stops receiving traffic while
@@ -146,9 +158,11 @@ def render_server(
         node=node,
         params=params,
         peers=peers,
-        # The tunnel's own address decides the masqueraded source range, so the rule
-        # comes out of the node's record rather than out of a constant.
-        hooks=wg_quick_hooks(egress, str(params["tunnel_address"])),
+        # The tunnel's own address decides the masqueraded source range and the source the
+        # way out is routed from, so both come out of the node's record rather than out of
+        # a constant.
+        hooks=plan.hooks,
+        table=plan.table,
     )
 
 

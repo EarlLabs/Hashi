@@ -41,6 +41,18 @@ def leaf_node(node) -> NodeView:
     return node
 
 
+def directives(config: str) -> str:
+    """A rendered config without its comments.
+
+    Every assertion about what a config says has to read this rather than the file: the
+    templates explain their own decisions at length, so matching the raw text would make
+    an assertion pass for a comment that describes the opposite of what is rendered.
+    """
+    return "\n".join(
+        line for line in config.splitlines() if line and not line.startswith("#")
+    )
+
+
 def ends(entry_node, leaf_node, amneziawg_params, **leaf_overrides):
     """The two ends of one hop, each validated by the transport's own model."""
     validate = profile(HOP_TRANSPORT).validate
@@ -89,29 +101,47 @@ def test_only_the_entry_dials(entry_node, leaf_node, amneziawg_params) -> None:
     assert "Endpoint" not in leaf_config
 
 
-def test_neither_end_routes_more_than_the_far_ends_own_address(
+def test_the_leaf_routes_no_more_than_the_entrys_own_address(
     entry_node, leaf_node, amneziawg_params
 ) -> None:
     """AllowedIPs is the authorisation list as well as the routing table.
 
-    A wide entry here would let the far end source traffic as any address in the range,
-    and a default route would send the node's own SSH session — the one the control
-    plane manages it over — into the tunnel.
+    On the leaf a wide entry would let the far end source traffic as any address in the
+    range, and it buys nothing: everything the leaf sends back into the hop is addressed
+    to the entry's own tunnel address.
     """
     entry, leaf = ends(entry_node, leaf_node, amneziawg_params)
 
-    entry_config, leaf_config = relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
+    _, leaf_config = relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
 
-    assert "AllowedIPs = 10.44.0.2/32" in entry_config
     assert "AllowedIPs = 10.44.0.1/32" in leaf_config
-    # Directives only: the template's own comment explains why a default route is
-    # wrong, and matching that comment would make this assertion pass for the text
-    # rather than for the configuration.
-    for config in (entry_config, leaf_config):
-        directives = [
-            line for line in config.splitlines() if line and not line.startswith("#")
-        ]
-        assert not [line for line in directives if "/0" in line]
+    assert "/0" not in directives(leaf_config)
+
+
+def test_the_entry_routes_everything_into_the_hop_and_installs_no_route(
+    entry_node, leaf_node, amneziawg_params
+) -> None:
+    """The entry's half is the opposite, and both halves of that are load-bearing — M3.
+
+    ``AllowedIPs`` is WireGuard's crypto-routing table: a friend's packet is encrypted to
+    a peer only if that peer's list covers the DESTINATION, and the reply is accepted only
+    if it covers the SOURCE. So an entry whose exit is the far end cannot route a friend
+    anywhere with the narrow form — the interface drops the packet, and nothing logs it.
+
+    What made a wide list dangerous is the ROUTE wg-quick derives from it, which would put
+    a default route in the main table and take the node's own SSH session — the one the
+    control plane manages it over — with it. That is a separate switch, and this asserts
+    both together: everything is allowed INTO the tunnel, and the tool installs nothing.
+    """
+    entry, leaf = ends(entry_node, leaf_node, amneziawg_params)
+
+    entry_config, _ = relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
+
+    assert "AllowedIPs = 0.0.0.0/0" in entry_config
+    assert "Table = off" in directives(entry_config)
+    # The way out is source-routed from the tunnel's own address, so nothing else on the
+    # node — SSH above all — can be pulled into the hop by it.
+    assert "from 10.44.0.1 lookup" in entry_config
 
 
 def test_the_hop_never_names_a_node_in_a_way_a_person_could_be_read_from(
@@ -127,12 +157,18 @@ def test_the_hop_never_names_a_node_in_a_way_a_person_could_be_read_from(
         assert leaf_node.display_name not in config
 
 
-def test_the_exit_address_is_the_leafs_tunnel_address(
+def test_the_way_out_is_the_entrys_own_tunnel_address(
     entry_node, leaf_node, amneziawg_params
 ) -> None:
-    """Where traffic goes once it is inside the tunnel, without the prefix."""
-    _, leaf = ends(entry_node, leaf_node, amneziawg_params)
-    assert relay.exit_address(leaf) == "10.44.0.2"
+    """The address a friend's traffic leaves the entry through, without the prefix.
+
+    The ENTRY's, not the leaf's, and that is M3's one correction to its own plan: nothing
+    listens at the leaf's in-tunnel address for the entry to dial. What the leaf offers is
+    a route, and the only way to hand a packet to it is to send it through the tunnel — so
+    what the entry's data plane needs is an address to send FROM. See ``relay.exit_via``.
+    """
+    entry, _ = ends(entry_node, leaf_node, amneziawg_params)
+    assert relay.exit_via(entry) == "10.44.0.1"
 
 
 # --- what it refuses, and why each refusal is a silent failure otherwise -----
