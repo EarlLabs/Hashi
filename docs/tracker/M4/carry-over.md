@@ -77,3 +77,36 @@ intended design. Do not fix them as part of another step.
 - **Filtering the digest write on rendered names rather than on `enabled` is not
   new behaviour** — the pre-fix code filtered the same way. It preserves existing
   semantics and only removes the lazy-load hazard.
+
+## From M4.3's review
+
+- **Low — an inaccurate comment** in `control/app/services/apply.py` says a
+  `NotFound` from a node deleted mid-fan-out "used to 500 the whole operation".
+  The reviewer checked Starlette's MRO-based handler dispatch: `NotFound` is a
+  `DomainError` subclass, so it already resolved to `domain_error_handler` and
+  answered 404. The real defect — unchanged either way — is that the fan-out
+  aborted for every later node, not the status code. Behaviour is right; the
+  explanation the owner is meant to learn from is not.
+
+- **Low, promoted into M4.6 — the address-leak guard cannot fail.** Detail in the
+  plan under M4.6.
+
+## Verified NOT a problem, recorded so it is not re-litigated
+
+- **The post-push failure window cannot leave the database claiming a state the
+  node is not in.** `node.state = ACTIVE` is assigned strictly *after* the
+  `applied_digest`/`applied_at` loop that can raise, and `session.commit()` after
+  that; `session.rollback()` then discards any dirty writes. The residual cost is
+  a stale `applied_digest` on the affected transport — drift-detection staleness
+  that self-heals on the next successful apply, not a state-machine lie. Traced
+  by the reviewer and asserted by two tests.
+- **`apply_many`'s `session.rollback()` cannot discard earlier nodes' work.**
+  `apply_node` commits per node, so the rollback only ever discards the current
+  node's uncommitted dirty state.
+- **The `str(exc)` divergence is correct.** A raw `OSError` from a TCP-level
+  failure embeds host and port in its `str()`, and such an exception can reach
+  the broad catch unsanitised because the narrower arms only catch
+  `TimeoutError`. Type-name to the operator, full text to the log.
+- **A naming trap worth knowing:** `crypto.SecretUnreadable` and
+  `errors.SecretsUnreadable` are different classes with near-identical names.
+  Only the first is in `_NOT_PER_NODE`.

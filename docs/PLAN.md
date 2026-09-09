@@ -354,7 +354,9 @@ This milestone's own criterion says *"a first apply that fails leaves the node
 `degraded` with the real reason in `state_detail`"*. The second one does not, so
 this is finishing M4 rather than widening it.
 
-### M4.6 — Pin the node-stack doubles to the real signatures
+### M4.6 — Two tests that currently cannot fail
+
+**Pin the node-stack doubles to the real signatures.**
 
 `tests/control/test_revocation_push.py` is the first test in this zone to fake
 the SSH boundary, which was the right call — there is no honest way to reach the
@@ -362,6 +364,21 @@ apply *success* path without one. The gap is that a stale double goes **silently
 green** rather than red if a real signature changes, and this double guards a
 charter criterion. `create_autospec`, or an `inspect.signature` parity assertion,
 turns that drift into a hard failure for a few lines.
+
+**And give the address-leak guard something to catch.** M4.3 deliberately puts
+only `type(exc).__name__` into the operator-facing string, never `str(exc)`,
+because a raw connection error carries the node's address — the reviewer
+confirmed it empirically (`[Errno 111] Connect call failed ('127.0.0.1', 1)`) and
+that such an exception can reach the broad catch unsanitised. The test guarding
+that asserts the address is absent from the response, but the exception it
+injects is a `MissingGreenlet`, which never carried an address in the first
+place. **A future step "harmonising" those messages by putting `{exc}` back would
+reintroduce the leak and this suite would stay green.** The guard needs an
+exception that actually carries an address forced through the broad catch, with
+the assertion made against both the API response and the stored `state_detail`.
+
+Both are the same defect in miniature and the reason this step exists: *a test
+that cannot fail is worse than no test.*
 
 **E2E:** none from `tests/e2e/` — this is control-zone territory and the gate that
 applies is `make test-control`.
