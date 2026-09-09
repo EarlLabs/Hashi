@@ -737,9 +737,18 @@ milestone.*
 
 ### M7.1 — Split the Caddy site in two
 ### M7.2 — Bind the panel and API to the private interface, with its own certificate
-### M7.3 — Document the way back in when the private network is unavailable
+### M7.3 — Document the way back in when the private network is unavailable — and TEST it
 
 SSH remains the fallback either way.
+
+> **Raised to "tested" on 2026-09-09**, after the owner pointed out that ТСПУ
+> detects plain WireGuard. The obfuscated transport is the answer to that and it
+> is what this milestone uses — but the honest position is that nothing in this
+> fleet can prove how the owner's *home or mobile* network behaves, because the
+> operator's machine and the entry host share a cloud region and their traffic
+> may never traverse ТСПУ at all. A fallback that has only been written down is
+> worth nothing on the day it is needed, and the day it is needed is an emergency
+> rotation. **Leave SSH access verified working, not merely described.**
 
 **E2E:** none — the check is reachability from two different networks, which no
 suite running on one machine can stage.
