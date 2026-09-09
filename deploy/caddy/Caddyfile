@@ -39,6 +39,33 @@
 	# site route is consulted, so the explicit redirect site cannot shadow it.
 	auto_https disable_redirects
 
+	# What to serve a client that sends no SNI at all — and that is not an exotic
+	# client, it is every ordinary one. **A TLS client omits SNI whenever the host is
+	# an IP literal**: curl does, every browser does, and the specification tells them
+	# to. A management tunnel hands the owner an ADDRESS rather than a name, so the
+	# console is dialled by IP by definition, and the SSH fallback is dialled at
+	# 127.0.0.1 by construction.
+	#
+	# Without this line, a listener carrying more than one certificate has no name to
+	# choose between them and Caddy aborts with `tlsv1 alert internal error`. That is
+	# not a theory: M7 shipped without it, passed review, and the console could not be
+	# reached on the first real host by any route the owner has — not over the tunnel,
+	# not over the forward. The suite could not see it because the test stack used a
+	# NAME for the console, and a name sends SNI.
+	#
+	# The value is the CONSOLE's name, not the delivery endpoint's, and that choice
+	# costs something worth stating. It is global — Caddy has no per-site form of it,
+	# checked against 2.8.4 — so a no-SNI connection to the public 443 is also answered
+	# with the console's certificate, which discloses the console's (private,
+	# unroutable) address to anyone who asks for it that way. The alternative was to
+	# default to the public name, which discloses nothing and leaves the owner facing a
+	# certificate-name mismatch on every single visit to their own console. Training the
+	# one operator to click through TLS warnings on the one surface that must never be
+	# impersonated is the worse of the two, by some distance. An operator who can
+	# resolve a name on their laptop AND their phone can set HASHI_PRIVATE_HOST to that
+	# name instead and be left with neither cost.
+	default_sni {$HASHI_PRIVATE_HOST}
+
 	# Silences the DEFAULT logger, which is not the same thing as the per-site
 	# ones below. Without this, any request that does not match a site block —
 	# by IP, or by another name resolving here — is written to stderr with its

@@ -262,6 +262,35 @@ def test_automatic_redirects_are_off_so_port_80_cannot_leak_the_console(
     )
 
 
+def test_a_client_that_sends_no_sni_is_given_something_to_be_served(
+    blocks: list[Block],
+) -> None:
+    """`default_sni`, which M7 shipped without and the first real host found missing.
+
+    **A TLS client omits SNI whenever the host is an IP literal** — curl does, every
+    browser does. The management tunnel hands the owner an address rather than a name,
+    and the SSH fallback is dialled at loopback, so the console is reached without SNI
+    by both of its routes. With more than one certificate on a listener and no name to
+    choose between them, Caddy aborts the handshake and the console is unreachable.
+
+    The scenario that proves the behaviour is
+    tests/e2e/infra/test_a_client_that_sends_no_sni_can_reach_the_sites.py, which
+    opens a real SNI-less handshake. This is the cheap half: it runs in `make test`
+    with no engine, and it fails the moment the line is deleted.
+    """
+    options = next(block for block in blocks if block.is_global)
+    match = re.search(r"^\s*default_sni\s+(\S+)\s*$", options.body, re.M)
+    assert match, (
+        "no default_sni: a client that sends no SNI — which is every client aimed at "
+        "an IP, and the management tunnel hands out an IP — gets its handshake aborted"
+    )
+    assert match.group(1) == "{$HASHI_PRIVATE_HOST}", (
+        f"default_sni is {match.group(1)!r}. It has to be the console's own name, or "
+        "the owner meets a certificate-name mismatch on every visit to their own "
+        "panel — and a literal here would be a name this deployment cannot change."
+    )
+
+
 def test_no_site_names_a_host_or_a_port_this_deployment_cannot_change(
     sites: list[Block],
 ) -> None:

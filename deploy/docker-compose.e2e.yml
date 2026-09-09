@@ -51,10 +51,11 @@ services:
     environment:
       HASHI_PUBLIC_HOST: localhost
       # M7's private site, pinned here for the same reason as the line above: the
-      # owner's real `.env` must never decide what a test stack serves. Its own name
-      # AND its own port, so a scenario can ask the public listener what it answers for
-      # the console's name — which is the leak `auto_https disable_redirects` closes.
-      HASHI_PRIVATE_HOST: console.localhost
+      # owner's real `.env` must never decide what a test stack serves. An IP, because
+      # that is what a management tunnel hands you and because an IP is what makes a
+      # client omit SNI — see deploy/e2e.env, where the same value is explained at
+      # length. It is a certificate subject and a Host header here, never dialled.
+      HASHI_PRIVATE_HOST: 10.99.0.1
       HASHI_PRIVATE_PORT: "54443"
       # Never used: an internal-CA certificate needs no ACME account. Present
       # because the base file requires the variable, and a placeholder here is

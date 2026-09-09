@@ -172,6 +172,30 @@ site has no public name and no public address, so ACME could never validate it, 
 nothing about the console's existence reaches a CA's logs. Your browser will ask about it
 once.
 
+**Set `HASHI_PRIVATE_HOST` to the tunnel address, not to a name**, unless you can resolve
+that name on *every* device you would reach the console from — including your phone,
+which cannot be given a hosts entry and is the device you reach for in an emergency. This
+matters more than it looks: **a TLS client sends no SNI when the host is an IP literal**,
+which is true of curl and of every browser, so a console dialled by address tells Caddy
+nothing about which certificate it wants. `deploy/caddy/Caddyfile` answers that with
+`default_sni`, set to this value — which is why it has to be the address you actually
+type. Without it the handshake is aborted with `tlsv1 alert internal error` and the
+console is unreachable by both of its routes; that is not hypothetical, it is how this
+milestone failed on its first real host.
+
+Two consequences worth knowing, neither of them a reason to change the value:
+
+- `default_sni` is global — Caddy has no per-site form of it — so a client that connects
+  to the **public** port without SNI is also answered with the console's certificate, and
+  learns this address. It is private and unroutable, and the alternative was a
+  certificate-name mismatch on every visit to your own console, which teaches you to
+  click through TLS warnings on the one surface that must never be impersonated.
+- **`HASHI_PUBLIC_HOST` must be a name with a real DNS record, never a bare address.** A
+  public CA cannot issue for an IP, so Caddy falls back to its own CA and every stock
+  client refuses the certificate — `/sub/{token}` then fails for every friend while
+  nothing on the host looks wrong. That is a fact about certificates rather than about
+  SNI, and no setting here repairs it.
+
 ### The management tunnel
 
 A dedicated **AmneziaWG** tunnel, not plain WireGuard and not a third-party mesh
