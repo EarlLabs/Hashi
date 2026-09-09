@@ -1,8 +1,8 @@
 """The panel loads from this host alone, proven against the booted stack.
 
-WHAT: every page of the console is fetched, every asset it references is followed,
-      and every reference found on the way — in HTML and inside the stylesheets — is
-      required to be same-origin.
+WHAT: every page AND every fragment of the console is fetched, every asset it
+      references is followed, and every reference found on the way — in HTML and
+      inside the stylesheets — is required to be same-origin.
 WHY:  ``docs/decisions.md`` decision 7, and it is the only part of M8 a test can hold.
       Three separate reasons, each sufficient on its own: ``base.html`` already refused
       a CDN for HTMX because *"the panel must work on a network where the CDN is
@@ -10,12 +10,19 @@ WHY:  ``docs/decisions.md`` decision 7, and it is the only part of M8 a test can
       put the console behind a management tunnel where a request to the open internet
       may have no route at all; and a font fetched from a US company announces every
       time the owner opens their VPN console.
-HOW:  follow what the page actually links, rather than reading the templates —
+HOW:  follow what the panel actually serves, rather than reading the templates —
       ``tests/control/test_the_panel_is_self_contained.py`` is the source-level half
       and this is the runtime one. They fail differently: a template that stops being
       rendered still passes the source check and would drop out of this one, and a
       stylesheet vendored into the image but not into the repository would pass the
       source check and fail here.
+
+      THE LIST IS THE TEST. A surface that is not fetched is not checked, and this
+      scenario shipped once with only its four navigable pages on it — so a reference
+      planted in the subscription-link dialog, the single most sensitive fragment in
+      the panel, was caught by the source scan and invisible here. Every new screen,
+      dialog or self-refreshing table goes into ``PANEL_PAGES``, ``PANEL_FRAGMENTS``
+      or the ``surfaces`` fixture in the same change that adds it.
 
 Boundary: real control + postgres + caddy. It proves the DOCUMENTS reference nothing
 external. It does not prove a browser made no request — no browser runs here — which
@@ -24,20 +31,35 @@ acceptance.
 """
 
 import re
+import uuid
 
 import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 
-# Every screen the console can put on a display, including the fragments a dialog is
-# made of — a third-party reference hidden in a modal is still a third-party
-# reference, and it is the one nobody looks at.
+# Whole documents the browser navigates to.
 PANEL_PAGES = (
     "/panel/login",
     "/panel/",
     "/panel/friends",
-    "/panel/friends/new",
     "/panel/fleet",
+)
+
+# The FRAGMENTS the console swaps in — dialogs and self-refreshing tables. They are
+# on this list for the reason the whole scenario exists: a fragment is rendered from
+# its own template, is never navigated to, and is therefore where a third-party
+# reference survives longest before anyone looks at it. Leaving them off is exactly
+# how this scenario would have passed while the panel's most sensitive dialog fetched
+# a font from a stranger.
+#
+# The two that need a friend are parameterised and built by ``surfaces`` below. The
+# POST routes are deliberately absent: they render these same templates through
+# panel/mutation_result.html, and a scenario that mutated the stand to re-read a
+# template it has already read would buy nothing and cost determinism.
+PANEL_FRAGMENTS = (
+    "/panel/friends/new",
+    "/panel/friends/table",
+    "/panel/overview/body",
 )
 
 # Anything that is not a path on this host. A scheme-relative URL is included on
@@ -50,6 +72,12 @@ INERT_SCHEMES = ("data:", "mailto:", "#", "javascript:void")
 
 
 @pytest.fixture
+def unique() -> str:
+    """A per-run suffix, so a re-run against a warm stack does not collide."""
+    return uuid.uuid4().hex[:8]
+
+
+@pytest.fixture
 async def operator(client):
     response = await client.post("/panel/login", data=OPERATOR)
     assert response.status_code == 303, (
@@ -57,6 +85,45 @@ async def operator(client):
         "deploy/e2e.env against deploy/docker-compose.e2e.yml"
     )
     return client
+
+
+@pytest.fixture
+async def surfaces(operator, unique: str) -> list[str]:
+    """Every panel URL that renders markup, including the two that need a friend.
+
+    A real friend and a real node are created because the two most interesting
+    fragments do not exist without them: the subscription-link dialog and the node
+    page. The stand is disposable and this run's rows are suffixed, so they cannot
+    collide with another scenario's.
+
+    NOTE what this fixture does NOT do: it never reads the friend's subscription URL.
+    The id is enough to address the dialog, and the token stays where it belongs.
+    """
+    friend = await operator.post("/api/friends", json={"nickname": f"styles-{unique}"})
+    assert friend.status_code == 201, friend.text
+    friend_id = friend.json()["id"]
+
+    node = await operator.post(
+        "/api/nodes",
+        json={
+            "name": f"styles-{unique}",
+            "address": "192.0.2.60",
+            "location_label": f"Testland-{unique}",
+        },
+    )
+    assert node.status_code == 201, node.text
+
+    return [
+        *PANEL_PAGES,
+        *PANEL_FRAGMENTS,
+        # The link dialog — the one fragment in the console that displays a live
+        # bearer credential, and therefore the one whose markup matters most.
+        f"/panel/friends/{friend_id}/subscription",
+        f"/panel/friends/{friend_id}/revoke",
+        # The pre-redesign node page. Still part of the panel until M9.5 retires it,
+        # and it carries an inline script of its own.
+        f"/panel/nodes/{node.json()['id']}",
+    ]
 
 
 def without_comments(text: str, *, css: bool = False) -> str:
@@ -101,30 +168,55 @@ def references_in_css(sheet: str) -> list[str]:
 
 
 def offenders(references: list[str]) -> list[str]:
-    """The ones that leave this host."""
-    return [
-        reference
+    """The ORIGINS that leave this host, with every path and query stripped.
+
+    Origins and not whole URLs, deliberately, and this is a rule for anything added
+    to this file. The surfaces below include the subscription-link dialog, which
+    carries a live bearer credential — so a failure message that echoed a matched URL
+    could put a friend's token into a CI log, which would be a worse defect than the
+    one this scenario closes. An origin names the third party, which is the entire
+    actionable content of the finding; the path adds nothing an operator needs.
+    """
+    leaking = {
+        _origin_of(reference)
         for reference in references
         if EXTERNAL.match(reference)
         and not reference.lower().startswith(INERT_SCHEMES)
-    ]
+    }
+    return sorted(leaking)
 
 
-async def test_no_panel_page_references_another_origin(operator) -> None:
-    """The whole console, page by page, with the dialogs it opens."""
-    for page in PANEL_PAGES:
-        response = await operator.get(page)
-        assert response.status_code == 200, f"{page} answered {response.status_code}"
+def _origin_of(url: str) -> str:
+    """``https://fonts.example/css2?x=y`` -> ``https://fonts.example``."""
+    stripped = url.strip()
+    scheme, _, rest = stripped.partition("//")
+    return f"{scheme}//{rest.split('/', 1)[0]}"
+
+
+async def test_no_panel_surface_references_another_origin(operator, surfaces) -> None:
+    """Every page AND every fragment — the dialogs and the self-refreshing tables.
+
+    The fragments are the half this scenario was missing when it was written. A
+    dialog is rendered from its own template and is never navigated to, so a
+    third-party reference planted in one is invisible to any check that only walks
+    pages — including, before this, the link dialog.
+
+    Only the URL is named on failure, never the response body: one of these surfaces
+    is a live subscription URL.
+    """
+    for surface in surfaces:
+        response = await operator.get(surface)
+        assert response.status_code == 200, f"{surface} answered {response.status_code}"
 
         leaking = offenders(references_in_html(response.text))
         assert leaking == [], (
-            f"{page} points the browser at another host: {leaking}. The panel must "
+            f"{surface} points the browser at another host: {leaking}. The panel must "
             "load from this host alone — docs/decisions.md, decision 7."
         )
 
 
 async def test_every_stylesheet_the_panel_links_is_served_here_and_stays_here(
-    operator,
+    operator, surfaces
 ) -> None:
     """Follow the links, not the templates.
 
@@ -133,8 +225,8 @@ async def test_every_stylesheet_the_panel_links_is_served_here_and_stays_here(
     ever have found.
     """
     sheets = set()
-    for page in PANEL_PAGES:
-        document = (await operator.get(page)).text
+    for surface in surfaces:
+        document = (await operator.get(surface)).text
         sheets.update(
             re.findall(r'<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"', document)
         )
