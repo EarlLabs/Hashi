@@ -164,18 +164,35 @@
 .table td, .table th { vertical-align: middle; }
 .table .right { text-align: right; }
 
-/* A nickname is the operator's own text and may be one unbroken 64-character run —
-   the longest the add-user field accepts. Left alone, such a cell sets the table's
-   min-content width, the table outgrows its card, and .table-scroll turns into a
-   horizontal scroll with no affordance: the row's button is clipped, the date wraps
-   onto three lines, and the nickname — the only thing identifying the row — is the
-   first column to scroll out of sight, leaving rows with a blank name. Wrapping
-   inside the column costs a second line and keeps every column on screen. */
-.table td { overflow-wrap: anywhere; }
+/* WHICH CELLS MAY BREAK A WORD, AND WHICH MAY NEVER. The rule, because getting it
+   wrong has now cost two acceptance rounds in opposite directions:
+
+     * a cell holding text the OPERATOR typed — a nickname, a node name — may break
+       mid-word, and says so with `.wraps`. Such a value may be one unbroken
+       64-character run (the longest the add-user field accepts); left unbreakable it
+       sets the table's min-content width, the table outgrows its card, and
+       .table-scroll becomes a horizontal scroll with no affordance — the button
+       clipped, the date on three lines, and the name itself the first column to
+       scroll out of sight.
+     * every other cell holds words WE wrote — a status, a date, a ratio — and none
+       of them may break. `overflow-wrap: anywhere` was briefly on `.table td`
+       wholesale, which fixed the long name and broke `active` into `activ / e` on
+       every row of the Users card at 1440px, because a column that may break has a
+       min-content width of one character and the table algorithm duly squeezed it.
+
+   So breaking is opt-in per cell. A new column that carries operator text adds
+   `.wraps`; anything else needs nothing and cannot be squeezed into a hyphenless
+   hyphenation. */
+.table td.wraps { overflow-wrap: anywhere; }
 
 /* …and the columns whose content is short and fixed keep their one line, so the
    space a long name needs comes out of the name's own column. */
 .table .nowrap, .table .right { white-space: nowrap; }
+
+/* A status word is not a nickname. The tag is the design system's status element
+   (UI-PATTERNS §4) and it is a single word by construction, so it never wraps and
+   never breaks — including inside a `.wraps` cell, should one ever hold one. */
+.tag { white-space: nowrap; }
 
 /* Below the breakpoint a wide table scrolls inside its own panel rather than
    pushing the page sideways (design/README.md, "Responsive"). */
@@ -273,10 +290,15 @@
   .skeleton-row { animation: none; }
 }
 
-/* Request failure. Not red — UI-PATTERNS §4, the steel accent is the only colour and
-   severity is carried by the words. The frame is what makes it read as an alarm. */
+/* A persistent message under the header, in TWO weights, and the difference between
+   them is a safety property rather than a taste one. Both used to be this one neutral
+   frame, so "the panel could not reach the control plane. Nothing was changed" and
+   "No node is serving yet…" were drawn identically and stacked one above the other —
+   an operator who reads the failure as an ordinary notice believes the action worked.
+   Still no red (UI-PATTERNS §4, the steel accent is the only colour): the weight comes
+   from the design system's own accent ramp, a thick edge, and a word saying so. */
 .banner {
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--color-divider);
   padding: var(--space-3) var(--space-4);
   font-size: 13px;
   display: flex;
@@ -284,16 +306,46 @@
   align-items: baseline;
 }
 
+/* …and the failing one, which must not be mistakable for the notice above. The same
+   element is what a failure inside a dialog gets (static/app.js), so a failure looks
+   the same wherever the operator meets it. */
+.banner-failure {
+  border-color: var(--color-accent-700);
+  border-left-width: 4px;
+  background: var(--color-accent-100);
+  color: var(--color-accent-900);
+}
+
+/* The word that carries the severity, per UI-PATTERNS §4. `flex: none` so a long
+   message wraps beside it rather than squeezing it. */
+.banner-label {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  flex: none;
+}
+
+.banner-failure .banner-label { color: var(--color-accent-800); }
+
 .banner:empty { display: none; }
 .banner-slot:empty { display: none; }
 .banner-slot { padding: 0 var(--space-6); margin-top: var(--space-4); }
 
 /* Field-level validation. Sits under the input it is about, never in a toast: a
-   toast disappears and the operator is left looking at a form that will not submit. */
+   toast disappears and the operator is left looking at a form that will not submit.
+   Weighted and edged, because at 12px an accent-coloured sentence sat under the
+   nickname field looking exactly like the muted hint beside it — a refusal that reads
+   as help text is a refusal the operator does not notice. */
 .field-error {
   font-size: 12px;
   margin-top: 5px;
-  color: var(--color-accent-800);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-accent-700);
+  font-weight: var(--font-heading-weight);
+  color: var(--color-accent-900);
 }
 
 .input[aria-invalid="true"] { border-color: var(--color-accent); }

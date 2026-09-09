@@ -65,7 +65,9 @@
             <tbody>
               {% for friend in overview.friends[:5] %}
               <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
-                <td>{{ friend.nickname }}</td>
+                {# `.wraps` — operator text, the one cell in the row allowed to
+                   break a word. app.css says why the whole row may not. #}
+                <td class="wraps">{{ friend.nickname }}</td>
                 <td>
                   {# UI-PATTERNS §4: status is a tag, never coloured text, and there is
                      no red — "revoked" is inert, so it is neutral. #}
@@ -107,8 +109,9 @@
             <tbody>
               {% for node in overview.nodes[:5] %}
               <tr>
-                <td>{{ node.name }}</td>
-                <td class="text-muted">{{ node.location_label }}</td>
+                {# Both operator text, both `.wraps`, for the same reason. #}
+                <td class="wraps">{{ node.name }}</td>
+                <td class="text-muted wraps">{{ node.location_label }}</td>
                 <td>
                   <span class="tag {{ 'tag-accent' if node.state == 'active' else ('tag-outline' if node.state == 'degraded' else 'tag-neutral') }}">
                     {{ node.state }}

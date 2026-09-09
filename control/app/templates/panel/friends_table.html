@@ -32,10 +32,19 @@
   <div class="loaded stack-6">
     {% if friends %}
     {% if not serving %}
+    {#
+      A NOTICE, not a failure: nothing went wrong, there is simply nothing serving
+      yet. It says so in its own word and wears the quiet frame, because the failure
+      banner sits in the same column above it (panel/banner.html) and the two reading
+      alike is how an operator misses the one that matters.
+    #}
     <div class="banner" role="status">
-      No node is serving yet, so every link below resolves to an empty configuration.
-      Put a node into service and the same links start working — nobody re-imports
-      anything.
+      <span class="banner-label">note</span>
+      <span>
+        No node is serving yet, so every link below resolves to an empty
+        configuration. Put a node into service and the same links start working —
+        nobody re-imports anything.
+      </span>
     </div>
     {% endif %}
     <div class="table-scroll">
@@ -52,7 +61,10 @@
         <tbody>
           {% for friend in friends %}
           <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
-            <td>{{ friend.nickname }}</td>
+            {# `.wraps`: a nickname is the operator's own text and may be one
+               unbroken 64-character run, so this is the cell that gives way. No
+               other cell in the row may break a word — see .table td.wraps. #}
+            <td class="wraps">{{ friend.nickname }}</td>
             <td>
               <span class="tag {{ 'tag-accent' if friend.is_active else 'tag-neutral' }}">
                 {{ "active" if friend.is_active else "revoked" }}

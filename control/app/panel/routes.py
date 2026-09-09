@@ -33,6 +33,7 @@ from control.app import auth
 from control.app.dependencies import session_dependency
 from control.app.errors import DomainError
 from control.app.models import NodeState
+from control.app.panel import wording
 from control.app.services import (
     apply,
     console,
@@ -641,6 +642,7 @@ def _mutation(
     banner: str | None = None,
     events: str | None = None,
     context: dict | None = None,
+    keeping: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> Response:
     """The one answer shape every console mutation gives.
@@ -650,11 +652,21 @@ def _mutation(
     screen's tables to refresh themselves. Routed through one function so
     "every mutation emits a toast naming its object" (UI-PATTERNS §8) is checkable by
     reading the call sites rather than every template.
+
+    Both sentences pass through ``wording.for_the_page``: they are composed in
+    ``services/``, which speaks the code's vocabulary, and decision 9 says that word
+    stops before the rendered page. ``keeping`` is the operator's own text inside the
+    sentence — a nickname — which is handed back exactly as they typed it.
     """
     response = TEMPLATES.TemplateResponse(
         request,
         "panel/mutation_result.html",
-        {"dialog": dialog, "toast": toast, "banner": banner, **(context or {})},
+        {
+            "dialog": dialog,
+            "toast": wording.for_the_page(toast, keeping=keeping) if toast else None,
+            "banner": wording.for_the_page(banner, keeping=keeping) if banner else None,
+            **(context or {}),
+        },
         status_code=status_code,
     )
     if events:
@@ -687,7 +699,11 @@ async def create_friend(
         return TEMPLATES.TemplateResponse(
             request,
             "panel/add_friend_dialog.html",
-            {"nickname": nickname, "error": exc.message},
+            # Decision 9 in the direction the console had been leaking: the refusal
+            # is composed in the service, which says ``friend``, and the operator
+            # reads ``user``. No ``keeping`` here — a service quotes the nickname
+            # (``{value!r}``), and quoted text is data the boundary never rewrites.
+            {"nickname": nickname, "error": wording.for_the_page(exc.message)},
             # 422 rather than 200, and htmx is configured in static/app.js to swap
             # this one status: an invalid form is not a success, and saying so is
             # what keeps the failure banner from firing on it as well.
@@ -698,6 +714,7 @@ async def create_friend(
         request,
         dialog="panel/subscription_dialog.html",
         toast=f"{friend.nickname} added",
+        keeping=friend.nickname,
         # Only ``friends-created``. It routes the console to Users (see the listener
         # on #main in pages/console.html), and the screen it lands on renders the
         # table fresh — so also firing ``friends-changed`` would start a second
@@ -770,4 +787,5 @@ async def revoke_friend(
         toast=f"{nickname} revoked — link is dead" if outcome.complete else None,
         banner=None if outcome.complete else outcome.summary(),
         events="friends-changed",
+        keeping=nickname,
     )

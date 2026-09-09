@@ -1,7 +1,8 @@
 // The console's four behaviours, in plain JavaScript against HTMX.
 //
-// WHAT: the toast timer, dialog dismissal, the copy button, and the banner that
-//       appears when a request does not come back.
+// WHAT: the toast timer, dialog dismissal, the copy button, and the failure a
+//       request raises when it does not come back — stated under the header, and
+//       inside the dialog as well when one is open in front of it.
 // WHY:  design/README.md asks for a toast that auto-dismisses and shows one at a
 //       time, dialogs that close on the backdrop, and a copy button that works. None
 //       of those is expressible in HTML alone, and the stack rule (CLAUDE.md) is
@@ -37,20 +38,53 @@
     if (host) host.innerHTML = "";
   }
 
-  function showBanner(text) {
-    const host = slot("banner-slot");
-    if (!host) return;
+  // A failure element: the accent-weighted frame and the word that says what it is.
+  // The same shape is used under the header and inside a dialog, so a failure looks
+  // the same wherever the operator meets it — see .banner-failure in app.css, and
+  // note that the ordinary notice (`.banner` alone) is deliberately quieter. The two
+  // were identical, which is how a failure came to read as an informational message.
+  function failure(text) {
+    const box = document.createElement("div");
+    box.className = "banner banner-failure";
+    box.setAttribute("role", "alert");
+    const label = document.createElement("span");
+    label.className = "banner-label";
+    label.textContent = "failed";
+    const words = document.createElement("span");
     // textContent, never innerHTML: this string can carry a server's own words.
-    const banner = document.createElement("div");
-    banner.className = "banner";
-    banner.setAttribute("role", "alert");
-    banner.textContent = text;
-    host.replaceChildren(banner);
+    words.textContent = text;
+    box.append(label, words);
+    return box;
+  }
+
+  function showFailure(text, origin) {
+    // The banner slot lives under the header, which is BEHIND an open dialog. A 5xx
+    // during add-user therefore explained itself where the operator was not looking.
+    // So a failure raised from inside a dialog is stated inside that dialog too —
+    // both, not either: the banner is what remains once the dialog is closed.
+    const dialog = origin && origin.closest ? origin.closest(".dialog") : null;
+    if (dialog) {
+      clearDialogFailure();
+      const inside = failure(text);
+      inside.dataset.dialogFailure = "true";
+      const actions = dialog.querySelector(".dialog-actions");
+      if (actions) actions.before(inside);
+      else dialog.append(inside);
+    }
+    const host = slot("banner-slot");
+    if (host) host.replaceChildren(failure(text));
+  }
+
+  function clearDialogFailure() {
+    const host = slot("dialog-slot");
+    if (!host) return;
+    for (const stale of host.querySelectorAll("[data-dialog-failure]")) stale.remove();
   }
 
   function clearBanner() {
     const host = slot("banner-slot");
     if (host) host.replaceChildren();
+    clearDialogFailure();
   }
 
   // --- copy ------------------------------------------------------------------
@@ -142,7 +176,11 @@
     if (event.detail.elt.closest(".sidenav-list")) {
       closeDialog();
       clearBanner();
+      return;
     }
+    // A retry from inside a dialog drops the last failure it printed there, so the
+    // operator never reads a stale explanation of a request that is still in flight.
+    if (event.detail.elt.closest(".dialog")) clearDialogFailure();
   });
 
   // Observed rather than driven off an htmx event, deliberately. Both slots are
@@ -178,7 +216,10 @@
   // A request that never came back, or came back as a server error. HTMX swaps
   // nothing in either case, so without this the operator presses a button and the
   // panel simply does not move.
-  const failed = (message) => () => showBanner(message);
+  // `event.detail.elt` is the element whose request failed — the form inside the
+  // add-user dialog, say — which is how showFailure knows whether a dialog is in
+  // front of the banner.
+  const failed = (message) => (event) => showFailure(message, event.detail.elt);
   document.body.addEventListener("htmx:sendError", failed(
     "the panel could not reach the control plane. Nothing was changed — check that " +
     "the service is running, then try again."
@@ -189,9 +230,10 @@
   ));
   document.body.addEventListener("htmx:responseError", (event) => {
     const code = event.detail.xhr.status;
-    showBanner(
+    showFailure(
       `the control plane refused that request (${code}). Nothing was changed. ` +
-      "Reload the page; if it happens again, the container's log has the reason."
+      "Reload the page; if it happens again, the container's log has the reason.",
+      event.detail.elt
     );
   });
   // Any successful exchange clears a banner left over from an earlier failure.

@@ -1,14 +1,21 @@
 {#
-  A persistent message, swapped out-of-band under the header.
+  A FAILED action, stated persistently and swapped out-of-band under the header.
 
   Used where a toast would be wrong because the operator must not miss it — a
   revocation that could not reach every node is the case this exists for. It stays on
   screen until the next successful request or the next navigation, both of which
   clear it (static/app.js).
 
-  Not coloured red: UI-PATTERNS §4 — the steel accent is the only colour and severity
-  is carried by the words.
+  Not red: UI-PATTERNS §4 — the steel accent is the only colour. But it is not the
+  same neutral frame an informational notice gets either, and that was an acceptance
+  finding rather than a preference: the failure and the "no node is serving yet"
+  notice were drawn identically and stacked one above the other, so the thing that
+  went wrong did not read as wrong. The weight is the accent ground, the thick left
+  edge, and the word "failed" — severity carried by the word, exactly as §4 asks.
 #}
 <div hx-swap-oob="innerHTML:#banner-slot">
-  <div class="banner" role="alert">{{ banner }}</div>
+  <div class="banner banner-failure" role="alert">
+    <span class="banner-label">failed</span>
+    <span>{{ banner }}</span>
+  </div>
 </div>
