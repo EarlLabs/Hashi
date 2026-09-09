@@ -180,6 +180,26 @@ config file does not count — this is the milestone whose whole failure mode wa
 
 ## → M2 — The WireGuard family must start at all · planned 2026-09-08
 
+> **Field run 2026-09-09 — steps complete and reviewed clean; the milestone stays
+> open on its second "done when", for a reason that is not its own.** One review
+> round, `0 critical, 0 high`; the Medium it raised was fixed rather than filed.
+> Gate green — 177 control, 187 edge (3 skipped), 96 infra.
+>
+> **First "done when": discharged on real hardware.** On the entry node both
+> containers reach **`Up`**, not `Created` — they were `Created` with exit 127
+> before — and both interfaces exist in the *node's* network namespace with the
+> transport's own name. `awg show` reports the interface with its obfuscation
+> values live (`jc`, `jmin`, `jmax`, `h1`–`h4`), and a real client built from the
+> friend's own subscription **completed a handshake in both directions**.
+>
+> **Second "done when" — "a client carries traffic" — not discharged, and the
+> cause is M14.** The handshake succeeds and nothing moves: the node has no
+> forwarding or NAT for the tunnel subnet, ufw's FORWARD policy is `DROP`, and the
+> rendered config has no `PostUp`/`PostDown`, so a friend's packet is decrypted
+> onto the interface and dropped. Nothing about the command, the image or the
+> interface is outstanding. This milestone closes when M14 lands and a page loads
+> through the tunnel. See `docs/tracker/M2/carry-over.md`.
+
 **The bug.** `node_stack.py:116,126` sets `command=("up", "{config}")` for
 `amneziawg` and `wireguard`. Both images have an **empty ENTRYPOINT**
 (`amneziavpn/amneziawg-go:3.0.3` → `Cmd=[/bin/sh]`;
