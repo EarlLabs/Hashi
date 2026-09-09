@@ -95,3 +95,52 @@ a documented one-liner install from a vendor's own website can fail in the one
 country this product exists for, while that vendor's package repository and API
 work fine. Anything this project ever tells an operator to `curl | sh` deserves
 the same check from the host that matters.
+
+---
+
+## The defect the field found, after the milestone passed review
+
+M7 reviewed `0 critical, 0 high` and was then deployed to the real entry host,
+where **the console could not be reached at all** — not over the tunnel, not over
+loopback.
+
+Everything around it was correct. The tunnel came up and held its address, the
+publication restricted exactly as designed
+(`0.0.0.0:80  0.0.0.0:443  <tunnel addr>:<port>  127.0.0.1:<port>`), and Caddy
+held a certificate for **both** private addresses. And:
+
+```
+http://<loopback>:<port>/panel/login    -> HTTP 400   ("you spoke HTTP to an HTTPS port")
+https://<loopback>:<port>/panel/login   -> HTTP 000   tlsv1 alert internal error
+https://<tunnel addr>:<port>/panel/login-> HTTP 000   tlsv1 alert internal error
+```
+
+**The discriminator is SNI**, proved with openssl on the host:
+
+| | |
+|---|---|
+| handshake **with** `-servername` | completes, certificate returned |
+| handshake **without** it | `tlsv1 alert internal error`, `no peer certificate available` |
+
+A TLS client sends **no SNI when the host is an IP literal** — true of curl, true
+of a browser. With several certificates and no SNI, Caddy cannot choose one and
+aborts. So the URL the runbook tells the owner to open, and the `curl` command it
+gives for the M7.3 fallback, both fail.
+
+## Why the suite could not have caught it, and why that is the point
+
+The e2e scenarios give the console `console.localhost` — a **name**, which sends
+SNI. A WireGuard tunnel hands you an **address**, which does not. Every assertion
+passed, the reviewer independently reproduced every claim, and the feature did not
+work.
+
+This is the plan's own thesis holding one more time, in the milestone that had
+just passed review: *everything checkable by rendering works; everything checkable
+only by running does not.* It is also the sharpest example in the whole run of why
+the acceptance step is a field observation and not a test run — nothing about the
+configuration was wrong, and nothing short of asking a real client to connect
+would have said so.
+
+**The lasting half of the fix is the scenario**, not the fix: an assertion that a
+client sending no SNI can complete a handshake with the console. Until that
+exists, the same defect can return the next time this file is touched.
