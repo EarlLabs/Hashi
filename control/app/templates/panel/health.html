@@ -18,5 +18,13 @@
         would push. Applying again replaces it.
       </p>
     {% endif %}
+    {% if health.stale %}
+      <p class="muted">
+        These transports are running, on a configuration older than the one on the node
+        — the file was replaced but the daemon was never restarted onto it. Anyone
+        revoked while it was in this state is still being served. Applying again
+        recreates the container.
+      </p>
+    {% endif %}
   {% endif %}
 </div>

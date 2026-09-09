@@ -1,0 +1,391 @@
+"""An apply that returns 200 must mean the daemon is serving what we pushed — M1.
+
+WHAT: ``POST /api/nodes/{id}/apply`` against a node whose containers behave the way
+      Compose really behaves, and ``GET /api/nodes/{id}/health`` against the state the
+      field measurement found.
+WHY:  docs/tracker/M1/field-measurement.md. On a real node, a config was written 8m25s
+      AFTER the container meant to serve it started; the apply returned 200, the node
+      was ``active``, and the health probe said ``reachable: true, healthy: true,
+      drifted: []``. Every one of those was a true answer to a question that does not
+      establish what an operator reads it as establishing. The consequence is charter
+      criterion 6 failing silently: a revoked friend keeps connecting, because the file
+      lost their credential and the running daemon never re-read the file.
+HOW:  the node is faked at the SHELL, not at ``node_stack``. ``_FakeHost`` answers
+      commands and holds files, so the real ``node_stack`` builds the real compose
+      file, the real verification command runs, and the real parsing reads the answer
+      — the only thing invented here is Docker, and only the one rule of it that
+      matters: **Compose compares the desired service definition against the running
+      container and leaves the container alone when they match.** That rule is the
+      bug's whole mechanism, so a fake that did not obey it would prove nothing.
+
+      Stated plainly: this does not prove that real Docker recreates a container when a
+      label changes. That is documented Compose behaviour and a field observation, and
+      M1's step notes say what to look at on the node. What it proves is that we now
+      ASK, and that a node which did not come back on this config cannot be reported as
+      applied.
+
+      Every test here is red against baseline 2413883 — see the module note in
+      ``_FakeHost.run`` for the one accommodation that makes them red by assertion
+      rather than by AttributeError.
+"""
+
+import itertools
+
+import yaml
+
+from control.app.models import NodeState
+from edge.bootstrap import node_stack
+
+# RFC 5737 documentation address, as everywhere in this zone. Never dialled: the
+# connection is replaced.
+NODE_ADDRESS = "192.0.2.10"
+FAKE_PRIVATE_KEY = "not-a-real-key"
+
+TRANSPORT = "vless-reality"
+
+# The label the compose file carries a service's config digest in. Spelled out here
+# rather than imported, deliberately: ``_FakeHost`` stands in for a NODE, and a node
+# reads what is written in the file rather than agreeing with our library by
+# construction. That the two spellings agree is its own assertion below.
+DIGEST_LABEL = "io.hashi.config-digest"
+
+
+class _FakeHost:
+    """One node: a shell, a filesystem, and a container per compose service.
+
+    ``recreates`` is the knob the milestone turns. With it on, the host obeys Compose:
+    a service whose definition changed gets a new container, and one whose definition
+    is unchanged is left running whatever it started with. With it off, the host never
+    recreates anything — which is the state every hashi node was in before M1, and the
+    state ``apply`` must refuse to call success. It is deliberately not "the node is
+    broken": a container can also fail to come back on the new config because Compose
+    is old, because the daemon crashed and was restarted from its old definition, or
+    because somebody ran `docker start` by hand. The verification has to catch the
+    outcome, not the cause.
+    """
+
+    learned_host_key = None
+
+    def __init__(self, *, recreates: bool = True) -> None:
+        self.files: dict[str, str] = {}
+        # service name -> the definition it was created from, and the digest label on it
+        self.containers: dict[str, dict] = {}
+        # How many times each service's container has been created. The evidence for
+        # "the daemon restarted onto the new config" — a start timestamp, without a
+        # clock.
+        self.creations: dict[str, int] = {}
+        self.recreates = recreates
+        self._generation = itertools.count(1)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc_info) -> bool:
+        return False
+
+    async def run(self, command: str, *, check: bool = True):
+        from edge.bootstrap.ssh import CommandResult
+
+        if "docker compose up -d" in command:
+            self._compose_up()
+            return CommandResult(exit_status=0, stdout="", stderr="")
+
+        if "docker inspect" in command:
+            lines = [
+                f"{service}|{container['digest']}|true"
+                for service, container in self.containers.items()
+            ]
+            return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
+
+        if "docker compose ps --services" in command:
+            # The PRE-M1 question — "which services are up" — still answerable, and
+            # this is the only reason it is here. It is what makes every assertion in
+            # this file fail on the BASELINE commit for the reason it is written about,
+            # instead of erroring on a function that does not exist yet. A fake that
+            # went silent on the old question would have made a stale node look absent,
+            # which is a red for the wrong reason and would not have proven the bug.
+            return CommandResult(
+                exit_status=0, stdout="\n".join(self.containers), stderr=""
+            )
+
+        if "docker version" in command:
+            return CommandResult(exit_status=0, stdout="27.1.1\n", stderr="")
+
+        return CommandResult(exit_status=0, stdout="", stderr="")
+
+    def _compose_up(self) -> None:
+        """`docker compose up -d`, with the one rule that matters modelled honestly."""
+        services = yaml.safe_load(self.files[node_stack.COMPOSE_PATH])["services"]
+        for service, definition in services.items():
+            running = self.containers.get(service)
+            if running is not None and (running["definition"] == definition or not self.recreates):
+                # Unchanged definition: Compose does nothing, and the process keeps
+                # whatever config it parsed at start. This line is the bug.
+                continue
+            self.containers[service] = {
+                "definition": definition,
+                "digest": definition.get("labels", {}).get(DIGEST_LABEL, ""),
+                "generation": next(self._generation),
+            }
+            self.creations[service] = self.creations.get(service, 0) + 1
+
+    async def write_file(self, path: str, content: str, *, mode: int = 0o600) -> None:
+        self.files[path] = content
+
+    async def read_file(self, path: str) -> str | None:
+        return self.files.get(path)
+
+
+def host_for(monkeypatch, host: _FakeHost) -> _FakeHost:
+    """Point every node connection this control plane opens at one fake host.
+
+    Both modules, because they import the class rather than the package: an apply and a
+    probe have to reach the SAME host here, or the probe would be answering about a
+    node the apply never touched — which is the one thing this file is about.
+    """
+    from control.app.services import apply, health
+
+    for module in (apply, health):
+        monkeypatch.setattr(module, "NodeConnection", lambda target: host)
+    return host
+
+
+async def a_node_with_a_transport(client, session, reality_params) -> str:
+    """One reachable node with one transport enabled, active and ready to be applied."""
+    from control.app.services import nodes
+
+    response = await client.post(
+        "/api/nodes",
+        json={
+            "name": "leaf-nl",
+            "address": NODE_ADDRESS,
+            "location_label": "Netherlands",
+            "ssh_host": NODE_ADDRESS,
+            "ssh_port": 22,
+            "ssh_private_key": FAKE_PRIVATE_KEY,
+        },
+    )
+    node_id = response.json()["id"]
+    await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": TRANSPORT, "params": reality_params},
+    )
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    return node_id
+
+
+def test_the_label_the_node_carries_is_the_one_the_library_reads() -> None:
+    """The fake above spells the label out; the library must agree with it.
+
+    Both halves of M1 are this one string — Compose recreates on it, and
+    ``docker inspect`` reads it back — so a rename that reached only one side would
+    leave apply silently unable to verify anything, with every test still green.
+    """
+    assert node_stack.CONFIG_DIGEST_LABEL == DIGEST_LABEL
+
+
+async def test_adding_a_friend_and_applying_recreates_the_container(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """M1's first "done when", as far as a test can carry it.
+
+    The node is applied, then a friend is added — which changes the rendered config and
+    nothing else — and the node is applied again. The container must be a NEW one: on a
+    real host that is a start timestamp later than the config's mtime, and the field
+    measurement is the same two numbers 8m25s apart in the wrong order.
+
+    Before M1 the second apply rendered a byte-identical compose file, Compose saw an
+    unchanged definition, and the friend could not connect.
+    """
+    host = host_for(monkeypatch, _FakeHost())
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    assert host.creations[TRANSPORT] == 1
+
+    await client.post("/api/friends", json={"nickname": "kolya"})
+
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    assert host.creations[TRANSPORT] == 2, (
+        "the second apply left the original container running, so the friend who was "
+        "just added is in the file on the node and not in the daemon serving it"
+    )
+
+
+async def test_the_running_container_carries_the_digest_that_was_applied(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The label and the recorded ``applied_digest`` are the same value.
+
+    If they could differ, the read-back would certify something that was never pushed
+    and drift detection would compare two unrelated numbers.
+    """
+    from sqlalchemy import select
+
+    from control.app.models import NodeTransport
+    from control.app.services import apply
+
+    host = host_for(monkeypatch, _FakeHost())
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    configs = await apply.apply_node(session, node_id=node_id)
+
+    row = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().one()
+
+    assert host.containers[TRANSPORT]["digest"] == node_stack.digest_of(configs[TRANSPORT])
+    assert row.applied_digest == host.containers[TRANSPORT]["digest"]
+
+
+async def test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """M1's second "done when": apply must not report success over a stale daemon.
+
+    The host here never recreates a container. The config reaches its disk and the
+    process goes on serving the previous one — the exact state measured in the field,
+    where the API answered 200 and the node was left ``active``.
+    """
+    from control.app.services import nodes
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+
+    await client.post("/api/friends", json={"nickname": "kolya"})
+    response = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert response.status_code == 502, (
+        f"a node still running the previous configuration was reported as applied: "
+        f"{response.text}"
+    )
+    message = response.json()["error"]["message"]
+    assert "still running an older configuration" in message
+    assert TRANSPORT in message
+
+    node = await nodes.get_node(session, node_id)
+    assert node.state == NodeState.DEGRADED
+    assert "still running an older configuration" in node.state_detail
+    # Core invariants §4 and §3 together: no address, and nothing that names a person.
+    assert NODE_ADDRESS not in message
+
+
+async def test_a_stale_apply_records_no_applied_digest(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The database must not record a state the node is not in.
+
+    ``applied_digest`` is what drift is measured against. Writing it for a config the
+    daemon never loaded is how the control plane came to answer ``drifted: []`` about a
+    node serving something else — the lie compounding itself.
+    """
+    from sqlalchemy import select
+
+    from control.app.models import NodeTransport
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    await client.post(f"/api/nodes/{node_id}/apply")
+    first = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().one().applied_digest
+
+    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post(f"/api/nodes/{node_id}/apply")
+
+    session.expire_all()
+    after = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().one().applied_digest
+
+    assert after == first, (
+        "the failed apply recorded a digest the running daemon never loaded"
+    )
+
+
+async def test_health_calls_a_stale_node_stale_rather_than_healthy(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The field measurement's second half, through the endpoint that produced it.
+
+    ``reachable: true, healthy: true, drifted: []`` about a node whose daemon had never
+    read its config. Drift detection compares the file on disk with the digest we
+    pushed and those genuinely matched; nothing compared either against what the
+    PROCESS loaded. ``drifted`` must stay empty here — nobody edited that file — and
+    the answer has to arrive in a field of its own.
+    """
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    await client.post(f"/api/nodes/{node_id}/apply")
+    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post(f"/api/nodes/{node_id}/apply")
+
+    health = (await client.get(f"/api/nodes/{node_id}/health")).json()
+
+    assert health["reachable"] is True
+    assert health["healthy"] is False, (
+        "a node whose daemon is serving a configuration we did not push reported "
+        "healthy — this is the answer the operator reads before believing a "
+        "revocation took effect"
+    )
+    assert health["drifted"] == [], (
+        "staleness was reported as drift, which sends the operator looking for "
+        "somebody who edited the node"
+    )
+    assert health["stale"] == [TRANSPORT]
+    assert health["running"] == [TRANSPORT]
+
+
+async def test_a_node_serving_what_we_pushed_is_healthy(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The green case, so the check above cannot pass by calling every node stale."""
+    host_for(monkeypatch, _FakeHost())
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    await client.post(f"/api/nodes/{node_id}/apply")
+    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post(f"/api/nodes/{node_id}/apply")
+
+    health = (await client.get(f"/api/nodes/{node_id}/health")).json()
+
+    assert health["healthy"] is True, health
+    assert health["stale"] == []
+    assert health["drifted"] == []
+
+
+async def test_a_revoked_friend_leaves_the_running_daemon_too(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """Criterion 6, at the node rather than in the file — M1's third "done when".
+
+    The code half of it: revoking must recreate the container, so the process
+    authorising connections is one that never saw the withdrawn credential. Whether
+    that friend's client actually stops connecting is a field observation on real
+    hardware, and this asserts only what makes it possible.
+    """
+    host = host_for(monkeypatch, _FakeHost())
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
+    await client.post(f"/api/nodes/{node_id}/apply")
+    with_friend = host.containers[TRANSPORT]["generation"]
+
+    response = await client.post(f"/api/friends/{friend_id}/revoke")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["complete"] is True
+    assert host.containers[TRANSPORT]["generation"] != with_friend, (
+        "the revocation rewrote the file and left the same process running, so the "
+        "revoked friend is still being authorised by the daemon"
+    )

@@ -158,6 +158,12 @@ class HealthResponse(BaseModel):
     running: list[str]
     missing: list[str]
     drifted: list[str]
+    # Transports whose container is up on a configuration we did not just push —
+    # separate from ``drifted`` because they are different faults with different
+    # repairs. See ``edge.health.probe.NodeHealth.stale``: a node measured in the field
+    # reported ``drifted: []`` while its daemon had never read the file it was reporting
+    # about.
+    stale: list[str]
     detail: str | None
 
 

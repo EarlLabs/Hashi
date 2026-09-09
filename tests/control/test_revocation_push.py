@@ -120,16 +120,18 @@ def pinned(monkeypatch: pytest.MonkeyPatch, module, name: str, double) -> None:
 class AcceptingNode:
     """A node that accepts every step of an apply.
 
-    Records the transports whose config was placed, so ``running_services`` can answer
-    with exactly those — which is what makes the "did it come back up serving
-    everything" check pass honestly rather than by returning a fixed list.
+    Records the DIGEST of each config it was handed, so ``loaded_digests`` can answer
+    with exactly those — which is what makes the "did the daemon come back up on this
+    config" check pass honestly rather than by returning a fixed list. Before M1 it
+    recorded only the names, and a node that had accepted the bytes and gone on running
+    the previous ones would have satisfied that.
     """
 
     # No host key is learned, so the test says nothing about host-key pinning.
     learned_host_key = None
 
     def __init__(self) -> None:
-        self.placed: list[str] = []
+        self.placed: dict[str, str] = {}
 
     # Untyped return: the class is its own annotation and py314 still needs a string
     # for that, which this repo's ruff rules reject (UP037).
@@ -173,7 +175,7 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def place_config(
         connection, *, transport_name: str, config: str, path: str | None = None
     ) -> None:
-        connection.placed.append(transport_name)
+        connection.placed[transport_name] = node_stack.digest_of(config)
 
     async def place_compose(connection, *, compose: str) -> None:
         return None
@@ -181,14 +183,17 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def restart(connection) -> None:
         return None
 
-    async def running_services(connection) -> list[str]:
-        return list(connection.placed)
+    async def loaded_digests(connection) -> dict[str, str]:
+        # A node whose restart DID take: every container comes back on the config it
+        # was just handed. ``digest_of`` is the real one, so this is the value
+        # production would compare against.
+        return dict(connection.placed)
 
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)
     pinned(monkeypatch, node_stack, "restart", restart)
-    pinned(monkeypatch, node_stack, "running_services", running_services)
+    pinned(monkeypatch, node_stack, "loaded_digests", loaded_digests)
 
 
 async def fleet_with_friend(client, session, reality_params, ws_params):

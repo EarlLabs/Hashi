@@ -253,7 +253,7 @@ async def test_the_hops_config_is_placed_where_its_daemon_will_look_for_it(
     )
     from edge.bootstrap import node_stack
 
-    services = node_stack.services_for(sorted(configs))
+    services = node_stack.services_for(configs)
     assert services[0]["config_path"].endswith(".conf")
     # And the container that loads it is not the proxy image the VLESS transports use.
     assert services[0]["command"][-1] == services[0]["config_path"]

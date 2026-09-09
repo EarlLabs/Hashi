@@ -14,7 +14,8 @@ HOW:  the order is the contract, and every step exists because skipping it produ
          reject, because it restarts into a crash loop and the node is down;
       3. place the config and the compose file;
       4. restart;
-      5. verify it came back;
+      5. verify the daemon came back ON THIS CONFIG — not merely that a container
+         exists, which is what M1 proved says nothing (see ``loaded_digests``);
       6. record the digest, so drift is detectable afterwards.
 
       Any failure from step 3 onward marks the node DEGRADED, never active — core
@@ -290,8 +291,13 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             transport_name, config, profile(transport_name).meta.config_format
         )
 
+    # The configs themselves, not their names: each service carries the digest of its
+    # own config as a label, which is what makes `docker compose up -d` recreate a
+    # container whose config changed. Sorted so the rendered compose file is byte-stable
+    # regardless of the order the transports were read in — an unstable one would
+    # recreate every container on every apply.
     compose = node_stack.render_compose(
-        transports=node_stack.services_for(sorted(configs))
+        transports=node_stack.services_for({name: configs[name] for name in sorted(configs)})
     )
 
     try:
@@ -312,11 +318,24 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             await node_stack.place_compose(connection, compose=compose)
             await node_stack.restart(connection)
 
-            # Verify rather than assume. `docker compose up -d` returns success as
-            # soon as the containers are created — a daemon that starts and
-            # immediately exits on a bad config satisfies that and serves nothing.
-            running = await node_stack.running_services(connection)
-            not_running = sorted(set(configs) - set(running))
+            # Verify rather than assume, and verify the right thing. `docker compose
+            # up -d` returns success as soon as the containers are created — a daemon
+            # that starts and immediately exits on a bad config satisfies that and
+            # serves nothing, and one that was never recreated satisfies it while
+            # serving the PREVIOUS config, which is the fault M1 measured in the field.
+            #
+            # ``loaded_digests`` answers with the digest each running container was
+            # created with, so the comparison below is against what the process was
+            # started from rather than against what is on disk beside it. Without it
+            # this function wrote an ``applied_digest`` recording a state the node was
+            # not in — and a revoked friend stayed connected.
+            loaded = await node_stack.loaded_digests(connection)
+            not_running = sorted(set(configs) - set(loaded))
+            stale = sorted(
+                name
+                for name, config in configs.items()
+                if name in loaded and loaded[name] != node_stack.digest_of(config)
+            )
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
         await _record_failure(session, node, str(exc))
@@ -360,8 +379,20 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             f"the node could not be configured and has been marked degraded: {reason}"
         ) from exc
 
-    if not_running:
-        detail = f"pushed, but these did not come up: {', '.join(not_running)}"
+    if not_running or stale:
+        # Two different faults, named separately because they send the operator to
+        # different places: a container that never came up is a config the daemon
+        # rejected, and one still on an older config is a definition Compose did not
+        # consider changed. Both leave the node degraded — core invariants §4, and the
+        # loud failure M1's second "done when" asks for.
+        detail = "pushed, but " + "; ".join(
+            part
+            for part in (
+                f"these did not come up: {', '.join(not_running)}" if not_running else "",
+                f"still running an older configuration: {', '.join(stale)}" if stale else "",
+            )
+            if part
+        )
         await _record_failure(session, node, detail)
         raise NodeOperationFailed(
             f"configuration was applied but the node is not serving it — marked "

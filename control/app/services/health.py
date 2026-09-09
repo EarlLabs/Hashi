@@ -6,7 +6,9 @@ WHY:  the control plane polls; a node never dials us. And health is deliberately
       module or the one it calls that could produce a per-user figure.
 HOW:  renders through the same function the apply path uses, so "drifted" means the
       node differs from what we would push — not from a second, separately written
-      idea of what should be there.
+      idea of what should be there. "stale" is the same comparison against what the
+      running PROCESS was started from, which is a different question and was the one
+      nothing asked until M1.
 """
 
 import logging
@@ -42,6 +44,10 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
             running=[],
             missing=sorted(expected),
             drifted=[],
+            # Empty rather than "everything": a node we could not reach has told us
+            # nothing about what its containers are running, and reporting a guess as
+            # a finding is the fault this milestone is about, one field over.
+            stale=[],
             detail=str(exc),
         )
 
@@ -52,5 +58,6 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
         running=health.running,
         missing=health.missing,
         drifted=health.drifted,
+        stale=health.stale,
         detail=health.detail,
     )
