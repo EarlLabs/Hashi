@@ -88,6 +88,12 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     rendered: dict[str, str] = {}
     view = nodes.node_view(node)
 
+    # This node's own way out, if it has one — M3. Read once per node rather than per
+    # transport, because it is a property of the NODE: an entry node has a hop and its
+    # friends leave through it; a leaf has none and its friends leave from it. What comes
+    # back is an address and nothing else, so nothing below learns what carries the hop.
+    hop_exit = await relay.exit_through_hop(session, node)
+
     # Queried rather than read off ``node.transports``. The relationship loads eagerly
     # when the node is freshly selected, but this function is also called right after a
     # revocation has deleted rows in the same session — at which point touching the
@@ -145,12 +151,13 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
                 view,
                 nodes.render_params(node_transport),
                 credentials,
-                # Whether this tunnel's traffic may leave the node, from the purpose the
-                # row already carries — M14.3, and see ``nodes.egress_for``. Passed for
-                # every transport, including those whose data plane forwards nothing in
-                # the kernel and renders nothing for it, so this call stays blind to
-                # which is which.
-                egress=nodes.egress_for(node_transport),
+                # Which way out this tunnel's traffic takes, from the purpose the row
+                # already carries and from whether this node has a hop — M14.3 and M3,
+                # and see ``nodes.egress_for``. Both are passed for every transport,
+                # including those whose data plane forwards nothing in the kernel and
+                # renders nothing for either, so this call stays blind to which is which.
+                egress=nodes.egress_for(node_transport, hop_exit),
+                exit_via=hop_exit,
             )
         except NodeOperationFailed:
             raise

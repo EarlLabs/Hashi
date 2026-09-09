@@ -87,43 +87,56 @@ def node_view(node: Node) -> NodeView:
     )
 
 
-# What a node may do with the packets one of its transports decrypts, by the purpose the
-# row already records — M14.3. A TABLE rather than a branch: the question is topology
-# ("who is on the far end of this tunnel"), which is exactly what ``purpose`` is, and
-# `control` still compares no transport name to a literal.
+# Which way out a node's traffic takes, by the purpose the row already records and by
+# whether that node has a hop of its own — M14.3, and M3 for the second half of the key.
+# A TABLE rather than a branch: both halves are topology (``purpose`` is "who is on the
+# far end of this tunnel", the flag is "does this node have a way out that is not its
+# own"), and `control` still compares no transport name to a literal.
 #
-# The two answers are not symmetric in how they fail, and that is why this is written
-# down rather than assumed. A friend-facing tunnel with no exit produces a friend who
-# says at once that nothing loads. A hop that exits locally produces a friend in Russia
-# whose traffic leaves in Russia, with two active nodes and a live hop on every screen.
+# The answers are not symmetric in how they fail, and that is why this is written down
+# rather than assumed. A friend-facing tunnel with no exit produces a friend who says at
+# once that nothing loads. A friend-facing tunnel on an ENTRY that exits locally produces
+# a friend in Russia whose traffic leaves in Russia, with two active nodes and a live hop
+# on every screen and nothing to notice.
 #
-# WHICH OF THE TWO RELAY ENTRIES BELOW IS LIVE TODAY: neither, and they are here on
-# purpose. ``apply.render_for_node`` never asks this function about a hop end — it
-# recognises a relay purpose first and dispatches the pair to ``relay.render_end``, which
-# reaches ``edge.relay.render_hop``, and THAT is where a hop's ``NONE`` actually comes
-# from. So the guarantee in force is ``render_hop``'s own, and these two rows are a
-# forward guard: the day something renders a hop end through the ordinary server path,
-# the answer is already decided and it is the safe one. They are unreachable, not dead —
-# do not delete them because the call graph says nothing reaches them.
-_EGRESS: dict[str, Egress] = {
-    TransportPurpose.FRIENDS: Egress.LOCAL,
-    TransportPurpose.RELAY_ENTRY: Egress.NONE,
-    TransportPurpose.RELAY_LEAF: Egress.NONE,
+# WHICH OF THE RELAY ENTRIES BELOW IS LIVE TODAY: none, and they are here on purpose.
+# ``apply.render_for_node`` never asks this function about a hop end — it recognises a
+# relay purpose first and dispatches the pair to ``relay.render_end``, which reaches
+# ``edge.relay.render_hop``, and THAT is where a hop end's policy actually comes from
+# (since M3: the leaf exits locally, the entry renders the way out and exits nowhere).
+# So the guarantee in force is ``render_hop``'s own, and these rows are a forward guard:
+# the day something renders a hop end through the ordinary server path, the answer is
+# already decided and it is the safe one. They are unreachable, not dead — do not delete
+# them because the call graph says nothing reaches them, and note they deliberately still
+# say NONE rather than mirroring what ``render_hop`` does. A guard's job is to be safe,
+# and this one cannot supply the address the entry's real policy needs.
+_EGRESS: dict[tuple[str, bool], Egress] = {
+    # (purpose, this node has a hop it dials)
+    (TransportPurpose.FRIENDS, False): Egress.LOCAL,
+    (TransportPurpose.FRIENDS, True): Egress.HOP,
+    (TransportPurpose.RELAY_ENTRY, False): Egress.NONE,
+    (TransportPurpose.RELAY_ENTRY, True): Egress.NONE,
+    (TransportPurpose.RELAY_LEAF, False): Egress.NONE,
+    (TransportPurpose.RELAY_LEAF, True): Egress.NONE,
 }
 
 
-def egress_for(node_transport: NodeTransport) -> Egress:
-    """The egress policy this row's purpose implies.
+def egress_for(node_transport: NodeTransport, hop_exit: str | None = None) -> Egress:
+    """Which way out this row's traffic takes.
+
+    ``hop_exit`` is the address this node's own way out runs through, or ``None`` when it
+    has no hop — see ``relay.exit_through_hop``. Only its presence is read here; the
+    address itself travels beside this value to the renderer, because a policy of "out
+    through the hop" and the address the hop runs through are two facts and neither is
+    usable alone.
 
     Unknown purposes fall to ``NONE`` rather than raising, and that is the fail-closed
     rule rather than laziness: a purpose this table has not been taught about is a
     topology nobody has decided the exit policy for, and the safe answer to an undecided
-    question is no exit.
-
-    Sending traffic INTO a hop rather than out of a node is the third answer, and it is
-    M3's: it belongs in this table, next to these two, and needs no new mechanism.
+    question is no exit. The same applies to the pairing itself — a combination missing
+    from the table is no exit, never a local one.
     """
-    return _EGRESS.get(node_transport.purpose, Egress.NONE)
+    return _EGRESS.get((node_transport.purpose, hop_exit is not None), Egress.NONE)
 
 
 def render_params(node_transport: NodeTransport) -> dict:

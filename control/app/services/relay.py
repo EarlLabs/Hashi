@@ -64,6 +64,43 @@ async def peer_of(session: AsyncSession, end: NodeTransport) -> NodeTransport:
     return peer
 
 
+async def exit_through_hop(session: AsyncSession, node: Node) -> str | None:
+    """The address on this node that its friends' traffic must leave through — M3.
+
+    ``None`` for a node with no hop of its own: a leaf, or a single-box deployment. That
+    is every node that has always exited directly and must keep doing so, which is why
+    this is the answer a node gets when the query finds nothing rather than an error.
+
+    Read from the row's EXISTENCE and not from ``enabled``, and the difference is decision
+    3. A hop end an operator has switched off is a tunnel that is not running — so the
+    friend-facing config still points at an address that is not there, and the friend gets
+    no exit. Filtering on ``enabled`` would instead hand that node back its direct
+    outbound: a friend in Russia exiting in Russia the moment somebody unticks a box.
+    """
+    result = await session.execute(
+        select(NodeTransport)
+        .where(NodeTransport.node_id == node.id)
+        .where(NodeTransport.purpose == TransportPurpose.RELAY_ENTRY)
+        .order_by(NodeTransport.transport_name)
+    )
+    ends = list(result.scalars().unique())
+    if not ends:
+        return None
+    if len(ends) > 1:
+        # Refused rather than resolved by picking one. A node has ONE way out — the route
+        # both hops would install lives in a single table on the host, so the second
+        # container's PostUp fails and the tunnel that ends up carrying the traffic is
+        # whichever came up first. An operator reading "this node dials two hops" can fix
+        # it; an operator reading nothing cannot.
+        raise DomainError(
+            f"node {node.name!r} is the entry end of {len(ends)} hops, and a node can "
+            "have only one way out. Dissolve all but one before applying it."
+        )
+    return edge_relay.exit_via(
+        edge_relay.HopEnd(node=nodes.node_view(node), params=nodes.render_params(ends[0]))
+    )
+
+
 def hop_view(node_transport: NodeTransport) -> edge_relay.HopEnd:
     """Project one stored end into the pure value object ``edge.relay`` renders from."""
     return edge_relay.HopEnd(
