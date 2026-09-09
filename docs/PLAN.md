@@ -86,7 +86,30 @@ because it is the lesson of the whole exercise:
 
 ---
 
-## → M1 — `apply` must actually take effect · planned 2026-09-08
+## ✅ M1 — `apply` must actually take effect · planned 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run, and verified on real hardware rather than by test.**
+> One review round, `0 critical, 0 high`. Gate green — 177 control, 155 edge
+> (3 skipped), 96 infra.
+>
+> **All three "done when" bullets discharged on a live node** — see
+> `docs/tracker/M1/field-proof.md`, and `field-measurement.md` for the same node
+> before the fix:
+>
+> | | before | after |
+> |---|---|---|
+> | config vs the process serving it | config written **8m25s after** the container started | container starts **0.5s after** the config |
+> | container label vs `sha256sum` of the config | no label | identical |
+> | health of a stale daemon | `healthy: true, drifted: []` | `healthy: false, drifted: [], stale: [...]` |
+> | a revoked friend's client | (never tested — the file "looked right") | **refused, while a live friend connected through the same node at the same moment** |
+>
+> That last row is criterion 6 holding, and the control is what makes it
+> conclusive: the node was still serving, only the revoked credential was dead.
+>
+> **`drifted` stayed `[]` and was correct** — the file genuinely matched what was
+> pushed. Nothing compared either against what the *process* loaded. That gap is
+> not in this milestone's original description and was the more dangerous half;
+> `stale` is a separate fact for that reason.
 
 **Blocking prerequisite for everything else.** Until this is fixed, no other fix
 can be verified on a live node: a correct change and an incorrect one both look
