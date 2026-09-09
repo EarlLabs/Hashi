@@ -1153,7 +1153,32 @@ is not done, however well the node works afterwards.
 
 ---
 
-## → M12 — The acceptance hands must actually hold a browser · found in the field 2026-09-08
+## ✅ M12 — The acceptance hands must actually hold a browser · found in the field 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run.** One review round, CLEAN, two Lows fixed by the
+> orchestrator. Gate green — 218 control, 230 edge (3 skipped), 161 infra, 140
+> e2e. **The gate did not get slower:** the browser stays behind its compose
+> profile, so `make e2e-up` neither builds nor starts it; the ~40s build lands
+> only on `stand.sh up`, once per machine.
+>
+> **Why it mattered now:** M8, M9 and M10 are the only milestones judged on the
+> stand rather than on rented hardware, they are the next three, and their
+> instrument could not take a single action.
+>
+> **The privacy claim was verified as structural, not incidental.** `begin` now
+> prints the in-container server's own output on failure; the reviewer traced
+> `serve()` and confirmed the browser launches and a page is created *before* the
+> socket binds, and that `begin` reads that log only in the branch where the
+> socket never appeared — so no client has connected and no URL or subscription
+> token can exist in it. The instrument check opens `/panel/` and never a `/sub/`
+> address, which would put a bearer token in a screenshot name.
+>
+> **Two things found on the way:** `drive.py` was committed `0644` while both its
+> siblings were `0755`, so the documented command died on `Permission denied`; and
+> `e2e-down`'s target-specific variable could be silently overridden from the
+> command line, a latent way to defeat M12.4 itself. Fixed with `override`, and
+> the test **tightened to require it**, proven red-first. See
+> `docs/tracker/M12/outcome.md`.
 
 **Appended during the overnight field run, not planned.** Found by running
 `scripts/acceptance/drive.py` for the first time against a stand that had just
