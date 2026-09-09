@@ -119,13 +119,32 @@ lint:
 
 ## --- running the stack ------------------------------------------------------
 
+# NO_ATTESTATIONS is on every `up -d --build` in this file, and it is what makes
+# them converge instead of churn.
+#
+# BuildKit attaches a provenance attestation to every image it exports, and the
+# attestation records when the build ran. So a FULLY CACHED rebuild still exports
+# a manifest with a new digest — which is the image ID compose compares against
+# the running container — and compose recreated `control` and `caddy` on every
+# single invocation, with nothing in the output to say why. Not the database:
+# postgres is PULLED by tag rather than built, so it was never touched by this and
+# no data was ever at risk. What it cost was a control-plane and TLS restart on
+# every routine deploy, and a `make up` that could not be used to check whether a
+# stack was already converged.
+#
+# The attestation is inert here: these images are built on the host that runs them
+# and are never pushed anywhere that could check a signature. Found and fixed for
+# scripts/panel-bootstrap.sh in M6.5, where the same behaviour made that script's
+# own IDEMPOTENT header untrue; these three are the rest of it.
+NO_ATTESTATIONS := BUILDX_NO_DEFAULT_ATTESTATIONS=1
+
 # Production shape: nothing is published to the outside world.
 up: env
-	$(COMPOSE) up -d --build
+	$(NO_ATTESTATIONS) $(COMPOSE) up -d --build
 
 # Dev overlay: the only thing that publishes ports, and only to 127.0.0.1.
 up-dev: env
-	$(COMPOSE_DEV) up -d --build
+	$(NO_ATTESTATIONS) $(COMPOSE_DEV) up -d --build
 
 down:
 	$(COMPOSE) down
@@ -240,7 +259,7 @@ E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
                 DEV_BIND_ADDR=$(E2E_BIND_ADDR)
 
 e2e-up: env
-	$(E2E_PORTS) $(COMPOSE_E2E) up -d --build
+	$(NO_ATTESTATIONS) $(E2E_PORTS) $(COMPOSE_E2E) up -d --build
 
 e2e-down:
 	$(E2E_PORTS) $(COMPOSE_E2E) down -v
