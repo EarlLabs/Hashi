@@ -243,7 +243,30 @@ through it. Repeat for `wireguard`.
 
 ---
 
-## → M3 — The entry node must route friend traffic into the hop · planned 2026-09-08
+## ✅ M3 — The entry node must route friend traffic into the hop · planned 2026-09-08 · done 2026-09-09
+
+> **The charter's core claim, working on real hardware.** One review round,
+> `0 critical, 0 high`. Gate green — 188 control, 230 edge (3 skipped), 96 infra.
+> All three "done when" bullets discharged on two live hosts; see
+> `docs/tracker/M3/field-proof.md`, and `field-observations.md` for the same fleet
+> before the fix.
+>
+> | | before | after |
+> |---|---|---|
+> | what the internet sees when a friend dials the Russian entry | **the entry's own address** | **the leaf's, in Amsterdam** |
+> | a real page through the relay | — | `HTTP 200`, 119 573 bytes |
+> | with the hop torn down | (never reached — it exited locally anyway) | **two timeouts, and never a Russian address** |
+> | the control plane's SSH across the apply | — | unaffected; main routing table untouched |
+>
+> **Two corrections this milestone made to its own instructions**, both recorded
+> in `docs/decisions.md` and beside the original wording above: a leaf's
+> in-tunnel address is a **route, not a destination**, so the entry binds its own
+> end (`sendThrough`) rather than dialling the far one; and the entry's hop-peer
+> `AllowedIPs` had to **widen** to `0.0.0.0/0`, because `AllowedIPs` is
+> WireGuard's crypto-routing table rather than a firewall list.
+>
+> **Found immediately after, and not covered by this milestone's criterion:** the
+> exit is Amsterdam and the **DNS lookup is still Russia** — now M16.
 
 **This is the charter's core claim, and it is not implemented.**
 
