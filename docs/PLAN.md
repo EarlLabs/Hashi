@@ -178,7 +178,7 @@ config file does not count — this is the milestone whose whole failure mode wa
 
 ---
 
-## → M2 — The WireGuard family must start at all · planned 2026-09-08
+## ✅ M2 — The WireGuard family must start at all · planned 2026-09-08 · done 2026-09-09
 
 > **Field run 2026-09-09 — steps complete and reviewed clean; the milestone stays
 > open on its second "done when", for a reason that is not its own.** One review
@@ -192,13 +192,13 @@ config file does not count — this is the milestone whose whole failure mode wa
 > values live (`jc`, `jmin`, `jmax`, `h1`–`h4`), and a real client built from the
 > friend's own subscription **completed a handshake in both directions**.
 >
-> **Second "done when" — "a client carries traffic" — not discharged, and the
-> cause is M14.** The handshake succeeds and nothing moves: the node has no
-> forwarding or NAT for the tunnel subnet, ufw's FORWARD policy is `DROP`, and the
-> rendered config has no `PostUp`/`PostDown`, so a friend's packet is decrypted
-> onto the interface and dropped. Nothing about the command, the image or the
-> interface is outstanding. This milestone closes when M14 lands and a page loads
-> through the tunnel. See `docs/tracker/M2/carry-over.md`.
+> **Second "done when" — "a client carries traffic" — discharged once M14 landed.**
+> When this milestone's work was done the handshake succeeded and nothing moved,
+> because the node had no forwarding or NAT for the tunnel subnet. That was M14,
+> not M2, and with M14 in place a real client on the `amneziawg` transport loads
+> pages through this node and exits at its address. Nothing about the command,
+> the image or the interface was ever outstanding. The plain-WireGuard member
+> carries M14's recorded image-backend limitation.
 
 **The bug.** `node_stack.py:116,126` sets `command=("up", "{config}")` for
 `amneziawg` and `wireguard`. Both images have an **empty ENTRYPOINT**
@@ -1137,7 +1137,26 @@ bootstrap script must no longer tell the operator to register that account.
 
 ---
 
-## → M14 — A WireGuard-family node accepts a friend and carries nothing · found in the field 2026-09-09
+## ✅ M14 — A WireGuard-family node accepts a friend and carries nothing · found in the field 2026-09-09 · done 2026-09-09
+
+> **Closed in the field run.** One review round, `0 critical, 1 high` — the High
+> was that a real limitation had been left with no written trace, not a defect in
+> the code; it is now `docs/tracker/M14/carry-over.md` and a decision entry. Gate
+> green — 183 control, 210 edge (3 skipped), 96 infra.
+>
+> **Both testable "done when" bullets discharged on real hardware** — see
+> `docs/tracker/M14/field-proof.md`. A real client from the friend's own
+> subscription loaded four sites through the tunnel including a **119 KB** page,
+> exiting at the node's address, where before M14 the same client completed a
+> handshake and every request timed out. Disabling the transport removed every
+> rule, the interface and the container; re-enabling restored **exactly one**
+> masquerade rule, not two.
+>
+> **Known limitation, recorded not fixed:** proven for `amneziawg`. The plain
+> WireGuard image ships `iptables` on the legacy backend, which on a ufw host
+> cannot front-run ufw's nft `DROP`, so a friend-facing `wireguard` row is
+> unproven and likely to fail in exactly this milestone's shape. Owner's decision
+> of 2026-09-09: the pin stays, the limitation is written down.
 
 **Found while discharging M2's second "done when".** M2 made both WireGuard-family
 containers start; this is what the next question revealed.
