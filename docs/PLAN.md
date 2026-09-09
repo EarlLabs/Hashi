@@ -913,10 +913,16 @@ and no subscription link anywhere in sight.
 
 ---
 
-## → M11 — One script prepares a host to be a node · planned 2026-09-08
+## ✅ M11 — One script prepares a host to be a node · planned 2026-09-08 · done 2026-09-09
 
-> **Field run 2026-09-08 — steps complete and reviewed clean; acceptance is
-> half-discharged and this milestone stays open.** M11.1–M11.3 each converged in
+> **Closed 2026-09-09.** Acceptance completed once apply worked — see the
+> "Acceptance completed" section of `docs/tracker/M11/outcome.md`. Both field
+> hosts were prepared by this script alone and both became working nodes carrying
+> real traffic, with nothing else typed on either box. **Not proven:** the
+> script's Docker *install* path, since both hosts already had Docker — only its
+> "already present" path was exercised.
+>
+> **Field run 2026-09-08 — steps complete and reviewed clean.** M11.1–M11.3 each converged in
 > one review round. M11.4 is **proven on two real hosts**: on a non-root host
 > with docker present and `ufw` inactive, and on a root host with `ufw` already
 > active carrying its own rules and hashi already applied to it. The second run
