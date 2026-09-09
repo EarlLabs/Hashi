@@ -265,16 +265,34 @@ E2E_BIND_ADDR ?= 127.0.0.1
 # acceptance browser uses one today: its image is ~2 GB and a test run that speaks
 # nothing but HTTP should not wait for it. `scripts/acceptance/stand.sh up` passes
 # E2E_PROFILES=browser; `make e2e-up` alone stays exactly as fast as it was.
-COMPOSE_E2E  := docker compose --env-file .env --env-file deploy/e2e.env -p $(E2E_PROJECT) \
+#
+# Recursively expanded (`=`, not `:=`) so `e2e-down` below can widen E2E_PROFILES
+# for itself. With `:=` the profile list would be frozen at the empty value this
+# file starts with, and the target-specific override would silently do nothing.
+COMPOSE_E2E  = docker compose --env-file .env --env-file deploy/e2e.env -p $(E2E_PROJECT) \
                 $(foreach p,$(E2E_PROFILES),--profile $(p)) \
                 -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml \
                 -f deploy/docker-compose.e2e.yml
 E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
                 DEV_BIND_ADDR=$(E2E_BIND_ADDR)
 
+# EVERY profile the e2e overlay defines — what `down` has to know about, whatever
+# `up` was asked for. `docker compose down` only touches services in the profiles
+# CURRENTLY enabled, so a `down` with no profile did not know `browser` existed
+# and left it running: one leaked container per acceptance run, each holding a
+# gigabyte of shared memory. Worse, it defeated `stand.sh up`'s own safety check —
+# that refuses to continue if anything still answers /healthz, and a leaked
+# browser answers nothing, so it passed and accumulated.
+# tests/infra/test_the_hands_can_take_an_action.py fails if the overlay grows a
+# profile this list does not have.
+E2E_ALL_PROFILES := browser
+
 e2e-up: env
 	$(NO_ATTESTATIONS) $(E2E_PORTS) $(COMPOSE_E2E) up -d --build
 
+# `down` takes away everything any `up` could have started, not only what this
+# invocation happened to ask for — see E2E_ALL_PROFILES.
+e2e-down: E2E_PROFILES := $(E2E_ALL_PROFILES)
 e2e-down:
 	$(E2E_PORTS) $(COMPOSE_E2E) down -v
 

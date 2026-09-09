@@ -77,6 +77,24 @@ def test_images_are_pinned(name: str) -> None:
     assert_pinned(name, image)
 
 
+ARG_DEFAULT = re.compile(r"^ARG\s+(\w+)\s*=\s*(\S+)\s*$")
+INTERPOLATION = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def expand_args(image: str, defaults: dict[str, str]) -> str:
+    """Resolve ``${NAME}`` / ``$NAME`` in a FROM line against the ARG defaults.
+
+    A tag may legitimately be composed from a build argument: the acceptance
+    browser DERIVES its upstream tag from the version it installs the ``playwright``
+    package at, so the package and the browser build it drives cannot drift apart.
+    The pin is then the ARG's default — and an ARG with no default is not a pin at
+    all, it is a tag whoever runs the build gets to choose.
+    """
+    return INTERPOLATION.sub(
+        lambda found: defaults.get(found.group(1) or found.group(2), found.group(0)), image
+    )
+
+
 @pytest.mark.parametrize(
     "path", sorted((DEPLOY / "docker").glob("*.Dockerfile")), ids=lambda p: p.name
 )
@@ -86,14 +104,26 @@ def test_dockerfile_base_images_are_pinned(path: pathlib.Path) -> None:
     Moving a service from ``image:`` to ``build:`` used to silently exempt it
     from the pinning rule — this is the half that catches it.
     """
+    lines = path.read_text().splitlines()
+    defaults = {
+        found.group(1): found.group(2)
+        for found in (ARG_DEFAULT.match(line.strip()) for line in lines)
+        if found
+    }
     froms = [
         line.split(maxsplit=1)[1].split()[0]
-        for line in path.read_text().splitlines()
+        for line in lines
         if line.upper().startswith("FROM ")
     ]
     assert froms, f"{path.name}: no FROM line"
     for image in froms:
-        assert_pinned(path.name, image)
+        resolved = expand_args(image, defaults)
+        assert "$" not in resolved, (
+            f"{path.name}: the base image {image!r} names a build argument with no "
+            f"default, so the tag is whatever the caller passes — that is a floating "
+            f"tag with extra steps"
+        )
+        assert_pinned(path.name, resolved)
 
 
 def test_dev_overlay_binds_loopback_by_default() -> None:

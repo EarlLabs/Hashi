@@ -49,6 +49,11 @@ SOCKET = BOX / "drive.sock"
 STATE = BOX / "state.json"
 SHOTS = BOX / "shots"
 UPLOADS = BOX / "uploads"
+# Everything the resident server writes while it starts. It used to go to
+# /dev/null, which is how a missing `playwright` package looked like a broken
+# stand for as long as anyone's patience lasted — see `startup_failure`.
+SERVER_LOG = BOX / "serve.log"
+SERVER_LOG_LINES = 40
 
 # The compose service holding the browser, and the path this file is mounted at.
 SERVICE = "browser"
@@ -122,6 +127,33 @@ def rewrite_url(url: str) -> str:
     if not PUBLISHED.match(url):
         return url
     return PUBLISHED.sub(IN_NETWORK, url, count=1)
+
+
+def startup_failure(log: str) -> str:
+    """What `begin` says when the socket never appeared — cause first.
+
+    The one place in this file that prints more than a line, and deliberately so
+    (`fail` explains why everything else does not). The server used to be started
+    with its stderr on /dev/null, so the single line that named the cause —
+    `ModuleNotFoundError: No module named 'playwright'` — was thrown away one line
+    above a message that blamed the stand. The stand was fine; an agent reading it
+    debugs compose, the profile, the network and the health checks instead.
+
+    Only what the server wrote while STARTING, and only the tail. Nothing has been
+    opened in the browser at that point, so no URL — and therefore no subscription
+    token — can be in it.
+    """
+    tail = "\n".join(log.splitlines()[-SERVER_LOG_LINES:]).strip()
+    if not tail:
+        return (
+            "the browser did not come up inside the stand, and its server wrote "
+            f"nothing at all — check that {SERVER_LOG} is writable and that the "
+            "browser image has a python to start"
+        )
+    return (
+        "the browser did not come up inside the stand. What its server wrote "
+        f"before it stopped:\n{tail}"
+    )
 
 
 def truncate_tree(tree: str, max_lines: int = MAX_TREE_LINES) -> str:
@@ -499,19 +531,29 @@ def in_container(args: argparse.Namespace) -> int:
             with contextlib.suppress(Exception):
                 send({"action": "end"})
         # The server outlives this process on purpose: the next verb needs the same
-        # page, not a fresh one.
-        subprocess.Popen(
-            [sys.executable, IN_BOX, "__serve", args.milestone,
-             "--max-actions", str(args.max_actions), "--minutes", str(args.minutes)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        # page, not a fresh one. Which is also why its output goes to a FILE rather
+        # than to a pipe — a pipe whose reader has already exited fills up and
+        # blocks the writer, and the writer here is the browser. `w` truncates, so
+        # what the failure path below reads is this session's start-up and never a
+        # previous one's. The file is disposable with the stand and never leaves
+        # the container.
+        with SERVER_LOG.open("w") as log:
+            server = subprocess.Popen(
+                [sys.executable, IN_BOX, "__serve", args.milestone,
+                 "--max-actions", str(args.max_actions), "--minutes", str(args.minutes)],
+                stdout=log, stderr=subprocess.STDOUT,
+            )
         for _ in range(100):
             if SOCKET.exists():
                 say(f"session open on {args.milestone}: "
                     f"{args.max_actions} actions, {args.minutes:g} minutes")
                 return 0
+            # It has already died: waiting out the rest of the ten seconds proves
+            # nothing and only delays the diagnosis.
+            if server.poll() is not None:
+                break
             time.sleep(0.1)
-        return fail("the browser did not come up inside the stand")
+        return fail(startup_failure(SERVER_LOG.read_text() if SERVER_LOG.exists() else ""))
 
     if args.action == "end":
         with contextlib.suppress(Exception):

@@ -2,8 +2,9 @@
 #
 # hashi — the disposable stand an acceptance agent walks.
 #
-# WHAT: `up` brings up a throwaway control plane and prints how to reach it;
-#       `down` destroys it with its volumes.
+# WHAT: `up` brings up a throwaway control plane, PROVES ITS HANDS by taking one
+#       real action through the real driver, and prints how to reach it; `down`
+#       destroys it with its volumes.
 # WHY:  the acceptance agent clicks everything, types a thousand characters into
 #       fields, double-clicks buttons and abandons flows halfway — on purpose.
 #       That belongs somewhere that gets destroyed afterwards, never near the
@@ -16,6 +17,13 @@
 # The one thing this file adds over `make e2e-up`: a database role that can read
 # and cannot write, because the honest answer to "did the button actually save
 # it?" cannot come from the same screen that claimed it did. See query.py.
+#
+# The second thing, added after the field run of 2026-09-08: this script used to
+# report `ready.` on a stand whose driver could not take a single action — the
+# browser image shipped no `playwright` package, and every verb failed against a
+# perfectly healthy stack. Health checks prove the SUBJECT; they say nothing about
+# the INSTRUMENT the milestone is judged with. So `up` now ends by driving one
+# real verb, and refuses to say ready if it fails. See `prove_the_hands`.
 set -euo pipefail
 
 # Defaults mirror the Makefile's, and are overridable for the same single reason
@@ -27,6 +35,9 @@ E2E_API_PORT="${E2E_API_PORT:-54200}"
 E2E_DB_HOST="${E2E_DB_HOST:-$E2E_API_HOST}"
 E2E_DB_PORT="${E2E_DB_PORT:-54232}"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
+# The compose project the Makefile creates. Named here only to ask docker what is
+# left after `down` — mirrors E2E_PROJECT in the Makefile and in drive.py.
+E2E_PROJECT="${E2E_PROJECT:-hashi-e2e}"
 
 # The read-only role the acceptance agent reads through. Fixed and obviously fake,
 # and committed on the same grounds as deploy/e2e.env: it guards a stack with no
@@ -42,6 +53,17 @@ say() { printf '[stand] %s\n' "$*"; }
 die() { printf '[stand] %s\n' "$*" >&2; exit 1; }
 
 healthz() { curl -fsS --max-time 5 "http://${E2E_API_HOST}:${E2E_API_PORT}/healthz" >/dev/null 2>&1; }
+
+# Whether this stand carries the acceptance browser. ACCEPTANCE_BROWSER=0 walks it
+# with curl instead — faster, and the right choice for a scenario with nothing to
+# look at. Asked in one place so the profile that starts the browser and the check
+# that proves it cannot disagree.
+hands_wanted() { [ "${ACCEPTANCE_BROWSER:-1}" != "0" ]; }
+
+# The name the instrument check files its evidence under, in .acceptance/. Not a
+# milestone: it belongs to the stand, so a milestone's own directory holds only
+# what that milestone's agent did.
+HANDS_CHECK="stand-check"
 
 up() {
   # Tear down whatever is already listening BEFORE starting anything. This is the
@@ -63,12 +85,13 @@ up() {
   # E2E_PROFILES=browser adds the acceptance agent's Chromium (see
   # deploy/docker-compose.e2e.yml). It publishes nothing and reaches the control
   # plane over the compose network; the driver is scripts/acceptance/drive.py.
-  # Set ACCEPTANCE_BROWSER=0 to walk the stand with curl instead — faster, and the
-  # right choice for a scenario with nothing to look at.
+  # The image is BUILT here rather than pulled — that is what puts the `playwright`
+  # package inside it — so the first stand on a machine takes a build; every one
+  # after that is cached.
   say "building and starting the stand"
   make e2e-up E2E_BIND_ADDR="${E2E_BIND_ADDR:-127.0.0.1}" \
               E2E_API_PORT="$E2E_API_PORT" E2E_DB_PORT="$E2E_DB_PORT" \
-              E2E_PROFILES="$([ "${ACCEPTANCE_BROWSER:-1}" = "0" ] || echo browser)" \
+              E2E_PROFILES="$(hands_wanted && echo browser || true)" \
     || die "the stand did not come up"
 
   say "waiting for the control plane (up to ${READY_TIMEOUT}s)"
@@ -85,6 +108,12 @@ up() {
   say "granting the read-only role '${RO_ROLE}'"
   grant_readonly || die "could not create the read-only role — a stand whose truth source cannot connect proves nothing"
 
+  if hands_wanted; then
+    say "proving the hands: one real action through the real driver"
+    prove_the_hands || die "the stand is up and its driver cannot take an action — the message above is the cause; fix the browser image before walking a milestone with it"
+    say "the hands work — evidence in .acceptance/${HANDS_CHECK}/${HANDS_CHECK}.png"
+  fi
+
   cat <<EOF
 
 [stand] ready.
@@ -99,6 +128,34 @@ operator's session cookie is not https-only and the panel actually logs in.
 
 The control plane is empty — no nodes, no transports, no friends, no hops.
 EOF
+}
+
+prove_the_hands() {
+  # The cheapest honest check there is: `begin` a session and `open` one page,
+  # through the same driver and the same container an acceptance run uses. Not a
+  # `docker exec python -c "import playwright"` — that would prove the import and
+  # leave the socket, the mount, the budget file and the compose invocation
+  # unproved, and the reason this check exists is that everything AROUND the
+  # broken part looked healthy.
+  #
+  # The panel's front door, which is a redirect to a login form: no token in that
+  # URL, and none in the screenshot it leaves. Never a /sub/ address — those carry
+  # a bearer credential in the path and this output is read by whoever runs the
+  # stand.
+  local status=0
+  scripts/acceptance/drive.py begin "$HANDS_CHECK" --max-actions 4 --minutes 2 \
+    || status=$?
+  if [ "$status" -eq 0 ]; then
+    # The tree goes to /dev/null: this is a liveness check, and its answer is the
+    # exit code. Anything the driver says on stderr is kept — that is the cause.
+    scripts/acceptance/drive.py open "http://${E2E_API_HOST}:${E2E_API_PORT}/panel/" \
+      --name "$HANDS_CHECK" >/dev/null || status=$?
+  fi
+  # Leave no session open: the agent's own `begin` starts a fresh one with the
+  # milestone's real budget, and a check that spent actions from it would be a
+  # check that made the run shorter.
+  scripts/acceptance/drive.py end >/dev/null 2>&1 || true
+  return "$status"
 }
 
 grant_readonly() {
@@ -138,12 +195,26 @@ SQL
 }
 
 down() {
-  # E2E_PROFILES=browser is NOT optional here. `docker compose down` only touches
-  # services whose profile is active, so a teardown without it leaves the browser
-  # container running — and the next `up` then finds a stale one holding the old
-  # image.
+  # No E2E_PROFILES here, deliberately. `docker compose down` only touches services
+  # whose profile is active, so a teardown that names one profile tears down one
+  # profile — and the day a second is added, this line silently stops covering it.
+  # The Makefile widens it instead: `e2e-down` forces E2E_PROFILES to
+  # E2E_ALL_PROFILES, so the list lives in one place and every profile the overlay
+  # defines is torn down whatever the caller asked for. A command-line assignment
+  # would OVERRIDE that target-specific one, which is the same bug wearing a fix.
   say "destroying the stand and its volumes"
-  make e2e-down E2E_PROFILES=browser
+  make e2e-down
+
+  # Then prove it is gone, the same way `up` proves the previous stand is. `down`
+  # used to leave the browser running: compose does not touch a service whose
+  # profile is off, and nothing ever looked. Each leaked container held a gigabyte
+  # of shared memory and was invisible to `up`'s /healthz check — a browser answers
+  # nothing there — so they accumulated one per acceptance run. This checks the
+  # PROJECT, not a service name, so it catches a profile nobody remembered.
+  local left
+  left="$(docker ps -a --filter "label=com.docker.compose.project=${E2E_PROJECT}" \
+          --format '{{.Names}}' | tr '\n' ' ')"
+  [ -z "${left// /}" ] || die "the stand is down and these containers are still up: ${left}— every profile the overlay defines has to be in E2E_ALL_PROFILES in the Makefile"
 
   # And wait for the ports to actually close. `down` returns when the containers
   # are gone, not when the kernel has released what they published, and autopilot

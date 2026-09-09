@@ -86,6 +86,53 @@ def test_a_long_tree_is_cut_and_says_so() -> None:
     assert "280 more lines" in cut[-1]
 
 
+def test_a_begin_that_fails_prints_the_cause_and_not_only_the_symptom() -> None:
+    """M12's second half: the traceback existed and was thrown on the floor.
+
+    `begin` started the in-container server on /dev/null and then reported "the
+    browser did not come up inside the stand" — a message that names the symptom,
+    hides the cause and points at the one layer that was working.
+    """
+    log = (
+        "Traceback (most recent call last):\n"
+        '  File "/srv/acceptance/drive.py", line 1, in <module>\n'
+        "ModuleNotFoundError: No module named 'playwright'\n"
+    )
+    message = drive.startup_failure(log)
+    assert "ModuleNotFoundError" in message and "playwright" in message
+
+
+def test_a_long_startup_log_comes_back_as_a_tail() -> None:
+    """The agent pays for every line of it, and the cause is at the end."""
+    log = "\n".join(f"line {n}" for n in range(500))
+    message = drive.startup_failure(log)
+    assert "line 499" in message
+    assert "line 0" not in message
+    assert len(message.splitlines()) <= drive.SERVER_LOG_LINES + 2
+
+
+def test_a_server_that_wrote_nothing_still_says_something_useful() -> None:
+    """An empty log must not turn into a message with a blank space where the cause was."""
+    message = drive.startup_failure("   \n\n")
+    assert "did not come up" in message
+    assert "nothing at all" in message
+
+
+def test_the_startup_log_is_never_copied_out_of_the_container() -> None:
+    """It is diagnosis, not evidence.
+
+    Everything the host collects lands in .acceptance/, which is read and quoted.
+    The server's log stays in the container's disposable /tmp and dies with the
+    stand — and `begin` truncates it, so nothing a previous session wrote can be
+    printed by a later failure.
+    """
+    assert str(drive.SERVER_LOG).startswith(str(drive.BOX))
+    source = (ROOT / "scripts/acceptance/drive.py").read_text()
+    assert "SERVER_LOG.open(\"w\")" in source, "the log is appended to rather than truncated"
+    collect_body = source.split("def collect(", 1)[1].split("\ndef ", 1)[0]
+    assert "SERVER_LOG" not in collect_body
+
+
 def test_the_budget_stops_at_the_action_cap() -> None:
     budget = drive.Budget("M8", max_actions=3, minutes=60)
     for _ in range(3):
@@ -171,7 +218,13 @@ def test_the_browser_is_built_not_bind_mounted() -> None:
     assert browser["build"]["dockerfile"] == "deploy/docker/acceptance-browser.Dockerfile"
 
     dockerfile = (ROOT / "deploy/docker/acceptance-browser.Dockerfile").read_text()
-    # The client and the bundled browsers must be the same version, or the failure
-    # arrives as "executable doesn't exist", several layers from its cause.
-    assert "v1.55.0-noble" in dockerfile and "playwright==1.55.0" in dockerfile
     assert "COPY scripts/acceptance/drive.py" in dockerfile
+
+    # The client and the bundled browsers must be the same version, or the failure
+    # arrives as "executable doesn't exist", several layers from its cause. That
+    # property is NOT asserted here as two literal substrings any more: the version
+    # is now written once, as an ARG the tag and the pin are both derived from, so
+    # a literal check would demand the very duplication it was guarding against.
+    # tests/infra/test_the_hands_can_take_an_action.py resolves the ARG and compares
+    # the two, which is the same property held mechanically instead of by spelling.
+    assert "ARG PLAYWRIGHT_VERSION" in dockerfile

@@ -64,7 +64,9 @@ services:
 
   # The acceptance agent's browser. Behind a PROFILE, so `make e2e-up` is unchanged
   # for everyone who is not walking a milestone — the image is large and a test run
-  # that only needs HTTP should not wait for it.
+  # that only needs HTTP should not wait for it. The profile is also why
+  # `make e2e-down` names it: a `down` that does not know this service exists
+  # leaves it running with its gigabyte of shared memory. See E2E_ALL_PROFILES.
   #
   # It publishes NOTHING. The browser reaches the control plane at `control:8000`
   # over the compose network, which is the only place `localhost` and an Origin mean
@@ -74,10 +76,12 @@ services:
   # friendly name, and it would sit outside that block.
   browser:
     profiles: ["browser"]
-    # Built, not pulled, and for the same reason caddy is: the upstream image ships
-    # the browsers but not the `playwright` package, and a BIND MOUNT of the driver
-    # would resolve on the daemon's filesystem — not this checkout — the moment the
-    # engine is remote. Both are baked. See deploy/docker/acceptance-browser.Dockerfile.
+    # BUILT, not pulled, for two reasons the field supplied on the same day.
+    # The upstream image carries Chromium and pip but not the `playwright` PACKAGE
+    # the driver imports, so pulling it bare produced a healthy stand whose every
+    # verb died on ModuleNotFoundError. And a BIND MOUNT of the driver resolves on
+    # the DAEMON's filesystem — not this checkout — the moment the engine is remote,
+    # which is the lesson caddy already taught. Both are baked into the image.
     build:
       context: ..
       dockerfile: deploy/docker/acceptance-browser.Dockerfile
