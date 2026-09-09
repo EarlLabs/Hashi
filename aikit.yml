@@ -86,7 +86,18 @@ zones:
 # What CI already believes "green" means: one job per zone, the same three
 # targets. Deliberately NOT `make test-e2e` — that needs a booted stack, and a
 # gate that silently requires Docker is a gate agents start skipping.
-verify_all: "make test"
+# Changed 2026-09-09, on the owner's instruction. It was `make test`, which
+# deliberately excludes `tests/e2e/` — and CI ran the same three zone targets, so
+# NOTHING ran the e2e scenarios at all. `panel-bootstrap.sh`'s own idempotency
+# scenario had been failing since the day it was written and was found by
+# accident, eleven milestones into a field run. `make verify` is `make test` plus
+# the stand booted, `tests/e2e/` run against it, and the stand torn down.
+#
+# It costs ~15 minutes and needs a docker engine, which is why `make test` still
+# exists and still excludes e2e: a fast gate people actually run, and an honest
+# one that closes the loop. Steps gate on their zone's own verify; this is for a
+# multi-zone change and for closing a milestone.
+verify_all: "make verify"
 
 review:
   # This project's own persona, not aikit's shipped one. Both are edit-incapable
