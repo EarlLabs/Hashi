@@ -90,3 +90,83 @@ def test_the_login_path_still_fails_closed_on_the_same_value() -> None:
     on a malformed hash is a signal a prober can read.
     """
     assert verify_password(PASSWORD, AS_IT_ARRIVED_ON_THE_LIVE_HOST) is False
+
+
+# --- round 1: the shapes that are not compose's ------------------------------
+#
+# The refusals above are all shapes docker compose produces, which is how the one below
+# got through: a hash can be malformed in ways that have nothing to do with interpolation
+# — hand-typed, half-pasted, or written by a future version of this format.
+
+MALFORMED = [
+    # A cost field that is not a number. THE round-1 critical: `int(n)` used to sit
+    # outside `_decoded`'s try, so this raised out of the pydantic validator and pydantic
+    # wrapped it in a ValidationError carrying `input_value=<the whole hash>`.
+    "scrypt$notanumber$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    "scrypt$32768$eight$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    "scrypt$32768$8$$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    # A cost that parses but that scrypt itself cannot take. Well FORMED, so it boots —
+    # see the totality test below for why that is still not a 500 on the login route.
+    "scrypt$0$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    "scrypt$-32768$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    # Not base64 at all, and base64 that decodes to nothing.
+    "scrypt$32768$8$1$not base64!$aGFzaGhhc2g=",
+    "scrypt$32768$8$1$c2FsdHNhbHQ=$",
+    # Not this format at all.
+    "bcrypt$32768$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",
+    "scrypt$32768$8$1$c2FsdHNhbHQ=",
+    "",
+    "run-python--m-control.cli-hash-password-and-paste-the-output",
+]
+
+
+@pytest.mark.parametrize("hash_value", MALFORMED)
+def test_no_malformed_hash_ever_reaches_a_message(hash_value: str) -> None:
+    """The refusal must not carry the credential, whatever shape the damage took.
+
+    Asserted on what the operator and the container's logs actually see — the string of
+    the exception, however it was raised and whoever wrapped it — rather than on the
+    exception's type. Type alone was the assertion that missed this: ``OperatorHashMalformed``
+    was raised correctly for every shape anybody had tried, while one uncaught
+    ``ValueError`` from a cost field turned into a pydantic ``ValidationError`` that
+    printed the hash in full, salt and digest included, on every boot attempt.
+
+    A hash is not a password, but it is an offline brute-force target, and putting one in
+    a boot message publishes it to whatever collects container output.
+    """
+    with pytest.raises(Exception) as refusal:  # noqa: B017 - the type is what is under test
+        settings_with(hash_value)
+
+    for rendering in (str(refusal.value), repr(refusal.value)):
+        assert hash_value == "" or hash_value not in rendering, (
+            "the boot failure prints the configured hash — this is the leak "
+            "OperatorHashMalformed exists to prevent, reintroduced through a wrapper"
+        )
+    assert isinstance(refusal.value, OperatorHashMalformed), (
+        f"{type(refusal.value).__name__} escaped instead of the refusal, so the message "
+        "is whatever the wrapper decided to say — which is how the credential got out"
+    )
+
+
+@pytest.mark.parametrize(
+    "hash_value",
+    [
+        *MALFORMED,
+        # Well formed, so `_decoded` returns parts and scrypt is actually called with
+        # them. Each of these raises a DIFFERENT exception out of hashlib, and none of
+        # them may reach the login route: the control rulebook's own trap is that a 500
+        # here is a signal a prober can tell apart from a wrong password.
+        "scrypt$3$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",  # not a power of two -> ValueError
+        "scrypt$1099511627776$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",  # beyond maxmem -> ValueError
+        "scrypt$" + "1" + "0" * 30 + "$8$1$c2FsdHNhbHQ=$aGFzaGhhc2g=",  # -> OverflowError
+    ],
+)
+def test_verifying_a_password_is_total(hash_value: str) -> None:
+    """``verify_password`` returns False for any string, and never raises.
+
+    A guarantee about the function, not about the order it is called in. It used to hold
+    only because the configured hash had already been through ``_decoded`` at boot, which
+    is an invariant no caller could see — and the login route is exactly the place where
+    an exception becomes a 500 that fails open-ish rather than closed.
+    """
+    assert verify_password(PASSWORD, hash_value) is False

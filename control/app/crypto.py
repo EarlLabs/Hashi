@@ -162,24 +162,37 @@ def _decoded(encoded: str) -> tuple[int, int, int, bytes, bytes] | None:
     ``b64decode`` silently drops characters outside the alphabet, so a value that
     has been chewed by an interpolating tool still decodes to *something* and looks
     like a hash. The point of this function is to notice exactly that.
+
+    **THIS FUNCTION NEVER RAISES.** Every malformed shape returns None, and both
+    callers depend on that rather than on any property of the value they are handed.
+    The first version parsed the cost fields OUTSIDE the try, which made
+    ``scrypt$notanumber$8$1$...`` raise an uncaught ValueError — and because
+    ``Settings`` reaches this through a pydantic validator, pydantic caught it and
+    built a ``ValidationError`` containing ``input_value=<the whole hash>``. That is
+    the credential in the boot-failure message, which is the exact leak
+    ``OperatorHashMalformed`` exists to prevent, reintroduced one layer down. So the
+    conversions live inside the guard, and the totality is a property to keep rather
+    than an accident of which inputs happened to be tested.
     """
     try:
         scheme, n, r, p, salt_b64, hash_b64 = encoded.split("$")
         if scheme != "scrypt":
             return None
+        cost, block_size, parallelism = int(n), int(r), int(p)
         salt = base64.b64decode(salt_b64, validate=True)
         expected = base64.b64decode(hash_b64, validate=True)
     except (ValueError, TypeError):
-        # binascii.Error is a ValueError, so a malformed base64 lands here too.
+        # binascii.Error is a ValueError, so a malformed base64 lands here too, and so
+        # does a cost field that is not a number.
         return None
     if not salt or not expected:
         # An empty field is the signature of the damage this guards against: a
         # `$name` swallowed by an interpolating tool leaves the separators behind
         # and takes the value.
         return None
-    if int(n) <= 1 or int(r) < 1 or int(p) < 1:
+    if cost <= 1 or block_size < 1 or parallelism < 1:
         return None
-    return int(n), int(r), int(p), salt, expected
+    return cost, block_size, parallelism, salt, expected
 
 
 def is_well_formed_hash(encoded: str) -> bool:
@@ -205,6 +218,12 @@ def verify_password(password: str, encoded: str) -> bool:
     Returns False on a malformed hash rather than raising: authorisation fails
     closed (core invariants §4), and a misconfigured hash must deny the login
     rather than produce a 500 that a prober can distinguish from a wrong password.
+
+    **TOTAL FOR ANY STRING**, and that is a guarantee rather than an arrangement.
+    It used to hold only because the configured hash had already survived one call
+    to ``_decoded`` at boot — an implicit ordering that no caller could see and that
+    the next caller would not inherit. ``_decoded`` never raising, plus the three
+    exception types below, is what makes it true of the function instead.
     """
     parts = _decoded(encoded)
     if parts is None:
@@ -215,9 +234,12 @@ def verify_password(password: str, encoded: str) -> bool:
             password.encode(), salt=salt, n=n, r=r, p=p,
             dklen=len(expected), maxmem=64 * 1024 * 1024,
         )
-    except ValueError:
-        # Parameters that parse as integers but that scrypt itself refuses — an `n`
-        # that is not a power of two, a cost beyond `maxmem`. Still a denial, never
-        # a 500.
+    except (ValueError, OverflowError, MemoryError):
+        # Parameters that parse as integers but that scrypt itself refuses. All three
+        # are reachable from a hash that is well FORMED: a cost that is not a power of
+        # two or exceeds `maxmem` raises ValueError, and one too large for a C
+        # unsigned long raises OverflowError — which the first version did not catch,
+        # so `scrypt$1000000000000000000000000000000$8$1$...` was a 500 on the login
+        # route rather than a denial. Still a denial, never a 500.
         return False
     return hmac.compare_digest(derived, expected)
