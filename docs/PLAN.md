@@ -1117,6 +1117,94 @@ bootstrap script must no longer tell the operator to register that account.
 
 ---
 
+## → M14 — A WireGuard-family node accepts a friend and carries nothing · found in the field 2026-09-09
+
+**Found while discharging M2's second "done when".** M2 made both WireGuard-family
+containers start; this is what the next question revealed.
+
+**Measured on the entry node with a real AmneziaWG client**, built from the
+friend's own `client-config-file` subscription:
+
+| | |
+|---|---|
+| container | `Up` |
+| interface in the node's netns | present, `UP,LOWER_UP` |
+| handshake | **completes, both ends** — `latest handshake: 17 seconds ago` |
+| bytes | client sent 2.02 KiB, received 252 B |
+| an address echo through the tunnel | **times out** |
+
+So the tunnel is genuinely established and the friend carries **nothing**.
+
+**The cause, confirmed on the host.** `net.ipv4.ip_forward = 1`, but:
+
+- `iptables -t nat -S POSTROUTING` masquerades only the docker bridges. **There is
+  no rule for the tunnel subnet.**
+- `iptables -S FORWARD` has policy **DROP** (ufw's `deny (routed)` default).
+- The rendered node config has **no `PostUp`/`PostDown`** — nothing adds either
+  rule when the interface comes up, or removes it when it goes down.
+
+A friend's packet is decrypted onto the tunnel interface and then dropped by the
+FORWARD chain, having never been NATed. Nothing logs it, because logging is off
+by charter — and it should stay off.
+
+**What is NOT wrong, so nobody "fixes" it.** The server-side
+`AllowedIPs = 10.77.0.2/32` is correct: on a WireGuard *server* that field means
+"the source addresses I accept from this peer", and the config's own comment is
+right that a default route there would swallow the node's own SSH session. The
+client side's `AllowedIPs = 0.0.0.0/0` is also correct. The two are consistent.
+The gap is the node's forwarding policy, not either config's peer list.
+
+**Why this is on M3's critical path and not only M2's.** The entry→leaf hop needs
+the *leaf* to forward and masquerade traffic arriving over the hop. That is the
+same missing capability, at the other end. M3 cannot show a foreign exit address
+without it.
+
+### M14.1 — A friend-facing tunnel's traffic must leave the node
+
+Add the forwarding and NAT the interface needs, tied to the interface's own life
+so it is removed when the tunnel goes down. `wg-quick`'s `PostUp`/`PostDown` is
+the idiomatic place and keeps it in the node's config rather than in host state,
+which suits a project whose nodes hold nothing that cannot be regenerated.
+
+**The egress interface name is the trap.** It is not `eth0` everywhere, and a
+hardcoded one is exactly the kind of value `CLAUDE.md` forbids. Derive it, or
+write the rule so it does not need one.
+
+### M14.2 — And it must stop when the tunnel does
+
+A `PostUp` without a matching `PostDown` leaves a NAT rule behind on a node whose
+transport has been disabled — a quiet, growing residue on a host the project
+promises holds nothing.
+
+### M14.3 — Decide what a node forwards, and say so
+
+Not every tunnel should exit locally. A hop's far end must forward into the hop,
+not masquerade out of the entry — that is M3's subject and decision 3's fail-closed
+rule. This step is about making the *policy* explicit and data-driven rather than
+implied by whichever rules happen to exist, so M3 has something to build on
+rather than around.
+
+**E2E:** the honest check is a client that carries traffic, which needs a real
+node — M5's territory. What a suite can assert here is that a rendered config
+that brings an interface up also carries the rule that makes it useful, and that
+every `PostUp` has a matching `PostDown`.
+
+**Done when**
+- [ ] A friend on a WireGuard-family transport reaches the internet, and the exit
+      address is the node's.
+- [ ] Disabling the transport removes every rule it added; a node that has been
+      applied and un-applied has no residue.
+- [ ] No egress interface name, address or port is hardcoded.
+
+acceptance: yes
+On a live node, enable a WireGuard-family transport, connect a real client from
+its own subscription, and load a page — the handshake alone is not the test, and
+this milestone exists because a handshake succeeded while nothing moved. Then
+disable the transport and check the node's NAT and FORWARD rules are as they
+were before.
+
+---
+
 ## Decisions needed from you
 
 | # | Decision | Blocks |
