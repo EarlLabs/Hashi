@@ -551,6 +551,47 @@ no check.
 
 ### M6.1 — Make bootstrap's final message match what is actually reachable
 ### M6.2 — Add `ufw logging off` to the runbook, and a check to bootstrap
+### M6.5 — `panel-bootstrap.sh` is not idempotent, and its own header says it is · found 2026-09-09
+
+`scripts/panel-bootstrap.sh`'s header enumerates four properties it holds itself
+to. The first is:
+
+> **1. IDEMPOTENT. A second run changes nothing.** Nothing below deletes,
+> recreates or re-initialises; `compose up -d` converges and leaves running
+> containers alone.
+
+It does not hold. `tests/e2e/infra/test_panel_bootstrap.py::test_running_it_again_changes_nothing`
+— a scenario that already exists, and which asserts the property on **container
+identity** rather than on an exit code — fails: a second run replaces a
+container. Observed twice, replacing a *different* container each time, so which
+service is recreated is not even stable.
+
+**This is pre-existing, and that is the point.** Verified by running the same
+scenario at `b155a5f`, the commit before the field run began: it fails there
+identically. Nothing in this run caused it.
+
+**Why nobody knew.** `make test` deliberately excludes e2e — a gate that silently
+needs Docker is one agents skip — and CI runs the same three zone targets. So
+`tests/e2e/` is not run by anything automatic, and this scenario has been failing
+for as long as it has existed while every green signal the project has stayed
+green. It is the same shape as every other defect this run found: the check
+existed, and nothing ran it.
+
+**Why it matters more than a flaky test.** The scenario's own docstring says it:
+recreating the database container is a restart of *the one service whose loss
+cannot be repaired by rebuilding a node*, and an operator re-running the script
+after fixing an unrelated typo must not risk it. The runbook tells operators to
+re-run this script.
+
+### M6.6 — Something must run the e2e suite
+
+A scenario nothing executes is documentation. Whatever the answer is — a CI job,
+a Make target the runbook names, a scheduled run — the property to establish is
+that `tests/e2e/` failing becomes visible to somebody without a person choosing
+to look. Note the honest constraint: these scenarios need a Docker engine, which
+is exactly why `make test` excludes them, so this is a decision about where that
+engine lives rather than a line of code.
+
 ### M6.4 — The operator's password hash cannot survive `--env-file` · found in the field 2026-09-08
 
 **Found while standing up the control plane on the entry host.** The panel
