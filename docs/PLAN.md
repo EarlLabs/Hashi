@@ -506,7 +506,21 @@ Provable by test once M1 is in.
 
 ---
 
-## → M5 — Tests that catch "renders but does not run" · planned 2026-09-08
+## ✅ M5 — Tests that catch "renders but does not run" · planned 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run.** One review round, CLEAN. Four scenarios under
+> `tests/e2e/edge/`, all against a real Docker engine. Gate green — 188 control,
+> 230 edge (3 skipped), 96 infra.
+>
+> **The "done when" is a demonstration and it was demonstrated**, then reproduced
+> independently by the reviewer: reverting M1 turns **only** M5.3 red (14
+> assertions), reverting M2 turns M5.1 red with `exec: "up": executable file not
+> found`, and reverting M3 turns **only** M5.4 red. See
+> `docs/tracker/M5/outcome.md`.
+>
+> M5.4 is a real relay — two containers, two networks, minted keys, a real
+> handshake — with the control that makes it discriminating: through the hop the
+> destination sees the leaf; by the entry's own route it sees the entry.
 
 Nothing in `tests/e2e/` or `tests/edge/` asserts the data-plane container command,
 and nothing asserts that traffic transits a hop.
