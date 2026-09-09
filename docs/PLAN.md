@@ -267,6 +267,18 @@ rendered, entry-dials-leaf asymmetry handled, `AllowedIPs` deliberately narrow s
 the control plane's own SSH is not swallowed, rotation and drift detection working.
 Every piece except the one that makes it a relay.
 
+> **The `AllowedIPs` half of that sentence stopped being true on 2026-09-09, on
+> purpose. Do not re-narrow it on the strength of the paragraph above.** The
+> entry's hop peer is now `0.0.0.0/0`, because WireGuard only encrypts a packet
+> to a peer whose `AllowedIPs` covers the **destination**, and only accepts a
+> reply whose **source** it covers — a `/32` entry can send nothing but pings,
+> and a relay's return traffic arrives sourced from the internet host the friend
+> asked for, not from the leaf. The SSH protection is a **different switch**:
+> `Table = off` plus source-based policy routing, so only traffic already sourced
+> from the tunnel's own address enters the hop and the main routing table is
+> untouched. Verified on real hardware — `docs/decisions.md`, and
+> `docs/tracker/M3/field-proof.md`.
+
 **Why this is the worst of the three: the failure is invisible.** The friend
 connects, pages load, the panel shows two `active` nodes and a live hop — and the
 exit is in Russia. The protection the topology exists to provide is absent while
@@ -275,6 +287,21 @@ everything looks healthy.
 ### M3.1 — Render the entry node's outbound and routing rule
 
 Target `exit_address(leaf)`, and send friend inbound traffic to it.
+
+> **Corrected while implementing, 2026-09-09 — this instruction was wrong.**
+> `exit_address(leaf)` cannot be an outbound *destination*, because **nothing
+> listens there**: a leaf runs one hop end and no proxy, so its in-tunnel address
+> accepts no connection. What a leaf offers is a **route**, not a service.
+>
+> What shipped: the entry opens ordinary connections **bound to its own end of
+> the tunnel** — `sendThrough: <the entry's in-tunnel address>` on a single
+> `freedom` outbound, plus a routing rule binding the friend inbound to it — and
+> the kernel carries them over the hop. Same function, other argument:
+> `exit_via(entry)`.
+>
+> Kept because the original wording would have rendered a config that looked
+> correct, passed review and connected to nothing — the same failure mode as the
+> milestone it was written to fix.
 
 ### M3.2 — Keep it data-driven
 
@@ -1321,6 +1348,81 @@ On a fleet where a node already offers a transport to friends, try to make that
 node the entry end of a hop over the same transport. Whatever the answer is, it
 must arrive with a reason an operator can act on — and if the answer is no, it
 must have been said earlier, when the friend-facing transport was enabled.
+
+---
+
+## → M16 — The exit is Amsterdam, the DNS lookup is still Russia · found in review 2026-09-09
+
+**Found by M3's reviewer, immediately after M3 was proven in the field.** The
+two-hop works: a friend dialling the entry exits at the leaf's address, measured
+on real hardware. This is the part that measurement does not cover.
+
+**The gap.** An entry's friend-facing Xray outbound resolves a domain destination
+through **the node's own resolver** before it opens the connection. `sendThrough`
+binds the *TCP* socket to the hop; nothing rendered binds the *lookup*. There is
+no `dns` object and no `domainStrategy` in either proxy template. So for a friend
+asking for a domain:
+
+| | where it happens |
+|---|---|
+| the DNS lookup for the destination | **the entry node — in Russia** |
+| the TCP connection carrying the request | the leaf, in Amsterdam |
+| the address the internet sees | the leaf's |
+
+M3's "done when" says *"a client connected to the entry node shows the leaf's
+public address as its exit IP"* — and it does. The criterion is met exactly as
+written. What the criterion does not say is that the friend's **destination
+names** are still resolved from Russia, by a resolver the node did not choose,
+one lookup per site visited.
+
+**Why this is worth a milestone rather than a footnote.** The charter's whole
+argument for the two-node topology is that a Russian box should learn as little
+as possible about what a friend does. An exit address in Amsterdam with a
+resolver in Russia leaks the one thing that is arguably most descriptive — the
+list of names, in order, with timing. It is not a *connection log*: nothing is
+stored, and nothing here contradicts the charter's non-goals. It is a live
+metadata path, and it is invisible in exactly the way M3's was: every signal
+green, the exit address correct, the question simply never asked.
+
+**Not made worse by M3** — before M3 everything was in Russia, lookup and exit
+alike. M3 moved the exit and left the lookup behind, which is why it surfaced now.
+
+### M16.1 — Decide where a friend's destination names get resolved
+
+The options are not equal and the choice is the milestone:
+
+- **Resolve through the hop.** An Xray `dns` object with `domainStrategy` set so
+  lookups follow the same outbound. Needs a resolver address the entry can reach
+  *through* the tunnel — and a resolver address in a rendered config is exactly
+  the kind of value `CLAUDE.md` forbids hardcoding, so it becomes node-record or
+  transport data.
+- **Do not resolve at the entry at all.** Pass the name to the far end and let it
+  resolve. This is what a proxy on the leaf would give, and it is the cleanest
+  answer — it is also the strongest argument for the leaf eventually running one,
+  which shapes B and C currently say it does not.
+- **Accept it and say so.** Write it in the runbook and the charter's own
+  language, so an operator knows what the topology does and does not hide. Honest,
+  and cheaper than either fix, but it narrows the claim the project makes.
+
+### M16.2 — Whatever is chosen, a scenario must be able to see it
+
+The reason this was invisible is that "what address does the internet see" and
+"who resolved the name" are different questions and only the first was ever
+asked. A test that watches where the lookup goes is the lasting half.
+
+**E2E:** `tests/e2e/edge/` for what a rendered config asks for; the honest check
+is a live observation on the two hosts, which no suite rents.
+
+**Done when**
+- [ ] It is written down where a friend's destination names are resolved, and why.
+- [ ] If the answer is "not in Russia", a friend's lookup provably does not leave
+      the entry node's own interface.
+- [ ] No resolver address is hardcoded in code or in a template.
+
+acceptance: yes
+On the live fleet, connect a friend to the entry and watch where the destination
+lookup goes — not where the traffic exits, which M3 already settled. Whatever the
+decision was, the observed behaviour must match it.
 
 ---
 
