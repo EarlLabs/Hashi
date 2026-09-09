@@ -260,7 +260,25 @@ this.
 
 ---
 
-## → M4 — Failures must report themselves honestly · planned 2026-09-08
+## ✅ M4 — Failures must report themselves honestly · planned 2026-09-08 · done 2026-09-09
+
+> **Closed in the field run.** Six steps, every one converging clean; only M4.4
+> needed a second round, for mixing two zones in one diff rather than for
+> anything it did. Gate at close: `make test` green — 169 control, 134 edge
+> (3 skipped), 90 infra.
+>
+> **M4.1 is proven on real hardware, not only by test.** The same apply that
+> returned `409: a node cannot go from draft to degraded` and logged one line —
+> `domain error: conflict` — now returns
+> `mkdir: cannot create directory '/opt/hashi': Permission denied`, in the
+> response body, in `state_detail`, and in an `ERROR` log line carrying the node
+> id and no address. The fault that took a health probe, a host inspection and a
+> hand-run command to identify is now a sentence. That is the milestone
+> justifying the reordering it was given.
+>
+> **The milestone grew from three steps to six**, each addition traceable: M4.4
+> from a 7m39s baseline gate, M4.5 from a reviewer disproving an
+> implementer's "harmless", M4.6 from two guards that could not fail.
 
 Two defects, both about a wrong message at the worst moment.
 
