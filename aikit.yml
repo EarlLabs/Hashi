@@ -83,10 +83,7 @@ zones:
     rulebook: .claude/projects/04-infra-rulebook.md
     verify: "make test-infra"
 
-# What CI already believes "green" means: one job per zone, the same three
-# targets. Deliberately NOT `make test-e2e` — that needs a booted stack, and a
-# gate that silently requires Docker is a gate agents start skipping.
-# Changed 2026-09-09, on the owner's instruction. It was `make test`, which
+# The gate. Changed 2026-09-09, on the owner's instruction. It was `make test`, which
 # deliberately excludes `tests/e2e/` — and CI ran the same three zone targets, so
 # NOTHING ran the e2e scenarios at all. `panel-bootstrap.sh`'s own idempotency
 # scenario had been failing since the day it was written and was found by
