@@ -67,3 +67,41 @@ both new test files assert they contain no host, address or node-side path:**
 - `the node stopped responding while a file was being read back (after {n}s)`
 
 Later message work matches these rather than inventing a fourth shape.
+## M4.1 — proven on real hardware, 2026-09-09
+
+Same node, same transport, same apply, before and after the fix.
+
+**Before** — API response:
+```
+{"error":{"code":"conflict","message":"a node cannot go from draft to degraded.
+ From draft it may become: active, retired"}}
+```
+Whole log record of the failure:
+```
+INFO control.app.errors: domain error: conflict
+```
+Recovering the real cause took a node health probe, an inspection of the host's
+filesystem, and reproducing the failing command by hand over SSH.
+
+**After** — API response, status 502:
+```
+the node could not be configured and has been marked degraded: command failed (1):
+'mkdir -p /opt/hashi/conf && chmod 700 /opt/hashi /opt/hashi/conf':
+mkdir: cannot create directory '/opt/hashi': Permission denied
+```
+Node state `degraded`, with that same sentence in `state_detail`. Log:
+```
+ERROR control.app.services.apply: apply failed for node <id>: command failed (1):
+  'mkdir -p /opt/hashi/conf && chmod 700 ...': mkdir: cannot create directory
+  '/opt/hashi': Permission denied
+INFO control.app.services.nodes: node <id> state -> degraded
+INFO control.app.errors: domain error: node_operation_failed
+```
+
+The log line names the node id and the command that failed. It carries no
+address and nothing about a connection, so it does not become the record the
+charter forbids.
+
+**This is the milestone justifying its own reordering.** M13 was found the hard
+way an hour earlier; with M4.1 in place the same class of fault arrives in the
+response body.

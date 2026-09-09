@@ -25,3 +25,28 @@ intended design. Do not fix them as part of another step.
 - **`apply_node` still serialises N node operations with no ceiling on the whole
   operation.** A fan-out across many dead nodes is bounded per node but additive
   in aggregate. Named by the implementer as out of scope for M4.4.
+
+## From M4.1's review
+
+- **Low — `control/app/services/apply.py` around the `NodeOperationFailed`
+  raise.** The message says *"has been marked degraded"* even on the one
+  reachable path where it was not: applying an already-`retired` node, where
+  `_record_failure` correctly swallows the refused `retired → degraded`
+  transition and the state does not change. The safety property holds —
+  `retired` is never in `NodeState.serving()` — so this misleads about mechanism
+  only, in a case an operator has to deliberately trigger, and
+  `GET /api/nodes/{id}` shows the true state immediately. Left because rewording
+  an operator-facing string is acceptance-visible and belongs to whoever owns
+  that wording, not to a step about the state machine.
+
+## Verified NOT a problem, recorded so it is not re-litigated
+
+- A node that reaches `degraded` from `draft` is treated **identically** to one
+  that reaches it from `active`: `NodeState.serving()` returns only `(ACTIVE,)`
+  and `nodes.serving_transports` filters on it, so neither can enter a
+  subscription. Nothing in the codebase branches on how a node reached its state
+  — there is no state history and no audit table. Checked by the M4.1 reviewer
+  against `serving()`, the panel template, `relay.py` and `health.py`.
+- `NodeTransport.applied_at` stays NULL on a failed first apply — every failure
+  path returns before it is set — so "which nodes have never worked" is still
+  answerable without a dedicated state.
