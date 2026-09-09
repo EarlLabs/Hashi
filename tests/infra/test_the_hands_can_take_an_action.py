@@ -168,9 +168,16 @@ def test_down_takes_away_every_profile_up_can_start() -> None:
         "E2E_ALL_PROFILES and the profiles in docker-compose.e2e.yml disagree, so "
         "`make e2e-down` leaves a container behind"
     )
-    assert re.search(r"^e2e-down:\s*E2E_PROFILES\s*:?=\s*\$\(E2E_ALL_PROFILES\)", makefile, re.M), (
-        "`e2e-down` no longer widens E2E_PROFILES, so it tears down only what a "
-        "profile-less `up` would have started"
+    # `override` is required, not merely tolerated. Without it GNU Make lets a
+    # command-line `E2E_PROFILES=...` win over a target-specific variable, which is a
+    # latent way to defeat the very leak this line closes — a browser left running per
+    # acceptance run, holding 1 GB of shm. Teardown takes everything, always.
+    assert re.search(
+        r"^e2e-down:\s*override\s+E2E_PROFILES\s*:?=\s*\$\(E2E_ALL_PROFILES\)", makefile, re.M
+    ), (
+        "`e2e-down` no longer widens E2E_PROFILES with `override`, so it tears down only "
+        "what a profile-less `up` would have started — or lets a command-line "
+        "E2E_PROFILES= silently narrow it"
     )
 
 

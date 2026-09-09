@@ -292,7 +292,11 @@ e2e-up: env
 
 # `down` takes away everything any `up` could have started, not only what this
 # invocation happened to ask for — see E2E_ALL_PROFILES.
-e2e-down: E2E_PROFILES := $(E2E_ALL_PROFILES)
+# `override`, deliberately: without it a command-line `E2E_PROFILES=...` silently
+# wins over a target-specific variable, which is a latent way to defeat the very
+# leak this line exists to close (M12.4 — a browser left running per acceptance
+# run, holding 1 GB of shm). Teardown takes everything, always.
+e2e-down: override E2E_PROFILES := $(E2E_ALL_PROFILES)
 e2e-down:
 	$(E2E_PORTS) $(COMPOSE_E2E) down -v
 

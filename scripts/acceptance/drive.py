@@ -86,7 +86,8 @@ def say(message: str) -> None:
 
 
 def fail(message: str) -> int:
-    """One line, never a traceback.
+    """One line, never a traceback (the one exception is `startup_failure`, which
+    prints the in-container server's own output — see its docstring for why).
 
     A Playwright stack trace is twenty frames of somebody else's code, and the
     agent would read every one of them at our expense to learn "the button was not
