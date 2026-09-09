@@ -153,13 +153,26 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
     match, at which point they do not know whether the run went well. Renaming a flag or
     rewording a `say` line therefore turns this red, which is the point — the wording is a
     contract between the two files, not a description of one by the other.
+
+    The script's lines are compared with its two shell variables expanded the way the run
+    expands them, because M13 gave the closing lines a path and an account name that are
+    values rather than words. The substitution is the runbook's own convention for a
+    transcript of output — angle brackets — and nothing else here is normalised: a
+    reworded sentence is still a reworded sentence.
     """
+    as_the_operator_sees_it = script.replace("${NODE_ROOT}", "/opt/hashi").replace(
+        "${TARGET_USER}", "<user>"
+    )
     for quoted in (
         # success, and what to do next
         "key authorised, firewall up, logging off",
         "register it in the panel with ssh_user",
-        "nothing of hashi's was installed here — the control plane creates /opt/hashi "
-        "itself when you apply",
+        # M13: the script now creates the directory, so the claim it makes about hashi
+        # state is narrower and the wording moved with it. Both files moved together,
+        # which is what this test is for.
+        "created /opt/hashi, empty and owned by <user>",
+        "no hashi code and no hashi state was installed here — /opt/hashi is an empty "
+        "directory owned by <user>, and the control plane fills it on your first apply",
         # a host somebody already prepared
         "docker is already installed — left exactly as it is",
         "the control plane's key is already authorised for",
@@ -167,13 +180,15 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
         "was already open",
         "incoming was already denied by default",
         "the firewall was already up — its existing rules were kept",
-        "an earlier apply already left /opt/hashi here — this run neither changed nor "
-        "removed it",
+        "/opt/hashi was already here — its contents were left alone, and <user> owns the "
+        "directory",
+        "an earlier apply already left files in /opt/hashi — this run neither changed nor "
+        "removed them, only re-asserted that <user> owns the directory",
         # the boundary the run ends on
         "the provider's own firewall sits in front of this host and outside this script's "
         "reach",
     ):
-        assert quoted in script, f"the script no longer says {quoted!r}"
+        assert quoted in as_the_operator_sees_it, f"the script no longer says {quoted!r}"
         assert quoted in leaf_section, (
             f"the runbook does not quote {quoted!r}, so an operator cannot match what they "
             "see against what this section promises"
@@ -186,6 +201,47 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
     )
     assert "**1**" in leaf_section and "**2**" in leaf_section, (
         "the section does not give the exit codes, so a piped run's failure is unreadable"
+    )
+
+
+def test_the_leaf_section_says_which_accounts_work(leaf_section: str) -> None:
+    """M13.3, and the question the runbook could not answer when it cost an evening.
+
+    Shape A said "reach the box as root" and every host in this project's history was
+    reached that way, so nothing in here was wrong — it was silent. Meanwhile the script
+    supports a non-root account, puts it in the docker group, and ends by telling the
+    operator to register it. An operator following both ended up with a node the control
+    plane could not write to, and nothing on the page said which of the two they should
+    have believed.
+
+    So the section states the rule, states what makes an account work, and states the
+    repair for a host that predates the script — the last one verbatim, because an
+    operator pastes it.
+    """
+    section = re.search(
+        r"^### Which accounts work\n(?:.*\n)*?(?=^### )", leaf_section, re.M
+    )
+    assert section, (
+        "the runbook does not say which accounts can drive a node, which is how a "
+        "documented non-root ssh_user became a node nothing could be written to"
+    )
+    accounts = section.group(0)
+    assert "passwordless" in accounts, (
+        "the section does not say what a non-root account needs, so 'any account' reads as "
+        "true and the script refuses half of them"
+    )
+    for requirement in ("`docker` group", "/opt/hashi", "public key"):
+        assert requirement in accounts, (
+            f"the section does not say the account must have {requirement}, so an operator "
+            "cannot tell whether the one they picked will work"
+        )
+    assert "escalat" in accounts, (
+        "the section does not say the control plane never escalates on a node — without "
+        "that, none of the three requirements has a reason and the next reader relaxes one"
+    )
+    assert "install -d -m 700 -o THE_SSH_USER /opt/hashi" in accounts, (
+        "the section does not give the by-hand repair for a host prepared before the "
+        "script existed, which is every host this project already has"
     )
 
 

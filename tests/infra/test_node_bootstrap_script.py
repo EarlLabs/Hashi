@@ -240,6 +240,13 @@ def test_it_leaves_no_hashi_code_and_no_hashi_state_on_the_host(script: str) -> 
     That property is what makes destroying and replacing a node safe, and this script must
     not invent the first exception. It installs a runtime, a public key and firewall rules
     — the compose file and every transport config are pushed later, by the control plane.
+
+    M13 narrowed this by exactly one directory and not one byte more. The script now
+    creates ``NODE_ROOT``, EMPTY, because ``/opt`` is root-owned and the library that
+    drives a node never escalates (see the agreement suite beside this file). An empty
+    directory is not state — nothing in it needs regenerating, because nothing is in it —
+    so what this assertion now checks is that emptiness: the one creation is allowed, and
+    anything that would put CONTENT under ``/opt`` is still a finding.
     """
     for forbidden in (
         r"git clone",
@@ -248,9 +255,27 @@ def test_it_leaves_no_hashi_code_and_no_hashi_state_on_the_host(script: str) -> 
         r"apt-get install[^\n]*python",
     ):
         assert not re.search(forbidden, script), f"the script installs {forbidden!r} on the node"
-    assert not re.search(r"(mkdir|install -d|tee|cp|scp|curl)[^\n]*/opt/", script), (
-        "the script writes into /opt on the node — node state belongs to the control plane"
+    # Commands only, never comments: the section explaining WHY the directory is created
+    # quotes the `mkdir: cannot create directory '/opt/hashi'` that M13 was found through,
+    # and a rule that cannot tell prose from a command cannot be written honestly.
+    commands = re.findall(r"^[^#\n][^\n]*", script, re.M)
+    writes_under_opt = [
+        line
+        for line in commands
+        if re.search(r"(mkdir|tee|cp|scp|curl)[^\n]*(/opt/|\$\{NODE_ROOT\})", line)
+        or re.search(r'(tee|cp|scp|curl)[^\n]*"\$\{NODE_ROOT\}', line)
+    ]
+    assert writes_under_opt == [], (
+        f"the script writes content into /opt on the node — node state belongs to the "
+        f"control plane: {writes_under_opt}"
     )
+    # And the one directory it does create is the root itself, never a path inside it:
+    # anything under NODE_ROOT is the control plane's to place and to reconcile.
+    for creation in re.findall(r"^\s*as_root install -d[^\n]*", script, re.M):
+        assert re.search(r'"\$\{(?:NODE_ROOT|SSH_DIR)\}"$', creation), (
+            f"the script creates a directory that is neither the account's .ssh nor the "
+            f"node root itself: {creation!r}"
+        )
     assert not re.search(r"docker-compose\.ya?ml", script), (
         "the script places a compose file, which the control plane would then have to "
         "reconcile with"
@@ -398,19 +423,38 @@ def test_it_stays_honest_about_hashi_state_on_a_host_already_applied_to(script: 
     """The closing line is read as "there is nothing of hashi's here", and on a re-run of a
     live node that is false — the control plane put its directory there on the first apply.
 
-    What is true on every run is the narrower claim: THIS SCRIPT put nothing there and
-    touched nothing that was there. The extra line is what keeps the sentence above it from
-    being read as the wider one.
+    What is true on every run is the narrower claim: THIS SCRIPT wrote nothing into the
+    directory and removed nothing from it. The extra line is what keeps the sentence above
+    it from being read as the wider one.
+
+    M13 made the claim narrower still, because the script now creates the directory: the
+    closing line says it is EMPTY, which stops being true on the second run of a live node.
+    So the correction has to fire on whether the directory PRE-EXISTED this run, which is a
+    fact only this run knows — the directory is there either way by the time it is read.
     """
-    assert "nothing of hashi's was installed here" in script, (
+    assert "no hashi code and no hashi state was installed here" in script, (
         "the run no longer states that it left no hashi state behind"
     )
-    assert re.search(r"^if \[ -d /opt/hashi \]; then", script, re.M), (
-        "a re-run on a node the control plane has already applied to reports that there is "
-        "nothing of hashi's on the host, which by then is untrue"
+    remembered = re.search(
+        r'^if \[ -d "\$\{NODE_ROOT\}" \]; then NODE_ROOT_EXISTED=1', script, re.M
     )
-    assert re.search(r"neither changed nor removed it", script), (
-        "the line does not say that this run left the existing directory alone"
+    created = re.search(r'^as_root install -d[^\n]*"\$\{NODE_ROOT\}"$', script, re.M)
+    corrected = re.search(r'^if \[ "\$\{NODE_ROOT_EXISTED\}" -eq 1 \]; then$', script, re.M)
+    assert remembered and created and corrected, (
+        "the run does not correct its own closing line for a host that already had the "
+        "directory"
+    )
+    assert remembered.start() < created.start(), (
+        "whether the directory pre-existed is read AFTER this run created it, so the answer "
+        "is always yes — the correction then fires on every run, including the first, and "
+        "the closing line is wrong in the other direction"
+    )
+    assert re.search(r"neither changed nor removed them", script), (
+        "the line does not say that this run left the existing contents alone"
+    )
+    assert re.search(r"only re-asserted that \$\{TARGET_USER\} owns", script), (
+        "the run claims it changed nothing, while `install -d` does re-assert ownership — "
+        "which is the one thing it changes on a host prepared for a different account"
     )
 
 

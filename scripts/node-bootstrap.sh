@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # WHAT: prepares a bare host to be driven as a hashi node — a container runtime, the one
-#       public key the control plane authenticates with, and the host firewall. Nothing
-#       else, and in particular no hashi code and no hashi state.
+#       public key the control plane authenticates with, the host firewall, and one empty
+#       directory for the control plane to write into, owned by the account it logs in as.
+#       Nothing else, and in particular no hashi code and no hashi state.
 # WHY:  `edge/bootstrap/node_stack.py` refuses a host that has no docker, and says so in
 #       as many words: hashi configures upstream data-plane containers and does not
 #       install a container runtime for you. That is the right boundary for the library
@@ -43,9 +44,16 @@
 #      nothing that cannot be regenerated from the control database (core invariants §3),
 #      and that property is what makes destroying a node safe. This script must not
 #      invent the first exception: it does not clone this repository, does not install
-#      python, does not create /opt/hashi, and does not write a config the control plane
-#      would later have to reconcile with. It installs a PUBLIC key; the private half
-#      stays on the control plane and is never generated here.
+#      python, and does not write a config the control plane would later have to reconcile
+#      with. It installs a PUBLIC key; the private half stays on the control plane and is
+#      never generated here.
+#
+#      It DOES create /opt/hashi — one EMPTY directory, owned by the account the control
+#      plane logs in as — and that is not the exception it looks like. State is what
+#      cannot be regenerated; an empty directory is not state, it is the permission to
+#      write one, and deleting it still costs a node nothing but an apply. Why it is
+#      created here rather than by the control plane is section 4 below, and it is the
+#      decision M13 exists for.
 #   5. THE HOST NEVER STARTS RECORDING WHO CONNECTED. `ufw enable` turns logging ON by
 #      default and immediately begins writing source addresses — the one record the
 #      charter forbids at any level. `ufw logging off` therefore runs BEFORE the firewall
@@ -217,7 +225,7 @@ TARGET_GROUP="$(id -gn "${TARGET_USER}")"
 #
 # The one thing hashi genuinely needs from the host and deliberately will not do from the
 # library. Everything above the runtime — the compose file, the transport configs — is
-# rendered by the control plane and pushed over SSH, which is why nothing of hashi's is
+# rendered by the control plane and pushed over SSH, which is why no hashi code is
 # installed here.
 if command -v docker >/dev/null 2>&1; then
   say "docker is already installed — left exactly as it is"
@@ -308,7 +316,45 @@ else
   say "authorised the control plane's key for ${TARGET_USER}"
 fi
 
-# --- 4. the host firewall -----------------------------------------------------
+# --- 4. the directory the control plane writes into ---------------------------
+#
+# THE PRODUCT'S PRIVILEGE BOUNDARY, and the decision M13 was opened to take. `/opt` is
+# root-owned on every distro, and `edge/bootstrap/node_stack.py` drives a node as exactly
+# the account in the node record and never escalates. So on a host prepared by THIS
+# SCRIPT with a non-root account — which it supports, puts in the docker group, and ends
+# by telling the operator to register — every apply died on
+#
+#     mkdir: cannot create directory '/opt/hashi': Permission denied
+#
+# The two halves of the product disagreed, and the disagreement was invisible from either
+# side alone. Three fixes were possible: create the directory here, teach the library to
+# `sudo`, or refuse a non-root account at registration. This one wins because this script
+# already runs privileged and already grants this account the docker socket — handing it
+# a directory it will own is the same category of act, done where the privilege already
+# is — while the second gives a deliberately pure library a privilege model, and the
+# third gives up every host whose provider offers no root account.
+#
+# What is created is EMPTY and stays empty until an apply: property 4 above, and the
+# reason this is not the first piece of hashi state on a node.
+#
+# `install -d` rather than `mkdir`, and unconditional: one call that asserts the
+# directory, its mode and its owner instead of changing them, exactly as the .ssh
+# directory above is asserted. On a second run it converges and nothing moves.
+#
+# The name and the value both match NODE_ROOT in `edge/bootstrap/node_stack.py`, and
+# tests/infra/test_node_bootstrap_agrees_with_the_control_plane.py goes red if either
+# side changes alone. Do not change one alone: that is the fault this section is the fix
+# for.
+NODE_ROOT="/opt/hashi"
+if [ -d "${NODE_ROOT}" ]; then NODE_ROOT_EXISTED=1; else NODE_ROOT_EXISTED=0; fi
+as_root install -d -m 700 -o "${TARGET_USER}" -g "${TARGET_GROUP}" "${NODE_ROOT}"
+if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
+  say "${NODE_ROOT} was already here — its contents were left alone, and ${TARGET_USER} owns the directory"
+else
+  say "created ${NODE_ROOT}, empty and owned by ${TARGET_USER}"
+fi
+
+# --- 5. the host firewall -----------------------------------------------------
 if ! command -v ufw >/dev/null 2>&1; then
   command -v apt-get >/dev/null 2>&1 || fail \
     "no ufw on this host and no apt-get to install it with. Install ufw and run this
@@ -463,7 +509,7 @@ else
   say "the firewall was already up — its existing rules were kept"
 fi
 
-# --- 5. verify, and only then report success ----------------------------------
+# --- 6. verify, and only then report success ----------------------------------
 #
 # The same questions the control plane will ask on its first connection, asked here where
 # the answer can still be acted on. Nothing below reads a log, and nothing prints the
@@ -490,12 +536,13 @@ say "ready: docker $(docker --version | awk '{print $3}' | tr -d ,), key authori
 # The port to name is the one this session actually arrived on, when there was one: a host
 # that answers on two ports still has exactly one that is known to work from outside.
 say "register it in the panel with ssh_user ${TARGET_USER} and ssh_port ${SESSION_PORT:-$(printf '%s' "${SSH_PORTS}" | awk 'NR==1')}"
-say "nothing of hashi's was installed here — the control plane creates /opt/hashi itself when you apply"
+say "no hashi code and no hashi state was installed here — ${NODE_ROOT} is an empty directory owned by ${TARGET_USER}, and the control plane fills it on your first apply"
 # On a re-run of a host the control plane has already applied to, the line above reads as
-# "there is nothing of hashi's on this host", which would be false. What is true either way
-# is that THIS SCRIPT put nothing there and touched nothing that was there.
-if [ -d /opt/hashi ]; then
-  say "an earlier apply already left /opt/hashi here — this run neither changed nor removed it"
+# "there is nothing of hashi's on this host", which would be false — the directory is
+# there and it is not empty. What is true either way is that THIS SCRIPT wrote nothing
+# into it and removed nothing from it.
+if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
+  say "an earlier apply already left files in ${NODE_ROOT} — this run neither changed nor removed them, only re-asserted that ${TARGET_USER} owns the directory"
 fi
 # Said last because it is the operator's next move, and the moment they are most likely to
 # blame the wrong layer. See section A of the header: this is the boundary that costs an

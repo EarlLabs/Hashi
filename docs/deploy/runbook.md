@@ -140,10 +140,13 @@ they are prepared the same way: **one script, `scripts/node-bootstrap.sh`, and n
 hand.** A hand-prepared host is a host you cannot rebuild at three in the morning, which
 is precisely when you rebuild one.
 
-It gives the host three things and stops: a container runtime, the one **public** key the
-control plane authenticates with, and the host firewall — with logging off before the
-firewall ever comes up. It installs **no hashi code and no hashi state**; `/opt/hashi` is
-created by the control plane on your first apply.
+It gives the host four things and stops: a container runtime, the one **public** key the
+control plane authenticates with, the host firewall — with logging off before the firewall
+ever comes up — and one **empty** directory, `/opt/hashi`, owned by the account you will
+register. It installs **no hashi code and no hashi state**: everything that ever lands in
+that directory is rendered by the control plane and pushed over SSH on your first apply. An
+empty directory is not state — nothing in it needs regenerating, because nothing is in it —
+and why it is created here rather than by the control plane is *Which accounts work*, below.
 
 ### Run it
 
@@ -186,12 +189,49 @@ guessing in three places, and each one is a mistake you want stopped here:
 - **The account is not root and sudo wants a password.** The run is piped over SSH and must
   never prompt, so give the account passwordless sudo or run as root.
 
+### Which accounts work
+
+**Root works, and so does any account with passwordless `sudo`.** That is the whole list,
+and both halves of the product agree on it — a test fails if they stop.
+
+The control plane logs into a node as exactly the account in the node record and **never
+escalates**: no `sudo`, no `su`, nothing per-node to switch on. It is a library that
+configures upstream daemons, and giving it a privilege model would give every node one.
+That is affordable only because the account already has everything it needs by the time
+the control plane first connects, and arranging that is this script's job:
+
+- **it owns `/opt/hashi`**, created here empty and `0700`, because `/opt` is root-owned and
+  the account could not create it itself;
+- **it is in the `docker` group**, so it can reach the socket the data plane runs on;
+- **its `authorized_keys` holds the control plane's public key**, and nothing else
+  authenticates.
+
+Pass `--user THE_SSH_USER` when that is not the account you are running the script as, and
+register **that** account in the panel — the run's `register it in the panel with ssh_user`
+line names the one it prepared. An account the script never saw has none of the three.
+
+**A host prepared before this script existed, or by hand as root, and now driven as a
+non-root account** is missing the first of the three. The apply fails with a sentence
+naming the directory rather than a `Permission denied` from inside a `mkdir`, and there are
+two ways out: run this script against the host, or create the directory once, as root:
+
+```bash
+install -d -m 700 -o THE_SSH_USER /opt/hashi
+```
+
+**Changing the account of a node that has already been applied to** takes one more step:
+the files an earlier apply left in `/opt/hashi` still belong to whoever placed them. Re-run
+this script with the new `--user` — it hands the directory over — and then either `chown -R`
+its contents to the new account or delete them. A node holds nothing that cannot be
+regenerated, so the next apply puts them all back.
+
 ### What a finished run says
 
 ```
+==> created /opt/hashi, empty and owned by <user>
 ==> ready: docker <version>, key authorised, firewall up, logging off
 ==> register it in the panel with ssh_user <user> and ssh_port <port>
-==> nothing of hashi's was installed here — the control plane creates /opt/hashi itself when you apply
+==> no hashi code and no hashi state was installed here — /opt/hashi is an empty directory owned by <user>, and the control plane fills it on your first apply
 ```
 
 Take the `ssh_user` and `ssh_port` from that second line — it names the port this session
@@ -214,7 +254,8 @@ or a first run on a host with a past, reports rather than changes:
 ==> <port>/<proto> was already open
 ==> incoming was already denied by default
 ==> the firewall was already up — its existing rules were kept
-==> an earlier apply already left /opt/hashi here — this run neither changed nor removed it
+==> /opt/hashi was already here — its contents were left alone, and <user> owns the directory
+==> an earlier apply already left files in /opt/hashi — this run neither changed nor removed them, only re-asserted that <user> owns the directory
 ```
 
 Nothing there is a warning. What the script never does is **close** anything: the rule set
