@@ -1015,7 +1015,13 @@ async def test_a_hop_end_is_not_something_a_user_is_offered(client, session) -> 
     assert refused.status_code == 200
     assert "banner-failure" in refused.text
     reading = _reading(refused.text)
-    assert "remove the hop instead" in reading
+    # The SAME sentence the dialog puts on the row, so the two cannot say different
+    # things about it — and no raw API call in a milestone whose acceptance line is "no
+    # URL typed by hand". The service's own message names one, with its path placeholder
+    # unsubstituted, and stays as it is for the API caller that reads that envelope.
+    assert console_service.OFFER_HOP_END in reading
+    assert "/api/" not in refused.text
+    assert "{node_transport_id}" not in refused.text
     # Decision 9: the service says friend, the page says user, and this sentence crosses
     # that boundary like every other one a service composes.
     assert "friend" not in reading.lower()
@@ -1145,6 +1151,108 @@ async def test_the_pre_redesign_enable_form_still_gets_its_redirect(client) -> N
 
     assert created.status_code == 303
     assert created.headers["location"] == f"/panel/nodes/{node_id}"
+
+
+async def test_a_parameter_this_form_renders_no_box_for_is_still_not_discarded(
+    client, session
+) -> None:
+    """A submitted value is used or refused, never quietly dropped.
+
+    This dialog renders a box per field the transport REQUIRES, so a field it defaults
+    has none — but a submission that answers one anyway (the old page's route is the same
+    route, and a scripted POST is what the e2e scenarios send) must still reach the
+    model. Discarding it silently substitutes the transport's own default for a value the
+    operator chose, and on the shipped Reality transport the field this is about is its
+    decoy port: a fleet where every node borrows one handshake is a fleet that can be
+    enumerated, which CLAUDE.md forbids outright.
+
+    The field is picked by DECLARATION rather than by preference — it has to be one this
+    transport declares and does not require, or the test would be asserting nothing about
+    the gap. Only its VALUE is written here, because no service call can invent one.
+    """
+    declared = transports_service.supplied_params("vless-reality")
+    required = set(transports_service.operator_params("vless-reality"))
+    defaulted = sorted(declared - required)
+    assert "decoy_port" in defaulted, defaulted
+
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "kept-1", "address": "192.0.2.51", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    enabled = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "port": "8443",
+            "decoy_host": "www.example.com",
+            "server_names": "www.example.com",
+            "decoy_port": "8443",
+        },
+    )
+
+    assert enabled.status_code == 303, enabled.text
+    session.expunge_all()
+    row = (
+        (
+            await session.execute(
+                select(NodeTransport).where(NodeTransport.node_id == node_id)
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert row.params["decoy_port"] == 8443, row.params
+
+
+async def test_another_transport_s_hidden_boxes_never_reach_the_chosen_one(
+    client, session
+) -> None:
+    """The reason the console names its boxes for their own group.
+
+    A hidden input is still submitted, so every group's boxes arrive on every
+    submission — and two transports that both declare a ``port`` would otherwise send
+    two values under one name, with whichever came last winning. What is stripped is
+    another group's prefix and nothing else.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "kept-2", "address": "192.0.2.52", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    other = next(
+        name
+        for name in transports_service.offerable_transports()
+        if name != "vless-reality"
+        and transports_service.PORT_FIELD in transports_service.operator_params(name)
+    )
+
+    enabled = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-port": "8443",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+            f"{other}-port": "9999",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert enabled.status_code == 200, enabled.text
+    session.expunge_all()
+    row = (
+        (
+            await session.execute(
+                select(NodeTransport).where(NodeTransport.node_id == node_id)
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert row.transport_name == "vless-reality"
+    assert row.params[transports_service.PORT_FIELD] == 8443, row.params
 
 
 async def test_a_box_left_empty_is_refused_under_that_box_when_enabling(
@@ -2362,6 +2470,13 @@ KEY_SURFACES = ("/panel/keys", "/panel/keys/table")
 FINGERPRINT = re.compile(r"^[0-9a-f]{4}…[0-9a-f]{4}$")
 
 
+# The node ``a_node_holding_material`` creates, named once. ``every_console_surface``
+# has to address the SAME node to list its two dialogs, and "whichever node sorts first"
+# is exactly the entry that quietly stops covering what it names — in a list whose whole
+# claim is that it is the test.
+MATERIAL_NODE = "keys-1"
+
+
 async def a_node_holding_material(client, reality_params) -> str:
     """A serving node with a protocol enabled and one user holding a credential on it.
 
@@ -2373,7 +2488,11 @@ async def a_node_holding_material(client, reality_params) -> str:
     """
     node = await client.post(
         "/api/nodes",
-        json={"name": "keys-1", "address": "192.0.2.30", "location_label": "Testland"},
+        json={
+            "name": MATERIAL_NODE,
+            "address": "192.0.2.30",
+            "location_label": "Testland",
+        },
     )
     node_id = node.json()["id"]
     enabled = await client.post(
@@ -2402,7 +2521,11 @@ async def every_console_surface(client, reality_params) -> list[str]:
     node_transport_id = await a_node_holding_material(client, reality_params)
     entry_end = await a_hop(client)
     friend_id = (await client.get("/api/friends")).json()[0]["id"]
-    node_id = (await client.get("/api/nodes")).json()[0]["id"]
+    node_id = next(
+        node["id"]
+        for node in (await client.get("/api/nodes")).json()
+        if node["name"] == MATERIAL_NODE
+    )
 
     return [
         "/panel/",

@@ -10,7 +10,8 @@ WHAT: ``operator_params(name)`` — the fields a transport requires that `contro
       already enabled somewhere and is being retyped rather than filled in. M9.5 adds
       ``offerable_transports()`` and ``operator_tuning(name)``: which transports a
       person can be handed at all, and what the box for each of their required fields
-      should say.
+      should say — and lifts ``supplied_params(name)`` out of ``hop_parameters``, since
+      "every field an operator may supply" is now asked by the enable route too.
 WHY:  two screens need exactly this list and must not disagree: the "enable a
       transport" form (item 7) and the "replace parameters" form (item 24). When the
       two were computed separately, a transport could offer a field on one screen and
@@ -61,6 +62,28 @@ def key_material_names(transport_name: str) -> frozenset[str]:
     return frozenset(
         {spec.name for spec in material}
         | {spec.public_name for spec in material if spec.public_name}
+    )
+
+
+def supplied_params(transport_name: str) -> frozenset[str]:
+    """Every field of ``transport_name`` an operator MAY supply, as a set.
+
+    The model's own fields minus everything the transport declares as key material and
+    minus every public counterpart of one (``key_material_names``) — so this is the
+    widest set a form of ours may accept, and a minted value is not in it whatever a
+    caller names in a submission.
+
+    Deliberately WIDER than ``operator_params``, which adds an ``is_required`` filter: a
+    field the transport DEFAULTS is one an operator may legitimately answer, and a route
+    that only accepted the required ones discarded such an answer in silence. It is the
+    same set ``hop_parameters`` has always returned, and it is defined here once so that
+    "what may an operator supply" has one answer rather than one per caller.
+    """
+    generated = key_material_names(transport_name)
+    return frozenset(
+        field
+        for field in profile(transport_name).params_model.model_fields
+        if field not in generated
     )
 
 
@@ -196,14 +219,13 @@ def hop_parameters(transport_name: str) -> list[str]:
     Still minus every name the transport declares as key material, including the public
     counterpart of a secret: those are minted, never typed, and a hop must not become
     the place they surface.
+
+    ``supplied_params`` sorted, and nothing else. That set was lifted out of this
+    function when the enable route needed the same question answered for a node rather
+    than for a hop end; the answer is the same one and it is computed once, so a
+    transport cannot offer a field on one form and have it dropped by another.
     """
-    transport = profile(transport_name)
-    generated = key_material_names(transport_name)
-    return sorted(
-        field
-        for field in transport.params_model.model_fields
-        if field not in generated
-    )
+    return sorted(supplied_params(transport_name))
 
 
 def hop_tuning(transport_name: str) -> tuple[TuningField, ...]:

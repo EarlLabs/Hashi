@@ -455,9 +455,22 @@ async def _set_offered(
         # Shown rather than raised: nothing was changed, and the operator is on the
         # screen this is about. Reachable only by a typed URL — the dialog offers no
         # button on a hop end, which is the one thing this refuses.
+        #
+        # IN THE CONSOLE'S OWN WORDS for that one thing, and not the service's. The
+        # service sentence ends by naming a raw API call — with its path placeholder
+        # unsubstituted — which is the opposite of the milestone whose acceptance line is
+        # "no URL typed by hand", and it disagrees with what the dialog behind this
+        # button says about the same row. It is not this route's to reword: the API is
+        # its other caller and that envelope is what a script reads. So the console picks
+        # the sentence the dialog already uses, from the same constant, and the two
+        # cannot drift. Anything else this ever refuses keeps the service's words.
         return _mutation(
             request,
-            banner=wording.for_the_page(exc.message),
+            banner=(
+                console.OFFER_HOP_END
+                if not offer.for_friends
+                else wording.for_the_page(exc.message)
+            ),
             keeping=offer.node,
             events="nodes-changed",
         )
@@ -1670,14 +1683,13 @@ async def enable_transport(
             request, session, node_id, typed, {"transport_name": NO_TRANSPORT_CHOSEN}
         )
 
-    # Which boxes this transport declares it needs. An empty tuple for a transport this
-    # image cannot deliver or does not ship at all: the service is what refuses those,
-    # by name, and it says so far better than a guess here would.
-    boxes = (
-        transports.operator_tuning(transport_name)
-        if transport_name in transports.offerable_transports()
-        else ()
-    )
+    # Which boxes this transport declares it needs, and — wider — every field it lets an
+    # operator answer at all. Both are empty for a transport this image cannot deliver or
+    # does not ship: the service is what refuses those, by name, and it says so far
+    # better than a guess here would.
+    offerable = transport_name in transports.offerable_transports()
+    boxes = transports.operator_tuning(transport_name) if offerable else ()
+    declared = transports.supplied_params(transport_name) if offerable else frozenset()
 
     def supplied(field: str) -> str:
         return typed.get(f"{transport_name}-{field}", typed.get(field, ""))
@@ -1696,20 +1708,22 @@ async def enable_transport(
     # Reading the form is shared with the rotation form below: a field the transport
     # declared as a sequence becomes a list whether or not the operator typed a comma.
     #
-    # FILTERED to this transport's own boxes, which this route did not do before. Two
-    # reasons and one cost. It has to filter now, because the console renders a group per
-    # transport and a hidden input is still submitted. And nothing but a declared box
-    # reaching a transport's validator is worth having on a panel route regardless — the
-    # service already refuses to let operator input overwrite minted material, and this
-    # is the same rule one layer earlier.
+    # EVERY FIELD THE TRANSPORT DECLARES, not only the ones this dialog renders a box
+    # for, and the difference is a value an operator can lose. The console asks for the
+    # REQUIRED fields; a transport also has fields it defaults, and a caller may answer
+    # one — the old page's own form does not, but a submission that does used to reach
+    # the model and must not stop doing so in silence. For the shipped Reality transport
+    # the discarded field would have been its decoy port, silently replaced by the value
+    # every other node uses, which is the one substitution CLAUDE.md names outright: a
+    # fleet that borrows one handshake is a fleet that can be enumerated.
     #
-    # THE COST, stated rather than discovered: the boxes are ``operator_params``, which
-    # filters on required, so a parameter the transport DEFAULTS is not accepted here
-    # from either panel any more. It is the same narrowing M9.4 recorded on the replace
-    # form, it matches what both forms actually render, and ``POST /api/nodes/{id}/
-    # transports`` still takes any declared parameter.
+    # What the lookup DOES strip is another group's boxes. The console renders a group
+    # per transport and a hidden input is still submitted, so a second transport's
+    # ``port`` arrives too — it is named ``<other>-port``, which is never a name looked
+    # up here. Nothing the transport does not declare reaches the model either, and key
+    # material is not in ``supplied_params`` at all, so no submission can name one.
     params = transports.parse_form(
-        transport_name, ((box.name, supplied(box.name)) for box in boxes)
+        transport_name, ((field, supplied(field)) for field in sorted(declared))
     )
 
     try:
