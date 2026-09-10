@@ -72,10 +72,10 @@ async def test_the_transports_screen_marks_a_blocked_protocol_and_says_why(
         )
 
     # /panel/transports, not /panel/fleet. M9.3 moved the capability table off the
-    # pre-redesign page and onto the console's own screen; the old page still exists
-    # until M9.6 and still carries this warning, which is exactly why this assertion
-    # had to move rather than stay green where it was. Relaxing it to "somewhere in
-    # the panel" would be how a rewrite loses the cover this scenario provides.
+    # pre-redesign page and onto the console's own screen while both were still live,
+    # which is exactly why this assertion had to move rather than stay green where it
+    # was; M9.6 then deleted that page. Relaxing it to "somewhere in the panel" would be
+    # how a rewrite loses the cover this scenario provides.
     page = await operator.get("/panel/transports")
     assert page.status_code == 200, page.text
     body = page.text

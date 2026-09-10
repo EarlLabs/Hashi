@@ -152,8 +152,8 @@ def parse_form(transport_name: str, items: Iterable[tuple[str, str]]) -> dict:
 # out of ``params["port"]``, and ``TransportMeta.port_range`` is the transport's own
 # statement of what it may listen on. Joining those two is what lets a box that the
 # transport itself gives no bounds for still say what it will take. The pre-redesign
-# node page has done exactly this since item 7 (``pages/node.html``, in JavaScript);
-# this is that line moved to the server, where a test can read it.
+# node page did exactly this from item 7 until M9.6 deleted it (``pages/node.html``, in
+# JavaScript); this is that line moved to the server, where a test can read it.
 PORT_FIELD = "port"
 
 

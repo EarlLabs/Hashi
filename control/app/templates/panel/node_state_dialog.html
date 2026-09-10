@@ -34,7 +34,7 @@
     {% endif %}
 
     {% if choices %}
-    <form class="dialog-form" hx-post="/panel/nodes/{{ node.id }}/set-state"
+    <form class="dialog-form" hx-post="/panel/nodes/{{ node.id }}/state"
           hx-target="#dialog-slot" hx-swap="innerHTML">
       <div class="field">
         <label for="node-state">state</label>

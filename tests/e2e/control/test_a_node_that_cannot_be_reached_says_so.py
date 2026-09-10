@@ -122,9 +122,10 @@ async def test_taking_a_node_out_of_rotation_is_not_the_same_as_retiring_it(
 
     node = (await operator.get(f"/api/nodes/{node_id}")).json()
     assert node["state"] == "draft"
-    # Its configuration survives — read from the node's own page, which is where the
-    # operator would look. Retiring is the operation that ends a node; this one only
-    # takes it out of rotation, and the difference is worth nothing if the transports
-    # have to be re-entered afterwards.
-    page = (await operator.get(f"/panel/nodes/{node_id}")).text
-    assert "vless-reality" in page
+    # Its configuration survives — read from the dialog that lists what this node
+    # offers, which is where the operator would look now that M9.6 has deleted the
+    # per-node page. Retiring is the operation that ends a node; this one only takes it
+    # out of rotation, and the difference is worth nothing if the transports have to be
+    # re-entered afterwards.
+    offers = (await operator.get(f"/panel/nodes/{node_id}/transports")).text
+    assert "vless-reality" in offers

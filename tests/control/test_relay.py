@@ -296,10 +296,11 @@ async def test_the_panel_offers_a_hop_form_built_from_the_transports_declaration
     """Named no protocol and no field in the template — both come from the registry."""
     await two_nodes(client)
 
-    # /panel/fleet, not /panel/. The redesigned console took /panel/ for its Overview
-    # in M8; the hop form is on the page that still OWNS hops until M9 ports them, and
-    # this assertion moved with the fact rather than being relaxed to "somewhere".
-    page = (await client.get("/panel/fleet")).text
+    # The console's establish-hop dialog, which took this form over from /panel/fleet
+    # when M9.2 landed the Hops screen and became its only home when M9.6 deleted that
+    # page. The assertion moved with the fact rather than being relaxed to "somewhere":
+    # BOTH ends get a box for a field neither this file nor the template names.
+    page = (await client.get("/panel/hops/new")).text
 
     assert 'name="entry-tunnel_address"' in page
     assert 'name="leaf-tunnel_address"' in page
@@ -317,31 +318,52 @@ async def test_the_panel_establishes_and_dissolves_a_hop(
         for key, value in fields[f"{side}_params"].items():
             form[f"{side}-{key}"] = str(value)
 
-    created = await client.post("/panel/hops", data=form)
-    assert created.status_code == 200
-    assert "good" in created.text, created.text
+    # The console's own route since M9.6, which took this name back from the page it
+    # belonged to. 200 IS the success assertion here: every way this form is refused
+    # answers 422 with the dialog re-rendered, so the two cannot be confused — and the
+    # database is what the claim is actually about.
+    created = await client.post(
+        "/panel/hops", data=form, headers={"HX-Request": "true"}
+    )
+    assert created.status_code == 200, created.text
 
     pairs = await relay.list_hops(session)
     assert len(pairs) == 1
 
-    removed = await client.post(f"/panel/hops/{pairs[0][0].id}/dissolve")
-    assert removed.status_code == 200
-    assert "good" in removed.text, removed.text
+    removed = await client.post(
+        f"/panel/hops/{pairs[0][0].id}/dissolve", headers={"HX-Request": "true"}
+    )
+    assert removed.status_code == 200, removed.text
+    assert await relay.list_hops(session) == []
 
 
 async def test_the_panel_reports_a_refused_hop_rather_than_erroring(
     client, hop_params
 ) -> None:
+    """A node that is its own exit is answered, not raised — reaching ``relay`` to do it.
+
+    Every box is filled so the panel's own empty-field check cannot short-circuit this:
+    the refusal under test is the SERVICE's, and it has to come back as something the
+    operator can read rather than as an error page.
+    """
     entry_id, _ = await two_nodes(client)
+    fields = hop_body(entry_id, entry_id, hop_params)
+    form = {"entry_node_id": entry_id, "leaf_node_id": entry_id,
+            "transport_name": HOP_TRANSPORT}
+    for side in ("entry", "leaf"):
+        for key, value in fields[f"{side}_params"].items():
+            form[f"{side}-{key}"] = str(value)
 
     response = await client.post(
-        "/panel/hops",
-        data={"entry_node_id": entry_id, "leaf_node_id": entry_id,
-              "transport_name": HOP_TRANSPORT},
+        "/panel/hops", data=form, headers={"HX-Request": "true"}
     )
 
-    assert response.status_code == 200
-    assert "bad" in response.text
+    # 422 with the dialog back, which is how this console refuses: app.js allows exactly
+    # that one status to swap, and the sentence is above the form because a pair that
+    # cannot form a tunnel is about no single box.
+    assert response.status_code == 422, response.status_code
+    assert "Establish a hop" in response.text
+    assert "a node cannot be its own exit" in response.text
 
 
 @pytest.mark.parametrize("method,path", [("post", "/panel/hops"), ("get", "/api/hops")])

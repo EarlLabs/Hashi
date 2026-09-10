@@ -36,7 +36,7 @@
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"
-              hx-post="/panel/nodes/transports/{{ offer.id }}/withdraw"
+              hx-post="/panel/transports/{{ offer.id }}/withdraw"
               hx-target="#dialog-slot" hx-swap="innerHTML">withdraw</button>
     </div>
     {% include "panel/corners.html" %}

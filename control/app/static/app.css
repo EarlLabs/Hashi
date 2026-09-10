@@ -119,16 +119,6 @@
   border-color: var(--color-divider);
 }
 
-/* A nav entry that leads somewhere not yet redesigned says so, quietly. Honest
-   beats tidy here: the alternative during M8/M9 is a dead link. */
-.sidenav-list .nav-note {
-  display: block;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
-}
-
 .sidenav-foot {
   margin-top: auto;
   display: flex;

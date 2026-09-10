@@ -1036,10 +1036,11 @@ async def overview(session: AsyncSession) -> Overview:
 def health_summary(name: str, health: schemas.HealthResponse) -> str:
     """One node's probe result as a sentence the console can put on screen.
 
-    Composed here rather than in the route because it is the same judgement the old
-    panel's ``panel/health.html`` made in markup, and the console needs it as TEXT: a
-    probe answers into a toast when the node is fine and into a persistent banner when
-    it is not, and neither carries a template.
+    Composed here rather than in the route because it is the same judgement the
+    pre-redesign panel's ``panel/health.html`` made in markup, and the console needs it
+    as TEXT: a probe answers into a toast when the node is fine and into a persistent
+    banner when it is not, and neither carries a template. That fragment went with the
+    page in M9.6; this function is what carried its reading across.
 
     Note what it cannot say, because the value does not exist upstream: no client
     count, no address, no traffic figure. Health means "is this node serving what we

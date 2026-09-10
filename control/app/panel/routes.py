@@ -1,7 +1,7 @@
 """The admin panel — the screen the owner lives in.
 
 WHAT: login, the console (Overview, Users, Nodes, Hops, Transports, Keys & configs),
-      the fleet page, and the actions on each.
+      and every action on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -13,25 +13,27 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
       operator, but a node's ``state_detail`` can contain text from a remote host —
       and a ``|safe`` on any of them is an injection.
 
-Two panels live here at once, on purpose and temporarily. The CONSOLE is the
-redesign in ``design/`` — a persistent sidebar over a swappable ``#main``, one screen
-per route, every creation flow in a dialog. Overview, Users, Nodes, Hops, Transports
-and Keys & configs are ported, and since M9.5 so is every ACTION the old page carried:
-enabling and withdrawing a transport and moving a node between states are on the Nodes
-screen. Until M9.6 deletes it, ``/panel/fleet`` still serves the original single page
-and the sidebar has an honest entry pointing at it, because a dead nav link is worse
-than an ugly one — and its note is empty, because everything that page listed and
-everything it did has somewhere else to be done.
+ONE panel, since M9.6. The CONSOLE is the redesign in ``design/`` — a persistent
+sidebar over a swappable ``#main``, one screen per route, every creation flow in a
+dialog. Overview, Users, Nodes, Hops, Transports and Keys & configs are its six
+screens, and every action the pre-redesign fleet page carried has a home on one of
+them: enabling, withdrawing and offering a transport and moving a node between states
+on the Nodes screen, both rotations on Keys & configs, both halves of a hop on Hops.
 
-WHAT M9.6 TAKES BACK WHEN IT GOES. The console had to take a longer name wherever the
-old page drives the same job WITH HTMX, since two htmx callers cannot be told apart by a
-header: ``/nodes/{id}/push`` for ``/apply``, ``/hops/establish`` and
-``/hops/{id}/tear-down`` for ``/hops`` and ``/dissolve``, ``/nodes/{id}/set-state`` for
-``/nodes/{id}/state``, and ``/nodes/transports/{id}/withdraw|offer`` for
-``/transports/{id}/state``. Two routes are SHARED instead, because the old page submits
-them as a plain browser form and the header does tell those apart: ``POST /panel/nodes``
-and ``POST /panel/nodes/{id}/transports``, each of which keeps a 303 branch that dies
-with the page. Do not delete any of it before then.
+``pages/index.html`` and ``pages/node.html`` are gone, and with them the two fragments
+only they rendered into, ``panel/outcome.html`` and ``panel/health.html``. Every route
+that had taken a longer name to keep out of theirs has the short one back:
+``/nodes/{id}/apply``, ``POST /panel/hops`` and ``/hops/{id}/dissolve``,
+``/nodes/{id}/state``, and ``/transports/{id}/withdraw`` + ``/offer`` — two routes
+rather than the one toggle that name used to be, because one of them is destructive
+and confirms first and the other is not and does not.
+
+WHAT DID NOT GO WITH THEM. The two routes that answered a plain browser form with a
+303 — ``POST /panel/nodes`` and ``POST /panel/nodes/{id}/transports`` — no longer
+redirect: the console is the only caller and it asks with htmx. What is kept is the
+REFUSAL split in ``_refuse_node`` and ``_refuse_the_form``: a caller that is not htmx
+has nowhere to render a field error, so it still gets the ``DomainError`` envelope
+rather than a dialog fragment it could not use.
 """
 
 import logging
@@ -60,7 +62,6 @@ from control.app.services import (
     rotation,
     transports,
 )
-from edge.registry import discover
 
 logger = logging.getLogger(__name__)
 
@@ -115,45 +116,21 @@ async def logout(request: Request) -> Response:
 # is here and nothing else is: an entry pointing nowhere is the failure this list
 # exists to prevent.
 #
-# ``boost`` false means an ordinary browser navigation to a page that has not been
-# redesigned yet — it leaves the console shell rather than swapping into it, and the
-# entry says so under its label instead of pretending otherwise.
+# Every entry is a boosted navigation that swaps ``#main``. The ``boost`` and ``note``
+# keys that let one entry be an ordinary browser navigation to a not-yet-redesigned
+# page went with the Fleet entry in M9.6: there is no such page left, and a flag no
+# entry ever sets is a flag the next screen has to guess the meaning of.
 #
 # There is no Traffic entry, and its slot is given to nothing. That is decision 6's
 # sharper half: a screen that exists to say "we do not measure this" is an invitation
 # to add the measurement later.
 NAV = (
-    {"key": "overview", "label": "Overview", "url": "/panel/", "boost": True, "note": ""},
-    {"key": "friends", "label": "Users", "url": "/panel/friends", "boost": True, "note": ""},
-    {"key": "nodes", "label": "Nodes", "url": "/panel/nodes", "boost": True, "note": ""},
-    {"key": "hops", "label": "Hops", "url": "/panel/hops", "boost": True, "note": ""},
-    {
-        "key": "transports",
-        "label": "Transports",
-        "url": "/panel/transports",
-        "boost": True,
-        "note": "",
-    },
-    {
-        "key": "keys",
-        "label": "Keys & configs",
-        "url": "/panel/keys",
-        "boost": True,
-        "note": "",
-    },
-    # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
-    # operator can tell from the sidebar which jobs have moved and which have not —
-    # nodes came out of it in M9.1, hops in M9.2, the capability table in M9.3, both
-    # rotations in M9.4 and the last three actions in M9.5. The note is empty because
-    # nothing that page lists or does is only there any more; M9.6 removes this entry
-    # with the page itself.
-    {
-        "key": "fleet",
-        "label": "Fleet",
-        "url": "/panel/fleet",
-        "boost": False,
-        "note": "",
-    },
+    {"key": "overview", "label": "Overview", "url": "/panel/"},
+    {"key": "friends", "label": "Users", "url": "/panel/friends"},
+    {"key": "nodes", "label": "Nodes", "url": "/panel/nodes"},
+    {"key": "hops", "label": "Hops", "url": "/panel/hops"},
+    {"key": "transports", "label": "Transports", "url": "/panel/transports"},
+    {"key": "keys", "label": "Keys & configs", "url": "/panel/keys"},
 )
 
 
@@ -364,9 +341,12 @@ def _node_form(
 # button and the form that adds another sits under them. Moving a node between states is
 # its own dialog because it is about the node rather than about what it runs.
 #
-# These are declared BEFORE ``/nodes/{node_id}`` further down the file, like the three
-# above them, and the order is load-bearing: FastAPI matches in registration order, so a
-# literal path declared after a path parameter would be swallowed by it.
+# The dialogs are on ``/nodes/{node_id}/...`` and the two mutations on
+# ``/transports/{node_transport_id}/...``, because they are about different subjects: a
+# dialog is about a NODE and asks what it offers, while withdrawing or offering is about
+# one NODE-TRANSPORT row. Both of those mutations wore a ``/nodes/`` prefix until M9.6,
+# only to stay clear of the pre-redesign page's ``POST /transports/{id}/state``, which
+# drove the same job with htmx and so could not be told apart from them by a header.
 
 # What a required box that was left empty is answered with. Field-level, at 422, like
 # every other refusal in this console: a form with a box per parameter the transport
@@ -406,7 +386,7 @@ NOT_ITS_PARAMETER = (
 )
 
 
-@router.get("/nodes/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
+@router.get("/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
 async def withdraw_transport_dialog(
     node_transport_id: str,
     request: Request,
@@ -420,7 +400,7 @@ async def withdraw_transport_dialog(
     )
 
 
-@router.post("/nodes/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
+@router.post("/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
 async def withdraw_transport(
     node_transport_id: str,
     request: Request,
@@ -428,15 +408,14 @@ async def withdraw_transport(
 ):
     """Take one transport out of every user's subscription — criterion 3's other half.
 
-    Its own route rather than the pre-redesign page's ``/transports/{id}/state``, which
-    answers with ``panel/outcome.html`` and is asked for with htmx too — so unlike the
-    add-node form the two cannot be told apart by a header. M9.6 deletes that page and
-    may take the older name back.
+    On this path rather than the pre-redesign page's ``POST /transports/{id}/state``
+    only until M9.6 deleted that page; the direction stays in the URL rather than in a
+    field for the reason ``_set_offered`` gives.
     """
     return await _set_offered(request, session, node_transport_id, offered=False)
 
 
-@router.post("/nodes/transports/{node_transport_id}/offer", response_class=HTMLResponse)
+@router.post("/transports/{node_transport_id}/offer", response_class=HTMLResponse)
 async def offer_transport(
     node_transport_id: str,
     request: Request,
@@ -497,14 +476,16 @@ async def _set_offered(
             events="nodes-changed",
         )
     if offered:
-        # Offering again grants material to every active user, so the Keys screen's
-        # "users on it" count moves with it. Withdrawing takes nothing away from anybody
-        # — a credential already minted stays minted — so it fires only the one event,
-        # rather than repainting a table nothing on it changed.
-        events = "nodes-changed, keys-changed"
+        # Offering again runs the same grant fan-out ``enable_transport`` does, so the
+        # material a user holds moves and the Keys screen's "users on it" count with it.
+        events = "nodes-changed, keys-changed, friends-changed"
         summary = console.offer_summary
     else:
-        events = "nodes-changed"
+        # Withdrawing fires two as well. What it does NOT take away is a MINTED
+        # CREDENTIAL — that stays minted, which is why the Keys screen is left alone —
+        # but the Users table's own columns are derived from ``serving_transports``,
+        # which counts only ENABLED rows, so both of them move the moment this commits.
+        events = "nodes-changed, friends-changed"
         summary = console.withdrawal_summary
     return _mutation(
         request,
@@ -529,8 +510,7 @@ async def node_transports_dialog(
     one row's actions cell.
 
     ``GET`` and ``POST`` of this path are two different jobs and that is not a collision:
-    the POST is the enable route further down, which the pre-redesign page's form has
-    always used and which now answers this dialog as well.
+    the POST is the enable route further down, which this dialog's form submits to.
     """
     return TEMPLATES.TemplateResponse(
         request, "panel/node_transports_dialog.html", await _enable_form(session, node_id)
@@ -590,9 +570,8 @@ async def _refuse_enable(
 ) -> Response:
     """The transports dialog again, at 422, with what was typed still in it.
 
-    The console's half only: every caller of this has already established that htmx
-    asked, because the pre-redesign form has nowhere to render a field error and keeps
-    the error envelope it has always produced instead.
+    Every caller of this has already established that htmx asked: a caller that did not
+    has nowhere to render a field error and gets the error envelope instead.
     """
     return TEMPLATES.TemplateResponse(
         request,
@@ -653,8 +632,8 @@ def _state_form(node, values: dict | None = None, errors: dict | None = None) ->
     }
 
 
-@router.post("/nodes/{node_id}/set-state", response_class=HTMLResponse)
-async def set_node_state_from_the_console(
+@router.post("/nodes/{node_id}/state", response_class=HTMLResponse)
+async def set_node_state(
     node_id: str,
     request: Request,
     state: str = Form(""),
@@ -663,9 +642,10 @@ async def set_node_state_from_the_console(
 ):
     """Move a node between states from the console — charter criterion 2.
 
-    ``/set-state`` and not ``/state`` because the pre-redesign page's own route below
-    still owns the short name and drives it WITH HTMX, so unlike the add-node form the
-    two cannot be told apart by a header. M9.6 deletes that page and takes the name back.
+    ``GET`` and ``POST`` of this path are two different jobs and that is not a collision:
+    the GET above renders the dialog, this answers what it was submitted with. The name
+    was ``/set-state`` until M9.6, only because the pre-redesign page drove the short one
+    with htmx and so could not be told apart from the console by a header.
 
     Both refusals land on the ``state`` control at 422 rather than becoming a banner, and
     both are about that control: an unknown word, or a transition this node may not make.
@@ -835,21 +815,18 @@ async def _hop_form(
     }
 
 
-@router.post("/hops/establish", response_class=HTMLResponse)
+@router.post("/hops", response_class=HTMLResponse)
 async def establish_hop(
     request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """Establish both ends of an entry→leaf tunnel from the console's dialog.
 
-    ``/hops/establish`` and not ``/hops`` only because ``POST /panel/hops`` still
-    belongs to the pre-redesign page below, which asks for it with htmx too and
-    answers into ``panel/outcome.html`` — so unlike the add-node form the two cannot
-    be told apart by a header. M9.6 takes the shorter name back when it deletes that
-    page.
+    ``/hops/establish`` until M9.6, only because the pre-redesign page owned
+    ``POST /panel/hops`` and asked for it with htmx too — so unlike the add-node form
+    the two could not be told apart by a header.
 
-    The form is read the same way ``create_hop`` reads it: each end's parameters
-    arrive prefixed, the prefix is stripped, and below that line this function still
-    names no field of any protocol. What is added here is that the fields are
+    Each end's parameters arrive prefixed, the prefix is stripped, and below that line
+    this function names no field of any protocol. The fields are also
     FILTERED to the chosen transport's own list before they are parsed — the dialog
     renders a group per hop-capable transport and only hides the ones not chosen, so
     without the filter a second transport's boxes would arrive and be refused by a
@@ -980,7 +957,7 @@ async def _refuse_hop(
     )
 
 
-@router.get("/hops/{node_transport_id}/tear-down", response_class=HTMLResponse)
+@router.get("/hops/{node_transport_id}/dissolve", response_class=HTMLResponse)
 async def tear_down_hop_dialog(
     node_transport_id: str,
     request: Request,
@@ -994,7 +971,7 @@ async def tear_down_hop_dialog(
     )
 
 
-@router.post("/hops/{node_transport_id}/tear-down", response_class=HTMLResponse)
+@router.post("/hops/{node_transport_id}/dissolve", response_class=HTMLResponse)
 async def tear_down_hop(
     node_transport_id: str,
     request: Request,
@@ -1002,9 +979,9 @@ async def tear_down_hop(
 ):
     """Remove both ends of a hop from the console, and say what is left to do.
 
-    Its own route rather than the ``/dissolve`` one below for the same reason as the
-    node's ``/push``: that one answers the pre-redesign page with a different
-    fragment. M9.6 takes the shorter name back.
+    ``/tear-down`` until M9.6, for the same reason ``establish_hop`` above had a longer
+    name: ``/dissolve`` belonged to the pre-redesign page, which drove it with htmx.
+    ``GET`` and ``POST`` of this path are the confirmation and the act.
 
     A toast and not a banner: tearing a hop down is the operator's own deliberate act
     and it succeeded. What it leaves behind — two nodes still holding a tunnel to an
@@ -1037,10 +1014,10 @@ async def transports_screen(request: Request) -> Response:
     refresh them, and no mutation in this panel can change which protocols the image
     ships. A ``/panel/transports/table`` URL would exist only to be listed.
 
-    Note that ``GET /panel/transports`` cannot collide with the pre-redesign page's
-    ``POST /panel/transports/{node_transport_id}/...`` routes further down: different
-    method, different shape. M9.5 homed those actions on the Nodes screen, under names
-    of their own, and M9.6 deletes the page.
+    Note that ``GET /panel/transports`` cannot collide with the withdraw and offer
+    routes on ``/panel/transports/{node_transport_id}/...`` further up: different shape,
+    and a different subject — this screen is about the protocols the IMAGE ships, those
+    are about one row on one node.
     """
     return _screen(
         request,
@@ -1121,17 +1098,12 @@ async def rotate_keys_dialog(
 
 
 @router.post("/keys/{node_transport_id}/rotate", response_class=HTMLResponse)
-async def rotate_keys_from_the_console(
+async def rotate_keys(
     node_transport_id: str,
     request: Request,
     session: AsyncSession = Depends(session_dependency),
 ):
     """Re-mint this transport's material and push it — item 23, from the console.
-
-    Its own route rather than the pre-redesign page's ``/transports/{id}/rotate-keys``
-    below, which answers with ``panel/outcome.html`` and is asked for with htmx too — so
-    unlike the add-node form the two cannot be told apart by a header. M9.6 deletes that
-    page and may take the older name back.
 
     A half-done rotation is a BANNER, not a toast. Between the write and a successful
     push the database and the node disagree, and for a decoy that means the blocked
@@ -1203,7 +1175,7 @@ async def replace_params_dialog(
 
 
 @router.post("/keys/{node_transport_id}/params", response_class=HTMLResponse)
-async def replace_params_from_the_console(
+async def replace_params(
     node_transport_id: str,
     request: Request,
     session: AsyncSession = Depends(session_dependency),
@@ -1395,82 +1367,6 @@ async def _refuse_params(
     )
 
 
-# --- the fleet page (pre-redesign; M9 ports its three screens) -----------------
-
-@router.get("/fleet", response_class=HTMLResponse)
-async def fleet(request: Request, session: AsyncSession = Depends(session_dependency)):
-    """The original single page: nodes, the hops between them, and what the image ships.
-
-    Still the screen that owns all three of those facts until M9 gives each its own.
-    It is reached from the sidebar's one honest entry, and it is deliberately NOT
-    inside the console shell — half-porting it would leave the operator unable to tell
-    which parts had been redesigned.
-    """
-    installed = sorted(discover().values(), key=lambda meta: meta.name)
-    return TEMPLATES.TemplateResponse(
-        request,
-        "pages/index.html",
-        {
-            "nodes": await nodes.list_nodes(session),
-            "transports": installed,
-            "hops": await relay.list_hops(session),
-            # Which transports may carry a hop, and why both of its conditions are
-            # needed, is ``transports.hop_transports``. It moved there in M9.2 because
-            # the console's own establish-hop dialog asks the same question, and two
-            # copies of "may this protocol cross the border" is the drift that would
-            # offer a blocked one on one screen and not the other.
-            "hop_transports": transports.hop_transports(),
-            "hop_params": {
-                name: transports.operator_params(name)
-                for name in transports.hop_transports()
-            },
-        },
-    )
-
-
-@router.get("/nodes/{node_id}", response_class=HTMLResponse)
-async def node_detail(
-    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
-):
-    node = await nodes.get_node(session, node_id)
-    installed = discover()
-    return TEMPLATES.TemplateResponse(
-        request,
-        "pages/node.html",
-        {
-            "node": node,
-            # Only the transitions this node may actually make, so the page cannot
-            # offer a button whose only outcome is a 409. ``retired`` is absent from
-            # a retired node's list for the reason in ``NodeState.allowed_from``:
-            # bringing back a record whose host is gone puts an address that may now
-            # belong to a stranger into every friend's subscription.
-            "state_options": NodeState.allowed_from(node.state),
-            # What the operator may retype on a transport already enabled here —
-            # item 24's rotation form. Only transports still installed in this image
-            # get one: a node running something this image no longer ships cannot be
-            # re-validated here, and offering the form would promise otherwise.
-            "editable": {
-                t.transport_name: transports.operator_params(t.transport_name)
-                for t in node.transports
-                if t.transport_name in installed
-            },
-            # Only transports not already on this node, so the form cannot offer an
-            # action that is guaranteed to conflict.
-            "available": sorted(
-                meta.name
-                for meta in installed.values()
-                if meta.name not in {t.transport_name for t in node.transports}
-                # A transport a friend could not receive in ANY shape is not offered at
-                # all, rather than offered and then refused. Since item 27 that is a
-                # narrower set than "not a URI": a transport whose configuration is a
-                # file is deliverable now, and the panel has to stop hiding it or the
-                # second format exists and nobody can switch it on.
-                and meta.subscription_formats
-            ),
-        },
-    )
-
-
 # --- actions (HTMX fragments) ------------------------------------------------
 
 @router.post("/nodes", response_class=HTMLResponse)
@@ -1485,14 +1381,13 @@ async def create_node(
     ssh_private_key: str = Form(""),
     session: AsyncSession = Depends(session_dependency),
 ):
-    """Register a node — from the console's dialog, or from the old page's form.
+    """Register a node from the console's dialog.
 
-    ONE route with two answers, because two panels are live at once (see the module
-    docstring). The console asks with htmx and gets the console's answer: the dialog
-    closes, a toast names the node, and the table refreshes itself. The pre-redesign
-    form at /panel/fleet is a plain browser POST and still gets its 303 back to the
-    page it was submitted from, so a reload does not re-post. M9.6 deletes that page
-    and the redirect branch with it.
+    Until M9.6 this one route had two answers: the console's, and a 303 back to the
+    pre-redesign form at ``/panel/fleet``, which was a plain browser POST and so could
+    be told apart by a header. The page is gone and so is the redirect — the console
+    asks with htmx and gets the console's answer: the dialog closes, a toast names the
+    node, and the table refreshes itself.
 
     Every field arrives as text, including the port, and every one of them is checked
     by ``schemas.NodeCreate`` — the API's own model, so the two surfaces cannot drift
@@ -1545,9 +1440,6 @@ async def create_node(
             key_dropped=bool(ssh_private_key),
         )
 
-    if not _is_htmx(request):
-        return RedirectResponse(url="/panel/fleet", status_code=status.HTTP_303_SEE_OTHER)
-
     return _mutation(
         request,
         toast=f"{node.name} added — a draft until you apply it",
@@ -1562,10 +1454,11 @@ def _refuse_node(
     """A refused node form, in whichever panel asked.
 
     The console gets its dialog back at 422 with the message under the field it is
-    about — M8.6, and static/app.js allows exactly that one status to swap. The
-    pre-redesign form has nowhere to render a field error, so it keeps the behaviour it
-    has always had: a ``DomainError``, which the one exception handler turns into the
-    envelope every other refusal on that page already produces.
+    about — M8.6, and static/app.js allows exactly that one status to swap. A caller
+    that is not htmx has nowhere to put a field error, so it gets a ``DomainError``,
+    which the one exception handler turns into this codebase's error envelope. That
+    split outlived the pre-redesign form it was written for: the bare shape of this
+    POST is still reachable, and a dialog fragment is not an answer to it.
     """
     if not _is_htmx(request):
         raise DomainError(" ".join(errors.values()))
@@ -1600,7 +1493,7 @@ def _refused_field(error) -> str:
 
 
 @router.post("/nodes/{node_id}/probe", response_class=HTMLResponse)
-async def probe_node_from_the_console(
+async def probe_node(
     node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """Ask a node what it is actually running, and say so on the console.
@@ -1610,9 +1503,9 @@ async def probe_node_from_the_console(
     action — an unreachable node, or one running a configuration older than the file
     on it, is a fault the operator has to still be able to read while they act on it.
 
-    Its own route rather than the ``/health`` one below because the two panels want
-    different answers to the same question: that one renders the old page's fragment
-    into ``#outcome``, this one is a console mutation. M9.6 deletes the other.
+    Until M9.6 there was a second probe route, ``/nodes/{id}/health``, answering the
+    pre-redesign page with a ``panel/health.html`` fragment. It went with the page; the
+    judgement it made in markup is ``console.health_summary``, which composes it as text.
     """
     node = await nodes.get_node(session, node_id)
     result = await health.check_node(session, node_id=node_id)
@@ -1628,15 +1521,14 @@ async def probe_node_from_the_console(
     )
 
 
-@router.post("/nodes/{node_id}/push", response_class=HTMLResponse)
-async def push_node_from_the_console(
+@router.post("/nodes/{node_id}/apply", response_class=HTMLResponse)
+async def apply_node(
     node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """Push this node's configuration to its host — the console's "apply".
 
-    ``push`` and not ``apply`` in the URL only because ``/apply`` still belongs to the
-    pre-redesign page below, which answers it with a different fragment; the word is
-    the codebase's own for the operation either way. M9.6 takes the shorter name back.
+    ``/nodes/{id}/push`` until M9.6, only because ``/apply`` belonged to the
+    pre-redesign page, which answered it with a different fragment.
 
     A failure is a banner rather than a toast, and that is the point of this button on
     the stand: a failed apply marks the node degraded, and the operator has to be able
@@ -1675,26 +1567,23 @@ async def enable_transport(
 ):
     """Enable a transport, taking its parameters from the submitted form.
 
-    ONE route with two answers, exactly like ``create_node`` above and for the same
-    reason (see the module docstring): the console asks with htmx and gets the console's
-    answer — the dialog closes, a toast names what was enabled, the tables refresh. The
-    pre-redesign page's form is a plain browser POST and still gets its 303 back to the
-    page it was submitted from, so a reload does not re-post. M9.6 deletes that page and
-    the redirect branch with it.
+    The console asks with htmx and gets the console's answer — the dialog closes, a
+    toast names what was enabled, the tables refresh. Until M9.6 this route also
+    answered the pre-redesign page's plain browser POST with a 303; that page is gone
+    and so is the redirect, and with it the BARE field names that form submitted.
 
     The form is read as a flat mapping and handed to the transport's own validator
     untouched. That is what makes a NEW protocol appear in this panel with no change
     here: this function does not know any protocol's field names, and the ``params``
     it forwards are whatever that transport declared it needs.
 
-    TWO SHAPES OF FORM ARRIVE AT ONE ROUTE, and neither is told apart by a header. The
-    console renders a group of boxes per transport and hides all but the chosen one —
-    a hidden input is still submitted, so with every group naming its boxes plainly a
-    second transport's ``port`` would arrive under the same name and the last one would
-    win. Its boxes are therefore named ``<transport>-<field>``. The old page builds only
-    the chosen transport's boxes, in JavaScript, and names them plainly. Each field is
-    looked up prefixed first and bare second: the console never sends a bare name and the
-    page never sends a prefixed one, so the two cannot collide.
+    EVERY BOX IS NAMED ``<transport>-<field>``. The dialog renders a group of boxes per
+    transport and hides all but the chosen one — a hidden input is still submitted, so
+    with every group naming its boxes plainly a second transport's ``port`` would arrive
+    under the same name and the last one would win. Until M9.6 a bare name was accepted
+    as a fallback, because the pre-redesign page built only the chosen transport's boxes
+    in JavaScript and named them plainly; that page is gone, and a bare name is now one
+    this form cannot read like any other.
     """
     form = await request.form()
     typed = {key: str(value).strip() for key, value in form.multi_items()}
@@ -1707,20 +1596,39 @@ async def enable_transport(
 
     # Which boxes this transport declares it needs, and — wider — every field it lets an
     # operator answer at all. Both are empty for a transport this image cannot deliver or
-    # does not ship: the service is what refuses those, by name, and it says so far
-    # better than a guess here would.
+    # does not ship, and EVERY CHECK BELOW IS SKIPPED for one: with nothing declared,
+    # a name-by-name complaint would be a complaint about every name submitted, and it
+    # would arrive INSTEAD of the answer the operator needs, which is that there is no
+    # such transport here (or that nothing could receive it). The service refuses those
+    # two by name and says so far better than a guess here would, so the submission is
+    # carried straight to it.
     offerable = transport_name in transports.offerable_transports()
     boxes = transports.operator_tuning(transport_name) if offerable else ()
     declared = transports.supplied_params(transport_name) if offerable else frozenset()
 
     def supplied(field: str) -> str:
-        return typed.get(f"{transport_name}-{field}", typed.get(field, ""))
+        return typed.get(f"{transport_name}-{field}", "")
 
-    # A name this form cannot read. Another GROUP's boxes are skipped rather than
-    # refused: the dialog renders one group per transport and a hidden input is still
-    # submitted, so those arrive on every submission and are the markup's doing rather
-    # than the operator's. Everything else that is neither a declared field nor this
-    # transport's own prefixed box is the operator's, and is answered.
+    # A name this form cannot read. THE GROUP PREFIX IS PART OF THE NAME, which is what
+    # changed in M9.6: a bare ``port`` was looked up as a fallback while the pre-redesign
+    # page still built its boxes that way, and now that the page is gone it is a name
+    # like any other this form does not have. Not merely dropped — ``supplied`` would
+    # return "" for it and the operator would be told a box they filled was left empty.
+    #
+    # Another GROUP's boxes are skipped rather than refused: the dialog renders one group
+    # per transport and a hidden input is still submitted, so those arrive on every
+    # submission and are the markup's doing rather than the operator's.
+    #
+    # Not asked at all when the transport is not offerable, per the note above: there is
+    # no declared set to measure a name against, so every name would be unreadable and
+    # this complaint would displace the service's own — which is the one the operator
+    # needs.
+    def its_own_box(field: str) -> bool:
+        return (
+            field.startswith(f"{transport_name}-")
+            and field.removeprefix(f"{transport_name}-") in declared
+        )
+
     def another_group(field: str) -> bool:
         return any(
             field.startswith(f"{other}-")
@@ -1732,10 +1640,9 @@ async def enable_transport(
         field
         for field in typed
         if field != "transport_name"
-        and field not in declared
-        and field.removeprefix(f"{transport_name}-") not in declared
+        and not its_own_box(field)
         and not another_group(field)
-    )
+    ) if offerable else []
     if unreadable:
         return await _refuse_the_form(
             request,
@@ -1760,10 +1667,10 @@ async def enable_transport(
     # declared as a sequence becomes a list whether or not the operator typed a comma.
     #
     # EVERY FIELD THE TRANSPORT DECLARES, not only the ones this dialog renders a box
-    # for, and the difference is a value an operator can lose. The console asks for the
-    # REQUIRED fields; a transport also has fields it defaults, and a caller may answer
-    # one — the old page's own form does not, but a submission that does used to reach
-    # the model and must not stop doing so in silence. For the shipped Reality transport
+    # for, and the difference is a value an operator can lose. The dialog draws a box per
+    # REQUIRED field; a transport also has fields it defaults, and a submission may
+    # answer one — it must reach the model rather than be dropped in silence. For the
+    # shipped Reality transport
     # the discarded field would have been its decoy port, silently replaced by the value
     # every other node uses, which is the one substitution CLAUDE.md names outright: a
     # fleet that borrows one handshake is a fleet that can be enumerated.
@@ -1822,11 +1729,6 @@ async def enable_transport(
             await friends.grant_everywhere(session, friend)
     await session.commit()
 
-    if not _is_htmx(request):
-        return RedirectResponse(
-            url=f"/panel/nodes/{node_id}", status_code=status.HTTP_303_SEE_OTHER
-        )
-
     node = await nodes.get_node(session, node_id)
     return _mutation(
         request,
@@ -1859,248 +1761,16 @@ async def _refuse_the_form(
 
     The console gets its dialog back at 422, with the message under the control it is
     about when there is one and above the form when the complaint is about a name that
-    has no box. The pre-redesign form has nowhere to render a field error, so it keeps
-    the behaviour it has always had — a ``DomainError``, which the one exception handler
-    turns into the envelope every other refusal on that page produces. Same split as
-    ``_refuse_node``, and ``plainly`` is what that envelope says: the box NAMES without
-    the group prefix, which is markup the caller with no form knows nothing about.
+    has no box. A caller that is not htmx has nowhere to render a field error and gets a
+    ``DomainError`` instead, which the one exception handler turns into this codebase's
+    error envelope — the same split as ``_refuse_node``, and it outlived the pre-redesign
+    form it was written for. ``plainly`` is what that envelope says: the box NAMES
+    without the group prefix, which is markup a caller with no form knows nothing about.
     """
     if not _is_htmx(request):
         raise DomainError(plainly or failure or " ".join((errors or {}).values()))
     return await _refuse_enable(
         request, session, node_id, values=typed, errors=errors, failure=failure
-    )
-
-
-@router.post("/nodes/{node_id}/apply", response_class=HTMLResponse)
-async def apply_node(
-    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
-):
-    """Push configuration to a node and show the outcome as a fragment."""
-    try:
-        applied = await apply.apply_node(session, node_id=node_id)
-        message, ok = f"applied: {', '.join(sorted(applied))}", True
-    except DomainError as exc:
-        # Shown rather than raised: a failed apply marks the node degraded, and the
-        # operator needs to read why on the page they are already on.
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
-    )
-
-
-@router.post("/nodes/{node_id}/state", response_class=HTMLResponse)
-async def set_node_state(
-    node_id: str,
-    request: Request,
-    state: str = Form(...),
-    detail: str = Form(""),
-    session: AsyncSession = Depends(session_dependency),
-):
-    """Move a node between states from the panel — charter criterion 2.
-
-    The API has had this since item 17; the panel had not, which made "the
-    replacement node is raised FROM THE PANEL" unprovable — an operator could create
-    the node and enable its protocol on a screen, then had to reach for curl to put
-    it into service. The criterion is written about the panel, so it is met here.
-
-    A fragment rather than a redirect: putting a node into service hands every
-    existing friend a credential on it, and how many is what the operator wants to
-    read without navigating away.
-    """
-    try:
-        node = await nodes.set_node_state(
-            session,
-            node_id=node_id,
-            state=NodeState(state),
-            detail=detail or None,
-        )
-        message, ok = f"{node.name} is now {node.state}.", True
-    except ValueError:
-        # An unknown string, before the service ever sees it. Names the vocabulary
-        # rather than echoing what was typed — the value came from a form.
-        message, ok = (
-            f"{state!r} is not a state a node can be in. Known states: "
-            f"{', '.join(sorted(NodeState))}."
-        ), False
-    except DomainError as exc:
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
-    )
-
-
-@router.post("/transports/{node_transport_id}/state", response_class=HTMLResponse)
-async def set_transport_enabled(
-    node_transport_id: str,
-    request: Request,
-    enabled: str = Form(...),
-    session: AsyncSession = Depends(session_dependency),
-):
-    """Offer a protocol to friends, or withdraw it — charter criterion 3.
-
-    Read as an explicit wanted value ("true"/"false") rather than a toggle, so a
-    double-submitted form does not put the fleet in the state the operator was
-    trying to leave. Anything that is not truthy is read as off, which is the safe
-    direction to be wrong in: it withdraws an offer rather than making one.
-    """
-    wanted = enabled.strip().lower() in {"1", "true", "on", "yes"}
-    try:
-        node_transport = await nodes.set_transport_enabled(
-            session, node_transport_id=node_transport_id, enabled=wanted
-        )
-        message, ok = (
-            (
-                f"{node_transport.transport_name} is offered to friends again — it is "
-                "in every active friend's subscription at their next refresh."
-            )
-            if wanted
-            else (
-                f"{node_transport.transport_name} is out of every subscription. The "
-                "node is still configured to serve it: re-apply the node to stop that."
-            )
-        ), True
-    except DomainError as exc:
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
-    )
-
-
-@router.post("/nodes/{node_id}/health", response_class=HTMLResponse)
-async def node_health(
-    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
-):
-    result = await health.check_node(session, node_id=node_id)
-    return TEMPLATES.TemplateResponse(request, "panel/health.html", {"health": result})
-
-
-# --- hops between nodes (item 16), from the PRE-REDESIGN page -----------------
-#
-# The console's own hop routes are in the Hops section further up. These two stay
-# because /panel/fleet still carries a hop form and asks for them with htmx, so unlike
-# the add-node form they cannot be told apart from the console's by a header. M9.6
-# deletes the page and takes the two shorter names back.
-
-@router.post("/hops", response_class=HTMLResponse)
-async def create_hop(
-    request: Request, session: AsyncSession = Depends(session_dependency)
-):
-    """Establish both ends of an entry→leaf tunnel from one form — the OLD page's.
-
-    The form carries each end's parameters prefixed with ``entry-`` / ``leaf-``. The
-    prefix is stripped here and nowhere else: below this line the two mappings are
-    ordinary transport parameters, validated by the transport's own model, and this
-    function still names no field of any protocol.
-    """
-    form = await request.form()
-    transport_name = str(form.get("transport_name", ""))
-
-    def side(prefix: str) -> dict:
-        return transports.parse_form(
-            transport_name,
-            (
-                (key.removeprefix(prefix), str(value))
-                for key, value in form.multi_items()
-                if key.startswith(prefix)
-            ),
-        )
-
-    try:
-        await relay.establish_hop(
-            session,
-            entry_node_id=str(form.get("entry_node_id", "")),
-            leaf_node_id=str(form.get("leaf_node_id", "")),
-            transport_name=transport_name,
-            entry_params=side("entry-"),
-            leaf_params=side("leaf-"),
-        )
-        message, ok = (
-            "hop established. Apply BOTH nodes to bring the tunnel up — until then it "
-            "exists only in the database."
-        ), True
-    except DomainError as exc:
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
-    )
-
-
-@router.post("/hops/{node_transport_id}/dissolve", response_class=HTMLResponse)
-async def dissolve_hop(
-    node_transport_id: str,
-    request: Request,
-    session: AsyncSession = Depends(session_dependency),
-):
-    """Remove both ends of a hop, and say which nodes now need re-applying."""
-    try:
-        affected = await relay.dissolve_hop(session, node_transport_id=node_transport_id)
-        message, ok = (
-            f"hop removed. Re-apply {len(affected)} node(s) so they stop holding a "
-            "tunnel to an exit that is no longer configured."
-        ), True
-    except DomainError as exc:
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
-    )
-
-
-# --- rotation (items 23 and 24), from the panel -------------------------------
-
-@router.post("/transports/{node_transport_id}/rotate-keys", response_class=HTMLResponse)
-async def rotate_keys(
-    node_transport_id: str,
-    request: Request,
-    session: AsyncSession = Depends(session_dependency),
-):
-    """Re-mint this transport's key material and push it — item 23.
-
-    A fragment, not a redirect: the outcome of a rotation is the whole point of
-    pressing the button. "Rotated, but the node could not be updated" has to be
-    readable on the page, because until it is retried the node still runs the old
-    material.
-    """
-    try:
-        outcome = await rotation.rotate_keys(session, node_transport_id=node_transport_id)
-        message, ok = outcome.summary(), outcome.complete
-    except DomainError as exc:
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
-    )
-
-
-@router.post("/transports/{node_transport_id}/params", response_class=HTMLResponse)
-async def replace_params(
-    node_transport_id: str,
-    request: Request,
-    session: AsyncSession = Depends(session_dependency),
-):
-    """Replace operator-supplied parameters — item 24, a blocked decoy being the case.
-
-    Reads the form the same way ``enable_transport`` does, and for the same reason:
-    this function must not know any protocol's field names. Only fields the operator
-    actually filled in are sent, so an untouched box means "leave it alone" rather
-    than "set it to empty".
-    """
-    form = await request.form()
-    try:
-        node_transport = await rotation.get_node_transport(session, node_transport_id)
-        params = transports.parse_form(
-            node_transport.transport_name,
-            ((key, str(value)) for key, value in form.multi_items()),
-        )
-        if not params:
-            raise DomainError("nothing was filled in, so there is nothing to change")
-        outcome = await rotation.replace_params(
-            session, node_transport_id=node_transport_id, params=params
-        )
-        message, ok = outcome.summary(), outcome.complete
-    except DomainError as exc:
-        message, ok = exc.message, False
-    return TEMPLATES.TemplateResponse(
-        request, "panel/outcome.html", {"message": message, "ok": ok}
     )
 
 

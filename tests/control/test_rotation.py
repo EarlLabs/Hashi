@@ -268,18 +268,25 @@ async def test_replacing_nothing_is_refused_rather_than_pushed(
 
 # --- the same two operations, from the panel (criteria 2 and 3 are "from the panel")
 
-async def test_the_node_page_offers_rotation_for_each_enabled_transport(
+async def test_the_keys_screen_offers_rotation_for_each_enabled_transport(
     client, session, reality_params
 ) -> None:
-    """The form is built from the transport's own declaration, so it names no protocol."""
-    node_id, node_transport_id, _, _ = await fleet(client, session, reality_params)
+    """The form is built from the transport's own declaration, so it names no protocol.
 
-    page = (await client.get(f"/panel/nodes/{node_id}")).text
+    On Keys & configs since M9.4, and its only home since M9.6 deleted the node page
+    both actions used to hang off. The claim did not move with the screen: each enabled
+    row offers both operations, and the replace form's boxes come from the registry.
+    """
+    _, node_transport_id, _, _ = await fleet(client, session, reality_params)
 
-    assert f"/panel/transports/{node_transport_id}/rotate-keys" in page
-    assert f"/panel/transports/{node_transport_id}/params" in page
+    screen = (await client.get("/panel/keys")).text
+
+    assert f"/panel/keys/{node_transport_id}/rotate" in screen
+    assert f"/panel/keys/{node_transport_id}/params" in screen
+
+    dialog = (await client.get(f"/panel/keys/{node_transport_id}/params")).text
     # A field the transport declared, offered without this template knowing it exists.
-    assert 'name="decoy_host"' in page
+    assert 'name="decoy_host"' in dialog
 
 
 async def test_the_panel_rotates_keys_and_returns_a_fragment(
@@ -289,7 +296,9 @@ async def test_the_panel_rotates_keys_and_returns_a_fragment(
     _, node_transport_id, _, token = await fleet(client, session, reality_params)
     before = base64.b64decode((await client.get(f"/sub/{token}")).text).decode()
 
-    response = await client.post(f"/panel/transports/{node_transport_id}/rotate-keys")
+    response = await client.post(
+        f"/panel/keys/{node_transport_id}/rotate", headers={"HX-Request": "true"}
+    )
 
     assert response.status_code == 200
     assert "<html" not in response.text.lower()
@@ -309,11 +318,12 @@ async def test_the_panel_leaves_blank_fields_alone(
     node_id, node_transport_id, _, _ = await fleet(client, session, reality_params)
 
     response = await client.post(
-        f"/panel/transports/{node_transport_id}/params",
+        f"/panel/keys/{node_transport_id}/params",
         data={"decoy_host": "www.wikipedia.org", "server_names": "www.wikipedia.org",
               "port": "", "decoy_port": ""},
+        headers={"HX-Request": "true"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     session.expire_all()
     config = json.dumps(await rendered_server_config(session, node_id))
@@ -324,20 +334,26 @@ async def test_the_panel_leaves_blank_fields_alone(
 async def test_the_panel_reports_a_rejected_rotation_as_a_failure_fragment(
     client, session, reality_params
 ) -> None:
-    """A refusal has to be readable on the page, not a 500 the operator never sees."""
+    """A refusal has to be readable on the page, not a 500 the operator never sees.
+
+    422 with the dialog re-rendered is how this console refuses — static/app.js allows
+    exactly that one status to swap — and the complaint lands under the box it is about.
+    """
     _, node_transport_id, _, _ = await fleet(client, session, reality_params)
 
     response = await client.post(
-        f"/panel/transports/{node_transport_id}/params", data={"port": "1"}
+        f"/panel/keys/{node_transport_id}/params",
+        data={"port": "1"},
+        headers={"HX-Request": "true"},
     )
 
-    assert response.status_code == 200
-    assert "bad" in response.text, response.text
+    assert response.status_code == 422, response.status_code
+    assert 'id="param-port-error"' in response.text, response.text
 
 
 @pytest.mark.parametrize(
     "path",
-    ["/panel/transports/whatever/rotate-keys", "/panel/transports/whatever/params"],
+    ["/panel/keys/whatever/rotate", "/panel/keys/whatever/params"],
 )
 async def test_rotation_from_the_panel_needs_an_operator_session(
     anonymous, path: str

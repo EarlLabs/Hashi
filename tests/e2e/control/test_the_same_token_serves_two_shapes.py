@@ -27,6 +27,11 @@ import zipfile
 import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
+
+# The console asks with htmx, and since M9.6 nothing here answers a header-less POST
+# with a redirect to a page: the pre-redesign panel those two branches existed for is
+# gone.
+HTMX = {"HX-Request": "true"}
 CONFIG_FILE_FORMAT = "client-config-file"
 
 # Distinct per scenario. NOT used to identify this run's own entries, though — see
@@ -71,20 +76,38 @@ def awg_params(port: int, address: str, peer: str) -> dict[str, str]:
 
 
 async def node_with(operator, *, name: str, address: str, country: str, transport: dict) -> str:
-    """A serving node running one transport, created and switched on from the panel."""
+    """A serving node running one transport, created and switched on from the panel.
+
+    200 is the success assertion on all three: every one of these refuses at 422 with its
+    dialog re-rendered, so a refusal cannot be read as a success. The enable form names
+    every box for its transport's GROUP — the dialog renders one group per transport and
+    hides all but the chosen one, and a hidden input is still submitted — so the prefix is
+    added here rather than written into each caller's parameter mapping.
+    """
     created = await operator.post(
         "/panel/nodes",
         data={"name": name, "address": address, "location_label": country},
+        headers=HTMX,
     )
-    assert created.status_code == 303, created.text
+    assert created.status_code == 200, created.text
     node_id = next(
         node["id"] for node in (await operator.get("/api/nodes")).json() if node["name"] == name
     )
 
-    enabled = await operator.post(f"/panel/nodes/{node_id}/transports", data=transport)
-    assert enabled.status_code == 303, enabled.text
+    chosen = transport["transport_name"]
+    enabled = await operator.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            key if key == "transport_name" else f"{chosen}-{key}": value
+            for key, value in transport.items()
+        },
+        headers=HTMX,
+    )
+    assert enabled.status_code == 200, enabled.text
 
-    state = await operator.post(f"/panel/nodes/{node_id}/state", data={"state": "active"})
+    state = await operator.post(
+        f"/panel/nodes/{node_id}/state", data={"state": "active"}, headers=HTMX
+    )
     assert state.status_code == 200, state.text
     return node_id
 

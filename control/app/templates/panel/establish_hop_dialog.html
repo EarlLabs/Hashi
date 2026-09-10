@@ -1,8 +1,8 @@
 {#
   "Establish a hop" — the biggest usability claim in the design handoff.
 
-  The old form on /panel/fleet asks twenty-five things at once, flat, in one column.
-  This one asks THREE — entry node, leaf node, transport — and puts every remaining
+  The pre-redesign form this replaced asked twenty-five things at once, flat, in one
+  column. This one asks THREE — entry node, leaf node, transport — and puts every remaining
   parameter behind a `<details>` disclosure labelled with its own cost
   (UI-PATTERNS §6). That is not decoration: this is the form the runbook has you open
   during a rotation, which is the worst possible moment to read twenty-five labels.
@@ -58,7 +58,7 @@
   <div class="dialog dialog-hop blueprint" role="dialog" aria-modal="true"
        aria-labelledby="establish-hop-title">
     <div class="dialog-title" id="establish-hop-title">Establish a hop</div>
-    <form class="dialog-form" hx-post="/panel/hops/establish"
+    <form class="dialog-form" hx-post="/panel/hops"
           hx-target="#dialog-slot" hx-swap="innerHTML">
 
       {% if failure %}

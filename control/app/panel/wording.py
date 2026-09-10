@@ -15,10 +15,11 @@ HOW:  every server-composed sentence a CONSOLE template renders passes through
       dialog's field error. Applying it in one helper each is what makes the rule
       checkable by reading ``panel/routes.py`` rather than every service.
 
-      Not applied to ``panel/outcome.html``: that fragment belongs to the
-      pre-redesign fleet page, whose own prose says "friend" throughout. Translating
-      only its messages would leave one page speaking two vocabularies. The rename
-      arrives there with M9's redesign of that page, and this module is what M9 uses.
+      There is no longer anywhere it is NOT applied: it was held back from
+      ``panel/outcome.html``, the pre-redesign fleet page's fragment, whose own prose
+      said "friend" throughout — translating only its messages would have left one page
+      speaking two vocabularies. M9.6 deleted that page and its fragment, so every
+      server-composed sentence the panel renders now comes through here.
 
 Two things are never translated, because they are not ours to rewrite:
 

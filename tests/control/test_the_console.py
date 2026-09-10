@@ -103,7 +103,7 @@ async def test_the_sidebar_leads_only_to_screens_that_exist(client) -> None:
     targets = re.findall(r'<a href="(/panel/[^"]*)"', body)
 
     assert "/panel/friends" in targets
-    assert "/panel/fleet" in targets
+    assert "/panel/fleet" not in targets, "the sidebar still points at the deleted page"
     for target in set(targets):
         assert (await client.get(target)).status_code == 200, target
 
@@ -433,8 +433,10 @@ async def test_the_overview_sends_a_new_operator_to_the_nodes_screen(client) -> 
     existed. M9.1 creates it, so M9.1 repoints them — a link to the page being retired
     is a link that teaches the operator the wrong route to the job.
 
-    The Overview's BODY, not the whole document: the sidebar still has its honest Fleet
-    entry, because hops and the transports table have not moved yet. M9.6 removes that.
+    The Overview's BODY, not the whole document — the assertion was written while the
+    sidebar still had an honest Fleet entry beside it. M9.6 removed that entry and the
+    page with it, and the whole document would satisfy this now; the body is still the
+    narrower subject and stays the one under test.
     """
     body = (await client.get("/panel/overview/body")).text
 
@@ -507,23 +509,6 @@ async def test_adding_a_node_names_it_and_refreshes_the_table(client) -> None:
     listed = (await client.get("/api/nodes")).json()
     assert [node["name"] for node in listed] == ["leaf-1"]
     assert listed[0]["state"] == "draft"
-
-
-async def test_the_pre_redesign_form_still_gets_its_redirect(client) -> None:
-    """/panel/fleet's plain form posts to this same route and must keep working.
-
-    The old page is not deleted until M9.6, and until then it is the only home for
-    hops, for the transports table and for half the per-node actions. A browser POST
-    gets a 303 so a reload does not re-post; the console asks with htmx and gets the
-    console's answer. Deleting this branch before the page is what would break it.
-    """
-    response = await client.post(
-        "/panel/nodes",
-        data={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/panel/fleet"
 
 
 async def test_a_refused_node_comes_back_on_the_field_with_what_was_typed(
@@ -667,7 +652,7 @@ async def test_applying_a_node_names_it_in_a_toast(client, monkeypatch) -> None:
 
     monkeypatch.setattr(apply_service, "apply_node", applied)
 
-    response = await client.post(f"/panel/nodes/{node_id}/push")
+    response = await client.post(f"/panel/nodes/{node_id}/apply")
 
     assert response.status_code == 200
     assert "config applied to leaf-1" in response.text
@@ -694,7 +679,7 @@ async def test_a_failed_apply_stays_on_screen_in_plain_words(client, monkeypatch
 
     monkeypatch.setattr(apply_service, "apply_node", refuse)
 
-    response = await client.post(f"/panel/nodes/{node_id}/push")
+    response = await client.post(f"/panel/nodes/{node_id}/apply")
 
     assert response.status_code == 200
     assert 'hx-swap-oob="innerHTML:#banner-slot"' in response.text
@@ -899,7 +884,7 @@ async def test_the_transports_dialog_says_what_each_one_is_doing_for_a_user(
     reading = _reading(offered.text)
     assert "Transports on offer-1" in reading
     assert console_service.OFFER_IN_EVERY_LINK in reading
-    assert f'hx-get="/panel/nodes/transports/{node_transport_id}/withdraw"' in offered.text
+    assert f'hx-get="/panel/transports/{node_transport_id}/withdraw"' in offered.text
     # The transport's name is on the button as DATA and next to the URL it leads to, and
     # that adjacency is a contract rather than a detail: it is what
     # tests/e2e/control/test_a_replacement_node_and_a_protocol_from_the_panel.py reads to
@@ -908,19 +893,19 @@ async def test_the_transports_dialog_says_what_each_one_is_doing_for_a_user(
     # against a booted stand.
     assert re.search(
         r'data-transport="vless-reality"\s+'
-        r'hx-get="/panel/nodes/transports/[^"]+/withdraw"',
+        r'hx-get="/panel/transports/[^"]+/withdraw"',
         offered.text,
     ), "the withdraw button no longer carries the transport it is about"
 
     withdrawn = await client.post(
-        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        f"/panel/transports/{node_transport_id}/withdraw",
         headers={"HX-Request": "true"},
     )
     assert withdrawn.status_code == 200, withdrawn.text
 
     again = await client.get(f"/panel/nodes/{node_id}/transports")
     assert console_service.OFFER_WITHDRAWN in _reading(again.text)
-    assert f'hx-post="/panel/nodes/transports/{node_transport_id}/offer"' in again.text
+    assert f'hx-post="/panel/transports/{node_transport_id}/offer"' in again.text
 
 
 async def test_withdrawing_confirms_first_and_says_what_is_still_true(
@@ -935,7 +920,7 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     node_id, node_transport_id = await a_node_with_an_offer(client, reality_params)
     await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
 
-    dialog = await client.get(f"/panel/nodes/transports/{node_transport_id}/withdraw")
+    dialog = await client.get(f"/panel/transports/{node_transport_id}/withdraw")
 
     assert dialog.status_code == 200
     reading = _reading(dialog.text)
@@ -945,15 +930,20 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     assert "revoke them on the Users screen" in reading
 
     answer = await client.post(
-        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        f"/panel/transports/{node_transport_id}/withdraw",
         headers={"HX-Request": "true"},
     )
 
     assert answer.status_code == 200
     assert "withdrawn on offer-1" in _reading(answer.text)
     assert "apply it to stop that" in _reading(answer.text)
-    assert answer.headers["HX-Trigger"] == "nodes-changed"
-    # The property under the sentence: it is out of what any user would be handed now.
+    # BOTH collections, and the second is the one that was missing until M9.6: the Users
+    # table's own columns are derived from ``serving_transports``, which counts enabled
+    # rows only, so a withdrawal moves them. ``keys-changed`` is correctly absent — a
+    # credential already minted stays minted, so the Keys screen is unchanged.
+    assert answer.headers["HX-Trigger"] == "nodes-changed, friends-changed"
+    # The property under the sentence: it is out of what any user would be handed now,
+    # and it is the same query the Users table's two columns are built from.
     session.expunge_all()
     assert await nodes_service.serving_transports(session) == []
 
@@ -964,19 +954,21 @@ async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
     """The other direction, from the same list. No confirmation: it takes nothing away.
 
     ``keys-changed`` rides with it and does not ride with a withdrawal, which is not
-    decoration: offering again grants material to every active user, so the Keys screen's
-    "users on it" count moves. Withdrawing takes no credential away from anybody.
+    decoration: offering again runs ``friends.grant_everywhere``, so material is minted
+    and the Keys screen's "users on it" count moves. Withdrawing takes no credential away
+    from anybody, so that screen is left alone — but ``friends-changed`` rides with BOTH,
+    because the Users table counts what is being SERVED and both directions change it.
     """
     node_id, node_transport_id = await a_node_with_an_offer(client, reality_params)
     await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
     await client.post("/panel/friends", data={"nickname": "mira"})
     await client.post(
-        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        f"/panel/transports/{node_transport_id}/withdraw",
         headers={"HX-Request": "true"},
     )
 
     answer = await client.post(
-        f"/panel/nodes/transports/{node_transport_id}/offer",
+        f"/panel/transports/{node_transport_id}/offer",
         headers={"HX-Request": "true"},
     )
 
@@ -984,7 +976,9 @@ async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
     reading = _reading(answer.text)
     assert "offered again on offer-1" in reading
     assert "nobody re-imports anything" in reading
-    assert answer.headers["HX-Trigger"] == "nodes-changed, keys-changed"
+    assert (
+        answer.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
+    )
     session.expunge_all()
     assert len(await nodes_service.serving_transports(session)) == 1
 
@@ -1006,10 +1000,10 @@ async def test_a_hop_end_is_not_something_a_user_is_offered(client, session) -> 
 
     assert dialog.status_code == 200
     assert console_service.OFFER_HOP_END in _reading(dialog.text)
-    assert f"/panel/nodes/transports/{entry_end}/withdraw" not in dialog.text
+    assert f"/panel/transports/{entry_end}/withdraw" not in dialog.text
 
     refused = await client.post(
-        f"/panel/nodes/transports/{entry_end}/withdraw", headers={"HX-Request": "true"}
+        f"/panel/transports/{entry_end}/withdraw", headers={"HX-Request": "true"}
     )
 
     assert refused.status_code == 200
@@ -1125,13 +1119,18 @@ async def test_enabling_a_transport_from_the_console_names_it_and_refreshes_the_
     assert "vless-reality" in (await client.get("/panel/nodes/table")).text
 
 
-async def test_the_pre_redesign_enable_form_still_gets_its_redirect(client) -> None:
-    """One route, two panels, until M9.6 deletes the second one.
+async def test_a_bare_field_name_is_no_longer_a_name_this_form_can_read(
+    client, session
+) -> None:
+    """The pre-redesign page's own submission shape, refused rather than acted on.
 
-    The old page's form is a plain browser POST with its boxes named plainly, and it
-    still gets a 303 back to the page it was submitted from — otherwise a reload
-    re-posts it. The console sends the same fields named for their group and asks with
-    htmx. Do not delete this branch before the page.
+    Until M9.6 this route looked a submitted name up PREFIXED first and BARE second,
+    because the old page built only the chosen transport's boxes in JavaScript and named
+    them plainly. That page is gone and so is the fallback — and a bare name now gets the
+    answer every other name this form cannot read gets, rather than being dropped. Which
+    matters most for a field the transport DEFAULTS: silently discarded, the shipped
+    Reality transport's decoy port would become the value every other node uses, which is
+    the one substitution CLAUDE.md names outright.
     """
     node = await client.post(
         "/api/nodes",
@@ -1147,10 +1146,25 @@ async def test_the_pre_redesign_enable_form_still_gets_its_redirect(client) -> N
             "decoy_host": "www.example.com",
             "server_names": "www.example.com",
         },
+        headers={"HX-Request": "true"},
     )
 
-    assert created.status_code == 303
-    assert created.headers["location"] == f"/panel/nodes/{node_id}"
+    assert created.status_code == 422, created.status_code
+    reading = _reading(created.text)
+    assert "this form cannot read" in reading
+    assert "port" in reading and "decoy_host" in reading
+    # And nothing was enabled — the point of refusing rather than dropping.
+    session.expunge_all()
+    rows = (
+        (
+            await session.execute(
+                select(NodeTransport).where(NodeTransport.node_id == node_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
 
 
 async def test_a_parameter_this_form_renders_no_box_for_is_still_not_discarded(
@@ -1185,14 +1199,15 @@ async def test_a_parameter_this_form_renders_no_box_for_is_still_not_discarded(
         f"/panel/nodes/{node_id}/transports",
         data={
             "transport_name": "vless-reality",
-            "port": "8443",
-            "decoy_host": "www.example.com",
-            "server_names": "www.example.com",
-            "decoy_port": "8443",
+            "vless-reality-port": "8443",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+            "vless-reality-decoy_port": "8443",
         },
+        headers={"HX-Request": "true"},
     )
 
-    assert enabled.status_code == 303, enabled.text
+    assert enabled.status_code == 200, enabled.text
     session.expunge_all()
     row = (
         (
@@ -1624,7 +1639,7 @@ async def test_putting_a_node_into_service_from_the_console_says_so(
     node_id, _ = await a_node_with_an_offer(client, reality_params)
 
     answer = await client.post(
-        f"/panel/nodes/{node_id}/set-state",
+        f"/panel/nodes/{node_id}/state",
         data={"state": "active"},
         headers={"HX-Request": "true"},
     )
@@ -1646,7 +1661,7 @@ async def test_a_transition_this_node_may_not_make_is_refused_on_that_control(
     await client.post(f"/api/nodes/{node_id}/state", json={"state": "retired"})
 
     refused = await client.post(
-        f"/panel/nodes/{node_id}/set-state",
+        f"/panel/nodes/{node_id}/state",
         data={"state": "active"},
         headers={"HX-Request": "true"},
     )
@@ -1676,7 +1691,7 @@ async def test_a_state_that_cannot_be_acted_on_lands_on_the_control(
     node_id = node.json()["id"]
 
     refused = await client.post(
-        f"/panel/nodes/{node_id}/set-state",
+        f"/panel/nodes/{node_id}/state",
         data={"state": state},
         headers={"HX-Request": "true"},
     )
@@ -2110,7 +2125,7 @@ async def test_a_mistyped_value_is_refused_under_the_box_it_was_typed_in(
         form[f"{prefix}-tunnel_address"] = "172.15.0.1/24"
 
         response = await client.post(
-            "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+            "/panel/hops", data=form, headers={"HX-Request": "true"}
         )
 
         assert response.status_code == 422
@@ -2220,7 +2235,7 @@ async def test_establishing_a_hop_names_what_is_left_to_do(client) -> None:
             form[f"{side}-{key}"] = str(value)
 
     response = await client.post(
-        "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+        "/panel/hops", data=form, headers={"HX-Request": "true"}
     )
 
     assert response.status_code == 200, response.text
@@ -2265,7 +2280,7 @@ async def test_a_box_left_empty_is_refused_under_that_box(client) -> None:
     form[f"entry-{parameter}"] = ""
 
     response = await client.post(
-        "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+        "/panel/hops", data=form, headers={"HX-Request": "true"}
     )
 
     assert response.status_code == 422
@@ -2305,7 +2320,7 @@ async def test_a_pair_that_would_not_form_a_tunnel_is_refused_in_the_dialog(
             form[f"{side}-{key}"] = str(value)
 
     response = await client.post(
-        "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+        "/panel/hops", data=form, headers={"HX-Request": "true"}
     )
 
     assert response.status_code == 422
@@ -2324,7 +2339,7 @@ async def test_tearing_down_a_hop_confirms_first_then_says_what_is_left(client) 
     """
     entry_end = await a_hop(client)
 
-    confirmation = await client.get(f"/panel/hops/{entry_end}/tear-down")
+    confirmation = await client.get(f"/panel/hops/{entry_end}/dissolve")
 
     assert confirmation.status_code == 200
     assert "Tear down this hop?" in confirmation.text
@@ -2332,7 +2347,7 @@ async def test_tearing_down_a_hop_confirms_first_then_says_what_is_left(client) 
     assert "no exit at all" in confirmation.text
 
     done = await client.post(
-        f"/panel/hops/{entry_end}/tear-down", headers={"HX-Request": "true"}
+        f"/panel/hops/{entry_end}/dissolve", headers={"HX-Request": "true"}
     )
 
     assert done.status_code == 200
@@ -2582,28 +2597,27 @@ async def test_the_transports_screen_measures_the_image_and_never_the_people(
         )
 
 
-async def test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_for_a_list(
+async def test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_at_all(
     client,
 ) -> None:
-    """The Fleet entry's note is what is LEFT on that page, and it is now empty.
+    """The Fleet entry shrank screen by screen and went with the page in M9.6.
 
-    Nodes went in M9.1, hops in M9.2 and the capability table here, so every LIST that
-    page carried has its own screen. The entry itself stays until M9.6 — the actions it
-    carries have no home yet — but a note naming a list that has moved would send the
-    operator to the wrong screen.
+    Nodes went in M9.1, hops in M9.2, the capability table in M9.3, both rotations in
+    M9.4 and the last three actions in M9.5 — at which point the entry led to a page
+    that was the only way to do nothing. The entry, its ``note``, the ``boost`` flag that
+    made it an unboosted navigation and the CSS rule that drew the note all went with it.
     """
     from control.app.panel.routes import NAV
 
     body = (await client.get("/panel/")).text
 
     assert "/panel/transports" in body
-    assert next(item for item in NAV if item["key"] == "fleet")["note"] == ""
-    # Fleet is the only entry that can render a note at all, so this is the same claim
-    # said in markup. A later screen that wants one changes this line in front of a
-    # reviewer, which is the point of writing it out rather than deriving it.
+    assert [item["key"] for item in NAV if item["key"] == "fleet"] == []
+    # Said in markup as well, because NAV agreeing with itself proves nothing about what
+    # the sidebar rendered. A later screen wanting a note under its label reinstates both
+    # the key and the branch in nav.html, in front of a reviewer.
     assert "nav-note" not in body
-    # The page itself is still there and still works: M9.6 retires it, not this step.
-    assert (await client.get("/panel/fleet")).status_code == 200
+    assert (await client.get("/panel/fleet")).status_code == 404
 
 
 # --- Keys & configs (M9.4) ----------------------------------------------------
@@ -2687,7 +2701,7 @@ async def every_console_surface(client, reality_params) -> list[str]:
         *HOP_SURFACES,
         *TRANSPORT_SURFACES,
         *KEY_SURFACES,
-        f"/panel/hops/{entry_end}/tear-down",
+        f"/panel/hops/{entry_end}/dissolve",
         # Both rotation dialogs, on both kinds of row: one friend-facing transport and
         # one end of a hop. They are the surfaces closest to the material, so a sweep
         # that skipped them would skip the place a value would first appear.
@@ -2700,7 +2714,7 @@ async def every_console_surface(client, reality_params) -> list[str]:
         # it is addressed by a node-transport rather than by a node.
         f"/panel/nodes/{node_id}/transports",
         f"/panel/nodes/{node_id}/state",
-        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        f"/panel/transports/{node_transport_id}/withdraw",
     ]
 
 
@@ -2879,10 +2893,9 @@ async def test_no_console_surface_ever_shows_key_material(
     CI log would be a worse defect than the one it closes.
     """
     surfaces = await every_console_surface(client, reality_params)
-    # The pre-redesign pages are swept too. They are still part of the panel until M9.6
-    # retires them, and "anywhere in the console" is the claim.
-    node_id = (await client.get("/api/nodes")).json()[0]["id"]
-    surfaces += ["/panel/fleet", f"/panel/nodes/{node_id}"]
+    # The two pre-redesign pages used to be appended here, because "anywhere in the
+    # console" was the claim and they were part of the panel. M9.6 deleted them, so the
+    # list that IS the test is now the whole panel with nothing bolted on.
 
     held = await stored_material(session)
     # Non-vacuous by construction: a fleet holding nothing would pass this sweep for
@@ -3587,25 +3600,27 @@ async def test_a_rotation_refusal_repeats_no_sentence_wherever_it_is_rendered(
 ) -> None:
     """The one part of a refusal every caller renders without choosing to.
 
-    ``ParamsRefused.message`` goes into the error envelope and into the pre-redesign
-    page's ``outcome.html`` — a PANEL surface — with no filtering possible at either.
-    The console's own screen sorts ``fields`` and prints none of them on this path, but
-    that is a decision the console makes and those two surfaces cannot. So the ROTATION
-    path composes its message from the parameter NAMES and states the rule in place of
-    their sentences: that mapping is validated together with material minted moments
-    earlier, and a validator can quote what it rejected.
+    ``ParamsRefused.message`` goes into the error envelope of ``POST
+    /api/transports/{id}/rotate-keys`` with no filtering possible at all, and it went
+    into the pre-redesign page's ``outcome.html`` the same way until M9.6 deleted that
+    page. The console's own screen sorts ``fields`` and prints none of them on this
+    path, but that is a decision the console makes and a caller reading the envelope
+    cannot. So the ROTATION path composes its message from the parameter NAMES and
+    states the rule in place of their sentences: that mapping is validated together with
+    material minted moments earlier, and a validator can quote what it rejected.
 
-    Driven through the old page deliberately, because that is the surface the rule is
-    written about and the one this file's screen sweep cannot reach.
+    Driven through the API deliberately — the surface with no say in the matter, and the
+    one this file's screen sweep cannot reach. The console's answer to the same refusal
+    is asserted by ``test_no_answer_to_a_rotation_shows_what_it_minted``.
     """
     node_transport_id = await a_node_holding_material(client, reality_params)
     monkeypatch.setattr(
         rotation_service, "profile", lambda name: _RefusingProfile(_RefusesTheMapping)
     )
 
-    outcome = await client.post(f"/panel/transports/{node_transport_id}/rotate-keys")
+    outcome = await client.post(f"/api/transports/{node_transport_id}/rotate-keys")
 
-    assert outcome.status_code == 200
+    assert outcome.status_code == 400, outcome.status_code
     if VALIDATOR_SAID in outcome.text:
         pytest.fail("a rotation's refusal carried the transport's own words")
     reading = _reading(outcome.text)

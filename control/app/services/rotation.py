@@ -145,8 +145,8 @@ async def rotate_keys(
         # THE MESSAGE ITSELF NAMES THE PARAMETERS AND REPEATS NONE OF THEIR SENTENCES,
         # which is the difference between this raise and the one in ``replace_params``
         # below. The message is the one part of a refusal that every caller renders
-        # without choosing to — the pre-redesign page prints it into ``outcome.html``,
-        # and ``POST /api/transports/{id}/rotate-keys`` returns it in the envelope — so
+        # without choosing to — the console draws it as a banner, and
+        # ``POST /api/transports/{id}/rotate-keys`` returns it in the envelope — so
         # on the one path whose mapping holds freshly minted material it may not carry
         # words the transport wrote about a value. Nothing is lost by that: no field
         # here was offered to the operator to correct, so the actionable content is

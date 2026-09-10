@@ -51,7 +51,7 @@ PANEL_PAGES = (
     # M9.4's. Same rule, and this one has the strongest reason to be walked: it is the
     # screen whose whole subject is material that may never be rendered.
     "/panel/keys",
-    "/panel/fleet",
+    # ``/panel/fleet`` was the eighth entry until M9.6 deleted the page.
 )
 
 # The FRAGMENTS the console swaps in — dialogs and self-refreshing tables. They are
@@ -141,9 +141,9 @@ async def surfaces(operator, unique: str) -> list[str]:
         # bearer credential, and therefore the one whose markup matters most.
         f"/panel/friends/{friend_id}/subscription",
         f"/panel/friends/{friend_id}/revoke",
-        # The pre-redesign node page. Still part of the panel until M9.6 retires it,
-        # and it carries an inline script of its own.
-        f"/panel/nodes/{node.json()['id']}",
+        # The pre-redesign node page was walked here too, because it carried an inline
+        # script of its own. M9.6 deleted it and ``pages/base.html`` with it, so this
+        # list is now the whole panel with nothing bolted on.
         # M9.5's two node dialogs, added in the change that added them. The first is the
         # largest fragment on the Nodes screen — a group of boxes per transport this
         # image ships, every one of them carrying text this panel did not write.
@@ -200,7 +200,7 @@ async def _with_an_offer(operator, node_id: str) -> list[str]:
         },
     )
     assert enabled.status_code == 201, enabled.text
-    return [f"/panel/nodes/transports/{enabled.json()['id']}/withdraw"]
+    return [f"/panel/transports/{enabled.json()['id']}/withdraw"]
 
 
 async def _with_a_hop(operator, unique: str) -> list[str]:
@@ -262,7 +262,7 @@ async def _with_a_hop(operator, unique: str) -> list[str]:
     assert hop.status_code == 201, hop.text
     entry_end = hop.json()["entry"]["id"]
     return [
-        f"/panel/hops/{entry_end}/tear-down",
+        f"/panel/hops/{entry_end}/dissolve",
         f"/panel/keys/{entry_end}/rotate",
         f"/panel/keys/{entry_end}/params",
     ]
