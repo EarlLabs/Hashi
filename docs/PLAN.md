@@ -1036,6 +1036,30 @@ scenarios that already cover it must stay green against the new screens:
       down a hop, rotate keys, replace params.
 - [ ] Establishing a hop asks three questions; the other 24 parameters are behind
       the disclosure, each showing its own transport's default as a placeholder.
+      **Correction, 2026-09-10 — the second clause was written on an assumption
+      that was never true, and the line is left in place with this beside it.**
+      No shipped transport declares a default for any hop parameter, and none may
+      be manufactured in `control`. Checked one field at a time: `port` and the
+      two tunnel addresses are barred outright by `CLAUDE.md`'s "never hardcode a
+      country, provider, IP, domain or port"; `jc`/`jmin`/`jmax` and `h1`–`h4` are
+      exactly the case the "never ship a shared default Reality decoy" rule is
+      written about, and the transport says so at the field — a fleet-wide junk
+      profile *is* the fingerprint; and `mtu`, the one that looks mechanical, is
+      the one the transport most explicitly refuses to default (*"this hop is a
+      tunnel inside a tunnel, and the default fragments"*), so a control-side
+      value would be `control` overruling `edge` about a protocol. The count is
+      also wrong: `design/README.md:98` asks for "12 parameters per end" over an
+      11-parameter list, and the twelfth is the only one that declares a default.
+      **What the disclosure does instead** is state each field's requirement and
+      its own transport's constraints, and say *outside* the closed disclosure how
+      many boxes are mandatory — derived from the transport, never written down —
+      so an empty box means "this will be refused", not "use the default", and the
+      operator learns it before they submit rather than after 22 refusals. The
+      reasoning is recorded in `docs/decisions.md`.
+- [ ] The disclosure says, before it is opened, how many of its parameters this
+      transport requires. Derived from the transport; a written number goes stale.
+      **Added 2026-09-10 with the correction above** — it is what makes the
+      acceptance line below answerable at all.
 - [ ] No template names a transport, a country, an address or a port.
 - [ ] No key material appears anywhere in the panel; fingerprints are truncated.
 - [ ] `pages/index.html` and `pages/node.html` are gone and nothing links to them.
@@ -1044,7 +1068,12 @@ acceptance: yes
 On the stand, register a node, enable a transport on it and apply — every step
 from the new screens, with no URL typed by hand. Then establish a hop between two
 nodes and check the dialog lets you answer three questions and leave the tuning
-alone. Open the transports screen: it must name a protocol the panel refuses to
+alone. **Corrected 2026-09-10, same reason as the "done when" above: leaving the
+tuning alone does not establish a hop, because no shipped transport declares a
+default for any of its hop parameters and `control` may not invent one. What is
+being judged instead is that the dialog SAYS SO before you commit — the count of
+required boxes is visible while the disclosure is still shut — and that each
+refusal arrives under its own box in words an operator can act on.** Open the transports screen: it must name a protocol the panel refuses to
 offer as an exit and say why, in words. Then hunt for a private key anywhere in
 the console — you must not find one. Applying will fail on the stand, because
 there is no real host behind the node; that is expected, and what is being judged
