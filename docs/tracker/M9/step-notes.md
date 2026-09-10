@@ -143,9 +143,15 @@ neither, or that wears `role="alert"` without `banner-failure`, or that carries 
 label. `alert` vs `status` is the live-region distinction, so the a11y contract
 and the visual contract are the same assertion.
 
-**Read `carry-over.md` before you add a banner:** that scan still has known holes
-for banners *added* in unusual syntactic shapes. Do not take a green run as proof
-your new banner was inspected.
+**Two rules, and one place to check before you add a banner.** *One element, one
+banner* — declaring `class` or `role` twice, including once per Jinja branch, is
+a fault, because a browser keeps the first and drops the second. And *put the
+literal class name in the attribute*: `{{ 'banner-failure' if failed else '' }}`
+is seen by the scan, a variable holding the same string is not. The scan was
+hardened after M9.1 closed and now lexes each template with Jinja's own lexer and
+faults on any element it cannot parse — **the accurate record of what it still
+cannot see is `_banner_faults`'s own docstring**, which is the thing to read
+before you rely on a green run. `fix-notes.md` has the history.
 
 ## Mutations
 

@@ -34,17 +34,19 @@ intended design. Do not fix them as part of another step.
 Round 3 was the last of the cap and returned `VERDICT: 0 critical, 0 high`, so
 M9.1 converged. Two of its Mediums were nonetheless sent through a **fresh fix
 step-loop** rather than banked, because M9.2–M9.6 add four more screens and both
-findings mislead the implementer who reads them:
+findings misled the implementer who read them: the banner scan was blind to
+shapes of banner *added* alongside the existing three, and `panel/banner.html`'s
+own header comment still asserted the rule M9.1 superseded.
 
-1. the banner scan is sound against a banner that *replaces* an existing one but
-   blind to four shapes of banner *added* alongside them — a non-`div` element,
-   unquoted attribute values, a `>` inside the opening tag, and a
-   Jinja-conditional failure class. The last two are the plausible ones here: the
-   class attribute is already Jinja-assembled in `nodes_table.html` and
-   `overview_body.html`;
-2. `panel/banner.html`'s own header comment still asserted the rule this step
-   superseded (*"Not red: UI-PATTERNS §4"*), so the next implementer reading it at
-   the point of use was told the opposite of the decision.
+**Both are now fixed and the loop has closed** — see `fix-notes.md` for what the
+scan became, how hard it was attacked, and the four non-blocking findings left
+open there. Two things from it bind every later screen:
 
-See `fix-notes.md` for how they landed. **Until that loop closed, a green run of
-the banner scan was not proof your new banner was inspected.**
+- **One element, one banner.** Declaring `class` or `role` twice — including once
+  per Jinja branch — is a fault.
+- **Put the literal class name in the attribute.** A failure class arriving
+  through a variable or a `{% set %}` is invisible to the scan.
+
+**The accurate record of what the scan still cannot see is `_banner_faults`'s own
+docstring in `tests/control/test_the_console.py`.** Read that before you rely on
+a green run — not this file, which will age.
