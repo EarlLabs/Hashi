@@ -29,7 +29,14 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.models import Friend, Node, NodeState, Subscription, TransportPurpose
+from control.app.api import schemas
+from control.app.models import (
+    Friend,
+    Node,
+    NodeState,
+    Subscription,
+    TransportPurpose,
+)
 from control.app.services import apply, friends, nodes, relay
 from edge.bootstrap import node_stack
 from edge.registry import discover
@@ -54,6 +61,23 @@ class Stat:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class TransportChip:
+    """One transport enabled on a node, as the Nodes screen tags it.
+
+    ``name`` is whatever the transport declared about itself — the console compares it
+    to nothing, and the template that renders these prints it without ever naming one.
+    ``offered`` is the operator's own answer to "is this in a subscription", and
+    ``for_friends`` distinguishes a friend-facing transport from one end of a hop, so a
+    tunnel between two of our own nodes cannot be misread as something a person is
+    being offered.
+    """
+
+    name: str
+    offered: bool
+    for_friends: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class NodeRow:
     """A node as the console lists it."""
 
@@ -67,6 +91,10 @@ class NodeRow:
     # measurement of the people on it; this is a measurement of US — whether what the
     # node was last given still matches what we would give it now.
     drift: str
+    # What this node runs. A configuration fact and nothing else: it moves when the
+    # OPERATOR enables or withdraws a protocol and never when a friend connects, which
+    # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
+    transports: tuple[TransportChip, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -158,6 +186,16 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
             state=str(node.state),
             state_detail=node.state_detail,
             drift=await drift_of(session, node),
+            transports=tuple(
+                TransportChip(
+                    name=row.transport_name,
+                    offered=row.enabled,
+                    for_friends=row.purpose == TransportPurpose.FRIENDS,
+                )
+                # Sorted by name: this is a relationship load, and a column that
+                # reshuffles itself between reloads reads as the fleet changing.
+                for row in sorted(node.transports, key=lambda row: row.transport_name)
+            ),
         )
         for node in await nodes.list_nodes(session)
     ]
@@ -252,6 +290,50 @@ async def overview(session: AsyncSession) -> Overview:
         nodes=rows,
         friends=people,
     )
+
+
+def health_summary(name: str, health: schemas.HealthResponse) -> str:
+    """One node's probe result as a sentence the console can put on screen.
+
+    Composed here rather than in the route because it is the same judgement the old
+    panel's ``panel/health.html`` made in markup, and the console needs it as TEXT: a
+    probe answers into a toast when the node is fine and into a persistent banner when
+    it is not, and neither carries a template.
+
+    Note what it cannot say, because the value does not exist upstream: no client
+    count, no address, no traffic figure. Health means "is this node serving what we
+    told it to", and the charter's no-logging rule covers this screen like every other.
+
+    ``drifted`` and ``stale`` get their own sentences and are not collapsed into one:
+    they are different faults with different repairs, and M1 found a node in the field
+    reporting no drift while its daemon had never read the file it was reporting about.
+    """
+    if health.healthy:
+        running = ", ".join(health.running)
+        return (
+            f"{name} is serving {running}"
+            if running
+            else f"{name} answered, and has no transport enabled to serve"
+        )
+
+    reason = health.detail or "no reason was reported"
+    if not health.reachable:
+        return f"{name} could not be reached — {reason}"
+
+    parts = [f"{name} answered but is not serving — {reason}."]
+    if health.drifted:
+        parts.append(
+            "Its configuration differs from the one we would push; applying again "
+            "replaces it."
+        )
+    if health.stale:
+        parts.append(
+            "Something is running on a configuration older than the file on the node "
+            "— the file was replaced but the daemon was never restarted onto it. "
+            "Anyone revoked while it was in this state is still being served. Applying "
+            "again recreates the container."
+        )
+    return " ".join(parts)
 
 
 def _plural(count: int, noun: str, tail: str) -> str:

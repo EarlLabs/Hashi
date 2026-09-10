@@ -15,7 +15,41 @@
  * things the token sheet has no scale for — the 218px sidebar, the 38px stat value,
  * the 900px breakpoint, the 24px toast inset. They come from design/README.md and
  * are cited where they appear.
+ *
+ * ONE set of colours is declared here rather than borrowed: the danger hue below. It
+ * is a token the design system does not have, it may not be added to the vendored
+ * sheet (that file differs from the handoff by exactly one deleted @import and a test
+ * holds it there), and every rule that uses it goes through a var() like everything
+ * else.
  */
+
+/* ── the one hue the design system does not ship ──────────────────────────── */
+
+/* A REFUSAL HAS TO LOOK LIKE ONE. UI-PATTERNS §4 says "there is no red; the steel
+ * accent is the only colour", and that rule stands for STATUS and for destructive
+ * ACTIONS — a revoked tag is neutral, a revoke button is an ordinary secondary. It
+ * does not survive contact with a failure. The console's refusals were drawn in
+ * --color-accent-700, which is the same slate blue as the primary "add user" button
+ * and as the accent on the ordinary NOTE banner, so nothing about the colour said
+ * "wrong" and the only signal a request had been refused was the wording. That was
+ * an acceptance finding (docs/tracker/M8/acceptance-verdict.md), carried into M9
+ * because M9 extends this palette across four more screens.
+ *
+ * Settled once, here, so every screen inherits it and no screen gets an error colour
+ * of its own. The hue is the one the panel already had — the pre-redesign page's
+ * `--bad` (#c0392b) — with a light tint to sit on and a dark step for text, so the
+ * console and the page it replaces do not disagree about what red means. Three steps
+ * and no more, named like the design system's own ramp positions so a reader knows
+ * which is the ground, which is the edge and which is the text.
+ *
+ * What it may be used for: a request that was REFUSED or FAILED. Not for a status
+ * tag, not for a destructive button, not for a warning about configuration — those
+ * are §4's and stay steel. */
+:root {
+  --color-danger-100: #f8e7e4;
+  --color-danger-700: #c0392b;
+  --color-danger-900: #7d2419;
+}
 
 /* ── shell ────────────────────────────────────────────────────────────────── */
 
@@ -198,6 +232,30 @@
    pushing the page sideways (design/README.md, "Responsive"). */
 .table-scroll { overflow-x: auto; }
 
+/* A row of tags in one cell — the transports a node runs. Wraps rather than pushing
+   the column open: a node can carry several, and UI-PATTERNS §12 says a table gives
+   way inside its own panel instead of widening the page. */
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* The line above a screen's own table: an optional explainer on the left and the
+   screen's own creation action on the right, which UI-PATTERNS §2 says is SECONDARY —
+   the header's "add user" is the panel's one primary and there are never two solid
+   accent buttons on screen. Built for reuse by every fleet screen: with no note the
+   lone button sits right; with one, the note takes the space and pushes it there. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.section-head .section-note { margin-right: auto; }
+
 /* Row actions: UI-PATTERNS §3 — inline-flex, --space-2, secondary buttons, no red. */
 .row-actions {
   display: inline-flex;
@@ -295,8 +353,8 @@
    frame, so "the panel could not reach the control plane. Nothing was changed" and
    "No node is serving yet…" were drawn identically and stacked one above the other —
    an operator who reads the failure as an ordinary notice believes the action worked.
-   Still no red (UI-PATTERNS §4, the steel accent is the only colour): the weight comes
-   from the design system's own accent ramp, a thick edge, and a word saying so. */
+   The weight is a thick edge and a word saying so; the colour is the danger hue at the
+   top of this file, which is UI-PATTERNS §4's one exception and is documented there. */
 .banner {
   border: 1px solid var(--color-divider);
   padding: var(--space-3) var(--space-4);
@@ -308,12 +366,14 @@
 
 /* …and the failing one, which must not be mistakable for the notice above. The same
    element is what a failure inside a dialog gets (static/app.js), so a failure looks
-   the same wherever the operator meets it. */
+   the same wherever the operator meets it — and since M9 it carries the danger hue
+   declared at the top of this file, because weight alone left the operator reading
+   the colour of the primary button on a message that meant the opposite. */
 .banner-failure {
-  border-color: var(--color-accent-700);
+  border-color: var(--color-danger-700);
   border-left-width: 4px;
-  background: var(--color-accent-100);
-  color: var(--color-accent-900);
+  background: var(--color-danger-100);
+  color: var(--color-danger-900);
 }
 
 /* The word that carries the severity, per UI-PATTERNS §4. `flex: none` so a long
@@ -328,7 +388,7 @@
   flex: none;
 }
 
-.banner-failure .banner-label { color: var(--color-accent-800); }
+.banner-failure .banner-label { color: var(--color-danger-700); }
 
 .banner:empty { display: none; }
 .banner-slot:empty { display: none; }
@@ -336,19 +396,20 @@
 
 /* Field-level validation. Sits under the input it is about, never in a toast: a
    toast disappears and the operator is left looking at a form that will not submit.
-   Weighted and edged, because at 12px an accent-coloured sentence sat under the
-   nickname field looking exactly like the muted hint beside it — a refusal that reads
-   as help text is a refusal the operator does not notice. */
+   Weighted, edged AND in the danger hue: at 12px an accent-coloured sentence sat under
+   the nickname field looking exactly like the muted hint beside it, and once weighted
+   it still wore the same slate blue as the button that had just refused it. A refusal
+   that reads as help text is a refusal the operator does not notice. */
 .field-error {
   font-size: 12px;
   margin-top: 5px;
   padding-left: var(--space-2);
-  border-left: 2px solid var(--color-accent-700);
+  border-left: 2px solid var(--color-danger-700);
   font-weight: var(--font-heading-weight);
-  color: var(--color-accent-900);
+  color: var(--color-danger-900);
 }
 
-.input[aria-invalid="true"] { border-color: var(--color-accent); }
+.input[aria-invalid="true"] { border-color: var(--color-danger-700); }
 
 /* A limit stated before it is hit. Same place and size as .field-error, muted rather
    than accented, because it is not a complaint — it is what stops the operator ever
@@ -373,7 +434,24 @@
    heading, and the sentence naming whose access the URL is. */
 .dialog-title, .dialog-body { overflow-wrap: anywhere; }
 
-.dialog-wide { width: min(560px, 100%); }
+/* design/README.md sizes the add-node dialog at 560px. The height rule is the one it
+   states for the hop dialog and this one already needs it: seven fields and their
+   hints are taller than a laptop's viewport at the design's own type scale, and a
+   dialog whose buttons are below the fold is a dialog that cannot be cancelled. */
+.dialog-wide {
+  width: min(560px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+/* A form with more than one field needs its own vertical rhythm. `.dialog` is a flex
+   column, but the FORM is one of its children — the gap does not reach inside it. The
+   same gap, so a dialog whose body is a form is spaced like one whose body is not. */
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
 
 .dialog-code {
   padding: var(--space-3);

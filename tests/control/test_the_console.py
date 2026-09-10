@@ -1,7 +1,8 @@
-"""The redesigned console — the two screens M8 ports, and what they may not show.
+"""The redesigned console — the screens M8 and M9 port, and what they may not show.
 
-WHAT: the shell, Overview, Users, the add-user and subscription dialogs, the states
-      the design did not draw, and the four cells the charter forbids.
+WHAT: the shell, Overview, Users, Nodes, the add-user, subscription and add-node
+      dialogs, the states the design did not draw, and the four cells the charter
+      forbids.
 WHY:  the design (``design/README.md``) is right about the layout and wrong about
       four cells, because it was drawn without the charter in hand. ``docs/decisions.md``
       decision 6 replaced them. A decision recorded in a document decays; a decision
@@ -17,9 +18,15 @@ import re
 
 import pytest
 
-from control.app.errors import Conflict
+from control.app.api import schemas
+from control.app.errors import Conflict, NodeOperationFailed
 from control.app.panel import wording
+from control.app.services import apply as apply_service
 from control.app.services import friends as friends_service
+from control.app.services import health as health_service
+from control.app.services import nodes as nodes_service
+
+TEMPLATES = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "templates"
 
 STATIC = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "static"
 
@@ -337,6 +344,424 @@ async def test_an_incomplete_revocation_stays_on_screen(client, reality_params) 
     assert "toast" not in done.text
 
 
+# --- Nodes (M9.1) -------------------------------------------------------------
+
+# Every console screen, fragment and dialog M9.1 adds. THE LIST IS THE TEST
+# (docs/tracker/M8/step-notes.md): a surface that is not on a list is a surface nothing
+# walks, and the runtime half of this rule lives in
+# tests/e2e/control/test_the_panel_fetches_nothing_from_a_third_party.py.
+NODE_SURFACES = ("/panel/nodes", "/panel/nodes/table", "/panel/nodes/new")
+
+
+async def test_the_nodes_screen_lists_the_fleet(client, reality_params) -> None:
+    """The design's Nodes table: what a node is called, where it exits, what it runs."""
+    await a_serving_node(client, reality_params)
+
+    response = await client.get("/panel/nodes")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Nodes" in body
+    assert "leaf-1" in body
+    assert "192.0.2.10" in body
+    assert "Testland" in body
+    # The transport is named because it is DATA on the row, not because this screen
+    # knows any protocol: whatever was enabled is what appears.
+    assert "vless-reality" in body
+    # UI-PATTERNS §2: the screen's own creation action is secondary, above its table.
+    assert "add node" in body
+
+
+async def test_the_nodes_screen_measures_the_fleet_and_never_the_people(
+    client, reality_params
+) -> None:
+    """Decision 6 on the screen it was written about.
+
+    The design's Nodes table has a "load" column. A node's load is a measurement of the
+    people on it, so it is not here and never will be; ``config`` reads drift against
+    the digest we last applied, which is a measurement of us.
+    """
+    await a_serving_node(client, reality_params)
+
+    body = (await client.get("/panel/nodes")).text
+
+    assert ">config<" in body
+    assert ">load<" not in body
+    assert "never applied" in body
+    for cell in FORBIDDEN_CELLS:
+        assert cell not in body.lower(), (
+            f"the Nodes screen shows {cell!r}, which the charter says must not exist"
+        )
+
+
+async def test_an_empty_nodes_screen_names_the_next_action(client) -> None:
+    """M8.6's rule on M9's first screen: a first-time operator meets this one early."""
+    body = (await client.get("/panel/nodes")).text
+
+    assert "No nodes yet" in body
+    assert "add node" in body
+    assert "<table" not in body
+
+
+async def test_the_overview_sends_a_new_operator_to_the_nodes_screen(client) -> None:
+    """The Overview's node links pointed at the pre-redesign page until this screen
+    existed. M9.1 creates it, so M9.1 repoints them — a link to the page being retired
+    is a link that teaches the operator the wrong route to the job.
+
+    The Overview's BODY, not the whole document: the sidebar still has its honest Fleet
+    entry, because hops and the transports table have not moved yet. M9.5 removes that.
+    """
+    body = (await client.get("/panel/overview/body")).text
+
+    assert 'href="/panel/nodes"' in body
+    assert "/panel/fleet" not in body
+
+
+async def test_a_degraded_node_says_why_on_its_row(client, session) -> None:
+    """An unexplained degraded node is a node nobody fixes."""
+    from control.app.models import NodeState
+
+    created = await client.post(
+        "/api/nodes",
+        json={"name": "leaf-2", "address": "192.0.2.12", "location_label": "Testland"},
+    )
+    await nodes_service.set_node_state(
+        session,
+        node_id=created.json()["id"],
+        state=NodeState.DEGRADED,
+        detail="the host refused the key",
+    )
+
+    body = (await client.get("/panel/nodes/table")).text
+
+    assert "degraded" in body
+    assert "the host refused the key" in body
+
+
+# --- the add-node dialog ------------------------------------------------------
+
+async def test_the_add_node_dialog_shows_its_defaults_without_naming_them(client) -> None:
+    """M9's own rule: no template names a port.
+
+    The two SSH defaults are declared in services/nodes.py and rendered from there, so
+    the value the form suggests and the value the service applies to an empty box are
+    the same one — and changing it is a change in one place.
+    """
+    dialog = await client.get("/panel/nodes/new")
+
+    assert dialog.status_code == 200
+    assert "Add a node" in dialog.text
+    assert f'placeholder="{nodes_service.DEFAULT_SSH_PORT}"' in dialog.text
+    assert f'placeholder="{nodes_service.DEFAULT_SSH_USER}"' in dialog.text
+    # …and the template it came from names neither. Comments stripped first: this
+    # repository explains itself in prose, and the prose legitimately carries numbers.
+    source = re.sub(
+        r"\{#.*?#\}",
+        "",
+        (TEMPLATES / "panel" / "add_node_dialog.html").read_text(),
+        flags=re.S,
+    )
+    assert str(nodes_service.DEFAULT_SSH_PORT) not in source
+    assert nodes_service.DEFAULT_SSH_USER not in source
+
+
+async def test_adding_a_node_names_it_and_refreshes_the_table(client) -> None:
+    """The console's answer: the dialog closes, a toast names the node, the list
+    re-fetches itself. And what it says is what a draft node actually is."""
+    response = await client.post(
+        "/panel/nodes",
+        data={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "Add a node" not in response.text
+    assert "leaf-1 added — a draft until you apply it" in response.text
+    assert "nodes-changed" in response.headers.get("HX-Trigger", "")
+
+    listed = (await client.get("/api/nodes")).json()
+    assert [node["name"] for node in listed] == ["leaf-1"]
+    assert listed[0]["state"] == "draft"
+
+
+async def test_the_pre_redesign_form_still_gets_its_redirect(client) -> None:
+    """/panel/fleet's plain form posts to this same route and must keep working.
+
+    The old page is not deleted until M9.5, and until then it is the only home for
+    hops, for the transports table and for half the per-node actions. A browser POST
+    gets a 303 so a reload does not re-post; the console asks with htmx and gets the
+    console's answer. Deleting this branch before the page is what would break it.
+    """
+    response = await client.post(
+        "/panel/nodes",
+        data={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/panel/fleet"
+
+
+async def test_a_refused_node_comes_back_on_the_field_with_what_was_typed(
+    client,
+) -> None:
+    """M8.6 field-level validation, on a dialog with seven fields instead of one."""
+    payload = {
+        "name": "leaf-1",
+        "address": "192.0.2.10",
+        "location_label": "Testland",
+        "ssh_user": "operator",
+    }
+    await client.post("/panel/nodes", data=payload, headers={"HX-Request": "true"})
+
+    duplicate = await client.post(
+        "/panel/nodes", data=payload, headers={"HX-Request": "true"}
+    )
+
+    assert duplicate.status_code == 422
+    assert "already exists" in duplicate.text
+    assert 'aria-invalid="true"' in duplicate.text
+    # Still the add dialog, with everything the operator typed still in it.
+    assert "Add a node" in duplicate.text
+    for value in ("leaf-1", "192.0.2.10", "Testland", "operator"):
+        assert f'value="{value}"' in duplicate.text
+    assert len((await client.get("/api/nodes")).json()) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value,expected",
+    [
+        ("name", "", "required"),
+        ("address", "", "required"),
+        ("location_label", "", "required"),
+        ("name", "n" * 65, "64 characters or fewer"),
+        ("ssh_port", "not-a-number", "a whole number"),
+    ],
+)
+async def test_a_node_that_cannot_be_stored_is_refused_with_a_sentence(
+    client, field: str, value: str, expected: str
+) -> None:
+    """The defect M8 fixed for a nickname, closed here before it can happen.
+
+    Without this the panel trusted the form and an over-long name reached the column,
+    coming back as an opaque 500. The limits are the API schema's own — checked here
+    through that same model, so the two surfaces cannot drift about what a node is.
+    """
+    payload = {
+        "name": "leaf-1",
+        "address": "192.0.2.10",
+        "location_label": "Testland",
+        field: value,
+    }
+
+    response = await client.post(
+        "/panel/nodes", data=payload, headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 422
+    assert expected in response.text
+    assert (await client.get("/api/nodes")).json() == []
+
+
+async def test_the_private_key_never_comes_back_out_of_the_dialog(client) -> None:
+    """The one key the panel accepts is write-only.
+
+    Every other field is refilled when the dialog comes back, because retyping them is
+    the annoyance that makes an operator paste from somewhere worse. The key is not:
+    putting submitted key material back into markup would make the panel a place key
+    material appears, which is the one thing CLAUDE.md says it must never become.
+    """
+    key = "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-real-key\n"
+    payload = {
+        "name": "leaf-1",
+        "address": "192.0.2.10",
+        "location_label": "Testland",
+        "ssh_private_key": key,
+    }
+    await client.post("/panel/nodes", data=payload, headers={"HX-Request": "true"})
+
+    duplicate = await client.post(
+        "/panel/nodes", data=payload, headers={"HX-Request": "true"}
+    )
+
+    assert duplicate.status_code == 422
+    assert "not-a-real-key" not in duplicate.text
+    assert "BEGIN OPENSSH PRIVATE KEY" not in duplicate.text
+
+
+# --- applying and probing from the console ------------------------------------
+
+async def test_applying_a_node_names_it_in_a_toast(client, monkeypatch) -> None:
+    """UI-PATTERNS §8's own example: `config applied to fra-1`, not `Success!`.
+
+    The push itself is monkeypatched — there is no host behind a node in this suite,
+    and what is under test is what the console does with the answer.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+        )
+    ).json()["id"]
+
+    async def applied(session, *, node_id):
+        return {"vless-reality": "config"}
+
+    monkeypatch.setattr(apply_service, "apply_node", applied)
+
+    response = await client.post(f"/panel/nodes/{node_id}/push")
+
+    assert response.status_code == 200
+    assert "config applied to leaf-1" in response.text
+    assert "nodes-changed" in response.headers.get("HX-Trigger", "")
+
+
+async def test_a_failed_apply_stays_on_screen_in_plain_words(client, monkeypatch) -> None:
+    """The outcome a toast must not carry, and M9's acceptance walk in one test.
+
+    Applying fails on a stand with no real host behind the node. A failed apply marks
+    the node degraded, so the reason has to still be readable while the operator acts
+    on it — a message that removes itself after 2200ms is the wrong carrier, and a raw
+    error or a blank page is worse than either.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+        )
+    ).json()["id"]
+
+    async def refuse(session, *, node_id):
+        raise NodeOperationFailed("this node has no SSH key, so nothing could be pushed")
+
+    monkeypatch.setattr(apply_service, "apply_node", refuse)
+
+    response = await client.post(f"/panel/nodes/{node_id}/push")
+
+    assert response.status_code == 200
+    assert 'hx-swap-oob="innerHTML:#banner-slot"' in response.text
+    assert "banner-failure" in response.text
+    assert "no SSH key" in response.text
+    assert "toast" not in response.text
+
+
+@pytest.mark.parametrize(
+    "healthy,reachable,detail,carrier",
+    [
+        (True, True, None, "toast"),
+        (False, False, "the node did not answer", "banner"),
+    ],
+)
+async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
+    client, monkeypatch, healthy: bool, reachable: bool, detail: str | None, carrier: str
+) -> None:
+    """Good news disappears; a fault does not.
+
+    A node that cannot be reached, or one running a configuration older than the file
+    on it, is something the operator has to still be able to read while they fix it.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+        )
+    ).json()["id"]
+
+    async def probed(session, *, node_id):
+        return schemas.HealthResponse(
+            node_id=node_id,
+            reachable=reachable,
+            healthy=healthy,
+            running=["vless-reality"] if healthy else [],
+            missing=[],
+            drifted=[],
+            stale=[],
+            detail=detail,
+        )
+
+    monkeypatch.setattr(health_service, "check_node", probed)
+
+    response = await client.post(f"/panel/nodes/{node_id}/probe")
+
+    assert response.status_code == 200
+    assert "leaf-1" in response.text
+    if carrier == "toast":
+        assert "is serving" in response.text
+        assert "banner-failure" not in response.text
+    else:
+        assert "banner-failure" in response.text
+        assert "the node did not answer" in response.text
+        assert "toast" not in response.text
+
+
+async def test_no_probe_answer_says_anything_about_who_connected(
+    client, monkeypatch
+) -> None:
+    """Health means "is this node serving what we told it to", on every screen.
+
+    The value does not exist upstream, which is the real guarantee; this holds the
+    console's own sentence to it, because a summary is exactly where somebody would
+    one day add "and 4 clients".
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+        )
+    ).json()["id"]
+
+    async def probed(session, *, node_id):
+        return schemas.HealthResponse(
+            node_id=node_id,
+            reachable=True,
+            healthy=False,
+            running=["vless-reality"],
+            missing=[],
+            drifted=[],
+            stale=["vless-reality"],
+            detail="a container is up on an older configuration",
+        )
+
+    monkeypatch.setattr(health_service, "check_node", probed)
+
+    body = (await client.post(f"/panel/nodes/{node_id}/probe")).text
+
+    for cell in (*FORBIDDEN_CELLS, "client", "connected"):
+        assert cell not in _visible_text(body).lower()
+
+
+def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() -> None:
+    """M9's own done-when, held over every console template rather than the new ones.
+
+    A hardcoded value is a node you cannot rotate away from (CLAUDE.md), and a template
+    is where one hides best: it is not code, so no zone invariant reads it, and it is
+    not configuration, so nobody looks for it there. The shapes checked are the ones
+    these values actually take in markup — a dotted quad, a literal in a `value` or
+    `placeholder` attribute, a `:port` suffix, a country, an installed transport's own
+    name. The pre-redesign pages under templates/pages are deliberately not scanned:
+    they carry all four and M9.5 deletes them.
+    """
+    from edge.registry import discover
+
+    address = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+    port = re.compile(r'(?:value|placeholder)\s*=\s*"\s*\d+\s*"|:\d{2,5}\b')
+    country = re.compile(
+        r"\b(?:Netherlands|Germany|Iceland|Finland|Russia|Amsterdam|Frankfurt)\b",
+        re.IGNORECASE,
+    )
+    named = tuple(discover())
+
+    offenders = []
+    for path in sorted((TEMPLATES / "panel").rglob("*.html")):
+        markup = re.sub(r"\{#.*?#\}", "", path.read_text(), flags=re.S)
+        for pattern in (address, port, country):
+            offenders += [f"{path.name}: {found}" for found in pattern.findall(markup)]
+        offenders += [f"{path.name}: {name}" for name in named if name in markup]
+
+    assert offenders == [], (
+        f"a console template names a value that belongs in a node record: {offenders}"
+    )
+
+
 # --- what a browser is allowed to keep (acceptance round 1) -------------------
 
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
@@ -556,6 +981,7 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
         "/panel/friends/new",
         f"/panel/friends/{friend_id}/subscription",
         f"/panel/friends/{friend_id}/revoke",
+        *NODE_SURFACES,
     )
 
     for path in surfaces:
@@ -682,8 +1108,9 @@ async def test_a_failure_does_not_read_like_a_notice(client, reality_params) -> 
 
     The failure banner and the "no node is serving yet" notice were the same neutral
     frame, stacked one above the other — an operator who reads a failure as an
-    informational message believes the action worked. Still no red (UI-PATTERNS §4):
-    the weight is the accent ramp, the thick edge and the word.
+    informational message believes the action worked. The weight is a thick edge and the
+    word; the COLOUR is the danger hue M9 settled, and the test below is the one that
+    holds it.
     """
     await a_serving_node(client, reality_params)
     friend_id = (
@@ -698,7 +1125,7 @@ async def test_a_failure_does_not_read_like_a_notice(client, reality_params) -> 
     rules = _css_rules()
     assert "background" not in rules[".banner"]
     assert "background" in rules[".banner-failure"]
-    assert "accent" in rules[".banner-failure"]
+    assert "danger" in rules[".banner-failure"]
 
 
 async def test_the_notice_is_the_quiet_one_and_says_which_it_is(client) -> None:
@@ -721,6 +1148,39 @@ def test_a_refused_field_does_not_read_like_the_hint_beside_it() -> None:
     assert "font-weight" in rules[".field-error"]
     assert "border-left" in rules[".field-error"]
     assert "font-weight" not in rules[".field-hint"]
+
+
+def test_a_refusal_is_not_drawn_in_the_colour_of_the_button_that_refused_it() -> None:
+    """The M8 acceptance finding the owner carried into M9, settled once.
+
+    A refusal had its own weight but no error colour: `.field-error` was drawn in
+    --color-accent-700, the same slate blue as the primary "add user" button and as the
+    accent on the ordinary NOTE banner, over dark navy text on no background. Nothing
+    about the colour said "wrong", and the only signal was the wording.
+
+    Settled in the shared stylesheet rather than on one screen, so every screen M9 and
+    M10 add inherits it and no screen gets an error colour of its own. UI-PATTERNS §4's
+    "there is no red" still holds everywhere it was written about — a status tag, a
+    destructive button — and this is its one documented exception: a request that was
+    REFUSED or FAILED.
+    """
+    rules = _css_rules()
+
+    # The hue is declared once, as tokens, like everything else in this stylesheet.
+    assert "--color-danger-700" in rules[":root"]
+    for selector in (".field-error", ".banner-failure"):
+        assert "danger" in rules[selector], f"{selector} carries no error colour"
+        assert "accent" not in rules[selector], (
+            f"{selector} is still drawn in the accent that refused it"
+        )
+    # And the ordinary notice is untouched: it is not a failure and must not read as one.
+    assert "danger" not in rules[".banner"]
+    # The three roles UI-PATTERNS §4 gives a status tag stay steel.
+    assert not [
+        selector
+        for selector, body in rules.items()
+        if selector.startswith(".tag") and "danger" in body
+    ]
 
 
 def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:

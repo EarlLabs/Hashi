@@ -1,6 +1,6 @@
 """The admin panel — the screen the owner lives in.
 
-WHAT: login, the console (Overview and Users), the fleet page, and the actions on each.
+WHAT: login, the console (Overview, Users, Nodes), the fleet page, and the actions on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -14,11 +14,13 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 
 Two panels live here at once, on purpose and temporarily. The CONSOLE is the
 redesign in ``design/`` — a persistent sidebar over a swappable ``#main``, one screen
-per route, every creation flow in a dialog. Overview and Users are ported; the fleet
-screens follow in M9. Until they do, ``/panel/fleet`` serves the original single
-page and the sidebar has an honest entry pointing at it, because a dead nav link is
-worse than an ugly one. M9.5 retires that page once every action it carries has a new
-home — do not delete it before then.
+per route, every creation flow in a dialog. Overview, Users and Nodes are ported; the
+remaining fleet screens are the rest of M9. Until they land, ``/panel/fleet`` serves
+the original single page and the sidebar has an honest entry pointing at it, because a
+dead nav link is worse than an ugly one — and its note names only what is still there.
+M9.5 retires that page once every action it carries has a new home: still on it are
+enabling and withdrawing a transport, moving a node between states, hops, and key
+rotation. Do not delete it before then.
 """
 
 import logging
@@ -27,9 +29,11 @@ import pathlib
 from fastapi import APIRouter, Depends, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app import auth
+from control.app.api import schemas
 from control.app.dependencies import session_dependency
 from control.app.errors import DomainError
 from control.app.models import NodeState
@@ -110,12 +114,16 @@ async def logout(request: Request) -> Response:
 NAV = (
     {"key": "overview", "label": "Overview", "url": "/panel/", "boost": True, "note": ""},
     {"key": "friends", "label": "Users", "url": "/panel/friends", "boost": True, "note": ""},
+    {"key": "nodes", "label": "Nodes", "url": "/panel/nodes", "boost": True, "note": ""},
+    # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
+    # operator can tell from the sidebar which jobs have moved and which have not —
+    # nodes came out of it in M9.1. M9.5 removes this entry with the page.
     {
         "key": "fleet",
         "label": "Fleet",
         "url": "/panel/fleet",
         "boost": False,
-        "note": "nodes · hops · transports",
+        "note": "hops · transports",
     },
 )
 
@@ -240,6 +248,63 @@ async def add_friend_dialog(request: Request) -> Response:
     )
 
 
+# --- Nodes (M9.1) ------------------------------------------------------------
+
+# These three come BEFORE ``/nodes/{node_id}`` further down the file, and the order is
+# load-bearing: FastAPI matches in registration order, so a literal path declared after
+# a path parameter would be swallowed by it.
+
+@router.get("/nodes", response_class=HTMLResponse)
+async def nodes_screen(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Nodes — the machines that serve traffic and the machines that exit it."""
+    return _screen(
+        request,
+        screen="panel/screens/nodes.html",
+        current="nodes",
+        title="Nodes",
+        subtitle=(
+            "the machines a user's link resolves to, and whether each is running "
+            "what you told it to"
+        ),
+        context={"nodes": await console.node_rows(session)},
+    )
+
+
+@router.get("/nodes/table", response_class=HTMLResponse)
+async def nodes_table(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """The nodes table on its own, for the refresh after a mutation."""
+    return TEMPLATES.TemplateResponse(
+        request, "panel/nodes_table.html", {"nodes": await console.node_rows(session)}
+    )
+
+
+@router.get("/nodes/new", response_class=HTMLResponse)
+async def add_node_dialog(request: Request) -> Response:
+    """The empty add-node dialog. No session work: it asks for a record, not a fleet."""
+    return TEMPLATES.TemplateResponse(request, "panel/add_node_dialog.html", _node_form())
+
+
+def _node_form(values: dict | None = None, errors: dict | None = None) -> dict:
+    """What the add-node dialog needs, in one place so first paint and refusal agree.
+
+    ``defaults`` comes from ``services/nodes.py`` rather than from the template because
+    M9 forbids a template naming a port — and because the value the form suggests and
+    the value the service applies when the box is left empty must be the same one.
+    """
+    return {
+        "values": values or {},
+        "errors": errors or {},
+        "defaults": {
+            "ssh_user": nodes.DEFAULT_SSH_USER,
+            "ssh_port": nodes.DEFAULT_SSH_PORT,
+        },
+    }
+
+
 # --- the fleet page (pre-redesign; M9 ports its three screens) -----------------
 
 @router.get("/fleet", response_class=HTMLResponse)
@@ -338,34 +403,191 @@ async def node_detail(
 @router.post("/nodes", response_class=HTMLResponse)
 async def create_node(
     request: Request,
-    name: str = Form(...),
-    address: str = Form(...),
-    location_label: str = Form(...),
+    name: str = Form(""),
+    address: str = Form(""),
+    location_label: str = Form(""),
     ssh_host: str = Form(""),
-    ssh_user: str = Form("root"),
-    ssh_port: int = Form(22),
+    ssh_user: str = Form(""),
+    ssh_port: str = Form(""),
     ssh_private_key: str = Form(""),
     session: AsyncSession = Depends(session_dependency),
 ):
-    """Register a node from the panel. Redirects so a reload does not re-post.
+    """Register a node — from the console's dialog, or from the old page's form.
 
-    Back to the fleet page rather than to ``/panel/``, which is the console's Overview
-    now: the operator was on the page carrying the form and that is where the new node
-    appears.
+    ONE route with two answers, because two panels are live at once (see the module
+    docstring). The console asks with htmx and gets the console's answer: the dialog
+    closes, a toast names the node, and the table refreshes itself. The pre-redesign
+    form at /panel/fleet is a plain browser POST and still gets its 303 back to the
+    page it was submitted from, so a reload does not re-post. M9.5 deletes that page
+    and the redirect branch with it.
+
+    Every field arrives as text, including the port, and every one of them is checked
+    by ``schemas.NodeCreate`` — the API's own model, so the two surfaces cannot drift
+    about what a node record may contain. Before M9 this route trusted the form: an
+    over-long name reached the column and came back as an opaque 500, which is exactly
+    the defect M8 fixed one screen over for a nickname.
     """
-    await nodes.create_node(
-        session,
-        name=name,
-        address=address,
-        location_label=location_label,
-        ssh_host=ssh_host or None,
-        ssh_user=ssh_user,
-        ssh_port=ssh_port,
-        # Empty string means "not supplied" — storing "" would encrypt an empty key
-        # and make the failure look like a wrong key rather than a missing one.
-        ssh_private_key=ssh_private_key or None,
+    typed = {
+        "name": name.strip(),
+        "address": address.strip(),
+        "location_label": location_label.strip(),
+        "ssh_host": ssh_host.strip(),
+        "ssh_user": ssh_user.strip(),
+        "ssh_port": ssh_port.strip(),
+    }
+    try:
+        payload = schemas.NodeCreate(
+            name=typed["name"],
+            address=typed["address"],
+            location_label=typed["location_label"],
+            # An empty box means "the usual one", and the usual one is declared in
+            # services/nodes.py. Empty string means "not supplied" for the key too —
+            # storing "" would encrypt an empty key and make the failure look like a
+            # wrong key rather than a missing one.
+            ssh_host=typed["ssh_host"] or None,
+            ssh_user=typed["ssh_user"] or nodes.DEFAULT_SSH_USER,
+            ssh_port=typed["ssh_port"] or nodes.DEFAULT_SSH_PORT,
+            ssh_private_key=ssh_private_key or None,
+        )
+    except ValidationError as exc:
+        return _refuse_node(
+            request,
+            values=typed,
+            errors={
+                str(error["loc"][0]): _refused_field(error) for error in exc.errors()
+            },
+        )
+
+    try:
+        node = await nodes.create_node(session, **payload.model_dump())
+    except DomainError as exc:
+        # ``create_node`` refuses exactly one thing — a name already in the fleet — so
+        # the message goes under the name field rather than being guessed at. Through
+        # ``wording.for_the_page`` like every other sentence a service composes.
+        return _refuse_node(
+            request,
+            values=typed,
+            errors={"name": wording.for_the_page(exc.message)},
+        )
+
+    if not _is_htmx(request):
+        return RedirectResponse(url="/panel/fleet", status_code=status.HTTP_303_SEE_OTHER)
+
+    return _mutation(
+        request,
+        toast=f"{node.name} added — a draft until you apply it",
+        keeping=node.name,
+        events="nodes-changed",
     )
-    return RedirectResponse(url="/panel/fleet", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _refuse_node(request: Request, *, values: dict, errors: dict) -> Response:
+    """A refused node form, in whichever panel asked.
+
+    The console gets its dialog back at 422 with the message under the field it is
+    about — M8.6, and static/app.js allows exactly that one status to swap. The
+    pre-redesign form has nowhere to render a field error, so it keeps the behaviour it
+    has always had: a ``DomainError``, which the one exception handler turns into the
+    envelope every other refusal on that page already produces.
+    """
+    if not _is_htmx(request):
+        raise DomainError(" ".join(errors.values()))
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/add_node_dialog.html",
+        _node_form(values=values, errors=errors),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
+def _refused_field(error) -> str:
+    """One validation error as the sentence that goes under the field it is about.
+
+    Written here rather than passed through from Pydantic: its own messages are about
+    types ("String should have at most 64 characters"), and the panel speaks to an
+    operator. The limits themselves are never repeated — they are read back out of the
+    error, so the schema stays the only place they are declared.
+
+    Nothing in here names a port, a country or an address, including in the sentence
+    about a port being out of range: what the operator needs to know is that the value
+    is not one a node can listen on, and the range is the schema's business.
+    """
+    kind = error["type"]
+    if kind in {"missing", "string_too_short"}:
+        return "required — a node cannot be registered without it"
+    if kind == "string_too_long":
+        return f"{(error.get('ctx') or {}).get('max_length')} characters or fewer"
+    if kind in {"int_parsing", "int_type", "greater_than_equal", "less_than_equal"}:
+        return "a whole number, and one a node can listen on"
+    return "not a value this field can take"
+
+
+@router.post("/nodes/{node_id}/probe", response_class=HTMLResponse)
+async def probe_node_from_the_console(
+    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Ask a node what it is actually running, and say so on the console.
+
+    A healthy answer is a toast: it is good news and it does not need to survive the
+    next click. Anything else is a BANNER, which stays until the next successful
+    action — an unreachable node, or one running a configuration older than the file
+    on it, is a fault the operator has to still be able to read while they act on it.
+
+    Its own route rather than the ``/health`` one below because the two panels want
+    different answers to the same question: that one renders the old page's fragment
+    into ``#outcome``, this one is a console mutation. M9.5 deletes the other.
+    """
+    node = await nodes.get_node(session, node_id)
+    result = await health.check_node(session, node_id=node_id)
+    summary = console.health_summary(node.name, result)
+    return _mutation(
+        request,
+        toast=summary if result.healthy else None,
+        banner=None if result.healthy else summary,
+        keeping=node.name,
+        # A probe changes nothing, but it is the moment the operator most wants the
+        # row's own reading of the node refreshed beside the answer.
+        events="nodes-changed",
+    )
+
+
+@router.post("/nodes/{node_id}/push", response_class=HTMLResponse)
+async def push_node_from_the_console(
+    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Push this node's configuration to its host — the console's "apply".
+
+    ``push`` and not ``apply`` in the URL only because ``/apply`` still belongs to the
+    pre-redesign page below, which answers it with a different fragment; the word is
+    the codebase's own for the operation either way. M9.5 takes the shorter name back.
+
+    A failure is a banner rather than a toast, and that is the point of this button on
+    the stand: a failed apply marks the node degraded, and the operator has to be able
+    to read why while they fix it instead of watching it disappear after 2200ms.
+    """
+    node = await nodes.get_node(session, node_id)
+    try:
+        applied = await apply.apply_node(session, node_id=node_id)
+    except DomainError as exc:
+        # Shown, not raised: apply_node has already recorded the failure and marked the
+        # node degraded, and what the operator needs is the reason on the screen they
+        # are on rather than an error envelope.
+        return _mutation(
+            request,
+            banner=exc.message,
+            keeping=node.name,
+            events="nodes-changed",
+        )
+    return _mutation(
+        request,
+        toast=(
+            f"config applied to {node.name} — {', '.join(sorted(applied))}"
+            if applied
+            else f"{node.name} has nothing enabled to apply"
+        ),
+        keeping=node.name,
+        events="nodes-changed",
+    )
 
 
 @router.post("/nodes/{node_id}/transports", response_class=HTMLResponse)

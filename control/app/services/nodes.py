@@ -28,6 +28,14 @@ from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
 
+# What a node record gets when the operator leaves the SSH boxes empty. Named here
+# rather than typed into the panel's form because M9 forbids a template naming a port:
+# a value written into markup is one nobody can find when it has to change, and the
+# add-node dialog now renders these as its placeholders instead of carrying its own
+# copy. They are defaults for reaching a host we own, not a fact about any provider.
+DEFAULT_SSH_USER = "root"
+DEFAULT_SSH_PORT = 22
+
 
 # --- reading ----------------------------------------------------------------
 
@@ -163,8 +171,8 @@ async def create_node(
     address: str,
     location_label: str,
     ssh_host: str | None = None,
-    ssh_port: int = 22,
-    ssh_user: str = "root",
+    ssh_port: int = DEFAULT_SSH_PORT,
+    ssh_user: str = DEFAULT_SSH_USER,
     ssh_private_key: str | None = None,
 ) -> Node:
     """Register a node. It starts in ``draft`` and carries no traffic yet.

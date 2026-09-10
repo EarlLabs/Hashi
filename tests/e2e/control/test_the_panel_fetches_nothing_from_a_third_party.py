@@ -42,6 +42,7 @@ PANEL_PAGES = (
     "/panel/login",
     "/panel/",
     "/panel/friends",
+    "/panel/nodes",
     "/panel/fleet",
 )
 
@@ -60,6 +61,10 @@ PANEL_FRAGMENTS = (
     "/panel/friends/new",
     "/panel/friends/table",
     "/panel/overview/body",
+    # M9.1's two, added in the change that added the screen — which is the rule this
+    # list exists to enforce.
+    "/panel/nodes/new",
+    "/panel/nodes/table",
 )
 
 # Anything that is not a path on this host. A scheme-relative URL is included on

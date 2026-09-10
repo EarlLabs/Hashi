@@ -1,0 +1,102 @@
+{#
+  "Add a node" — the Nodes screen's own creation flow.
+
+  UI-PATTERNS §5: creation happens in a dialog, never inline on the page, and a dialog
+  is title → fields → one sentence on the consequence → actions with cancel secondary
+  and confirm primary. design/README.md sizes this one at 560px with its short fields
+  in two columns and the key on its own row, which is `.dialog-wide` and `.grid-2` —
+  the grid collapses under the one breakpoint that already exists (UI-PATTERNS §12).
+
+  NOTHING HERE NAMES A HOST, A COUNTRY OR A PORT. That is M9's own rule and it is why
+  the two SSH defaults arrive in `defaults` from services/nodes.py instead of being
+  typed into this file: a value written into markup is one nobody can find when it has
+  to change. The hints say what a box is for, in prose, and the boxes themselves are
+  empty until the operator fills them.
+
+  Re-rendered with `errors` set when the node is refused, so each message lands under
+  the field it is about — M8.6, and every value the operator typed comes back with it.
+  Every value EXCEPT the private key: see the note on that field. A toast would be the
+  wrong carrier for any of this, since it is gone in 2200ms and leaves the operator
+  looking at a form that will not submit.
+#}
+{% macro field(name, label, hint, value, errors, type="text", placeholder="", required=False) %}
+{# One text field with its label, hint, error and the aria wiring that ties the three
+   together. A macro rather than seven copies: the wiring is what silently rots when a
+   field is added, and there is exactly one copy of it here. #}
+<div class="field">
+  <label for="node-{{ name }}">{{ label }}</label>
+  <input class="input" id="node-{{ name }}" name="{{ name }}" type="{{ type }}"
+         value="{{ value or "" }}" placeholder="{{ placeholder }}"
+         autocomplete="off"{% if required %} required{% endif %}
+         aria-describedby="node-{{ name }}-hint{% if errors.get(name) %} node-{{ name }}-error{% endif %}"
+         {% if errors.get(name) %}aria-invalid="true"{% endif %}>
+  <div class="field-hint" id="node-{{ name }}-hint">{{ hint }}</div>
+  {% if errors.get(name) %}
+  <div class="field-error" id="node-{{ name }}-error" role="alert">{{ errors[name] }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+<div class="dialog-backdrop">
+  <div class="dialog dialog-wide blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="add-node-title">
+    <div class="dialog-title" id="add-node-title">Add a node</div>
+    <form class="dialog-form" hx-post="/panel/nodes"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="grid-2">
+        {{ field("name", "name", "64 characters or fewer. Yours to recognise it by.",
+                 values.get("name"), errors, required=True) }}
+        {{ field("address", "address users dial",
+                 "The hostname or address a user's client opens — not the one you administer it at, if the two differ.",
+                 values.get("address"), errors, required=True) }}
+        {{ field("location_label", "exit label",
+                 "What a user sees this node as — where its traffic comes out.",
+                 values.get("location_label"), errors, required=True) }}
+        {{ field("ssh_host", "ssh host",
+                 "Leave empty to administer it at the address above.",
+                 values.get("ssh_host"), errors) }}
+        {{ field("ssh_user", "ssh user", "Leave empty for the usual account.",
+                 values.get("ssh_user"), errors, placeholder=defaults.ssh_user) }}
+        {{ field("ssh_port", "ssh port", "Leave empty for the usual port.",
+                 values.get("ssh_port"), errors, placeholder=defaults.ssh_port) }}
+      </div>
+
+      {#
+        The one key this panel ever accepts, and it is write-only.
+
+        UI-PATTERNS §9 and CLAUDE.md: where key material could appear, the panel states
+        the rule instead. This box is the exception that proves it — it is how the
+        control plane is given the credential for reaching the host, and it is stored
+        encrypted and never rendered anywhere again. A transport's own keys are minted
+        on our side and never typed into any form.
+
+        Deliberately NOT refilled when this dialog comes back with an error, unlike
+        every other field: putting a submitted private key back into the markup would
+        make the panel a place key material appears, which is precisely what that rule
+        forbids. The hint says so, because a silently emptied box is how somebody
+        creates a node with no key and reads the failed apply as a broken host.
+      #}
+      <div class="field">
+        <label for="node-ssh_private_key">ssh private key</label>
+        <textarea class="input" id="node-ssh_private_key" name="ssh_private_key" rows="3"
+                  autocomplete="off" spellcheck="false"
+                  aria-describedby="node-ssh_private_key-hint"></textarea>
+        <div class="field-hint" id="node-ssh_private_key-hint">
+          Stored encrypted and never displayed again. Optional now — without it the node
+          can be registered but its configuration cannot be applied. This box is never
+          refilled, so if the form comes back, paste it again.
+        </div>
+      </div>
+
+      <div class="dialog-body">
+        A new node is a draft. It carries nobody until you enable a protocol on it,
+        apply that configuration, and put it into service — and no user has to do
+        anything when you do.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">add node</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>
