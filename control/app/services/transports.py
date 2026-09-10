@@ -448,10 +448,14 @@ def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
     by construction — ``operator_params`` filters on it — so ``required`` is true of all
     of them, and the placeholder can only ever be the shape the field will accept.
 
-    The narrowing that follows from ``operator_params``, stated rather than discovered:
-    a parameter the transport DEFAULTS gets no box here, so it cannot be set while
-    enabling. That is parity with the form this replaces and with the replace form
-    beside it; ``POST /api/nodes/{id}/transports`` still takes either.
+    What follows from ``operator_params``, stated rather than discovered: a parameter the
+    transport DEFAULTS gets no BOX here, the same as on the form this replaces — an
+    operator filling this dialog in cannot set one. It is not narrower than what the
+    route accepts, and that difference is deliberate: ``POST /panel/nodes/{id}/
+    transports`` reads every field of ``supplied_params``, so a submission that answers a
+    defaulted parameter is honoured rather than dropped. Do not read this as parity with
+    ``replaceable_params``, whose narrowing IS the accepted set and becomes permanent
+    when the old page goes.
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields

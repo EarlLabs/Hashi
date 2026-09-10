@@ -1206,6 +1206,154 @@ async def test_a_parameter_this_form_renders_no_box_for_is_still_not_discarded(
     assert row.params["decoy_port"] == 8443, row.params
 
 
+async def test_a_name_this_form_cannot_read_is_refused_rather_than_dropped(
+    client, session
+) -> None:
+    """A misspelled parameter is answered, not quietly replaced by a default.
+
+    Before this route read a submission against the transport's declaration, an unknown
+    name reached the model — which declares ``extra="forbid"`` — and came back as a
+    refusal. Filtering to what the form can read must not turn that into a 200 with the
+    transport's own default silently in its place: it is the same class as a defaulted
+    parameter being discarded, and the operator has no other way to find out.
+
+    Another GROUP's box is the one thing skipped rather than refused, and that is the
+    dialog's own markup rather than anything the operator typed —
+    ``test_another_transport_s_hidden_boxes_never_reach_the_chosen_one`` holds it.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "typo-1", "address": "192.0.2.54", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-port": "8443",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+            "decoy_prot": "8443",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422, refused.text
+    reading = _reading(refused.text)
+    assert "decoy_prot" in reading
+    assert "nothing was enabled" in reading
+    # And nothing was: a refusal that had already written the row would be worse than
+    # the silence it replaces.
+    session.expunge_all()
+    rows = (
+        (
+            await session.execute(
+                select(NodeTransport).where(NodeTransport.node_id == node_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
+
+
+def test_no_form_may_supply_what_a_transport_declares_as_material() -> None:
+    """The claim the widened route rests on, over every transport this image ships.
+
+    ``supplied_params`` is what ``POST /panel/nodes/{id}/transports`` reads a submission
+    against, and it is the only thing standing between a form and a minted value — the
+    guarantee used to be "the form renders no box for one", and widening the route past
+    its boxes retired that. So the set itself is asserted: both halves of
+    ``key_material_names`` (the material and the public counterpart it is delivered
+    under) are subtracted, for every installed transport, and a transport that declares
+    a new piece of material is covered the day it ships.
+
+    Non-vacuous by construction: a transport that declares no material at all proves
+    nothing here, so at least one must, and each one's own declaration is what is
+    subtracted rather than a written list.
+    """
+    from edge.registry import discover
+
+    declaring = 0
+    for name in sorted(discover()):
+        minted = transports_service.key_material_names(name)
+        supplied = transports_service.supplied_params(name)
+        assert supplied & minted == set(), (
+            f"{name}'s enable form would accept a value the control plane mints: "
+            f"{sorted(supplied & minted)}"
+        )
+        declaring += bool(minted)
+    assert declaring, "no transport in this image mints anything, so this proves nothing"
+
+
+@pytest.mark.parametrize("prefixed", (False, True), ids=("bare", "named for its group"))
+async def test_no_submission_can_name_a_value_the_control_plane_mints(
+    client, session, reality_params, prefixed: bool
+) -> None:
+    """The same claim at the route, in both shapes a submission can arrive in.
+
+    Enabling is the one panel action that MINTS, so a submission that names a minted
+    field is the shape to guard: the widened route reads every field the transport
+    declares, and what keeps a key out of that set is ``key_material_names`` alone. Both
+    lookups are tried, because the route has two — a bare name (the pre-redesign form's
+    shape) and one named for its own group (the console's).
+
+    The marker is checked against what the fleet actually HOLDS, decrypted, rather than
+    against the response: the failure this is about is a stored value, not a rendered
+    one. ``pytest.fail`` and never ``assert`` on that comparison — a rewritten assertion
+    prints both operands, and one of them is the node's private key.
+    """
+    marker = "MARKER-NOT-A-MINTED-VALUE"
+    material = sorted(transports_service.key_material_names("vless-reality"))
+    assert material, "this transport mints nothing, so this proves nothing"
+
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "minted-1", "address": "192.0.2.53", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    prefix = "vless-reality-" if prefixed else ""
+    enabled = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            f"{prefix}port": "8443",
+            f"{prefix}decoy_host": "www.example.com",
+            f"{prefix}server_names": "www.example.com",
+            **{f"{prefix}{name}": marker for name in material},
+        },
+        headers={"HX-Request": "true"} if prefixed else {},
+    )
+
+    # Refused, because a minted name is not a field this form can read — and refused is
+    # the answer rather than dropped, so a caller naming one is told which names. Each
+    # panel in the answer it can render: the console's dialog at 422, and the caller with
+    # no form the error envelope it has always had.
+    if prefixed:
+        assert enabled.status_code == 422, enabled.text
+        said = _reading(enabled.text)
+    else:
+        assert enabled.status_code == 400, enabled.text
+        said = enabled.json()["error"]["message"]
+    for name in material:
+        assert name in said, name
+
+    # And nothing was enabled, so nothing was minted and nothing was overwritten. The
+    # sweep runs against a fleet that HOLDS material, which is what makes it non-vacuous.
+    await a_node_holding_material(client, reality_params)
+    held = await stored_material(session)
+    assert held
+    for label, value in held.items():
+        if value == marker or marker in str(value):
+            pytest.fail(f"a submission named {label} and the value it named was stored")
+    rows = (await session.execute(select(NodeTransport))).scalars().unique()
+    for row in rows:
+        for field, value in row.params.items():
+            if marker in str(value):
+                pytest.fail(f"a submission set {field}, which the control plane mints")
+
+
 async def test_another_transport_s_hidden_boxes_never_reach_the_chosen_one(
     client, session
 ) -> None:

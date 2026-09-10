@@ -383,6 +383,28 @@ NO_DEFAULT = "required — this transport declares no default to fall back on"
 # of the form is built from.
 NO_TRANSPORT_CHOSEN = "required — choose which protocol this node should offer"
 
+# What a submission naming something this form cannot read is answered with. Above the
+# form and not under a box, because the name it is about has no box — that is the whole
+# complaint.
+#
+# REFUSED RATHER THAN DROPPED, and that is the same rule as the one above it: a value an
+# operator supplied is used or refused, never quietly ignored. Before this route filtered
+# anything, an unknown name reached the transport's model, which declares
+# ``extra="forbid"`` and refused it — so a misspelled parameter came back as a refusal
+# rather than as a node silently enabled with the transport's default in its place. That
+# is worth keeping, and the sentence covers a minted name in the same breath: a
+# submission cannot name one either, and being told why beats being told nothing.
+#
+# No rendered box can produce this. The console's own boxes are named for their group and
+# every one of them is a field its transport declares, and another group's boxes are
+# ignored rather than refused — a hidden input is the dialog's own doing, not the
+# operator's.
+NOT_ITS_PARAMETER = (
+    "nothing was enabled — this form cannot read: {names}. A parameter this transport "
+    "does not declare, or one the control plane mints for you, is never taken from a "
+    "submission."
+)
+
 
 @router.get("/nodes/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
 async def withdraw_transport_dialog(
@@ -1694,6 +1716,35 @@ async def enable_transport(
     def supplied(field: str) -> str:
         return typed.get(f"{transport_name}-{field}", typed.get(field, ""))
 
+    # A name this form cannot read. Another GROUP's boxes are skipped rather than
+    # refused: the dialog renders one group per transport and a hidden input is still
+    # submitted, so those arrive on every submission and are the markup's doing rather
+    # than the operator's. Everything else that is neither a declared field nor this
+    # transport's own prefixed box is the operator's, and is answered.
+    def another_group(field: str) -> bool:
+        return any(
+            field.startswith(f"{other}-")
+            for other in transports.offerable_transports()
+            if other != transport_name
+        )
+
+    unreadable = sorted(
+        field
+        for field in typed
+        if field != "transport_name"
+        and field not in declared
+        and field.removeprefix(f"{transport_name}-") not in declared
+        and not another_group(field)
+    )
+    if unreadable:
+        return await _refuse_the_form(
+            request,
+            session,
+            node_id,
+            typed,
+            failure=NOT_ITS_PARAMETER.format(names=", ".join(unreadable)),
+        )
+
     empty = [box.name for box in boxes if not supplied(box.name)]
     if empty:
         return await _refuse_the_form(
@@ -1717,11 +1768,16 @@ async def enable_transport(
     # every other node uses, which is the one substitution CLAUDE.md names outright: a
     # fleet that borrows one handshake is a fleet that can be enumerated.
     #
-    # What the lookup DOES strip is another group's boxes. The console renders a group
-    # per transport and a hidden input is still submitted, so a second transport's
-    # ``port`` arrives too — it is named ``<other>-port``, which is never a name looked
-    # up here. Nothing the transport does not declare reaches the model either, and key
-    # material is not in ``supplied_params`` at all, so no submission can name one.
+    # What the lookup DOES skip is another group's boxes. The console renders a group per
+    # transport and a hidden input is still submitted, so a second transport's ``port``
+    # arrives too — it is named ``<other>-port``, which is never a name looked up here.
+    # Anything ELSE this form cannot read was refused above rather than skipped, so the
+    # only thing dropped in silence is markup the dialog itself produced.
+    #
+    # Key material is not in ``supplied_params`` at all, so no submission can name one —
+    # asserted, not asserted-in-a-comment: see
+    # ``test_no_submission_can_name_a_value_the_control_plane_mints`` and
+    # ``test_no_form_may_supply_what_a_transport_declares_as_material``.
     params = transports.parse_form(
         transport_name, ((field, supplied(field)) for field in sorted(declared))
     )
@@ -1794,22 +1850,26 @@ async def _refuse_the_form(
     session: AsyncSession,
     node_id: str,
     typed: dict,
-    errors: dict,
+    errors: dict | None = None,
     *,
+    failure: str | None = None,
     plainly: str | None = None,
 ) -> Response:
     """A submission this panel refused before the service saw it, in whichever panel.
 
-    The console gets its dialog back at 422 with the message under the control it is
-    about. The pre-redesign form has nowhere to render a field error, so it keeps the
-    behaviour it has always had — a ``DomainError``, which the one exception handler
+    The console gets its dialog back at 422, with the message under the control it is
+    about when there is one and above the form when the complaint is about a name that
+    has no box. The pre-redesign form has nowhere to render a field error, so it keeps
+    the behaviour it has always had — a ``DomainError``, which the one exception handler
     turns into the envelope every other refusal on that page produces. Same split as
     ``_refuse_node``, and ``plainly`` is what that envelope says: the box NAMES without
     the group prefix, which is markup the caller with no form knows nothing about.
     """
     if not _is_htmx(request):
-        raise DomainError(plainly or " ".join(errors.values()))
-    return await _refuse_enable(request, session, node_id, values=typed, errors=errors)
+        raise DomainError(plainly or failure or " ".join((errors or {}).values()))
+    return await _refuse_enable(
+        request, session, node_id, values=typed, errors=errors, failure=failure
+    )
 
 
 @router.post("/nodes/{node_id}/apply", response_class=HTMLResponse)
