@@ -1,7 +1,7 @@
 """What the redesigned console puts on screen, and nothing more.
 
-WHAT: the Overview's four stat cards, the node rows they summarise, and the friend
-      rows the Users screen lists.
+WHAT: the Overview's four stat cards, the node rows they summarise, the friend rows
+      the Users screen lists, and the hop rows the Hops screen lists.
 WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       "throughput now", "last seen", node "load", and a whole Traffic screen. The
       charter's non-goals forbid every one of them: *"No traffic logging, no DNS
@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
+from control.app.errors import NotFound
 from control.app.models import (
     Friend,
     Node,
@@ -45,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 # What the drift cell can say. Strings rather than an enum because they are read only
 # by a template and by the operator; a state machine here would be ceremony.
+# What a hop's state tag can say. The same reasoning as the drift strings below: read
+# only by a template and by the operator, so a state machine here would be ceremony.
+# ``ESTABLISHED`` is deliberately narrower than "both ends exist" — see ``hop_rows``.
+HOP_ESTABLISHED = "established"
+HOP_PENDING = "pending"
+HOP_INCOMPLETE = "incomplete"
+
 IN_SYNC = "in sync"
 NEVER_APPLIED = "never applied"
 NOTHING_ENABLED = "nothing enabled"
@@ -107,6 +115,32 @@ class FriendRow:
     added: datetime.datetime
     nodes_served: int
     nodes_serving: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class HopRow:
+    """One entry→leaf hop as the console lists it.
+
+    ``id`` is the ENTRY end's node-transport id, which is what both the API and
+    ``relay.dissolve_hop`` address a hop by — the leaf end is reached through it, so a
+    row carries one id and not two.
+
+    ``leaf_node`` is ``None`` for half a hop, which is a state the operator has to be
+    able to see: the foreign key between the two ends is SET NULL rather than CASCADE
+    precisely so that removing one end leaves the other visible instead of silently
+    disappearing with it.
+
+    Nothing here moves when a friend connects. A hop's state moves when the operator
+    establishes it, applies it or tears it down, which is the test docs/decisions.md
+    sets for whether a cell may be on a screen at all.
+    """
+
+    id: str
+    entry_node: str
+    leaf_node: str | None
+    transport: str
+    state: str
+    since: datetime.datetime | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -225,6 +259,70 @@ async def friend_rows(session: AsyncSession) -> list[FriendRow]:
         )
         for friend in await friends.list_friends(session)
     ]
+
+
+async def hop_rows(session: AsyncSession) -> list[HopRow]:
+    """Every hop, in the words the Hops screen uses.
+
+    ``established`` means both ends exist AND both have had a configuration applied —
+    the same judgement the Overview's third stat card makes, and for the same reason:
+    a pair that exists only in the database is a tunnel that has not been brought up,
+    and calling it established is the panel telling the operator that traffic is
+    flowing through something nothing has pushed.
+    """
+    rows = []
+    for entry, leaf in await relay.list_hops(session):
+        if leaf is None:
+            state, since = HOP_INCOMPLETE, None
+        elif entry.applied_at and leaf.applied_at:
+            # The LATER of the two: a hop is only as applied as its least recently
+            # applied end, and the earlier timestamp would date it from before the
+            # tunnel could have come up.
+            state, since = HOP_ESTABLISHED, max(entry.applied_at, leaf.applied_at)
+        else:
+            state, since = HOP_PENDING, None
+        rows.append(
+            HopRow(
+                id=entry.id,
+                entry_node=entry.node.name,
+                leaf_node=leaf.node.name if leaf else None,
+                transport=entry.transport_name,
+                state=state,
+                since=since,
+            )
+        )
+    return rows
+
+
+async def hop_row(session: AsyncSession, node_transport_id: str) -> HopRow:
+    """One hop, projected exactly as the table projects it.
+
+    Found in the list rather than fetched on its own so that the tear-down dialog and
+    the row behind it cannot disagree about what the hop is called. The fleet is a
+    handful of nodes, and the alternative — a second query with its own joins — is the
+    shape that drifts.
+    """
+    for row in await hop_rows(session):
+        if row.id == node_transport_id:
+            return row
+    raise NotFound("no such hop")
+
+
+def tear_down_summary(affected: list[str]) -> str:
+    """What tearing a hop down leaves the operator to do, as one sentence.
+
+    Here rather than in the route for the same reason as ``health_summary``: prose
+    composed from a count is a judgement about the fleet, and routes in this codebase
+    do wiring. The count is nodes that still hold a tunnel to an exit that is now gone
+    — one of them when the hop was already half missing.
+    """
+    count = len(affected)
+    noun = "node" if count == 1 else "nodes"
+    verb = "it stops" if count == 1 else "they stop"
+    return (
+        f"hop torn down — re-apply {count} {noun} so {verb} holding a tunnel to an "
+        "exit that is no longer configured"
+    )
 
 
 async def overview(session: AsyncSession) -> Overview:

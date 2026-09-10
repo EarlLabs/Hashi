@@ -1,6 +1,7 @@
 """The admin panel — the screen the owner lives in.
 
-WHAT: login, the console (Overview, Users, Nodes), the fleet page, and the actions on each.
+WHAT: login, the console (Overview, Users, Nodes, Hops), the fleet page, and the
+      actions on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -14,13 +15,13 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 
 Two panels live here at once, on purpose and temporarily. The CONSOLE is the
 redesign in ``design/`` — a persistent sidebar over a swappable ``#main``, one screen
-per route, every creation flow in a dialog. Overview, Users and Nodes are ported; the
-remaining fleet screens are the rest of M9. Until they land, ``/panel/fleet`` serves
-the original single page and the sidebar has an honest entry pointing at it, because a
-dead nav link is worse than an ugly one — and its note names only what is still there.
-M9.6 retires that page once every action it carries has a new home: still on it are
-enabling and withdrawing a transport, moving a node between states, hops, and key
-rotation. Do not delete it before then.
+per route, every creation flow in a dialog. Overview, Users, Nodes and Hops are
+ported; the remaining fleet screens are the rest of M9. Until they land,
+``/panel/fleet`` serves the original single page and the sidebar has an honest entry
+pointing at it, because a dead nav link is worse than an ugly one — and its note names
+only what is still there. M9.6 retires that page once every action it carries has a new
+home: still on it are enabling and withdrawing a transport, moving a node between
+states, and key rotation. Do not delete it before then.
 """
 
 import logging
@@ -115,15 +116,17 @@ NAV = (
     {"key": "overview", "label": "Overview", "url": "/panel/", "boost": True, "note": ""},
     {"key": "friends", "label": "Users", "url": "/panel/friends", "boost": True, "note": ""},
     {"key": "nodes", "label": "Nodes", "url": "/panel/nodes", "boost": True, "note": ""},
+    {"key": "hops", "label": "Hops", "url": "/panel/hops", "boost": True, "note": ""},
     # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
     # operator can tell from the sidebar which jobs have moved and which have not —
-    # nodes came out of it in M9.1. M9.6 removes this entry with the page.
+    # nodes came out of it in M9.1 and hops in M9.2. M9.6 removes this entry with the
+    # page.
     {
         "key": "fleet",
         "label": "Fleet",
         "url": "/panel/fleet",
         "boost": False,
-        "note": "hops · transports",
+        "note": "transports",
     },
 )
 
@@ -319,6 +322,247 @@ def _node_form(
     }
 
 
+# --- Hops (M9.2) -------------------------------------------------------------
+
+# The two ends of a hop, in the order the topology forces: the entry is the node
+# friends dial and the one that DIALS OUT, because a node behind a Russian carrier NAT
+# cannot be dialled. ``prefix`` is what each end's parameters are named with in the
+# form, and it is the same prefix ``create_hop`` below has always stripped — declared
+# once here so the dialog that writes it and the route that reads it cannot drift.
+HOP_SIDES = (
+    {"prefix": "entry", "label": "entry end", "note": "the node users dial"},
+    {"prefix": "leaf", "label": "leaf end", "note": "the node traffic leaves from"},
+)
+
+# What a box that was left empty is answered with when the transport declares no
+# default for it. Field-level, at 422, like every other refusal in the console: a hop
+# with twenty-two parameters cannot be corrected from one sentence at the top.
+NO_DEFAULT = "required — this transport declares no default to fall back on"
+
+
+@router.get("/hops", response_class=HTMLResponse)
+async def hops_screen(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Hops — the tunnel a node's traffic leaves through, and where it comes out."""
+    return _screen(
+        request,
+        screen="panel/screens/hops.html",
+        current="hops",
+        title="Hops",
+        subtitle=(
+            "which node a user's traffic arrives at, and which node it leaves from"
+        ),
+        context={"hops": await console.hop_rows(session)},
+    )
+
+
+@router.get("/hops/table", response_class=HTMLResponse)
+async def hops_table(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """The hops table on its own, for the refresh after a mutation."""
+    return TEMPLATES.TemplateResponse(
+        request, "panel/hops_table.html", {"hops": await console.hop_rows(session)}
+    )
+
+
+@router.get("/hops/new", response_class=HTMLResponse)
+async def establish_hop_dialog(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """The empty establish-hop dialog. It needs the fleet: two of its three questions
+    are which node."""
+    return TEMPLATES.TemplateResponse(
+        request, "panel/establish_hop_dialog.html", await _hop_form(session)
+    )
+
+
+async def _hop_form(
+    session: AsyncSession,
+    values: dict | None = None,
+    errors: dict | None = None,
+    *,
+    failure: str | None = None,
+) -> dict:
+    """What the establish-hop dialog needs, in one place so first paint and refusal
+    agree.
+
+    ``tuning`` is per transport and comes from ``services/transports.py``, which reads
+    it out of the transport's own declaration. That is M9's "no template names a
+    transport, a country, an address or a port" made structural rather than checked:
+    this dialog has twenty-two boxes and not one of them has a value written into the
+    markup.
+
+    Everything the operator typed comes back on a refusal, all of it — unlike the
+    add-node dialog, which drops the private key. There is no key in this form to drop:
+    a hop's material is minted at both ends and the value the two must share is minted
+    once for both, so the panel never asks for one.
+    """
+    installed = transports.hop_transports()
+    return {
+        "nodes": await nodes.list_nodes(session),
+        "transports": installed,
+        "tuning": {name: transports.hop_tuning(name) for name in installed},
+        "sides": HOP_SIDES,
+        "values": values or {},
+        "errors": errors or {},
+        # A refusal the transport or the hop renderer composed, about the pair rather
+        # than about one box. Shown inside the dialog because that is where the
+        # operator is, and app.js clears it on the next attempt.
+        "failure": failure,
+        # A refusal is worthless behind a closed disclosure: the operator would read
+        # "11 parameters per end" and no message at all. Open it for a refusal that
+        # landed on a tuning box, and for one about the PAIR as well — everything the
+        # hop renderer refuses is a disagreement between two values that are in there.
+        "open_tuning": failure is not None or any("-" in key for key in (errors or {})),
+    }
+
+
+@router.post("/hops/establish", response_class=HTMLResponse)
+async def establish_hop(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Establish both ends of an entry→leaf tunnel from the console's dialog.
+
+    ``/hops/establish`` and not ``/hops`` only because ``POST /panel/hops`` still
+    belongs to the pre-redesign page below, which asks for it with htmx too and
+    answers into ``panel/outcome.html`` — so unlike the add-node form the two cannot
+    be told apart by a header. M9.6 takes the shorter name back when it deletes that
+    page.
+
+    The form is read the same way ``create_hop`` reads it: each end's parameters
+    arrive prefixed, the prefix is stripped, and below that line this function still
+    names no field of any protocol. What is added here is that the fields are
+    FILTERED to the chosen transport's own list before they are parsed — the dialog
+    renders a group per hop-capable transport and only hides the ones not chosen, so
+    without the filter a second transport's boxes would arrive and be refused by a
+    model that forbids extras.
+    """
+    form = await request.form()
+    typed = {key: str(value).strip() for key, value in form.multi_items()}
+    transport_name = typed.get("transport_name", "")
+
+    errors: dict[str, str] = {}
+    for question in ("entry_node_id", "leaf_node_id", "transport_name"):
+        if not typed.get(question):
+            errors[question] = "required — a hop cannot be established without it"
+
+    tuning = (
+        transports.hop_tuning(transport_name)
+        if transport_name in transports.hop_transports()
+        else ()
+    )
+    for side in HOP_SIDES:
+        for parameter in tuning:
+            field = f"{side['prefix']}-{parameter.name}"
+            if parameter.required and not typed.get(field):
+                errors[field] = NO_DEFAULT
+
+    if errors:
+        return await _refuse_hop(request, session, values=typed, errors=errors)
+
+    def supplied(prefix: str) -> dict:
+        return transports.parse_form(
+            transport_name,
+            (
+                (parameter.name, typed.get(f"{prefix}-{parameter.name}", ""))
+                for parameter in tuning
+            ),
+        )
+
+    try:
+        await relay.establish_hop(
+            session,
+            entry_node_id=typed.get("entry_node_id", ""),
+            leaf_node_id=typed.get("leaf_node_id", ""),
+            transport_name=transport_name,
+            entry_params=supplied("entry"),
+            leaf_params=supplied("leaf"),
+        )
+    except DomainError as exc:
+        # Shown in the dialog rather than raised: everything this refuses is about the
+        # PAIR — two ends on different tunnel networks, a node that is its own exit, a
+        # transport that cannot cross the border — so there is no one box to put it
+        # under, and the operator has to be able to read it beside what they typed.
+        return await _refuse_hop(
+            request, session, values=typed, failure=wording.for_the_page(exc.message)
+        )
+
+    return _mutation(
+        request,
+        # UI-PATTERNS §8: an action with a delayed real-world effect says so. Nothing
+        # is carrying traffic until both nodes are applied — until then the hop exists
+        # only in the database, and a toast reading "hop established" would be the
+        # panel telling the operator a tunnel is up that has never been pushed.
+        toast="hop establishing — apply both nodes to bring it up",
+        # Both, because a hop is two node-transport rows: the Nodes screen tags them on
+        # the two nodes it lists, and its table is refreshed by the other event.
+        events="hops-changed, nodes-changed",
+    )
+
+
+async def _refuse_hop(
+    request: Request,
+    session: AsyncSession,
+    *,
+    values: dict,
+    errors: dict | None = None,
+    failure: str | None = None,
+) -> Response:
+    """The establish-hop dialog again, at 422, with what was typed still in it."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/establish_hop_dialog.html",
+        await _hop_form(session, values=values, errors=errors, failure=failure),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
+@router.get("/hops/{node_transport_id}/tear-down", response_class=HTMLResponse)
+async def tear_down_hop_dialog(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """The confirmation. UI-PATTERNS §3: destructive actions confirm in a dialog."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/tear_down_hop_dialog.html",
+        {"hop": await console.hop_row(session, node_transport_id)},
+    )
+
+
+@router.post("/hops/{node_transport_id}/tear-down", response_class=HTMLResponse)
+async def tear_down_hop(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Remove both ends of a hop from the console, and say what is left to do.
+
+    Its own route rather than the ``/dissolve`` one below for the same reason as the
+    node's ``/push``: that one answers the pre-redesign page with a different
+    fragment. M9.6 takes the shorter name back.
+
+    A toast and not a banner: tearing a hop down is the operator's own deliberate act
+    and it succeeded. What it leaves behind — two nodes still holding a tunnel to an
+    exit that is gone — is in the sentence, and the row it names is gone from the table
+    behind it.
+    """
+    try:
+        affected = await relay.dissolve_hop(session, node_transport_id=node_transport_id)
+    except DomainError as exc:
+        # Shown, not raised: a hop that could not be torn down is a fault the operator
+        # has to still be able to read while they act on it.
+        return _mutation(request, banner=wording.for_the_page(exc.message))
+    return _mutation(
+        request,
+        toast=console.tear_down_summary(affected),
+        events="hops-changed, nodes-changed",
+    )
+
+
 # --- the fleet page (pre-redesign; M9 ports its three screens) -----------------
 
 @router.get("/fleet", response_class=HTMLResponse)
@@ -338,32 +582,15 @@ async def fleet(request: Request, session: AsyncSession = Depends(session_depend
             "nodes": await nodes.list_nodes(session),
             "transports": installed,
             "hops": await relay.list_hops(session),
-            # A hop's transport is one whose configuration is consumed as a FILE by a
-            # node rather than as a link by a phone — which is what
-            # ``subscription_expressible`` being false has always meant here, and it
-            # still means it after item 27. Offering the URI ones would invite the
-            # operator to build a tunnel out of a friend-facing link; offering only
-            # these makes the form say what it is for.
-            #
-            # Note the overlap this now allows and which is correct: a transport can be
-            # in this list AND offerable to friends. AmneziaWG is exactly that — it runs
-            # the border-crossing hop, and since item 26 it also serialises a file a
-            # friend can import.
-            #
-            # Since item 28 the filter also drops transports that declare they cannot
-            # carry a hop at all. Both conditions are needed and neither implies the
-            # other: plain WireGuard is a config file too, so the first alone would have
-            # offered it here — and the renderer would refuse it, after the operator had
-            # filled in a form.
-            "hop_transports": [
-                meta.name
-                for meta in installed
-                if not meta.subscription_expressible and meta.hop_capable
-            ],
+            # Which transports may carry a hop, and why both of its conditions are
+            # needed, is ``transports.hop_transports``. It moved there in M9.2 because
+            # the console's own establish-hop dialog asks the same question, and two
+            # copies of "may this protocol cross the border" is the drift that would
+            # offer a blocked one on one screen and not the other.
+            "hop_transports": transports.hop_transports(),
             "hop_params": {
-                meta.name: transports.operator_params(meta.name)
-                for meta in installed
-                if not meta.subscription_expressible and meta.hop_capable
+                name: transports.operator_params(name)
+                for name in transports.hop_transports()
             },
         },
     )
@@ -750,13 +977,18 @@ async def node_health(
     return TEMPLATES.TemplateResponse(request, "panel/health.html", {"health": result})
 
 
-# --- hops between nodes (item 16), from the panel -----------------------------
+# --- hops between nodes (item 16), from the PRE-REDESIGN page -----------------
+#
+# The console's own hop routes are in the Hops section further up. These two stay
+# because /panel/fleet still carries a hop form and asks for them with htmx, so unlike
+# the add-node form they cannot be told apart from the console's by a header. M9.6
+# deletes the page and takes the two shorter names back.
 
 @router.post("/hops", response_class=HTMLResponse)
 async def create_hop(
     request: Request, session: AsyncSession = Depends(session_dependency)
 ):
-    """Establish both ends of an entry→leaf tunnel from one form.
+    """Establish both ends of an entry→leaf tunnel from one form — the OLD page's.
 
     The form carries each end's parameters prefixed with ``entry-`` / ``leaf-``. The
     prefix is stripped here and nowhere else: below this line the two mappings are

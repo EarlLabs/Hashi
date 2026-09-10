@@ -186,6 +186,10 @@
 .stack-8 { display: flex; flex-direction: column; gap: var(--space-8); }
 
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6); }
+/* Built as repeat(N, minmax(0, 1fr)) like its siblings, so it collapses under the one
+   breakpoint rather than needing one of its own (UI-PATTERNS §12). The gap is smaller:
+   this one holds the hop dialog's three questions inside a 620px box, not a screen. */
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
 .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-6); }
 
 /* ── type and table helpers ───────────────────────────────────────────────── */
@@ -457,6 +461,65 @@
   gap: var(--space-3);
 }
 
+/* design/README.md sizes the establish-hop dialog at 620px and states the height rule
+   there first: three questions plus twenty-two tuning boxes is far taller than a
+   laptop's viewport, and a dialog whose cancel button is below the fold is a dialog
+   that cannot be cancelled. Its own class rather than a wider .dialog-wide, because
+   the add-node dialog is 560px and widening it to suit this one would leave six short
+   fields floating in a box drawn for twenty-five. */
+.dialog-hop {
+  width: min(620px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+/* UI-PATTERNS §6 — progressive disclosure. The summary is the label that states the
+   COST of opening it, so it reads as a heading rather than as a link, and the rule
+   above it separates the three decisions from the knobs. */
+.disclosure {
+  border-top: 1px solid var(--color-divider);
+  padding-top: var(--space-3);
+}
+
+.disclosure > summary {
+  cursor: pointer;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+
+.disclosure > summary + * { margin-top: var(--space-3); }
+
+/* One end's parameters. A column per end, side by side, collapsing under the one
+   breakpoint that already exists (UI-PATTERNS §12) because it is a .grid-2. */
+.tuning-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tuning-side h4 { margin: 0; }
+
+/* design/README.md draws these as `label 1fr | input 92px` rows. The input is wider
+   here and the reason is in the data: 92px was drawn for the short numeric knobs, and
+   these boxes also take a tunnel address with its prefix, which does not fit — a value
+   the operator cannot read back is a value they retype. The label may wrap; the row
+   grows with it. */
+.tuning-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 136px);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A parameter name is a machine value and wears `.mono` in the markup for it
+   (UI-PATTERNS §7). All this adds is that it may wrap: these are the longest names in
+   the panel and the row grows rather than the dialog widening. */
+.tuning-field label { overflow-wrap: anywhere; }
+
+/* The hint and the refusal belong to the row, not to one of its columns. */
+.tuning-field .field-hint,
+.tuning-field .field-error { grid-column: 1 / -1; }
+
 .dialog-code {
   padding: var(--space-3);
   border: 1px solid var(--color-divider);
@@ -511,5 +574,5 @@
   .sidenav-list { flex-direction: row; }
   .sidenav-list a { white-space: nowrap; }
   .sidenav-foot { margin-top: 0; margin-left: auto; flex-direction: row; align-items: center; }
-  .grid-2, .grid-4 { grid-template-columns: minmax(0, 1fr); }
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: minmax(0, 1fr); }
 }

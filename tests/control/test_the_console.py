@@ -1,8 +1,8 @@
 """The redesigned console — the screens M8 and M9 port, and what they may not show.
 
-WHAT: the shell, Overview, Users, Nodes, the add-user, subscription and add-node
-      dialogs, the states the design did not draw, and the four cells the charter
-      forbids.
+WHAT: the shell, Overview, Users, Nodes, Hops, the add-user, subscription, add-node,
+      establish-hop and tear-down dialogs, the states the design did not draw, and the
+      four cells the charter forbids.
 WHY:  the design (``design/README.md``) is right about the layout and wrong about
       four cells, because it was drawn without the charter in hand. ``docs/decisions.md``
       decision 6 replaced them. A decision recorded in a document decays; a decision
@@ -13,6 +13,7 @@ HOW:  the in-process client from conftest, already holding an operator session. 
       for.
 """
 
+import html.parser
 import pathlib
 import re
 
@@ -26,6 +27,8 @@ from control.app.services import apply as apply_service
 from control.app.services import friends as friends_service
 from control.app.services import health as health_service
 from control.app.services import nodes as nodes_service
+from control.app.services import transports as transports_service
+from edge.registry import profile
 
 TEMPLATES = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "templates"
 
@@ -808,6 +811,483 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
     )
 
 
+# --- Hops (M9.2) --------------------------------------------------------------
+
+# THE LIST IS THE TEST. Every hop surface, so the decision-9 sweep below walks them
+# and a later screen cannot quietly drop one. The tear-down dialog needs a hop and is
+# added to that sweep separately.
+HOP_SURFACES = ("/panel/hops", "/panel/hops/table", "/panel/hops/new")
+
+# The three questions the design says this dialog may ask, in the order it asks them.
+# Written out rather than derived, because THIS is the claim: a later screen that adds
+# a fourth question has to change this line, in front of a reviewer.
+THE_THREE_QUESTIONS = ("entry_node_id", "leaf_node_id", "transport_name")
+
+
+def a_hop_transport() -> str:
+    """Whichever installed transport may carry a hop. Never a literal.
+
+    The suite discovers it the same way the panel does, so this file does not become
+    the place a protocol name is written down — and a fleet whose hop transport is
+    replaced does not need this file edited.
+    """
+    installed = transports_service.hop_transports()
+    assert installed, "this image ships nothing that can carry a hop"
+    return installed[0]
+
+
+def hop_side(address: str, peer: str, port: int = 51820) -> dict:
+    """One end's operator-supplied parameters, as the API takes them.
+
+    The same block ``tests/e2e/control/test_a_hop_never_reaches_a_friend.py`` uses.
+    RFC 5737 documentation addresses are not private, so the tunnel addresses are
+    RFC 1918 — the transport's own model refuses a public range, for the reason it
+    states there.
+    """
+    return {
+        "port": port,
+        "tunnel_address": address,
+        "peer_tunnel_address": peer,
+        "mtu": 1280,
+        "junk_packet_count": 4,
+        "junk_packet_min_size": 40,
+        "junk_packet_max_size": 80,
+        "init_packet_magic_header": 1020327352,
+        "response_packet_magic_header": 2060487442,
+        "underload_packet_magic_header": 3679305607,
+        "transport_packet_magic_header": 1436947798,
+    }
+
+
+async def two_nodes(client) -> tuple[str, str]:
+    """An entry and a leaf. Named so they cannot collide with ``a_serving_node``'s,
+    which the decision-9 sweep creates in the same database."""
+    ids = []
+    for name, address, label in (
+        ("entry-1", "192.0.2.20", "Entryland"),
+        ("exit-1", "192.0.2.10", "Exitland"),
+    ):
+        created = await client.post(
+            "/api/nodes",
+            json={"name": name, "address": address, "location_label": label},
+        )
+        assert created.status_code == 201, created.text
+        ids.append(created.json()["id"])
+    return ids[0], ids[1]
+
+
+async def a_hop(client) -> str:
+    """One established hop. Returns the ENTRY end's id, which is what addresses it."""
+    entry_id, leaf_id = await two_nodes(client)
+    created = await client.post(
+        "/api/hops",
+        json={
+            "entry_node_id": entry_id,
+            "leaf_node_id": leaf_id,
+            "transport_name": a_hop_transport(),
+            "entry_params": hop_side("10.44.0.1/24", "10.44.0.2/24"),
+            "leaf_params": hop_side("10.44.0.2/24", "10.44.0.1/24"),
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["entry"]["id"]
+
+
+class _Controls(html.parser.HTMLParser):
+    """Every named form control in a document, and whether it is behind a disclosure.
+
+    Written here rather than pulled in, because adding a dependency to `control`'s test
+    path is an architect decision and the stdlib parser is enough: this reads RENDERED
+    markup, not a template, so none of the Jinja that defeats it is present.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.controls: list[tuple[str, dict, bool]] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "details":
+            self._depth += 1
+        if tag in {"input", "select", "textarea"}:
+            attributes = dict(attrs)
+            if attributes.get("name"):
+                self.controls.append(
+                    (attributes["name"], attributes, self._depth > 0)
+                )
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "details" and self._depth:
+            self._depth -= 1
+
+
+def _form_controls(markup: str) -> list[tuple[str, dict, bool]]:
+    parser = _Controls()
+    parser.feed(markup)
+    return parser.controls
+
+
+async def test_the_hops_screen_lists_the_fleet_s_tunnels(client) -> None:
+    """design/README.md §4: entry, leaf, transport, state, established, tear down."""
+    await a_hop(client)
+
+    response = await client.get("/panel/hops")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Hops" in body
+    assert "entry-1" in body and "exit-1" in body
+    # The transport is named because it is DATA on the row, not because this screen
+    # knows any protocol: whatever carries the hop is what appears.
+    assert a_hop_transport() in body
+    # Neither end has been applied, so the hop is not established and must not say it
+    # is — nothing is carrying traffic until both nodes are pushed.
+    assert "pending" in body
+    assert "not yet — apply both nodes" in body
+    assert "establish hop" in body
+    assert "tear down" in body
+
+
+async def test_an_empty_hops_screen_says_what_no_hop_means(client) -> None:
+    """A first-time operator meets this one before they have two nodes."""
+    body = (await client.get("/panel/hops")).text
+
+    assert "No hops yet" in body
+    assert "establish hop" in body
+    assert "<table" not in body
+
+
+async def test_the_hops_screen_measures_the_fleet_and_never_the_people(client) -> None:
+    """Decision 6 on a screen it was not written about, which is the point of it."""
+    await a_hop(client)
+
+    body = (await client.get("/panel/hops")).text.lower()
+
+    for cell in FORBIDDEN_CELLS:
+        assert cell not in body, (
+            f"the Hops screen shows {cell!r}, which the charter says must not exist"
+        )
+    assert "throughput" not in body
+
+
+async def test_establishing_a_hop_asks_three_questions(client) -> None:
+    """M9's own done-when, held mechanically rather than by looking at a screenshot.
+
+    "Asks three questions" is not a claim about how the dialog LOOKS. It is a claim
+    about where its form controls are: exactly three outside the disclosure, and every
+    other parameter — both ends of them — inside one. A later screen that adds a fourth
+    question, or that lifts one knob out of the disclosure "just this once", fails
+    here, which is the only way this claim survives four more screens.
+    """
+    await two_nodes(client)
+    transport = a_hop_transport()
+
+    dialog = await client.get("/panel/hops/new")
+
+    assert dialog.status_code == 200
+    assert "Establish a hop" in dialog.text
+    controls = _form_controls(dialog.text)
+
+    outside = [name for name, _, behind in controls if not behind]
+    assert tuple(outside) == THE_THREE_QUESTIONS, (
+        f"the hop dialog asks {len(outside)} questions before the disclosure: {outside}"
+    )
+
+    # And every remaining parameter is inside it, for BOTH ends — a hop's two ends are
+    # not interchangeable, so one shared set of boxes would be a different bug.
+    inside = {name for name, _, behind in controls if behind}
+    expected = {
+        f"{side}-{parameter.name}"
+        for side in ("entry", "leaf")
+        for parameter in transports_service.hop_tuning(transport)
+    }
+    assert inside == expected
+    # The summary states the cost of opening it, in the transport's own count.
+    assert f"{len(transports_service.hop_tuning(transport))} parameters per end" \
+        in dialog.text
+
+
+async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> None:
+    """The other half of the claim: an empty box has to mean something visible.
+
+    A placeholder that is ABSENT leaves the operator with a bare box and no way to
+    know what it takes; one that shows a value the transport would not actually use is
+    worse, because it reads as a promise the form does not keep. So every box carries
+    the transport's own declaration, and this test recomputes what that is from the
+    model rather than from the function under test.
+    """
+    await two_nodes(client)
+    transport = a_hop_transport()
+    fields = profile(transport).params_model.model_fields
+
+    controls = _form_controls((await client.get("/panel/hops/new")).text)
+    behind = {name: attrs for name, attrs, is_behind in controls if is_behind}
+    assert behind, "nothing is behind the disclosure at all"
+
+    for name, attrs in behind.items():
+        parameter = name.split("-", 1)[1]
+        info = fields[parameter]
+        placeholder = attrs.get("placeholder", "")
+        assert placeholder, f"{name} has no placeholder, so an empty box says nothing"
+
+        if not info.is_required():
+            # The transport declares a default, so the box may promise it — and the
+            # promise is kept: an empty box is dropped before the model sees it
+            # (services/transports.py:parse_form) and the model fills it with this.
+            assert placeholder == str(info.get_default(call_default_factory=True)), name
+            continue
+
+        # No default to promise, so the box states what it will accept — either in the
+        # transport's own words, or as the range it declared.
+        if placeholder == (info.description or "").strip():
+            continue
+
+        # A range, and every number in it has to come from the field's own constraints
+        # or from the transport's declared port range — never from a value written into
+        # a template.
+        declared = {
+            str(getattr(constraint, edge, None))
+            for constraint in info.metadata
+            for edge in ("ge", "le", "gt", "lt")
+        }
+        declared |= {str(bound) for bound in profile(transport).meta.port_range}
+        for number in re.findall(r"\d+", placeholder):
+            assert number in declared, (
+                f"{name}'s placeholder shows {number}, which its transport declares "
+                "nowhere"
+            )
+
+
+async def test_the_hop_dialog_never_asks_for_key_material(client) -> None:
+    """A hop mints keys at both ends, and the panel must not become where they surface.
+
+    Absent by construction rather than by omission: the list comes from
+    ``operator_params``, which subtracts everything the transport declared as key
+    material — including the public counterpart of a secret, which is derived and never
+    typed. The value the two ends must share is minted once for both
+    (``KeySpec.shared_between_peers``), so there is nothing here for an operator to
+    keep consistent by hand and nothing to type.
+    """
+    await two_nodes(client)
+    transport = a_hop_transport()
+    minted = set()
+    for spec in profile(transport).meta.key_material:
+        minted.add(spec.name)
+        if spec.public_name:
+            minted.add(spec.public_name)
+    assert minted, "this transport declares no key material, so this proves nothing"
+
+    dialog = await client.get("/panel/hops/new")
+
+    asked = {
+        name.split("-", 1)[-1] for name, _, _ in _form_controls(dialog.text)
+    }
+    assert not (asked & minted), f"the hop dialog asks for key material: {asked & minted}"
+    for name in minted:
+        assert name not in dialog.text, f"{name} is named in the hop dialog"
+
+
+async def test_establishing_a_hop_names_what_is_left_to_do(client) -> None:
+    """The console's answer: the dialog closes, a toast says the hop is not up YET.
+
+    "hop established" would be the panel telling the operator a tunnel is carrying
+    traffic when nothing has been pushed to either host — UI-PATTERNS §8 asks an action
+    with a delayed real-world effect to say so.
+    """
+    entry_id, leaf_id = await two_nodes(client)
+    form = {
+        "entry_node_id": entry_id,
+        "leaf_node_id": leaf_id,
+        "transport_name": a_hop_transport(),
+    }
+    for side, address, peer in (
+        ("entry", "10.44.0.1/24", "10.44.0.2/24"),
+        ("leaf", "10.44.0.2/24", "10.44.0.1/24"),
+    ):
+        for key, value in hop_side(address, peer).items():
+            form[f"{side}-{key}"] = str(value)
+
+    response = await client.post(
+        "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert "Establish a hop" not in response.text
+    assert "hop establishing — apply both nodes to bring it up" in response.text
+    triggered = response.headers.get("HX-Trigger", "")
+    assert "hops-changed" in triggered
+    # The Nodes screen tags a hop end on both of its nodes, so its table refreshes too.
+    assert "nodes-changed" in triggered
+
+    listed = (await client.get("/api/hops")).json()
+    assert len(listed) == 1
+    assert listed[0]["entry"]["node_id"] == entry_id
+
+
+async def test_a_box_left_empty_is_refused_under_that_box(client) -> None:
+    """Twenty-two parameters cannot be corrected from one sentence at the top.
+
+    Per field, at 422, with everything else the operator typed still in the form —
+    which is the pattern M9.1 set and the one status static/app.js allows to swap.
+    """
+    entry_id, leaf_id = await two_nodes(client)
+    transport = a_hop_transport()
+    parameter = transports_service.hop_tuning(transport)[0].name
+
+    form = {
+        "entry_node_id": entry_id,
+        "leaf_node_id": leaf_id,
+        "transport_name": transport,
+    }
+    for side, address, peer in (
+        ("entry", "10.44.0.1/24", "10.44.0.2/24"),
+        ("leaf", "10.44.0.2/24", "10.44.0.1/24"),
+    ):
+        for key, value in hop_side(address, peer).items():
+            form[f"{side}-{key}"] = str(value)
+    kept = form[f"leaf-{parameter}"]
+    form[f"entry-{parameter}"] = ""
+
+    response = await client.post(
+        "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 422
+    assert "Establish a hop" in response.text
+    controls = {name: attrs for name, attrs, _ in _form_controls(response.text)}
+    assert controls[f"entry-{parameter}"].get("aria-invalid") == "true"
+    # The far end's value is untouched: a refusal about one box may not empty another.
+    assert controls[f"leaf-{parameter}"].get("value") == kept
+    # …and the disclosure comes back OPEN, or the message is behind a closed summary.
+    assert "<details" in response.text and " open" in response.text
+
+    assert (await client.get("/api/hops")).json() == []
+
+
+async def test_a_pair_that_would_not_form_a_tunnel_is_refused_in_the_dialog(
+    client,
+) -> None:
+    """Everything ``edge.relay`` refuses is about the PAIR, so it has no field.
+
+    Two ends on different tunnel networks render as two perfectly valid files and no
+    tunnel, which is why it is refused before either row is written. The operator reads
+    it beside what they typed rather than as an error page.
+    """
+    entry_id, leaf_id = await two_nodes(client)
+    form = {
+        "entry_node_id": entry_id,
+        "leaf_node_id": leaf_id,
+        "transport_name": a_hop_transport(),
+    }
+    for side, address, peer in (
+        ("entry", "10.44.0.1/24", "10.44.0.2/24"),
+        ("leaf", "10.99.0.2/24", "10.99.0.1/24"),
+    ):
+        for key, value in hop_side(address, peer).items():
+            form[f"{side}-{key}"] = str(value)
+
+    response = await client.post(
+        "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 422
+    assert "different tunnel networks" in response.text
+    # Stated as a refusal, in the dialog the operator is looking at.
+    assert 'class="field-error" role="alert"' in response.text
+    assert (await client.get("/api/hops")).json() == []
+
+
+async def test_tearing_down_a_hop_confirms_first_then_says_what_is_left(client) -> None:
+    """UI-PATTERNS §3, and decision 3 stated where it can still be acted on.
+
+    The confirmation says what the operator will see afterwards — an entry node that
+    fails CLOSED reads from the outside exactly like a node that has stopped working —
+    because that is the sentence they need before they press it, not after.
+    """
+    entry_end = await a_hop(client)
+
+    confirmation = await client.get(f"/panel/hops/{entry_end}/tear-down")
+
+    assert confirmation.status_code == 200
+    assert "Tear down this hop?" in confirmation.text
+    assert "entry-1" in confirmation.text and "exit-1" in confirmation.text
+    assert "no exit at all" in confirmation.text
+
+    done = await client.post(
+        f"/panel/hops/{entry_end}/tear-down", headers={"HX-Request": "true"}
+    )
+
+    assert done.status_code == 200
+    assert "hop torn down — re-apply 2 nodes" in done.text
+    assert "hops-changed" in done.headers.get("HX-Trigger", "")
+    assert (await client.get("/api/hops")).json() == []
+
+
+def test_a_box_promises_a_default_only_when_its_transport_declares_one() -> None:
+    """The rule ``tuning_field`` applies, over a model this suite writes itself.
+
+    Against the shipped transports the "declares a default" branch never runs — every
+    hop parameter they declare is required — so the rule that matters most is the one
+    with no coverage from the dialog above. Written against a model of this test's own
+    so the branch is exercised whatever the image happens to ship.
+    """
+    from pydantic import BaseModel, Field
+
+    class Model(BaseModel):
+        bounded: int = Field(ge=2, le=9)
+        floor_only: int = Field(gt=4)
+        described: str = Field(description="what this one takes")
+        defaulted: int = 7
+        listed: tuple[str, ...] = ()
+        unbounded: int
+
+    fields = Model.model_fields
+    port_range = (1024, 65535)
+
+    def box(name):
+        return transports_service.tuning_field(name, fields[name], port_range)
+
+    assert box("bounded").placeholder == "2–9"
+    assert box("bounded").required
+    # `gt` is not `ge`: the first value the field accepts is the one after it.
+    assert box("floor_only").placeholder == "5 or more"
+    assert box("described").placeholder == "what this one takes"
+    # A declared default is the one case where the placeholder is a promise, so it is
+    # also the one case where it must be the value the transport would actually use.
+    assert box("defaulted").placeholder == "7"
+    assert not box("defaulted").required
+    assert box("defaulted").default == "7"
+    # A declared "none of these" is a real state and has to read as one rather than as
+    # a box nobody filled in.
+    assert box("listed").placeholder == "none"
+    # Nothing declared and nothing to fall back on — the transport's problem, said out
+    # loud rather than papered over here.
+    assert box("unbounded").placeholder == ""
+
+
+def test_the_port_is_the_one_field_name_the_console_knows() -> None:
+    """And it belongs to the hop contract rather than to any protocol.
+
+    ``edge.relay.endpoint_of`` builds the address the far end dials out of
+    ``params["port"]`` and ``TransportMeta.port_range`` is what a transport may listen
+    on; joining those is what lets the one box with no bounds of its own still say what
+    it takes. Held as a test because it is the single place `control` reads a parameter
+    by name, and a second one must not appear without somebody noticing.
+    """
+    from pydantic import BaseModel
+
+    class Model(BaseModel):
+        port: int
+
+    assert transports_service.PORT_FIELD == "port"
+    assert transports_service.tuning_field(
+        "port", Model.model_fields["port"], (1024, 65535)
+    ).placeholder == "1024–65535"
+
+
 # --- what a browser is allowed to keep (acceptance round 1) -------------------
 
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
@@ -1015,6 +1495,7 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
     of the operator. A new one joins this list in the change that adds it.
     """
     await a_serving_node(client, reality_params)
+    entry_end = await a_hop(client)
     friend_id = (
         await client.post("/api/friends", json={"nickname": "mira"})
     ).json()["id"]
@@ -1028,6 +1509,8 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
         f"/panel/friends/{friend_id}/subscription",
         f"/panel/friends/{friend_id}/revoke",
         *NODE_SURFACES,
+        *HOP_SURFACES,
+        f"/panel/hops/{entry_end}/tear-down",
     )
 
     for path in surfaces:
@@ -1119,7 +1602,7 @@ async def test_a_status_word_never_breaks_mid_word(client, reality_params) -> No
     """
     rules = _css_rules()
 
-    # The whole allow-list of places a word may be broken, written out so a fourth
+    # The whole allow-list of places a word may be broken, written out so a fifth
     # cannot be added without a reader of this test agreeing to it.
     may_break = {
         selector
@@ -1130,6 +1613,13 @@ async def test_a_status_word_never_breaks_mid_word(client, reality_params) -> No
         ".table td.wraps",              # the operator's own text, in a table…
         ".dialog-title, .dialog-body",  # …and in a dialog that quotes it
         ".dialog-code",                 # the subscription URL: one unbroken token
+        # A hop parameter's name, in the hop dialog's tuning rows (M9.2). Agreed to
+        # rather than slipped in, which is what this list is for: these are the longest
+        # names in the panel, they sit in a 1fr column beside a fixed-width input inside
+        # a 620px dialog, and a name that cannot wrap prints over the box beside it.
+        # It is not a table column, so the min-content collapse this rule exists to
+        # prevent cannot happen here — the row grows instead.
+        ".tuning-field label",
     }
     # And a status tag is a single word we wrote, wherever it is put.
     assert "nowrap" in rules[".tag"]

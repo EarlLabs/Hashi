@@ -1,8 +1,9 @@
-// The console's four behaviours, in plain JavaScript against HTMX.
+// The console's five behaviours, in plain JavaScript against HTMX.
 //
-// WHAT: the toast timer, dialog dismissal, the copy button, and the failure a
-//       request raises when it does not come back — stated under the header, and
-//       inside the dialog as well when one is open in front of it.
+// WHAT: the toast timer, dialog dismissal, the copy button, showing the field group
+//       a select chose, and the failure a request raises when it does not come back —
+//       stated under the header, and inside the dialog as well when one is open in
+//       front of it.
 // WHY:  design/README.md asks for a toast that auto-dismisses and shows one at a
 //       time, dialogs that close on the backdrop, and a copy button that works. None
 //       of those is expressible in HTML alone, and the stack rule (CLAUDE.md) is
@@ -199,6 +200,22 @@
     if (!dialog) return;
     const first = dialog.querySelector("input, textarea, select, button");
     if (first) first.focus();
+  });
+
+  // A form that renders one group of fields per choice, and shows the chosen one.
+  // Generic on purpose: the select says which group it drives with
+  // `data-transport-select`, each group names the value it belongs to with
+  // `data-transport-group`, and nothing here knows what the values are. Presentation
+  // ONLY — the server filters the submitted fields to the chosen transport's own
+  // list, so a browser with this script dead still establishes the right hop.
+  document.body.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-transport-select]");
+    if (!select) return;
+    const form = select.closest("form");
+    if (!form) return;
+    for (const group of form.querySelectorAll("[data-transport-group]")) {
+      group.hidden = group.dataset.transportGroup !== select.value;
+    }
   });
 
   // A refused form. htmx does not swap a non-2xx response by default, which would

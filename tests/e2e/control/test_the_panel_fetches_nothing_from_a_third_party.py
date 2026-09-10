@@ -43,6 +43,7 @@ PANEL_PAGES = (
     "/panel/",
     "/panel/friends",
     "/panel/nodes",
+    "/panel/hops",
     "/panel/fleet",
 )
 
@@ -65,6 +66,12 @@ PANEL_FRAGMENTS = (
     # list exists to enforce.
     "/panel/nodes/new",
     "/panel/nodes/table",
+    # M9.2's, same rule. The establish-hop dialog is the largest fragment in the
+    # console — three questions and twenty-two tuning boxes — and every one of those
+    # boxes carries text this panel did not write, which is exactly the kind of
+    # surface a third-party reference survives longest in.
+    "/panel/hops/new",
+    "/panel/hops/table",
 )
 
 # Anything that is not a path on this host. A scheme-relative URL is included on
@@ -128,7 +135,67 @@ async def surfaces(operator, unique: str) -> list[str]:
         # The pre-redesign node page. Still part of the panel until M9.6 retires it,
         # and it carries an inline script of its own.
         f"/panel/nodes/{node.json()['id']}",
+        # The tear-down confirmation, which needs a whole hop behind it.
+        *await _with_a_hop(operator, unique),
     ]
+
+
+async def _with_a_hop(operator, unique: str) -> list[str]:
+    """The tear-down dialog, and the two nodes and the hop it does not exist without.
+
+    Its own helper because a hop is the most expensive surface on this list to reach —
+    two nodes and a validated parameter block for each end — and the alternative was to
+    leave it off, which is the omission this whole scenario was written about.
+    """
+    transports = (await operator.get("/api/transports")).json()
+    carrier = sorted(
+        transport["name"]
+        for transport in transports
+        if transport["hop_capable"] and not transport["subscription_expressible"]
+    )
+    if not carrier:  # pragma: no cover - an image with no hop-capable transport
+        return []
+
+    ends = []
+    for role, address in (("hop-entry", "192.0.2.61"), ("hop-exit", "192.0.2.62")):
+        created = await operator.post(
+            "/api/nodes",
+            json={
+                "name": f"{role}-{unique}",
+                "address": address,
+                "location_label": f"Testland-{unique}-{role}",
+            },
+        )
+        assert created.status_code == 201, created.text
+        ends.append(created.json()["id"])
+
+    def side(address: str, peer: str) -> dict:
+        return {
+            "port": 51820,
+            "tunnel_address": address,
+            "peer_tunnel_address": peer,
+            "mtu": 1280,
+            "junk_packet_count": 4,
+            "junk_packet_min_size": 40,
+            "junk_packet_max_size": 80,
+            "init_packet_magic_header": 1020327352,
+            "response_packet_magic_header": 2060487442,
+            "underload_packet_magic_header": 3679305607,
+            "transport_packet_magic_header": 1436947798,
+        }
+
+    hop = await operator.post(
+        "/api/hops",
+        json={
+            "entry_node_id": ends[0],
+            "leaf_node_id": ends[1],
+            "transport_name": carrier[0],
+            "entry_params": side("10.77.0.1/24", "10.77.0.2/24"),
+            "leaf_params": side("10.77.0.2/24", "10.77.0.1/24"),
+        },
+    )
+    assert hop.status_code == 201, hop.text
+    return [f"/panel/hops/{hop.json()['entry']['id']}/tear-down"]
 
 
 def without_comments(text: str, *, css: bool = False) -> str:
