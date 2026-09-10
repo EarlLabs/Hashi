@@ -72,3 +72,152 @@ ruled it out of this milestone.
   shown. If it moves because a person *used* the service, it is an analytic about
   them and may not exist at all. That line was written for M8 and explicitly kept
   "because it will be needed again on every screen M9 and M10 add".
+
+---
+
+# Established by M9.1 — the Nodes screen
+
+Everything below was invented by M9.1 and binds M9.2–M9.6. Follow it; do not
+relitigate. It supplements M8's rulebook rather than replacing it — where this
+file is silent, M8's notes still govern.
+
+## Adding a screen (M8's shape, as M9.1 actually used it)
+
+Route → `_screen(screen="panel/screens/<x>.html", current=<NAV key>, title=,
+subtitle=, context=)`. Template = `{% include "panel/console_header.html" %}`
+then `<div class="panel">`. The collection lives in its own **self-swapping
+fragment**: `hx-target="this"`, `hx-swap="outerHTML"`, `hx-indicator="this"`,
+**`hx-disinherit="hx-indicator"`**, `hx-trigger="<thing>-changed from:body"`.
+M9.1's is `panel/nodes_table.html`, event `nodes-changed`.
+
+## New CSS vocabulary — reuse it, do not reinvent it
+
+- `.section-head` — explainer on the left, the screen's secondary creation
+  button on the right. Built with the Hops screen's explainer row in mind.
+- `.section-note` — the explainer text itself.
+- `.tag-row` — wrapping tags inside a table cell.
+- `.dialog-form` — flex column at `--space-3`, for any dialog with more than one
+  field.
+- `.dialog-wide` — 560px plus `max-height: 86vh` with `overflow-y`. **The hop
+  dialog's 620px needs its own class**; do not widen this one.
+
+**No new breakpoint was added and none may be.** There is one, at 900px,
+per UI-PATTERNS §12.
+
+## Multi-field dialogs, and how a refusal is shaped
+
+Copy `add_node_dialog.html`'s `{% macro field(...) %}` — it wires
+`aria-describedby`, `aria-invalid`, the hint and the error in one place.
+
+Context shape is `{"values": {...}, "errors": {field: sentence}, "defaults":
+{...}}`, built by `_node_form()`. **A refusal is a 422 with the dialog
+re-rendered, per field** — `app.js` allows exactly that one status to swap.
+`_refuse_node` / `_refused_field` are the pattern. `_mutation(keeping=…)` carries
+state across a refusal.
+
+**Secrets are not refilled on a refusal, and the operator is told at the moment
+it happens.** The add-node dialog empties the SSH private key on a 422 and
+renders a `.field-error` in that field — *"the key you pasted was not kept —
+paste it again before you submit, or this node is registered without one"* —
+wired into the textarea's `aria-describedby`, and shown **only** when a key was
+actually pasted. A later dialog handling a secret copies this behaviour rather
+than "fixing" it. Silently emptying the box is how an operator registers a node
+with no key and learns at apply.
+
+## A refusal must look like one — settled here, for every later screen
+
+`--color-danger-100/700/900` are tokens in `:root` in `app.css`; the 700 is the
+hue the pre-redesign page already used, so console and old page agree on what red
+means. They are applied to `.field-error`, `.banner-failure`,
+`.banner-failure .banner-label` and `.input[aria-invalid]` — **every place a
+request was refused or failed, and nowhere else.** Status tags and destructive
+buttons stay steel: UI-PATTERNS §4 holds everywhere it was written about, and
+this is its one exception, **recorded in `docs/decisions.md` (2026-09-10)**, not
+merely in a comment.
+
+**Every `.banner` must declare `role="alert"` (a refusal) or `role="status"` (a
+notice), and must carry a `banner-label`.** This is mechanical, not advisory:
+`test_no_refusal_anywhere_in_the_panel_is_drawn_as_an_ordinary_notice` scans
+every template under `control/app/templates/` and fails on a banner that declares
+neither, or that wears `role="alert"` without `banner-failure`, or that carries no
+label. `alert` vs `status` is the live-region distinction, so the a11y contract
+and the visual contract are the same assertion.
+
+**Read `carry-over.md` before you add a banner:** that scan still has known holes
+for banners *added* in unusual syntactic shapes. Do not take a green run as proof
+your new banner was inspected.
+
+## Mutations
+
+Success → `toast=`. Anything failed, partial, or needing to survive the next
+click → `banner=` (persistent, and now red). **OOB swaps are `innerHTML:#slot`,
+never `hx-swap-oob="true"`** — outerHTML replaces the slot node and kills
+`app.js`'s MutationObserver. Node-summary prose lives in
+`console.health_summary()`, never in a route or a template.
+
+## Never name a port, country, address, domain or transport in a template
+
+`test_no_console_template_names_a_transport_a_country_an_address_or_a_port` scans
+every `templates/panel/**.html`. Defaults come from service constants —
+`nodes.DEFAULT_SSH_USER` / `DEFAULT_SSH_PORT` is the pattern. **That scan has
+known holes too; see `carry-over.md`.** It is a backstop, not a licence.
+
+## Testing
+
+`tests/control/test_the_console.py`, standard `client` fixture, no chdir. Reach a
+node with `a_serving_node(client, reality_params)`. For apply/probe, monkeypatch
+`apply_service.apply_node` / `health_service.check_node` — a real one costs a 5s
+SSH timeout. `_css_rules()` reads `app.css` as `selector -> declarations` for
+assertions about how something looks.
+
+**THE LIST IS THE TEST.** `NODE_SURFACES` in `test_the_console.py` feeds the
+decision-9 sweep. `PANEL_PAGES` / `PANEL_FRAGMENTS` in
+`tests/e2e/control/test_the_panel_fetches_nothing_from_a_third_party.py` gained
+`/panel/nodes`, `/panel/nodes/new`, `/panel/nodes/table`. **Add yours in the same
+change that adds the surface** — the first version of that list omitted the
+dialogs, including the one carrying a bearer credential, and that gap was the
+finding.
+
+## Wording acceptance will judge
+
+Sidebar `Nodes`. Title `Nodes`, subtitle *"the machines a user's link resolves
+to, and whether each is running what you told it to"*. Buttons `add node`,
+`probe`, `apply`, `cancel`. Dialog title `Add a node`. Toasts `<name> added — a
+draft until you apply it`, `config applied to <name> — <transports>`, `<name> is
+serving <transports>`. Empty state `No nodes yet`. Columns `name / exit / address
+/ state / config / transports / actions`. A degraded node's reason on its own row
+as `why: <detail>`.
+
+## Do not relitigate
+
+- **The Overview's node links were repointed to `/panel/nodes` by M9.1** — both
+  `all nodes` and the empty state's `add a node`. The sidebar's Fleet entry stays
+  until hops and transports move, with its note narrowed to `hops · transports`.
+- **`POST /panel/nodes` serves two panels from one route** — htmx gets the console
+  answer (dialog closes, toast, `nodes-changed`), a plain browser POST still gets
+  its 303 to `/panel/fleet`, so the pre-redesign form keeps working until M9.6.
+  `test_the_pre_redesign_form_still_gets_its_redirect` holds it. **Do not delete
+  that branch before the page.**
+- **The console's apply posts to `/panel/nodes/{id}/push`**, not `/apply`, because
+  `/apply` still answers the old page with `panel/outcome.html`. **M9.6 should
+  take the short name back** when it deletes those routes.
+- `_refuse_node` **raises** `DomainError` for the non-htmx caller where its console
+  sibling returns a 422 fragment — the old page has nowhere to render a field
+  error, so it keeps the error envelope it already produced.
+- **`design/UI-PATTERNS.md` is deliberately left contradicting the shipped
+  console.** It is the designer's handoff record; `docs/decisions.md` is the
+  override, and the rule is enforced by tests over `app.css`, every template and
+  `app.js` rather than by prose in either file. Rewriting the handoff would erase
+  that the departure was ours. Do not "fix" it.
+
+## Existing e2e scenarios that still drive the old pages
+
+Not M9.2–M9.4's to repoint; recorded so the right step picks each up.
+
+- `test_the_panel_never_offers_a_blocked_protocol_as_working.py` GETs
+  `/panel/fleet` — **repoint when M9.3 lands the Transports screen.**
+- `test_a_replacement_node_and_a_protocol_from_the_panel.py` GETs
+  `/panel/nodes/{id}` (the old detail page) and scrapes
+  `data-transport=… hx-post="/panel/transports/{id}/state"` for the withdraw
+  button's id — **repoint with M9.5**, which homes enable/withdraw.
+- The other two drive POST routes only; none of those changed.
