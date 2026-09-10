@@ -1,7 +1,7 @@
 """The admin panel — the screen the owner lives in.
 
-WHAT: login, the console (Overview, Users, Nodes, Hops, Transports), the fleet
-      page, and the actions on each.
+WHAT: login, the console (Overview, Users, Nodes, Hops, Transports, Keys & configs),
+      the fleet page, and the actions on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -15,14 +15,17 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 
 Two panels live here at once, on purpose and temporarily. The CONSOLE is the
 redesign in ``design/`` — a persistent sidebar over a swappable ``#main``, one screen
-per route, every creation flow in a dialog. Overview, Users, Nodes, Hops and
-Transports are ported; the remaining fleet screens are the rest of M9. Until they land,
+per route, every creation flow in a dialog. Overview, Users, Nodes, Hops, Transports
+and Keys & configs are ported; the rest of M9 is what is left. Until it lands,
 ``/panel/fleet`` serves the original single page and the sidebar has an honest entry
 pointing at it, because a dead nav link is worse than an ugly one — and its note names
 only what is still there, which is now nothing: every LIST that page carried has its
 own screen. M9.6 retires it once every ACTION it carries has a new home too: still on
-it are enabling and withdrawing a transport, moving a node between states, and key
-rotation. Do not delete it before then.
+it are enabling and withdrawing a transport and moving a node between states. Key
+rotation and parameter replacement moved to the Keys & configs screen in M9.4, and
+that page's own two rotation routes stay until the page goes — it drives them with
+htmx, so they cannot be told apart from the console's by a header. Do not delete
+either before then.
 """
 
 import logging
@@ -37,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.api import schemas
 from control.app.dependencies import session_dependency
-from control.app.errors import DomainError, HopEndRefused
+from control.app.errors import DomainError, HopEndRefused, ParamsRefused
 from control.app.models import NodeState, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
@@ -125,13 +128,20 @@ NAV = (
         "boost": True,
         "note": "",
     },
+    {
+        "key": "keys",
+        "label": "Keys & configs",
+        "url": "/panel/keys",
+        "boost": True,
+        "note": "",
+    },
     # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
     # operator can tell from the sidebar which jobs have moved and which have not —
-    # nodes came out of it in M9.1, hops in M9.2 and the capability table in M9.3, and
-    # the note is empty because the three THINGS that page listed have all moved. What
-    # is still only there is a handful of ACTIONS on a node — enable and withdraw a
-    # transport, move a node between states, rotate keys — which M9.4 and M9.5 home and
-    # M9.6 removes this entry with the page.
+    # nodes came out of it in M9.1, hops in M9.2, the capability table in M9.3 and both
+    # rotations in M9.4, and the note is empty because the three THINGS that page
+    # listed have all moved. What is still only there is a pair of ACTIONS on a node —
+    # enable and withdraw a transport, move a node between states — which M9.5 homes
+    # and M9.6 removes this entry with the page.
     {
         "key": "fleet",
         "label": "Fleet",
@@ -660,6 +670,296 @@ async def transports_screen(request: Request) -> Response:
             "that inspects traffic"
         ),
         context={"transports": console.transport_rows()},
+    )
+
+
+# --- Keys & configs (M9.4) ---------------------------------------------------
+
+# What a form with every box empty is answered with. Field-level would be wrong here
+# and it is the one place in the console where it is: an empty box on this form is a
+# meaningful answer — "keep this value" — so there is no single box to put the message
+# under. It is the form as a whole that said nothing.
+NOTHING_TYPED = (
+    "nothing was typed, so there is nothing to replace — an empty box keeps the value "
+    "that is already in place"
+)
+
+
+@router.get("/keys", response_class=HTMLResponse)
+async def keys_screen(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """Keys & configs — what each node holds, and how to replace it.
+
+    The screen the charter's "rotate anything that gets blocked, all from one admin
+    panel" lands on, and the one screen in this console whose whole subject is material
+    that may never be displayed. UI-PATTERNS §9 is therefore its layout rule rather than
+    a detail of it: every cell that could have held a value holds a fingerprint or the
+    rule instead, and both come from services/console.py already composed.
+    """
+    return _screen(
+        request,
+        screen="panel/screens/keys.html",
+        current="keys",
+        title="Keys & configs",
+        subtitle=(
+            "what each node holds, and how to replace it without anyone re-importing "
+            "their link"
+        ),
+        context={"keys": await console.key_rows(session)},
+    )
+
+
+@router.get("/keys/table", response_class=HTMLResponse)
+async def keys_table(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """The keys table on its own, for the refresh after a rotation."""
+    return TEMPLATES.TemplateResponse(
+        request, "panel/keys_table.html", {"keys": await console.key_rows(session)}
+    )
+
+
+@router.get("/keys/{node_transport_id}/rotate", response_class=HTMLResponse)
+async def rotate_keys_dialog(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """The confirmation. UI-PATTERNS §3: a destructive action confirms in a dialog."""
+    key = await console.key_row(session, node_transport_id)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/rotate_keys_dialog.html",
+        {
+            "key": key,
+            # Composed in services/console.py from the transport's own declaration, so
+            # the dialog states it without knowing which protocol declared it.
+            "shared_with_peer": (
+                console.KEY_SHARED_WITH_PEER if key.shared_with_peer else None
+            ),
+        },
+    )
+
+
+@router.post("/keys/{node_transport_id}/rotate", response_class=HTMLResponse)
+async def rotate_keys_from_the_console(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Re-mint this transport's material and push it — item 23, from the console.
+
+    Its own route rather than the pre-redesign page's ``/transports/{id}/rotate-keys``
+    below, which answers with ``panel/outcome.html`` and is asked for with htmx too — so
+    unlike the add-node form the two cannot be told apart by a header. M9.6 deletes that
+    page and may take the older name back.
+
+    A half-done rotation is a BANNER, not a toast. Between the write and a successful
+    push the database and the node disagree, and for a decoy that means the blocked
+    value is still what the node is serving: that sentence has to survive the operator's
+    next click rather than vanish after 2200ms.
+    """
+    key = await console.key_row(session, node_transport_id)
+    try:
+        outcome = await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+    except DomainError as exc:
+        # Shown rather than raised: the operator is on the screen this is about, and
+        # nothing was changed.
+        return _mutation(
+            request, banner=exc.message, keeping=key.node, events="keys-changed"
+        )
+    if not outcome.complete:
+        return _mutation(
+            request,
+            banner=console.rotation_summary(key, outcome),
+            keeping=key.node,
+            events="keys-changed, nodes-changed",
+        )
+    return _mutation(
+        request,
+        toast=console.rotation_summary(key, outcome),
+        keeping=key.node,
+        # Both: the push moves this node's applied timestamp and can move its state, so
+        # the Nodes table is as stale as this one. Copied from the hop mutations, which
+        # is the established shape for a mutation touching two collections.
+        events="keys-changed, nodes-changed",
+    )
+
+
+@router.get("/keys/{node_transport_id}/params", response_class=HTMLResponse)
+async def replace_params_dialog(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """The replace-parameters form — item 24's, in the console."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/replace_params_dialog.html",
+        await _params_form(session, node_transport_id),
+    )
+
+
+@router.post("/keys/{node_transport_id}/params", response_class=HTMLResponse)
+async def replace_params_from_the_console(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Replace operator-supplied parameters — a blocked decoy being the case.
+
+    Reads the form the way ``enable_transport`` does and for the same reason: this
+    function must not know any protocol's field names. Two things it adds. The fields
+    are FILTERED to the boxes this dialog actually rendered, so nothing else in a
+    submission can reach the transport's model — and every one of those boxes is a value
+    the operator typed, never a minted one, because ``replaceable_params`` subtracts key
+    material before a box exists. And an empty box is dropped by ``parse_form``, which
+    is what makes "leave it alone" expressible at all.
+    """
+    key = await console.key_row(session, node_transport_id)
+    if not key.installed:
+        raise DomainError(console.KEY_NOT_IN_THIS_IMAGE)
+    node_transport = await rotation.get_node_transport(session, node_transport_id)
+    boxes = transports.replaceable_params(key.transport, node_transport.params)
+    names = {box.name for box in boxes}
+
+    form = await request.form()
+    typed = {
+        name: str(value).strip()
+        for name, value in form.multi_items()
+        if name in names
+    }
+    supplied = transports.parse_form(key.transport, typed.items())
+    if not supplied:
+        return await _refuse_params(
+            request, session, node_transport_id, values=typed, failure=NOTHING_TYPED
+        )
+
+    try:
+        outcome = await rotation.replace_params(
+            session, node_transport_id=node_transport_id, params=supplied
+        )
+    except ParamsRefused as exc:
+        # Each complaint under the box it is about — the same treatment the hop dialog
+        # gives one, and for the same reason: a sentence at the top of a form naming a
+        # parameter sends the operator hunting for it mid-rotation.
+        return await _refuse_params(
+            request,
+            session,
+            node_transport_id,
+            values=typed,
+            **_refused_parameters(exc, names, key.transport),
+        )
+    except DomainError as exc:
+        # Everything else this refuses is about the request rather than about one value
+        # — values that are already in place, most likely. Stated once, above the form.
+        return await _refuse_params(
+            request,
+            session,
+            node_transport_id,
+            values=typed,
+            failure=wording.for_the_page(exc.message),
+        )
+
+    if not outcome.complete:
+        return _mutation(
+            request,
+            banner=console.replacement_summary(key, outcome),
+            keeping=key.node,
+            events="keys-changed, nodes-changed",
+        )
+    return _mutation(
+        request,
+        toast=console.replacement_summary(key, outcome),
+        keeping=key.node,
+        events="keys-changed, nodes-changed",
+    )
+
+
+async def _params_form(
+    session: AsyncSession,
+    node_transport_id: str,
+    values: dict | None = None,
+    errors: dict | None = None,
+    *,
+    failure: str | None = None,
+) -> dict:
+    """What the replace-parameters dialog needs, in one place so first paint and refusal
+    agree.
+
+    ``boxes`` comes from services/transports.py, which reads them out of the transport's
+    own model — so this dialog names no field, no port and no address, and it cannot
+    render a box for a value the control plane minted.
+    """
+    node_transport = await rotation.get_node_transport(session, node_transport_id)
+    key = await console.key_row(session, node_transport_id)
+    if not key.installed:
+        # A node running a protocol this image no longer ships. The table offers no
+        # button for such a row, so this is only reachable by a typed URL — but it would
+        # otherwise be a 500 from the registry lookup, and "internal error" is the wrong
+        # answer to a question that has a real one.
+        raise DomainError(console.KEY_NOT_IN_THIS_IMAGE)
+    return {
+        "key": key,
+        "boxes": transports.replaceable_params(
+            node_transport.transport_name, node_transport.params
+        ),
+        "values": values or {},
+        "errors": errors or {},
+        "failure": failure,
+    }
+
+
+def _refused_parameters(
+    exc: ParamsRefused, boxes: set[str], transport_name: str
+) -> dict:
+    """One refusal, sorted into what may be shown and what may only be stated.
+
+    Three destinations, and the third is this step's own rule. A complaint about a box
+    on this form goes under that box. A complaint about a field the form does not render
+    is stated above it, with the transport's own words, exactly as the hop dialog does.
+    A complaint about KEY MATERIAL is stated above it WITHOUT those words: a validator's
+    message can quote the value it rejected, and the mapping being validated holds this
+    node's own minted material — so the panel names the parameter and prints the rule
+    instead of the sentence. That is the case that cannot be seen while it works, which
+    is the whole reason this is a function.
+    """
+    material = transports.key_material_names(transport_name)
+    errors = {
+        field: wording.for_the_page(message)
+        for field, message in exc.fields.items()
+        if field in boxes
+    }
+    withheld = [field for field in exc.fields if field in material]
+    homeless = [
+        f"{field}: {message}"
+        for field, message in exc.fields.items()
+        if field not in boxes and field not in material
+    ]
+    stated = []
+    if homeless:
+        stated.append(
+            wording.for_the_page(f"the transport also refused {'; '.join(homeless)}")
+        )
+    if withheld:
+        stated.append(console.withheld_note(withheld))
+    return {"errors": errors, "failure": " ".join(stated) or None}
+
+
+async def _refuse_params(
+    request: Request,
+    session: AsyncSession,
+    node_transport_id: str,
+    *,
+    values: dict,
+    errors: dict | None = None,
+    failure: str | None = None,
+) -> Response:
+    """The replace-parameters dialog again, at 422, with what was typed still in it."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/replace_params_dialog.html",
+        await _params_form(
+            session, node_transport_id, values=values, errors=errors, failure=failure
+        ),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
 

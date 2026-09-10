@@ -32,9 +32,9 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import DomainError, NotFound
+from control.app.errors import DomainError, NotFound, ParamsRefused
 from control.app.models import Credential, NodeTransport
-from control.app.services import apply, keymaterial
+from control.app.services import apply, keymaterial, relay
 from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
@@ -187,9 +187,32 @@ async def replace_params(
     try:
         validated = transport.validate(merged)
     except ValidationError as exc:
-        raise DomainError(
-            f"transport {node_transport.transport_name!r} rejected these parameters: "
-            f"{exc.errors()[0]['msg']}"
+        # Kept PER FIELD as well as flattened into the sentence, exactly as
+        # ``relay.establish_hop`` does it and for the same reason: a caller with a box
+        # per parameter has somewhere to put "this one, this reason", and one sentence
+        # naming a field the operator then has to hunt for is what a rotation cannot
+        # afford. Only the first error used to travel at all, so a form refused on two
+        # values reported one of them.
+        #
+        # Never the VALUES of the merged mapping: it holds this node's decrypted key
+        # material. What travels is the transport's own complaint, and which of those
+        # complaints may be PRINTED is decided by the caller, which knows which fields
+        # it has boxes for.
+        #
+        # ``relay._plainly`` rather than a second copy of it: it strips the label
+        # Pydantic puts in front of a custom validator's own sentence, and two
+        # definitions of "what that prefix looks like" is how one of them stops being
+        # updated. M9.2 wrote it and the milestone's notes name it as the function any
+        # surface showing a transport's own validation message should use.
+        fields: dict[str, str] = {}
+        for error in exc.errors():
+            where = ".".join(str(part) for part in error["loc"])
+            fields.setdefault(where, relay._plainly(error["msg"]))
+        problems = "; ".join(f"{where}: {message}" for where, message in fields.items())
+        raise ParamsRefused(
+            f"transport {node_transport.transport_name!r} rejected these parameters — "
+            f"{problems}",
+            fields=fields,
         ) from exc
 
     changed = sorted(

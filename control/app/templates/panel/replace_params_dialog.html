@@ -1,0 +1,87 @@
+{#
+  "Replace parameters" — item 24's form, in the console.
+
+  The case it exists for is a decoy that has been blocked, and this file names neither
+  that field nor that protocol: `boxes` arrives from services/transports.py, which reads
+  every box out of the transport's own model. A new package therefore gets a working
+  replacement form with no edit here, which is charter criterion 4 in one file.
+
+  NO BOX CAN EXIST FOR KEY MATERIAL, and that is structural rather than checked: the box
+  list is `operator_params`, which subtracts everything the transport declares as
+  material AND the public counterpart of it. So the form cannot ask for a key, cannot
+  show one as a placeholder, and cannot carry one back on a refusal. UI-PATTERNS §9's
+  rule is stated in the body anyway — a form that silently does the right thing teaches
+  the operator nothing about why they are never asked for a key here.
+
+  EMPTY MEANS KEEP, which is the opposite of the establish-hop dialog's empty box, and
+  the reason this uses its own `ParamBox` rather than that dialog's `TuningField`: there
+  is no "required" on this form. Each placeholder is the value in place now, written the
+  way the form takes it back, so "leave it alone" is something the operator can see
+  rather than something they have to trust.
+#}
+{% macro box(parameter, values, errors) %}
+{#
+  One box: label, input, and the aria wiring that ties its hint and error together. A
+  macro rather than a copy per field — the wiring is what silently rots when a
+  transport gains a parameter, and there is exactly one copy of it here.
+
+  Not marked `required` in the markup: an empty box is a valid answer on this form.
+#}
+<div class="tuning-field">
+  <label class="mono" for="param-{{ parameter.name }}">{{ parameter.name }}</label>
+  <input class="input" id="param-{{ parameter.name }}" name="{{ parameter.name }}"
+         type="text" value="{{ values.get(parameter.name, "") }}"
+         placeholder="{{ parameter.placeholder }}"
+         autocomplete="off" spellcheck="false"
+         {% if parameter.hint or errors.get(parameter.name) %}aria-describedby="{% if parameter.hint %}param-{{ parameter.name }}-hint{% endif %}{% if parameter.hint and errors.get(parameter.name) %} {% endif %}{% if errors.get(parameter.name) %}param-{{ parameter.name }}-error{% endif %}"{% endif %}
+         {% if errors.get(parameter.name) %}aria-invalid="true"{% endif %}>
+  {% if parameter.hint %}
+  <div class="field-hint" id="param-{{ parameter.name }}-hint">{{ parameter.hint }}</div>
+  {% endif %}
+  {% if errors.get(parameter.name) %}
+  <div class="field-error" id="param-{{ parameter.name }}-error" role="alert">{{ errors[parameter.name] }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+<div class="dialog-backdrop">
+  <div class="dialog dialog-wide blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="replace-params-title">
+    <div class="dialog-title" id="replace-params-title">Replace parameters</div>
+    <form class="dialog-form" hx-post="/panel/keys/{{ key.id }}/params"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+
+      {% if failure %}
+      {#
+        A refusal about the request rather than about one box — nothing typed, nothing
+        changed, or a complaint the form has no box to land on. Same treatment as a
+        field error because it is the same thing: a request that was refused.
+      #}
+      <div class="field-error" role="alert">{{ failure }}</div>
+      {% endif %}
+
+      <div class="dialog-body">
+        {{ key.node }} — {{ key.transport }}. Each box holds the value in place now;
+        leave one empty to keep it. Key material is not on this form and never can be:
+        it is minted here, stored encrypted and never displayed, so replacing a value
+        does not touch it.
+      </div>
+
+      {% for parameter in boxes %}
+      {{ box(parameter, values, errors) }}
+      {% endfor %}
+
+      <div class="dialog-body text-muted">
+        The node is re-rendered and pushed as soon as you submit. Users keep the same
+        link and pick this up the next time their client refreshes it.
+        {%- if not key.for_friends %} This is one end of a hop: the far end is not
+        changed with it, so a value the two must agree on leaves the tunnel down until
+        the other end matches.{% endif %}
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">replace</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

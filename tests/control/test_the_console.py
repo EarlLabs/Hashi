@@ -14,21 +14,25 @@ HOW:  the in-process client from conftest, already holding an operator session. 
 """
 
 import html.parser
+import json
 import pathlib
 import re
 
 import jinja2
 import pytest
+from sqlalchemy import select
 
 from control.app.api import schemas
-from control.app.errors import Conflict, NodeOperationFailed
-from control.app.models import TransportPurpose
+from control.app.errors import Conflict, NodeOperationFailed, ParamsRefused
+from control.app.models import Credential, Node, NodeTransport, TransportPurpose
 from control.app.panel import wording
 from control.app.services import apply as apply_service
 from control.app.services import console as console_service
 from control.app.services import friends as friends_service
 from control.app.services import health as health_service
+from control.app.services import keymaterial
 from control.app.services import nodes as nodes_service
+from control.app.services import rotation as rotation_service
 from control.app.services import transports as transports_service
 from edge.registry import profile
 
@@ -949,17 +953,19 @@ def _form_controls(markup: str) -> list[tuple[str, dict, bool]]:
     return _read(markup).controls
 
 
-def _described(response, kind: str) -> dict[str, str]:
+def _described(response, kind: str, prefix: str = "hop") -> dict[str, str]:
     """Each row's hint or error, by the control it belongs to.
 
     Read off the id the macro wires into ``aria-describedby``, so this asserts the
     thing a screen reader is actually handed rather than a div that happens to sit
-    nearby.
+    nearby. ``prefix`` is the dialog's own id prefix — M9.4's replace-parameters form
+    wires its boxes the same way under ``param-``, and one reader for both is what
+    stops the second dialog's wiring from being asserted more loosely than the first's.
     """
     return {
         name: html.unescape(re.sub(r"\s+", " ", text)).strip()
         for name, text in re.findall(
-            rf'id="hop-([^"]+)-{kind}"[^>]*>(.*?)</div>', response.text, re.S
+            rf'id="{prefix}-([^"]+)-{kind}"[^>]*>(.*?)</div>', response.text, re.S
         )
     }
 
@@ -1719,6 +1725,598 @@ async def test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_for_a_li
     assert (await client.get("/panel/fleet")).status_code == 200
 
 
+# --- Keys & configs (M9.4) ----------------------------------------------------
+
+# THE LIST IS THE TEST. The two surfaces that need no id; the two dialogs that do are
+# built by ``every_console_surface`` below, which is what both sweeps walk.
+KEY_SURFACES = ("/panel/keys", "/panel/keys/table")
+
+# The shape UI-PATTERNS §9 draws: four hex characters, an ellipsis, four more. Written
+# out rather than derived from the constant, because THIS is the claim — a fingerprint
+# that grew back towards the value it names has to change this line.
+FINGERPRINT = re.compile(r"^[0-9a-f]{4}…[0-9a-f]{4}$")
+
+
+async def a_node_holding_material(client, reality_params) -> str:
+    """A serving node with a protocol enabled and one user holding a credential on it.
+
+    Returns the NODE-TRANSPORT id, which is what every rotation route addresses and
+    what ``a_serving_node`` does not hand back — it returns the node, and two dozen
+    tests depend on that. The user is created last, deliberately: a friend is granted
+    every SERVING node at the moment they are created, so this is what puts a
+    credential on the row and gives the rotate dialog a blast radius to state.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "keys-1", "address": "192.0.2.30", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+    await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
+    await client.post("/api/friends", json={"nickname": "mira"})
+    return enabled.json()["id"]
+
+
+async def every_console_surface(client, reality_params) -> list[str]:
+    """Every console URL that renders markup, and the fleet it takes to reach them.
+
+    THE LIST IS THE TEST (docs/tracker/M8/step-notes.md), in the one shape that keeps
+    it honest: TWO sweeps walk this list — decision 9's, which reads every surface for
+    the code's word, and M9.4's, which reads every surface for key material — so a
+    screen, fragment or dialog that is not here is walked by neither. A new one joins
+    this function in the change that adds it, which is the same rule the e2e scenario's
+    ``PANEL_PAGES``/``PANEL_FRAGMENTS`` lists carry.
+
+    It creates what it lists: three of these surfaces do not exist without a friend, a
+    hop or a transport enabled on a node.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    entry_end = await a_hop(client)
+    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+
+    return [
+        "/panel/",
+        "/panel/friends",
+        "/panel/overview/body",
+        "/panel/friends/table",
+        "/panel/friends/new",
+        f"/panel/friends/{friend_id}/subscription",
+        f"/panel/friends/{friend_id}/revoke",
+        *NODE_SURFACES,
+        *HOP_SURFACES,
+        *TRANSPORT_SURFACES,
+        *KEY_SURFACES,
+        f"/panel/hops/{entry_end}/tear-down",
+        # Both rotation dialogs, on both kinds of row: one friend-facing transport and
+        # one end of a hop. They are the surfaces closest to the material, so a sweep
+        # that skipped them would skip the place a value would first appear.
+        f"/panel/keys/{node_transport_id}/rotate",
+        f"/panel/keys/{node_transport_id}/params",
+        f"/panel/keys/{entry_end}/rotate",
+        f"/panel/keys/{entry_end}/params",
+    ]
+
+
+async def stored_material(session) -> dict[str, str]:
+    """Every value this fleet actually holds that no surface may ever render.
+
+    Read out of the database and DECRYPTED, which is what makes the sweep exact rather
+    than a guess at what key material looks like in markup: it hunts for the real
+    bytes, so it catches one in a `title=`, a `data-` attribute, a comment or a hidden
+    input as readily as in a cell.
+
+    The keys of this mapping are field and node names, safe to print in a failure
+    message. The values never are — see the sweep, which names the LABEL and never the
+    value, for the same reason ``offenders()`` in the e2e scenario returns origins
+    rather than URLs: a test that leaked a key into a CI log would be a worse defect
+    than the one it closes.
+    """
+    # Read fresh every time, and this line is load-bearing: SQLAlchemy hands back the
+    # instance it already has for a row rather than re-reading it, so calling this
+    # twice around a rotation returned the material from BEFORE it, twice — and a test
+    # comparing an answer against stale values passes over the leak it exists to find.
+    # Caught by running the sweep below against a deliberately leaking rotation.
+    session.expunge_all()
+
+    held: dict[str, str] = {}
+    rows = (await session.execute(select(NodeTransport))).scalars().unique()
+    for row in rows:
+        for name, value in json.loads(row.secrets).items():
+            held[f"{row.transport_name}'s {name} on node-transport {row.id}"] = value
+    credentials = (await session.execute(select(Credential))).scalars().unique()
+    for credential in credentials:
+        held[f"credential {credential.id}'s subject"] = credential.subject
+        for name, value in json.loads(credential.secrets).items():
+            held[f"credential {credential.id}'s {name}"] = value
+    for node in (await session.execute(select(Node))).scalars().unique():
+        if node.ssh_private_key:
+            held[f"the SSH private key for node {node.name}"] = node.ssh_private_key
+    return held
+
+
+async def test_the_keys_screen_lists_what_each_node_holds(
+    client, reality_params
+) -> None:
+    """design/README.md §7, with the two columns this schema can honestly fill."""
+    await a_node_holding_material(client, reality_params)
+
+    response = await client.get("/panel/keys")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Keys &amp; configs" in body or "Keys & configs" in body
+    assert "keys-1" in body
+    # The transport is named because it is DATA on the row, not because this screen
+    # knows any protocol.
+    assert "vless-reality" in body
+    for column in ("node", "transport", "scope", "fingerprint", "on the node"):
+        assert f">{column}<" in body, column
+    # The design's own two columns that this schema cannot fill honestly. `minted` has
+    # no column to read — a row's timestamps move whenever anything on it changes — and
+    # `rotates` would promise a schedule nothing in this product keeps.
+    assert ">minted<" not in body
+    assert ">rotates<" not in body
+    # Both actions the milestone's "done when" homes here.
+    assert "rotate keys" in body
+    assert "replace params" in body
+
+
+async def test_a_fingerprint_is_short_and_is_not_the_value_it_names(
+    client, session, reality_params
+) -> None:
+    """UI-PATTERNS §9: fingerprints are truncated — and derived from what is published.
+
+    Two assertions, and the second is the one that matters. The cell shows eight
+    characters of a SHA-256 digest, and the PUBLISHED value that digest was computed
+    over is itself absent from the screen: the panel names material rather than
+    displaying it, even when the material in question is the half that already travels
+    to every device.
+    """
+    await a_node_holding_material(client, reality_params)
+    row = (
+        (await session.execute(select(NodeTransport)))
+        .scalars()
+        .unique()
+        .__iter__()
+        .__next__()
+    )
+
+    body = (await client.get("/panel/keys")).text
+
+    shown = re.findall(r"([0-9a-f]{4}…[0-9a-f]{4})", body)
+    assert len(shown) == 1, shown
+    assert FINGERPRINT.match(shown[0])
+    assert shown[0] == keymaterial.fingerprint(
+        profile(row.transport_name).meta.key_material, row.params
+    )
+    published = [
+        row.params[spec.public_name]
+        for spec in profile(row.transport_name).meta.key_material
+        if spec.public_name and spec.public_name in row.params
+    ]
+    assert published, "this transport publishes nothing, so this proves nothing"
+    for value in published:
+        if value in body:
+            # Same instrument as the sweep below, for a milder reason: this half is
+            # published to every device that uses it, but a CI log is still not where
+            # a fleet's public keys belong.
+            pytest.fail("the screen shows a published value rather than naming it")
+
+
+async def test_the_fingerprint_moves_when_the_material_does(
+    client, reality_params
+) -> None:
+    """The cell's whole job: telling the operator that a rotation actually happened.
+
+    A fingerprint that did not move after a rotation would be a fingerprint of
+    something else — a row id, a name — dressed up as one, and nothing else on the
+    screen would give that away.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    before = re.findall(r"[0-9a-f]{4}…[0-9a-f]{4}", (await client.get("/panel/keys")).text)
+
+    await client.post(f"/panel/keys/{node_transport_id}/rotate")
+
+    after = re.findall(r"[0-9a-f]{4}…[0-9a-f]{4}", (await client.get("/panel/keys")).text)
+    assert len(before) == len(after) == 1
+    assert before != after
+
+
+async def test_a_transport_with_no_published_half_prints_the_rule_instead(
+    client, ws_params
+) -> None:
+    """UI-PATTERNS §9's actual instruction, in the cell where it bites.
+
+    A transport whose node material is secret at both ends has nothing that may be
+    hashed: its values are short or private, and a digest of a short one is recoverable
+    by trying every candidate. So the cell says what is true — it is held and it is not
+    shown — instead of inventing a fingerprint from something that must not go into one.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={
+                "name": "ws-1",
+                "address": "192.0.2.31",
+                "location_label": "Testland",
+            },
+        )
+    ).json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-ws-tls", "params": ws_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+
+    body = (await client.get("/panel/keys")).text
+
+    assert console_service.KEY_HELD_NOT_SHOWN in _reading(body)
+    assert not re.findall(r"[0-9a-f]{4}…[0-9a-f]{4}", body)
+
+
+async def test_no_console_surface_ever_shows_key_material(
+    client, session, reality_params
+) -> None:
+    """M9's acceptance walk — "hunt for a private key anywhere in the console" — as a
+    test, so it is hunted on every run rather than once by a person.
+
+    It sweeps every console surface with the REAL values this fleet holds, decrypted
+    out of the database: node private keys, the pre-shared key both ends of a hop
+    carry, and every user credential minted on either. A substring search over the
+    whole response is what makes it stronger than reading: it catches a value in a
+    `title=`, a `data-` attribute, a hidden input, an HTML comment or a URL as readily
+    as one in a cell, and it does not need to know what a key looks like.
+
+    The failure message names the LABEL and never the value — one of these surfaces
+    also renders a live subscription token, and a scenario that put a credential into a
+    CI log would be a worse defect than the one it closes.
+    """
+    surfaces = await every_console_surface(client, reality_params)
+    # The pre-redesign pages are swept too. They are still part of the panel until M9.6
+    # retires them, and "anywhere in the console" is the claim.
+    node_id = (await client.get("/api/nodes")).json()[0]["id"]
+    surfaces += ["/panel/fleet", f"/panel/nodes/{node_id}"]
+
+    held = await stored_material(session)
+    # Non-vacuous by construction: a fleet holding nothing would pass this sweep for
+    # the wrong reason. Two node keys, a pre-shared key at each hop end and a user
+    # credential is the floor.
+    assert len(held) >= 5, sorted(held)
+
+    for surface in surfaces:
+        response = await client.get(surface)
+        assert response.status_code == 200, surface
+        for label, value in held.items():
+            if value in response.text:
+                # ``pytest.fail`` and not ``assert``: pytest rewrites a failing
+                # assertion into a message containing BOTH operands, so an
+                # ``assert value not in body`` puts the key it just found into the CI
+                # log — which is a worse defect than the one this sweep closes, and is
+                # the same rule ``offenders()`` follows in the e2e scenario. Found by
+                # running this test red, which is the only way it could have been.
+                pytest.fail(
+                    f"{surface} rendered {label} — key material is minted here, "
+                    "stored encrypted and never displayed (UI-PATTERNS §9)"
+                )
+
+
+async def test_no_answer_to_a_rotation_shows_what_it_minted(
+    client, session, reality_params
+) -> None:
+    """The other half of the sweep, and the half a list of URLs cannot reach.
+
+    A mutation answers with a toast or a banner composed from a service's own words,
+    and the rotation path is the one place in this panel where those words are about
+    values that were just minted. Both sides are checked — what the row held before
+    the rotation and what it holds after — because either would be a leak, and the
+    first one is the one an "it only prints the new material" reading would miss.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    before = await stored_material(session)
+
+    answer = await client.post(
+        f"/panel/keys/{node_transport_id}/rotate", headers={"HX-Request": "true"}
+    )
+
+    assert answer.status_code == 200
+    after = await stored_material(session)
+    assert before and after
+    for held in (before, after):
+        for label, value in held.items():
+            if value in answer.text:
+                # The label, never the value — see the sweep above for why an ordinary
+                # assertion is the wrong instrument here.
+                pytest.fail(f"the rotation's answer rendered {label}")
+
+
+async def test_rotating_keys_confirms_first_and_says_what_it_costs(
+    client, reality_params
+) -> None:
+    """UI-PATTERNS §3, and the three facts an operator cannot recover afterwards.
+
+    A rotation re-mints every user credential on the transport as well as the node's
+    own material, and it is one click from "probe". The count is in the sentence so the
+    blast radius is read before the button, not inferred after it.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    dialog = await client.get(f"/panel/keys/{node_transport_id}/rotate")
+
+    assert dialog.status_code == 200
+    reading = _reading(dialog.text)
+    assert "Rotate these keys?" in reading
+    assert "keys-1" in reading
+    assert "1 user credential" in reading
+    # The link does not move — which is the whole reason a rotation is possible at all
+    # without anyone touching their device.
+    assert "same link" in reading
+    assert "rotate keys" in dialog.text
+    assert "cancel" in dialog.text
+
+
+async def test_rotating_one_end_of_a_hop_says_what_it_does_to_the_other(
+    client,
+) -> None:
+    """The decision of 2026-08-09, stated where it can still be acted on.
+
+    A transport may declare that some of its material is SYMMETRIC — both ends of a hop
+    must hold the same copy — and `control` mints each end separately, so re-minting at
+    one end produces two configuration files that are individually valid and a handshake
+    that never completes. Nothing in the wire behaviour says so; the operator only sees
+    a tunnel that stopped.
+
+    Read from the DECLARATION rather than from a name: this asserts the sentence appears
+    on a hop end whose transport declares symmetric material, and does not appear on a
+    friend-facing row, which is the same distinction the code makes.
+    """
+    entry_end = await a_hop(client)
+    carrier = profile(a_hop_transport()).meta
+    assert any(
+        spec.shared_between_peers for spec in carrier.key_material
+    ), "this image's hop carrier declares nothing symmetric, so this proves nothing"
+
+    dialog = await client.get(f"/panel/keys/{entry_end}/rotate")
+
+    assert dialog.status_code == 200
+    reading = _reading(dialog.text)
+    assert console_service.KEY_SHARED_WITH_PEER in reading
+    # And what a hop end is NOT: nobody's credential rides on it.
+    assert "No user holds anything on it" in reading
+    assert "user credential" not in reading
+
+
+async def test_a_rotation_that_could_not_reach_the_node_stays_on_screen(
+    client, reality_params
+) -> None:
+    """The failure that must never be reported as success.
+
+    Nothing behind these nodes answers, so the push cannot land: the material is in the
+    database and the node is still running the old one. That is a banner rather than a
+    toast — it has to survive the operator's next click, because until it is applied
+    the blocked value is still what the node serves.
+
+    The real push runs rather than a monkeypatched one, unlike the apply tests above:
+    what is under test IS the failure branch, and both ways a documentation address can
+    fail — refused or dropped — arrive at it identically. Nothing here asserts a
+    duration, which is the one thing that would make the difference matter (conftest's
+    ``LoopbackSSH`` says why).
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    answer = await client.post(
+        f"/panel/keys/{node_transport_id}/rotate", headers={"HX-Request": "true"}
+    )
+
+    assert answer.status_code == 200
+    reading = _reading(answer.text)
+    assert "banner-failure" in answer.text
+    assert "toast" not in answer.text
+    assert "still running the old material" in reading
+    assert answer.headers["HX-Trigger"] == "keys-changed, nodes-changed"
+
+
+async def test_the_replace_dialog_offers_no_box_for_key_material(
+    client, reality_params
+) -> None:
+    """Absent by construction, not by omission.
+
+    The box list is the transport's required fields MINUS everything it declares as
+    material and every public counterpart of one, so this form cannot ask for a key,
+    cannot show one as a placeholder, and cannot hand one back on a refusal. Asserted
+    against the transport's OWN declaration rather than a written list, so a protocol
+    that declares a new piece of material is covered the day it ships.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    dialog = await client.get(f"/panel/keys/{node_transport_id}/params")
+
+    assert dialog.status_code == 200
+    boxes = {name for name, _, _ in _form_controls(dialog.text)}
+    assert boxes, "a dialog with no boxes proves nothing"
+    material = transports_service.key_material_names("vless-reality")
+    assert material, "this transport mints nothing, so this proves nothing"
+    assert boxes & material == set()
+    # And the rule is stated, rather than the absence being left to be noticed.
+    assert "never can be" in _reading(dialog.text)
+
+
+async def test_replacing_a_parameter_names_what_changed(
+    client, reality_params
+) -> None:
+    """Item 24's real case: a decoy that has been blocked, replaced from the console.
+
+    The field NAMES are in the answer, unlike a key rotation's — these are values the
+    operator typed themselves, so naming them back is how they confirm the right box
+    landed.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    answer = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={"decoy_host": "www.wikipedia.example"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200
+    reading = _reading(answer.text)
+    assert "decoy_host" in reading
+    assert "keys-1" in reading
+    # The push cannot land in this suite, so this is the half-done sentence rather than
+    # a toast. What matters is that it names the change and says what is still true.
+    assert "still running the old material" in reading
+
+
+async def test_a_refused_parameter_lands_under_its_own_box(
+    client, reality_params
+) -> None:
+    """M9.1's rule on M9.4's form: a refusal is a 422 with the message under the field.
+
+    Flattened to a sentence at the top, the operator has to work out which of the boxes
+    the prose is about — during a rotation, which is the moment this form exists for.
+
+    The box picked is one the transport DECLARES it requires, found through the same
+    service call the form is built from rather than written down: this form offers the
+    required fields and no others, so a test naming a defaulted one would be refused
+    for having typed nothing and would pass for the wrong reason.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    box = transports_service.PORT_FIELD
+    assert box in transports_service.operator_params("vless-reality")
+
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={box: "70000"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    errors = _described(refused, "error", prefix="param")
+    assert box in errors, errors
+    # What the operator typed comes back with it, so nothing has to be retyped.
+    assert 'value="70000"' in refused.text
+
+
+async def test_a_refusal_about_key_material_prints_the_rule_instead_of_the_message(
+    client, monkeypatch, reality_params
+) -> None:
+    """The case that cannot be seen while it works.
+
+    A transport's own validation message may quote the value it rejected, and what is
+    being validated on this path includes the material this node holds — so a refusal
+    naming a field the operator did not type must not arrive with its sentence. The
+    refusal planted here has never happened; what is under test is that the panel names
+    the parameter and states the rule rather than printing what came with it.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    async def refuse(session, *, node_transport_id, params):
+        raise ParamsRefused(
+            "transport rejected these parameters",
+            fields={"private_key": "is not valid: NOT-A-REAL-KEY-BUT-A-VALUE"},
+        )
+
+    monkeypatch.setattr(rotation_service, "replace_params", refuse)
+
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={"decoy_host": "www.wikipedia.example"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    reading = _reading(refused.text)
+    assert "NOT-A-REAL-KEY-BUT-A-VALUE" not in refused.text
+    assert "private_key" in reading
+    assert "never displayed" in reading
+
+
+async def test_an_empty_replace_form_is_refused_without_a_box_to_blame(
+    client, reality_params
+) -> None:
+    """The one refusal on this form that is deliberately NOT per field.
+
+    An empty box here is a meaningful answer — keep this value — so there is no single
+    box the message belongs under. It is the form as a whole that said nothing, and the
+    sentence says so rather than marking every field invalid.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={"decoy_host": ""},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    assert "nothing was typed" in _reading(refused.text)
+    assert _described(refused, "error", prefix="param") == {}
+
+
+async def test_nothing_this_screen_serves_may_be_stored_or_remembered(
+    client, reality_params
+) -> None:
+    """Checked deliberately here rather than inherited, because of what this screen is.
+
+    ``docs/decisions.md`` (2026-09-09): htmx's history cache writes the whole body to
+    ``localStorage``, and that entry exists because a dialog body once held a live
+    subscription URL. Every response under ``/panel`` gets ``no-store`` from one
+    middleware, so this screen's fragments are covered — but "covered by a prefix"
+    is exactly what was true of the fragment that carried the credential, and the
+    screen whose subject is key material is the wrong one to take on trust.
+
+    The screen itself is in ``TWO_REPRESENTATION_URLS`` above, which additionally
+    proves the ``Vary``. This walks the fragments a browser is handed and the two
+    dialogs, which have ids and so cannot be parameterised into that list.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    fragments = (
+        "/panel/keys/table",
+        f"/panel/keys/{node_transport_id}/rotate",
+        f"/panel/keys/{node_transport_id}/params",
+    )
+
+    for path in fragments:
+        response = await client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["cache-control"] == "no-store", path
+
+    # And nothing on the screen is written to localStorage at all: the console opts out
+    # of htmx's history cache entirely, which is the other half of that decision.
+    assert 'hx-history="false"' in (await client.get("/panel/keys")).text
+
+
+async def test_the_keys_screen_measures_the_fleet_and_never_the_people(
+    client, reality_params
+) -> None:
+    """Decision 6 on the one screen that counts something per user.
+
+    ``users on it`` counts credentials WE minted on this transport — the blast radius
+    of the button beside it. It moves when the operator adds or revokes a user and
+    never when anybody connects, which is the test docs/decisions.md sets.
+    """
+    await a_node_holding_material(client, reality_params)
+
+    body = (await client.get("/panel/keys")).text
+
+    assert ">users on it<" in body
+    for cell in FORBIDDEN_CELLS:
+        assert cell not in body.lower(), (
+            f"the Keys screen shows {cell!r}, which the charter says must not exist"
+        )
+
+
+async def test_an_empty_keys_screen_says_where_material_comes_from(client) -> None:
+    """M8.6's rule on the screen a first-time operator reaches with nothing enabled."""
+    body = (await client.get("/panel/keys")).text
+
+    assert "Nothing minted yet" in body
+    assert "<table" not in body
+
+
 # --- what a browser is allowed to keep (acceptance round 1) -------------------
 
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
@@ -1737,6 +2335,11 @@ TWO_REPRESENTATION_URLS = (
     "/panel/nodes",
     "/panel/hops",
     "/panel/transports",
+    # M9.4's, and the one on this list whose body is the most sensitive: htmx's history
+    # cache writes a stored body to localStorage, which is what decision 9's htmx entry
+    # is about. This screen holds fingerprints rather than values, and it is on here so
+    # that stays a property of the response and not of the reader.
+    "/panel/keys",
 )
 
 
@@ -1769,7 +2372,13 @@ async def test_a_console_fragment_can_never_be_stored_under_its_page_url(
 
 
 @pytest.mark.parametrize(
-    "path", (*TWO_REPRESENTATION_URLS, "/panel/friends/table", "/panel/friends/new")
+    "path",
+    (
+        *TWO_REPRESENTATION_URLS,
+        "/panel/friends/table",
+        "/panel/friends/new",
+        "/panel/keys/table",
+    ),
 )
 async def test_no_panel_response_is_storable(client, path: str) -> None:
     """Wider than the defect, and for a second reason.
@@ -1936,29 +2545,11 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
 
     THE LIST IS THE TEST (docs/tracker/M8/step-notes.md): every console screen,
     fragment and dialog is walked, and none of them may put the code's word in front
-    of the operator. A new one joins this list in the change that adds it.
+    of the operator. A new one joins ``every_console_surface`` in the change that adds
+    it — one list, walked by this sweep and by M9.4's hunt for key material, so a
+    surface cannot be missing from one of them and present in the other.
     """
-    await a_serving_node(client, reality_params)
-    entry_end = await a_hop(client)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "mira"})
-    ).json()["id"]
-
-    surfaces = (
-        "/panel/",
-        "/panel/friends",
-        "/panel/overview/body",
-        "/panel/friends/table",
-        "/panel/friends/new",
-        f"/panel/friends/{friend_id}/subscription",
-        f"/panel/friends/{friend_id}/revoke",
-        *NODE_SURFACES,
-        *HOP_SURFACES,
-        *TRANSPORT_SURFACES,
-        f"/panel/hops/{entry_end}/tear-down",
-    )
-
-    for path in surfaces:
+    for path in await every_console_surface(client, reality_params):
         response = await client.get(path)
         assert response.status_code == 200, path
         assert "friend" not in _visible_text(response.text).lower(), path

@@ -1,0 +1,126 @@
+{#
+  The keys table, on its own so a rotation can refresh it without a page load.
+
+  Swaps itself, exactly like panel/nodes_table.html and panel/hops_table.html: one file
+  is both the first paint and every refresh, so there is no second rendering that could
+  disagree with this one about what a row says. It listens for `keys-changed`, which
+  both rotation mutations in panel/routes.py fire — and they fire `nodes-changed` with
+  it, because a push moves the node's own state as well.
+
+  `hx-disinherit="hx-indicator"`: the skeleton belongs to THIS element's own refresh and
+  to nothing inside it. Without it, opening the rotate confirmation would take the whole
+  table away and replace it with the loading skeleton, for an action that has not
+  happened yet.
+
+  Every string in here that is not a column heading arrives already composed from
+  services/console.py. That is what makes UI-PATTERNS §9 structural on this screen
+  rather than a rule somebody has to remember: there is no branch in this file that
+  could print a value, because there is no value in this file's context to print — a
+  row carries a fingerprint or the sentence that says why there is none.
+#}
+<div id="keys-table" class="stack-6"
+     hx-get="/panel/keys/table" hx-trigger="keys-changed from:body"
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this"
+     hx-disinherit="hx-indicator">
+
+  <div class="loading" aria-hidden="true">
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+  </div>
+
+  <div class="loaded stack-6">
+    {% if keys %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>node</th>
+            <th>transport</th>
+            <th>scope</th>
+            <th>fingerprint</th>
+            <th>on the node</th>
+            <th>users on it</th>
+            <th class="right">actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for key in keys %}
+          <tr>
+            {# `.wraps` on the one cell holding text the OPERATOR typed. app.css says
+               why every other cell in a row must refuse to break. #}
+            <td class="wraps">{{ key.node }}</td>
+            {# The transport's own name, printed as data. This template names none. #}
+            <td class="mono wraps">{{ key.transport }}</td>
+            <td class="text-muted">{{ key.scope }}</td>
+            <td>
+              {% if key.fingerprint %}
+              {# UI-PATTERNS §7 and §9: a fingerprint is a machine value, so monospace,
+                 and truncated — this is eight characters of a SHA-256 digest of the
+                 published half, which is all an operator needs to see that material
+                 changed after a rotation. #}
+              <span class="mono text-muted nowrap">{{ key.fingerprint }}</span>
+              {% else %}
+              {# The rule, exactly where a value could otherwise have gone. Composed in
+                 services/console.py from what the transport DECLARES, so it is never a
+                 sentence about which protocol this is. #}
+              <span class="text-muted">{{ key.held }}</span>
+              {% endif %}
+            </td>
+            <td class="text-muted nowrap">
+              {% if key.pushed %}{{ key.pushed.strftime("%d %b %Y") }}
+              {% else %}never pushed — apply this node{% endif %}
+            </td>
+            <td class="text-muted nowrap">
+              {# A hop end's other holder is the far NODE, not a person: a rotation
+                 there takes a tunnel down rather than re-keying anybody's client. #}
+              {% if key.for_friends %}{{ key.holders }}{% else %}hop — none{% endif %}
+            </td>
+            <td class="right">
+              <span class="row-actions">
+                {% if key.installed %}
+                {% if key.replaceable %}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/keys/{{ key.id }}/params"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">replace params</button>
+                {% endif %}
+                {#
+                  UI-PATTERNS §3: a destructive action is a plain secondary button that
+                  confirms in a dialog. Not drawn in red — the danger hue belongs to a
+                  request that was refused or failed (docs/decisions.md, 2026-09-10),
+                  and this is an action the operator meant to take.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/keys/{{ key.id }}/rotate"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">rotate keys</button>
+                {% else %}
+                {# No button at all rather than one whose only outcome is a refusal:
+                   this image cannot validate what it does not ship. Two words and not
+                   the reason — the reason is already on this row, in the fingerprint
+                   cell, and an actions column may never wrap (app.css). #}
+                <span class="text-muted">no actions</span>
+                {% endif %}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {#
+      The empty state. It names the next action and says what the absence MEANS: no
+      material exists until a protocol is enabled somewhere, because that is the moment
+      the control plane mints it.
+    #}
+    <div class="empty">
+      <div class="empty-title">Nothing minted yet</div>
+      <p class="empty-body text-muted">
+        Material is minted when you enable a protocol on a node, which happens on the
+        Nodes screen. Until then there is nothing to rotate and nothing to replace —
+        and nothing for anyone to have taken.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>

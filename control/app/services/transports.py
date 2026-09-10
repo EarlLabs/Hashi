@@ -5,7 +5,9 @@ WHAT: ``operator_params(name)`` — the fields a transport requires that `contro
       flat HTML form into the mapping that transport's model expects, and, since M9.2,
       ``hop_transports()``, ``hop_parameters(name)`` and ``hop_tuning(name)``: which
       transports may carry an entry→leaf hop, which of their fields an operator may
-      supply, and what each of those boxes should say before it is filled.
+      supply, and what each of those boxes should say before it is filled. M9.4 adds
+      ``replaceable_params(name, current)``, the same question for a transport that is
+      already enabled somewhere and is being retyped rather than filled in.
 WHY:  two screens need exactly this list and must not disagree: the "enable a
       transport" form (item 7) and the "replace parameters" form (item 24). When the
       two were computed separately, a transport could offer a field on one screen and
@@ -31,7 +33,7 @@ HOW:  required fields of the transport's own model, minus every name the transpo
 import dataclasses
 import types
 import typing
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from pydantic.fields import FieldInfo
 
@@ -42,13 +44,27 @@ from edge.registry import discover, profile
 _SEQUENCES = (list, tuple, set, frozenset, Sequence)
 
 
+def key_material_names(transport_name: str) -> frozenset[str]:
+    """Every parameter name of ``transport_name`` that is MINTED rather than typed.
+
+    Both halves: the value the transport declared as material, and — when it is
+    asymmetric — the ``public_name`` its public counterpart is delivered under. One
+    function because three callers subtract exactly this set and must not disagree
+    about it: the two forms an operator fills in, and the refusal path that decides
+    whether a transport's own complaint may be printed. A form that subtracted one
+    name fewer would ask the operator to type a key.
+    """
+    material = profile(transport_name).meta.key_material
+    return frozenset(
+        {spec.name for spec in material}
+        | {spec.public_name for spec in material if spec.public_name}
+    )
+
+
 def operator_params(transport_name: str) -> list[str]:
     """Required fields the operator must supply for ``transport_name``, sorted."""
     transport = profile(transport_name)
-    generated = {spec.name for spec in transport.meta.key_material}
-    generated |= {
-        spec.public_name for spec in transport.meta.key_material if spec.public_name
-    }
+    generated = key_material_names(transport_name)
 
     return sorted(
         field
@@ -179,10 +195,7 @@ def hop_parameters(transport_name: str) -> list[str]:
     the place they surface.
     """
     transport = profile(transport_name)
-    generated = {spec.name for spec in transport.meta.key_material}
-    generated |= {
-        spec.public_name for spec in transport.meta.key_material if spec.public_name
-    }
+    generated = key_material_names(transport_name)
     return sorted(
         field
         for field in transport.params_model.model_fields
@@ -305,3 +318,67 @@ def _declared_bounds(info: FieldInfo) -> str | None:
     if high is not None:
         return f"{high} or less"
     return None
+
+
+# --- replacing what is already in place (M9.4) --------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParamBox:
+    """One box in the replace-parameters dialog — item 24's form, in the console.
+
+    Deliberately NOT a ``TuningField``. That type's ``required`` is "leaving this empty
+    refuses the request", which is the opposite of what an empty box means here: this
+    form replaces values that are already in place, so empty means KEEP. Reusing it
+    would have put a property on screen that reads backwards.
+
+    ``placeholder`` is the value in place now, written the way this form would take it
+    back — which is what makes "leave it empty to keep it" a statement the operator can
+    check rather than one they have to trust.
+    """
+
+    name: str
+    placeholder: str
+    hint: str
+
+
+def replaceable_params(
+    transport_name: str, current: Mapping[str, object]
+) -> tuple[ParamBox, ...]:
+    """Every field an operator may retype on a transport already enabled, with its box.
+
+    The list is ``operator_params`` — the same one the enable form asks for, so a
+    transport cannot offer a field on one screen and not the other. That list already
+    subtracts everything the transport declares as key material and every public
+    counterpart of it (see ``key_material_names``), so **no box on this form can exist
+    for a minted value, and no minted value can become a placeholder.** That is the
+    charter's rule made structural here rather than checked at the template.
+
+    ``hint`` is the field's own ``description``, in full, exactly as ``hop_tuning``
+    renders it. ``placeholder`` is the value the row currently holds; a field with no
+    value stored gets an empty box rather than a suggestion, because the one thing this
+    placeholder means is "this is what you are replacing".
+    """
+    fields = profile(transport_name).params_model.model_fields
+    return tuple(
+        ParamBox(
+            name=name,
+            placeholder=_as_typed(current.get(name)),
+            hint=(fields[name].description or "").strip(),
+        )
+        for name in operator_params(transport_name)
+    )
+
+
+def _as_typed(value: object) -> str:
+    """A stored value as this form would take it back.
+
+    A sequence becomes the comma-separated run ``parse_form`` splits again, so what the
+    box shows is what the box accepts. Anything absent is an empty string — never the
+    word "None", which an operator would reasonably retype.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return ", ".join(str(item) for item in value)
+    return str(value)

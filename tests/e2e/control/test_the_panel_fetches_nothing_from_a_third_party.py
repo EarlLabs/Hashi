@@ -48,6 +48,9 @@ PANEL_PAGES = (
     # nothing this panel can do changes which protocols the image ships, so the whole
     # screen is one document and there is no refresh URL to list.
     "/panel/transports",
+    # M9.4's. Same rule, and this one has the strongest reason to be walked: it is the
+    # screen whose whole subject is material that may never be rendered.
+    "/panel/keys",
     "/panel/fleet",
 )
 
@@ -76,6 +79,8 @@ PANEL_FRAGMENTS = (
     # surface a third-party reference survives longest in.
     "/panel/hops/new",
     "/panel/hops/table",
+    # M9.4's, same rule.
+    "/panel/keys/table",
 )
 
 # Anything that is not a path on this host. A scheme-relative URL is included on
@@ -139,17 +144,20 @@ async def surfaces(operator, unique: str) -> list[str]:
         # The pre-redesign node page. Still part of the panel until M9.6 retires it,
         # and it carries an inline script of its own.
         f"/panel/nodes/{node.json()['id']}",
-        # The tear-down confirmation, which needs a whole hop behind it.
+        # The tear-down confirmation and M9.4's two rotation dialogs, all of which
+        # need a whole hop behind them.
         *await _with_a_hop(operator, unique),
     ]
 
 
 async def _with_a_hop(operator, unique: str) -> list[str]:
-    """The tear-down dialog, and the two nodes and the hop it does not exist without.
+    """The dialogs that need a node-transport, and the hop they do not exist without.
 
     Its own helper because a hop is the most expensive surface on this list to reach —
     two nodes and a validated parameter block for each end — and the alternative was to
-    leave it off, which is the omission this whole scenario was written about.
+    leave it off, which is the omission this whole scenario was written about. M9.4's
+    two rotation dialogs are addressed by a node-transport id, and the hop's entry end
+    is one, so they come out of the same fixture rather than a second fleet.
     """
     transports = (await operator.get("/api/transports")).json()
     carrier = sorted(
@@ -199,7 +207,12 @@ async def _with_a_hop(operator, unique: str) -> list[str]:
         },
     )
     assert hop.status_code == 201, hop.text
-    return [f"/panel/hops/{hop.json()['entry']['id']}/tear-down"]
+    entry_end = hop.json()["entry"]["id"]
+    return [
+        f"/panel/hops/{entry_end}/tear-down",
+        f"/panel/keys/{entry_end}/rotate",
+        f"/panel/keys/{entry_end}/params",
+    ]
 
 
 def without_comments(text: str, *, css: bool = False) -> str:

@@ -1,0 +1,42 @@
+{#
+  Keys & configs — what each node holds, and how to replace it.
+
+  design/README.md §7 asks for scope, transport, fingerprint (truncated, mono, muted),
+  minted, rotates and a "rotate" action, over a lead paragraph stating the rule. The
+  columns here are that list with two honest substitutions, both recorded rather than
+  quietly made:
+
+  * `minted` became `on the node`. Nothing in this schema records WHEN a piece of
+    material was minted — a row's timestamps move when anything on it changes, so a
+    cell labelled "minted" would be a date that is right until the first rotation and
+    silently wrong afterwards. What the control plane genuinely holds is when a
+    configuration carrying this material last reached the host, which is also the fact
+    a rotation's failure mode is about.
+  * `rotates` is gone. It asks for a schedule, and there is none: nothing in this
+    product rotates anything on its own, and a column promising otherwise would be the
+    panel telling the operator a job is being done for them. Its space went to `users
+    on it`, which is the blast radius of the button in the same row.
+
+  THE LEAD PARAGRAPH IS THE SCREEN'S POINT, not decoration. UI-PATTERNS §9: where key
+  material could appear, the panel prints the rule instead — so this screen, whose whole
+  subject is material that may never be displayed, states the rule once at the top and
+  then keeps it in every cell. Nothing on it is derived from a private or pre-shared
+  value: a fingerprint is a short hash of the PUBLISHED half a transport declares (see
+  services/keymaterial.py, which is handed the clear parameters and never the encrypted
+  ones), and a transport with no published half gets the rule in that cell instead of a
+  value.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  <div class="stack-6">
+    <p class="text-muted section-note">
+      Key material is minted by the control plane, stored encrypted, and never displayed
+      again — not here, not in a dialog, not on any other screen. A fingerprint is a
+      short hash of the half that is already published to the devices that use it, so
+      nothing on this screen can be turned back into a key. You never type one in
+      either: the only credential this panel accepts is the SSH key on the add-node
+      dialog, which is stored encrypted the moment it arrives and never rendered again.
+    </p>
+    {% include "panel/keys_table.html" %}
+  </div>
+</div>

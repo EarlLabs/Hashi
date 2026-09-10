@@ -86,6 +86,31 @@ class HopEndRefused(DomainError):
         self.fields = fields
 
 
+class ParamsRefused(DomainError):
+    """A transport refused the parameters on one node-transport, field by field.
+
+    ``HopEndRefused``'s sibling and built to the same pattern (see it for the full
+    reasoning): a subclass that INHERITS status and code, so ``POST /api/transports/
+    {id}/params`` answers exactly as it always did, and adds ``fields`` for the one
+    caller that has a box per parameter to put a message in.
+
+    Not the same type, and not merged with it, because ``purpose`` is hop vocabulary:
+    a hop has two ends and a refusal has to say which one it is about. A transport
+    enabled on a node has one, so there is nothing to disambiguate, and carrying an
+    end's name on a refusal that has no end would be the console's own confusion.
+
+    What ``fields`` may carry is narrower than what Pydantic reports, and the narrowing
+    happens at the caller rather than here: a validator's message can quote the value it
+    rejected, and the mapping being validated contains this node's key material. The
+    panel therefore prints a message only for a field it actually has a box for — and a
+    box exists only for a value the operator typed.
+    """
+
+    def __init__(self, message: str, *, fields: dict[str, str]) -> None:
+        super().__init__(message)
+        self.fields = fields
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 

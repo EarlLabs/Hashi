@@ -1,8 +1,9 @@
 """What the redesigned console puts on screen, and nothing more.
 
 WHAT: the Overview's four stat cards, the node rows they summarise, the friend rows
-      the Users screen lists, the hop rows the Hops screen lists, and the capability
-      row the Transports screen lists per protocol this image ships.
+      the Users screen lists, the hop rows the Hops screen lists, the capability row
+      the Transports screen lists per protocol this image ships, and the key row the
+      Keys & configs screen lists per transport enabled on a node.
 WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       "throughput now", "last seen", node "load", and a whole Traffic screen. The
       charter's non-goals forbid every one of them: *"No traffic logging, no DNS
@@ -27,21 +28,30 @@ import dataclasses
 import datetime
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
 from control.app.errors import NotFound
 from control.app.models import (
+    Credential,
     Friend,
     Node,
     NodeState,
     Subscription,
     TransportPurpose,
 )
-from control.app.services import apply, friends, nodes, relay
+from control.app.services import (
+    apply,
+    friends,
+    keymaterial,
+    nodes,
+    relay,
+    rotation,
+    transports,
+)
 from edge.bootstrap import node_stack
-from edge.registry import TransportMeta, discover
+from edge.registry import KeyScope, TransportMeta, discover
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +105,57 @@ TRANSPORT_WHY_IDENTIFIED = (
     "network that inspects traffic can name the protocol and drop it: both ends stay "
     "correctly configured, no tunnel comes up, and nothing on the user's device says "
     "what happened."
+)
+
+
+# What the Keys & configs screen may say about the material a node holds — and every
+# one of these is here rather than in a template for the same reason the transport
+# sentences above are: they are the console's own words about a DECLARATION, and a
+# template choosing between them would be choosing by protocol.
+#
+# UI-PATTERNS §9 in one table: where key material could appear, the panel prints the
+# rule instead. There is no branch anywhere on this screen that could print a value —
+# a fingerprint is computed from published material only (``keymaterial.fingerprint``),
+# and a transport with none gets the sentence below rather than something invented.
+KEY_HELD_NOT_SHOWN = (
+    "held, never shown — this transport declares no public half to fingerprint"
+)
+KEY_NOT_IN_THIS_IMAGE = (
+    "not in this image — nothing here can read, re-mint or validate this material"
+)
+
+# Who the material on one row is for. A hop end's second holder is the far NODE rather
+# than a person, which is a distinction the operator has to be able to make before they
+# press rotate: re-keying a hop end takes a tunnel down until both ends are applied,
+# and re-keying a friend-facing transport re-mints credentials people are holding.
+KEY_SCOPE_NODE = "this node"
+KEY_SCOPE_HOP = "this node, and the far end of the hop"
+
+# What a rotation costs at one end of a hop, when the transport has declared that some
+# of its material is SYMMETRIC (``KeySpec.shared_between_peers``, docs/decisions.md
+# 2026-08-09). `control` mints each end separately, so re-minting here produces a value
+# the far end does not have — two configuration files that are individually valid and a
+# handshake that never completes. Written from the DECLARATION, so a transport with no
+# symmetric material never says it and no protocol is named to decide.
+#
+# It is stated in the confirmation rather than used to hide the button: this action is
+# the only home the panel has for it, and an operator who is told the consequence can
+# still be right to want it.
+KEY_SHARED_WITH_PEER = (
+    "This transport declares material that both ends of a hop must hold the same copy "
+    "of, and each end is minted separately — so rotating here gives this end a value "
+    "the far end does not have. The tunnel stays down until the hop is torn down and "
+    "established again, which mints one value for both."
+)
+
+# The one sentence a refusal may carry ABOUT key material, and it carries no value.
+# A transport's own complaint can quote what it rejected, and what is being validated
+# includes the material this node holds — so a message about a field the operator did
+# not type is stated as the rule instead of printed. See ``ParamsRefused``.
+KEY_MATERIAL_WITHHELD = (
+    "the transport also refused something this form does not ask for: {names}. That is "
+    "minted material, so its own message is not printed here — key material is never "
+    "displayed, only replaced."
 )
 
 
@@ -228,6 +289,52 @@ class TransportRow:
     # of four teaches nothing.
     hop_note: str | None
     why: str | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class KeyRow:
+    """The material one transport holds on one node, as the Keys screen lists it.
+
+    ``id`` is the node-transport's own id, which is what every rotation route addresses.
+
+    ``fingerprint`` is a short one-way name for what the node holds, or ``None`` when
+    the transport declares no published half — in which case ``held`` carries the rule
+    instead. Nothing else on this row is derived from key material at all: not the
+    scope, not the date, not the count. See ``keymaterial.fingerprint`` for what may be
+    fed into that function and what may never be.
+
+    ``pushed`` is when a configuration carrying this material last reached the host.
+    It is deliberately the row's own ``applied_at`` and not a comparison against a fresh
+    render: whether a node is running what we would give it NOW is the Nodes screen's
+    ``config`` cell (``drift_of``), and two screens answering that question in two ways
+    is how an operator ends up trusting the wrong one.
+
+    ``holders`` counts credentials WE minted on this transport — the blast radius of
+    rotating it, since every one of them is re-minted with the node's own material. It
+    passes the test ``docs/decisions.md`` sets: it moves when the operator adds or
+    revokes a user, and not when anybody connects.
+    """
+
+    id: str
+    node: str
+    transport: str
+    scope: str
+    fingerprint: str | None
+    held: str | None
+    pushed: datetime.datetime | None
+    holders: int
+    for_friends: bool
+    # Whether rotating THIS row breaks a value the far end of a hop holds a copy of.
+    # Read from the transport's own ``shared_between_peers`` declaration and only
+    # meaningful on a hop end, which is where both halves of this flag come from.
+    shared_with_peer: bool
+    # Whether this image still ships the transport this row runs. False means the
+    # material cannot be fingerprinted, re-minted or validated here — so the screen
+    # offers neither action rather than offering one that is certain to be refused.
+    installed: bool
+    # Whether the transport declares anything an operator may retype. A transport whose
+    # every parameter is minted has nothing for the replace form to hold.
+    replaceable: bool
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -449,6 +556,141 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
         hop_note=None if meta.hop_capable else TRANSPORT_NO_HOP,
         why=TRANSPORT_WHY_IDENTIFIED if meta.blocked_by_inspection else None,
     )
+
+
+async def key_rows(session: AsyncSession) -> list[KeyRow]:
+    """Every transport enabled on every node, as the material each one holds.
+
+    One query for the credential counts rather than one per row, and never through
+    ``NodeTransport.credentials``: that relationship loads lazily, and lazy I/O on an
+    async session raises at runtime rather than in a test.
+
+    Nothing here decrypts anything. The row's ``secrets`` column is not read on this
+    path at all — the fingerprint is computed from ``params``, which is the clear one —
+    so the screen cannot show key material even by accident.
+    """
+    installed = discover()
+    counted = dict(
+        (
+            await session.execute(
+                select(Credential.node_transport_id, func.count(Credential.id)).group_by(
+                    Credential.node_transport_id
+                )
+            )
+        ).all()
+    )
+
+    rows = []
+    for node in await nodes.list_nodes(session):
+        # Sorted by name for the reason every other collection here is: an unordered
+        # list reshuffles itself between reloads and reads as the fleet changing.
+        for row in sorted(node.transports, key=lambda row: row.transport_name):
+            meta = installed.get(row.transport_name)
+            # ``params`` and never ``secrets``: the clear column is the only one this
+            # screen reads, and the specs decide which of its values may be hashed.
+            fingerprint = (
+                keymaterial.fingerprint(meta.key_material, row.params) if meta else None
+            )
+            for_friends = row.purpose == TransportPurpose.FRIENDS
+            rows.append(
+                KeyRow(
+                    id=row.id,
+                    node=node.name,
+                    transport=row.transport_name,
+                    scope=KEY_SCOPE_NODE if for_friends else KEY_SCOPE_HOP,
+                    fingerprint=fingerprint,
+                    # The rule, printed exactly where a value could otherwise have gone.
+                    held=(
+                        None
+                        if fingerprint
+                        else (KEY_HELD_NOT_SHOWN if meta else KEY_NOT_IN_THIS_IMAGE)
+                    ),
+                    pushed=row.applied_at,
+                    holders=counted.get(row.id, 0),
+                    for_friends=for_friends,
+                    shared_with_peer=bool(
+                        meta
+                        and not for_friends
+                        and any(
+                            spec.shared_between_peers and spec.scope is KeyScope.NODE
+                            for spec in meta.key_material
+                        )
+                    ),
+                    installed=meta is not None,
+                    replaceable=bool(
+                        meta and transports.operator_params(row.transport_name)
+                    ),
+                )
+            )
+    return rows
+
+
+async def key_row(session: AsyncSession, node_transport_id: str) -> KeyRow:
+    """One row, projected exactly as the table projects it.
+
+    Found in the list rather than fetched on its own, for the reason ``hop_row`` is:
+    the dialog and the row behind it must not disagree about what they are addressing.
+    """
+    for row in await key_rows(session):
+        if row.id == node_transport_id:
+            return row
+    raise NotFound("no such transport on any node")
+
+
+def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
+    """What a key rotation means for the people holding a link, in one sentence.
+
+    Its own sentence rather than ``RotationOutcome.summary()``, which is written for the
+    pre-redesign page it names ("retry from the node's page") and enumerates the
+    parameters it re-minted. Neither belongs here: that page is going, and a console
+    that lists ``private_key`` beside a fingerprint invites the reader to look for the
+    value. What changed is visible as the fingerprint on the row behind this message;
+    what the operator needs in words is what it costs the people on that node.
+    """
+    if not outcome.complete:
+        return _unpushed(row, outcome, "its keys were re-minted here")
+    return (
+        f"keys rotated on {row.node} — {row.transport}; users keep the same link and "
+        "pick this up the next time their client refreshes it"
+    )
+
+
+def replacement_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
+    """What was replaced, named, and what happens to the people on it.
+
+    The field names ARE listed here, unlike a key rotation's: these are values the
+    operator typed themselves, so naming them back is how they confirm the right box
+    landed. Nothing minted can be in this list — the form has no box for one.
+    """
+    changed = ", ".join(outcome.rotated)
+    if not outcome.complete:
+        return _unpushed(row, outcome, f"{changed} replaced here")
+    return (
+        f"replaced {changed} on {row.node} — {row.transport}; users keep the same link "
+        "and pick this up the next time their client refreshes it"
+    )
+
+
+def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
+    """The half-done state, which is why these two are banners and not toasts.
+
+    Between the write and a successful push the database and the node disagree, and for
+    a decoy rotation that means the blocked value is still what the node is serving.
+    Written in the present tense, naming what is still TRUE rather than reporting that
+    a request failed — an operator who reads "failed" and walks away has been told the
+    opposite of what happened.
+    """
+    return (
+        f"{row.node} — {row.transport}: {what}, but the node could not be updated: "
+        f"{outcome.failure.rstrip('.')}. Until it is, the node is still running the "
+        "old material and users on it are unaffected. Apply the node from the Nodes "
+        "screen once it can be reached."
+    )
+
+
+def withheld_note(names: list[str]) -> str:
+    """UI-PATTERNS §9 in the one place a refusal could have printed a value."""
+    return KEY_MATERIAL_WITHHELD.format(names=", ".join(sorted(names)))
 
 
 def tear_down_summary(affected: list[str]) -> str:
