@@ -1005,7 +1005,23 @@ could appear, the panel prints the rule instead. Nothing displays a private or
 preshared key — the API already withholds both, and the panel must not become the
 place they surface.
 
-### M9.5 — Retire `pages/index.html` and `pages/node.html`
+### M9.5 — Enable, withdraw and set state, from the Nodes screen · step added 2026-09-10
+
+**Not new scope — an unallocated part of this milestone's own "done when".** That
+checklist names *"add node, enable and disable a transport, apply, probe, set
+state, establish and tear down a hop, rotate keys, replace params"*, and the four
+steps above home every one of those except **enable/withdraw a transport** and
+**set node state**: M9.1 carries the node's own lifecycle, M9.3 is read-only by
+its own description, M9.4 is keys. So these two actions had no named step while
+being required before M9.6 may delete the page that currently carries them.
+Found by M9.1's implementer and allocated here rather than silently widening
+another step.
+
+M9's acceptance walk — *"register a node, enable a transport on it and apply —
+every step from the new screens, with no URL typed by hand"* — cannot be
+completed without this.
+
+### M9.6 — Retire `pages/index.html` and `pages/node.html`
 
 **E2E:** none new — the behaviour is unchanged and only the markup moves. The
 scenarios that already cover it must stay green against the new screens:
