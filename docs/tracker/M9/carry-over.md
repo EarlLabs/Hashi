@@ -121,3 +121,31 @@ say, and the reason it says less than the journal knows.
   rather than fixed because both rounds returned clean and this is a Low; it is
   the same defect class as the rest of this milestone's findings, so it is worth
   doing when someone next touches that function.
+
+## From M9.4, review round 1 — a deferral, recorded rather than fixed
+
+Background, like everything else in this file: it tells you what is known-wrong so
+you do not mistake it for the intended design. Do not fix it as part of another
+step.
+
+- **Medium — rotating one end of a hop re-mints a SYMMETRIC value at that end
+  only.** `control/app/services/rotation.py`'s `rotate_keys` mints node-scoped
+  material for the one `node_transport` it was given and pushes that one node. On a
+  hop end whose transport declares `KeySpec.shared_between_peers` — the shipped
+  hop carrier declares it for its pre-shared key — that leaves the two ends holding
+  different copies of a value they must share: **two individually valid
+  configuration files and a handshake that never completes**, with nothing in any
+  log to say why. `docs/decisions.md` (2026-08-09) records that the declaration
+  exists *because* `control` mints each end separately, and `relay.establish_hop`
+  already acts on it by minting once and copying; rotation reads it only to compose
+  prose. Pre-existing — the API has behaved this way since item 23, and the
+  pre-redesign node page offered the same button with no warning at all — so M9.4
+  did not change the behaviour: it **states the consequence in the confirmation
+  dialog** (`console.KEY_SHARED_WITH_PEER`, written from the declaration and never
+  from a protocol's name) rather than hiding an action that M9.6 would otherwise
+  leave without a home. **Do not read the current behaviour as the design.** The
+  fix is to rotate BOTH ends in one transaction whenever any spec declares
+  `shared_between_peers` — mint once, copy to the peer the way `establish_hop`
+  does, then push both nodes and report honestly if either push failed — at which
+  point the dialog's sentence changes from a consequence to a cost.
+

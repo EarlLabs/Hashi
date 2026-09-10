@@ -148,15 +148,24 @@ KEY_SHARED_WITH_PEER = (
     "established again, which mints one value for both."
 )
 
-# The one sentence a refusal may carry ABOUT key material, and it carries no value.
-# A transport's own complaint can quote what it rejected, and what is being validated
-# includes the material this node holds — so a message about a field the operator did
-# not type is stated as the rule instead of printed. See ``ParamsRefused``.
+# The one sentence a refusal may carry about something the operator did not type, and
+# it carries no value. A transport's own complaint can quote what it rejected, and what
+# is validated on this path includes the material the node holds — so anything the form
+# has no box for is NAMED and the rule is printed in place of its message. Written to
+# cover everything that is not a box rather than key material alone: the guard that
+# named only material closed two instances and left the class open, which is this
+# milestone's recurring shape. See ``ParamsRefused`` and ``_refused_parameters``.
 KEY_MATERIAL_WITHHELD = (
-    "the transport also refused something this form does not ask for: {names}. That is "
-    "minted material, so its own message is not printed here — key material is never "
-    "displayed, only replaced."
+    "the transport also refused something this form has no box for: {names}. Its own "
+    "message is not printed — a refusal can quote the value it rejected, and what is "
+    "checked here includes material this panel never displays."
 )
+
+# What a refusal with no field to its name is called. A model-level validator reports
+# an empty location, which is a complaint about the mapping rather than about any one
+# parameter; printing nothing there would leave the operator with a sentence that names
+# no subject, and printing the raw empty string reads as a rendering fault.
+KEY_UNNAMED_REFUSAL = "the parameters as a whole"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -689,8 +698,15 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
 
 
 def withheld_note(names: list[str]) -> str:
-    """UI-PATTERNS §9 in the one place a refusal could have printed a value."""
-    return KEY_MATERIAL_WITHHELD.format(names=", ".join(sorted(names)))
+    """UI-PATTERNS §9 wherever a refusal could otherwise have printed a value.
+
+    A name with no field in it — Pydantic's empty location, which a model-level
+    validator produces — is given the words for what it actually is. Names are sorted so
+    two refusals about the same parameters read identically.
+    """
+    return KEY_MATERIAL_WITHHELD.format(
+        names=", ".join(sorted(name or KEY_UNNAMED_REFUSAL for name in names))
+    )
 
 
 def tear_down_summary(affected: list[str]) -> str:

@@ -759,9 +759,30 @@ async def rotate_keys_from_the_console(
     key = await console.key_row(session, node_transport_id)
     try:
         outcome = await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+    except ParamsRefused as exc:
+        # The transport refused what we just minted for it. NOTHING in that mapping was
+        # typed by anybody — it is stored parameters plus fresh material — so this
+        # screen has no box for any of it and may print none of the transport's own
+        # sentences: an empty box set is what says so, and the parameters are named with
+        # the rule in place of their messages. Latent rather than live today (no shipped
+        # validator quotes its input), which is precisely why it is guarded rather than
+        # watched.
+        return _mutation(
+            request,
+            # ``or`` so this cannot go silent: a refusal carrying no field at all would
+            # otherwise render an empty banner slot, and a rotation that did nothing
+            # while saying nothing is the worst answer on this screen.
+            banner=(
+                _refused_parameters(exc, boxes=set())["failure"]
+                or console.withheld_note([""])
+            ),
+            keeping=key.node,
+            events="keys-changed",
+        )
     except DomainError as exc:
         # Shown rather than raised: the operator is on the screen this is about, and
-        # nothing was changed.
+        # nothing was changed. These are this panel's own sentences — a transport the
+        # image no longer ships, or one that declares nothing to rotate.
         return _mutation(
             request, banner=exc.message, keeping=key.node, events="keys-changed"
         )
@@ -815,7 +836,10 @@ async def replace_params_from_the_console(
     """
     key = await console.key_row(session, node_transport_id)
     if not key.installed:
-        raise DomainError(console.KEY_NOT_IN_THIS_IMAGE)
+        # 422 with the dialog re-rendered, like every other refusal in this console —
+        # the sentence comes from ``_params_form``, which is the one place that decides
+        # what an uninstalled transport can be told.
+        return await _refuse_params(request, session, node_transport_id, values={})
     node_transport = await rotation.get_node_transport(session, node_transport_id)
     boxes = transports.replaceable_params(key.transport, node_transport.params)
     names = {box.name for box in boxes}
@@ -845,7 +869,7 @@ async def replace_params_from_the_console(
             session,
             node_transport_id,
             values=typed,
-            **_refused_parameters(exc, names, key.transport),
+            **_refused_parameters(exc, names),
         )
     except DomainError as exc:
         # Everything else this refuses is about the request rather than about one value
@@ -890,57 +914,60 @@ async def _params_form(
     """
     node_transport = await rotation.get_node_transport(session, node_transport_id)
     key = await console.key_row(session, node_transport_id)
-    if not key.installed:
-        # A node running a protocol this image no longer ships. The table offers no
-        # button for such a row, so this is only reachable by a typed URL — but it would
-        # otherwise be a 500 from the registry lookup, and "internal error" is the wrong
-        # answer to a question that has a real one.
-        raise DomainError(console.KEY_NOT_IN_THIS_IMAGE)
     return {
         "key": key,
-        "boxes": transports.replaceable_params(
-            node_transport.transport_name, node_transport.params
+        # A node running a protocol this image no longer ships has nothing to build a
+        # box from: the registry lookup would raise. The dialog says so instead — the
+        # table offers no button for such a row, so this is only reachable by a typed
+        # URL, and a raised domain error would answer that with a 400 the console never
+        # swaps (static/app.js allows one status through, and it is 422). The operator
+        # would get an open dialog with nothing in it and no message anywhere.
+        "boxes": (
+            transports.replaceable_params(
+                node_transport.transport_name, node_transport.params
+            )
+            if key.installed
+            else ()
         ),
         "values": values or {},
         "errors": errors or {},
-        "failure": failure,
+        "failure": failure or (None if key.installed else console.KEY_NOT_IN_THIS_IMAGE),
     }
 
 
-def _refused_parameters(
-    exc: ParamsRefused, boxes: set[str], transport_name: str
-) -> dict:
-    """One refusal, sorted into what may be shown and what may only be stated.
+def _refused_parameters(exc: ParamsRefused, boxes: set[str]) -> dict:
+    """One refusal, sorted into what may be shown and what may only be NAMED.
 
-    Three destinations, and the third is this step's own rule. A complaint about a box
-    on this form goes under that box. A complaint about a field the form does not render
-    is stated above it, with the transport's own words, exactly as the hop dialog does.
-    A complaint about KEY MATERIAL is stated above it WITHOUT those words: a validator's
-    message can quote the value it rejected, and the mapping being validated holds this
-    node's own minted material — so the panel names the parameter and prints the rule
-    instead of the sentence. That is the case that cannot be seen while it works, which
-    is the whole reason this is a function.
+    The rule is an allow-list, and it is written that way after the first version got it
+    the wrong way round. That one printed the transport's own sentence for anything that
+    was not a declared piece of key material, which closed two instances and left the
+    class open: Pydantic reports a model-level validator at an EMPTY location and a
+    nested one at ``field.0``, neither of which is a name in that set, so both fell
+    through to the branch that prints the message — the one place the message may quote
+    the value it rejected, on a path where the mapping being validated holds this node's
+    minted material.
+
+    So: a complaint located at EXACTLY one of this form's boxes gets its message under
+    that box, because a box holds a value the operator typed and nothing else. Every
+    other shape — key material, a field this form does not render, a nested location, no
+    location at all — is stated above the form by name, with the rule in place of the
+    sentence. Erring this way costs a reason on a refusal about a field the operator
+    cannot edit anyway; erring the other way prints key material.
+
+    ``boxes`` may be empty, which is the key-rotation path: nothing there was typed by
+    anybody, so nothing there may be printed.
     """
-    material = transports.key_material_names(transport_name)
-    errors = {
-        field: wording.for_the_page(message)
-        for field, message in exc.fields.items()
-        if field in boxes
+    errors = {}
+    withheld = []
+    for field, message in exc.fields.items():
+        if field in boxes:
+            errors[field] = wording.for_the_page(message)
+        else:
+            withheld.append(field)
+    return {
+        "errors": errors,
+        "failure": console.withheld_note(withheld) if withheld else None,
     }
-    withheld = [field for field in exc.fields if field in material]
-    homeless = [
-        f"{field}: {message}"
-        for field, message in exc.fields.items()
-        if field not in boxes and field not in material
-    ]
-    stated = []
-    if homeless:
-        stated.append(
-            wording.for_the_page(f"the transport also refused {'; '.join(homeless)}")
-        )
-    if withheld:
-        stated.append(console.withheld_note(withheld))
-    return {"errors": errors, "failure": " ".join(stated) or None}
 
 
 async def _refuse_params(

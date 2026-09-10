@@ -118,9 +118,25 @@ async def rotate_keys(
     try:
         validated = transport.validate(merged)
     except ValidationError as exc:
-        raise DomainError(
-            f"the rotated parameters are not valid for {node_transport.transport_name!r}: "
-            f"{exc.errors()[0]['msg']}"
+        # ``ParamsRefused`` rather than a plain ``DomainError``, and it matters MORE
+        # here than on the replacement path: this mapping holds the private key that
+        # was minted three lines up, and a validator's message may quote what it
+        # rejected. Carrying the complaint per field is what lets a caller decide which
+        # of them it may print — and on this path the answer is none of them, because
+        # nothing in this mapping was typed by anybody. See ``_refused_parameters`` in
+        # panel/routes.py, which is handed an empty set of boxes for exactly that.
+        #
+        # Only the first error travelled before, so a rotation refused on two values
+        # reported one of them.
+        fields: dict[str, str] = {}
+        for error in exc.errors():
+            where = ".".join(str(part) for part in error["loc"])
+            fields.setdefault(where, relay._plainly(error["msg"]))
+        problems = "; ".join(f"{where}: {message}" for where, message in fields.items())
+        raise ParamsRefused(
+            f"the rotated parameters are not valid for "
+            f"{node_transport.transport_name!r} — {problems}",
+            fields=fields,
         ) from exc
 
     secret_keys = set(minted.secrets)

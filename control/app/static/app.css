@@ -520,6 +520,27 @@
 .tuning-field .field-hint,
 .tuning-field .field-error { grid-column: 1 / -1; }
 
+/* The replace-parameters row: the same grid with the columns the other way round, and
+   the reason is which half is being READ. In the hop dialog the label carries the
+   question and the box is empty, so the box can be narrow. Here the box carries the
+   value being replaced — that is the whole affordance of "leave one empty to keep it" —
+   and a hostname or a comma-joined list shows about seventeen characters in 136px. So
+   the label takes what it needs and the input takes the rest. Same tokens and the same
+   one breakpoint; nothing new but a second grid template. */
+.param-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A parameter name is a machine value and wears `.mono` in the markup for it
+   (UI-PATTERNS §7). All this adds is that it may wrap rather than widening the row. */
+.param-field label { overflow-wrap: anywhere; }
+
+.param-field .field-hint,
+.param-field .field-error { grid-column: 1 / -1; }
+
 .dialog-code {
   padding: var(--space-3);
   border: 1px solid var(--color-divider);

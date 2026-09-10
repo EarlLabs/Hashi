@@ -2200,24 +2200,44 @@ async def test_a_refused_parameter_lands_under_its_own_box(
     assert 'value="70000"' in refused.text
 
 
-async def test_a_refusal_about_key_material_prints_the_rule_instead_of_the_message(
+# Every SHAPE Pydantic reports a location in, as this panel would receive it. Written
+# out because the guard is keyed on the shape and not on the value: an allow-list that
+# only handles the first of these is one `loc` away from printing a message about a
+# field nobody typed. `""` is what a model-level validator produces, `x.0` a nested one,
+# and the last is a field this form has no box for.
+#
+# The message on each carries a value that must never reach the page. Only the first
+# entry is a box on the replace form, and it is the only one whose sentence may be read.
+REFUSAL_SHAPES = {
+    "port": "must be inside the range — QUOTED-BOX-VALUE",
+    "private_key": "is not usable — QUOTED-MATERIAL-VALUE",
+    "": "these parameters disagree with each other — QUOTED-MODEL-VALUE",
+    "server_names.0": "is not a hostname — QUOTED-NESTED-VALUE",
+    "decoy_port": "is out of range — QUOTED-UNRENDERED-VALUE",
+}
+
+
+async def test_a_refusal_prints_the_transport_s_words_only_under_a_box(
     client, monkeypatch, reality_params
 ) -> None:
-    """The case that cannot be seen while it works.
+    """The case that cannot be seen while it works, closed as a class rather than twice.
 
     A transport's own validation message may quote the value it rejected, and what is
-    being validated on this path includes the material this node holds — so a refusal
-    naming a field the operator did not type must not arrive with its sentence. The
-    refusal planted here has never happened; what is under test is that the panel names
-    the parameter and states the rule rather than printing what came with it.
+    validated on this path includes the material the node holds. The first version of
+    this guard named the key material it knew about and printed everything else, which
+    covers the two shapes anybody thinks of and leaves the rest: Pydantic reports a
+    model-level validator at an EMPTY location and a nested one at ``field.0``, and
+    neither is a declared parameter name.
+
+    So the rule is an allow-list — a message is printed only under a box, because a box
+    holds a value the operator typed — and this plants one refusal of every shape at
+    once to hold it. Each carries a distinct value; only the box's may be read.
     """
     node_transport_id = await a_node_holding_material(client, reality_params)
+    assert "port" in transports_service.operator_params("vless-reality")
 
     async def refuse(session, *, node_transport_id, params):
-        raise ParamsRefused(
-            "transport rejected these parameters",
-            fields={"private_key": "is not valid: NOT-A-REAL-KEY-BUT-A-VALUE"},
-        )
+        raise ParamsRefused("transport rejected these parameters", fields=REFUSAL_SHAPES)
 
     monkeypatch.setattr(rotation_service, "replace_params", refuse)
 
@@ -2229,9 +2249,55 @@ async def test_a_refusal_about_key_material_prints_the_rule_instead_of_the_messa
 
     assert refused.status_code == 422
     reading = _reading(refused.text)
-    assert "NOT-A-REAL-KEY-BUT-A-VALUE" not in refused.text
-    assert "private_key" in reading
-    assert "never displayed" in reading
+    for name, message in REFUSAL_SHAPES.items():
+        quoted = message.rsplit(" ", 1)[-1]
+        if name == "port":
+            # The one the operator typed: its sentence lands under its own box.
+            assert _described(refused, "error", prefix="param")["port"] == message
+            continue
+        if quoted in refused.text:
+            # ``pytest.fail`` and not ``assert``, for the reason the sweep below gives:
+            # a rewritten assertion prints both operands, and one of these stands in
+            # for key material.
+            pytest.fail(f"the refusal about {name or 'the whole mapping'} was printed")
+        # Named, so the operator knows what was refused, with the rule in its place.
+        assert (name or console_service.KEY_UNNAMED_REFUSAL) in reading
+    assert "never displays" in reading
+
+
+async def test_a_rotation_refused_by_the_transport_prints_none_of_its_words(
+    client, monkeypatch, reality_params
+) -> None:
+    """The other rotation path, where NOTHING in the mapping was typed by anybody.
+
+    ``rotate_keys`` validates stored parameters plus the material it has just minted —
+    including the private key — so a validator that quotes its input would be quoting
+    key material, and this screen has no box for any of it. The refusal is therefore
+    named and never printed: an empty set of boxes is what says so.
+
+    Latent rather than live, which is why it is guarded instead of watched: no shipped
+    transport's validator quotes its input today, and the day one does there is no
+    second chance to notice.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    async def refuse(session, *, node_transport_id, **rest):
+        raise ParamsRefused("the rotated parameters are not valid", fields=REFUSAL_SHAPES)
+
+    monkeypatch.setattr(rotation_service, "rotate_keys", refuse)
+
+    answer = await client.post(
+        f"/panel/keys/{node_transport_id}/rotate", headers={"HX-Request": "true"}
+    )
+
+    assert answer.status_code == 200
+    reading = _reading(answer.text)
+    for name, message in REFUSAL_SHAPES.items():
+        if message.rsplit(" ", 1)[-1] in answer.text:
+            pytest.fail(f"the rotation refusal about {name or 'the whole mapping'} was printed")
+        assert (name or console_service.KEY_UNNAMED_REFUSAL) in reading
+    # A refusal, so it is drawn as one and stays until the next successful request.
+    assert "banner-failure" in answer.text
 
 
 async def test_an_empty_replace_form_is_refused_without_a_box_to_blame(
@@ -2287,6 +2353,65 @@ async def test_nothing_this_screen_serves_may_be_stored_or_remembered(
     # And nothing on the screen is written to localStorage at all: the console opts out
     # of htmx's history cache entirely, which is the other half of that decision.
     assert 'hx-history="false"' in (await client.get("/panel/keys")).text
+
+
+async def test_a_transport_this_image_no_longer_ships_says_so_in_the_dialog(
+    client, monkeypatch, reality_params
+) -> None:
+    """A row whose protocol has left the image, asked for by a typed URL.
+
+    The table offers no button for it, so this is only reachable deliberately — but the
+    answer still has to arrive where the operator is looking. Raising a domain error
+    here produced a 400, and ``static/app.js`` swaps exactly one status (422): the
+    dialog would have opened empty with the explanation in a response body nothing
+    rendered. So the dialog states it, offers no submit, and the POST refuses at the one
+    status the console can show.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    # An image that ships nothing, which is what a package removed from the tree looks
+    # like to a row that still names it. M9.3's own trick, on the same function.
+    monkeypatch.setattr(console_service, "discover", lambda: {})
+
+    dialog = await client.get(f"/panel/keys/{node_transport_id}/params")
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={"decoy_host": "www.wikipedia.example"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert dialog.status_code == 200
+    assert console_service.KEY_NOT_IN_THIS_IMAGE in _reading(dialog.text)
+    assert 'type="submit"' not in dialog.text
+    assert refused.status_code == 422
+    assert console_service.KEY_NOT_IN_THIS_IMAGE in _reading(refused.text)
+
+
+def test_the_replace_form_gives_its_boxes_the_room_the_value_needs() -> None:
+    """Which half of the row is being READ decides which half is wide.
+
+    The hop dialog's ``.tuning-field`` caps its input at 136px and gives the label the
+    rest, which is right for twenty-four short numeric knobs whose boxes are empty. On
+    this form the input carries the value being replaced — "leave one empty to keep it"
+    is only an affordance if the operator can see what they would be keeping — and a
+    hostname or a comma-joined list shows about seventeen characters in 136px.
+
+    Asserted where the rule is written, since no browser runs here: the acceptance walk
+    is what proves it lays out.
+    """
+    rules = _css_rules()
+
+    assert ".param-field" in rules, "the replace form has no row rule of its own"
+    columns = rules[".param-field"]
+    assert "minmax(0, 1fr)" in columns
+    assert "136px" not in columns
+    # The label is the column that gives way, not the box.
+    assert "auto" in columns
+
+    markup = (TEMPLATES / "panel" / "replace_params_dialog.html").read_text()
+    assert "param-field" in markup
+    assert "tuning-field" not in re.sub(r"\{#.*?#\}", "", markup, flags=re.S)
+    # And no breakpoint was added for it — there is one, at 900px (UI-PATTERNS §12).
+    assert _served("app.css").count("@media (max-width") == 1
 
 
 async def test_the_keys_screen_measures_the_fleet_and_never_the_people(
@@ -2656,6 +2781,12 @@ async def test_a_status_word_never_breaks_mid_word(client, reality_params) -> No
         # It is not a table column, so the min-content collapse this rule exists to
         # prevent cannot happen here — the row grows instead.
         ".tuning-field label",
+        # The same name in the replace-parameters dialog (M9.4), agreed to for that
+        # reason and one of its own: this row's label column is `auto` and its input
+        # takes the rest, so a long parameter name that cannot wrap does not print over
+        # the box — it takes the box's width away, and that width is what the value
+        # being replaced is read in.
+        ".param-field label",
     }
     # And a status tag is a single word we wrote, wherever it is put.
     assert "nowrap" in rules[".tag"]

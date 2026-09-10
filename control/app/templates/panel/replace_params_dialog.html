@@ -25,9 +25,17 @@
   macro rather than a copy per field — the wiring is what silently rots when a
   transport gains a parameter, and there is exactly one copy of it here.
 
+  `.param-field` and NOT the hop dialog's `.tuning-field`, which caps its input at 136px
+  and gives the label the rest. That is right for twenty-four short numeric knobs and
+  wrong here, because on this form the INPUT is the thing being read: its placeholder is
+  the value being replaced, and "leave one empty to keep it" is only an affordance if
+  the operator can see what they would be keeping. A hostname or a comma-joined list
+  shows about seventeen characters in 136px. Same tokens, same breakpoint, columns the
+  other way round — see app.css.
+
   Not marked `required` in the markup: an empty box is a valid answer on this form.
 #}
-<div class="tuning-field">
+<div class="param-field">
   <label class="mono" for="param-{{ parameter.name }}">{{ parameter.name }}</label>
   <input class="input" id="param-{{ parameter.name }}" name="{{ parameter.name }}"
          type="text" value="{{ values.get(parameter.name, "") }}"
@@ -59,6 +67,7 @@
       <div class="field-error" role="alert">{{ failure }}</div>
       {% endif %}
 
+      {% if boxes %}
       <div class="dialog-body">
         {{ key.node }} — {{ key.transport }}. Each box holds the value in place now;
         leave one empty to keep it. Key material is not on this form and never can be:
@@ -81,6 +90,21 @@
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
         <button class="btn btn-primary" type="submit">replace</button>
       </div>
+      {% else %}
+      {#
+        Nothing to offer: a transport this image no longer ships, or one that declares
+        no parameter an operator may supply. The reason is in `failure` above. No submit
+        button, because there is nothing it could send — a form whose only outcome is a
+        refusal is a worse answer than saying so.
+      #}
+      <div class="dialog-body">
+        {{ key.node }} — {{ key.transport }}. There is nothing on this transport for you
+        to replace here.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+      </div>
+      {% endif %}
     </form>
     {% include "panel/corners.html" %}
   </div>
