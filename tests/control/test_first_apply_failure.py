@@ -73,10 +73,18 @@ TRANSITION_COMPLAINT = "cannot go from"
 # same reason as above.
 INTERNAL_ERROR_COMPLAINT = "unexpected internal error"
 
-# Obviously not a key, and never used to authenticate: asyncssh refuses to import it
-# before anything is dialled. That is the point — it is a genuinely DIFFERENT failure
-# from a node that cannot be reached, arriving through a different arm of ``apply_node``,
-# and M4.5 is about two consecutive failures with two different causes.
+# Obviously not a key, and never used to authenticate: it is refused before anything is
+# dialled. That is the point — it is a genuinely DIFFERENT failure from a node that
+# cannot be reached, arriving through a different arm of ``apply_node``, and M4.5 is
+# about two consecutive failures with two different causes.
+#
+# WHICH arm changed with M9's acceptance fixes and the difference is worth knowing: the
+# SSH layer used to be the thing that refused it, from outside the block that turns a
+# connection failure into ``NodeUnreachable``, so it arrived as an exception class
+# through the broad catch — a probe answering 500 and a push telling the operator that
+# "what reached the node is unknown", which was untrue of a key that never loaded.
+# ``target_for`` refuses it now, and the recording below is what keeps M4.5 true of that
+# arm as well.
 UNIMPORTABLE_PRIVATE_KEY = "not-a-real-key"
 
 
@@ -238,9 +246,11 @@ async def test_a_second_failure_replaces_the_first_ones_reason(
     """The operator retries, fails differently, and must be told the NEW reason — M4.5.
 
     Two real applies with two real and different causes: nothing answers at the address,
-    then a key on the record that cannot be imported. The second arrives through the
-    broad catch rather than through ``NodeUnreachable``, so this also covers the case
-    where the two failures do not even share an arm of ``apply_node``.
+    then a key on the record that cannot be imported. The second is refused by
+    ``target_for`` before a connection is attempted, rather than arriving as
+    ``NodeUnreachable``, so this also covers the case where the two failures do not even
+    share an arm of ``apply_node`` — and it is the arm where nothing was written to the
+    host, which still has to leave the row's reason current.
 
     Driven through the ROUTE, not through ``apply_node``, and that is load-bearing. Each
     request gets its own session, so the second apply loads the node from the database

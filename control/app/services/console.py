@@ -133,21 +133,22 @@ KEY_NOT_IN_THIS_IMAGE = (
 KEY_SCOPE_NODE = "this node"
 KEY_SCOPE_HOP = "this node, and the far end of the hop"
 
-# What a rotation costs at one end of a hop, when the transport has declared that some
+# What a rotation COSTS at one end of a hop, when the transport has declared that some
 # of its material is SYMMETRIC (``KeySpec.shared_between_peers``, docs/decisions.md
-# 2026-08-09). `control` mints each end separately, so re-minting here produces a value
-# the far end does not have — two configuration files that are individually valid and a
-# handshake that never completes. Written from the DECLARATION, so a transport with no
-# symmetric material never says it and no protocol is named to decide.
+# 2026-08-09). Written from the DECLARATION, so a transport with no symmetric material
+# never says it and no protocol is named to decide.
 #
-# It is stated in the confirmation rather than used to hide the button: this action is
-# the only home the panel has for it, and an operator who is told the consequence can
-# still be right to want it.
+# It was a CONSEQUENCE and is now a cost, which is the change the fix to ``rotate_keys``
+# bought: rotating one end used to leave the far end holding a value it could not
+# handshake with, and the sentence here said so. Both ends are now re-keyed in one
+# transaction and both nodes pushed, so what is left to state is the window between the
+# two pushes — the tunnel is down while it is open, and stays down if the second node
+# cannot be reached.
 KEY_SHARED_WITH_PEER = (
     "This transport declares material that both ends of a hop must hold the same copy "
-    "of, and each end is minted separately — so rotating here gives this end a value "
-    "the far end does not have. The tunnel stays down until the hop is torn down and "
-    "established again, which mints one value for both."
+    "of, so rotating here re-keys the far end with it and pushes both nodes. The tunnel "
+    "is down from the moment the first node takes the new material until the second one "
+    "does — and if the second cannot be reached, it stays down until you apply it."
 )
 
 # The one sentence a refusal may carry in place of a message it will not print, and it
@@ -839,18 +840,23 @@ def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     *"No user holds anything on it: this is a tunnel between two of our own nodes"* — so
     an answer that then reports what users will pick up contradicts the sentence they
     confirmed. The far end is named instead, because that is the only holder a hop end
-    has, and it is still running the material it was last given. What to DO about that
-    is deliberately not advised: with symmetric material an apply does not fix it (see
-    ``KEY_SHARED_WITH_PEER`` and M9's carry-over), and advice that is wrong for one
-    declaration is worse than none.
+    has.
+
+    WHAT IT SAYS ABOUT THE FAR END CHANGED WITH THE ROTATION ITSELF. It used to say the
+    far end was still holding the material it was given — true then, and the whole
+    defect: the two ends no longer matched. A rotation now writes both ends in one
+    transaction and pushes both nodes, so on a complete one they match and both have
+    taken it, and telling the operator to do something about the far end would be
+    telling them to fix what is not broken. When the push did NOT land everywhere,
+    ``_unpushed`` says which node has to be applied and what is true until it is.
     """
     if not outcome.complete:
         return _unpushed(row, outcome, "its keys were re-minted here")
     if not row.for_friends:
         return (
-            f"keys rotated on {row.node} — {row.transport}, at this end of the hop; no "
-            "user holds anything on it, and the far end is still holding the material "
-            "it was given"
+            f"keys rotated on {row.node} — {row.transport} and at the far end of the "
+            "hop; no user holds anything on it, and both nodes have taken the new "
+            "material"
         )
     return (
         f"keys rotated on {row.node} — {row.transport}; users keep the same link and "
@@ -874,8 +880,8 @@ def replacement_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     if not row.for_friends:
         return (
             f"replaced {changed} on {row.node} — {row.transport}, at this end of the "
-            "hop; no user holds anything on it, and the far end is still running the "
-            "config it was last given"
+            "hop; no user holds anything on it, and the far end has been applied with "
+            "it so the two still match"
         )
     return (
         f"replaced {changed} on {row.node} — {row.transport}; users keep the same link "
@@ -886,30 +892,43 @@ def replacement_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
 def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     """The half-done state, which is why these two are banners and not toasts.
 
-    Between the write and a successful push the database and the node disagree, and for
+    Between the write and a successful push the database and the nodes disagree, and for
     a decoy rotation that means the blocked value is still what the node is serving.
     Written in the present tense, naming what is still TRUE rather than reporting that
     a request failed — an operator who reads "failed" and walks away has been told the
     opposite of what happened.
 
-    Whose problem it is NOT differs by row, so that clause branches with its two
-    callers: a friend-facing transport still has people on the old material and they are
-    unaffected; a hop end has nobody on it at all, and the tunnel is untouched precisely
-    because the push did not land.
+    Whose problem it is NOT differs by row, and on a hop it differs by HOW MUCH landed,
+    which is the fail-safe an operator has to be able to read: a hop rotation writes
+    both ends and pushes two nodes, so one node taking it and the other not is a tunnel
+    that is down, while neither taking it is a tunnel that is untouched. Reporting both
+    as "the node is still running the old material" would be right about one of them and
+    a false reassurance about the other. A friend-facing row has one node and people on
+    the old material, who are unaffected.
     """
     if row.for_friends:
         standing = (
             "the node is still running the old material and users on it are unaffected"
         )
+    elif outcome.nodes_updated:
+        standing = (
+            "one end of the hop has taken it and the other has not, so the tunnel is "
+            "down until it does — no user holds anything on it either way"
+        )
     else:
         standing = (
-            "the node is still running the old material, so the tunnel to the far end "
-            "is unaffected — and no user holds anything on it either way"
+            "neither end took it, so both are still running the material they had and "
+            "the tunnel is unaffected — no user holds anything on it either way"
         )
+    unreached = sorted(outcome.nodes_failed)
+    many = len(unreached) > 1
     return (
-        f"{row.node} — {row.transport}: {what}, but the node could not be updated: "
-        f"{outcome.failure.rstrip('.')}. Until it is, {standing}. Apply the node from "
-        f"{apply.WHERE_TO_RETRY} once it can be reached."
+        f"{row.node} — {row.transport}: {what}, but "
+        f"{'these nodes' if many else 'the node'} could not be updated: "
+        f"{rotation.reasons(outcome.nodes_failed)}. "
+        f"Until {'they are' if many else 'it is'}, {standing}. Apply "
+        f"{'them' if many else 'it'} again from {apply.WHERE_TO_RETRY} once "
+        f"{'they can' if many else 'it can'} be reached."
     )
 
 

@@ -36,10 +36,15 @@ import yaml
 from control.app.models import NodeState
 from edge.bootstrap import node_stack
 
+from .conftest import GENERATED_SSH_KEY
+
 # RFC 5737 documentation address, as everywhere in this zone. Never dialled: the
 # connection is replaced.
 NODE_ADDRESS = "192.0.2.10"
-FAKE_PRIVATE_KEY = "not-a-real-key"
+
+# A real key, from the conftest — see the constant there for why a placeholder string no
+# longer reaches the apply path. It authenticates nothing: the connection is replaced.
+FAKE_PRIVATE_KEY = GENERATED_SSH_KEY
 
 TRANSPORT = "vless-reality"
 

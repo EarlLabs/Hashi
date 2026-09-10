@@ -3299,12 +3299,14 @@ async def test_every_rotation_sentence_branches_on_who_holds_the_row(
     assert for_friends.for_friends and not hop_end.for_friends
 
     landed = rotation_service.RotationOutcome(
-        node_transport_id=node_transport_id, rotated=["decoy_host"], node_pushed=True
+        node_transport_id=node_transport_id,
+        rotated=["decoy_host"],
+        nodes_updated=["entry-1", "exit-1"],
     )
     half_done = rotation_service.RotationOutcome(
         node_transport_id=node_transport_id,
         rotated=["decoy_host"],
-        failure="the host refused the connection",
+        nodes_failed={"entry-1": "the host refused the connection"},
     )
 
     for compose in (console_service.rotation_summary, console_service.replacement_summary):
@@ -4097,6 +4099,212 @@ async def test_a_long_nickname_leaves_the_short_columns_alone(
         body = (await client.get(path)).text
         assert longest in body, path
         assert 'class="text-muted nowrap"' in body, path
+
+
+# --- the acceptance walk of M9: actions that reported nothing ------------------
+
+async def test_a_probe_of_a_node_whose_key_will_not_load_answers_instead_of_crashing(
+    client, session
+) -> None:
+    """Probe had no answer for the commonest thing wrong with a node record.
+
+    The acceptance walk pressed probe on a node whose SSH key was not a key and got a
+    500: the key is loaded outside the block that turns a connection failure into
+    ``NodeUnreachable``, so it escaped ``check_node`` as an exception class and this
+    route had nothing to catch it with. A 500 on this button is the one outcome the
+    screen cannot explain — and a probe changes nothing, so there is nothing to be
+    unsure about afterwards.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
+        )
+    ).json()["id"]
+    # Written onto the record rather than through the form, which now refuses it — this
+    # is the node an operator registered before it did.
+    node = await nodes_service.get_node(session, node_id)
+    node.ssh_private_key = "not-a-real-key"
+    await session.commit()
+
+    response = await client.post(f"/panel/nodes/{node_id}/probe")
+
+    assert response.status_code == 200, response.text
+    assert "banner-failure" in response.text
+    assert "cannot be read" in _reading(response.text), response.text
+
+
+async def test_a_key_the_control_plane_cannot_read_is_refused_under_its_own_box(
+    client,
+) -> None:
+    """Foreseeable bad input, refused as bad input.
+
+    A pasted key that lost a line, or carries a passphrase, used to be accepted into the
+    record and reported at the first apply as "an unexpected internal error
+    (KeyImportError)" pointing at a container log. The panel already knows how to refuse
+    a field; this is one.
+
+    The refusal carries the SENTENCE and never the paste: this box holds the credential
+    for a whole fleet, and it is the one box this dialog is written never to render back.
+    """
+    typed = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n"
+
+    response = await client.post(
+        "/panel/nodes",
+        data={
+            "name": "leaf-1",
+            "address": "192.0.2.10",
+            "location_label": "Testland",
+            "ssh_private_key": typed,
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert 'id="node-ssh_private_key-error"' in response.text
+    assert "not a private key this control plane can read" in _reading(response.text)
+    if typed.strip() in response.text:
+        pytest.fail("the refused key was handed back into the dialog")
+
+    # And nothing was registered: a refusal that half-happened is the defect one layer
+    # down from the one this closes.
+    assert (await client.get("/api/nodes")).json() == []
+
+
+async def test_the_api_refuses_the_same_key_without_quoting_it(client) -> None:
+    """The other surface, and the reason the check is not a model validator.
+
+    FastAPI answers a request-model refusal with ``input`` — the value it rejected — in
+    the body, so a ``field_validator`` on this field would make the API echo the pasted
+    private key. The service refuses it instead, through the envelope every other domain
+    refusal uses.
+    """
+    typed = "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-key\n"
+
+    response = await client.post(
+        "/api/nodes",
+        json={
+            "name": "leaf-1",
+            "address": "192.0.2.10",
+            "location_label": "Testland",
+            "ssh_private_key": typed,
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["message"] == nodes_service.SSH_KEY_UNUSABLE
+    if "not-a-key" in response.text:
+        pytest.fail("the API answered a refused key with the key")
+
+
+async def test_every_console_answer_owns_the_banner_slot(client, reality_params) -> None:
+    """Why a probe reported nothing at all, twice, on the acceptance stand.
+
+    Both answers below are 200s. The banner one was reaching the browser all along and
+    being wiped a moment later: ``static/app.js`` emptied the slot on
+    ``htmx:afterRequest`` for any successful exchange, and that event fires AFTER the
+    swap — so the failure the server had just written was removed by the request that
+    delivered it.
+
+    Clearing it earlier is not the fix either, because a table refreshing itself on a
+    ``-changed`` event is a successful exchange too. So the answer owns the slot: a
+    mutation that has something to say fills it, and one that has not empties it. That
+    is what this asserts, on both branches, because an answer that says nothing about
+    the slot is how a stale failure outlives what fixed it.
+    """
+    node_id = await a_serving_node(client, reality_params)
+
+    async def probed(session, *, node_id):
+        return schemas.HealthResponse(
+            node_id=node_id,
+            reachable=True,
+            healthy=True,
+            running=["vless-reality"],
+            missing=[],
+            drifted=[],
+            stale=[],
+            detail=None,
+        )
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(health_service, "check_node", probed)
+        good = await client.post(f"/panel/nodes/{node_id}/probe")
+
+    assert good.status_code == 200
+    assert 'hx-swap-oob="innerHTML:#banner-slot"' in good.text, (
+        "a successful mutation left the last failure on screen"
+    )
+    assert "banner-failure" not in good.text
+
+    failed = await client.post(f"/panel/nodes/{node_id}/apply")
+    assert failed.status_code == 200
+    assert failed.text.count('hx-swap-oob="innerHTML:#banner-slot"') == 1
+    assert "banner-failure" in failed.text
+
+
+def test_nothing_in_the_script_empties_the_banner_slot_after_a_request() -> None:
+    """The other half of the fix above, where the wiping actually happened.
+
+    Read as source, because this suite has no browser — the acceptance walk is what
+    proves it on screen. It is a narrow instrument and says so: it holds the ONE
+    listener that did this and the sentence a 5xx draws, and it would not see the same
+    mistake made from a new listener with another name.
+
+    The 5xx sentence is here for the finding it came from. It read "Nothing was changed"
+    over a rotation that had already re-keyed a node — a false reassurance, which is
+    worse than an error, because the operator has no reason to look. Nothing out here
+    can know how far a 5xx got.
+    """
+    js = _served("app.js")
+
+    assert "htmx:afterRequest" not in js, (
+        "a listener on htmx:afterRequest runs after the swap, so anything it clears is "
+        "whatever the answer just delivered"
+    )
+    responded = js[js.index("htmx:responseError"):]
+    assert "Nothing was changed" not in responded
+
+
+async def test_a_half_pushed_hop_rotation_says_the_tunnel_is_down(
+    client, session
+) -> None:
+    """A hop rotation reaches two nodes, so "the push failed" is two different states.
+
+    Both ends are written in one transaction and both nodes are pushed. If one takes it
+    and the other does not, the two ends hold different material and the tunnel is DOWN;
+    if neither takes it, both are still running what they had and the tunnel is
+    untouched. Reporting either as "the node is still running the old material" is right
+    about one of them and a false reassurance about the other — which is the defect
+    class this milestone's acceptance came back on.
+    """
+    entry_end = await a_hop(client)
+    session.expunge_all()
+    row = await console_service.key_row(session, entry_end)
+    assert not row.for_friends
+
+    half = rotation_service.RotationOutcome(
+        node_transport_id=entry_end,
+        rotated=["private_key"],
+        nodes_updated=["entry-1"],
+        nodes_failed={"exit-1": "the node did not answer"},
+    )
+    neither = rotation_service.RotationOutcome(
+        node_transport_id=entry_end,
+        rotated=["private_key"],
+        nodes_failed={
+            "entry-1": "the node did not answer",
+            "exit-1": "the node did not answer",
+        },
+    )
+
+    down = console_service.rotation_summary(row, half)
+    assert "the tunnel is down" in down, down
+    assert "exit-1" in down, down
+    assert apply_service.WHERE_TO_RETRY in down
+
+    untouched = console_service.rotation_summary(row, neither)
+    assert "the tunnel is unaffected" in untouched, untouched
+    assert "the tunnel is down" not in untouched, untouched
 
 
 # --- acceptance round 3 -------------------------------------------------------

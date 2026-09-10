@@ -9,7 +9,17 @@
 
   The out-of-band elements have to be TOP-LEVEL in the response for htmx to find
   them, which is why they are included here rather than nested inside a dialog.
+
+  THE BANNER SLOT IS ALWAYS ANSWERED, with the failure or with nothing. That is what
+  clears the last failure when the operator's next action works, and it is the server's
+  job rather than the script's because the script cannot tell the two apart: it used to
+  empty the slot on `htmx:afterRequest` for any successful exchange, which fires AFTER
+  the swap — so every banner this file has ever sent was written into the slot and
+  wiped again a moment later, and a probe that could not reach a node reported nothing
+  at all. A table refreshing itself on a `-changed` event is a successful exchange too,
+  which is why "clear it earlier" is not the fix either: only an answer that OWNS the
+  slot can know whether it is meant to be empty.
 #}
 {% if dialog %}{% include dialog %}{% endif %}
 {% if toast %}{% include "panel/toast.html" %}{% endif %}
-{% if banner %}{% include "panel/banner.html" %}{% endif %}
+{% if banner %}{% include "panel/banner.html" %}{% else %}<div hx-swap-oob="innerHTML:#banner-slot"></div>{% endif %}

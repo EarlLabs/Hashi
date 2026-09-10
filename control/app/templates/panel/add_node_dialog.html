@@ -82,12 +82,25 @@
         <label for="node-ssh_private_key">ssh private key</label>
         <textarea class="input" id="node-ssh_private_key" name="ssh_private_key" rows="3"
                   autocomplete="off" spellcheck="false"
-                  aria-describedby="node-ssh_private_key-hint{% if key_dropped %} node-ssh_private_key-dropped{% endif %}"></textarea>
+                  aria-describedby="node-ssh_private_key-hint{% if errors.get("ssh_private_key") %} node-ssh_private_key-error{% endif %}{% if key_dropped %} node-ssh_private_key-dropped{% endif %}"
+                  {% if errors.get("ssh_private_key") %}aria-invalid="true"{% endif %}></textarea>
         <div class="field-hint" id="node-ssh_private_key-hint">
           Stored encrypted and never displayed again. Optional now — without it the node
           can be registered but its configuration cannot be applied. This box is never
           refilled, so if the form comes back, paste it again.
         </div>
+        {#
+          What was wrong with the key itself, when that is why the form came back. Its
+          own element beside the "not kept" notice below rather than one element saying
+          both: they are two different facts — this one is why it was refused, that one
+          is what the operator has to do about an emptied box — and one element cannot
+          carry two roles (see the banner rule in M9's step notes).
+        #}
+        {% if errors.get("ssh_private_key") %}
+        <div class="field-error" id="node-ssh_private_key-error" role="alert">
+          {{ errors["ssh_private_key"] }}
+        </div>
+        {% endif %}
         {% if key_dropped %}
         <div class="field-error" id="node-ssh_private_key-dropped" role="alert">
           the key you pasted was not kept — paste it again before you submit, or this

@@ -128,6 +128,43 @@ def render_end(end: NodeTransport, peer: NodeTransport) -> str:
     return leaf_config
 
 
+# What an operator is told when two ends would render into files that carry nothing.
+# One sentence, used where a hop is first established and where one end of an existing
+# hop is rewritten, because those are the same mistake at two moments — and because
+# ``HopNotRenderable`` is not a ``DomainError``: whichever path lets it escape answers
+# 500 and tells the operator that nothing was changed.
+HOP_WOULD_NOT_WORK = "these two ends would not form a working tunnel: {reason}"
+
+
+def check_renders_as_a_pair(
+    end: NodeTransport, peer: NodeTransport, *, end_params: dict, peer_params: dict
+) -> None:
+    """Refuse two hop ends that would not carry traffic — before either one is written.
+
+    ``render_end`` renders what the rows CURRENTLY hold; this renders what a caller is
+    about to write into them, which is the difference that matters to anything rewriting
+    one end of a live hop. ``edge.relay`` refuses the combinations that produce two
+    individually valid configuration files and a handshake that never completes —
+    mismatched symmetric material above all — and it does so by raising
+    ``HopNotRenderable``, which is not a ``DomainError``. A caller that renders after it
+    has committed therefore does not get a refusal at all: it gets a 500 over a change
+    that has already happened.
+
+    Pure: it reads the two rows' nodes and renders. Nothing is written and nothing is
+    read from the database, so it is safe to call between validating and committing —
+    which is the only place it belongs.
+    """
+    near = edge_relay.HopEnd(node=nodes.node_view(end.node), params=end_params)
+    far = edge_relay.HopEnd(node=nodes.node_view(peer.node), params=peer_params)
+    entry, leaf = (
+        (near, far) if end.purpose == TransportPurpose.RELAY_ENTRY else (far, near)
+    )
+    try:
+        edge_relay.render_hop(end.transport_name, entry=entry, leaf=leaf)
+    except edge_relay.HopNotRenderable as exc:
+        raise DomainError(HOP_WOULD_NOT_WORK.format(reason=exc)) from exc
+
+
 def _end_word(purpose: TransportPurpose) -> str:
     """Which end of the hop this is, in the word an operator uses for it.
 
@@ -375,7 +412,7 @@ async def establish_hop(
             ),
         )
     except edge_relay.HopNotRenderable as exc:
-        raise DomainError(f"these two ends would not form a working tunnel: {exc}") from exc
+        raise DomainError(HOP_WOULD_NOT_WORK.format(reason=exc)) from exc
 
     session.add_all(ends)
     await session.flush()

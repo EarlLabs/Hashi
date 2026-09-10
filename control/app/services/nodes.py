@@ -15,12 +15,14 @@ HOW:  every transport-specific decision is delegated. Parameters are validated b
 import json
 import logging
 
+import asyncssh
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import (
     Conflict,
+    DomainError,
     NotDeliverable,
     NotFound,
     ParamsRefused,
@@ -40,6 +42,42 @@ logger = logging.getLogger(__name__)
 # copy. They are defaults for reaching a host we own, not a fact about any provider.
 DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_PORT = 22
+
+# What an operator is told when the text in the SSH key box is not a key this control
+# plane can load. One sentence, used by the form that accepts a key and by the push path
+# that finds an unusable one already stored, so the two cannot describe it differently.
+#
+# It carries no part of what was pasted. The value is a credential for every node in the
+# fleet, and a refusal that quoted the first line of it would put it in the markup of the
+# one form written never to render it back (see the dialog's own note).
+SSH_KEY_UNUSABLE = (
+    "not a private key this control plane can read — paste the whole key, from its "
+    "BEGIN line to its END line, and not one that is protected by a passphrase"
+)
+
+
+def ssh_key_is_usable(key: str) -> bool:
+    """Whether the SSH layer will be able to load this private key.
+
+    Asked with the SAME call the connection itself makes, so "accepted by the panel" and
+    "usable for reaching a node" cannot come to mean two different things. A structural
+    check on the BEGIN and END lines would accept a truncated body, and the operator
+    would learn about it at the first apply — as an internal error, which is what this
+    function exists to stop being the answer to a mistyped paste.
+
+    ``ValueError`` because that is the base of what the library raises for both shapes of
+    unusable key: text that is not a key at all, and a key this control plane holds no
+    passphrase for. Neither is an internal error and neither is worth two sentences —
+    both mean the credential cannot be used and has to be pasted again.
+
+    Nothing is logged and nothing is returned but the answer: the argument is a
+    credential, and the exception it raises can quote what it was given.
+    """
+    try:
+        asyncssh.import_private_key(key)
+    except ValueError:
+        return False
+    return True
 
 
 # --- reading ----------------------------------------------------------------
@@ -185,7 +223,19 @@ async def create_node(
     Draft rather than active is deliberate: a node exists as a record before it is
     configured, and a record that defaulted to active would put an unconfigured host
     into every friend's subscription the moment it was typed in.
+
+    A key that will not load is refused HERE and not stored. It is ordinary bad input —
+    a paste that lost its last line, a key with a passphrase — and the alternative is
+    what it used to be: the record accepted, and the mistake reported at the first apply
+    as an internal error naming an exception class and pointing at a container log. The
+    node cannot be edited afterwards either, so the moment to say so is this one.
     """
+    # Truthiness rather than ``is not None``: an empty string means "not supplied"
+    # everywhere else on this path — the SSH layer treats it as no key at all — and a
+    # refusal saying an empty box is not a key would be about the wrong thing.
+    if ssh_private_key and not ssh_key_is_usable(ssh_private_key):
+        raise DomainError(SSH_KEY_UNUSABLE)
+
     existing = await session.execute(select(Node).where(Node.name == name))
     if existing.scalars().first() is not None:
         raise Conflict(f"a node named {name!r} already exists")

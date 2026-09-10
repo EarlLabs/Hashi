@@ -1427,6 +1427,22 @@ async def create_node(
             key_dropped=bool(ssh_private_key),
         )
 
+    # Asked before the service is called only so the answer lands under the box it is
+    # about: ``create_node`` refuses the same key with the same sentence, through the
+    # same helper, for every caller that is not this form. The predicate is in one
+    # place; which surface can place it is what differs.
+    if ssh_private_key and not nodes.ssh_key_is_usable(ssh_private_key):
+        return _refuse_node(
+            request,
+            values=typed,
+            errors={"ssh_private_key": nodes.SSH_KEY_UNUSABLE},
+            # The box is emptied on every refusal, so it is emptied on this one too —
+            # and the operator is told, exactly as they are when some OTHER field was
+            # the problem. A dialog that kept the rejected key would be the one place
+            # this panel renders key material.
+            key_dropped=True,
+        )
+
     try:
         node = await nodes.create_node(session, **payload.model_dump())
     except DomainError as exc:
@@ -1506,9 +1522,21 @@ async def probe_node(
     Until M9.6 there was a second probe route, ``/nodes/{id}/health``, answering the
     pre-redesign page with a ``panel/health.html`` fragment. It went with the page; the
     judgement it made in markup is ``console.health_summary``, which composes it as text.
+
+    A node whose record cannot produce an SSH session at all — no address, or a stored
+    key that will not load — never reaches the probe: ``check_node`` builds its target
+    through ``apply.target_for``, which refuses those two before dialling. That refusal
+    is an answer to the operator, not a fault, so it is shown here the way a failed
+    apply is. Without this arm it was a 500, and a 500 on this button is the one outcome
+    the screen has no way to explain.
     """
     node = await nodes.get_node(session, node_id)
-    result = await health.check_node(session, node_id=node_id)
+    try:
+        result = await health.check_node(session, node_id=node_id)
+    except DomainError as exc:
+        return _mutation(
+            request, banner=exc.message, keeping=node.name, events="nodes-changed"
+        )
     summary = console.health_summary(node.name, result)
     return _mutation(
         request,

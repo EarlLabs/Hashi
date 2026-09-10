@@ -462,3 +462,113 @@ async def test_a_refused_hop_end_carries_none_of_the_material_it_minted(
     # The transport's own words still travel, and something was struck out of them.
     assert VALIDATOR_QUOTED in refused.value.message
     assert relay.WITHHELD in refused.value.message
+
+
+# --- rotating one end of a hop (M9 acceptance) --------------------------------
+
+def _symmetric_names() -> set[str]:
+    """The names this hop transport DECLARED both ends must hold the same copy of.
+
+    Read from the declaration rather than written down, so this file names no protocol's
+    field — the same rule the code under test follows, and the reason a transport with a
+    different symmetric value would be covered by these tests unchanged.
+    """
+    from edge.registry import KeyScope, profile
+
+    return {
+        spec.name
+        for spec in profile(HOP_TRANSPORT).meta.key_material
+        if spec.scope is KeyScope.NODE and spec.shared_between_peers
+    }
+
+
+async def test_rotating_one_end_of_a_hop_leaves_the_two_ends_a_pair(
+    client, session, hop_params
+) -> None:
+    """The acceptance finding this file's neighbour produced, and the worst of M9's.
+
+    Rotating the entry end used to re-mint the symmetric material at that end ALONE.
+    The two ends then held different copies of a value they must share: two individually
+    valid configuration files and a handshake that never completes — and, because the
+    row was committed before the pair was re-rendered, ``edge.relay`` refused it on the
+    way to the node, out of reach of every handler. The operator was shown a 500 reading
+    "Nothing was changed" over a hop that had just been broken.
+
+    So the claim is not "it does not raise": it is that after a rotation the two ends
+    still describe one tunnel, which is what ``render_end`` will only do for a matching
+    pair.
+    """
+    _, _, body = await established(client, hop_params)
+    shared = _symmetric_names()
+    assert shared, "this transport declares nothing symmetric, so this run proves nothing"
+
+    before = json.loads((await session.get(NodeTransport, body["entry"]["id"])).secrets)
+
+    response = await client.post(f"/api/transports/{body['entry']['id']}/rotate-keys")
+    assert response.status_code == 200, response.text
+
+    # The rotation happened in the route's own session; this one is holding what the
+    # rows said before it.
+    session.expire_all()
+    entry = await session.get(NodeTransport, body["entry"]["id"])
+    leaf = await session.get(NodeTransport, body["leaf"]["id"])
+    entry_secrets = json.loads(entry.secrets)
+    leaf_secrets = json.loads(leaf.secrets)
+
+    for name in shared:
+        assert entry_secrets[name] == leaf_secrets[name], (
+            f"the two ends hold different copies of {name} after a rotation"
+        )
+        assert entry_secrets[name] != before[name], f"{name} was not rotated at all"
+
+    # The far end's own private half is NOT re-minted: rotating this end is about this
+    # node's material, and nothing that happened here exposed the other node's.
+    assert set(leaf_secrets) == set(entry_secrets)
+
+    # And the pair renders, which is the check that used to happen after the commit.
+    relay.render_end(entry, leaf)
+    relay.render_end(leaf, entry)
+
+
+async def test_a_hop_rotation_pushes_both_nodes_and_names_the_ones_it_could_not_reach(
+    client, session, hop_params
+) -> None:
+    """One end's material is the other end's config, so both hosts have to be told.
+
+    Neither node in this fixture answers, so both pushes fail — which is what makes the
+    report readable: an outcome naming ONE node would mean the far end was never
+    attempted, and the operator would have no idea the tunnel is down.
+    """
+    _, _, body = await established(client, hop_params)
+
+    answer = (
+        await client.post(f"/api/transports/{body['entry']['id']}/rotate-keys")
+    ).json()
+
+    assert answer["complete"] is False
+    for node_name in ("entry-ru", "leaf-nl"):
+        assert node_name in answer["summary"], answer["summary"]
+
+
+async def test_a_hop_end_whose_far_end_is_gone_is_refused_before_it_re_keys_anything(
+    client, session, hop_params
+) -> None:
+    """A rotation that cannot end in a working pair changes nothing.
+
+    Half a hop cannot be re-keyed into a whole one, and re-keying this end anyway would
+    move the material of a node whose tunnel is already dead — for nothing. Refused, and
+    the row is proven untouched afterwards, because "it answered 400" and "it wrote
+    nothing" are two different claims.
+    """
+    _, _, body = await established(client, hop_params)
+    before = json.loads((await session.get(NodeTransport, body["entry"]["id"])).secrets)
+
+    await session.delete(await session.get(NodeTransport, body["leaf"]["id"]))
+    await session.commit()
+
+    response = await client.post(f"/api/transports/{body['entry']['id']}/rotate-keys")
+    assert response.status_code == 400, response.text
+
+    session.expire_all()
+    entry = await session.get(NodeTransport, body["entry"]["id"])
+    assert json.loads(entry.secrets) == before, "a refused rotation re-keyed the end"

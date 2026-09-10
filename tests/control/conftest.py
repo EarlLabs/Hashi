@@ -23,6 +23,7 @@ import socket
 from collections.abc import Iterator
 from typing import NamedTuple
 
+import asyncssh
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -45,6 +46,24 @@ TEST_SECRET_KEY = "test-secret-key-not-real-000000000000000000000000"
 
 OPERATOR_USERNAME = "owner"
 OPERATOR_PASSWORD = "test-operator-password"
+
+# An SSH private key a node record can really hold, for the fixtures whose node is
+# registered with one.
+#
+# It has to be a REAL key, and cannot go back to being the string "not-a-real-key" it
+# was in three files: since M9's acceptance fixes, a key that the SSH layer cannot load
+# is refused when the node is registered and again before any connection is attempted
+# (``nodes.ssh_key_is_usable``, ``apply.target_for``) — because a paste that will not
+# import used to reach the operator as an internal error naming an exception class.
+# A fixture holding a placeholder now stops at the registration it is not testing.
+#
+# Generated per run rather than committed: a private key in a repository is a private
+# key in a repository, even a useless one, and this costs microseconds. It authenticates
+# nothing here — every test that uses it replaces the connection or dials an address
+# nothing answers on.
+GENERATED_SSH_KEY = (
+    asyncssh.generate_private_key("ssh-ed25519").export_private_key("openssh").decode()
+)
 
 
 async def database_is_available() -> bool:

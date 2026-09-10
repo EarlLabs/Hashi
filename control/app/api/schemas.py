@@ -28,6 +28,13 @@ class NodeCreate(BaseModel):
     ssh_user: str = Field(default="root", max_length=32)
 
     # Supplied once, encrypted immediately, and never returned by any endpoint.
+    #
+    # WHETHER IT IS A KEY AT ALL IS CHECKED IN services/nodes.py, NOT HERE, and that is
+    # not an oversight to tidy up. FastAPI answers a model validator's refusal with
+    # ``input`` in the body — the value it rejected — so a ``field_validator`` on this
+    # field would make ``POST /api/nodes`` echo the pasted private key back in a 422.
+    # That is the one thing docs/decisions.md (2026-09-10) says a refusal may never
+    # carry. ``nodes.create_node`` refuses it instead, with a sentence and no value.
     ssh_private_key: str | None = Field(default=None, repr=False)
 
 

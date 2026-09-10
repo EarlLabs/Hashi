@@ -245,16 +245,25 @@
     "the control plane did not answer in time. It may still be finishing the " +
     "action — reload before trying it again."
   ));
+  // What this one may NOT say is "Nothing was changed", which it said until an
+  // acceptance walk caught it: a 5xx means the control plane started answering and
+  // stopped, and from out here there is no way to know how far it got. It was drawn
+  // over a rotation that had already re-keyed a node — the operator was told the
+  // opposite of what happened and had no reason to look. The send-error handler above
+  // may say it, and does: a request that never left the browser changed nothing by
+  // construction, and the timeout between them says the honest version of this one.
   document.body.addEventListener("htmx:responseError", (event) => {
     const code = event.detail.xhr.status;
     showFailure(
-      `the control plane refused that request (${code}). Nothing was changed. ` +
-      "Reload the page; if it happens again, the container's log has the reason.",
+      `the control plane could not complete that request (${code}). It may have got ` +
+      "part way, so reload the page and check before trying it again; the container's " +
+      "log has the reason.",
       event.detail.elt
     );
   });
-  // Any successful exchange clears a banner left over from an earlier failure.
-  document.body.addEventListener("htmx:afterRequest", (event) => {
-    if (event.detail.successful) clearBanner();
-  });
+  // A banner is cleared by the answer that replaces it, not from here. Every console
+  // mutation answers the banner slot — with a failure, or with nothing (see
+  // panel/mutation_result.html) — and this file used to empty the same slot on any
+  // successful exchange, which fires after the swap: the banner the server had just
+  // written was wiped by the request that delivered it.
 })();

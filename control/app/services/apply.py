@@ -211,10 +211,30 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
 
 
 def target_for(node: Node, node_settings: Settings) -> NodeTarget:
-    """How to reach a node over SSH, from its record."""
+    """How to reach a node over SSH, from its record.
+
+    The two ways a node's record cannot produce a session at all are refused here, in
+    the one function both the push and the probe build their target with, so neither has
+    to recognise them separately.
+
+    The key is the second of them and it was an internal error until this line existed:
+    the SSH layer loads it OUTSIDE the block that turns a connection failure into
+    ``NodeUnreachable``, so an unusable one escaped as an exception class — a 500 on the
+    probe, and on the push a sentence saying "what reached the node is unknown", which
+    is untrue when nothing was ever dialled. Refused before the connection is attempted,
+    so both surfaces can say what is actually true: no session, nothing sent.
+
+    Nodes registered before the panel started refusing such a key still hold one, which
+    is why this is a check on the record and not only on the form.
+    """
     if not node.ssh_host:
         raise NodeOperationFailed(
             "this node has no SSH address, so its configuration cannot be pushed"
+        )
+    if node.ssh_private_key and not nodes.ssh_key_is_usable(node.ssh_private_key):
+        raise NodeOperationFailed(
+            "the SSH private key stored for this node cannot be read, so no connection "
+            "was attempted and nothing on the node was changed"
         )
     return NodeTarget(
         host=node.ssh_host,
@@ -330,8 +350,20 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
         transports=node_stack.services_for({name: configs[name] for name in sorted(configs)})
     )
 
+    # Built before the connection, and its refusal RECORDED. A record that cannot
+    # produce a session at all — no address, or a stored key the SSH layer will not load
+    # — is not the half-configured window below: nothing has been written to the host.
+    # But the node is still one the operator cannot reach, and the reason on its row has
+    # to be the current one rather than whatever the previous attempt left there (M4.5).
+    # Re-raised unchanged, so what is recorded and what is answered are one sentence.
     try:
-        async with NodeConnection(target_for(node, node_settings)) as connection:
+        target = target_for(node, node_settings)
+    except NodeOperationFailed as exc:
+        await _record_failure(session, node, exc.message)
+        raise
+
+    try:
+        async with NodeConnection(target) as connection:
             # Persist a learned host key on the FIRST successful connection, so every
             # later connection is pinned and an interception fails loudly.
             if connection.learned_host_key and not node.ssh_host_key:

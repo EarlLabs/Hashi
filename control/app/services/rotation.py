@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import DomainError, NotFound, ParamsRefused
-from control.app.models import Credential, NodeTransport
+from control.app.models import Credential, NodeTransport, TransportPurpose
 from control.app.services import apply, keymaterial, relay
 from edge.registry import KeyScope, discover, profile
 
@@ -61,29 +61,63 @@ WHOLE_MAPPING = "the parameters as a whole"
 
 @dataclass
 class RotationOutcome:
-    """What was rotated, and whether the nodes accepted it."""
+    """What was rotated, and whether every node it had to reach accepted it.
+
+    NODES, plural, and that is the shape rather than a generalisation for its own sake:
+    one end of a hop cannot be rotated alone (see ``rotate_keys``), so the commonest
+    rotation on an entry node writes two rows and has to push two hosts. An outcome that
+    could only describe one of them would report half of what happened.
+
+    Keyed by node NAME rather than id, unlike ``RevocationOutcome``: both readers of this
+    are composing a sentence for a person — the console's banner and the API's
+    ``summary`` — and an id in it tells them nothing they can act on.
+    """
 
     node_transport_id: str
     rotated: list[str] = field(default_factory=list)
-    node_pushed: bool = False
-    failure: str | None = None
+
+    # Nodes that took the push. What is in the database is now on these.
+    nodes_updated: list[str] = field(default_factory=list)
+
+    # Node name -> why its push did not land. These are still running what they had.
+    nodes_failed: dict[str, str] = field(default_factory=dict)
 
     @property
     def complete(self) -> bool:
-        return self.node_pushed and self.failure is None
+        """Every node this rotation had to reach took it.
+
+        ``nodes_updated`` has to be non-empty rather than merely ``not nodes_failed``:
+        an outcome is built before the push and returned after it, and "nothing failed
+        yet" is not the same claim as "it landed".
+        """
+        return bool(self.nodes_updated) and not self.nodes_failed
 
     def summary(self) -> str:
         if self.complete:
             return (
-                f"rotated {', '.join(self.rotated)} and pushed to the node; friends pick "
-                "it up at their next refresh, with no action on their part"
+                f"rotated {', '.join(self.rotated)} and pushed to "
+                f"{', '.join(self.nodes_updated)}; friends pick it up at their next "
+                "refresh, with no action on their part"
             )
         return (
-            f"rotated {', '.join(self.rotated)} in the database, but the node could NOT "
-            f"be updated: {self.failure}. Until it is, the node is still running the OLD "
-            f"material — apply the node again from {apply.WHERE_TO_RETRY} once it can be "
-            "reached."
+            f"rotated {', '.join(self.rotated)} in the database, but "
+            f"{', '.join(sorted(self.nodes_failed))} could NOT be updated: "
+            f"{reasons(self.nodes_failed)}. Until then what is in the database is not "
+            f"on every node — apply them again from {apply.WHERE_TO_RETRY} once they "
+            "can be reached."
         )
+
+
+def reasons(nodes_failed: dict[str, str]) -> str:
+    """Each node that was not updated, with the reason it gave, in a stable order.
+
+    Public because the console composes its own sentence around the same list and must
+    not compose this part of it differently — the API envelope and the banner name the
+    same nodes for the same reasons.
+    """
+    return "; ".join(
+        f"{node}: {reason.rstrip('.')}" for node, reason in sorted(nodes_failed.items())
+    )
 
 
 async def get_node_transport(session: AsyncSession, node_transport_id: str) -> NodeTransport:
@@ -105,6 +139,25 @@ async def rotate_keys(
     leave every friend's identity on that node unchanged.
 
     Friends' subscription URLs are not touched, so nobody re-imports anything.
+
+    ONE END OF A HOP IS NOT ROTATED ALONE. A hop is two rows that render as a pair: the
+    far end's configuration is built from this end's public half, and a transport may
+    also declare material both ends must hold the same copy of
+    (``KeySpec.shared_between_peers``, docs/decisions.md 2026-08-09). So a rotation here
+    re-mints this end, copies whatever is declared symmetric into the far end, checks
+    that the two still render as a working tunnel, writes BOTH rows in one transaction,
+    and pushes both nodes.
+
+    Both rows in one transaction is the part that is not negotiable, and it is why this
+    is not merely a reordering of the commit and the push. Until this function did that,
+    the rotation was committed at one end and the pair was re-rendered on the way to the
+    node — where ``edge.relay`` refused it, out of reach of every handler, so the
+    operator was shown a 500 reading "Nothing was changed" over a hop that had just been
+    broken. Material committed at one end only is that state on disk; there is no
+    sentence that makes it safe.
+
+    Refused rather than half-done, before anything is written: a far end that is gone
+    (``relay.peer_of``), and a pair that would not render.
     """
     node_transport = await get_node_transport(session, node_transport_id)
 
@@ -126,6 +179,16 @@ async def rotate_keys(
             "material, so there is nothing to rotate"
         )
 
+    # The far end, read before anything is validated so a half hop is refused rather
+    # than re-keyed into one. ``peer_of`` says which of the two it is.
+    peer = (
+        await relay.peer_of(session, node_transport)
+        if node_transport.purpose in TransportPurpose.relays()
+        else None
+    )
+    held = json.loads(node_transport.secrets)
+    peer_held = json.loads(peer.secrets) if peer is not None else {}
+
     # Existing operator-supplied parameters, with the freshly minted values over the
     # top. Validated BEFORE anything is written, so a rotation that would produce an
     # invalid config leaves the node exactly as it was.
@@ -134,69 +197,59 @@ async def rotate_keys(
         for key, value in node_transport.params.items()
         if key not in minted.params
     }
-    merged = {**surviving, **minted.params, **minted.secrets}
-    try:
-        validated = transport.validate(merged)
-    except ValidationError as exc:
-        # ``ParamsRefused`` rather than a plain ``DomainError``, and it matters MORE
-        # here than on the replacement path: this mapping was validated together with
-        # the private key minted three lines up, and a validator's message may quote
-        # what it rejected. Carrying the complaint per field is what lets a caller
-        # decide which of them it may print.
-        #
-        # THE MESSAGE ITSELF NAMES THE PARAMETERS AND REPEATS NONE OF THEIR SENTENCES,
-        # which is the difference between this raise and the one in ``replace_params``
-        # below. The message is the one part of a refusal that every caller renders
-        # without choosing to — the console draws it as a banner, and
-        # ``POST /api/transports/{id}/rotate-keys`` returns it in the envelope — so
-        # on the one path whose mapping holds freshly minted material it may not carry
-        # words the transport wrote about a value. Nothing is lost by that: no field
-        # here was offered to the operator to correct, so the actionable content is
-        # WHICH parameters were refused, and the sentences are still on ``fields`` for a
-        # caller that has somewhere it may safely put them.
-        #
-        # Only the first error travelled before, so a rotation refused on two values
-        # reported one of them.
-        #
-        # ``relay.refused_fields`` strikes the material out of the sentences as well, so
-        # what is on ``fields`` is safe for a caller that has somewhere to put it. That
-        # is belt and braces on this path rather than the whole guard — the message here
-        # repeats no sentence at all — and it is the same call the replacement path
-        # below depends on completely. Both the freshly minted secrets and the ones the
-        # row still holds: the second set is not in ``merged``, and passing it costs a
-        # line rather than an argument about whether a validator could reach it.
-        fields = relay.refused_fields(
-            exc,
-            withholding=[
-                *minted.secrets.values(),
-                *json.loads(node_transport.secrets).values(),
-            ],
-        )
-        raise ParamsRefused(
-            f"the rotated parameters are not valid for "
-            f"{node_transport.transport_name!r} — refused: {_named(fields)}. "
-            f"{MATERIAL_NOT_REPEATED}",
-            fields=fields,
-        ) from exc
-
-    secret_keys = set(minted.secrets)
-    node_transport.params = {k: v for k, v in validated.items() if k not in secret_keys}
-    node_transport.secrets = json.dumps(
-        {k: v for k, v in validated.items() if k in secret_keys}
+    # Every secret in play, at both ends: a refusal at either one is composed from a
+    # mapping that holds one of them, and a symmetric value is the same string in both.
+    withheld = [*minted.secrets.values(), *held.values(), *peer_held.values()]
+    validated = _validated(
+        transport,
+        {**surviving, **minted.params, **minted.secrets},
+        transport_name=node_transport.transport_name,
+        withholding=withheld,
     )
+
+    peer_validated: dict = {}
+    if peer is not None:
+        # Only what the transport DECLARED as symmetric crosses to the far end. Its own
+        # private half is not re-minted here: rotating this end is about this node's
+        # material, and the far end's key was not exposed by anything that happened to
+        # this one. Nothing recognises a field by name, so a future transport with a
+        # different symmetric value works unchanged — the same loop ``establish_hop``
+        # runs when it mints the pair in the first place.
+        shared = {}
+        for spec in meta.key_material:
+            if spec.scope is not KeyScope.NODE or not spec.shared_between_peers:
+                continue
+            for side in (minted.params, minted.secrets):
+                if spec.name in side:
+                    shared[spec.name] = side[spec.name]
+        peer_validated = _validated(
+            transport,
+            {**peer.params, **peer_held, **shared},
+            transport_name=peer.transport_name,
+            withholding=withheld,
+        )
+        # The pair, rendered from what is about to be written. This is the check that
+        # ``edge.relay`` used to make on the way to the node, after the commit.
+        relay.check_renders_as_a_pair(
+            node_transport, peer, end_params=validated, peer_params=peer_validated
+        )
+
+    _store(node_transport, validated, secret_names=set(minted.secrets))
     outcome.rotated.extend(sorted(minted.params) + sorted(minted.secrets))
+    if peer is not None:
+        _store(peer, peer_validated, secret_names=set(peer_held) | set(minted.secrets))
 
     if include_clients:
         client_specs = [
             spec for spec in meta.key_material if spec.scope is KeyScope.CLIENT
         ]
         if client_specs:
-            held = await session.execute(
+            held_credentials = await session.execute(
                 select(Credential).where(
                     Credential.node_transport_id == node_transport.id
                 )
             )
-            for credential in held.scalars().unique():
+            for credential in held_credentials.scalars().unique():
                 fresh = keymaterial.rotate(client_specs, KeyScope.CLIENT)
                 subject = fresh.secrets.pop("subject", None) or fresh.params.pop(
                     "subject", None
@@ -206,10 +259,13 @@ async def rotate_keys(
                 credential.secrets = json.dumps({**fresh.secrets, **fresh.params})
             outcome.rotated.append("per-friend credentials")
 
+    # One commit for both ends. A second commit between them would be exactly the state
+    # this function refuses to produce.
     await session.commit()
     logger.info("rotated material on node-transport %s", node_transport.id)
 
-    return await _push(session, node_transport, outcome)
+    ends = [node_transport] if peer is None else [node_transport, peer]
+    return await _push(session, ends, outcome)
 
 
 async def replace_params(
@@ -227,6 +283,14 @@ async def replace_params(
     node: those are two different operations with two different consequences for
     friends, and conflating them means an operator changing a hostname cannot predict
     what happens.
+
+    On one end of a hop the pair is re-rendered before the change is written, exactly as
+    ``rotate_keys`` does it and for the same reason: a value that leaves the two ends
+    unable to form a tunnel is refused here, where the operator still has the form in
+    front of them, rather than on the way to the node — where it is not a refusal at all
+    but an unhandled failure over a change that has already been committed. Nothing is
+    copied to the far end on this path: these are values the operator typed for THIS
+    end, and a parameter one end holds is not one the other must.
     """
     node_transport = await get_node_transport(session, node_transport_id)
 
@@ -288,16 +352,88 @@ async def replace_params(
     if not changed:
         raise DomainError("nothing to change — those values are already in place")
 
-    secret_keys = set(stored_secrets)
-    node_transport.params = {k: v for k, v in validated.items() if k not in secret_keys}
-    node_transport.secrets = json.dumps(
-        {k: v for k, v in validated.items() if k in secret_keys}
-    )
+    ends = [node_transport]
+    if node_transport.purpose in TransportPurpose.relays():
+        peer = await relay.peer_of(session, node_transport)
+        relay.check_renders_as_a_pair(
+            node_transport,
+            peer,
+            end_params=validated,
+            peer_params={**peer.params, **json.loads(peer.secrets)},
+        )
+        # Pushed as well as checked: the far end renders the pair too, so its file can
+        # change because of a value typed at this one.
+        ends.append(peer)
+
+    _store(node_transport, validated, secret_names=set(stored_secrets))
     await session.commit()
     logger.info("replaced parameters on node-transport %s", node_transport.id)
 
     outcome = RotationOutcome(node_transport_id=node_transport.id, rotated=changed)
-    return await _push(session, node_transport, outcome)
+    return await _push(session, ends, outcome)
+
+
+def _validated(
+    transport, merged: dict, *, transport_name: str, withholding: list
+) -> dict:
+    """One mapping through the transport's own model, or the rotation path's refusal.
+
+    A function rather than two copies because a hop rotation validates TWO mappings —
+    this end's freshly minted material, and the far end's with the symmetric half copied
+    into it — and both are refused the same way. What is refused at either end refuses
+    the whole rotation, before anything is written.
+
+    ``ParamsRefused`` rather than a plain ``DomainError``, and it matters MORE here than
+    on the replacement path: this mapping was validated together with a private key
+    minted moments earlier, and a validator's message may quote what it rejected.
+    Carrying the complaint per field is what lets a caller decide which of them it may
+    print.
+
+    THE MESSAGE ITSELF NAMES THE PARAMETERS AND REPEATS NONE OF THEIR SENTENCES, which
+    is the difference between this refusal and the one in ``replace_params`` below. The
+    message is the one part of a refusal that every caller renders without choosing to —
+    the console draws it as a banner, and ``POST /api/transports/{id}/rotate-keys``
+    returns it in the envelope — so on the one path whose mapping holds freshly minted
+    material it may not carry words the transport wrote about a value. Nothing is lost
+    by that: no field here was offered to the operator to correct, so the actionable
+    content is WHICH parameters were refused, and the sentences are still on ``fields``
+    for a caller that has somewhere it may safely put them.
+
+    Only the first error travelled before, so a rotation refused on two values reported
+    one of them.
+
+    ``relay.refused_fields`` strikes the material out of the sentences as well, so what
+    is on ``fields`` is safe for a caller that has somewhere to put it. That is belt and
+    braces on this path rather than the whole guard — the message here repeats no
+    sentence at all — and it is the same call the replacement path below depends on
+    completely. ``withholding`` is every secret in play at both ends of a hop, not only
+    the ones in this mapping: passing them costs a line rather than an argument about
+    whether a validator could reach one.
+    """
+    try:
+        return transport.validate(merged)
+    except ValidationError as exc:
+        fields = relay.refused_fields(exc, withholding=withholding)
+        raise ParamsRefused(
+            f"the rotated parameters are not valid for {transport_name!r} — refused: "
+            f"{_named(fields)}. {MATERIAL_NOT_REPEATED}",
+            fields=fields,
+        ) from exc
+
+
+def _store(node_transport: NodeTransport, validated: dict, *, secret_names: set) -> None:
+    """Split one validated mapping back into the clear column and the encrypted one.
+
+    Which names are secret is the caller's to say: it is what the transport DECLARED as
+    secret and minted, plus — at the far end of a hop — what that row already held
+    encrypted and is keeping.
+    """
+    node_transport.params = {
+        key: value for key, value in validated.items() if key not in secret_names
+    }
+    node_transport.secrets = json.dumps(
+        {key: value for key, value in validated.items() if key in secret_names}
+    )
 
 
 def _named(fields: dict[str, str]) -> str:
@@ -312,22 +448,31 @@ def _named(fields: dict[str, str]) -> str:
 
 
 async def _push(
-    session: AsyncSession, node_transport: NodeTransport, outcome: RotationOutcome
+    session: AsyncSession, ends: list[NodeTransport], outcome: RotationOutcome
 ) -> RotationOutcome:
-    """Re-render and push the node this transport lives on.
+    """Re-render and push every node this rotation touched.
 
     Failures are recorded on the outcome rather than raised, for the same reason as in
-    revocation: the operator needs to know the database and the node now disagree, which
-    is a different and more urgent fact than "the request failed".
+    revocation: the operator needs to know the database and the nodes now disagree,
+    which is a different and more urgent fact than "the request failed".
+
+    Through ``apply.apply_many`` — one node's failure never costs the other node's
+    outcome, which for a hop is the difference between "the far end is fine" and no
+    answer at all. It also contains what escaped this function before: anything a render
+    or a push raises that is not a ``DomainError`` was, until now, a 500 over a change
+    that had already been committed.
     """
-    try:
-        await apply.apply_node(session, node_id=node_transport.node_id)
-        outcome.node_pushed = True
-    except DomainError as exc:
-        outcome.failure = exc.message
+    named = {end.node_id: end.node.name for end in ends}
+    for node_id, failure in (await apply.apply_many(session, ends)).items():
+        if failure is None:
+            outcome.nodes_updated.append(named[node_id])
+        else:
+            outcome.nodes_failed[named[node_id]] = failure
+    if outcome.nodes_failed:
         logger.error(
-            "rotation on node-transport %s was not pushed; the node still runs the old "
-            "material",
-            node_transport.id,
+            "rotation on node-transport %s was not pushed to %d node(s); each is still "
+            "running the material it had",
+            outcome.node_transport_id,
+            len(outcome.nodes_failed),
         )
     return outcome
