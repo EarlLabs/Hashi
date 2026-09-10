@@ -128,6 +128,16 @@ Background, like everything else in this file: it tells you what is known-wrong 
 you do not mistake it for the intended design. Do not fix it as part of another
 step.
 
+- **RESOLVED 2026-09-10 — this shipped, forced by M9's acceptance walk.**
+  `rotate_keys` now mints once, copies every value the transport declares
+  `shared_between_peers` into the far end, renders the pair through
+  `relay.check_renders_as_a_pair` **before anything is written**, writes both rows
+  and commits **once**, then pushes both nodes. There is no window in which one end
+  holds new material and the other does not: a failed commit writes nothing, and a
+  peer row deleted between read and write gives `StaleDataError` and a full
+  rollback. Both confirmation dialogs were rewritten to match. The entry below is
+  kept because the sequence is the record, and because its diagnosis is what the
+  fix was built from.
 - **Medium — rotating one end of a hop re-mints a SYMMETRIC value at that end
   only.** `control/app/services/rotation.py`'s `rotate_keys` mints node-scoped
   material for the one `node_transport` it was given and pushes that one node. On a
@@ -275,8 +285,14 @@ secrets column is not ciphertext")` with no operand.
 
 ## Found while closing the M9.4 High — a live 500, worse than recorded below
 
-`POST /panel/keys/{id}/rotate` **on a hop end of the shipped carrier is a 500
-today.** Apply re-renders the pair and `edge.relay` raises `HopNotRenderable`
+**RESOLVED 2026-09-10 — this shipped, in the same change as the entry above.**
+The route now answers 200 with a banner naming each node and what is true of the
+tunnel. `HopNotRenderable` becomes a `DomainError` inside
+`relay.check_renders_as_a_pair`, before any write, so the render is checked rather
+than escaping uncaught — and the false *"Nothing was changed"* is gone. The
+original entry is kept below; the sequence is the record.
+
+`POST /panel/keys/{id}/rotate` **on a hop end of the shipped carrier was a 500.** Apply re-renders the pair and `edge.relay` raises `HopNotRenderable`
 (*"the two ends carry different pre-shared keys"*), which is **not** a
 `DomainError`, so it escapes the route rather than becoming an operator-facing
 refusal. Verified at the baseline with the fix stashed, so it is **pre-existing**,
