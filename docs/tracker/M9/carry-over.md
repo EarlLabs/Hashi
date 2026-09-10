@@ -407,3 +407,34 @@ mutation. These three are what remain.
   `rotation.py:43` now reads *"rendered by **a caller** that never chose to — the
   API's error envelope, **and** the pre-redesign page's outcome fragment"*
   (singular head, two items) while omitting the console that `:145-147` lists.
+
+## From M9's acceptance fixes — a check living in the wrong zone, deliberately
+
+`control/app/services/nodes.py` imports `asyncssh` directly to provide
+`ssh_key_is_usable` / `SSH_KEY_UNUSABLE`, so a stored or pasted SSH private key
+that cannot be loaded is refused **before** anything dials — which is what turned
+the acceptance walk's *"an unexpected internal error (KeyImportError)"* into a
+sentence under the key box.
+
+**The zone-correct home is `edge/bootstrap/ssh.py`**, beside the call it mirrors,
+and the real upstream fix is smaller than the workaround: that module imports the
+key **outside** its own `try/except`, which is why a bad key escapes as a bare
+class name instead of becoming a handled failure. Moving the check there, and
+pulling the import inside the try, is an `edge`-zone change and `CLAUDE.md` keeps
+cross-zone work in its own diff — so it was not done here.
+
+**Recorded so the duplication does not read as the design.** Until it moves,
+`control` knows one thing about SSH key formats that it should not have to.
+
+Two related notes from the same pass:
+
+- The key check is deliberately **not** a `field_validator` on `NodeCreate`,
+  unlike every other constraint on that model: FastAPI's default 422 body carries
+  `input` — the rejected value — so a validator there would make `POST /api/nodes`
+  echo the pasted private key. There is no `RequestValidationError` handler in
+  `main.py` to strip it. `test_the_api_refuses_the_same_key_without_quoting_it`
+  asserts **400**, so tidying it back into a validator goes red rather than
+  quietly reintroducing the leak the 2026-09-10 decision forbids.
+- `console.KeyRow.shared_with_peer` still gates the rotate dialog's note on the
+  transport's *symmetric* declaration, although the cost of a hop-end rotation now
+  applies to any hop end.
