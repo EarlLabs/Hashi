@@ -602,3 +602,128 @@ none`, `no actions`.
 - The console's key routes took new names because the old `/panel/transports/{id}/…`
   pair is also htmx-driven and cannot be told apart by a header. **M9.6 has
   nothing to take back here** — only `/nodes/{id}/apply`, `/hops` and `/dissolve`.
+
+---
+
+# Established by M9.5 — enable, withdraw, set state
+
+Binds M9.6.
+
+## Where the three actions live, and why
+
+A node's row on `/panel/nodes` carries four buttons: `probe`, `apply`,
+**`transports`**, **`set state`**. `transports` opens *Transports on \<node\>* — a
+line per transport with its standing and one button (`withdraw` / `offer` / none
+for a hop end) plus the enable form under it. `set state` opens *Set this node's
+state* with only `NodeState.allowed_from`, each showing what it does to a user's
+link.
+
+**One dialog owns one subject.** A withdraw button beside each transport chip
+would put controls in a *data* cell, which nothing else in this console does
+(UI-PATTERNS §3), so the list and its creation form share one dialog. State is its
+own dialog because it is about the node, not about what it runs.
+
+## The enable route accepts DECLARED FIELDS, not rendered boxes
+
+This is the guarantee that changed, and the old one must not be relied on again.
+
+`transports.supplied_params(name) -> frozenset` is *every field an operator may
+supply* — model fields **minus** `key_material_names(name)`. `hop_parameters` is
+`sorted(supplied_params(name))`, so the hop form and the enable form cannot drift
+about it. `operator_params` is untouched and remains the **required-only** subset.
+
+`POST /panel/nodes/{id}/transports` reads a submitted name **prefixed for its own
+group first, bare second**, over `supplied_params` — not over the boxes the dialog
+drew. Why it had to change: the form renders a box per *required* field, so a
+parameter the transport **defaults** was being silently discarded, and on the
+shipped Reality transport that field is the **decoy port** — an operator's chosen
+value replaced by the fleet-wide default, silently, on the wrong side of
+`CLAUDE.md`'s *"never ship a shared default Reality decoy destination"*.
+
+**A name the form cannot read is REFUSED (`NOT_ITS_PARAMETER`), not dropped** —
+including a minted one — because the baseline refused it (`extra="forbid"`) and a
+misspelled parameter silently becoming the default is the same defect one layer
+down. The one exception is `<other-transport>-field`, which is **skipped**: a
+hidden input is the dialog's own markup, not something the operator typed.
+
+**`supplied_params(name) & key_material_names(name) == ∅` is what the widened
+route rests on.** It has a per-transport test and a route-level one. The old
+guarantee — *"the form renders no box for it"* — no longer holds.
+
+**The bare shape of that POST is the non-htmx caller**, so its refusal is a **400
+envelope**, not a 422 fragment. A test driving both shapes must expect both.
+
+## Reusable
+
+`console.offers_on(session, node_id)` / `offer_row(session, nt_id)` →
+`OfferRow(id, node, transport, offered, for_friends, standing)`;
+`console.state_choices(node)` → `StateChoice(state, means)` from
+`NODE_STATE_MEANS`; `console.withdrawal_summary` / `offer_summary`;
+`console.OFFER_HOP_END` — **the console's sentence for "this row is one end of a
+hop"**, used by both the dialog row and the refusal banner, so the two cannot
+disagree. A service message that names an API path does not reach the console.
+`transports.offerable_transports()`, `transports.operator_tuning(name)` (a
+`TuningField` tuple — `required` means the same as on the hop form, the **opposite**
+of `ParamBox`).
+
+**`offers_on` queries `NodeTransport` rather than reading `node.transports`,
+deliberately.** Reached from a route that already loaded the node-transport,
+`session.get(Node, …)` hands back an identity-mapped Node whose collection was
+never loaded — `Node.transports` is `selectin` and the eager loader does not chain
+to a joined-loaded parent — so touching it is `MissingGreenlet` at runtime.
+Verified by a standalone repro. **Do not "simplify" it back.**
+
+## Testing
+
+`a_node_with_an_offer(client, reality_params)` → `(node_id, node_transport_id)`.
+`_enable_boxes(markup, transport)` strips the group prefix. Refusals read with
+`_described(response, "error", prefix="enable")` (keys are
+`<transport>-<field>`) and `prefix="node"` for the state dialog. **Enable-form
+boxes are named `<transport>-<field>`; a bare name is the old page's shape.**
+Monkeypatch `nodes_service.profile` for a refusing transport on this path.
+`MATERIAL_NODE = "keys-1"` is named once beside `a_node_holding_material` — select
+by name, never by `/api/nodes` ordering.
+
+## Wording acceptance will judge
+
+Buttons `transports`, `set state`, `withdraw`, `offer`, `enable`. Dialog titles
+`Transports on <node>`, `Withdraw <transport>?`, `Set this node's state`. Toasts
+`<transport> enabled on <node> — apply the node to push it`; `<transport>
+withdrawn on <node> — out of every user's link at their next refresh. The node is
+still configured to serve it: apply it to stop that.`; `<transport> offered again
+on <node> — …nobody re-imports anything.`; `<node> is now <state>`. Empty states
+`Nothing is enabled on <node> yet…` and `Every protocol this image can hand to a
+user is already enabled on <node>.`
+
+## WHAT M9.6 MUST KNOW
+
+**Routes to take back** (all took long names only because the old page drives the
+same job *with htmx* and cannot be told apart by a header):
+
+- `/nodes/{id}/push` → `/apply`
+- `/hops/establish` + `/hops/{id}/tear-down` → `/hops` + `/dissolve`
+- `/nodes/{id}/set-state` → `/nodes/{id}/state`
+- `/nodes/transports/{id}/withdraw|offer` → the old `/transports/{id}/state`
+- M9.4's key routes take nothing back — they already own good names.
+
+**Two routes are SHARED, not duplicated.** `POST /panel/nodes` and `POST
+/panel/nodes/{id}/transports` each keep a 303 branch for the plain browser form.
+Deleting the pages means deleting those branches, plus
+`test_the_pre_redesign_form_still_gets_its_redirect`,
+`test_the_pre_redesign_enable_form_still_gets_its_redirect`, and the bare-name
+fallback in `supplied()` inside the enable route.
+
+**Still driving old routes after M9.6 deletes them:**
+`tests/e2e/control/test_a_replacement_node_and_a_protocol_from_the_panel.py` —
+`reality_from_the_panel` (expects 303) and `state_from_the_panel` (`POST
+/nodes/{id}/state`, expects an `outcome.html` fragment). The withdraw half is
+already repointed and now walks button → confirmation → POST rather than assuming
+a URL.
+
+## Do not relitigate
+
+- `establish_hop_dialog.html` names all its boxes `entry-<field>` regardless of
+  transport, so two hop-capable transports sharing a field name would collide.
+  Latent — one carrier ships. M9.2's, not M9.5's.
+- `server_names` has no `description`, so its enable box shows no hint. Same as the
+  old page; closing it is an `edge`-side declaration.

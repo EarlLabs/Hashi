@@ -346,3 +346,29 @@ next person adding a refusal path is not told the class is fully closed. Closing
 needs a different instrument from the redaction decision — the withholding set is
 the whole node's material rather than one mapping's, and there is no field mapping
 to sort — which is why it is a task of its own rather than a line in this one.
+
+## From M9.5, review round 3 — cap spent
+
+Both Mediums are **folded into M9.6's step-loop** rather than carried, because
+M9.6 edits the same routes file. The two Lows are carried.
+
+- **Low — a test that is true by set algebra.**
+  `tests/control/test_the_console.py:1261-1288` asserts `supplied_params(name) &
+  key_material_names(name) == set()`, but `supplied_params` is *defined* as
+  `model_fields - key_material_names(name)` — so the intersection is empty for any
+  implementation of `key_material_names`, and the docstring's claim that "both
+  halves are subtracted" is assumed rather than asserted. **The guarantee does
+  hold**, pinned by `test_the_hop_dialog_never_asks_for_key_material:2186`, which
+  reads `profile(name).meta.key_material` directly — so this is a docstring
+  overstating one test, not a hole. Fix: build `minted` from the declaration the
+  way line 2186 does, so the test reads the declaration rather than the function it
+  is checking.
+- **Low — a docstring that names the wrong assertion as load-bearing.**
+  `tests/control/test_the_console.py:1302-1304` presents the stored-material sweep
+  as the claim under test, but that sweep **cannot** fail from a broken subtraction
+  alone: `enable_transport` merges minted material last and would overwrite an
+  accepted value, so it needs the subtraction *and* the merge order broken
+  together. The **refusal** assertion is what goes red. The implementer flagged
+  this itself rather than letting it pass, and the reviewer confirmed the
+  characterisation — the gap is only that the file does not say so. Fix: one line
+  in the docstring.
