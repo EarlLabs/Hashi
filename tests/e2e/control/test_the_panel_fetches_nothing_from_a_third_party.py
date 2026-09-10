@@ -112,9 +112,12 @@ async def operator(client):
 async def surfaces(operator, unique: str) -> list[str]:
     """Every panel URL that renders markup, including the two that need a friend.
 
-    A real friend and a real node are created because the two most interesting
-    fragments do not exist without them: the subscription-link dialog and the node
-    page. The stand is disposable and this run's rows are suffixed, so they cannot
+    A real friend and a real node are created because the most interesting fragments do
+    not exist without them: the subscription-link dialog, which is the one surface in
+    the console that displays a live bearer credential, and the two node dialogs the
+    Nodes screen's rows open — the transports list and the state form. (It used to say
+    "the node page"; M9.6 deleted that page, and the node is now created for those
+    dialogs.) The stand is disposable and this run's rows are suffixed, so they cannot
     collide with another scenario's.
 
     NOTE what this fixture does NOT do: it never reads the friend's subscription URL.

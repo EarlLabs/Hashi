@@ -774,15 +774,21 @@ async def test_no_probe_answer_says_anything_about_who_connected(
 
 
 def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() -> None:
-    """M9's own done-when, held over every console template rather than the new ones.
+    """M9's own done-when, held over EVERY template this panel renders.
 
     A hardcoded value is a node you cannot rotate away from (CLAUDE.md), and a template
     is where one hides best: it is not code, so no zone invariant reads it, and it is
     not configuration, so nobody looks for it there. The shapes checked are the ones
     these values actually take in markup — a dotted quad, a literal in a `value` or
     `placeholder` attribute, a `:port` suffix, a country, an installed transport's own
-    name. The pre-redesign pages under templates/pages are deliberately not scanned:
-    they carry all four and M9.6 deletes them.
+    name.
+
+    ``templates/`` whole, not ``templates/panel`` — the same walk the banner scan makes.
+    Only ``panel/`` was scanned while ``templates/pages/`` still held the two
+    pre-redesign pages, which carried all four and were on their way out; M9.6 deleted
+    them, and what is left under ``pages/`` is ``console.html`` and ``login.html``, two
+    live console templates that an exclusion written about deleted files would have kept
+    silently outside this scan.
     """
     from edge.registry import discover
 
@@ -795,7 +801,7 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
     named = tuple(discover())
 
     offenders = []
-    for path in sorted((TEMPLATES / "panel").rglob("*.html")):
+    for path in sorted(TEMPLATES.rglob("*.html")):
         markup = re.sub(r"\{#.*?#\}", "", path.read_text(), flags=re.S)
         for pattern in (address, port, country):
             offenders += [f"{path.name}: {found}" for found in pattern.findall(markup)]
@@ -812,7 +818,7 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
 # here and not in a file of their own because they are the Nodes screen's own row
 # actions: the claim under test is that the operator reaches every one of them from the
 # screen M9.1 built, with no URL typed by hand — which is what M9's acceptance walk
-# asks for and what M9.6 is waiting on.
+# asks for, and what M9.6 was waiting on before it could delete that page.
 
 
 async def a_node_with_an_offer(client, reality_params) -> tuple[str, str]:
@@ -1271,6 +1277,86 @@ async def test_a_name_this_form_cannot_read_is_refused_rather_than_dropped(
         .all()
     )
     assert rows == []
+
+
+async def test_a_transport_this_form_cannot_offer_gets_the_service_s_answer(
+    client, monkeypatch
+) -> None:
+    """The one submission this form measures NOTHING against, and why it must not try.
+
+    ``supplied_params`` and ``operator_tuning`` are both EMPTY for a transport this image
+    does not ship or could not deliver — there is no declaration to read them out of. So
+    a name-by-name complaint about the submission would name every field on it, and would
+    arrive INSTEAD of the only answer worth having: that there is no such transport here,
+    or that nobody could receive it. Both sentences are ``nodes.enable_transport``'s, by
+    name, and this route's job is to get out of their way.
+
+    Both sentences arrive through ``wording.for_the_page`` like every other sentence a
+    service composes, so the second one reads "a USER's client" on screen where the
+    service wrote "friend" — decision 9's line, asserted here in the shape a person sees.
+
+    Two shapes, because they fail at two different lines of the service and only the
+    first is reachable without fabricating an image:
+
+    * a name this image does not ship, asserted to really not be installed;
+    * one that IS installed and declares no format a client can consume. No shipped
+      transport does, so the fleet is fabricated — through ``discover`` in BOTH modules,
+      since ``offerable_transports`` asks one and ``enable_transport`` asks the other,
+      and a route that answered from one image while the service answered from another
+      would prove nothing.
+
+    Red-first: with the ``offerable`` guard removed, both come back as
+    ``NOT_ITS_PARAMETER`` naming every box on the form, which is what the second half of
+    each assertion is written against.
+    """
+    from edge.registry import TransportMeta
+
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "unoffer-1", "address": "192.0.2.55", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    async def submit(name: str):
+        return await client.post(
+            f"/panel/nodes/{node_id}/transports",
+            data={
+                "transport_name": name,
+                "port": "8443",
+                "decoy_host": "www.example.com",
+                "server_names": "www.example.com",
+            },
+            headers={"HX-Request": "true"},
+        )
+
+    # --- a name this image does not ship -------------------------------------
+    absent = "no-such-transport"
+    assert absent not in transports_service.offerable_transports()
+
+    refused = await submit(absent)
+    assert refused.status_code == 422, refused.text
+    reading = _reading(refused.text)
+    assert f"no transport named '{absent}' is installed" in reading, reading
+    assert "this form cannot read" not in reading, reading
+
+    # --- one this image ships and no client could receive --------------------
+    undeliverable = TransportMeta(
+        name="unreceivable-shape",
+        family="tcp",
+        needs_tls=False,
+        port_range=(1024, 65535),
+        subscription_formats=frozenset(),
+    )
+    fleet = {undeliverable.name: undeliverable}
+    monkeypatch.setattr(transports_service, "discover", lambda: fleet)
+    monkeypatch.setattr(nodes_service, "discover", lambda: fleet)
+    assert undeliverable.name not in transports_service.offerable_transports()
+
+    refused = await submit(undeliverable.name)
+    assert refused.status_code == 422, refused.text
+    reading = _reading(refused.text)
+    assert "declares no format a user's client can consume" in reading, reading
+    assert "this form cannot read" not in reading, reading
 
 
 def test_no_form_may_supply_what_a_transport_declares_as_material() -> None:
@@ -2618,6 +2704,20 @@ async def test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_at_all(
     # the key and the branch in nav.html, in front of a reviewer.
     assert "nav-note" not in body
     assert (await client.get("/panel/fleet")).status_code == 404
+
+    # And the per-node page with it. Asserted separately, and against a node that REALLY
+    # EXISTS: with no node in the fleet a 404 would arrive either way — from the missing
+    # route, or from ``nodes.get_node`` inside a route that was still there — and the
+    # assertion would prove nothing. This is the half whose absence rests on the ROUTE
+    # TABLE rather than on a deleted literal path, since ``/panel/nodes/{node_id}`` is
+    # the shape that would swallow ``/panel/nodes/new`` and ``/panel/nodes/table`` if it
+    # came back.
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "gone-1", "address": "192.0.2.90", "location_label": "Testland"},
+    )
+    assert node.status_code == 201, node.text
+    assert (await client.get(f"/panel/nodes/{node.json()['id']}")).status_code == 404
 
 
 # --- Keys & configs (M9.4) ----------------------------------------------------
