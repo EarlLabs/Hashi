@@ -437,7 +437,7 @@ def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
     """Every box the enable form asks for, with what each of them should say.
 
     ``operator_params`` decides which boxes exist — what an operator MUST supply, which
-    is what the pre-redesign page's form has always asked for — and ``tuning_field``
+    is what the pre-redesign page's form asked for too — and ``tuning_field``
     decides what each of them says, out of the transport's own declaration. Two existing
     answers joined, so the enable form cannot disagree with the replace form about which
     fields are the operator's, nor with the hop dialog about what a box may promise.
@@ -449,13 +449,17 @@ def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
     of them, and the placeholder can only ever be the shape the field will accept.
 
     What follows from ``operator_params``, stated rather than discovered: a parameter the
-    transport DEFAULTS gets no BOX here, the same as on the form this replaces — an
+    transport DEFAULTS gets no BOX here, the same as on the form this replaced — an
     operator filling this dialog in cannot set one. It is not narrower than what the
     route accepts, and that difference is deliberate: ``POST /panel/nodes/{id}/
     transports`` reads every field of ``supplied_params``, so a submission that answers a
-    defaulted parameter is honoured rather than dropped. Do not read this as parity with
-    ``replaceable_params``, whose narrowing IS the accepted set and becomes permanent
-    when the old page goes.
+    defaulted parameter is honoured rather than dropped.
+
+    Do not read this as parity with ``replaceable_params``, whose narrowing IS the
+    accepted set — and that narrowing is now PERMANENT. It was parity with the
+    pre-redesign form until M9.6 deleted it, which is the moment M9's carry-over asked a
+    later reader to notice: a parameter the transport defaults can no longer be replaced
+    from the panel at all. ``POST /api/transports/{id}/params`` still changes either.
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields

@@ -198,9 +198,10 @@ def refused_fields(
     be.
 
     So the values are removed here, while they are still in scope, rather than sorted
-    four surfaces later: this closes ``fields``, the flattened message, the console, the
-    pre-redesign page's outcome fragment and the API envelope at once. The console's
-    allow-list stays as the second line of defence.
+    four surfaces later: this closes ``fields``, the flattened message, the console and
+    the API envelope at once — and the pre-redesign page's outcome fragment, which was
+    the fourth until M9.6 deleted it. The console's allow-list stays as the second line
+    of defence.
 
     ``withholding`` is **what is stored encrypted or minted as secret** — the same set
     ``stored_material`` sweeps for in the tests — and deliberately not "everything

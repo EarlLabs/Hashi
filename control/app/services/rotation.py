@@ -40,10 +40,11 @@ from edge.registry import KeyScope, discover, profile
 logger = logging.getLogger(__name__)
 
 # Why a rotation's refusal names its parameters and repeats none of their messages.
-# The message on a ``ParamsRefused`` is rendered by callers that never chose to — an
-# error envelope, and the pre-redesign page's outcome fragment — so the path that
-# validates freshly minted material states the rule there instead, exactly as the
-# console does on screen (UI-PATTERNS §9). It is not about which field was named: the
+# The message on a ``ParamsRefused`` is rendered by a caller that never chose to — the
+# API's error envelope, and the pre-redesign page's outcome fragment until M9.6 deleted
+# it — so the path that validates freshly minted material states the rule there instead,
+# exactly as the console does on screen (UI-PATTERNS §9). It is not about which field
+# was named: the
 # operator's own parameters are validated alongside the new key, so a complaint about
 # any of them is a complaint about a mapping that held one.
 MATERIAL_NOT_REPEATED = (
@@ -80,7 +81,8 @@ class RotationOutcome:
         return (
             f"rotated {', '.join(self.rotated)} in the database, but the node could NOT "
             f"be updated: {self.failure}. Until it is, the node is still running the OLD "
-            "material — retry from the node's page."
+            f"material — apply the node again from {apply.WHERE_TO_RETRY} once it can be "
+            "reached."
         )
 
 
@@ -259,7 +261,8 @@ async def replace_params(
         # it was untrue of ``problems``, which is built from ALL of ``fields``: a
         # model-level validator quoting the mapping, or a ``field_validator`` on a real
         # box reading the rest of it through ``info.data``, put the node's private key
-        # into the pre-redesign page's outcome fragment and into the API envelope.
+        # into the API envelope — and, until M9.6 deleted it, into the pre-redesign
+        # page's outcome fragment.
         # The sentences are safe because the VALUES WERE REMOVED, not because of who
         # typed what — ``docs/decisions.md`` (2026-09-10).
         #

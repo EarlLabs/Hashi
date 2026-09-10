@@ -13,6 +13,7 @@ HOW:  the in-process client from conftest, already holding an operator session. 
       for.
 """
 
+import ast
 import html.parser
 import json
 import pathlib
@@ -43,6 +44,7 @@ from edge.registry import profile
 TEMPLATES = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "templates"
 
 STATIC = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "static"
+APP = pathlib.Path(__file__).resolve().parents[2] / "control" / "app"
 
 # Jinja's own lexer, so the banner scan below reads a template as markup rather than
 # as text. Nothing is ever rendered: the branch this environment cannot take is
@@ -367,6 +369,16 @@ async def test_an_incomplete_revocation_stays_on_screen(client, reality_params) 
     assert 'hx-swap-oob="innerHTML:#banner-slot"' in done.text
     assert "still live" in done.text
     assert "toast" not in done.text
+
+    # AND IT SAYS WHERE TO FINISH THE JOB, on a screen that exists. This sentence ended
+    # "Retry from the node's page" for one milestone after M9.6 deleted that page — so
+    # the operator was sent to a 404 at the one moment somebody who should be cut off is
+    # still connected. Asserted against the constant rather than against the words, so
+    # the screen can be renamed in one place; asserted for the ABSENCE of a page too,
+    # because that is the shape of the mistake.
+    reading = _reading(done.text)
+    assert apply_service.WHERE_TO_RETRY in reading, reading
+    assert "page" not in reading, reading
 
 
 # --- Nodes (M9.1) -------------------------------------------------------------
@@ -812,6 +824,86 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
     )
 
 
+# Surfaces this panel no longer has, and the prose that used to send an operator to one.
+# Paths and template names first, then the WORDS — because the string that survived M9.6
+# was neither a route nor an ``hx-`` attribute but a sentence composed in ``services/``,
+# which a sweep of either would never have looked at.
+DELETED_SURFACES = (
+    "/panel/fleet",
+    "pages/index.html",
+    "pages/node.html",
+    "pages/base.html",
+    "panel/outcome.html",
+    "panel/health.html",
+    "node's page",
+    "fleet page",
+)
+
+
+def _sentences(module: pathlib.Path) -> list[tuple[int, str]]:
+    """Every string literal in a module that is NOT a docstring, with its line.
+
+    The distinction is the whole instrument. A docstring or a comment discussing a page
+    that once existed is history and belongs in the file; a string LITERAL is something
+    the code hands to somebody — a message, a banner, a template path, a URL — and it is
+    the only kind that can still point at a surface that is gone.
+
+    ``ast`` rather than a regex over the text, because a regex cannot tell those two
+    apart, and a sweep that flagged the history would be turned off within a week.
+    """
+    tree = ast.parse(module.read_text())
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+def test_no_sentence_this_panel_hands_an_operator_names_a_surface_that_is_gone() -> None:
+    """The class behind M9.6's last defect, closed rather than the instance patched.
+
+    A revocation that could not reach every node drew a banner ending *"Retry from the
+    node's page"* — composed in ``services/revocation.py``, rendered straight onto the
+    Users screen — for one milestone after M9.6 deleted that page. So at the exact
+    moment somebody who should be cut off is still connected, the operator was sent to a
+    URL that 404s and that no button or sidebar entry leads to.
+
+    It survived a sweep of every docstring and every ``hx-`` attribute because it was
+    neither: it was prose a SERVICE composes and a route renders without choosing to, and
+    nothing asserted its text. This sweep is over the strings a person can actually be
+    handed — every non-docstring literal in ``control/app`` — so the next deleted screen
+    cannot leave one behind the same way.
+
+    It is deliberately not a sweep for "a URL in service prose" generally: a service may
+    legitimately name ``/api/...`` for a script reading an envelope. The rule this holds
+    is narrower and exact — nothing may name a surface this panel NO LONGER HAS.
+    """
+    offenders = []
+    for module in sorted(APP.rglob("*.py")):
+        for line, text in _sentences(module):
+            for gone in DELETED_SURFACES:
+                if gone in text:
+                    offenders.append(f"{module.name}:{line}: {gone!r}")
+
+    assert offenders == [], (
+        "a string this code hands somebody names a surface M9.6 deleted — say where the "
+        f"ACTION lives now (services/apply.py:WHERE_TO_RETRY): {offenders}"
+    )
+
+
 # --- enable, withdraw and set state, from the Nodes screen (M9.5) -------------
 
 # The three actions the pre-redesign node page was the only home for. They are tested
@@ -1179,9 +1271,10 @@ async def test_a_parameter_this_form_renders_no_box_for_is_still_not_discarded(
     """A submitted value is used or refused, never quietly dropped.
 
     This dialog renders a box per field the transport REQUIRES, so a field it defaults
-    has none — but a submission that answers one anyway (the old page's route is the same
-    route, and a scripted POST is what the e2e scenarios send) must still reach the
-    model. Discarding it silently substitutes the transport's own default for a value the
+    has none — but a submission that answers one anyway must still reach the model. That
+    used to be the pre-redesign form's shape as well as a scripted POST's; since M9.6 it
+    is the console's own boxes, named for their group, and nothing else. Discarding it
+    silently substitutes the transport's own default for a value the
     operator chose, and on the shipped Reality transport the field this is about is its
     decoy port: a fleet where every node borrows one handshake is a fleet that can be
     enumerated, which CLAUDE.md forbids outright.
@@ -1396,9 +1489,16 @@ async def test_no_submission_can_name_a_value_the_control_plane_mints(
 
     Enabling is the one panel action that MINTS, so a submission that names a minted
     field is the shape to guard: the widened route reads every field the transport
-    declares, and what keeps a key out of that set is ``key_material_names`` alone. Both
-    lookups are tried, because the route has two — a bare name (the pre-redesign form's
-    shape) and one named for its own group (the console's).
+    declares, and what keeps a key out of that set is ``key_material_names`` alone.
+
+    What the two cases distinguish is the CALLER, not the lookup. The route had two
+    lookups until M9.6 — prefixed first, bare second, because the pre-redesign form
+    named its boxes plainly — and it has one now; that a bare name is refused for being
+    unreadable rather than accepted is
+    ``test_a_bare_field_name_is_no_longer_a_name_this_form_can_read``'s claim, not this
+    one. Here the bare case doubles as the NON-HTMX caller, which has nowhere to render
+    a field error and gets the 400 envelope, against the console's 422 fragment — the
+    split the body below asserts either side of.
 
     The marker is checked against what the fleet actually HOLDS, decrypted, rather than
     against the response: the failure this is about is a stored value, not a rendered

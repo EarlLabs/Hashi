@@ -671,7 +671,8 @@ def state_choices(node: Node) -> tuple[StateChoice, ...]:
 
     ``NodeState.allowed_from`` is the machine and this does not restate it — a dialog
     that offered a transition the service refuses would be a button whose only outcome
-    is a 409, which is why the pre-redesign page reads the same list. What is added is
+    is a 409, which is why the pre-redesign page read the same list before M9.6 deleted
+    it, and why nothing may restate it here either. What is added is
     the sentence, from ``NODE_STATE_MEANS``, so the operator chooses between
     consequences rather than between four words.
 
@@ -824,12 +825,14 @@ async def key_row(session: AsyncSession, node_transport_id: str) -> KeyRow:
 def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     """What a key rotation means for the people holding a link, in one sentence.
 
-    Its own sentence rather than ``RotationOutcome.summary()``, which is written for the
-    pre-redesign page it names ("retry from the node's page") and enumerates the
-    parameters it re-minted. Neither belongs here: that page is going, and a console
-    that lists ``private_key`` beside a fingerprint invites the reader to look for the
-    value. What changed is visible as the fingerprint on the row behind this message;
-    what the operator needs in words is what it costs the people on that node.
+    Its own sentence rather than ``RotationOutcome.summary()``, which enumerates the
+    parameters it re-minted: a console that lists ``private_key`` beside a fingerprint
+    invites the reader to look for the value. What changed is visible as the fingerprint
+    on the row behind this message; what the operator needs in words is what it costs the
+    people on that node. (That summary also used to end "retry from the node's page",
+    naming a page M9.6 deleted. It now ends at ``apply.WHERE_TO_RETRY``, the same
+    constant ``_unpushed`` below uses, so the envelope and the console cannot drift about
+    where an operator finishes a push.)
 
     A HOP END COSTS NOBODY A LINK, and now says so. Every other string on this screen
     branches on ``for_friends``, including the confirmation the operator just read —
@@ -906,7 +909,7 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     return (
         f"{row.node} — {row.transport}: {what}, but the node could not be updated: "
         f"{outcome.failure.rstrip('.')}. Until it is, {standing}. Apply the node from "
-        "the Nodes screen once it can be reached."
+        f"{apply.WHERE_TO_RETRY} once it can be reached."
     )
 
 

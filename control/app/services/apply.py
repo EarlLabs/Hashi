@@ -48,6 +48,21 @@ from edge.registry import profile
 
 logger = logging.getLogger(__name__)
 
+# Where an operator finishes a push that did not land. A SCREEN, named in words, and
+# never a page or a URL — that is the whole point of this constant existing rather than
+# the sentence being written three times.
+#
+# It exists because the sentence it replaced outlived the surface it named. "Retry from
+# the node's page" was true until M9.6 deleted that page, and it was still being drawn
+# on the console afterwards: on an INCOMPLETE REVOCATION, which is the moment somebody
+# who should be cut off is still connected, the operator was sent to a URL that 404s.
+# A docstring naming a dead template is a nuisance; a live sentence naming one is the
+# operator standing still at the only moment that matters.
+#
+# Every service sentence that tells an operator where to go uses this. A screen that
+# moves moves here, and nothing composed in ``services/`` may name a page again.
+WHERE_TO_RETRY = "the Nodes screen"
+
 # The boundary between "this node failed" and "stop the whole operation".
 #
 # Everything ``apply_node`` does is work for ONE node — read its record, render its

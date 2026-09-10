@@ -294,8 +294,9 @@ async def enable_transport(
         # KEPT PER FIELD as well as flattened into the sentence, which is the M9.5
         # addition here. ``ParamsRefused`` is a ``DomainError`` that INHERITS its status
         # and its code (see the exception's own note), so ``POST /api/nodes/{id}/
-        # transports`` and the pre-redesign form answer exactly as they always have —
-        # envelope for envelope. What it adds is somewhere for the console's enable
+        # transports`` answers exactly as it always has — envelope for envelope, and so
+        # did the pre-redesign form for as long as it existed. What it adds is somewhere
+        # for the console's enable
         # dialog to put "this box, this reason", which is the same reason
         # ``relay.establish_hop`` and ``rotation.replace_params`` raise their own
         # subclasses: a sentence at the top of an eleven-box form makes the operator

@@ -387,7 +387,8 @@ class _QuotesTheWholeMapping(pydantic.BaseModel):
 
     The shape that matters most here, because a refusal at an empty location is
     flattened into ``HopEndRefused.message`` — which ``POST /api/hops`` returns in its
-    envelope and the pre-redesign page prints, neither of which can sort anything.
+    envelope, and which the pre-redesign page printed until M9.6 deleted it. Neither
+    could sort anything, which is why the sorting happens where the values are.
     """
 
     model_config = pydantic.ConfigDict(extra="allow")

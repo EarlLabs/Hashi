@@ -107,9 +107,10 @@ class ParamsRefused(DomainError):
     and the narrowing happens where they are BUILT — ``relay.refused_fields``, which
     strikes every held value out of every sentence while those values are still in
     scope. A validator's message can quote the value it rejected, and the mapping being
-    validated contains this node's key material, so neither surface that renders this
-    exception without choosing to (the API envelope, the pre-redesign outcome fragment)
-    can be left to sort it out. The panel narrows again on top of that, printing a
+    validated contains this node's key material, so a surface that renders this
+    exception without choosing to — the API envelope, and the pre-redesign outcome
+    fragment until M9.6 deleted it — cannot be left to sort it out. The panel narrows
+    again on top of that, printing a
     message only for a field it actually has a box for. See ``docs/decisions.md``
     (2026-09-10).
     """

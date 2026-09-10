@@ -385,8 +385,8 @@ async def test_rotation_service_refuses_a_transport_this_image_does_not_ship(
 # minted — and a transport's own validator may quote what it was handed. No shipped
 # transport's does, which is exactly why this is guarded rather than watched: the day
 # one does there is no second chance to notice, and the surfaces that render a
-# ``ParamsRefused`` (the API envelope, the pre-redesign page's outcome fragment, the
-# console's dialog) render it without choosing to.
+# ``ParamsRefused`` (the API envelope and the console's dialog — and the pre-redesign
+# page's outcome fragment until M9.6 deleted it) render it without choosing to.
 #
 # The models below refuse the way a real one could, at every location shape Pydantic
 # reports, and each quotes the material back. ``docs/decisions.md`` (2026-09-10).

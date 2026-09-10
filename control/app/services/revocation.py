@@ -48,7 +48,14 @@ class RevocationOutcome:
         return not self.nodes_failed
 
     def summary(self) -> str:
-        """One line for the operator. Says the uncomfortable thing when it is true."""
+        """One line for the operator. Says the uncomfortable thing when it is true.
+
+        The incomplete half is drawn as a banner on the Users screen, and it is the most
+        load-bearing sentence this codebase composes: it is read at the one moment a
+        person who should be cut off is still connected. So it ends by naming where the
+        push is finished — ``apply.WHERE_TO_RETRY``, a screen, never a page. It named
+        ``pages/node.html`` until M9.6 deleted that page and left this pointing at a 404.
+        """
         if self.complete:
             return (
                 f"access withdrawn everywhere; {len(self.nodes_updated)} node(s) updated"
@@ -56,8 +63,8 @@ class RevocationOutcome:
         return (
             f"access withdrawn in the database and on {len(self.nodes_updated)} node(s), "
             f"but {len(self.nodes_failed)} node(s) could NOT be updated — the "
-            "credential is still live there until they are reachable. Retry from the "
-            "node's page."
+            "credential is still live there until they are reachable. Apply those nodes "
+            f"again from {apply.WHERE_TO_RETRY} once they can be reached."
         )
 
 
