@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import Conflict, DomainError, NotFound
+from control.app.errors import Conflict, DomainError, HopEndRefused, NotFound
 from control.app.models import Node, NodeTransport, TransportPurpose
 from control.app.services import keymaterial, nodes
 from edge import relay as edge_relay
@@ -127,6 +127,33 @@ def render_end(end: NodeTransport, peer: NodeTransport) -> str:
     return leaf_config
 
 
+def _end_word(purpose: TransportPurpose) -> str:
+    """Which end of the hop this is, in the word an operator uses for it.
+
+    ``relay-entry`` is the column's vocabulary and belongs in the database, not in a
+    sentence somebody reads while a rotation is half done. A two-way branch on our own
+    topology enum, in the module that owns hops — it names no protocol and there is no
+    third end.
+    """
+    return "entry" if purpose == TransportPurpose.RELAY_ENTRY else "leaf"
+
+
+def _plainly(message: str) -> str:
+    """A Pydantic message as the sentence the transport actually wrote.
+
+    Pydantic prefixes a custom validator's own text with ``Value error,`` — so the
+    transport's carefully written *"is not a private address — a public range here
+    would route the node's own traffic into the tunnel"* reaches the operator wearing a
+    label about Pydantic's internals. The prefix is dropped and nothing else is
+    rewritten: a transport's own words are the best sentence available here, and every
+    other message shape (``Input should be a valid integer``) is already plain.
+    """
+    for noise in ("Value error, ", "Assertion failed, "):
+        if message.startswith(noise):
+            return message[len(noise):]
+    return message
+
+
 async def establish_hop(
     session: AsyncSession,
     *,
@@ -194,15 +221,26 @@ async def establish_hop(
         try:
             validated = transport.validate(merged)
         except ValidationError as exc:
+            # Kept PER FIELD as well as flattened into the sentence. A caller with a
+            # form has somewhere to put "this box, this reason", and one sentence at the
+            # top of a twenty-four-box form makes the operator hunt for the parameter
+            # the prose names. See ``HopEndRefused``.
+            #
+            # Never the VALUES of the mapping: at this point it holds the private key we
+            # just minted. What travels is the transport's own complaint, which quotes
+            # only what the operator typed.
+            fields: dict[str, str] = {}
+            for error in exc.errors():
+                where = ".".join(str(part) for part in error["loc"])
+                fields.setdefault(where, _plainly(error["msg"]))
             problems = "; ".join(
-                f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-                for error in exc.errors()
+                f"{where}: {message}" for where, message in fields.items()
             )
-            # Never the values: at this point the mapping holds the private key we
-            # just minted.
-            raise DomainError(
-                f"transport {transport_name!r} rejected the {purpose} parameters — "
-                f"{problems}"
+            raise HopEndRefused(
+                f"transport {transport_name!r} rejected the {_end_word(purpose)} end's "
+                f"parameters — {problems}",
+                purpose=str(purpose),
+                fields=fields,
             ) from exc
 
         secret_keys = set(minted.secrets)

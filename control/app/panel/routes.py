@@ -36,8 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.api import schemas
 from control.app.dependencies import session_dependency
-from control.app.errors import DomainError
-from control.app.models import NodeState
+from control.app.errors import DomainError, HopEndRefused
+from control.app.models import NodeState, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
     apply,
@@ -329,14 +329,28 @@ def _node_form(
 # cannot be dialled. ``prefix`` is what each end's parameters are named with in the
 # form, and it is the same prefix ``create_hop`` below has always stripped — declared
 # once here so the dialog that writes it and the route that reads it cannot drift.
+#
+# ``purpose`` is the same end in the vocabulary ``services/relay.py`` speaks, so a
+# refusal that names one end can be put back on that end's boxes. One table, so the two
+# mappings cannot disagree about which end is which.
 HOP_SIDES = (
-    {"prefix": "entry", "label": "entry end", "note": "the node users dial"},
-    {"prefix": "leaf", "label": "leaf end", "note": "the node traffic leaves from"},
+    {
+        "prefix": "entry",
+        "label": "entry end",
+        "note": "the node users dial",
+        "purpose": TransportPurpose.RELAY_ENTRY,
+    },
+    {
+        "prefix": "leaf",
+        "label": "leaf end",
+        "note": "the node traffic leaves from",
+        "purpose": TransportPurpose.RELAY_LEAF,
+    },
 )
 
 # What a box that was left empty is answered with when the transport declares no
 # default for it. Field-level, at 422, like every other refusal in the console: a hop
-# with twenty-two parameters cannot be corrected from one sentence at the top.
+# with twenty-four parameters cannot be corrected from one sentence at the top.
 NO_DEFAULT = "required — this transport declares no default to fall back on"
 
 
@@ -480,11 +494,20 @@ async def establish_hop(
             entry_params=supplied("entry"),
             leaf_params=supplied("leaf"),
         )
+    except HopEndRefused as exc:
+        # The transport refused one end's parameters, field by field, and this form has
+        # a box for each of them — so each complaint goes under the box it is about,
+        # exactly like an empty one. Flattened into a sentence at the top it would send
+        # the operator scrolling twenty-four boxes hunting for the parameter the prose
+        # names, mid-rotation, which is the moment this dialog exists for.
+        return await _refuse_hop(
+            request, session, values=typed, **_on_their_boxes(exc, tuning)
+        )
     except DomainError as exc:
-        # Shown in the dialog rather than raised: everything this refuses is about the
-        # PAIR — two ends on different tunnel networks, a node that is its own exit, a
-        # transport that cannot cross the border — so there is no one box to put it
-        # under, and the operator has to be able to read it beside what they typed.
+        # Everything else a hop refuses is about the PAIR — two ends on different tunnel
+        # networks, a node that is its own exit, a transport that cannot cross the
+        # border. There is no one box to put those under, so they are stated once, above
+        # the form, beside what the operator typed.
         return await _refuse_hop(
             request, session, values=typed, failure=wording.for_the_page(exc.message)
         )
@@ -500,6 +523,42 @@ async def establish_hop(
         # the two nodes it lists, and its table is refreshed by the other event.
         events="hops-changed, nodes-changed",
     )
+
+
+def _on_their_boxes(exc: HopEndRefused, tuning: tuple) -> dict:
+    """One end's per-field refusal, sorted into the boxes that can show it.
+
+    A parameter with a box on this form gets the message under it. Anything else — a
+    complaint about a field this dialog does not render, or one Pydantic located
+    somewhere other than a top-level field — falls back to the sentence above the form,
+    because a message addressed to a box that does not exist is a message nobody reads.
+    That fallback is the whole reason this is a function: it is the case that cannot be
+    seen while it works.
+    """
+    prefix = next(
+        side["prefix"] for side in HOP_SIDES if side["purpose"] == exc.purpose
+    )
+    boxes = {parameter.name for parameter in tuning}
+    errors = {
+        f"{prefix}-{field}": wording.for_the_page(message)
+        for field, message in exc.fields.items()
+        if field in boxes
+    }
+    homeless = [
+        f"{field}: {message}"
+        for field, message in exc.fields.items()
+        if field not in boxes
+    ]
+    return {
+        "errors": errors,
+        "failure": (
+            wording.for_the_page(
+                f"the {prefix} end was refused — {'; '.join(homeless)}"
+            )
+            if homeless
+            else None
+        ),
+    }
 
 
 async def _refuse_hop(

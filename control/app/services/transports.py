@@ -199,9 +199,12 @@ def hop_tuning(transport_name: str) -> tuple[TuningField, ...]:
     they cannot leave alone.
 
     Note what is NOT filtered here: a parameter a transport happens to ignore at a hop
-    end. Nothing declares that machine-readably, and control guessing it would be
-    control deciding what a protocol does with its own field. So it is offered, with
-    the transport's own default in it — which is the answer that changes nothing.
+    end. Nothing declares that machine-readably — the transport says it in a code
+    comment — and control guessing it would be control deciding what a protocol does
+    with its own field. So it is offered, with the transport's own default in it, which
+    is the answer that changes nothing. ``docs/decisions.md`` (2026-09-10) records
+    which field this is today, the trap it leaves for an operator who has read that
+    journal, and the two ``edge``-side declarations that would close it.
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields

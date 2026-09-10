@@ -129,10 +129,20 @@
         </div>
       </div>
 
+      {#
+        Which transport's boxes are on screen. The chosen one, falling back to the
+        first only when nothing is chosen yet — and NEVER two: with a second carrier
+        installed, a rule that always showed the first left two disclosures visible
+        with contradicting counts, and the body's "the summary above says how many"
+        named neither of them. static/app.js only re-hides on a `change` event, which
+        an htmx swap does not fire, so this has to be right on the server.
+      #}
+      {% set shown = values.get('transport_name')
+                     if values.get('transport_name') in transports
+                     else (transports[0] if transports else none) %}
       {% for name in transports %}
       {#
-        One disclosure per transport, all but the first hidden until the select says
-        otherwise.
+        One disclosure per transport, every one but `shown` hidden.
 
         BOTH numbers in the summary are `tuning`'s own — how many boxes this transport
         has, and how many of them it declares no default for. Derived and not written,
@@ -145,7 +155,7 @@
       #}
       {% set must_fill = tuning[name] | selectattr("required") | list %}
       <details class="disclosure" data-transport-group="{{ name }}"
-               {% if not loop.first and values.get('transport_name') != name %}hidden{% endif %}
+               {% if name != shown %}hidden{% endif %}
                {% if open_tuning and values.get('transport_name') == name %}open{% endif %}>
         <summary>advanced tuning — {{ tuning[name] | length }} parameters per end,
           {{ must_fill | length }} of them required by this transport</summary>

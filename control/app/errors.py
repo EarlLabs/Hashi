@@ -55,6 +55,37 @@ class NotDeliverable(DomainError):
     code = "not_deliverable"
 
 
+class HopEndRefused(DomainError):
+    """One end of a hop was refused by the transport's own model, field by field.
+
+    A subclass rather than a new envelope, so every existing caller keeps the answer it
+    has always had: same status, same code, same ``message``. What it adds is
+    ``fields`` — the transport's own complaint, per parameter — for the one caller that
+    has somewhere to put it.
+
+    It exists because the console's establish-hop dialog has twenty-four boxes behind a
+    disclosure. Flattening a per-field complaint into one sentence at the top of that
+    form makes the operator scroll it hunting for the parameter the prose names, during
+    a rotation, which is the moment this form was designed for. Everything ELSE a hop
+    refuses is genuinely about the pair — two ends on different tunnel networks, a node
+    that is its own exit — and has no field to land on; those stay a plain
+    ``DomainError`` and are stated once, above the form.
+
+    ``purpose`` is the ``TransportPurpose`` of the end that was refused, as its string
+    value. Carried rather than folded into the field names because which end a
+    parameter belongs to is the caller's vocabulary, not this module's.
+
+    Status and code are deliberately INHERITED. A caller that has always seen a 400
+    with ``bad_request`` still does, envelope for envelope — this type adds a way to
+    read the same refusal, and changes nothing for anybody who does not.
+    """
+
+    def __init__(self, message: str, *, purpose: str, fields: dict[str, str]) -> None:
+        super().__init__(message)
+        self.purpose = purpose
+        self.fields = fields
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 

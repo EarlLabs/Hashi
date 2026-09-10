@@ -22,6 +22,7 @@ import pytest
 
 from control.app.api import schemas
 from control.app.errors import Conflict, NodeOperationFailed
+from control.app.models import TransportPurpose
 from control.app.panel import wording
 from control.app.services import apply as apply_service
 from control.app.services import friends as friends_service
@@ -905,12 +906,17 @@ class _Controls(html.parser.HTMLParser):
     matches the word anywhere in any prose the dialog happens to contain, so it would
     pass a refusal that came back behind a shut summary the day someone writes a
     sentence with "open" in it — which this dialog now does.
+
+    ``visible`` is the same idea for ``hidden``: which groups a browser would actually
+    draw. With one carrier installed every rule looks alike, so this is read rather
+    than assumed.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.controls: list[tuple[str, dict, bool]] = []
         self.opened: set[str] = set()
+        self.visible: list[str] = []
         self._depth = 0
 
     def handle_starttag(self, tag: str, attrs) -> None:
@@ -919,6 +925,8 @@ class _Controls(html.parser.HTMLParser):
             self._depth += 1
             if "open" in attributes:
                 self.opened.add(attributes.get("data-transport-group", ""))
+            if "hidden" not in attributes:
+                self.visible.append(attributes.get("data-transport-group", ""))
         if tag in {"input", "select", "textarea"} and attributes.get("name"):
             self.controls.append((attributes["name"], attributes, self._depth > 0))
 
@@ -940,18 +948,27 @@ def _form_controls(markup: str) -> list[tuple[str, dict, bool]]:
     return _read(markup).controls
 
 
-def _hints(response) -> dict[str, str]:
-    """Each row's full-width hint, by the control it describes.
+def _described(response, kind: str) -> dict[str, str]:
+    """Each row's hint or error, by the control it belongs to.
 
     Read off the id the macro wires into ``aria-describedby``, so this asserts the
-    thing a screen reader is handed rather than a div that happens to sit nearby.
+    thing a screen reader is actually handed rather than a div that happens to sit
+    nearby.
     """
     return {
-        name: html.unescape(text).strip()
+        name: html.unescape(re.sub(r"\s+", " ", text)).strip()
         for name, text in re.findall(
-            r'id="hop-([^"]+)-hint"[^>]*>(.*?)</div>', response.text, re.S
+            rf'id="hop-([^"]+)-{kind}"[^>]*>(.*?)</div>', response.text, re.S
         )
     }
+
+
+def _hints(response) -> dict[str, str]:
+    return _described(response, "hint")
+
+
+def _field_errors(response) -> dict[str, str]:
+    return _described(response, "error")
 
 
 async def test_the_hops_screen_lists_the_fleet_s_tunnels(client) -> None:
@@ -1112,6 +1129,157 @@ async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> 
         # easily got wrong.
         if info.description:
             assert described.get(name) == info.description.strip(), name
+
+
+def _render_hop_dialog(**context) -> str:
+    """The establish-hop dialog rendered directly, so a second carrier can be tried.
+
+    One hop-capable transport ships today, and every rule about "which group is shown"
+    looks correct with one. This renders the real template against a synthetic fleet of
+    two — no application, no database — because the day a second carrier lands is
+    exactly when nobody re-reads this file.
+    """
+    environment = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(str(TEMPLATES)), autoescape=True
+    )
+    return environment.get_template("panel/establish_hop_dialog.html").render(
+        {
+            "nodes": [],
+            "sides": (
+                {"prefix": "entry", "label": "entry end", "note": "dials"},
+                {"prefix": "leaf", "label": "leaf end", "note": "listens"},
+            ),
+            "values": {},
+            "errors": {},
+            "failure": None,
+            "open_tuning": False,
+            **context,
+        }
+    )
+
+
+TWO_CARRIERS = {
+    "alpha": (transports_service.TuningField("a", "0–1", "", None),),
+    "beta": (
+        transports_service.TuningField("b", "0–1", "", None),
+        transports_service.TuningField("c", "0–1", "", None),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "chosen,shown",
+    [
+        ({}, "alpha"),                              # nothing chosen yet: the first
+        ({"transport_name": "beta"}, "beta"),       # …the chosen one, not the first
+        ({"transport_name": "gone"}, "alpha"),      # …a transport no longer installed
+    ],
+)
+def test_exactly_one_transport_s_tuning_is_ever_on_screen(chosen, shown) -> None:
+    """Two visible disclosures state two different counts, and the dialog's own body
+    says "the summary above says how many" — which, with two summaries above, names
+    neither. The claim this whole screen rests on is a count, so it cannot be allowed
+    to have two answers.
+    """
+    markup = _render_hop_dialog(
+        transports=sorted(TWO_CARRIERS), tuning=TWO_CARRIERS, values=chosen
+    )
+
+    assert _read(markup).visible == [shown]
+
+
+async def test_a_mistyped_value_is_refused_under_the_box_it_was_typed_in(
+    client,
+) -> None:
+    """The other mistake a rotation produces, and it is not an empty box.
+
+    The transport's own model refuses a value per field, and this form has a box for
+    each of them. Flattened into one sentence at the top — which is what a plain
+    ``DomainError`` would give — the operator scrolls twenty-four boxes hunting for the
+    parameter the prose names. What they get instead is the transport's own sentence
+    under the box, with neither the database's word for the end (``relay-entry``) nor
+    Pydantic's label for its own internals (``Value error,``) in it.
+    """
+    entry_id, leaf_id = await two_nodes(client)
+    transport = a_hop_transport()
+
+    for prefix, other in (("entry", "leaf"), ("leaf", "entry")):
+        form = {
+            "entry_node_id": entry_id,
+            "leaf_node_id": leaf_id,
+            "transport_name": transport,
+        }
+        for side, address, peer in (
+            ("entry", "10.44.0.1/24", "10.44.0.2/24"),
+            ("leaf", "10.44.0.2/24", "10.44.0.1/24"),
+        ):
+            for key, value in hop_side(address, peer).items():
+                form[f"{side}-{key}"] = str(value)
+        # One digit off RFC 1918 — the mistake a rotation actually produces — and a
+        # public range, which the transport refuses out loud: it would route the node's
+        # own traffic into the tunnel. (The documentation ranges every other fixture
+        # here uses are `is_private` to Python's ipaddress, so they pass.)
+        form[f"{prefix}-tunnel_address"] = "172.15.0.1/24"
+
+        response = await client.post(
+            "/panel/hops/establish", data=form, headers={"HX-Request": "true"}
+        )
+
+        assert response.status_code == 422
+        controls = {name: attrs for name, attrs, _ in _form_controls(response.text)}
+        assert controls[f"{prefix}-tunnel_address"].get("aria-invalid") == "true", prefix
+        # …and only that one. A refusal that marks both ends teaches the operator to
+        # ignore the marking.
+        invalid = [
+            name for name, attrs in controls.items() if attrs.get("aria-invalid")
+        ]
+        assert invalid == [f"{prefix}-tunnel_address"], invalid
+
+        refusals = _field_errors(response)
+        assert "is not a private address" in refusals.get(
+            f"{prefix}-tunnel_address", ""
+        ), refusals
+        # The transport's own sentence, whole — including the reason, which is the part
+        # that stops the operator retyping the same thing.
+        assert "route the node's own traffic into the tunnel" in refusals[
+            f"{prefix}-tunnel_address"
+        ]
+        # Neither the column's word for the end nor Pydantic's word for itself.
+        assert "relay-entry" not in response.text
+        assert "relay-leaf" not in response.text
+        assert "Value error" not in response.text
+        # The far end keeps what was typed in it.
+        assert controls[f"{other}-tunnel_address"].get("value")
+        assert _read(response.text).opened == {transport}
+
+    assert (await client.get("/api/hops")).json() == []
+
+
+async def test_a_refusal_with_no_box_to_land_on_is_still_read(client) -> None:
+    """The fallback that cannot be seen while it works.
+
+    A complaint about a parameter this dialog does not render has nowhere to go, and a
+    message addressed to a box that does not exist is a message nobody reads. It is
+    stated above the form instead — asserted here by driving the mapping directly,
+    because reaching it through a transport would mean shipping one that refuses a
+    field it never offers.
+    """
+    from control.app.errors import HopEndRefused
+    from control.app.panel import routes
+
+    tuning = transports_service.hop_tuning(a_hop_transport())
+    placed = routes._on_their_boxes(
+        HopEndRefused(
+            "flattened",
+            purpose=str(TransportPurpose.RELAY_LEAF),
+            fields={"mtu": "too small", "nothing_we_render": "also wrong"},
+        ),
+        tuning,
+    )
+
+    assert placed["errors"] == {"leaf-mtu": "too small"}
+    assert "nothing_we_render: also wrong" in placed["failure"]
+    assert "leaf end was refused" in placed["failure"]
 
 
 async def test_the_hop_dialog_never_asks_for_key_material(client) -> None:
