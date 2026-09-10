@@ -93,3 +93,60 @@ diagnostic — **not** a substitute for making the network itself deterministic.
 - `edge/bootstrap/ssh.py`'s OSError arm ends its sentence with a bare class name
   (`… : OSError`). It reads worse than the timeout arm's. Left deliberately —
   changing it is `edge` work and would defeat M21.1's own point.
+
+## Shipped shell text run under the host's own `/bin/sh` (M21.3)
+
+`edge/bootstrap/node_stack.py`'s `_WG_QUICK_SUPERVISOR` idles with
+`while :; do sleep 86400 & wait $!; done`, **not** `sleep infinity`. POSIX gives
+`sleep` a non-negative decimal *integer* operand; `infinity` is a GNU extension a
+BSD `sleep` refuses, and the test deliberately runs that script under the host's
+shell — so on macOS the gate was red for a reason unrelated to any change.
+
+Measured no worse inside the container, which is the owner's stated condition:
+old and new are byte-identical across `dash`, `bash` and `busybox sh` on stays-up,
+SIGTERM (trap runs, `down` called, exit 0, ~3 ms), idle child killed (`set -e`
+still fires, exit 137), `up` fails, trap's `down` fails, and SIGINT; `docker stop`
+returns in 0.17 s either way; `wait` reaps, so no zombies; 180/180 randomly-timed
+SIGTERMs with the interval forced to 0 gave clean exit-0 teardowns, so the
+`& wait $!` signal window is not a real one. `86400` is not a CLAUDE.md
+hardcode — the rule enumerates things you must be able to rotate away from, and
+the loop makes the number non-load-bearing anyway: any value idles forever, it
+only sets how often the shell wakes.
+
+**Conventions this establishes:**
+
+- A test that runs shipped shell text under the host's `/bin/sh` puts a
+  **POSIX-strict shim first on `PATH`** — `posix_sleep` in
+  `tests/edge/test_the_wireguard_family_can_start.py`, which returns a bin
+  directory; pass it as `run_supervisor(stub_tool, config, posix_sleep)`. Reuse
+  it for any future host-tool dependency rather than writing another. It is the
+  edge-zone form of M21.2's rule: the test opens the thing it depends on.
+- **Production shell in this repo is POSIX-only including operands**, not just
+  syntax. `sh -n` cannot see this class of defect; that is stated in
+  `test_the_script_needs_no_shell_this_project_does_not_have`'s docstring.
+- **Trap for anyone editing that script:** a test that mutates
+  `_WG_QUICK_SUPERVISOR` by string `.replace` becomes a silent no-op the moment
+  the script is reworded, and its red half then cannot go red.
+  `tests/e2e/edge/test_compose_hands_the_engine_the_command_we_wrote.py` used to
+  poison the literal `"sleep infinity"`; it now appends `; : $CANARY` to the
+  shell element, coupled to nothing the script says. Append, or assert the
+  mutation landed — never `.replace` a production string a reword can move.
+
+## Do not relitigate
+
+- Rejected for M21.3: a **host-capability skip** (leaves the two scenarios
+  unproven on exactly the machine the owner runs the gate on, and a future
+  `sleep infinity` regression stays invisible until someone with a BSD `sleep`
+  meets it) and **running the script the way the container does** (needs a docker
+  engine, which would move these out of `make test-edge` — and CLAUDE.md's static
+  half must not need Docker).
+- The fixture alone was **not** sufficient: with the shim in place and
+  `sleep infinity` restored, the two tests fail everywhere, including on Linux.
+  The pair is the point — the shim makes a non-portable idle red on CI where it
+  was invisible, the portable idle makes it green on the owner's laptop.
+- What `make test-edge` still cannot prove is that the *image's* busybox runs this
+  line. That is `tests/e2e/edge/` and a field observation.
+- The WireGuard `DataPlane.executables` tuple does not declare `sleep`, though the
+  shell line invokes it. Pre-existing, harmless (both pinned images ship busybox),
+  and out of M21.3's reach — note **M19.3** is the step that declares `ip` for the
+  same tuple and is the natural home for this.

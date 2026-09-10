@@ -27,3 +27,14 @@ dialled endpoint and no longer guarded the node's advertised address) and its Lo
 recorded here only so the sequence is legible: a clean verdict was returned first
 and the fixes were asked for anyway, because a milestone about a trustworthy gate
 is the wrong place to bank a coverage reduction.
+
+## From M21.3, review round 1
+
+Nothing left open — the round returned `VERDICT: CLEAN` with no findings at any
+severity.
+
+One pre-existing observation was recorded rather than fixed, and it belongs to a
+later milestone rather than here: the WireGuard family's `DataPlane.executables`
+tuple does not declare `sleep`, although the supervisor's shell line invokes it.
+Harmless today (both pinned images ship busybox) and out of M21.3's reach.
+**M19.3 declares `ip` for that same tuple and is where this should be picked up.**
