@@ -1,7 +1,7 @@
 """The admin panel — the screen the owner lives in.
 
-WHAT: login, the console (Overview, Users, Nodes, Hops), the fleet page, and the
-      actions on each.
+WHAT: login, the console (Overview, Users, Nodes, Hops, Transports), the fleet
+      page, and the actions on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -15,13 +15,14 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 
 Two panels live here at once, on purpose and temporarily. The CONSOLE is the
 redesign in ``design/`` — a persistent sidebar over a swappable ``#main``, one screen
-per route, every creation flow in a dialog. Overview, Users, Nodes and Hops are
-ported; the remaining fleet screens are the rest of M9. Until they land,
+per route, every creation flow in a dialog. Overview, Users, Nodes, Hops and
+Transports are ported; the remaining fleet screens are the rest of M9. Until they land,
 ``/panel/fleet`` serves the original single page and the sidebar has an honest entry
 pointing at it, because a dead nav link is worse than an ugly one — and its note names
-only what is still there. M9.6 retires that page once every action it carries has a new
-home: still on it are enabling and withdrawing a transport, moving a node between
-states, and key rotation. Do not delete it before then.
+only what is still there, which is now nothing: every LIST that page carried has its
+own screen. M9.6 retires it once every ACTION it carries has a new home too: still on
+it are enabling and withdrawing a transport, moving a node between states, and key
+rotation. Do not delete it before then.
 """
 
 import logging
@@ -117,16 +118,26 @@ NAV = (
     {"key": "friends", "label": "Users", "url": "/panel/friends", "boost": True, "note": ""},
     {"key": "nodes", "label": "Nodes", "url": "/panel/nodes", "boost": True, "note": ""},
     {"key": "hops", "label": "Hops", "url": "/panel/hops", "boost": True, "note": ""},
+    {
+        "key": "transports",
+        "label": "Transports",
+        "url": "/panel/transports",
+        "boost": True,
+        "note": "",
+    },
     # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
     # operator can tell from the sidebar which jobs have moved and which have not —
-    # nodes came out of it in M9.1 and hops in M9.2. M9.6 removes this entry with the
-    # page.
+    # nodes came out of it in M9.1, hops in M9.2 and the capability table in M9.3, and
+    # the note is empty because the three THINGS that page listed have all moved. What
+    # is still only there is a handful of ACTIONS on a node — enable and withdraw a
+    # transport, move a node between states, rotate keys — which M9.4 and M9.5 home and
+    # M9.6 removes this entry with the page.
     {
         "key": "fleet",
         "label": "Fleet",
         "url": "/panel/fleet",
         "boost": False,
-        "note": "transports",
+        "note": "",
     },
 )
 
@@ -619,6 +630,36 @@ async def tear_down_hop(
         request,
         toast=console.tear_down_summary(affected),
         events="hops-changed, nodes-changed",
+    )
+
+
+# --- Transports (M9.3) -------------------------------------------------------
+
+@router.get("/transports", response_class=HTMLResponse)
+async def transports_screen(request: Request) -> Response:
+    """Transports — what this image can speak, and what each protocol survives.
+
+    Read-only, and the only console screen that takes no session: its whole content is
+    discovered from the packages under ``edge/transports/``, so there is nothing about
+    the fleet on it and nothing a query could add. It also has no self-swapping
+    fragment for the same reason — the other three screens have one so a mutation can
+    refresh them, and no mutation in this panel can change which protocols the image
+    ships. A ``/panel/transports/table`` URL would exist only to be listed.
+
+    Note that ``GET /panel/transports`` cannot collide with the pre-redesign page's
+    ``POST /panel/transports/{node_transport_id}/...`` routes further down: different
+    method, different shape. M9.5 homes those actions and M9.6 deletes the page.
+    """
+    return _screen(
+        request,
+        screen="panel/screens/transports.html",
+        current="transports",
+        title="Transports",
+        subtitle=(
+            "the protocols this image can speak, and which of them survives a network "
+            "that inspects traffic"
+        ),
+        context={"transports": console.transport_rows()},
     )
 
 

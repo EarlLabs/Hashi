@@ -44,6 +44,10 @@ PANEL_PAGES = (
     "/panel/friends",
     "/panel/nodes",
     "/panel/hops",
+    # M9.3's, added in the change that added the screen. It has no fragment of its own:
+    # nothing this panel can do changes which protocols the image ships, so the whole
+    # screen is one document and there is no refresh URL to list.
+    "/panel/transports",
     "/panel/fleet",
 )
 

@@ -1,7 +1,8 @@
 """What the redesigned console puts on screen, and nothing more.
 
 WHAT: the Overview's four stat cards, the node rows they summarise, the friend rows
-      the Users screen lists, and the hop rows the Hops screen lists.
+      the Users screen lists, the hop rows the Hops screen lists, and the capability
+      row the Transports screen lists per protocol this image ships.
 WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       "throughput now", "last seen", node "load", and a whole Traffic screen. The
       charter's non-goals forbid every one of them: *"No traffic logging, no DNS
@@ -40,7 +41,7 @@ from control.app.models import (
 )
 from control.app.services import apply, friends, nodes, relay
 from edge.bootstrap import node_stack
-from edge.registry import discover
+from edge.registry import TransportMeta, discover
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,32 @@ IN_SYNC = "in sync"
 NEVER_APPLIED = "never applied"
 NOTHING_ENABLED = "nothing enabled"
 UNRENDERABLE = "cannot render"
+
+# What the Transports screen may say about a protocol, as the words the operator
+# reads. Every one of them is the prose for a DECLARATION a transport makes about
+# itself (``edge.registry.TransportMeta``) — never for a protocol's name. That is why
+# they are here and not in the template: a template choosing between them by name
+# would be the ``if transport ==`` the whole contract exists to prevent, and a template
+# writing them inline would put the charter's loudest warning in the one file no zone
+# invariant reads.
+TRANSPORT_IDENTIFIED = "identified and blocked — do not offer this as a working exit"
+TRANSPORT_CAMOUFLAGED = "obfuscated or TLS-shaped"
+TRANSPORT_NO_HOP = "never on an entry→leaf hop"
+TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
+TRANSPORT_UNDELIVERED = "not in a user's link yet — this panel cannot hand it over"
+
+# The sentence this milestone's acceptance line is about, and the whole reason the
+# screen exists: a protocol the panel refuses to offer as an exit, and WHY, in words an
+# operator can act on. Written from ``blocked_by_inspection`` alone, so it names no
+# country — which networks do the inspecting is the charter's subject, not this file's
+# — and no protocol. A transport that stops declaring itself identified stops being
+# warned about, with nothing to edit here.
+TRANSPORT_WHY_IDENTIFIED = (
+    "it has no camouflage. The wire format is fixed and looks like itself, so a "
+    "network that inspects traffic can name the protocol and drop it: both ends stay "
+    "correctly configured, no tunnel comes up, and nothing on the user's device says "
+    "what happened. Enable it only where nothing is filtering."
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -141,6 +168,54 @@ class HopRow:
     transport: str
     state: str
     since: datetime.datetime | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TransportRow:
+    """One installed transport, as the read-only capability table lists it.
+
+    Every field is the transport's OWN declaration, turned into the words an operator
+    reads. Nothing on this row is a fact about the fleet and nothing on it is a fact
+    about a person: it moves when the image ships a different set of packages and at no
+    other time — which is the test ``docs/decisions.md`` sets for whether a cell may be
+    on a screen at all, passed the easy way.
+
+    ``why`` is the one that matters. It is present exactly when the transport declares
+    itself identified on the wire, and it is the sentence M9's acceptance line demands:
+    a protocol the panel refuses to offer as an exit, with the reason in words. It is
+    ``None`` for every other transport, so the screen warns about what the image
+    declares rather than about what anybody wrote down.
+
+    What is deliberately NOT here, because no transport declares it: whether a protocol
+    has been proven on real hardware, and whether the image this project pins can carry
+    it to a user without failing silently. Both are recorded in prose (see
+    ``docs/decisions.md``, 2026-09-09) and neither is machine-readable, so putting
+    either on the screen would mean `control` recognising a protocol by name.
+    """
+
+    name: str
+    family: str
+    # The transport's declared listening range as ``low–high``. Read from
+    # ``TransportMeta.port_range``: a port written here would be a node we could not
+    # rotate away from (CLAUDE.md), and a port written in the template would be one no
+    # zone invariant reads.
+    ports: str
+    # Which subscription shapes this transport serialises into, and — separately —
+    # whether this panel can actually hand any of them over yet. The two are kept apart
+    # because they are different answers: a transport can serialise a shape that
+    # delivery does not carry, and a column that collapsed them would tell the operator
+    # a user has something they have never been sent.
+    delivery: str
+    delivery_note: str | None
+    # ``blocked_by_inspection``, in words and as the flag the screen reads to decide how
+    # loud to be.
+    exposure: str
+    identified: bool
+    # ``hop_capable``, but only when it is False: a transport that may carry a hop needs
+    # no sentence about it, and a column that says "may carry a hop" on three rows out
+    # of four teaches nothing.
+    hop_note: str | None
+    why: str | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -306,6 +381,62 @@ async def hop_row(session: AsyncSession, node_transport_id: str) -> HopRow:
         if row.id == node_transport_id:
             return row
     raise NotFound("no such hop")
+
+
+def transport_rows() -> list[TransportRow]:
+    """Every transport this image ships, as the capability table lists them.
+
+    No session and no ``await``: this screen is a projection of the image, not of the
+    fleet. ``discover()`` imports the packages under ``edge/transports/`` — a new
+    protocol appears here on its own, and one that fails to import does not appear at
+    all, which is the honest answer rather than a row that lies about being available.
+
+    Sorted by name for the reason every other collection in this module is: an
+    unordered list reshuffles itself between reloads and reads as the fleet changing.
+    """
+    return [
+        _transport_row(meta)
+        for meta in sorted(discover().values(), key=lambda meta: meta.name)
+    ]
+
+
+def _transport_row(meta: TransportMeta) -> TransportRow:
+    """One transport's declaration, projected into the words the screen shows.
+
+    This is the whole of M9.3's hard rule. Three of the strings below are chosen by a
+    boolean the TRANSPORT declares about itself, and none of them is chosen by which
+    protocol it is — there is no name compared to anything here, in the template, or
+    anywhere on the path between them. Ship a fifth protocol and its row writes itself;
+    ship one that declares itself identified and the warning appears with no edit.
+
+    The two conditions in ``delivery_note`` are not the same condition. A transport
+    with no declared format serialises into nothing a user could consume at all; a
+    transport with one this panel does not yet deliver serialises fine and is simply not
+    handed over (``subscription_expressible``, and its own docstring in
+    ``edge/registry.py``, say why). Reporting the second as the first would tell the
+    operator a protocol is unusable when it is merely undelivered.
+    """
+    low, high = meta.port_range
+    formats = sorted(str(shape) for shape in meta.subscription_formats)
+    return TransportRow(
+        name=meta.name,
+        family=meta.family,
+        ports=f"{low}–{high}",
+        delivery=", ".join(formats) if formats else TRANSPORT_NO_DELIVERY,
+        delivery_note=(
+            None
+            if not formats or meta.subscription_expressible
+            else TRANSPORT_UNDELIVERED
+        ),
+        exposure=(
+            TRANSPORT_IDENTIFIED
+            if meta.blocked_by_inspection
+            else TRANSPORT_CAMOUFLAGED
+        ),
+        identified=meta.blocked_by_inspection,
+        hop_note=None if meta.hop_capable else TRANSPORT_NO_HOP,
+        why=TRANSPORT_WHY_IDENTIFIED if meta.blocked_by_inspection else None,
+    )
 
 
 def tear_down_summary(affected: list[str]) -> str:

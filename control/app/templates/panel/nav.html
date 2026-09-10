@@ -19,7 +19,11 @@
     {% else %}
     <a href="{{ item.url }}" {% if item.key == current %}aria-current="page"{% endif %}>
       {{ item.label }}
-      <span class="nav-note">{{ item.note }}</span>
+      {# The note is what is LEFT on that page, and it may legitimately be empty once
+         everything it LISTED has moved (M9.3). An empty span would still take the
+         note's own line height and leave the entry taller than its neighbours for no
+         text, so the element is absent rather than blank. #}
+      {% if item.note %}<span class="nav-note">{{ item.note }}</span>{% endif %}
     </a>
     {% endif %}
   {% endfor %}

@@ -1,0 +1,114 @@
+{#
+  Transports — the read-only capability table, discovered from the image.
+
+  design/README.md §5: name (mono), family, ports (mono), how a user receives it, on a
+  filtering network, with the footnote below. Its columns are kept exactly, and its one
+  sentence of example copy is not: the handoff writes the warning against a named
+  protocol's row, and no template here may name a transport. Every string on this
+  screen arrives already composed in `transports` from services/console.py, which reads
+  each one out of the transport's OWN declaration — so there is nothing in this file
+  for a scan to find, because there is nothing in this file to write.
+
+  THE ONE THING THIS SCREEN IS FOR. A protocol that a filtering network identifies must
+  never read here as a working exit: otherwise the owner offers a user in a filtering
+  country a protocol that cannot come up, and it is reported as "hashi is broken" —
+  the most expensive bug report this project can generate. It says so in the cell, and
+  the reason gets its own row underneath in words the operator can act on, the way a
+  degraded node's reason does in panel/nodes_table.html.
+
+  No colour carries that warning, deliberately. The console has exactly one hue outside
+  the steel accent and it belongs to a request that was refused or failed
+  (docs/decisions.md, 2026-09-10); a standing fact about a protocol is not one. So the
+  loud row is the one in ordinary text and every calm row is muted, which is the same
+  distinction panel/hops_table.html draws for a hop that leads nowhere.
+
+  No self-swapping fragment and no `-changed` trigger, unlike the other three fleet
+  screens. Nothing this panel can do changes which protocols the image ships, so a
+  refresh URL here would exist only to be listed.
+
+  What is NOT on this screen, and may never be: anything that moves when a user
+  connects. Nothing here moves even when the OPERATOR acts — the whole table is a
+  property of the image.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  <div class="stack-6">
+    {% if transports %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>family</th>
+            <th>ports</th>
+            <th>how a user receives it</th>
+            <th>on a filtering network</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for transport in transports %}
+          <tr>
+            {# UI-PATTERNS §7: a protocol's own name and its port range are machine
+               values, so both are monospace. Both are printed as data — this template
+               names no transport and no port. #}
+            <td class="mono">{{ transport.name }}</td>
+            <td class="text-muted">{{ transport.family }}</td>
+            <td class="mono nowrap">{{ transport.ports }}</td>
+            <td>
+              {{ transport.delivery }}
+              {% if transport.delivery_note %}
+              {# Serialising a shape and this panel handing it over are two different
+                 answers. Second line rather than a replacement, so a transport that is
+                 merely undelivered does not read as one a user could never consume. #}
+              <div class="text-muted">{{ transport.delivery_note }}</div>
+              {% endif %}
+            </td>
+            {# The words are the transport's own declaration, composed in
+               services/console.py. All this cell decides is how loud they are, and it
+               decides that from a property the transport declares about ITSELF —
+               never from which protocol it is. #}
+            <td class="{{ '' if transport.identified else 'text-muted' }}">
+              {{ transport.exposure }}
+              {% if transport.hop_note %}
+              <div class="text-muted">{{ transport.hop_note }}</div>
+              {% endif %}
+            </td>
+          </tr>
+          {% if transport.why %}
+          {#
+            Why the panel refuses to offer this one as an exit, in words. Its own row
+            rather than a second line in the cell, for the same reason a degraded node's
+            reason gets one: it is a sentence and not a label, and the columns beside it
+            are short.
+          #}
+          <tr class="row-detail">
+            <td class="text-muted" colspan="5">why: {{ transport.why }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted section-note">
+      Discovered from the image, not listed anywhere. A new protocol appears here on
+      its own, and one that fails to load does not appear at all — so a row missing
+      from this table is a package to fix, never a protocol to add here.
+    </p>
+    {% else %}
+    {#
+      An image that discovered nothing. It cannot happen to a working build, which is
+      exactly why it needs saying out loud: silence here would look like an empty fleet
+      rather than a broken image, and the operator would go looking at their nodes.
+    #}
+    <div class="empty">
+      <div class="empty-title">No transports in this image</div>
+      <p class="empty-body text-muted">
+        Nothing was discovered under the transports package, so no node can be given a
+        protocol to speak and no user's link can resolve to anything. This is a build
+        to fix rather than a screen to fill: a protocol is a package, and one that
+        fails to import is missing here rather than broken later.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>

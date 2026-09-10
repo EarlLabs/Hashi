@@ -25,6 +25,7 @@ from control.app.errors import Conflict, NodeOperationFailed
 from control.app.models import TransportPurpose
 from control.app.panel import wording
 from control.app.services import apply as apply_service
+from control.app.services import console as console_service
 from control.app.services import friends as friends_service
 from control.app.services import health as health_service
 from control.app.services import nodes as nodes_service
@@ -1521,6 +1522,203 @@ def test_the_port_is_the_one_field_name_the_console_knows() -> None:
     ).placeholder == "1024–65535"
 
 
+# --- Transports (M9.3) --------------------------------------------------------
+
+# THE LIST IS THE TEST, and this screen contributes exactly one entry. It has no
+# dialog and no self-swapping fragment: nothing this panel can do changes which
+# protocols the image ships, so a refresh URL here would exist only to be listed.
+TRANSPORT_SURFACES = ("/panel/transports",)
+
+
+def _identified() -> list[str]:
+    """Whichever installed transports declare themselves identified on the wire.
+
+    Discovered, never a literal — the same rule as ``a_hop_transport``. A test that
+    named the protocol would be the branch this whole screen exists to avoid, and it
+    would go green for the wrong reason the day that package is replaced.
+    """
+    from edge.registry import discover
+
+    return sorted(
+        name for name, meta in discover().items() if meta.blocked_by_inspection
+    )
+
+
+def _reading(markup: str) -> str:
+    """``_visible_text`` with entities turned back into what a person actually reads.
+
+    The sentences on this screen contain apostrophes and Jinja escapes them, so an
+    assertion written in the operator's own words has to compare against those words
+    rather than against ``&#39;``.
+    """
+    return html.unescape(_visible_text(markup))
+
+
+async def test_the_transports_screen_lists_every_protocol_the_image_ships(
+    client,
+) -> None:
+    """One row per installed transport, and every value on it read from the image.
+
+    Asserted against ``discover()`` rather than against a written list, because that IS
+    the claim the screen makes about itself: a new protocol is one package and appears
+    here on its own.
+    """
+    from edge.registry import discover
+
+    installed = discover()
+    assert installed, "no transports discovered — this assertion would be vacuous"
+
+    body = (await client.get("/panel/transports")).text
+
+    for name, meta in installed.items():
+        assert name in body, f"{name} is not on the transports screen at all"
+        assert meta.family in body, name
+        low, high = meta.port_range
+        assert f"{low}–{high}" in body, name
+    assert "Discovered from the image" in body
+
+
+async def test_the_screen_names_a_protocol_it_refuses_as_an_exit_and_says_why(
+    client,
+) -> None:
+    """M9's acceptance line, held as a test rather than as a walk.
+
+    *"Open the transports screen: it must name a protocol the panel refuses to offer as
+    an exit and say why, in words."* Both halves are asserted, and the second one is
+    the one that rots: a screen can keep a label long after the sentence explaining it
+    has been edited into decoration.
+
+    Skips loudly rather than passing vacuously if this image ships no such transport —
+    a green run would otherwise mean "the warning is correct" when it means "there was
+    nothing to warn about".
+    """
+    blocked = _identified()
+    if not blocked:
+        pytest.skip(
+            "this image ships no transport that declares itself identified on the "
+            "wire, so the screen has nothing to warn about and this proves nothing"
+        )
+
+    reads = _reading((await client.get("/panel/transports")).text)
+
+    for name in blocked:
+        assert name in reads, f"{name} is not named on the transports screen"
+    # The label, in the words the pre-redesign page used and acceptance already knows.
+    assert console_service.TRANSPORT_IDENTIFIED in reads
+    # And the reason, in words, which is the half the milestone was written about.
+    assert f"why: {console_service.TRANSPORT_WHY_IDENTIFIED}" in reads
+
+
+async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
+    client, monkeypatch
+) -> None:
+    """The hard rule of this step, held where breaking it would be invisible.
+
+    Two fleets of one, identical in every declared value but the two booleans, and
+    neither transport is one this image ships. If any part of the path from
+    ``TransportMeta`` to the rendered cell recognised a protocol by name, the warning
+    would follow the name and neither of these rows would move.
+    """
+    from edge.registry import TransportMeta
+
+    def a_fleet_of_one(**declared) -> None:
+        meta = TransportMeta(
+            name="unshipped-shape",
+            family="udp",
+            needs_tls=False,
+            port_range=(1024, 65535),
+            **declared,
+        )
+        monkeypatch.setattr(console_service, "discover", lambda: {meta.name: meta})
+
+    a_fleet_of_one(blocked_by_inspection=True, hop_capable=False)
+    loud = _reading((await client.get("/panel/transports")).text)
+
+    a_fleet_of_one()
+    calm = _reading((await client.get("/panel/transports")).text)
+
+    assert "unshipped-shape" in loud and "unshipped-shape" in calm
+    assert console_service.TRANSPORT_IDENTIFIED in loud
+    assert console_service.TRANSPORT_NO_HOP in loud
+    assert console_service.TRANSPORT_WHY_IDENTIFIED in loud
+
+    assert console_service.TRANSPORT_CAMOUFLAGED in calm
+    assert console_service.TRANSPORT_IDENTIFIED not in calm
+    assert console_service.TRANSPORT_NO_HOP not in calm
+    assert "why:" not in calm
+
+
+async def test_a_transport_this_panel_cannot_hand_over_says_so(client) -> None:
+    """"How a user receives it" is two questions, and the screen answers both.
+
+    A transport declares which subscription shapes it serialises into; whether this
+    panel actually delivers any of them is ``subscription_expressible``, and today it
+    is False for the config-file shape (backlog item 27). Collapsing the two would tell
+    the operator a user is holding something they have never been sent.
+
+    Skipped rather than asserted blindly if every installed transport is deliverable —
+    that is a legitimate image and this scenario would prove nothing about it.
+    """
+    from edge.registry import discover
+
+    undelivered = [
+        meta
+        for meta in discover().values()
+        if meta.subscription_formats and not meta.subscription_expressible
+    ]
+    if not undelivered:
+        pytest.skip("every installed transport rides in the subscription this panel serves")
+
+    reads = _reading((await client.get("/panel/transports")).text)
+
+    for meta in undelivered:
+        for shape in meta.subscription_formats:
+            assert str(shape) in reads, meta.name
+    assert console_service.TRANSPORT_UNDELIVERED in reads
+
+
+async def test_the_transports_screen_measures_the_image_and_never_the_people(
+    client,
+) -> None:
+    """Decision 6 on the one screen that could not have carried those cells anyway.
+
+    Asserted all the same: this table is where a "sessions" or "bandwidth" column would
+    look most at home, because a capability table reads like a place to say how much a
+    protocol is used.
+    """
+    body = (await client.get("/panel/transports")).text.lower()
+
+    for cell in FORBIDDEN_CELLS:
+        assert cell not in body, (
+            f"the Transports screen shows {cell!r}, which the charter says must not "
+            "exist"
+        )
+
+
+async def test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_for_a_list(
+    client,
+) -> None:
+    """The Fleet entry's note is what is LEFT on that page, and it is now empty.
+
+    Nodes went in M9.1, hops in M9.2 and the capability table here, so every LIST that
+    page carried has its own screen. The entry itself stays until M9.6 — the actions it
+    carries have no home yet — but a note naming a list that has moved would send the
+    operator to the wrong screen.
+    """
+    from control.app.panel.routes import NAV
+
+    body = (await client.get("/panel/")).text
+
+    assert "/panel/transports" in body
+    assert next(item for item in NAV if item["key"] == "fleet")["note"] == ""
+    # Fleet is the only entry that can render a note at all, so this is the same claim
+    # said in markup. A later screen that wants one changes this line in front of a
+    # reviewer, which is the point of writing it out rather than deriving it.
+    assert "nav-note" not in body
+    # The page itself is still there and still works: M9.6 retires it, not this step.
+    assert (await client.get("/panel/fleet")).status_code == 200
+
+
 # --- what a browser is allowed to keep (acceptance round 1) -------------------
 
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
@@ -1743,6 +1941,7 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
         f"/panel/friends/{friend_id}/revoke",
         *NODE_SURFACES,
         *HOP_SURFACES,
+        *TRANSPORT_SURFACES,
         f"/panel/hops/{entry_end}/tear-down",
     )
 
