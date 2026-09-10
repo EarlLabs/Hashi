@@ -50,3 +50,35 @@ open there. Two things from it bind every later screen:
 **The accurate record of what the scan still cannot see is `_banner_faults`'s own
 docstring in `tests/control/test_the_console.py`.** Read that before you rely on
 a green run — not this file, which will age.
+
+## From M9.2, review round 3 — cap spent, left open
+
+All non-blocking; every round returned `VERDICT: 0 critical, 0 high`, and round 3
+ran both gates itself (`make test-control` 346, `make e2e-verify` 146).
+
+- **Medium — a hop mistyped at BOTH ends reports only the entry one.**
+  `control/app/services/relay.py:216-244` validates the entry end first and raises
+  on the first failure, so with both `entry-tunnel_address` and
+  `leaf-tunnel_address` set to a public range, the 422 marks
+  `entry-tunnel_address` alone and **the leaf's equally-invalid value comes back
+  unmarked, looking accepted.** The corrected acceptance line reads *"each refusal
+  arrives under its own box"*; here one of two refusals silently does not arrive,
+  and the operator pays a second round trip mid-rotation. Note the empty-box
+  pre-check in the route DOES collect both ends at once — only transport-model
+  refusals behave this way. **This is deferred, not intended: do not read the
+  current behaviour as the design.** The fix is to accumulate `ValidationError`s
+  per end into one `HopEndRefused` carrying `{purpose: fields}` and let
+  `_on_their_boxes` place both prefixes.
+- **Low — box counts in comments have drifted.** `hop_tuning` returns 12
+  parameters per end, so the dialog renders 24 tuning boxes, but `_hop_form`'s
+  docstring (`panel/routes.py:408`), the e2e comment
+  (`test_the_panel_fetches_nothing_from_a_third_party.py:70`) and the template's
+  macro comment (`establish_hop_dialog.html:32`) all still say twenty-two, while
+  `errors.py:66` and `routes.py:353/501` correctly say twenty-four. The codebase
+  states two different numbers for the same thing. (The template's "twenty-five
+  things" for the *old* form is correct — that form uses `operator_params`, which
+  drops `client_dns`.)
+- **Low — `transports.py:240`'s `tuning_field` docstring** still says "no
+  transport declares a default for a hop parameter" without the *requires*
+  qualifier, which would tell a skimming reader the placeholder path is dead code.
+  The journal headline was narrowed on 2026-09-10; this docstring was not.

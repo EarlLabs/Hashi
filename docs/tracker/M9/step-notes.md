@@ -227,3 +227,160 @@ Not M9.2–M9.4's to repoint; recorded so the right step picks each up.
   `data-transport=… hx-post="/panel/transports/{id}/state"` for the withdraw
   button's id — **repoint with M9.5**, which homes enable/withdraw.
 - The other two drive POST routes only; none of those changed.
+
+---
+
+# Established by M9.2 — the Hops screen
+
+Binds M9.3–M9.6. Supplements the M9.1 section; where this is silent, that governs.
+
+## The one thing this step is about
+
+Establishing a hop asks **three questions** — entry node, leaf node, transport —
+and every other parameter lives behind `<details> advanced tuning`.
+`test_establishing_a_hop_asks_three_questions` parses the **rendered** dialog
+with a stdlib `HTMLParser` tracking `<details>` depth and asserts the controls
+outside are exactly `(entry_node_id, leaf_node_id, transport_name)`. It catches a
+fourth question added outside, a knob lifted out of the disclosure, one end's
+boxes going missing, and the summary's count drifting from the transport's real
+field count. **Do not add a control outside that disclosure.**
+
+**Read the plan's corrected "done when" before you touch this screen.** The
+original clause promised each box would show "its own transport's default as a
+placeholder"; no shipped transport declares a default for a hop parameter it
+*requires*, and `control` may not manufacture one. The full reasoning is
+`docs/decisions.md` (2026-09-10) — field by field, and why. What the disclosure
+does instead is state each field's requirement and say, **outside the shut
+disclosure**, how many boxes are mandatory: `advanced tuning — 12 parameters per
+end, 11 of them required by this transport`, both numbers derived via
+`selectattr("required")`. **Derived, never written** — a literal count goes stale
+the day a transport changes.
+
+## Two service functions, two questions
+
+- `transports.hop_parameters(name)` — **every field an operator may supply**
+  (model fields minus key material and its `public_name`s). `hop_tuning` iterates
+  this.
+- `transports.operator_params(name)` — **every field an operator must supply**
+  (adds an `is_required` filter). Its two callers are `/api/transports` and the
+  old page's two forms. **Do not merge them**: filtering on required made the
+  "declared default" branch unreachable and silently dropped a defaulted field's
+  box entirely.
+
+`TuningField.hint` is the field's `description`, **always, in full**, rendered
+full-width under the row (`.field-hint { grid-column: 1 / -1 }`) and wired into
+`aria-describedby`. `TuningField.placeholder` is **only ever a value or a
+range** — never prose. The input is 136px; a 43-character sentence in it shows
+about seventeen characters.
+
+`transports.PORT_FIELD = "port"` is the one field name `control` knows. It is
+hop-contract vocabulary, not a protocol's — `edge/relay.py` already reads
+`end.params['port']`. `test_the_port_is_the_one_field_name_the_console_knows`
+stands over it so a second cannot appear quietly.
+
+## Refusals land on their own box
+
+`control.app.errors.HopEndRefused(DomainError)` carries `purpose` and
+`fields` (`{parameter: message}`). It **inherits `status_code=400` and
+`code="bad_request"` deliberately**, so `POST /api/hops` and the old page's
+`create_hop` get an identical envelope — the subclass only adds a second way to
+read the same refusal. **This is the pattern for any service refusal that has
+fields to land on:** subclass `DomainError`, inherit status and code, add
+structure; callers that do not know about it are unaffected.
+
+`HOP_SIDES` is the single table mapping form prefix ↔ `TransportPurpose`.
+Anything mapping a service refusal back onto a hop form goes through it, so the
+two mappings cannot disagree. `relay._plainly()` strips pydantic's
+`Value error, ` / `Assertion failed, ` prefix — any surface showing a transport's
+own validation message should use it. `_end_word()` turns `relay-entry` into
+`entry`; **no operator-facing string may carry the internal purpose vocabulary.**
+
+## Exactly one disclosure is ever on screen
+
+`shown = chosen if chosen in transports else transports[0]`, resolved **once
+before the loop**; each `<details>` is `hidden` unless `name == shown`. The
+earlier `not loop.first` form left the first transport's disclosure permanently
+visible, so a refusal re-render showed two summaries with contradicting counts.
+`app.js` only re-hides on a `change` event, which an htmx swap does not fire —
+so the server, not the script, must decide this.
+
+`app.js` gained one generic behaviour: a `change` listener showing the
+`[data-transport-group]` matching a `[data-transport-select]` in the same form.
+Presentation only — the server filters submitted fields to the chosen transport's
+list, so it works with the script dead. Reuse it for any "one group of fields per
+choice" form.
+
+## Tuning inputs carry no `required` attribute, deliberately
+
+A browser refuses to submit a form with an empty required field **it cannot
+focus**, and a field inside a closed `<details>` is exactly that — the operator
+would press submit and nothing would happen, with no message. The server refuses
+per field at 422 instead. A screen copying this macro inherits *server-side
+required*, not markup-required.
+
+## Events
+
+Every hop mutation fires `"hops-changed, nodes-changed"` — comma-separated in one
+`HX-Trigger`. A hop is two node-transport rows, so the Nodes table must refresh
+with it. **Copy this for any mutation touching two collections.**
+
+## New CSS — reuse, do not reinvent
+
+`.dialog-hop` (620px/86vh — the hop dialog's own class, as the M9.1 notes
+required), `.disclosure` + `.disclosure > summary` for any `<details>`,
+`.tuning-side`, `.tuning-field` (label 1fr | input 136px), `.grid-3` — added to
+the **existing** 900px collapse rule. No new breakpoint.
+
+## Testing
+
+`a_hop_transport()` (discovered, never a literal), `hop_side(address, peer,
+port=51820)`, `two_nodes(client)` (`entry-1`/`exit-1`, deliberately not colliding
+with `a_serving_node`'s `leaf-1` in the shared database), `a_hop(client)`.
+`_render_hop_dialog(**context)` renders the dialog through a `FileSystemLoader`
+with **no app and no database** — use it to try a fleet this image does not ship.
+`_read(markup)` returns `.controls`, `.visible`, `.opened`; `_field_errors()` and
+`_hints()` read off the `aria-describedby` ids.
+
+**A test picking "a tuning box" must pick a *required* one** — the first entry is
+now a defaulted field that is correctly accepted empty.
+
+**RFC 5737 documentation ranges are `is_private == True` to Python's
+`ipaddress`** and pass tunnel-address validation. To test a rejected address use
+`172.15.0.1/24` — one digit off RFC 1918, which is the mistake a rotation
+actually produces.
+
+## Wording acceptance will judge
+
+Sidebar `Hops`. Title `Hops`, subtitle *"which node a user's traffic arrives at,
+and which node it leaves from"*. Buttons `establish hop`, `tear down`, `cancel`.
+Dialog titles `Establish a hop`, `Tear down this hop?`. Summary `advanced tuning
+— N parameters per end, M of them required by this transport`. Toasts `hop
+establishing — apply both nodes to bring it up`, `hop torn down — re-apply N
+nodes so they stop holding a tunnel to an exit that is no longer configured`.
+Empty state `No hops yet`. Columns `entry / leaf / transport / state /
+established / actions`. A half hop reads `missing — this hop leads nowhere`; an
+unapplied hop's date cell reads `not yet — apply both nodes`.
+
+The tear-down confirmation **states decision 3 in words** — an entry that fails
+closed looks like a broken node from outside, so the operator is told that before
+they confirm.
+
+## Do not relitigate
+
+- **`AllowedIPs` is not surfaced and cannot be** — it is rendered by `edge` from
+  the peer block and is not in any params model, so the dialog can never present
+  the old narrow value the plan's M3 prose still describes.
+- **Key material is absent by construction** — `hop_parameters` subtracts
+  everything in `meta.key_material` including `public_name`s.
+  `test_the_hop_dialog_never_asks_for_key_material` holds it.
+- **`client_dns` is offered although it is inert at a hop end.** Recorded in
+  `docs/decisions.md` (2026-09-10) with its trap named. Do not "fix" it in
+  `control` — closing it needs an `edge`-side declaration.
+- **New routes took new names** because `POST /panel/hops` and
+  `/hops/{id}/dissolve` still belong to the old page and **both call it with
+  htmx**, so unlike the add-node form they cannot be told apart by a header.
+  **M9.6 takes `/hops` and `/dissolve` back.**
+- The sidebar's Fleet note narrowed to `transports`. **M9.3 empties it entirely.**
+- Hop prose lives in `services/console.py` (`hop_rows`, `hop_row`,
+  `tear_down_summary`, `HOP_ESTABLISHED/PENDING/INCOMPLETE`) — never in a route or
+  a template.
