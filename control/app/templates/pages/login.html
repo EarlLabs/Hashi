@@ -10,6 +10,12 @@
 
   The error message is identical for a wrong username and a wrong password — see
   panel/routes.py:login_submit for why.
+
+  It wears the FAILURE banner, not the neutral notice one. A refusal drawn as an
+  ordinary message is a refusal an operator reads as information — the finding M9
+  settled once, in app.css, for every screen (docs/decisions.md, 2026-09-10). This page
+  is outside the console shell but loads the same stylesheet, and it is the first
+  refusal anyone ever meets here.
 #}<!doctype html>
 <html lang="en">
 <head>
@@ -37,7 +43,10 @@
       <div class="text-muted wordmark-kicker">private mesh</div>
     </div>
     {% if error %}
-    <div class="banner" role="alert">{{ error }}</div>
+    <div class="banner banner-failure" role="alert">
+      <span class="banner-label">failed</span>
+      <span>{{ error }}</span>
+    </div>
     {% endif %}
     <form method="post" action="/panel/login" class="signin-form">
       <div class="field">

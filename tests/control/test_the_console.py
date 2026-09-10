@@ -409,7 +409,7 @@ async def test_the_overview_sends_a_new_operator_to_the_nodes_screen(client) -> 
     is a link that teaches the operator the wrong route to the job.
 
     The Overview's BODY, not the whole document: the sidebar still has its honest Fleet
-    entry, because hops and the transports table have not moved yet. M9.5 removes that.
+    entry, because hops and the transports table have not moved yet. M9.6 removes that.
     """
     body = (await client.get("/panel/overview/body")).text
 
@@ -487,7 +487,7 @@ async def test_adding_a_node_names_it_and_refreshes_the_table(client) -> None:
 async def test_the_pre_redesign_form_still_gets_its_redirect(client) -> None:
     """/panel/fleet's plain form posts to this same route and must keep working.
 
-    The old page is not deleted until M9.5, and until then it is the only home for
+    The old page is not deleted until M9.6, and until then it is the only home for
     hops, for the transports table and for half the per-node actions. A browser POST
     gets a 303 so a reload does not re-post; the console asks with htmx and gets the
     console's answer. Deleting this branch before the page is what would break it.
@@ -586,6 +586,40 @@ async def test_the_private_key_never_comes_back_out_of_the_dialog(client) -> Non
     assert duplicate.status_code == 422
     assert "not-a-real-key" not in duplicate.text
     assert "BEGIN OPENSSH PRIVATE KEY" not in duplicate.text
+
+
+async def test_a_dropped_key_says_so_at_the_moment_it_is_dropped(client) -> None:
+    """A silent trap, closed where it happens.
+
+    Emptying the box is right. Saying so only in the static hint is not: the operator
+    whose NAME was refused is reading the message under the name, fixes it, resubmits,
+    and registers a node with no key at all — which surfaces much later as an apply
+    that cannot connect and reads as a broken host.
+
+    And it is said only when there was something to drop. "Your key was not kept" about
+    a key that was never pasted is a second confusion in place of the first.
+    """
+    payload = {
+        "name": "leaf-1",
+        "address": "192.0.2.10",
+        "location_label": "Testland",
+    }
+    await client.post("/panel/nodes", data=payload, headers={"HX-Request": "true"})
+
+    with_key = await client.post(
+        "/panel/nodes",
+        data={**payload, "ssh_private_key": "not-a-real-key"},
+        headers={"HX-Request": "true"},
+    )
+    without_key = await client.post(
+        "/panel/nodes", data=payload, headers={"HX-Request": "true"}
+    )
+
+    assert with_key.status_code == 422
+    assert "was not kept" in with_key.text
+    assert "not-a-real-key" not in with_key.text
+    assert without_key.status_code == 422
+    assert "was not kept" not in without_key.text
 
 
 # --- applying and probing from the console ------------------------------------
@@ -738,7 +772,7 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
     these values actually take in markup — a dotted quad, a literal in a `value` or
     `placeholder` attribute, a `:port` suffix, a country, an installed transport's own
     name. The pre-redesign pages under templates/pages are deliberately not scanned:
-    they carry all four and M9.5 deletes them.
+    they carry all four and M9.6 deletes them.
     """
     from edge.registry import discover
 
@@ -1161,8 +1195,9 @@ def test_a_refusal_is_not_drawn_in_the_colour_of_the_button_that_refused_it() ->
     Settled in the shared stylesheet rather than on one screen, so every screen M9 and
     M10 add inherits it and no screen gets an error colour of its own. UI-PATTERNS §4's
     "there is no red" still holds everywhere it was written about — a status tag, a
-    destructive button — and this is its one documented exception: a request that was
-    REFUSED or FAILED.
+    destructive button — and this is its one exception: a request that was REFUSED or
+    FAILED. It supersedes that line of the handoff for that one role and is written
+    down as such in docs/decisions.md (2026-09-10), not only here.
     """
     rules = _css_rules()
 
@@ -1181,6 +1216,61 @@ def test_a_refusal_is_not_drawn_in_the_colour_of_the_button_that_refused_it() ->
         for selector, body in rules.items()
         if selector.startswith(".tag") and "danger" in body
     ]
+
+
+async def test_the_sign_in_refusal_is_a_failure_and_not_a_notice(anonymous) -> None:
+    """The one refusal outside the console, and the first anybody ever meets.
+
+    It was drawn as the neutral notice — the same frame as "No node is serving yet" —
+    on a page that loads the same stylesheet, so the finding M9 settled once was still
+    live in the place a person meets it first. The class-level guard is the test below;
+    this one holds the page itself, because the sign-in screen has no shell and would
+    not be walked by anything else.
+    """
+    refused = await anonymous.post(
+        "/panel/login", data={"username": "owner", "password": "wrong"}
+    )
+
+    assert refused.status_code == 401
+    assert "banner-failure" in refused.text
+    assert "failed" in _visible_text(refused.text)
+    assert "Those credentials were not accepted." in refused.text
+
+
+def test_no_refusal_anywhere_in_the_panel_is_drawn_as_an_ordinary_notice() -> None:
+    """The class, not the instance.
+
+    Two treatments share one element and the difference between them is a safety
+    property: an operator who reads a failure as an informational message believes the
+    action worked. The rule is mechanical, so it is checked mechanically —
+    ``role="alert"`` is a banner that must wear the failure frame, ``role="status"`` is
+    a banner that must not, and every one of them carries the word that says which it
+    is (UI-PATTERNS §4: severity is carried by the word as well as the weight).
+
+    Over every template, not just the console's: the sign-in screen is outside the
+    shell and is exactly where this was missed.
+    """
+    banner = re.compile(r'<div\s+class="([^"]*)"([^>]*)>')
+
+    checked = 0
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        markup = re.sub(r"\{#.*?#\}", "", path.read_text(), flags=re.S)
+        for classes, attrs in banner.findall(markup):
+            if "banner" not in classes.split():
+                continue
+            checked += 1
+            failing = "banner-failure" in classes.split()
+            where = f"{path.name}: {classes}"
+            if 'role="alert"' in attrs:
+                assert failing, f"{where} — a refusal drawn as an ordinary notice"
+            if 'role="status"' in attrs:
+                assert not failing, f"{where} — a notice drawn as a failure"
+            assert 'role="alert"' in attrs or 'role="status"' in attrs, (
+                f"{where} — a banner that says nothing about which of the two it is"
+            )
+            assert "banner-label" in markup, f"{where} — a banner with no word on it"
+
+    assert checked >= 3, "this scan found almost nothing, so it proves almost nothing"
 
 
 def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:

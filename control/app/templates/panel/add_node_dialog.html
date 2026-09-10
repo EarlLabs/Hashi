@@ -72,19 +72,28 @@
         Deliberately NOT refilled when this dialog comes back with an error, unlike
         every other field: putting a submitted private key back into the markup would
         make the panel a place key material appears, which is precisely what that rule
-        forbids. The hint says so, because a silently emptied box is how somebody
-        creates a node with no key and reads the failed apply as a broken host.
+        forbids. The hint says so, and `key_dropped` says it AGAIN at the moment it
+        happens — a static hint is not enough, because the operator whose NAME was
+        refused is reading the message under the name, fixes that, resubmits, and
+        registers a node with no key at all. The apply that cannot connect arrives much
+        later and reads as a broken host.
       #}
       <div class="field">
         <label for="node-ssh_private_key">ssh private key</label>
         <textarea class="input" id="node-ssh_private_key" name="ssh_private_key" rows="3"
                   autocomplete="off" spellcheck="false"
-                  aria-describedby="node-ssh_private_key-hint"></textarea>
+                  aria-describedby="node-ssh_private_key-hint{% if key_dropped %} node-ssh_private_key-dropped{% endif %}"></textarea>
         <div class="field-hint" id="node-ssh_private_key-hint">
           Stored encrypted and never displayed again. Optional now — without it the node
           can be registered but its configuration cannot be applied. This box is never
           refilled, so if the form comes back, paste it again.
         </div>
+        {% if key_dropped %}
+        <div class="field-error" id="node-ssh_private_key-dropped" role="alert">
+          the key you pasted was not kept — paste it again before you submit, or this
+          node is registered without one
+        </div>
+        {% endif %}
       </div>
 
       <div class="dialog-body">

@@ -18,7 +18,7 @@ per route, every creation flow in a dialog. Overview, Users and Nodes are ported
 remaining fleet screens are the rest of M9. Until they land, ``/panel/fleet`` serves
 the original single page and the sidebar has an honest entry pointing at it, because a
 dead nav link is worse than an ugly one — and its note names only what is still there.
-M9.5 retires that page once every action it carries has a new home: still on it are
+M9.6 retires that page once every action it carries has a new home: still on it are
 enabling and withdrawing a transport, moving a node between states, hops, and key
 rotation. Do not delete it before then.
 """
@@ -117,7 +117,7 @@ NAV = (
     {"key": "nodes", "label": "Nodes", "url": "/panel/nodes", "boost": True, "note": ""},
     # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
     # operator can tell from the sidebar which jobs have moved and which have not —
-    # nodes came out of it in M9.1. M9.5 removes this entry with the page.
+    # nodes came out of it in M9.1. M9.6 removes this entry with the page.
     {
         "key": "fleet",
         "label": "Fleet",
@@ -288,16 +288,30 @@ async def add_node_dialog(request: Request) -> Response:
     return TEMPLATES.TemplateResponse(request, "panel/add_node_dialog.html", _node_form())
 
 
-def _node_form(values: dict | None = None, errors: dict | None = None) -> dict:
+def _node_form(
+    values: dict | None = None,
+    errors: dict | None = None,
+    *,
+    key_dropped: bool = False,
+) -> dict:
     """What the add-node dialog needs, in one place so first paint and refusal agree.
 
     ``defaults`` comes from ``services/nodes.py`` rather than from the template because
     M9 forbids a template naming a port — and because the value the form suggests and
     the value the service applies when the box is left empty must be the same one.
+
+    ``key_dropped`` is true when the operator pasted a private key into a submission
+    that was then refused. The key is deliberately not put back into the markup, and
+    saying so AT THAT MOMENT is the difference between a rule and a trap: otherwise
+    somebody fixes the field that was wrong, resubmits, and registers a node with no
+    key at all — a failure that surfaces much later as an apply that cannot connect.
+    It is false when they pasted nothing, because "your key was not kept" about a key
+    that never existed is its own confusion.
     """
     return {
         "values": values or {},
         "errors": errors or {},
+        "key_dropped": key_dropped,
         "defaults": {
             "ssh_user": nodes.DEFAULT_SSH_USER,
             "ssh_port": nodes.DEFAULT_SSH_PORT,
@@ -418,7 +432,7 @@ async def create_node(
     docstring). The console asks with htmx and gets the console's answer: the dialog
     closes, a toast names the node, and the table refreshes itself. The pre-redesign
     form at /panel/fleet is a plain browser POST and still gets its 303 back to the
-    page it was submitted from, so a reload does not re-post. M9.5 deletes that page
+    page it was submitted from, so a reload does not re-post. M9.6 deletes that page
     and the redirect branch with it.
 
     Every field arrives as text, including the port, and every one of them is checked
@@ -456,6 +470,7 @@ async def create_node(
             errors={
                 str(error["loc"][0]): _refused_field(error) for error in exc.errors()
             },
+            key_dropped=bool(ssh_private_key),
         )
 
     try:
@@ -468,6 +483,7 @@ async def create_node(
             request,
             values=typed,
             errors={"name": wording.for_the_page(exc.message)},
+            key_dropped=bool(ssh_private_key),
         )
 
     if not _is_htmx(request):
@@ -481,7 +497,9 @@ async def create_node(
     )
 
 
-def _refuse_node(request: Request, *, values: dict, errors: dict) -> Response:
+def _refuse_node(
+    request: Request, *, values: dict, errors: dict, key_dropped: bool = False
+) -> Response:
     """A refused node form, in whichever panel asked.
 
     The console gets its dialog back at 422 with the message under the field it is
@@ -495,7 +513,7 @@ def _refuse_node(request: Request, *, values: dict, errors: dict) -> Response:
     return TEMPLATES.TemplateResponse(
         request,
         "panel/add_node_dialog.html",
-        _node_form(values=values, errors=errors),
+        _node_form(values=values, errors=errors, key_dropped=key_dropped),
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
@@ -535,7 +553,7 @@ async def probe_node_from_the_console(
 
     Its own route rather than the ``/health`` one below because the two panels want
     different answers to the same question: that one renders the old page's fragment
-    into ``#outcome``, this one is a console mutation. M9.5 deletes the other.
+    into ``#outcome``, this one is a console mutation. M9.6 deletes the other.
     """
     node = await nodes.get_node(session, node_id)
     result = await health.check_node(session, node_id=node_id)
@@ -559,7 +577,7 @@ async def push_node_from_the_console(
 
     ``push`` and not ``apply`` in the URL only because ``/apply`` still belongs to the
     pre-redesign page below, which answers it with a different fragment; the word is
-    the codebase's own for the operation either way. M9.5 takes the shorter name back.
+    the codebase's own for the operation either way. M9.6 takes the shorter name back.
 
     A failure is a banner rather than a toast, and that is the point of this button on
     the stand: a failed apply marks the node degraded, and the operator has to be able
