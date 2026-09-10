@@ -150,9 +150,22 @@ step.
   point the dialog's sentence changes from a consequence to a cost.
 
 
-## From M9.4, review round 3 — THE RUN STOPPED HERE
+## From M9.4, review round 3 — RESOLVED 2026-09-10
 
-**M9.4 did not converge.** Round 3 was the last of the cap and returned
+**Superseded: the High and the two Mediums below were CLOSED**, on the owner's
+standing instruction to decide and continue rather than stop. The decision is in
+`docs/decisions.md` (2026-09-10, *"A refusal never carries a secret's VALUE"*):
+redaction moved into the service — `relay.refused_fields(exc, *, withholding)` —
+where the values are still in scope, closing `fields`, `message`, the console, the
+pre-redesign page and the API envelope at once. The console's allow-list stays as
+the second line of defence. The identical shape in `relay.py` for `HopEndRefused`
+closed in the same pass.
+
+The original record is kept below because the sequence is the point, and because
+the *reasoning* about what an allow-list can and cannot close still binds anyone
+adding a new refusal path.
+
+**M9.4 did not converge within its cap.** Round 3 was the last of the cap and returned
 `VERDICT: 0 critical, 1 high`. Under `step-loop` Phase 3 and `autopilot` §4 —
 *"the round cap is spent, in review or in acceptance, with blocking issues
 open"* — the run stops rather than working around it. Everything built is
@@ -259,3 +272,24 @@ same instrument M9.4 replaced in `tests/control/`. Synthetic stand data, so the
 exposure is small. `infra` zone — CLAUDE.md keeps cross-zone work in separate
 diffs, so it needs a task of its own. Fix: `pytest.fail("a node-transport's
 secrets column is not ciphertext")` with no operand.
+
+## Found while closing the M9.4 High — a live 500, worse than recorded below
+
+`POST /panel/keys/{id}/rotate` **on a hop end of the shipped carrier is a 500
+today.** Apply re-renders the pair and `edge.relay` raises `HopNotRenderable`
+(*"the two ends carry different pre-shared keys"*), which is **not** a
+`DomainError`, so it escapes the route rather than becoming an operator-facing
+refusal. Verified at the baseline with the fix stashed, so it is **pre-existing**,
+not introduced.
+
+This is the live consequence of the `shared_between_peers` entry above, and it is
+worse than that entry describes: the carry-over says the operator gets two valid
+configs and a handshake that never completes, but on this carrier they do not even
+get that far — they get an unhandled exception.
+
+**Not fixed, deliberately: fixing it IS the deferred symmetric-rotation fix** —
+mint once and copy across both ends in one transaction, then push both nodes. A
+`try/except` that turns the 500 into a sentence would be worse than the 500,
+because it would make a broken action look like a handled one. It is also why the
+surface-level hop-end test added with the redaction drives **replace** rather than
+**rotate**.
