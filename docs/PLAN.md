@@ -1891,7 +1891,7 @@ The same measurement as above, on a ufw host, with the answer changed.
 
 ---
 
-## → M21 — A gate that fails at random is a gate people stop reading · found 2026-09-09
+## ✅ M21 — A gate that fails at random is a gate people stop reading · found 2026-09-09 · done 2026-09-10
 
 `tests/control/test_node_timeouts.py::test_a_node_that_never_answers_is_reported_with_a_plain_reason`
 and `tests/control/test_first_apply_failure.py` fail intermittently, returning
@@ -1948,12 +1948,25 @@ gate for M21.1 and M21.2, `make test-edge` for M21.3, and the honest proof is
 running them repeatedly under load and getting the same answer every time.
 
 **Done when**
-- [ ] The unreachable-node tests give the same result on a loaded machine as on
-      an idle one.
-- [ ] The assertion names the property the operator depends on, not the errno
-      that happened to produce it.
-- [ ] `make verify` is not red on a host whose `sleep` is BSD's, and the reason
-      it is not is written where the next reader will find it.
+- [x] The unreachable-node tests give the same result on a loaded machine as on
+      an idle one. — both files now dial a loopback socket the suite itself opens
+      (`unanswering_ssh` listens and never accepts; `refusing_ssh` is bound and
+      never listening), so the target's behaviour is decided by the test rather
+      than by the host's routing table. 40/40 identical runs idle and under
+      eight busy loops on four cores, reproduced independently by the reviewer.
+- [x] The assertion names the property the operator depends on, not the errno
+      that happened to produce it. — `assert_plain_reason(reason, *addresses)` in
+      `tests/control/conftest.py`. Proven by mutation to still fail on a
+      traceback, a bare class name, an empty reason, and a reason carrying either
+      of the node's two addresses.
+- [x] `make verify` is not red on a host whose `sleep` is BSD's, and the reason
+      it is not is written where the next reader will find it. — the supervisor's
+      idle is now `while :; do sleep 86400 & wait $!; done`, measured
+      byte-identical to `sleep infinity` inside the container across `dash`,
+      `bash` and `busybox sh` on every signal and failure arm; and the edge test
+      now puts a POSIX-strict `sleep` first on `PATH`, so the host's own `sleep`
+      stops mattering and a future non-portable idle goes red on Linux CI too.
+      Written up in `docs/tracker/M21/step-notes.md`.
 
 acceptance: no
 
