@@ -11,6 +11,14 @@ title=, subtitle=, context=)` in `control/app/panel/routes.py`. It renders
 out-of-band) when `HX-Request: true`. Add the entry to `NAV`; `boost: True` for a
 console screen.
 
+> **Superseded by M9.6, 2026-09-10 — there is no `boost` key any more.** `boost`
+> and `note` were removed from `NAV` and from `nav.html` when the Fleet entry —
+> the only unboosted, noted entry — was deleted along with the pre-redesign
+> pages. Every console entry is boosted now, so there is nothing to set. Passing
+> `boost: True` is harmless and does nothing; do not copy this line expecting it
+> to matter. The reasoning sits at `control/app/panel/routes.py:119-122` and
+> `nav.html:8-11`.
+
 **Screen template shape:** `{% include "panel/console_header.html" %}` then
 `<div class="panel">…</div>`. Put the collection in its own fragment that swaps
 itself (`hx-target="this" hx-swap="outerHTML" hx-indicator="this"`,
