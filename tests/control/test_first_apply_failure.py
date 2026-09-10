@@ -57,7 +57,8 @@ from .conftest import assert_plain_reason
 # What a FRIEND would dial, and the only thing this address is here: RFC 5737
 # TEST-NET-1, the same one every other fixture in this zone uses. Nothing in this file
 # dials it — the control plane reaches a node at its ``ssh_host`` — so nothing here
-# depends on what a documentation address does.
+# depends on what a documentation address does. It is still checked for below: a node
+# has two addresses now, and a reason must not carry either of them.
 ADVERTISED_ADDRESS = "192.0.2.10"
 
 # The transition complaint that used to be handed to the operator instead of the real
@@ -147,7 +148,7 @@ async def test_a_first_apply_that_fails_records_the_real_reason(
     # What was RECORDED is a reason a person can act on (words, no traceback, no bare
     # class name, no address — see ``assert_plain_reason``), and it is the same reason
     # the operator was handed rather than a second, separately written one.
-    assert_plain_reason(node.state_detail, address=refusing_ssh.host)
+    assert_plain_reason(node.state_detail, refusing_ssh.host, ADVERTISED_ADDRESS)
     assert node.state_detail in raised.value.message
 
 
@@ -172,7 +173,7 @@ async def test_the_real_reason_reaches_a_log(
     # replaced, which only checked that the log contained a sentence this file also
     # knew how to spell.
     reason = (await nodes.get_node(session, node_id)).state_detail
-    assert_plain_reason(reason, address=refusing_ssh.host)
+    assert_plain_reason(reason, refusing_ssh.host, ADVERTISED_ADDRESS)
 
     logged = [record.getMessage() for record in caplog.records]
     assert any(reason in line for line in logged), logged
@@ -192,7 +193,7 @@ async def test_the_api_reports_the_node_rather_than_the_state_machine(
     assert outcome.status_code == 502, outcome.text
     body = outcome.json()["error"]
     assert body["code"] == "node_operation_failed"
-    assert_plain_reason(body["message"], address=refusing_ssh.host)
+    assert_plain_reason(body["message"], refusing_ssh.host, ADVERTISED_ADDRESS)
     assert TRANSITION_COMPLAINT not in body["message"]
     assert INTERNAL_ERROR_COMPLAINT not in body["message"]
 
@@ -201,7 +202,7 @@ async def test_the_api_reports_the_node_rather_than_the_state_machine(
     # Tied to the response rather than to a wording: the row the panel renders and the
     # answer the operator just got must be the same failure, whichever sentence the
     # connect attempt produced.
-    assert_plain_reason(node["state_detail"], address=refusing_ssh.host)
+    assert_plain_reason(node["state_detail"], refusing_ssh.host, ADVERTISED_ADDRESS)
     assert node["state_detail"] in body["message"]
 
 
@@ -223,7 +224,7 @@ async def test_a_refused_transition_never_replaces_the_reason(
         await apply.apply_node(session, node_id=node_id)
 
     assert isinstance(raised.value.__cause__, NodeUnreachable), raised.value.message
-    assert_plain_reason(raised.value.message, address=refusing_ssh.host)
+    assert_plain_reason(raised.value.message, refusing_ssh.host, ADVERTISED_ADDRESS)
     assert TRANSITION_COMPLAINT not in raised.value.message, (
         "the bookkeeping's own failure replaced the node's"
     )
@@ -260,7 +261,7 @@ async def test_a_second_failure_replaces_the_first_ones_reason(
     # subject (M21.1). Spelling it out is also how this assertion could pass while
     # proving nothing — a wrong guess makes ``not in`` below trivially true.
     first_reason = (await client.get(f"/api/nodes/{node_id}")).json()["state_detail"]
-    assert_plain_reason(first_reason, address=refusing_ssh.host)
+    assert_plain_reason(first_reason, refusing_ssh.host, ADVERTISED_ADDRESS)
 
     node = await nodes.get_node(session, node_id)
     node.ssh_private_key = UNIMPORTABLE_PRIVATE_KEY

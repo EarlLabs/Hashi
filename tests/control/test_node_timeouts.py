@@ -40,7 +40,8 @@ from .conftest import assert_plain_reason
 # What a FRIEND would dial: a reserved documentation address (RFC 5737), as everywhere
 # else in this zone. Nothing in this file dials it — the control plane reaches a node at
 # its ``ssh_host``, which is the separate column below — so its routability is no longer
-# load-bearing anywhere here.
+# load-bearing anywhere here. It is still checked for below: a node has two addresses
+# now, and a reason must not carry either of them.
 ADVERTISED_ADDRESS = "192.0.2.10"
 
 
@@ -100,7 +101,7 @@ async def test_a_node_that_never_answers_is_reported_with_a_plain_reason(
     # And this is the part the operator reads. Asserted as a property (words, one
     # line, no traceback, no bare class name, no address travelling with it) rather
     # than as the particular sentence the timeout arm happens to write — M21.1.
-    assert_plain_reason(report.detail, address=unanswering_ssh.host)
+    assert_plain_reason(report.detail, unanswering_ssh.host, ADVERTISED_ADDRESS)
 
     # Ten times the configured ceiling. Wide enough that a loaded machine cannot fail
     # it, tight enough that a ceiling which is configured but not honoured — the

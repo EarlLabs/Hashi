@@ -213,10 +213,17 @@ class LoopbackSSH(NamedTuple):
 def _bound_loopback_socket() -> socket.socket:
     """A TCP socket holding one ephemeral loopback port, not yet listening."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # No SO_REUSEADDR on purpose: the exclusivity of the bind is the point. A second
-    # process cannot take this port while the test runs, so nothing can answer where
-    # the test decided nothing answers.
-    sock.bind((LOOPBACK, 0))
+    try:
+        # No SO_REUSEADDR on purpose: the exclusivity of the bind is the point. A
+        # second process cannot take this port while the test runs, so nothing can
+        # answer where the test decided nothing answers.
+        sock.bind((LOOPBACK, 0))
+    except BaseException:
+        # The fixtures' ``finally`` only ever sees a socket this function returned, so
+        # a bind that raises has to close its own fd or the descriptor is lost for the
+        # rest of the session.
+        sock.close()
+        raise
     return sock
 
 
@@ -282,7 +289,7 @@ _EDGES = "\"'`.,:;!?()[]{}<>—-"
 _WORDS_REQUIRED = 4
 
 
-def assert_plain_reason(reason: str | None, *, address: str) -> None:
+def assert_plain_reason(reason: str | None, *addresses: str) -> None:
     """The operator was told, in words, why an operation on a node failed.
 
     Asserts the property M4.4 introduced rather than the sentence it introduced:
@@ -290,9 +297,14 @@ def assert_plain_reason(reason: str | None, *, address: str) -> None:
     node address travelling with it (core invariants §6 — a node's address in
     operator-facing text is a step towards a connection record).
 
-    ``address`` is required rather than optional: every caller has one, and the check
-    is worthless in exactly the tests that forget to pass it.
+    ``addresses`` is EVERY address that names the node under test, and at least one is
+    required: the check is worthless in exactly the tests that forget to pass it. There
+    is more than one because a node record carries more than one — the address a friend
+    dials and the address `control` dials over SSH are separate columns, and until
+    M21.2 they held the same string here, which is the only reason one argument ever
+    looked sufficient. A reason may leak either.
     """
+    assert addresses, "assert_plain_reason needs the node's addresses to check for"
     assert isinstance(reason, str), f"the operator was given no reason at all: {reason!r}"
 
     text = reason.strip()
@@ -308,6 +320,7 @@ def assert_plain_reason(reason: str | None, *, address: str) -> None:
         f"{_WORDS_REQUIRED} ordinary words, and has {len(prose)}"
     )
 
-    assert address not in text, (
-        f"the node's address travelled with the reason: {text!r}"
-    )
+    for address in addresses:
+        assert address not in text, (
+            f"the node's address travelled with the reason: {text!r}"
+        )
