@@ -149,3 +149,113 @@ step.
   does, then push both nodes and report honestly if either push failed — at which
   point the dialog's sentence changes from a consequence to a cost.
 
+
+## From M9.4, review round 3 — THE RUN STOPPED HERE
+
+**M9.4 did not converge.** Round 3 was the last of the cap and returned
+`VERDICT: 0 critical, 1 high`. Under `step-loop` Phase 3 and `autopilot` §4 —
+*"the round cap is spent, in review or in acceptance, with blocking issues
+open"* — the run stops rather than working around it. Everything built is
+committed and both gates are green (`make test-control` 391, `make e2e-verify`
+147, both run by the reviewer, not claimed by the builder).
+
+**Do not read the open High below as intended behaviour, and do not start M9.5
+until it is settled.**
+
+### HIGH, open — the console can render the node's decrypted private key
+
+`control/app/panel/routes.py:971` with `control/app/services/rotation.py:261-270`.
+
+The allow-list closes the class of **locations** and not the class of
+**messages**. A `field_validator` on a field the form *does* have a box for reads
+other already-validated fields through `info.data` — and `merged` at
+`rotation.py:229` is `{**params, **typed, **stored_secrets}`, so
+`info.data["private_key"]` is the decrypted secret. Pydantic locates that error
+at `("decoy_host",)` → `"decoy_host"`, which **is** in `boxes`, so
+`_refused_parameters` prints the sentence verbatim.
+
+Reproduced by the reviewer against the shipped `vless-reality` row with only the
+model swapped: `POST /panel/keys/{id}/params` answered 422 with
+`<div class="field-error" id="param-decoy_host-error" role="alert">does not match
+the key &lt;the node's real private key&gt;</div>` — **visible text, on the Keys &
+configs screen's own dialog**, which is precisely where M9's acceptance line says
+*"you must not find one"*.
+
+**Latent today** — it needs a transport whose validator quotes `info.data`, and
+none ships. By this milestone's own repeated standard (*guarded rather than
+watched*) that is the reason to close it, not to leave it. Note the diff's own
+reasoning already contains the answer and simply was not carried across:
+`routes.py:812-818` argues that on the rotate path *"a complaint may be quoting
+material whichever field it names."*
+
+**The reviewer's proposed fix — redact rather than sort.** `replace_params` holds
+`stored_secrets` at the moment it builds `fields`: strip any stored secret value
+out of every `error["msg"]` (and out of `problems`) before either leaves the
+service. One place, and it closes `fields`, `message`, the console, the old page
+and the API at once — and closes the Medium below with it. Then widen
+`test_no_answer_to_a_rotation_shows_what_it_minted` to sweep the **replace** POST
+answer too, with a validator quoting `info.data` as the red-first case.
+
+**The identical shape exists in `relay.py:230-244` for `HopEndRefused`** —
+pre-existing, not this diff's, same fix location.
+
+### Medium, open — the C split's stated reason does not hold
+
+`control/app/services/rotation.py:265-270`. The comment argues *"every field a
+caller can act on is a value the operator has just typed"* — but `problems` is
+built from **all** of `fields`, unfiltered, so it carries the sentence for
+`private_key`, for `""` (a model-level validator), and for anything else the
+transport complains about, none of which any caller typed. The reviewer
+reproduced both: with a model-level validator quoting `self.private_key`, the old
+page's `/panel/transports/{id}/params` returned 200 with the key inside
+`outcome.html`, and `POST /api/transports/{id}/params` returned 400 with the key
+in the error envelope. The split is defensible in what it *keeps* (per-box
+sentences, which M9.2's "each refusal arrives under its own box" needs) and not in
+what it *says*. Also violates the control rulebook's *"secrets … never stored in a
+variable that ends up in a log record, a template context, or an exception
+message"* the moment a validator behaves this way. **Same single fix as the High.**
+
+### Medium, open — a hop-end rotation is reported as if users were affected
+
+`control/app/services/console.py:662` and `:678`. A **successful** rotation or
+replacement on a hop end reports *"users keep the same link and pick this up the
+next time their client refreshes it"*. Neither function branches on
+`row.for_friends`, although every other string on this screen does —
+`rotate_keys_dialog.html` deliberately says *"No user holds anything on it: this
+is a tunnel between two of our own nodes"*. So the operator confirms a hop-end
+rotation having read that no user is involved, and is then told about users'
+links. `_unpushed` has the same shape. Fix: branch both summaries on
+`row.for_friends`, the way the dialog does; the dialog's two sentences are the
+model.
+
+### Low, open — `KEY_MATERIAL_WITHHELD` is phrased about a form that is not there
+
+`control/app/services/console.py:158`. The sentence hardcodes *"the transport also
+refused something **this form** has no box for"*, and is used twice where that is
+untrue: on the rotation path it is the **banner** text and there is no form on
+screen at all (and *"also"* implies something else was reported when nothing was);
+and for the falsy-message shape it names a field that **does** have a box. Fix:
+two constants, or one sentence phrased about what was withheld rather than about a
+form.
+
+### Low, open — nothing sweeps the replace POST answer
+
+`tests/control/test_the_console.py:1963` and `:2009`. The material sweep covers
+every GET surface and the **rotate** POST answer; nothing sweeps the **replace**
+POST answer, which is precisely the gap the High came through.
+`test_a_refusal_prints_the_transport_s_words_only_under_a_box` plants markers, so
+it proves the sorting, not the absence of real material. Fix: post to
+`/panel/keys/{id}/params` with a validator quoting `info.data` and check the
+answer against `stored_material(session)`, with `pytest.fail` rather than
+`assert`.
+
+### Cross-zone, recorded here so it is not lost — NOT M9's to fix
+
+`tests/e2e/infra/test_restore_proves_the_backup.py:394-397` —
+`assert stored.startswith("gAAAA"), f"…{stored[:40]!r}"` fires exactly when the
+`secrets` column is **not** ciphertext, i.e. it prints 40 characters of plaintext
+key material into the CI log, and pytest's rewriting adds the operand on top. The
+same instrument M9.4 replaced in `tests/control/`. Synthetic stand data, so the
+exposure is small. `infra` zone — CLAUDE.md keeps cross-zone work in separate
+diffs, so it needs a task of its own. Fix: `pytest.fail("a node-transport's
+secrets column is not ciphertext")` with no operand.

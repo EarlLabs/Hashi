@@ -483,3 +483,122 @@ scenarios: the capability half on `/panel/transports`, and
 `test_the_hop_dialog_does_not_offer_a_blocked_protocol` asserting the option
 values of `hop-transport_name` at `/panel/hops/new`. Both were proven red-first by
 mutation against a rebuilt stand.
+
+---
+
+# Established by M9.4 — Keys & configs
+
+Binds M9.5–M9.6. **M9.4 did NOT converge — read `carry-over.md` first for the one
+High left open.**
+
+## The fingerprint
+
+`keymaterial.fingerprint(specs, params)` → first 4 + last 4 hex of
+`sha256("<public_name>=<value>\n"…)`, rendered `9f3c…a17d`.
+
+Its input is **only** values stored under a `KeySpec.public_name` for
+`KeyScope.NODE` specs, read from the **clear** `params` column. `secrets` is
+never read on that path and nothing decrypts in `key_rows`. A merely-non-secret
+minted value is **deliberately excluded** — `short_id` is `secret=False` but
+declares no `public_name`, and hashing a few bytes is reversible by enumeration.
+**The rule is "what the transport declared public", never "what is not
+encrypted".** Irreversible because the preimage already ships inside every user's
+config, so the digest reveals strictly less than what is handed out.
+
+No public half declared → **no fingerprint**, and the cell prints the rule.
+
+## How a refusal is sorted, and the rule that replaced the message
+
+`_refused_parameters(exc, boxes)` is an **allow-list**: a transport's own sentence
+is printed **only** for a `loc` that is exactly one of this form's boxes.
+Everything else — key material, an unrendered field, a nested `loc`, an empty
+`loc` — is named with the rule instead. The earlier deny-list keyed on an exact
+top-level field name was one `loc` shape from open.
+
+It is airtight *because* Pydantic field names are Python identifiers: a
+`".".join`ed multi-element `loc` can never equal a box name, and `loc == ()`
+joins to `""`, which is never a box. **Do not "simplify" that join to
+`error["loc"][0]`** — that collapses `server_names.0` onto a real box and starts
+printing a nested validator's message.
+
+**A refusal is never silent, and that invariant lives in the sorter, not the
+caller.** A falsy message is treated as unprintable and named with the rule; a
+`ParamsRefused` carrying no field at all is stated as a complaint about the
+parameters as a whole. Both callers inherit it, so the next caller cannot forget.
+
+`rotate_keys` passes `boxes=set()`. **The reason is not "nothing in that mapping
+was typed"** — the operator's own parameters are validated alongside the new
+material, so some of it was. The reason is that the rotate answer is a
+**confirmation dialog with no boxes**, so there is nowhere for a message about one
+parameter to belong, and the mapping was validated *together with* material
+minted three lines earlier, so a complaint may be quoting material whichever
+field it names.
+
+`rotation.MATERIAL_NOT_REPEATED` / `WHOLE_MAPPING` / `_named()` are the vocabulary
+for any service refusal whose mapping holds minted material: **name the
+parameters, state the rule, keep the sentences on `fields`** for a caller that has
+somewhere safe for them.
+
+## Testing this
+
+- **Never `assert secret not in body`.** Pytest's assertion rewriting prints both
+  operands, i.e. the key into the CI log. Use `pytest.fail(label)`.
+- **`session.expunge_all()` before re-reading after a mutation.** SQLAlchemy's
+  identity map returned the same values twice, and the sweep passed against a
+  deliberately-leaking route until this was added.
+- **A marker must be a token only the message could carry.** The first attempt
+  used the operator's own typed value, which a 422 legitimately hands back into
+  its box — proving nothing.
+- `every_console_surface()` is the single list feeding **both** sweeps (decision-9
+  and key material). Add your screen and dialogs there.
+- `stored_material(session)` reads the decrypted values the fleet actually holds.
+- `a_node_holding_material(client, reality_params)` → a serving node with a
+  transport enabled and one user credential, returning the node-transport id.
+- Rotation POSTs run the real push (~1s SSH failure) on purpose — the failure
+  branch is the thing under test.
+
+## Reusable
+
+`transports.key_material_names(name)` is **the one place minted names are
+subtracted** (`operator_params` and `hop_parameters` both use it).
+`transports.replaceable_params(name, current) -> ParamBox` — empty box means
+*keep*. **Do not reuse `TuningField`**, whose `required` means the opposite here.
+`.param-field` (label `auto`, input `minmax(0, 1fr)`) is the replace form's row
+class — on that form the **input** is the thing being read, since its placeholder
+is the current value. `.tuning-field` is the hop dialog's, sized for 24 short
+numeric boxes. `ParamsRefused` is the pattern for a single-object per-field
+refusal; it is a **sibling** of `HopEndRefused`, not a merge — `purpose` is hop
+vocabulary and a node-transport has one end.
+
+## Known narrowing, permanent after M9.6
+
+`replaceable_params` is built from `operator_params`, which filters on
+`is_required()`, so **a parameter the transport defaults can never be replaced
+from the panel** — `decoy_port` and `fingerprint` on the shipped Reality
+transport — while `POST /api/transports/{id}/params` will change either. Parity
+with the old form today, so M9.6's "every action has a home" still holds, but it
+becomes a permanent narrowing the moment that page goes.
+
+## Wording acceptance will judge
+
+Sidebar `Keys & configs`. Title `Keys & configs`, subtitle *"what each node holds,
+and how to replace it without anyone re-importing their link"*. Columns `node /
+transport / scope / fingerprint / on the node / users on it / actions`. Buttons
+`rotate keys`, `replace params`, `replace`, `cancel`. Dialog titles `Rotate these
+keys?`, `Replace parameters`. Empty state `Nothing minted yet`. Cells `held, never
+shown — …`, `not in this image — …`, `never pushed — apply this node`, `hop —
+none`, `no actions`.
+
+## Do not relitigate
+
+- **The handoff is contradicted twice, deliberately, and journalled**
+  (`docs/decisions.md`, 2026-09-10): design §7's `minted`/`rotates` columns became
+  `on the node`/`users on it` (no column records when material was minted; nothing
+  rotates on a schedule), and **UI-PATTERNS §9's "generated on the node" is false**
+  — `edge` is pure, so the panel says "minted by the control plane". A later
+  screen copying §9's wording would describe our key handling wrongly.
+- `rotation.py` reaches `relay._plainly` across modules rather than copying it,
+  per M9.2's note naming it the shared helper.
+- The console's key routes took new names because the old `/panel/transports/{id}/…`
+  pair is also htmx-driven and cannot be told apart by a header. **M9.6 has
+  nothing to take back here** — only `/nodes/{id}/apply`, `/hops` and `/dissolve`.
