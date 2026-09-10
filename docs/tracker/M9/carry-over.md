@@ -104,3 +104,20 @@ say, and the reason it says less than the journal knows.
   protocol's name to close it. The same limit is why
   `TRANSPORT_WHY_IDENTIFIED` states a capability and recommends no action: advice
   has to be right about the whole stack, and for that transport it would not be.
+
+## From M9.3, review round 2 — cap not spent, left open as a Low
+
+- **Low — an unexercised branch behind a load-bearing docstring claim.**
+  `control/app/services/console.py:437`'s `else TRANSPORT_NO_DELIVERY` never runs:
+  every shipped transport declares a non-empty `subscription_formats` (the field
+  defaults to `{V1_URI_LIST}`), and the synthetic meta in
+  `test_the_warning_follows_a_declaration_and_never_a_protocol_s_name` takes that
+  default too. `_transport_row`'s docstring makes *"these two conditions are not
+  the same condition"* a load-bearing claim, and only the
+  `subscription_expressible` half has a test standing over it — **a later edit
+  collapsing the two would stay green.** Fix is one more call through the existing
+  `a_fleet_of_one` harness with `subscription_formats=frozenset()`, asserting
+  `TRANSPORT_NO_DELIVERY` is read and `TRANSPORT_UNDELIVERED` is not. Carried
+  rather than fixed because both rounds returned clean and this is a Low; it is
+  the same defect class as the rest of this milestone's findings, so it is worth
+  doing when someone next touches that function.

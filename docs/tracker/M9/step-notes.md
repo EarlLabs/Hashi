@@ -384,3 +384,102 @@ they confirm.
 - Hop prose lives in `services/console.py` (`hop_rows`, `hop_row`,
   `tear_down_summary`, `HOP_ESTABLISHED/PENDING/INCOMPLETE`) — never in a route or
   a template.
+
+---
+
+# Established by M9.3 — the Transports screen
+
+Binds M9.4–M9.6. Supplements the M9.1 and M9.2 sections.
+
+## A capability table states capabilities. It does not give advice.
+
+This is the rule M9.3 was corrected into and the one most likely to be broken
+again, because a helpful sentence is always tempting. Every string on this screen
+is **projected from a declared property of `TransportMeta`** — and the moment a
+cell recommends an *action*, it has to be right about the whole stack, which a
+capability declaration cannot be.
+
+The concrete case: the `why:` sentence used to end *"Enable it only where nothing
+is filtering."* `docs/decisions.md` (2026-09-09) contradicts that for the only
+transport it can apply to — under the pinned legacy-iptables image on a `ufw`
+host you get *"handshake completes, nothing moves, nothing logged"* — and it sat
+one cell from *"this panel cannot hand it over"*. It was dropped and **nothing
+replaced it**. Do not add advice to a capability cell.
+
+## Where every cell comes from
+
+| cell | source |
+|---|---|
+| name | `meta.name` |
+| family | `meta.family` |
+| ports | `meta.port_range`, as `low–high` |
+| how a user receives it | `meta.subscription_formats`, sorted and joined |
+| …second line | `meta.subscription_expressible` |
+| on a filtering network | `meta.blocked_by_inspection` |
+| …second line | `meta.hop_capable` |
+| the `why:` row | present iff `blocked_by_inspection` |
+
+`console.TRANSPORT_*` constants hold the prose. **A new capability sentence goes
+beside them, keyed on a declared property, never on a name.** Reuse
+`console.transport_rows()` / `TransportRow`; add a field there rather than
+reading `discover()` in a route.
+
+`test_the_warning_follows_a_declaration_and_never_a_protocol_s_name` renders two
+fabricated single-transport fleets differing only in the declared booleans, so a
+`meta.name == …` branch fails it. To try a fleet this image does not ship:
+`monkeypatch.setattr(console_service, "discover", lambda: {name: meta})` and GET
+the screen — no database rows needed.
+
+## Testing
+
+`TRANSPORT_SURFACES` joined the decision-9 sweep. `_identified()` finds the
+blocked transport **by declaration, never by name**. `_reading(markup)` is
+`_visible_text` plus `html.unescape` — needed because these sentences contain
+apostrophes Jinja escapes, so a raw-constant assertion against `response.text`
+fails.
+
+`TWO_REPRESENTATION_URLS` is now **all five** console URLs. Its premise assertion
+(`<!doctype html>` present in the document, absent from the `HX-Request` fetch) is
+what makes each entry non-vacuous — the `no-store` header itself comes from
+`main.py`'s `/panel`-prefix middleware and is inherited. **Add your screen to it.**
+
+## Divergences to know about
+
+- **No self-swapping fragment and no `-changed` trigger.** Nothing this panel can
+  do changes which packages the image ships. **So do not assume every screen has a
+  `…/table` URL to fire an event at** — a mutation wanting this table to repaint
+  has nothing to fire at and would have to add the fragment first.
+- **The only console screen with no `session` dependency.** Its route takes just
+  `request` (it is still on `router`, so still operator-only). A later step
+  wanting a fleet fact on it must add the session back — and at that point *"does
+  it move when a friend connects?"* applies again.
+- **`nav.html` omits an empty `<span class="nav-note">` entirely.** The Fleet note
+  is now empty and `test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_for_a_list`
+  asserts `"nav-note" not in body`. **A later screen wanting a note must change
+  that line deliberately.**
+
+## Wording acceptance will judge
+
+Sidebar `Transports`. Title `Transports`, subtitle *"the protocols this image can
+speak, and which of them survives a network that inspects traffic"*. Columns
+`name / family / ports / how a user receives it / on a filtering network`. The
+cell `identified and blocked — do not offer this as a working exit`. Sub-lines
+`never on an entry→leaf hop` and `not in a user's link yet — this panel cannot
+hand it over`. Footnote begins *"Discovered from the image, not listed
+anywhere."* Empty state `No transports in this image`.
+
+The `why:` row, verbatim — acceptance reads this exact text:
+
+> why: it has no camouflage. The wire format is fixed and looks like itself, so a
+> network that inspects traffic can name the protocol and drop it: both ends stay
+> correctly configured, no tunnel comes up, and nothing on the user's device says
+> what happened.
+
+## The scenario that was split, and why
+
+`test_the_panel_never_offers_a_blocked_protocol_as_working.py` used to drive
+`/panel/fleet`, where both facts shared one page. They no longer do, so it is two
+scenarios: the capability half on `/panel/transports`, and
+`test_the_hop_dialog_does_not_offer_a_blocked_protocol` asserting the option
+values of `hop-transport_name` at `/panel/hops/new`. Both were proven red-first by
+mutation against a rebuilt stand.
