@@ -16,6 +16,7 @@ HOW:  the in-process client from conftest, already holding an operator session. 
 import pathlib
 import re
 
+import jinja2
 import pytest
 
 from control.app.api import schemas
@@ -29,6 +30,17 @@ from control.app.services import nodes as nodes_service
 TEMPLATES = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "templates"
 
 STATIC = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "static"
+
+# Jinja's own lexer, so the banner scan below reads a template as markup rather than
+# as text. Nothing is ever rendered: the branch this environment cannot take is
+# exactly the branch a scan over rendered pages would never look at. The trailing
+# newline is kept so that _html_only hands back exactly what it was given.
+JINJA = jinja2.Environment(keep_trailing_newline=True)
+
+# A whole opening tag, on any element, quote-aware so that neither a `>` inside an
+# attribute value nor an unquoted value can end it early. Group 1 is the element
+# name, which _element_body needs to find the matching close.
+TAG = re.compile(r"""<([a-zA-Z][a-zA-Z0-9-]*)(?:"[^"]*"|'[^']*'|[^>"'])*>""")
 
 # The four cells decision 6 removed, as the words that would appear on screen if any
 # of them came back. Written as a table so a reader can see the whole prohibition at
@@ -1237,6 +1249,76 @@ async def test_the_sign_in_refusal_is_a_failure_and_not_a_notice(anonymous) -> N
     assert "Those credentials were not accepted." in refused.text
 
 
+# Defective banners the scan below must catch, keyed by the shape that used to hide
+# them. Each one was pasted into a real template first and watched to see the suite
+# stay green, which is the only evidence a scan of this kind is worth anything: the
+# first version demanded that `class` come first and be double-quoted, and the second
+# read the file with `<div\b[^>]*>` and split the class attribute on whitespace. Add
+# the next hole here, in the shape that found it.
+AWKWARD_BANNERS = {
+    "on an element that is not a div": (
+        '<p class="banner banner-failure" role="status">'
+        '<span class="banner-label">failed</span>it failed</p>'
+    ),
+    "with unquoted attribute values": (
+        "<div class=banner role=alert>"
+        '<span class="banner-label">failed</span>it failed</div>'
+    ),
+    "whose opening tag holds a `>` inside a Jinja expression": (
+        '<div class="banner{% if 1 > 0 %}{% endif %}" role="alert">'
+        '<span class="banner-label">failed</span>it failed</div>'
+    ),
+    "whose failure class is behind a Jinja conditional": (
+        """<div class="banner {{ 'banner-failure' if failed else '' }}" role="status">"""
+        '<span class="banner-label">note</span>nothing is wrong</div>'
+    ),
+    "whose role is behind a Jinja block": (
+        '<div class="banner" {% if failed %}role="alert"{% endif %}>'
+        '<span class="banner-label">failed</span>it failed</div>'
+    ),
+    "that borrows its role from a data attribute": (
+        '<div data-role="status" class="banner">'
+        '<span class="banner-label">note</span>nothing is wrong</div>'
+    ),
+    "whose opening tag cannot be parsed at all": (
+        "<div class=\"banner\" role=\"status\" title=don't>"
+        '<span class="banner-label">note</span>nothing is wrong</div>'
+    ),
+    "whose element is never closed": (
+        '<div class="banner" role="status"><span class="banner-label">note</span>'
+    ),
+}
+
+# …and the same awkwardness written correctly, because a scan that flags everything is
+# a scan the next person loosens. Every one of these must be READ as a banner and pass.
+SOUND_BANNERS = {
+    "on an element that is not a div": (
+        '<p class="banner banner-failure" role="alert">'
+        '<span class="banner-label">failed</span>it failed</p>'
+    ),
+    "with unquoted attribute values": (
+        "<div class=banner role=status>"
+        '<span class="banner-label">note</span>nothing is wrong</div>'
+    ),
+    "whose class is assembled by Jinja": (
+        """<div class="banner {{ 'banner-failure' if failed else '' }}" role="alert">"""
+        '<span class="banner-label">failed</span>it failed</div>'
+    ),
+    "whose attributes are assembled by Jinja": (
+        '<div class="banner banner-failure" {% if 1 > 0 %}role="alert"{% endif %}>'
+        '<span class="banner-label">failed</span>it failed</div>'
+    ),
+    "written with its attributes in the other order and single-quoted": (
+        "<div role='status' class='banner'>"
+        '<span class="banner-label">note</span>nothing is wrong</div>'
+    ),
+    "wrapping its label behind a child element": (
+        '<div class="banner" role="status"><div class="icon"></div>'
+        '<span class="banner-label">note</span>nothing is wrong</div>'
+    ),
+}
+
+
 def test_no_refusal_anywhere_in_the_panel_is_drawn_as_an_ordinary_notice() -> None:
     """The class, not the instance.
 
@@ -1250,43 +1332,44 @@ def test_no_refusal_anywhere_in_the_panel_is_drawn_as_an_ordinary_notice() -> No
     Over every template, not just the console's: the sign-in screen is outside the
     shell and is exactly where this was missed.
 
-    HOW IT READS THE MARKUP MATTERS AS MUCH AS WHAT IT CHECKS. The first version of
-    this scan required ``class`` to be the tag's first attribute and to be
-    double-quoted, so ``<div role="alert" class="banner">`` and
-    ``<div class='banner'>`` were skipped in silence and the test still passed — a
-    verification that cannot fail is worse than none, because it is believed. So the
-    whole tag is matched first and its attributes are read out of it without caring
-    about their order or their quotes, and the label is looked for INSIDE the element
-    rather than anywhere in the file: a labelless banner added to a file that already
-    contains one somewhere else was the second way this passed while being wrong.
+    HOW IT READS THE MARKUP MATTERS AS MUCH AS WHAT IT CHECKS, and that reading now
+    lives in ``_banner_faults`` so that the test below can scan the scan. Three
+    versions of this passed while being wrong, every one of them because a banner they
+    could not PARSE was skipped in silence instead of flagged — see
+    ``AWKWARD_BANNERS`` for the shapes, which are the record of the mutations that
+    found them.
     """
-    tag = re.compile(r"<div\b[^>]*>")
-
     checked = 0
     for path in sorted(TEMPLATES.rglob("*.html")):
-        markup = re.sub(r"\{#.*?#\}", "", path.read_text(), flags=re.S)
-        for opening in tag.finditer(markup):
-            classes = _attribute(opening.group(0), "class").split()
-            if "banner" not in classes:
-                continue
-            checked += 1
-            role = _attribute(opening.group(0), "role").lower()
-            failing = "banner-failure" in classes
-            where = f"{path.name}: {' '.join(classes)}"
-            # This element's own content, so the word is required on the banner that
-            # was found and not merely somewhere in the file it lives in.
-            inside = markup[opening.end():].split("</div>", 1)[0]
-
-            assert role in {"alert", "status"}, (
-                f"{where} — a banner that says nothing about which of the two it is"
-            )
-            if role == "alert":
-                assert failing, f"{where} — a refusal drawn as an ordinary notice"
-            else:
-                assert not failing, f"{where} — a notice drawn as a failure"
-            assert "banner-label" in inside, f"{where} — a banner with no word on it"
+        faults, found = _banner_faults(path.name, path.read_text())
+        assert not faults, "\n".join(faults)
+        checked += found
 
     assert checked >= 3, "this scan found almost nothing, so it proves almost nothing"
+
+
+def test_the_banner_scan_is_not_blind_to_a_banner_written_in_an_awkward_shape() -> None:
+    """The scan above is worth exactly what its reading of the markup is worth.
+
+    A verification that cannot fail is worse than none, because it is believed, and
+    this one has been that twice. So it gets a scan of its own: every shape in
+    ``AWKWARD_BANNERS`` is a defective banner a past version of the scan looked at and
+    called fine — found by pasting it into a real template and watching the suite stay
+    green. They live in the suite rather than in a review comment because the next hole
+    will be found the same way and belongs in the same place.
+
+    The second half matters as much: a scan that flags everything gets loosened by the
+    first person it inconveniences. ``SOUND_BANNERS`` holds the same awkward syntax
+    written correctly, and every one of them must be read as a banner and pass.
+    """
+    for shape, markup in AWKWARD_BANNERS.items():
+        faults, _ = _banner_faults("shape.html", markup)
+        assert faults, f"the scan is blind to a banner {shape}"
+
+    for shape, markup in SOUND_BANNERS.items():
+        faults, found = _banner_faults("shape.html", markup)
+        assert not faults, f"a sound banner {shape} was reported: {faults}"
+        assert found == 1, f"a sound banner {shape} was not read as a banner at all"
 
 
 def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:
@@ -1306,21 +1389,167 @@ def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:
     assert 'className = "banner"' not in js
 
 
+def _banner_faults(name: str, source: str) -> tuple[list[str], int]:
+    """Every way the banners in one template break the rule, and how many were read.
+
+    The reading, not the rule, is where this has gone wrong before, so it is one
+    function that a test can point at markup of its own rather than a loop buried in a
+    test that can only ever be given the real templates.
+
+    A template is not HTML and must not be read as though it were. Jinja's own lexer
+    reduces every construct to something that can neither open, close nor quote an
+    element (``_html_only``); whole tags are then matched on any element, quote-aware,
+    and their attributes read out in any order and any quoting. What closes the class
+    rather than four instances is ``_unparsed_elements``: anything element-shaped that
+    the tag pattern could NOT read is itself a fault, so "it did not match, so it
+    vanished" stops being a way to pass.
+
+    What it still cannot see, said out loud so a green run is not read as more than it
+    is: a class that arrives whole from Python (``class="{{ css }}"``) names nothing in
+    the template, and a banner built in JavaScript is held by
+    ``test_a_failure_inside_a_dialog_is_stated_inside_that_dialog`` instead.
+    """
+    markup, line_of = _html_only(source)
+    openings = list(TAG.finditer(markup))
+    faults = _unparsed_elements(name, markup, line_of, openings)
+    checked = 0
+
+    for opening in openings:
+        declared = _attribute(opening.group(0), "class")
+        if "banner" not in declared.split():
+            continue
+        checked += 1
+        where = f"{name}:{line_of[opening.start()]}"
+        role = _attribute(opening.group(0), "role").strip().lower()
+        # A substring of the whole attribute, not one of its tokens: a class the
+        # template only sometimes renders is still a class that can come out red, and
+        # the two ways of guessing wrong are not symmetric. Calling a notice a failure
+        # fails this suite; calling a failure a notice ships an operator a refusal that
+        # reads as information.
+        failing = "banner-failure" in declared
+        # This element's own content, up to ITS closing tag — the word must be on the
+        # banner that was found, not merely somewhere in the file it lives in.
+        inside = _element_body(markup, opening)
+
+        if role not in {"alert", "status"}:
+            faults.append(f"{where} — a banner that says nothing about which of the two it is")
+        elif role == "alert" and not failing:
+            faults.append(f"{where} — a refusal drawn as an ordinary notice")
+        elif role == "status" and failing:
+            faults.append(f"{where} — a notice drawn as a failure")
+        if inside is None:
+            faults.append(f"{where} — a banner whose element never closes")
+        elif "banner-label" not in inside:
+            faults.append(f"{where} — a banner with no word on it")
+
+    return faults, checked
+
+
+def _html_only(source: str) -> tuple[str, list[int]]:
+    """A Jinja template with its Jinja reduced to something that cannot fake markup.
+
+    Templates are not HTML, and most of the holes the banner scan has had came from
+    reading them as though they were: ``{% if 1 > 0 %}`` ends an opening tag that is
+    not over, ``{{ 'banner-failure' if failed }}`` hides a class name behind quotes,
+    and a ``{% if %}`` between two attributes hides every attribute after it.
+
+    So the source is lexed by Jinja itself — nothing here guesses where a construct
+    starts or ends — and every character of every non-``data`` token that is not part
+    of a word becomes a space. What survives is ordinary HTML in which an expression
+    still shows its literals, so ``class="banner {{ 'banner-failure' if f }}"`` reads
+    as the two class names it can render, and ``class="banner{% if x %}"`` still reads
+    as ``banner`` rather than as ``banner{%``. Jinja comments go the same way, which is
+    both why a banner drawn inside ``{# … #}`` is not scanned and why one cannot hide
+    inside a comment either.
+
+    The substitution is character for character, so what comes back is the same length
+    as what went in and every offset still points at the same character. Line numbers
+    come from the lexer's own token positions rather than from counting newlines,
+    because whitespace control (``{%-``) legitimately eats a newline the source had.
+    """
+    html: list[str] = []
+    lines: list[int] = []
+    for lineno, kind, value in JINJA.lex(source):
+        piece = value if kind == "data" else re.sub(r"[^\w-]", " ", value)
+        html.append(piece)
+        at = lineno
+        for character in piece:
+            lines.append(at)
+            at += character == "\n"
+    return "".join(html), lines
+
+
+def _unparsed_elements(
+    name: str, markup: str, line_of: list[int], openings: list[re.Match[str]]
+) -> list[str]:
+    """Nothing element-shaped may leave this scan in silence.
+
+    Every way the banner scan has passed while being wrong was an element its pattern
+    could not match and therefore never looked at. Fixing the shapes that were found
+    closes those instances; this closes the class. The gaps between the tags that DID
+    match are checked for anything still shaped like an opening tag — so a banner
+    written in a syntax nobody has thought of is a red test rather than an unexamined
+    refusal.
+    """
+    faults = []
+    cursor = 0
+    spans = [(opening.start(), opening.end()) for opening in openings]
+    for start, end in [*spans, (len(markup), len(markup))]:
+        stray = re.search(r"<[a-zA-Z]", markup[cursor:start])
+        if stray:
+            at = cursor + stray.start()
+            faults.append(
+                f"{name}:{line_of[at]} — an element this scan cannot parse, which is "
+                f"how a bad banner gets skipped in silence: {markup[at : at + 60]!r}"
+            )
+        cursor = end
+    return faults
+
+
+def _element_body(markup: str, opening: re.Match[str]) -> str | None:
+    """What is inside an element, up to ITS OWN closing tag rather than the first one.
+
+    ``markup[opening.end():].split("</div>", 1)[0]`` stops at the first close in the
+    file, so a banner whose first child is a wrapper — an icon, say — reports "no word
+    on it" while wearing its label. No banner has one yet; the first to get one would
+    have met this. Returns None when the element never closes, which the caller reports
+    as itself instead of as a missing label.
+    """
+    if opening.group(0).endswith("/>"):
+        return ""
+    depth = 1
+    rest = markup[opening.end() :]
+    for step in re.finditer(
+        rf"""<(/?){opening.group(1)}\b(?:"[^"]*"|'[^']*'|[^>"'])*>""", rest, flags=re.I
+    ):
+        depth += -1 if step.group(1) else 1
+        if depth == 0:
+            return rest[: step.start()]
+    return None
+
+
 def _attribute(tag: str, name: str) -> str:
     """One attribute's value out of an opening tag, whatever order or quotes it uses.
 
     Deliberately forgiving about the markup and unforgiving about the rule: the scan
     above exists to catch a hand-written screen that got a banner wrong, and a screen
-    written by hand is exactly where ``role`` comes before ``class`` or a value is in
-    single quotes. Returns "" when the attribute is absent, which the caller reads as
-    "this banner declares nothing", not as "this is fine".
+    written by hand is exactly where ``role`` comes before ``class``, where a value is
+    in single quotes, and where a value has no quotes at all — that last one used to
+    return "" and drop the element out of the scan as "not a banner".
+
+    ``data-role=`` is not ``role=``: with a word boundary in front, a banner that
+    declared no role at all borrowed one from whichever data attribute came first, and
+    passed. Returns "" when the attribute is absent, which the caller reads as "this
+    banner declares nothing", not as "this is fine".
     """
     found = re.search(
-        rf"""\b{name}\s*=\s*(?:"([^"]*)"|'([^']*)')""", tag, flags=re.I
+        rf"""(?<![-\w]){name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+        tag,
+        flags=re.I,
     )
     if not found:
         return ""
-    return found.group(1) if found.group(1) is not None else found.group(2)
+    return next(group for group in found.groups() if group is not None)
 
 
 def _visible_text(html: str) -> str:

@@ -6,12 +6,18 @@
   screen until the next successful request or the next navigation, both of which
   clear it (static/app.js).
 
-  Not red: UI-PATTERNS §4 — the steel accent is the only colour. But it is not the
-  same neutral frame an informational notice gets either, and that was an acceptance
-  finding rather than a preference: the failure and the "no node is serving yet"
-  notice were drawn identically and stacked one above the other, so the thing that
-  went wrong did not read as wrong. The weight is the accent ground, the thick left
-  edge, and the word "failed" — severity carried by the word, exactly as §4 asks.
+  It is not the neutral frame an informational notice gets, and that was an acceptance
+  finding rather than a preference: the failure and the "no node is serving yet" notice
+  were drawn identically and stacked one above the other, so the thing that went wrong
+  did not read as wrong. The weight is the thick left edge and the word "failed" —
+  severity carried by the word, exactly as §4 asks.
+
+  It IS red, since M9: the danger hue declared at the top of static/app.css. That
+  supersedes UI-PATTERNS §4's "there is no red" for this one role — a request that was
+  REFUSED or FAILED — and for nothing else; a status tag and a destructive button stay
+  steel. The reasoning is in docs/decisions.md (2026-09-10), which is the override the
+  handoff file is deliberately not updated to reflect. Weight alone left the operator
+  reading the colour of the primary button on a message that meant the opposite.
 #}
 <div hx-swap-oob="innerHTML:#banner-slot">
   <div class="banner banner-failure" role="alert">
