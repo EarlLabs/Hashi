@@ -372,3 +372,38 @@ M9.6 edits the same routes file. The two Lows are carried.
   this itself rather than letting it pass, and the reviewer confirmed the
   characterisation — the gap is only that the file does not say so. Fix: one line
   in the docstring.
+
+## From M9.6, confirming round — left open
+
+M9.6 ran **four** review rounds. The fourth was one past the cap, taken
+deliberately: round 3 found a **High** (a live banner sending the operator to the
+page the step had just deleted, at the moment an incomplete revocation left
+somebody still connected), and leaving that fix unreviewed in the last step before
+acceptance was worse than exceeding the cap by one. The fix was confirmed by
+mutation. These three are what remain.
+
+- **Medium — the deleted-surface sweep is believed past its proof.**
+  `tests/control/test_the_console.py:886-888` claims *"the next deleted screen
+  cannot leave one behind the same way"*, but `DELETED_SURFACES` is a
+  **hand-maintained tuple** and nothing enforces or records that it must be
+  extended. It carries exactly one of the ~10 panel routes M9.6 removed
+  (`/panel/fleet` — not `GET /panel/nodes/{id}`, `/push`, `/health`,
+  `/set-state`, `/hops/establish`, `/hops/{id}/tear-down`,
+  `/nodes/transports/{id}/withdraw|offer`, `/transports/{id}/state|rotate-keys|params`),
+  and substring matching still misses a phrase split mid-words across implicitly
+  concatenated literals — **M9.6's own defect survived being split only because
+  the break happened to fall before `node's page`.** No live instance exists; the
+  reviewer swept for all of them. This is the instrument being trusted beyond what
+  it proves, which `fix-notes.md` names as its own defect class. Fix: make the
+  template half mechanical (assert every `*.html` literal names a file that exists
+  under `templates/`) and state the hand-maintained remainder — route paths, prose
+  forms, split literals — in the docstring the way `_banner_faults` does.
+- **Low — one comment the retensing sweep missed**, in the very module that now
+  owns the constant: `control/app/services/apply.py:184` still says *"the operator
+  has to read that sentence, **on the node's page**, with the node left
+  degraded"*. It is a comment, so the AST sweep will never see it.
+- **Low — ragged prose left by the retensing.** `services/rotation.py:43-47`,
+  `errors.py:110-113`, `services/transports.py:439-440`: orphan half-lines, and
+  `rotation.py:43` now reads *"rendered by **a caller** that never chose to — the
+  API's error envelope, **and** the pre-redesign page's outcome fragment"*
+  (singular head, two items) while omitting the console that `:145-147` lists.

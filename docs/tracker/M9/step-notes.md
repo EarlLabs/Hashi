@@ -727,3 +727,97 @@ a URL.
   Latent — one carrier ships. M9.2's, not M9.5's.
 - `server_names` has no `description`, so its enable box shows no hint. Same as the
   old page; closing it is an `edge`-side declaration.
+
+---
+
+# Established by M9.6 — the old pages are gone
+
+Binds M10 and everything after.
+
+## What no longer exists
+
+`pages/index.html`, `pages/node.html`, `pages/base.html`, `panel/outcome.html`,
+`panel/health.html`; `GET /panel/fleet`, `GET /panel/nodes/{id}`, and the eight
+action routes that only answered them. **Both old URLs are 404**, asserted — and
+the `/panel/nodes/{id}` assertion is written against a node the test creates,
+because a random id would 404 through `NotFound` anyway and prove nothing.
+
+**The console routes took their short names back:** `/nodes/{id}/apply`,
+`POST /hops`, `/hops/{id}/dissolve`, `/nodes/{id}/state`. The long names existed
+only because the old pages drove the same jobs *with htmx* and could not be told
+apart by a header. Withdraw and offer stayed **two routes**, not one toggle — the
+namespace was freed, but M9.5's split (one destructive and confirming, one not) is
+on the do-not-relitigate list.
+
+**`boost` and `note` are gone from `NAV` and from `nav.html`.** The Fleet entry
+was the only unboosted, noted one. Every console entry is boosted now, so there is
+nothing to set — **M8's step-notes still say `boost: True` and now carry a
+supersession note.** Passing it is harmless and does nothing.
+
+**The 303 branches are gone** from `POST /panel/nodes` and
+`POST /panel/nodes/{id}/transports`, with their two tests and the bare-name
+fallback in `supplied()`. **A bare field name is now refused** (`NOT_ITS_PARAMETER`),
+not merely unread: deleting the fallback alone would have told an operator who
+filled a bare `port` that they left the box *empty*, which is a lie about what
+happened.
+
+## Never let a sentence name a surface that is gone
+
+This is the High this step shipped and had to fix, and it is the one a deletion
+diff will produce again.
+
+An **incomplete revocation** — the moment somebody who should be cut off is still
+connected — drew a banner ending *"Retry from the node's page."* on the Users
+screen. That page had just been deleted. Every docstring and `hx-*` attribute was
+swept; this survived because it is **service prose that nothing asserted**.
+
+**`apply.WHERE_TO_RETRY = "the Nodes screen"`** is now the one place that names
+where to finish a half-done push. `RevocationOutcome.summary()`,
+`RotationOutcome.summary()` and `console._unpushed` all read it, so the console
+and the API envelope cannot drift. It lives in `apply.py` because finishing a push
+is that module's subject and all three already import it — no new edge, no cycle.
+
+**`test_no_sentence_this_panel_hands_an_operator_names_a_surface_that_is_gone`**
+parses every module under `control/app/` with `ast` and sweeps every
+**non-docstring** string literal against `DELETED_SURFACES`. The docstring
+exclusion is the instrument, not an oversight: a comment about a page that once
+existed is history and belongs in the file; a **literal** is something the code
+hands somebody. `main.py` sets `docs_url`/`redoc_url`/`openapi_url` to `None`, so
+no docstring is ever served — verified, not assumed. 823 literals scanned; it
+reaches `Constant` nodes inside f-strings, which is the shape these sentences now
+use.
+
+**Read `carry-over.md` before you trust it** — `DELETED_SURFACES` is
+hand-maintained and does not cover everything the docstring implies.
+
+## Templates and e2e
+
+**The template scan now walks `TEMPLATES.rglob("*.html")`, not just
+`templates/panel`.** Its old exclusion — *"the pre-redesign pages carry all four
+and M9.6 deletes them"* — went void the moment those pages went, leaving
+`console.html` and `login.html`, two **live** templates, silently outside a scan
+standing over M9's own "done when".
+
+**The e2e standard is: read the URL off the rendered dialog, never write it
+down.** `form_action(operator, dialog_url, opened_by=…)` and `button_in(…)`
+generalise the walk `withdraw_button` established. Seven e2e files were repointed;
+`reality_from_the_panel` now asserts `200` + no `<html>` (unambiguous, because
+every refusal on that route is 422 or 400, never 200), and `state_from_the_panel`
+keeps both original assertions against `mutation_result.html`.
+
+**Send `HX-Request: true` on every panel POST** — nothing answers a header-less
+one with a redirect any more.
+
+## What acceptance will meet
+
+- **Nothing outside the console shell exists.** Every job is reachable from a
+  sidebar entry or a row button; there is no URL to type.
+- **The sidebar is six entries** — Overview, Users, Nodes, Hops, Transports,
+  Keys & configs. No Fleet, no note under any label.
+- **Two refusal statuses:** 422 re-renders a dialog; 400 is what a caller that is
+  not the console gets. `app.js` swaps only 422.
+- **After a partial revocation, rotation or replacement**, the operator is told to
+  *"apply those nodes again from the Nodes screen once they can be reached"* — a
+  screen that exists, one sidebar click away.
+- No other operator-visible wording changed. Everything acceptance judges is what
+  M9.1–M9.5's notes recorded.
