@@ -71,4 +71,8 @@ covering every serving node. Nothing else is stored about them."*
   screen when M9 lands.
 - `console.drift_of` is the local digest comparison; do not confuse it with the
   probe's `drifted`/`stale` (`docs/tracker/M1/step-notes.md`).
-- `pages/index.html` and `pages/node.html` are **not** deleted until M9.5.
+- `pages/index.html` and `pages/node.html` are **not** deleted until M9.6.
+  (Written as M9.5 when M8 closed; M9 gained a step on 2026-09-10 — enable,
+  withdraw and set state, which had no named step — and retirement moved down
+  one. The rule is unchanged: they go last, once every action they carry has a
+  new home.)
