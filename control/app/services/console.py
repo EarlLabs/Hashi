@@ -343,9 +343,13 @@ class KeyRow:
     pushed: datetime.datetime | None
     holders: int
     for_friends: bool
-    # Whether rotating THIS row breaks a value the far end of a hop holds a copy of.
-    # Read from the transport's own ``shared_between_peers`` declaration and only
-    # meaningful on a hop end, which is where both halves of this flag come from.
+    # Whether rotating THIS row also re-keys the far end of the hop, because the
+    # transport declared material both ends must hold the same copy of. It used to mean
+    # that rotating BROKE that value at the far end; the rotation now carries it across
+    # in the same transaction, so what the flag selects is a cost to state
+    # (``KEY_SHARED_WITH_PEER``) rather than a consequence to warn about. Read from the
+    # transport's own ``shared_between_peers`` declaration and only meaningful on a hop
+    # end, which is where both halves of this flag come from.
     shared_with_peer: bool
     # Whether this image still ships the transport this row runs. False means the
     # material cannot be fingerprinted, re-minted or validated here — so the screen

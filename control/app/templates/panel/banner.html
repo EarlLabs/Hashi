@@ -3,8 +3,15 @@
 
   Used where a toast would be wrong because the operator must not miss it — a
   revocation that could not reach every node is the case this exists for. It stays on
-  screen until the next successful request or the next navigation, both of which
-  clear it (static/app.js).
+  screen until an ANSWER replaces it: every console mutation swaps this slot, with a
+  failure or with nothing (panel/mutation_result.html), so the operator's next action is
+  what clears it. Navigation clears it too, from static/app.js.
+
+  It did not used to be that way, and the difference is the reason this comment is
+  worth reading: app.js emptied the slot on `htmx:afterRequest` for any successful
+  exchange, which fires AFTER the swap — so a banner this template delivered was wiped
+  by the very request that delivered it, and an action whose only answer is a banner
+  reported nothing at all.
 
   It is not the neutral frame an informational notice gets, and that was an acceptance
   finding rather than a preference: the failure and the "no node is serving yet" notice

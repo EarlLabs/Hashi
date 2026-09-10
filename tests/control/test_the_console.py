@@ -4307,6 +4307,89 @@ async def test_a_half_pushed_hop_rotation_says_the_tunnel_is_down(
     assert "the tunnel is down" not in untouched, untouched
 
 
+async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) -> None:
+    """A dialog and the sentence that answers it, held together — for the third time.
+
+    Both of this screen's confirmations have now stated the opposite of their own answer
+    on a hop end, and the second time was ON THE SAME PARAGRAPH as a comment recording
+    the first. What makes that recur is that the two halves live in different files and
+    nothing reads them together, so this does: the claim under test is not a wording but
+    the PAIR — what the operator confirms and what they are then told must be the same
+    fact about the far end.
+
+    The fact both must carry, since the rotation was fixed: the far end is written and
+    pushed WITH this one, and a push that reaches only one of the two leaves the tunnel
+    down. Composed with outcomes rather than driven through a push, because a real one
+    would need two hosts; the POST itself is exercised by the test below.
+    """
+    entry_end = await a_hop(client)
+    session.expunge_all()
+    row = await console_service.key_row(session, entry_end)
+    assert not row.for_friends, "this fixture stopped being a hop end"
+
+    landed = rotation_service.RotationOutcome(
+        node_transport_id=entry_end,
+        rotated=["decoy_host"],
+        nodes_updated=["entry-1", "exit-1"],
+    )
+    half = rotation_service.RotationOutcome(
+        node_transport_id=entry_end,
+        rotated=["decoy_host"],
+        nodes_updated=["entry-1"],
+        nodes_failed={"exit-1": "the node did not answer"},
+    )
+
+    actions = (
+        ("rotate", f"/panel/keys/{entry_end}/rotate", console_service.rotation_summary),
+        ("replace", f"/panel/keys/{entry_end}/params", console_service.replacement_summary),
+    )
+    for action, url, compose in actions:
+        dialog = _reading((await client.get(url)).text)
+
+        # What the operator is asked to confirm, and what they are told when only one of
+        # the two nodes took it: the same state, named the same way.
+        assert "the tunnel is down" in dialog, f"{action}: the dialog does not name it"
+        assert "the tunnel is down" in compose(row, half), f"{action}: the answer does not"
+
+        # And neither may promise the far end is left as it was. Both did, in the two
+        # sentences this test was written for.
+        for promise in (
+            "The far end is not changed",
+            "the far end is still holding",
+            "the node keeps running what it has",
+        ):
+            assert promise not in dialog, f"{action}: {promise!r} is no longer true"
+            assert promise not in compose(row, landed), f"{action}: answered {promise!r}"
+
+
+async def test_the_console_rotates_a_hop_end_and_names_both_nodes(client) -> None:
+    """The button the acceptance walk actually pressed, pressed here.
+
+    Everything else about this path is covered a layer down — the service through
+    ``POST /api/transports/{id}/rotate-keys``, the sentences by composing outcomes — and
+    the gap that left is exactly where the failure was: this route loads the row through
+    ``console.key_row`` before ``rotate_keys`` reaches for it again, and it answered a
+    500 reading "Nothing was changed" over a hop it had just broken. M9.4's notes sent
+    the surface-level hop-end test down the ``params`` path deliberately, BECAUSE rotate
+    500'd; closing that is part of fixing it.
+
+    Neither node answers, so both pushes fail — which is what makes the banner readable:
+    it names both, and an answer naming one would mean the far end was never attempted.
+    """
+    entry_end = await a_hop(client)
+
+    response = await client.post(
+        f"/panel/keys/{entry_end}/rotate", headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert "banner-failure" in response.text
+    reading = _reading(response.text)
+    for node in ("entry-1", "exit-1"):
+        assert node in reading, reading
+    assert "keys-changed" in response.headers.get("HX-Trigger", "")
+
+
 # --- acceptance round 3 -------------------------------------------------------
 
 # The console's own stylesheet and script, read as text. There is no browser in this

@@ -86,6 +86,14 @@
         UNCONDITIONALLY, and the answer it produces (console.replacement_summary) says
         "no user holds anything on it". The operator confirmed one sentence and was told
         the opposite. A hop end's only consumer is the far NODE.
+
+        IT HAPPENED A SECOND TIME on the same paragraph and is worth naming twice: the
+        hop branch said "the far end is not changed with it", which was true until
+        `replace_params` began pushing the pair — the far end's own configuration is
+        rendered from this one, so a value typed here can change its file. The answer
+        says "the far end has been applied with it so the two still match". Whichever of
+        a dialog and its answer is wrong, a pair that states opposites is one defect, and
+        `test_a_hop_dialog_and_the_answer_it_will_get_agree` now holds them together.
       #}
       {% if key.for_friends %}
       <div class="dialog-body text-muted">
@@ -94,10 +102,10 @@
       </div>
       {% else %}
       <div class="dialog-body text-muted">
-        The node is re-rendered and pushed as soon as you submit. No user holds anything
-        on it: this is one end of a hop, a tunnel between two of our own nodes. The far
-        end is not changed with it, so a value the two must agree on leaves that tunnel
-        down until the other end matches.
+        Both ends of the hop are re-rendered and pushed as soon as you submit: the far
+        end's own configuration is built from this one. No user holds anything on it:
+        this is one end of a hop, a tunnel between two of our own nodes. If the push
+        reaches only one of the two, the tunnel is down until you apply the other.
       </div>
       {% endif %}
       <div class="dialog-actions">

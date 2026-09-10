@@ -10,10 +10,16 @@
     which is why the count is in the sentence;
   * what a user has to do — nothing. Their link does not move, so this is safe during a
     block. What they will see is their client failing until it next refreshes;
-  * what happens if the push does not land — the node keeps running the old material and
-    the two disagree until it is applied. That is stated here rather than only in the
-    banner afterwards, because it is the difference between "rotate and walk away" and
-    "rotate and watch".
+  * what happens if the push does not land — which is not one outcome but two, and they
+    differ by row. A friend-facing node keeps running the old material until it is
+    applied. A HOP END is rotated at both ends in one transaction and pushed to two
+    nodes, so a push that reaches one of them leaves the two ends holding different
+    material and the tunnel down until the other is applied. Both are stated here rather
+    than only in the banner afterwards, because it is the difference between "rotate and
+    walk away" and "rotate and watch" — and because a dialog promising the one-node
+    version over a hop end is the false reassurance this screen exists to stop giving.
+    The sentences must stay in step with ``console._unpushed``, which is what answers
+    them; ``test_a_hop_dialog_and_the_answer_it_will_get_agree`` holds the pair.
 
   No key material is named and none could be: this dialog's whole context is one KeyRow,
   which carries a fingerprint and never a value.
@@ -53,11 +59,20 @@
     #}
     <div class="dialog-body">{{ shared_with_peer }}</div>
     {% endif %}
+    {% if key.for_friends %}
     <div class="dialog-body text-muted">
       The new material is written here first and then pushed. If the push cannot reach
       the host, the node keeps running what it has and this screen says so — apply the
       node once it can be reached.
     </div>
+    {% else %}
+    <div class="dialog-body text-muted">
+      Both ends are written in one step and then pushed to both nodes. If only one of
+      them takes it, the two ends hold different material and the tunnel is down until
+      you apply the other; if neither does, both keep running what they have and the
+      tunnel is unaffected. This screen says which.
+    </div>
+    {% endif %}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"

@@ -1106,9 +1106,13 @@ async def rotate_keys(
     """Re-mint this transport's material and push it — item 23, from the console.
 
     A half-done rotation is a BANNER, not a toast. Between the write and a successful
-    push the database and the node disagree, and for a decoy that means the blocked
+    push the database and the nodes disagree, and for a decoy that means the blocked
     value is still what the node is serving: that sentence has to survive the operator's
     next click rather than vanish after 2200ms.
+
+    NODES, plural, on a hop end: this action re-keys both ends in one transaction and
+    pushes two hosts, so the banner may be about a push that landed at one of them and
+    left the tunnel down. ``console.rotation_summary`` is what says which.
     """
     key = await console.key_row(session, node_transport_id)
     try:
