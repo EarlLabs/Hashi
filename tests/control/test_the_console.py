@@ -1249,26 +1249,42 @@ def test_no_refusal_anywhere_in_the_panel_is_drawn_as_an_ordinary_notice() -> No
 
     Over every template, not just the console's: the sign-in screen is outside the
     shell and is exactly where this was missed.
+
+    HOW IT READS THE MARKUP MATTERS AS MUCH AS WHAT IT CHECKS. The first version of
+    this scan required ``class`` to be the tag's first attribute and to be
+    double-quoted, so ``<div role="alert" class="banner">`` and
+    ``<div class='banner'>`` were skipped in silence and the test still passed — a
+    verification that cannot fail is worse than none, because it is believed. So the
+    whole tag is matched first and its attributes are read out of it without caring
+    about their order or their quotes, and the label is looked for INSIDE the element
+    rather than anywhere in the file: a labelless banner added to a file that already
+    contains one somewhere else was the second way this passed while being wrong.
     """
-    banner = re.compile(r'<div\s+class="([^"]*)"([^>]*)>')
+    tag = re.compile(r"<div\b[^>]*>")
 
     checked = 0
     for path in sorted(TEMPLATES.rglob("*.html")):
         markup = re.sub(r"\{#.*?#\}", "", path.read_text(), flags=re.S)
-        for classes, attrs in banner.findall(markup):
-            if "banner" not in classes.split():
+        for opening in tag.finditer(markup):
+            classes = _attribute(opening.group(0), "class").split()
+            if "banner" not in classes:
                 continue
             checked += 1
-            failing = "banner-failure" in classes.split()
-            where = f"{path.name}: {classes}"
-            if 'role="alert"' in attrs:
-                assert failing, f"{where} — a refusal drawn as an ordinary notice"
-            if 'role="status"' in attrs:
-                assert not failing, f"{where} — a notice drawn as a failure"
-            assert 'role="alert"' in attrs or 'role="status"' in attrs, (
+            role = _attribute(opening.group(0), "role").lower()
+            failing = "banner-failure" in classes
+            where = f"{path.name}: {' '.join(classes)}"
+            # This element's own content, so the word is required on the banner that
+            # was found and not merely somewhere in the file it lives in.
+            inside = markup[opening.end():].split("</div>", 1)[0]
+
+            assert role in {"alert", "status"}, (
                 f"{where} — a banner that says nothing about which of the two it is"
             )
-            assert "banner-label" in markup, f"{where} — a banner with no word on it"
+            if role == "alert":
+                assert failing, f"{where} — a refusal drawn as an ordinary notice"
+            else:
+                assert not failing, f"{where} — a notice drawn as a failure"
+            assert "banner-label" in inside, f"{where} — a banner with no word on it"
 
     assert checked >= 3, "this scan found almost nothing, so it proves almost nothing"
 
@@ -1288,6 +1304,23 @@ def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:
     # And every failure — banner or dialog — wears the failure frame, not the notice's.
     assert '"banner banner-failure"' in js
     assert 'className = "banner"' not in js
+
+
+def _attribute(tag: str, name: str) -> str:
+    """One attribute's value out of an opening tag, whatever order or quotes it uses.
+
+    Deliberately forgiving about the markup and unforgiving about the rule: the scan
+    above exists to catch a hand-written screen that got a banner wrong, and a screen
+    written by hand is exactly where ``role`` comes before ``class`` or a value is in
+    single quotes. Returns "" when the attribute is absent, which the caller reads as
+    "this banner declares nothing", not as "this is fine".
+    """
+    found = re.search(
+        rf"""\b{name}\s*=\s*(?:"([^"]*)"|'([^']*)')""", tag, flags=re.I
+    )
+    if not found:
+        return ""
+    return found.group(1) if found.group(1) is not None else found.group(2)
 
 
 def _visible_text(html: str) -> str:

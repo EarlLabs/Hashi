@@ -38,11 +38,13 @@
  * Settled once, here, so every screen inherits it and no screen gets an error colour
  * of its own, and recorded in docs/decisions.md (2026-09-10) because it supersedes a
  * line of the handoff: UI-PATTERNS.md still reads "there is no red", and a departure
- * that lives only in a stylesheet comment is one the next screen re-argues. The hue is the one the panel already had — the pre-redesign page's
- * `--bad` (#c0392b) — with a light tint to sit on and a dark step for text, so the
- * console and the page it replaces do not disagree about what red means. Three steps
- * and no more, named like the design system's own ramp positions so a reader knows
- * which is the ground, which is the edge and which is the text.
+ * that lives only in a stylesheet comment is one the next screen re-argues.
+ *
+ * The hue is the one the panel already had — the pre-redesign page's `--bad`
+ * (#c0392b) — with a light tint to sit on and a dark step for text, so the console
+ * and the page it replaces do not disagree about what red means. Three steps and no
+ * more, named like the design system's own ramp positions so a reader knows which is
+ * the ground, which is the edge and which is the text.
  *
  * What it may be used for: a request that was REFUSED or FAILED. Not for a status
  * tag, not for a destructive button, not for a warning about configuration — those

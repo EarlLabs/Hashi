@@ -125,7 +125,7 @@ async def surfaces(operator, unique: str) -> list[str]:
         # bearer credential, and therefore the one whose markup matters most.
         f"/panel/friends/{friend_id}/subscription",
         f"/panel/friends/{friend_id}/revoke",
-        # The pre-redesign node page. Still part of the panel until M9.5 retires it,
+        # The pre-redesign node page. Still part of the panel until M9.6 retires it,
         # and it carries an inline script of its own.
         f"/panel/nodes/{node.json()['id']}",
     ]
