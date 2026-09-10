@@ -78,11 +78,23 @@ TRANSPORT_UNDELIVERED = "not in a user's link yet — this panel cannot hand it 
 # country — which networks do the inspecting is the charter's subject, not this file's
 # — and no protocol. A transport that stops declaring itself identified stops being
 # warned about, with nothing to edit here.
+#
+# IT STATES A CAPABILITY AND RECOMMENDS NOTHING, deliberately. An earlier draft ended
+# "enable it only where nothing is filtering", which is the one clause that did not
+# follow from any declaration — and ``docs/decisions.md`` (2026-09-09) contradicts it
+# for the only transport it can apply to: on a ufw host the pinned plain-WireGuard
+# image lands its forwarding rules on a backend the host's own DROP does not traverse,
+# so an operator who took that advice on an unfiltered network would get a handshake
+# that completes and traffic that never moves. A table that states what a protocol IS
+# only has to be right about the protocol; the moment it tells the operator what to DO
+# it has to be right about the whole stack, and here it is not. The gap is background
+# in ``docs/tracker/M9/carry-over.md``: no field of ``TransportMeta`` expresses it, and
+# closing it is an ``edge``-side declaration rather than a name compared here.
 TRANSPORT_WHY_IDENTIFIED = (
     "it has no camouflage. The wire format is fixed and looks like itself, so a "
     "network that inspects traffic can name the protocol and drop it: both ends stay "
     "correctly configured, no tunnel comes up, and nothing on the user's device says "
-    "what happened. Enable it only where nothing is filtering."
+    "what happened."
 )
 
 

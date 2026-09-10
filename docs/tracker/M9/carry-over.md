@@ -82,3 +82,25 @@ ran both gates itself (`make test-control` 346, `make e2e-verify` 146).
   transport declares a default for a hop parameter" without the *requires*
   qualifier, which would tell a skimming reader the placeholder path is dead code.
   The journal headline was narrowed on 2026-09-10; this docstring was not.
+
+## From M9.3, review round 1 — a contract gap, recorded rather than worked around
+
+Not a defect in what shipped; a limit on what the Transports screen can honestly
+say, and the reason it says less than the journal knows.
+
+- **`TransportMeta` cannot express "proven on hardware" or "known packaging
+  limitation".** The capability table projects declared fields only, so those two
+  facts are absent from it by construction. `docs/decisions.md` (2026-09-09) holds
+  both for the transports this image ships: `amneziawg` is proven end to end on
+  real hardware, and a user-facing plain-WireGuard row is *not* proven and is
+  likely to fail silently under the pinned `masipcat/wireguard-go` image on a
+  `ufw` host — handshake completes, nothing moves, nothing logged. The screen
+  therefore warns about that transport for the reason it *does* declare
+  (`blocked_by_inspection`), and its "how a user receives it" cell already reads
+  *"not in a user's link yet — this panel cannot hand it over"*, which is the
+  narrow exposure the journal names. **Closing the gap properly is an `edge`-side
+  declaration in a task of its own** — a new field the transport sets about
+  itself. It is not a `control` special case, and `control` may not compare a
+  protocol's name to close it. The same limit is why
+  `TRANSPORT_WHY_IDENTIFIED` states a capability and recommends no action: advice
+  has to be right about the whole stack, and for that transport it would not be.

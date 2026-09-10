@@ -115,6 +115,12 @@ async def test_the_hop_dialog_does_not_offer_a_blocked_protocol(operator) -> Non
     assert dialog.status_code == 200, dialog.text
 
     hop_options = _options_of(dialog.text, "hop-transport_name")
+    # Before the loop, because ``_options_of`` answers "no such select" with an empty
+    # list — a legitimate answer on a page with no hop form, and a vacuous pass here.
+    # Since the split this assertion no longer shares a page with anything proving the
+    # form rendered at all, so a rename of the select's id would turn the scenario
+    # green while proving nothing.
+    assert hop_options, "the hop dialog rendered no transport select"
     for name in blocked:
         assert name not in hop_options, (
             f"the hop form offers {name}, which the renderer refuses — the operator "

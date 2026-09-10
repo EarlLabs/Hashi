@@ -1724,7 +1724,20 @@ async def test_the_sidebar_no_longer_sends_the_operator_to_the_old_page_for_a_li
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
 # defect this section stands over needs both halves of that sentence: a URL with two
 # representations, and a cache that stores one of them under the other's name.
-TWO_REPRESENTATION_URLS = ("/panel/", "/panel/friends")
+#
+# It held two of the five that qualify until M9.3, which is the shape of defect this
+# comment describes rather than avoids: the three screens M9 added inherited the header
+# from main.py's /panel prefix and were therefore untested rather than unheld. Written
+# out rather than derived from NAV, because THIS is the claim — a screen that stops
+# having two representations, or one added without them, changes this line in front of
+# a reviewer.
+TWO_REPRESENTATION_URLS = (
+    "/panel/",
+    "/panel/friends",
+    "/panel/nodes",
+    "/panel/hops",
+    "/panel/transports",
+)
 
 
 @pytest.mark.parametrize("path", TWO_REPRESENTATION_URLS)
