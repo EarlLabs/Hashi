@@ -14,11 +14,12 @@
   * a degraded node's reason gets its own row under it. The design never drew one, and
     an unexplained degraded node is a node nobody fixes.
 
-  The pre-redesign page at /panel/fleet still owns the transports table and the
-  per-node actions this screen does not carry yet — enabling and withdrawing a
-  transport, moving a node between states, rotating keys. Hops moved to their own
-  screen in M9.2. M9.6 retires that page once all of those have a home; until then it
-  is reachable from the sidebar and says what it is.
+  Every action a node has is now reachable from this screen's own rows: probe and apply
+  from M9.1, and from M9.5 the dialog that lists what this node offers — with a button
+  per transport to withdraw or offer it again, and the form that enables another — plus
+  the one that moves the node between states. Hops moved to their own screen in M9.2 and
+  key rotation to Keys & configs in M9.4. The pre-redesign page at /panel/fleet still
+  answers until M9.6 deletes it; nothing on it is the only way to do anything any more.
 #}
 {% include "panel/console_header.html" %}
 <div class="panel">

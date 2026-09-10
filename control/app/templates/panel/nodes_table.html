@@ -106,6 +106,19 @@
                 <button class="btn btn-secondary" type="button"
                         hx-post="/panel/nodes/{{ node.id }}/push"
                         hx-target="#dialog-slot" hx-swap="innerHTML">apply</button>
+                {#
+                  M9.5's two. What this node offers is a LIST inside this row, so its
+                  actions cannot live in this cell one per transport — the dialog behind
+                  this button holds a line per transport with its own button, and the
+                  form that enables another. Moving the node between states is its own
+                  dialog because it is about the node rather than about what it runs.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/transports"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">transports</button>
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/state"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">set state</button>
               </span>
             </td>
           </tr>

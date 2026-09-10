@@ -3,7 +3,8 @@
 WHAT: the Overview's four stat cards, the node rows they summarise, the friend rows
       the Users screen lists, the hop rows the Hops screen lists, the capability row
       the Transports screen lists per protocol this image ships, and the key row the
-      Keys & configs screen lists per transport enabled on a node.
+      Keys & configs screen lists per transport enabled on a node, and the offer row
+      and state choices the Nodes screen's own actions are built from.
 WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       "throughput now", "last seen", node "load", and a whole Traffic screen. The
       charter's non-goals forbid every one of them: *"No traffic logging, no DNS
@@ -38,6 +39,7 @@ from control.app.models import (
     Friend,
     Node,
     NodeState,
+    NodeTransport,
     Subscription,
     TransportPurpose,
 )
@@ -353,6 +355,89 @@ class KeyRow:
     replaceable: bool
 
 
+# What one transport on one node is doing for the people this fleet exists for, as the
+# words the Nodes screen's own actions are read beside. Every one of them is composed
+# from two facts about OUR configuration — the row's purpose and its ``enabled`` flag —
+# and never from which protocol it is, which is the same rule the chips on the table
+# follow.
+#
+# The withdrawn sentence carries the thing ``nodes.set_transport_enabled`` insists on
+# and that a panel is most likely to blur: switching a transport off changes what the
+# control plane DELIVERS, not what the host is running. An operator who reads
+# "withdrawn" as "stopped" has been told the opposite of what happened.
+OFFER_IN_EVERY_LINK = "offered — in every user's link at their next refresh"
+OFFER_WITHDRAWN = (
+    "withdrawn — out of every user's link. The node is still configured to serve it "
+    "until you re-apply it."
+)
+OFFER_HOP_END = (
+    "one end of a hop — not something a user is offered. Tear the hop down from the "
+    "Hops screen; switching one end off would leave a tunnel that no longer completes "
+    "while both ends still look configured."
+)
+
+# What each state a node may be moved into MEANS, in the one place that decides it.
+# Keyed on this project's own topology enum rather than on prose in a template, so the
+# dialog offering a transition and the sentence explaining it cannot drift — and so a
+# fifth state is one line here rather than a template nobody remembers to edit.
+#
+# Every one of these is a fact about DELIVERY: which link a state puts this node into
+# and which it takes it out of. That is what the operator is actually choosing between,
+# and it is what ``NodeState`` itself documents at each member.
+NODE_STATE_MEANS = {
+    NodeState.ACTIVE: (
+        "serving — in every user's link at their next refresh, on whatever this node "
+        "has enabled and applied"
+    ),
+    NodeState.DRAFT: (
+        "out of every user's link, with its configuration kept — how a node is taken "
+        "out of rotation without being retired"
+    ),
+    NodeState.DEGRADED: (
+        "out of every user's link until you put it back, so nobody is routed onto a "
+        "half-configured node"
+    ),
+    NodeState.RETIRED: (
+        "final. The record is kept so its address is not quietly reused, and a retired "
+        "node cannot be brought back — you register its replacement instead"
+    ),
+}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class OfferRow:
+    """One transport on one node, as the Nodes screen's own actions address it.
+
+    ``id`` is the node-transport's own id, which is what the withdraw and offer routes
+    address — the same id the Keys screen's rotations use, because it is the same row.
+
+    ``offered`` is the operator's own answer to "is this in a subscription" and
+    ``for_friends`` is whether it could ever be: a hop end's consumer is the far NODE,
+    so it has no offer to withdraw and the screen says so rather than showing a button
+    whose only outcome is a refusal.
+
+    Nothing here moves when a user connects. Both flags move when the operator acts,
+    which is the test ``docs/decisions.md`` sets for whether a cell may be on a screen.
+    """
+
+    id: str
+    node: str
+    transport: str
+    offered: bool
+    for_friends: bool
+    # Which of the three sentences above this row is in, composed here so no template
+    # chooses between them and no route writes one.
+    standing: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StateChoice:
+    """One state this node may be moved into, and what that does to a user's link."""
+
+    state: str
+    means: str
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Overview:
     stats: list[Stat]
@@ -516,6 +601,89 @@ async def hop_row(session: AsyncSession, node_transport_id: str) -> HopRow:
         if row.id == node_transport_id:
             return row
     raise NotFound("no such hop")
+
+
+async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
+    """Every transport enabled on one node, with what each is doing for a user.
+
+    The Nodes screen's own dialog is built from this, so what the row SAYS and which
+    button it gets come from one projection rather than from a template working it out
+    twice. Sorted by name for the reason the table's chips are: a list that reshuffles
+    itself between reloads reads as the fleet changing.
+    """
+    node = await nodes.get_node(session, node_id)
+    # The rows are QUERIED rather than read off ``node.transports``, and that is not a
+    # style choice: this list is also reached from a route that already loaded the
+    # node-transport, whose own ``node`` relationship hands back the same Node instance
+    # out of the identity map — with its ``transports`` collection never loaded, so
+    # touching it is lazy IO on an async session and raises ``MissingGreenlet`` at
+    # runtime rather than in a query. One select, ordered in SQL, works from either
+    # direction. (``key_rows`` reads the relationship safely because it comes from
+    # ``list_nodes``, which issues the query that populates it.)
+    result = await session.execute(
+        select(NodeTransport)
+        .where(NodeTransport.node_id == node.id)
+        # Sorted for the reason every other collection here is: an unordered list
+        # reshuffles itself between reloads and reads as the fleet changing.
+        .order_by(NodeTransport.transport_name)
+    )
+    return [
+        OfferRow(
+            id=row.id,
+            node=node.name,
+            transport=row.transport_name,
+            offered=row.enabled,
+            for_friends=row.purpose == TransportPurpose.FRIENDS,
+            standing=_standing(row.purpose, row.enabled),
+        )
+        for row in result.scalars().unique()
+    ]
+
+
+async def offer_row(session: AsyncSession, node_transport_id: str) -> OfferRow:
+    """One row, projected exactly as the list projects it.
+
+    Found in its node's list rather than fetched on its own, for the reason ``key_row``
+    and ``hop_row`` are: the confirmation dialog and the row behind it must not disagree
+    about what they are addressing.
+    """
+    node_transport = await nodes.get_node_transport(session, node_transport_id)
+    for row in await offers_on(session, node_transport.node_id):
+        if row.id == node_transport_id:
+            return row
+    raise NotFound("no such transport on any node")
+
+
+def _standing(purpose: TransportPurpose, enabled: bool) -> str:
+    """Which of the three sentences this row is in.
+
+    A branch on our own topology and on the operator's own flag — never on a protocol.
+    A hop end is answered first because ``enabled`` means something different there: it
+    says the tunnel should be running, not that anybody is being offered anything.
+    """
+    if purpose != TransportPurpose.FRIENDS:
+        return OFFER_HOP_END
+    return OFFER_IN_EVERY_LINK if enabled else OFFER_WITHDRAWN
+
+
+def state_choices(node: Node) -> tuple[StateChoice, ...]:
+    """The states this node may move to, each with what it does to a user's link.
+
+    ``NodeState.allowed_from`` is the machine and this does not restate it — a dialog
+    that offered a transition the service refuses would be a button whose only outcome
+    is a 409, which is why the pre-redesign page reads the same list. What is added is
+    the sentence, from ``NODE_STATE_MEANS``, so the operator chooses between
+    consequences rather than between four words.
+
+    A state with no sentence yet comes back with an empty one rather than raising: this
+    is a dialog, and a missing line of prose must not be a 500 on the screen the
+    operator uses to fix things. ``test_every_state_a_node_may_move_to_says_what_it
+    _means`` is what keeps that branch unreachable.
+    """
+    return tuple(
+        StateChoice(state=str(state), means=NODE_STATE_MEANS.get(state, ""))
+        for state in NodeState.allowed_from(node.state)
+    )
 
 
 def transport_rows() -> list[TransportRow]:
@@ -751,6 +919,35 @@ def withheld_note(names: list[str]) -> str:
     """
     return KEY_MATERIAL_WITHHELD.format(
         names=", ".join(sorted(name or KEY_UNNAMED_REFUSAL for name in names))
+    )
+
+
+def withdrawal_summary(node: str, transport: str) -> str:
+    """What withdrawing a transport does, and — as loudly — what it does not do.
+
+    Here rather than in the route for the reason ``tear_down_summary`` is: this is a
+    judgement about what is still true of the fleet, and routes in this codebase do
+    wiring. The second sentence is ``nodes.set_transport_enabled``'s own warning made
+    operator-facing: disabling changes what the control plane DELIVERS, not what the
+    host is running. A person who already holds a fetched configuration keeps
+    connecting until the node is applied without them, and an operator who reads
+    "withdrawn" as "stopped" has been told the opposite of what happened.
+    """
+    return (
+        f"{transport} withdrawn on {node} — out of every user's link at their next "
+        "refresh. The node is still configured to serve it: apply it to stop that."
+    )
+
+
+def offer_summary(node: str, transport: str) -> str:
+    """What offering a transport again costs the people on it: nothing.
+
+    The other half of criterion 3, and the half that has to say "nobody does anything":
+    every active user is granted material on it here, and their link does not move.
+    """
+    return (
+        f"{transport} offered again on {node} — in every user's link at their next "
+        "refresh, and nobody re-imports anything."
     )
 
 

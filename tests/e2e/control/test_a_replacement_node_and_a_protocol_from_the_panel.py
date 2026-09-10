@@ -91,22 +91,39 @@ async def state_from_the_panel(operator, node_id: str, state: str) -> str:
     return response.text
 
 
-async def offered_id(operator, node_id: str, transport_name: str) -> str:
-    """The node-transport id the panel's own withdraw button posts to.
+async def withdraw_button(operator, node_id: str, transport_name: str) -> str:
+    """The URL the panel's own withdraw button leads to, for one protocol on one node.
 
-    Read off the page rather than out of a JSON API on purpose: the operator's route to
-    this action is the button, and a scenario that discovered the id some other way
-    could pass while the button pointed nowhere.
+    Read off the panel rather than out of a JSON API on purpose: the operator's route to
+    this action is the button, and a scenario that discovered the id some other way could
+    pass while the button pointed nowhere.
+
+    REPOINTED BY M9.5, which moved this action off the pre-redesign node page and onto
+    the Nodes screen — the button now lives in the dialog that row's "transports" action
+    opens. The property is the same one and it is asserted harder: the button still
+    carries the transport's name as DATA rather than only as text beside it, and what
+    comes back is the URL the button itself carries, so a button pointing nowhere fails
+    here rather than being routed around. What follows it is the confirmation dialog,
+    which is where the POST that actually withdraws is.
     """
-    page = await operator.get(f"/panel/nodes/{node_id}")
-    assert page.status_code == 200, page.text
+    dialog = await operator.get(f"/panel/nodes/{node_id}/transports")
+    assert dialog.status_code == 200, dialog.text
     found = re.search(
         rf'data-transport="{re.escape(transport_name)}"\s+'
-        r'hx-post="/panel/transports/([^/"]+)/state"',
-        page.text,
+        r'hx-get="(/panel/nodes/transports/[^"]+/withdraw)"',
+        dialog.text,
     )
-    assert found, f"no withdraw button for {transport_name} on the node page"
-    return found.group(1)
+    assert found, f"no withdraw button for {transport_name} on the Nodes screen"
+
+    # The confirmation the operator reads before they press it, and the POST behind it —
+    # taken from the dialog rather than assumed, for the same reason as the button.
+    confirmation = await operator.get(found.group(1))
+    assert confirmation.status_code == 200, confirmation.text
+    posts_to = re.search(
+        r'hx-post="(/panel/nodes/transports/[^"]+/withdraw)"', confirmation.text
+    )
+    assert posts_to, "the withdraw confirmation confirms nothing"
+    return posts_to.group(1)
 
 
 async def friend_token(operator, nickname: str) -> str:
@@ -230,8 +247,8 @@ async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves
     # as an edit: the assertion below is the same one that would have caught a
     # withdrawal that only changed a row.
     withdrawn = await operator.post(
-        f"/panel/transports/{await offered_id(operator, node_id, 'vless-ws-tls')}/state",
-        data={"enabled": "false"},
+        await withdraw_button(operator, node_id, "vless-ws-tls"),
+        headers={"HX-Request": "true"},
     )
     assert withdrawn.status_code == 200, withdrawn.text
     assert "<html" not in withdrawn.text.lower()

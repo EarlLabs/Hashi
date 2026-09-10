@@ -16,16 +16,22 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 Two panels live here at once, on purpose and temporarily. The CONSOLE is the
 redesign in ``design/`` — a persistent sidebar over a swappable ``#main``, one screen
 per route, every creation flow in a dialog. Overview, Users, Nodes, Hops, Transports
-and Keys & configs are ported; the rest of M9 is what is left. Until it lands,
-``/panel/fleet`` serves the original single page and the sidebar has an honest entry
-pointing at it, because a dead nav link is worse than an ugly one — and its note names
-only what is still there, which is now nothing: every LIST that page carried has its
-own screen. M9.6 retires it once every ACTION it carries has a new home too: still on
-it are enabling and withdrawing a transport and moving a node between states. Key
-rotation and parameter replacement moved to the Keys & configs screen in M9.4, and
-that page's own two rotation routes stay until the page goes — it drives them with
-htmx, so they cannot be told apart from the console's by a header. Do not delete
-either before then.
+and Keys & configs are ported, and since M9.5 so is every ACTION the old page carried:
+enabling and withdrawing a transport and moving a node between states are on the Nodes
+screen. Until M9.6 deletes it, ``/panel/fleet`` still serves the original single page
+and the sidebar has an honest entry pointing at it, because a dead nav link is worse
+than an ugly one — and its note is empty, because everything that page listed and
+everything it did has somewhere else to be done.
+
+WHAT M9.6 TAKES BACK WHEN IT GOES. The console had to take a longer name wherever the
+old page drives the same job WITH HTMX, since two htmx callers cannot be told apart by a
+header: ``/nodes/{id}/push`` for ``/apply``, ``/hops/establish`` and
+``/hops/{id}/tear-down`` for ``/hops`` and ``/dissolve``, ``/nodes/{id}/set-state`` for
+``/nodes/{id}/state``, and ``/nodes/transports/{id}/withdraw|offer`` for
+``/transports/{id}/state``. Two routes are SHARED instead, because the old page submits
+them as a plain browser form and the header does tell those apart: ``POST /panel/nodes``
+and ``POST /panel/nodes/{id}/transports``, each of which keeps a 303 branch that dies
+with the page. Do not delete any of it before then.
 """
 
 import logging
@@ -137,11 +143,10 @@ NAV = (
     },
     # Shrinking as M9 ports it. The note is what is LEFT on the old page, so an
     # operator can tell from the sidebar which jobs have moved and which have not —
-    # nodes came out of it in M9.1, hops in M9.2, the capability table in M9.3 and both
-    # rotations in M9.4, and the note is empty because the three THINGS that page
-    # listed have all moved. What is still only there is a pair of ACTIONS on a node —
-    # enable and withdraw a transport, move a node between states — which M9.5 homes
-    # and M9.6 removes this entry with the page.
+    # nodes came out of it in M9.1, hops in M9.2, the capability table in M9.3, both
+    # rotations in M9.4 and the last three actions in M9.5. The note is empty because
+    # nothing that page lists or does is only there any more; M9.6 removes this entry
+    # with the page itself.
     {
         "key": "fleet",
         "label": "Fleet",
@@ -343,6 +348,353 @@ def _node_form(
     }
 
 
+# --- Nodes: what one offers, and what state it is in (M9.5) -------------------
+#
+# The three actions the pre-redesign node page was the only home for — enable a
+# transport, withdraw one, move a node between states — reached from the Nodes screen's
+# own row actions. Until they were here, M9's acceptance walk ("every step from the new
+# screens, with no URL typed by hand") could not be completed, and M9.6 could not delete
+# the page that still carries them.
+#
+# WHERE THEY LIVE, AND WHY THERE. A node's transports are a LIST inside a row, and a row
+# has one actions cell: a withdraw button beside every chip would put controls in a data
+# cell, which nothing else in this console does (UI-PATTERNS §3 — actions are the
+# actions column). So the row's ``transports`` button opens a dialog about exactly one
+# subject, what this node offers, where each transport gets its own line and its own
+# button and the form that adds another sits under them. Moving a node between states is
+# its own dialog because it is about the node rather than about what it runs.
+#
+# These are declared BEFORE ``/nodes/{node_id}`` further down the file, like the three
+# above them, and the order is load-bearing: FastAPI matches in registration order, so a
+# literal path declared after a path parameter would be swallowed by it.
+
+# What a required box that was left empty is answered with. Field-level, at 422, like
+# every other refusal in this console: a form with a box per parameter the transport
+# declares cannot be corrected from one sentence at the top — and how many that is, is
+# the transport's business and not a number to write down here. Shared with the
+# establish-hop route below, which asks the same question of the same kind of box: a
+# parameter the transport declares no default for is refused when it is left empty,
+# whichever form it was left empty on.
+NO_DEFAULT = "required — this transport declares no default to fall back on"
+
+# What a form submitted with no protocol chosen is answered with, under the one control
+# that was not answered. Its own sentence rather than the one above because nothing was
+# left empty here that a transport declares anything about: this is the choice the rest
+# of the form is built from.
+NO_TRANSPORT_CHOSEN = "required — choose which protocol this node should offer"
+
+
+@router.get("/nodes/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
+async def withdraw_transport_dialog(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """The confirmation. UI-PATTERNS §3: a destructive action confirms in a dialog."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/withdraw_transport_dialog.html",
+        {"offer": await console.offer_row(session, node_transport_id)},
+    )
+
+
+@router.post("/nodes/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
+async def withdraw_transport(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Take one transport out of every user's subscription — criterion 3's other half.
+
+    Its own route rather than the pre-redesign page's ``/transports/{id}/state``, which
+    answers with ``panel/outcome.html`` and is asked for with htmx too — so unlike the
+    add-node form the two cannot be told apart by a header. M9.6 deletes that page and
+    may take the older name back.
+    """
+    return await _set_offered(request, session, node_transport_id, offered=False)
+
+
+@router.post("/nodes/transports/{node_transport_id}/offer", response_class=HTMLResponse)
+async def offer_transport(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Put a withdrawn transport back into every user's link. No confirmation: it takes
+    nothing away, and what it gives is stated on the row the button sits on."""
+    return await _set_offered(request, session, node_transport_id, offered=True)
+
+
+async def _set_offered(
+    request: Request,
+    session: AsyncSession,
+    node_transport_id: str,
+    *,
+    offered: bool,
+) -> Response:
+    """Both directions, one implementation, and the direction in the URL rather than in
+    a field.
+
+    The service reads an explicit wanted value rather than toggling, so that a
+    double-submitted form cannot put the fleet into the state the operator was trying to
+    leave (``nodes.set_transport_enabled``). Two routes keep that property while the
+    console gains what a toggle cannot have: one of them is destructive and confirms
+    first, the other is not and does not.
+
+    A toast rather than a banner, the same call the tear-down makes: this is the
+    operator's own deliberate act and it succeeded. What it LEAVES BEHIND — a node still
+    configured to serve what nobody is being offered — is in the sentence, and the
+    confirmation said it before they pressed.
+    """
+    offer = await console.offer_row(session, node_transport_id)
+    try:
+        await nodes.set_transport_enabled(
+            session, node_transport_id=node_transport_id, enabled=offered
+        )
+    except DomainError as exc:
+        # Shown rather than raised: nothing was changed, and the operator is on the
+        # screen this is about. Reachable only by a typed URL — the dialog offers no
+        # button on a hop end, which is the one thing this refuses.
+        return _mutation(
+            request,
+            banner=wording.for_the_page(exc.message),
+            keeping=offer.node,
+            events="nodes-changed",
+        )
+    if offered:
+        # Offering again grants material to every active user, so the Keys screen's
+        # "users on it" count moves with it. Withdrawing takes nothing away from anybody
+        # — a credential already minted stays minted — so it fires only the one event,
+        # rather than repainting a table nothing on it changed.
+        events = "nodes-changed, keys-changed"
+        summary = console.offer_summary
+    else:
+        events = "nodes-changed"
+        summary = console.withdrawal_summary
+    return _mutation(
+        request,
+        toast=summary(offer.node, offer.transport),
+        keeping=offer.node,
+        events=events,
+    )
+
+
+@router.get("/nodes/{node_id}/transports", response_class=HTMLResponse)
+async def node_transports_dialog(
+    node_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """What this node offers, and the form that adds one more.
+
+    Two things in one dialog on purpose, and it is the one dialog in this console that
+    holds both a list and a creation form: they are a single subject — which protocols
+    this node hands to a user — and the operator reading the list is almost always about
+    to act on it. Splitting them would put the same node's answer behind two buttons in
+    one row's actions cell.
+
+    ``GET`` and ``POST`` of this path are two different jobs and that is not a collision:
+    the POST is the enable route further down, which the pre-redesign page's form has
+    always used and which now answers this dialog as well.
+    """
+    return TEMPLATES.TemplateResponse(
+        request, "panel/node_transports_dialog.html", await _enable_form(session, node_id)
+    )
+
+
+async def _enable_form(
+    session: AsyncSession,
+    node_id: str,
+    values: dict | None = None,
+    errors: dict | None = None,
+    *,
+    failure: str | None = None,
+) -> dict:
+    """What the transports dialog needs, in one place so first paint and refusal agree.
+
+    ``tuning`` is per transport and comes from ``services/transports.py``, which reads
+    every box out of the transport's own model — so this dialog names no protocol, no
+    field and no port, exactly as the establish-hop dialog does not. The list of
+    protocols it may offer at all is the image's own answer (``offerable_transports``)
+    minus what this node already runs, so the form cannot present an action whose only
+    outcome is a refusal.
+
+    NO BOX CAN EXIST FOR KEY MATERIAL and that is structural: ``operator_tuning`` is
+    built from ``operator_params``, which subtracts everything the transport declares as
+    material and every public counterpart of one. Enabling is the moment material is
+    MINTED, which is exactly why the form it is minted from may not ask for any.
+    """
+    node = await nodes.get_node(session, node_id)
+    offers = await console.offers_on(session, node_id)
+    running = {offer.transport for offer in offers}
+    installed = [
+        name for name in transports.offerable_transports() if name not in running
+    ]
+    return {
+        "node": node,
+        "offers": offers,
+        "transports": installed,
+        "tuning": {name: transports.operator_tuning(name) for name in installed},
+        "values": values or {},
+        "errors": errors or {},
+        # A refusal about the request rather than about one box — a transport this image
+        # cannot deliver, one already enabled here, a node that is gone. Shown inside the
+        # dialog because that is where the operator is.
+        "failure": failure,
+    }
+
+
+async def _refuse_enable(
+    request: Request,
+    session: AsyncSession,
+    node_id: str,
+    *,
+    values: dict,
+    errors: dict | None = None,
+    failure: str | None = None,
+) -> Response:
+    """The transports dialog again, at 422, with what was typed still in it.
+
+    The console's half only: every caller of this has already established that htmx
+    asked, because the pre-redesign form has nowhere to render a field error and keeps
+    the error envelope it has always produced instead.
+    """
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_transports_dialog.html",
+        await _enable_form(session, node_id, values=values, errors=errors, failure=failure),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
+def _on_its_boxes(exc: ParamsRefused, transport_name: str, boxes: set[str]) -> dict:
+    """One transport's per-field refusal, on the boxes this dialog rendered for it.
+
+    Every decision is ``_refused_parameters``' — which sentence may be printed at all
+    (an allow-list: only a complaint located at exactly one of this form's boxes, since
+    a box holds a value the operator typed), and what is said in place of one that may
+    not be. What this adds is the group prefix and nothing else: the dialog renders a set
+    of boxes per transport and names each one for its own group, so an error keyed by a
+    bare field name would land nowhere. No message is read here.
+    """
+    sorted_out = _refused_parameters(exc, boxes)
+    return {
+        "errors": {
+            f"{transport_name}-{field}": message
+            for field, message in sorted_out["errors"].items()
+        },
+        "failure": sorted_out["failure"],
+    }
+
+
+@router.get("/nodes/{node_id}/state", response_class=HTMLResponse)
+async def node_state_dialog(
+    node_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Where this node may go from where it is, and what each of those does to a link."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_state_dialog.html",
+        _state_form(await nodes.get_node(session, node_id)),
+    )
+
+
+def _state_form(node, values: dict | None = None, errors: dict | None = None) -> dict:
+    """What the state dialog needs, in one place so first paint and refusal agree.
+
+    ``choices`` is ``NodeState.allowed_from`` projected through ``services/console.py``,
+    never restated here: a dialog offering a transition the service refuses is a button
+    whose only outcome is a 409. ``retired`` is absent from a retired node's list for the
+    reason the state machine gives — bringing back a record whose host is gone puts an
+    address that may now belong to a stranger into every user's subscription.
+    """
+    return {
+        "node": node,
+        "choices": console.state_choices(node),
+        "values": values or {},
+        "errors": errors or {},
+    }
+
+
+@router.post("/nodes/{node_id}/set-state", response_class=HTMLResponse)
+async def set_node_state_from_the_console(
+    node_id: str,
+    request: Request,
+    state: str = Form(""),
+    detail: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Move a node between states from the console — charter criterion 2.
+
+    ``/set-state`` and not ``/state`` because the pre-redesign page's own route below
+    still owns the short name and drives it WITH HTMX, so unlike the add-node form the
+    two cannot be told apart by a header. M9.6 deletes that page and takes the name back.
+
+    Both refusals land on the ``state`` control at 422 rather than becoming a banner, and
+    both are about that control: an unknown word, or a transition this node may not make.
+    The second is only reachable from a dialog opened before somebody else moved the node
+    — which is exactly when the operator needs to see the current answer, and re-rendering
+    the dialog is what gives them one.
+    """
+    node = await nodes.get_node(session, node_id)
+    typed = {"state": state, "detail": detail}
+    if not state:
+        return _refuse_state(
+            request, node, values=typed, errors={"state": NO_STATE_CHOSEN}
+        )
+    try:
+        wanted = NodeState(state)
+    except ValueError:
+        # An unknown word, before the service ever sees it. The message names no value:
+        # this one came from a form, and the states themselves are on screen already.
+        return _refuse_state(
+            request, node, values=typed, errors={"state": NO_SUCH_STATE}
+        )
+
+    try:
+        moved = await nodes.set_node_state(
+            session, node_id=node_id, state=wanted, detail=detail or None
+        )
+    except DomainError as exc:
+        return _refuse_state(
+            request,
+            node,
+            values=typed,
+            errors={"state": wording.for_the_page(exc.message)},
+        )
+
+    return _mutation(
+        request,
+        toast=f"{moved.name} is now {moved.state}",
+        keeping=moved.name,
+        # Both, and the second is not decoration: a node becoming serving hands every
+        # active user a credential on it, which is what criterion 2 rests on and what
+        # the Users table's own column counts.
+        events="nodes-changed, friends-changed",
+    )
+
+
+# The two answers to a state that cannot be acted on, both landing on the one control
+# they are about. Neither echoes what arrived: it came from a form, and the dialog behind
+# this answer already lists the states this node may actually move to.
+NO_STATE_CHOSEN = "required — choose the state to move this node into"
+NO_SUCH_STATE = "that is not a state this node can be moved into"
+
+
+def _refuse_state(
+    request: Request, node, *, values: dict, errors: dict
+) -> Response:
+    """The state dialog again, at 422, with the message under the control it is about."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_state_dialog.html",
+        _state_form(node, values=values, errors=errors),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
 # --- Hops (M9.2) -------------------------------------------------------------
 
 # The two ends of a hop, in the order the topology forces: the entry is the node
@@ -368,12 +720,6 @@ HOP_SIDES = (
         "purpose": TransportPurpose.RELAY_LEAF,
     },
 )
-
-# What a box that was left empty is answered with when the transport declares no
-# default for it. Field-level, at 422, like every other refusal in the console: a hop
-# with twenty-four parameters cannot be corrected from one sentence at the top.
-NO_DEFAULT = "required — this transport declares no default to fall back on"
-
 
 @router.get("/hops", response_class=HTMLResponse)
 async def hops_screen(
@@ -658,7 +1004,8 @@ async def transports_screen(request: Request) -> Response:
 
     Note that ``GET /panel/transports`` cannot collide with the pre-redesign page's
     ``POST /panel/transports/{node_transport_id}/...`` routes further down: different
-    method, different shape. M9.5 homes those actions and M9.6 deletes the page.
+    method, different shape. M9.5 homed those actions on the Nodes screen, under names
+    of their own, and M9.6 deletes the page.
     """
     return _screen(
         request,
@@ -1293,35 +1640,162 @@ async def enable_transport(
 ):
     """Enable a transport, taking its parameters from the submitted form.
 
+    ONE route with two answers, exactly like ``create_node`` above and for the same
+    reason (see the module docstring): the console asks with htmx and gets the console's
+    answer — the dialog closes, a toast names what was enabled, the tables refresh. The
+    pre-redesign page's form is a plain browser POST and still gets its 303 back to the
+    page it was submitted from, so a reload does not re-post. M9.6 deletes that page and
+    the redirect branch with it.
+
     The form is read as a flat mapping and handed to the transport's own validator
     untouched. That is what makes a NEW protocol appear in this panel with no change
     here: this function does not know any protocol's field names, and the ``params``
     it forwards are whatever that transport declared it needs.
+
+    TWO SHAPES OF FORM ARRIVE AT ONE ROUTE, and neither is told apart by a header. The
+    console renders a group of boxes per transport and hides all but the chosen one —
+    a hidden input is still submitted, so with every group naming its boxes plainly a
+    second transport's ``port`` would arrive under the same name and the last one would
+    win. Its boxes are therefore named ``<transport>-<field>``. The old page builds only
+    the chosen transport's boxes, in JavaScript, and names them plainly. Each field is
+    looked up prefixed first and bare second: the console never sends a bare name and the
+    page never sends a prefixed one, so the two cannot collide.
     """
     form = await request.form()
-    transport_name = str(form.get("transport_name", ""))
+    typed = {key: str(value).strip() for key, value in form.multi_items()}
+    transport_name = typed.get("transport_name", "")
+
+    if not transport_name:
+        return await _refuse_the_form(
+            request, session, node_id, typed, {"transport_name": NO_TRANSPORT_CHOSEN}
+        )
+
+    # Which boxes this transport declares it needs. An empty tuple for a transport this
+    # image cannot deliver or does not ship at all: the service is what refuses those,
+    # by name, and it says so far better than a guess here would.
+    boxes = (
+        transports.operator_tuning(transport_name)
+        if transport_name in transports.offerable_transports()
+        else ()
+    )
+
+    def supplied(field: str) -> str:
+        return typed.get(f"{transport_name}-{field}", typed.get(field, ""))
+
+    empty = [box.name for box in boxes if not supplied(box.name)]
+    if empty:
+        return await _refuse_the_form(
+            request,
+            session,
+            node_id,
+            typed,
+            {f"{transport_name}-{name}": NO_DEFAULT for name in empty},
+            plainly="; ".join(f"{name}: {NO_DEFAULT}" for name in empty),
+        )
 
     # Reading the form is shared with the rotation form below: a field the transport
     # declared as a sequence becomes a list whether or not the operator typed a comma.
+    #
+    # FILTERED to this transport's own boxes, which this route did not do before. Two
+    # reasons and one cost. It has to filter now, because the console renders a group per
+    # transport and a hidden input is still submitted. And nothing but a declared box
+    # reaching a transport's validator is worth having on a panel route regardless — the
+    # service already refuses to let operator input overwrite minted material, and this
+    # is the same rule one layer earlier.
+    #
+    # THE COST, stated rather than discovered: the boxes are ``operator_params``, which
+    # filters on required, so a parameter the transport DEFAULTS is not accepted here
+    # from either panel any more. It is the same narrowing M9.4 recorded on the replace
+    # form, it matches what both forms actually render, and ``POST /api/nodes/{id}/
+    # transports`` still takes any declared parameter.
     params = transports.parse_form(
-        transport_name,
-        (
-            (key, str(value))
-            for key, value in form.multi_items()
-            if key != "transport_name"
-        ),
+        transport_name, ((box.name, supplied(box.name)) for box in boxes)
     )
 
-    await nodes.enable_transport(
-        session, node_id=node_id, transport_name=transport_name, params=params
-    )
+    try:
+        node_transport = await nodes.enable_transport(
+            session, node_id=node_id, transport_name=transport_name, params=params
+        )
+    except ParamsRefused as exc:
+        # The transport refused what it was given, field by field, and this dialog has a
+        # box for each of them — so each complaint goes under the box it is about, the
+        # same treatment the hop dialog gives one. Which of them may be PRINTED is not
+        # decided here: ``_refused_parameters`` allows a sentence only under a box, and
+        # the service has already struck every minted value out of every sentence
+        # (``relay.refused_fields``). Both matter on this path, because enabling is the
+        # moment material is minted and the mapping that was validated held it.
+        if not _is_htmx(request):
+            raise
+        return await _refuse_enable(
+            request,
+            session,
+            node_id,
+            values=typed,
+            **_on_its_boxes(exc, transport_name, {box.name for box in boxes}),
+        )
+    except DomainError as exc:
+        # Everything else is about the request rather than about one value: a transport
+        # this image does not ship, one no client could receive, one already enabled
+        # here. Stated once, above the form.
+        if not _is_htmx(request):
+            raise
+        return await _refuse_enable(
+            request,
+            session,
+            node_id,
+            values=typed,
+            failure=wording.for_the_page(exc.message),
+        )
+
     for friend in await friends.list_friends(session):
         if friend.is_active:
             await friends.grant_everywhere(session, friend)
     await session.commit()
-    return RedirectResponse(
-        url=f"/panel/nodes/{node_id}", status_code=status.HTTP_303_SEE_OTHER
+
+    if not _is_htmx(request):
+        return RedirectResponse(
+            url=f"/panel/nodes/{node_id}", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    node = await nodes.get_node(session, node_id)
+    return _mutation(
+        request,
+        # UI-PATTERNS §8: an action with a delayed real-world effect says so. Nothing is
+        # on the host until it is applied — the row exists, the material is minted, and
+        # the node is serving none of it yet.
+        toast=(
+            f"{node_transport.transport_name} enabled on {node.name} — apply the node "
+            "to push it"
+        ),
+        keeping=node.name,
+        # Three collections move: this node's chips, the material that was just minted,
+        # and every active user's coverage count. Comma-separated in one HX-Trigger, the
+        # shape M9.2 established for a mutation touching more than one.
+        events="nodes-changed, keys-changed, friends-changed",
     )
+
+
+async def _refuse_the_form(
+    request: Request,
+    session: AsyncSession,
+    node_id: str,
+    typed: dict,
+    errors: dict,
+    *,
+    plainly: str | None = None,
+) -> Response:
+    """A submission this panel refused before the service saw it, in whichever panel.
+
+    The console gets its dialog back at 422 with the message under the control it is
+    about. The pre-redesign form has nowhere to render a field error, so it keeps the
+    behaviour it has always had — a ``DomainError``, which the one exception handler
+    turns into the envelope every other refusal on that page produces. Same split as
+    ``_refuse_node``, and ``plainly`` is what that envelope says: the box NAMES without
+    the group prefix, which is markup the caller with no form knows nothing about.
+    """
+    if not _is_htmx(request):
+        raise DomainError(plainly or " ".join(errors.values()))
+    return await _refuse_enable(request, session, node_id, values=typed, errors=errors)
 
 
 @router.post("/nodes/{node_id}/apply", response_class=HTMLResponse)

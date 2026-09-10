@@ -144,10 +144,63 @@ async def surfaces(operator, unique: str) -> list[str]:
         # The pre-redesign node page. Still part of the panel until M9.6 retires it,
         # and it carries an inline script of its own.
         f"/panel/nodes/{node.json()['id']}",
+        # M9.5's two node dialogs, added in the change that added them. The first is the
+        # largest fragment on the Nodes screen — a group of boxes per transport this
+        # image ships, every one of them carrying text this panel did not write.
+        f"/panel/nodes/{node.json()['id']}/transports",
+        f"/panel/nodes/{node.json()['id']}/state",
+        # …and the confirmation behind one of its buttons, which needs a protocol
+        # actually enabled on that node before it exists.
+        *await _with_an_offer(operator, node.json()["id"]),
         # The tear-down confirmation and M9.4's two rotation dialogs, all of which
         # need a whole hop behind them.
         *await _with_a_hop(operator, unique),
     ]
+
+
+# One protocol's worth of operator input, for the fixture below. A literal block for the
+# same reason ``_with_a_hop`` has one: no API can invent a hostname or a port, so the
+# values are written here and the TRANSPORT is discovered — this file names none. A
+# transport whose required fields are not all in this block is skipped rather than
+# half-filled.
+AN_OFFER = {
+    "port": 8471,
+    "decoy_host": "www.example.com",
+    "server_names": ["www.example.com"],
+}
+
+
+async def _with_an_offer(operator, node_id: str) -> list[str]:
+    """The withdraw confirmation, and the offer it does not exist without.
+
+    M9.5 moved withdrawing a transport onto the Nodes screen, and its confirmation is a
+    fragment like any other — so it goes on this list in the change that added it, which
+    is the rule this whole scenario exists to enforce.
+    """
+    installed = (await operator.get("/api/transports")).json()
+    offerable = sorted(
+        transport["name"]
+        for transport in installed
+        if transport["subscription_expressible"]
+        and set(transport["operator_params"]) <= set(AN_OFFER)
+    )
+    if not offerable:  # pragma: no cover - an image with nothing this block can fill
+        return []
+
+    required = next(
+        transport["operator_params"]
+        for transport in installed
+        if transport["name"] == offerable[0]
+    )
+    enabled = await operator.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": offerable[0],
+            "params": {name: AN_OFFER[name] for name in required},
+        },
+    )
+    assert enabled.status_code == 201, enabled.text
+    return [f"/panel/nodes/transports/{enabled.json()['id']}/withdraw"]
 
 
 async def _with_a_hop(operator, unique: str) -> list[str]:

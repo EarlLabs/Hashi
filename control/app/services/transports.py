@@ -7,7 +7,10 @@ WHAT: ``operator_params(name)`` — the fields a transport requires that `contro
       transports may carry an entry→leaf hop, which of their fields an operator may
       supply, and what each of those boxes should say before it is filled. M9.4 adds
       ``replaceable_params(name, current)``, the same question for a transport that is
-      already enabled somewhere and is being retyped rather than filled in.
+      already enabled somewhere and is being retyped rather than filled in. M9.5 adds
+      ``offerable_transports()`` and ``operator_tuning(name)``: which transports a
+      person can be handed at all, and what the box for each of their required fields
+      should say.
 WHY:  two screens need exactly this list and must not disagree: the "enable a
       transport" form (item 7) and the "replace parameters" form (item 24). When the
       two were computed separately, a transport could offer a field on one screen and
@@ -382,3 +385,55 @@ def _as_typed(value: object) -> str:
     if isinstance(value, (list, tuple, set, frozenset)):
         return ", ".join(str(item) for item in value)
     return str(value)
+
+
+# --- enabling one on a node (M9.5) --------------------------------------------
+
+
+def offerable_transports() -> list[str]:
+    """Every installed transport a user's client could actually receive, sorted.
+
+    The question the "enable a transport" form asks of the image, and the same one
+    ``nodes.enable_transport`` refuses on: a transport that declares no format a
+    client can consume would be enabled and then silently missing from every
+    subscription, so it is refused out loud (charter amendment A, backlog item 7 S2a).
+    Offering it and then refusing it is the shape this list exists to prevent — the
+    form must not present an action whose only outcome is a refusal.
+
+    Sibling of ``hop_transports`` above and deliberately not merged with it: that one
+    answers "may this carry a tunnel between two of our own nodes", this one answers
+    "may a person be handed this", and a transport can honestly be on both lists or on
+    neither. Nothing here names a protocol; both answers come from what each transport
+    declares about itself.
+    """
+    return sorted(
+        meta.name for meta in discover().values() if meta.subscription_formats
+    )
+
+
+def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
+    """Every box the enable form asks for, with what each of them should say.
+
+    ``operator_params`` decides which boxes exist — what an operator MUST supply, which
+    is what the pre-redesign page's form has always asked for — and ``tuning_field``
+    decides what each of them says, out of the transport's own declaration. Two existing
+    answers joined, so the enable form cannot disagree with the replace form about which
+    fields are the operator's, nor with the hop dialog about what a box may promise.
+
+    ``TuningField`` and NOT ``ParamBox``, and the difference is the reason M9.4 refused
+    to reuse it the other way round: on this form an empty box is REFUSED, exactly as on
+    the hop dialog, because nothing is in place yet to keep. Every field here is required
+    by construction — ``operator_params`` filters on it — so ``required`` is true of all
+    of them, and the placeholder can only ever be the shape the field will accept.
+
+    The narrowing that follows from ``operator_params``, stated rather than discovered:
+    a parameter the transport DEFAULTS gets no box here, so it cannot be set while
+    enabling. That is parity with the form this replaces and with the replace form
+    beside it; ``POST /api/nodes/{id}/transports`` still takes either.
+    """
+    transport = profile(transport_name)
+    fields = transport.params_model.model_fields
+    return tuple(
+        tuning_field(name, fields[name], transport.meta.port_range)
+        for name in operator_params(transport_name)
+    )

@@ -19,7 +19,12 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import Conflict, DomainError, NotDeliverable, NotFound
+from control.app.errors import (
+    Conflict,
+    NotDeliverable,
+    NotFound,
+    ParamsRefused,
+)
 from control.app.models import Node, NodeState, NodeTransport, TransportPurpose
 from control.app.services import keymaterial
 from edge.egress import Egress
@@ -286,6 +291,16 @@ async def enable_transport(
         # operator parameters against a transport's model shares, precisely so that
         # "what may not be printed" cannot be answered four different ways.
         #
+        # KEPT PER FIELD as well as flattened into the sentence, which is the M9.5
+        # addition here. ``ParamsRefused`` is a ``DomainError`` that INHERITS its status
+        # and its code (see the exception's own note), so ``POST /api/nodes/{id}/
+        # transports`` and the pre-redesign form answer exactly as they always have —
+        # envelope for envelope. What it adds is somewhere for the console's enable
+        # dialog to put "this box, this reason", which is the same reason
+        # ``relay.establish_hop`` and ``rotation.replace_params`` raise their own
+        # subclasses: a sentence at the top of an eleven-box form makes the operator
+        # hunt for the parameter the prose names.
+        #
         # Imported inside the function to break a cycle: ``relay`` imports this module
         # for ``node_view`` and ``render_params``. Same deferred-import reasoning as the
         # two ``friends`` imports below.
@@ -293,8 +308,9 @@ async def enable_transport(
 
         fields = relay.refused_fields(exc, withholding=minted.secrets.values())
         problems = "; ".join(f"{where}: {message}" for where, message in fields.items())
-        raise DomainError(
-            f"transport {transport_name!r} rejected these parameters — {problems}"
+        raise ParamsRefused(
+            f"transport {transport_name!r} rejected these parameters — {problems}",
+            fields=fields,
         ) from exc
 
     # Split the validated result back apart for storage. Driven by which keys the

@@ -27,6 +27,7 @@ from sqlalchemy import select
 from control.app.api import schemas
 from control.app.errors import Conflict, NodeOperationFailed, ParamsRefused
 from control.app.models import Credential, Node, NodeTransport, TransportPurpose
+from control.app.panel import routes as panel_routes
 from control.app.panel import wording
 from control.app.services import apply as apply_service
 from control.app.services import console as console_service
@@ -818,6 +819,627 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
     assert offenders == [], (
         f"a console template names a value that belongs in a node record: {offenders}"
     )
+
+
+# --- enable, withdraw and set state, from the Nodes screen (M9.5) -------------
+
+# The three actions the pre-redesign node page was the only home for. They are tested
+# here and not in a file of their own because they are the Nodes screen's own row
+# actions: the claim under test is that the operator reaches every one of them from the
+# screen M9.1 built, with no URL typed by hand — which is what M9's acceptance walk
+# asks for and what M9.6 is waiting on.
+
+
+async def a_node_with_an_offer(client, reality_params) -> tuple[str, str]:
+    """A node with one friend-facing transport on it, as (node id, node-transport id).
+
+    Both ids, because these actions address two different things: the node's own dialogs
+    are keyed by node, and withdrawing addresses the row. Its own helper rather than
+    ``a_node_holding_material``, which hands back only the second and is depended on by
+    the key sweeps.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "offer-1", "address": "192.0.2.40", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+    return node_id, enabled.json()["id"]
+
+
+def _enable_boxes(markup: str, transport: str) -> dict[str, dict]:
+    """The boxes this dialog rendered for one transport, by the field they are about.
+
+    The dialog names every box for its own group — two transports that both declare a
+    ``port`` would otherwise submit two boxes under one name, and the last would win —
+    so this strips the group back off rather than the test knowing the markup's shape.
+    """
+    return {
+        name.removeprefix(f"{transport}-"): attributes
+        for name, attributes, _ in _form_controls(markup)
+        if name.startswith(f"{transport}-")
+    }
+
+
+async def test_every_action_a_node_has_is_on_its_own_row(client, reality_params) -> None:
+    """M9's acceptance line: every step from the new screens, no URL typed by hand.
+
+    Four actions, four buttons, in the row's own actions cell — the two M9.1 shipped and
+    the two M9.5 adds. Asserted as the URLs the buttons carry, because a button that
+    opens nothing is exactly what this milestone's "every action has a home" is about.
+    """
+    node_id, _ = await a_node_with_an_offer(client, reality_params)
+
+    body = (await client.get("/panel/nodes/table")).text
+
+    for action in ("probe", "apply", "transports", "set state"):
+        assert f">{action}</button>" in body, action
+    assert f'hx-get="/panel/nodes/{node_id}/transports"' in body
+    assert f'hx-get="/panel/nodes/{node_id}/state"' in body
+    # Every one of them opens into the dialog slot rather than navigating: this row is
+    # inside a table that swaps itself.
+    assert body.count('hx-target="#dialog-slot"') >= 4
+
+
+async def test_the_transports_dialog_says_what_each_one_is_doing_for_a_user(
+    client, reality_params
+) -> None:
+    """The list half of the dialog: a line per transport, with its standing and one
+    button — and the standing is composed from the row's purpose and the operator's own
+    flag, never from which protocol it is."""
+    node_id, node_transport_id = await a_node_with_an_offer(client, reality_params)
+
+    offered = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert offered.status_code == 200
+    reading = _reading(offered.text)
+    assert "Transports on offer-1" in reading
+    assert console_service.OFFER_IN_EVERY_LINK in reading
+    assert f'hx-get="/panel/nodes/transports/{node_transport_id}/withdraw"' in offered.text
+    # The transport's name is on the button as DATA and next to the URL it leads to, and
+    # that adjacency is a contract rather than a detail: it is what
+    # tests/e2e/control/test_a_replacement_node_and_a_protocol_from_the_panel.py reads to
+    # withdraw one named protocol without parsing this dialog's shape. Held here as well
+    # as there, so a reflow of this markup fails in the fast suite rather than only
+    # against a booted stand.
+    assert re.search(
+        r'data-transport="vless-reality"\s+'
+        r'hx-get="/panel/nodes/transports/[^"]+/withdraw"',
+        offered.text,
+    ), "the withdraw button no longer carries the transport it is about"
+
+    withdrawn = await client.post(
+        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        headers={"HX-Request": "true"},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+
+    again = await client.get(f"/panel/nodes/{node_id}/transports")
+    assert console_service.OFFER_WITHDRAWN in _reading(again.text)
+    assert f'hx-post="/panel/nodes/transports/{node_transport_id}/offer"' in again.text
+
+
+async def test_withdrawing_confirms_first_and_says_what_is_still_true(
+    client, session, reality_params
+) -> None:
+    """Criterion 3's other half, and the sentence an operator is most likely to misread.
+
+    Withdrawing changes what this panel DELIVERS, not what the host is running. The
+    confirmation says so before the button, and the answer says it again — a person who
+    reads "withdrawn" as "stopped" has been told the opposite of what happened.
+    """
+    node_id, node_transport_id = await a_node_with_an_offer(client, reality_params)
+    await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
+
+    dialog = await client.get(f"/panel/nodes/transports/{node_transport_id}/withdraw")
+
+    assert dialog.status_code == 200
+    reading = _reading(dialog.text)
+    assert "Withdraw vless-reality?" in reading
+    assert "not what the host is running" in reading
+    # And what this action is NOT: revocation is a different reach, on another screen.
+    assert "revoke them on the Users screen" in reading
+
+    answer = await client.post(
+        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200
+    assert "withdrawn on offer-1" in _reading(answer.text)
+    assert "apply it to stop that" in _reading(answer.text)
+    assert answer.headers["HX-Trigger"] == "nodes-changed"
+    # The property under the sentence: it is out of what any user would be handed now.
+    session.expunge_all()
+    assert await nodes_service.serving_transports(session) == []
+
+
+async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
+    client, session, reality_params
+) -> None:
+    """The other direction, from the same list. No confirmation: it takes nothing away.
+
+    ``keys-changed`` rides with it and does not ride with a withdrawal, which is not
+    decoration: offering again grants material to every active user, so the Keys screen's
+    "users on it" count moves. Withdrawing takes no credential away from anybody.
+    """
+    node_id, node_transport_id = await a_node_with_an_offer(client, reality_params)
+    await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
+    await client.post("/panel/friends", data={"nickname": "mira"})
+    await client.post(
+        f"/panel/nodes/transports/{node_transport_id}/withdraw",
+        headers={"HX-Request": "true"},
+    )
+
+    answer = await client.post(
+        f"/panel/nodes/transports/{node_transport_id}/offer",
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200
+    reading = _reading(answer.text)
+    assert "offered again on offer-1" in reading
+    assert "nobody re-imports anything" in reading
+    assert answer.headers["HX-Trigger"] == "nodes-changed, keys-changed"
+    session.expunge_all()
+    assert len(await nodes_service.serving_transports(session)) == 1
+
+
+async def test_a_hop_end_is_not_something_a_user_is_offered(client, session) -> None:
+    """A hop's consumer is the far NODE, so it has no offer to withdraw.
+
+    No button at all rather than one whose only outcome is a refusal — and the line says
+    where the operation that removes BOTH ends lives, because switching one end off would
+    leave a tunnel that no longer completes while both ends still look configured.
+    Reached by a typed URL anyway, the refusal arrives where the operator is looking
+    rather than as a 409 the console would never swap.
+    """
+    entry_end = await a_hop(client)
+    session.expunge_all()
+    node_id = (await nodes_service.get_node_transport(session, entry_end)).node_id
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert dialog.status_code == 200
+    assert console_service.OFFER_HOP_END in _reading(dialog.text)
+    assert f"/panel/nodes/transports/{entry_end}/withdraw" not in dialog.text
+
+    refused = await client.post(
+        f"/panel/nodes/transports/{entry_end}/withdraw", headers={"HX-Request": "true"}
+    )
+
+    assert refused.status_code == 200
+    assert "banner-failure" in refused.text
+    reading = _reading(refused.text)
+    assert "remove the hop instead" in reading
+    # Decision 9: the service says friend, the page says user, and this sentence crosses
+    # that boundary like every other one a service composes.
+    assert "friend" not in reading.lower()
+
+
+async def test_the_enable_form_asks_only_what_the_transport_declares(
+    client, reality_params
+) -> None:
+    """A box per required field, per transport, and not one of them written here.
+
+    Asserted against the transport's OWN declaration rather than a list: a protocol that
+    gains a parameter gets a box the day it ships, and one that declares a piece of key
+    material can never get one — the box list subtracts every minted name and every
+    public counterpart of one.
+    """
+    node_id, _ = await a_node_with_an_offer(client, reality_params)
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert dialog.status_code == 200
+    # vless-reality is already on this node, so it is not offered twice.
+    assert _enable_boxes(dialog.text, "vless-reality") == {}
+    for name in transports_service.offerable_transports():
+        if name == "vless-reality":
+            continue
+        boxes = _enable_boxes(dialog.text, name)
+        assert set(boxes) == set(transports_service.operator_params(name)), name
+        material = transports_service.key_material_names(name)
+        assert set(boxes) & material == set(), name
+        # Not markup-required, deliberately: a required box inside a HIDDEN group makes
+        # the form silently unsubmittable, which is the trap the hop dialog names.
+        assert all("required" not in attributes for attributes in boxes.values()), name
+    assert "never type a key" in _reading(dialog.text).lower()
+
+
+async def test_exactly_one_transport_s_boxes_are_ever_on_screen(
+    client, reality_params
+) -> None:
+    """The hop dialog's rule, on the other form that renders a group per transport.
+
+    ``static/app.js`` only re-hides on a ``change`` event, which an htmx swap does not
+    fire — so the server decides which group is visible, and a refusal that came back
+    showing two groups would offer two boxes under the same label.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "empty-1", "address": "192.0.2.41", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    offerable = transports_service.offerable_transports()
+    assert len(offerable) > 1, "one transport proves nothing about hiding the others"
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+    groups = re.findall(r'data-transport-group="([^"]+)"([^>]*)>', dialog.text)
+
+    assert [name for name, _ in groups] == offerable
+    assert [name for name, rest in groups if "hidden" not in rest] == [offerable[0]]
+
+    chosen = offerable[-1]
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={"transport_name": chosen},
+        headers={"HX-Request": "true"},
+    )
+    groups = re.findall(r'data-transport-group="([^"]+)"([^>]*)>', refused.text)
+    assert [name for name, rest in groups if "hidden" not in rest] == [chosen]
+
+
+async def test_enabling_a_transport_from_the_console_names_it_and_refreshes_the_tables(
+    client, reality_params
+) -> None:
+    """The console's answer: the dialog closes, a toast names what was enabled, and the
+    three collections that moved refresh themselves.
+
+    The toast says what has NOT happened yet, which is the whole of UI-PATTERNS §8 here:
+    the row exists and the material is minted, and the host is serving none of it until
+    the node is applied.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "empty-2", "address": "192.0.2.42", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    answer = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-port": "8443",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200, answer.text
+    reading = _reading(answer.text)
+    assert "vless-reality enabled on empty-2" in reading
+    assert "apply the node to push it" in reading
+    assert answer.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
+    assert "vless-reality" in (await client.get("/panel/nodes/table")).text
+
+
+async def test_the_pre_redesign_enable_form_still_gets_its_redirect(client) -> None:
+    """One route, two panels, until M9.6 deletes the second one.
+
+    The old page's form is a plain browser POST with its boxes named plainly, and it
+    still gets a 303 back to the page it was submitted from — otherwise a reload
+    re-posts it. The console sends the same fields named for their group and asks with
+    htmx. Do not delete this branch before the page.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "old-1", "address": "192.0.2.43", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    created = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "port": "8443",
+            "decoy_host": "www.example.com",
+            "server_names": "www.example.com",
+        },
+    )
+
+    assert created.status_code == 303
+    assert created.headers["location"] == f"/panel/nodes/{node_id}"
+
+
+async def test_a_box_left_empty_is_refused_under_that_box_when_enabling(
+    client, reality_params
+) -> None:
+    """M9.1's rule on M9.5's form: a refusal is a 422 with the message under the field.
+
+    The box picked is one the transport DECLARES it requires, found through the same
+    service call the form is built from rather than written down.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "empty-3", "address": "192.0.2.44", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    box = transports_service.PORT_FIELD
+    assert box in transports_service.operator_params("vless-reality")
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    errors = _described(refused, "error", prefix="enable")
+    assert errors.get(f"vless-reality-{box}") == panel_routes.NO_DEFAULT, errors
+    # What the operator typed comes back with it, so nothing has to be retyped.
+    assert 'value="www.example.com"' in refused.text
+
+
+async def test_a_form_with_no_protocol_chosen_is_refused_on_that_control(
+    client,
+) -> None:
+    """The one control the rest of the form is built from, and its own sentence."""
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "empty-4", "address": "192.0.2.45", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={"transport_name": ""},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    assert _described(refused, "error", prefix="enable") == {
+        "transport_name": panel_routes.NO_TRANSPORT_CHOSEN
+    }
+
+
+async def test_a_parameter_the_transport_refuses_lands_under_its_own_box(
+    client, reality_params
+) -> None:
+    """The transport's own complaint, under the box it is about — the same treatment the
+    hop dialog gives one, through the same allow-list."""
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "empty-5", "address": "192.0.2.46", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-port": "70000",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    errors = _described(refused, "error", prefix="enable")
+    assert "vless-reality-port" in errors, errors
+    assert 'value="70000"' in refused.text
+
+
+async def test_a_refusal_about_the_request_is_stated_above_the_form(
+    client, reality_params
+) -> None:
+    """Everything that is not about one box is stated once, above the form.
+
+    Driven with a transport already enabled on this node, which is the refusal an
+    operator actually meets: the list stops offering it, so this is what a stale dialog
+    answers with rather than a 409 the console would never swap.
+    """
+    node_id, _ = await a_node_with_an_offer(client, reality_params)
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-port": "8444",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    reading = _reading(refused.text)
+    assert "already enabled" in reading
+    assert 'role="alert"' in refused.text
+
+
+async def test_no_refusal_from_enabling_shows_what_it_just_minted(
+    client, monkeypatch, reality_params
+) -> None:
+    """The path where material is MINTED, guarded the way the replacement path is.
+
+    ``enable_transport`` mints the node's key material and validates it together with
+    what the operator typed, so a ``field_validator`` on a field this form does have a
+    box for can read the private key through ``info.data`` and quote it — Pydantic then
+    files the complaint at a real box name and the console's allow-list passes it. That
+    class is closed in the service, where the values are still in scope
+    (``relay.refused_fields``, docs/decisions.md 2026-09-10), which is why this asserts
+    the sentence ARRIVED with the value struck out of it rather than that it went
+    missing: a guard that dropped the message would cost the operator the only
+    actionable answer this form gives them.
+
+    Latent rather than live — no shipped transport's validator quotes its input — and
+    that is the reason to guard it rather than watch it.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "empty-6", "address": "192.0.2.47", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    monkeypatch.setattr(
+        nodes_service,
+        "profile",
+        lambda name: _RefusingProfile(_QuotesAFieldItWasValidatedWith),
+    )
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            "transport_name": "vless-reality",
+            "vless-reality-port": "8443",
+            "vless-reality-decoy_host": "www.example.com",
+            "vless-reality-server_names": "www.example.com",
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    under_its_box = _described(refused, "error", prefix="enable")[
+        "vless-reality-decoy_host"
+    ]
+    assert VALIDATOR_SAID in under_its_box
+    assert relay_service.WITHHELD in under_its_box
+
+
+async def test_setting_a_state_offers_only_the_transitions_this_node_may_make(
+    client,
+) -> None:
+    """A button whose only outcome is a 409 is worse than no button.
+
+    The list is ``NodeState.allowed_from`` and this test does not restate it either:
+    both sides read the same machine, so a change to it moves the dialog with no edit.
+    """
+    from control.app.models import NodeState
+
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "state-1", "address": "192.0.2.48", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/state")
+
+    assert dialog.status_code == 200
+    offered = re.findall(r'<option value="([^"]*)"', dialog.text)
+    assert offered == ["", *NodeState.allowed_from(NodeState.DRAFT)]
+    # Each one says what it does to a user's link rather than defining the word.
+    reading = _reading(dialog.text)
+    for state in NodeState.allowed_from(NodeState.DRAFT):
+        assert console_service.NODE_STATE_MEANS[state] in reading
+
+
+async def test_a_retired_node_says_so_and_offers_nothing(client) -> None:
+    """The one state with nowhere to go. No form, because there is nothing it could send.
+
+    Terminal by design: bringing back a record whose host is gone would put an address
+    that may now belong to a stranger into every user's subscription.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "state-2", "address": "192.0.2.49", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+    await client.post(f"/api/nodes/{node_id}/state", json={"state": "retired"})
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/state")
+
+    assert dialog.status_code == 200
+    assert "<form" not in dialog.text
+    reading = _reading(dialog.text)
+    assert "that is final" in reading
+    assert "replacement node" in reading
+
+
+async def test_putting_a_node_into_service_from_the_console_says_so(
+    client, session, reality_params
+) -> None:
+    """Charter criterion 2's own control, on the screen the criterion is written about.
+
+    An operator could create the node and enable its protocol on a screen and then had
+    to reach for curl to put it into service. ``friends-changed`` rides with the answer
+    because becoming serving hands every active user a credential on this node, which is
+    the fan-out the criterion rests on.
+    """
+    node_id, _ = await a_node_with_an_offer(client, reality_params)
+
+    answer = await client.post(
+        f"/panel/nodes/{node_id}/set-state",
+        data={"state": "active"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200, answer.text
+    assert "offer-1 is now active" in _reading(answer.text)
+    assert answer.headers["HX-Trigger"] == "nodes-changed, friends-changed"
+    session.expunge_all()
+    assert len(await nodes_service.serving_transports(session)) == 1
+
+
+async def test_a_transition_this_node_may_not_make_is_refused_on_that_control(
+    client, reality_params
+) -> None:
+    """Reachable from a dialog opened before somebody else moved the node — which is
+    exactly when the operator needs the current answer, and re-rendering the dialog at
+    422 is what gives them one."""
+    node_id, _ = await a_node_with_an_offer(client, reality_params)
+    await client.post(f"/api/nodes/{node_id}/state", json={"state": "retired"})
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/set-state",
+        data={"state": "active"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    # Stated without an id, because a retired node's dialog renders no control for it to
+    # be tied to — and a refusal must never be silent, least of all the one shape of it
+    # that has nowhere to land.
+    assert "cannot go from retired to active" in _reading(refused.text)
+    assert 'class="field-error" role="alert"' in refused.text
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    (("", "NO_STATE_CHOSEN"), ("elsewhere", "NO_SUCH_STATE")),
+    ids=("nothing chosen", "a word this codebase has never heard of"),
+)
+async def test_a_state_that_cannot_be_acted_on_lands_on_the_control(
+    client, state: str, expected: str
+) -> None:
+    """Both answers land under the one control they are about, and neither echoes what
+    arrived — it came from a form, and the dialog already lists what may be chosen."""
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "state-3", "address": "192.0.2.50", "location_label": "Testland"},
+    )
+    node_id = node.json()["id"]
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/set-state",
+        data={"state": state},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    errors = _described(refused, "error", prefix="node")
+    assert errors["state"] == getattr(panel_routes, expected)
+    if state:
+        assert state not in errors["state"]
+
+
+def test_every_state_a_node_may_move_to_says_what_it_means() -> None:
+    """The dialog's fallback for a state with no sentence exists so that a missing line
+    of prose is not a 500 on the screen the operator fixes things from. This is what
+    keeps that branch unreachable — a fifth state fails here, in the suite, instead."""
+    from control.app.models import NodeState
+
+    for state in NodeState:
+        assert console_service.NODE_STATE_MEANS.get(state), state
 
 
 # --- Hops (M9.2) --------------------------------------------------------------
@@ -1780,6 +2402,7 @@ async def every_console_surface(client, reality_params) -> list[str]:
     node_transport_id = await a_node_holding_material(client, reality_params)
     entry_end = await a_hop(client)
     friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    node_id = (await client.get("/api/nodes")).json()[0]["id"]
 
     return [
         "/panel/",
@@ -1801,6 +2424,12 @@ async def every_console_surface(client, reality_params) -> list[str]:
         f"/panel/keys/{node_transport_id}/params",
         f"/panel/keys/{entry_end}/rotate",
         f"/panel/keys/{entry_end}/params",
+        # M9.5's three, added in the change that added them. The first two are the Nodes
+        # screen's own row actions; the third is the confirmation behind one of them, and
+        # it is addressed by a node-transport rather than by a node.
+        f"/panel/nodes/{node_id}/transports",
+        f"/panel/nodes/{node_id}/state",
+        f"/panel/nodes/transports/{node_transport_id}/withdraw",
     ]
 
 
@@ -2207,6 +2836,31 @@ async def test_every_rotation_sentence_branches_on_who_holds_the_row(
             assert ("same link" in friends_sentence) or (
                 "users on it are unaffected" in friends_sentence
             ), what
+
+    # AND THE DIALOGS THAT PRODUCE THOSE ANSWERS, because the contradiction survived a
+    # round with its halves swapped: ``rotate_keys_dialog.html`` branched and
+    # ``replace_params_dialog.html`` did not, so a hop-end replacement was confirmed with
+    # "users keep the same link" and answered with "no user holds anything on it". A
+    # dialog and its answer disagreeing about who holds the row is the same defect
+    # whichever of the two is wrong, so both ends of both actions are read here.
+    async def as_read(node_transport_id: str, action: str) -> str:
+        """One dialog as a person reads it, with the markup's own line breaks closed up.
+
+        A dialog's prose is wrapped in the template, so a sentence that fits on one line
+        in ``services/console.py`` spans two here — assert on the raw text and "same
+        link" is absent from a dialog that says it in full.
+        """
+        markup = (await client.get(f"/panel/keys/{node_transport_id}/{action}")).text
+        return re.sub(r"\s+", " ", _reading(markup)).lower()
+
+    for action in ("rotate", "params"):
+        hop_dialog = await as_read(entry_end, action)
+        assert "no user holds anything on it" in hop_dialog, action
+        assert "same link" not in hop_dialog, action
+
+        # And the friend-facing dialog still says what it always said, so this is a
+        # branch rather than a sentence that stopped mentioning people.
+        assert "same link" in await as_read(node_transport_id, action), action
 
 
 async def test_the_replace_dialog_offers_no_box_for_key_material(

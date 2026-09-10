@@ -79,13 +79,27 @@
       {{ box(parameter, values, errors) }}
       {% endfor %}
 
+      {#
+        WHO HOLDS THIS ROW, branched the way rotate_keys_dialog.html branches — and the
+        contradiction that made it necessary is worth naming, because the halves were
+        swapped for a while: this dialog stated "users keep the same link" for a hop end
+        UNCONDITIONALLY, and the answer it produces (console.replacement_summary) says
+        "no user holds anything on it". The operator confirmed one sentence and was told
+        the opposite. A hop end's only consumer is the far NODE.
+      #}
+      {% if key.for_friends %}
       <div class="dialog-body text-muted">
         The node is re-rendered and pushed as soon as you submit. Users keep the same
         link and pick this up the next time their client refreshes it.
-        {%- if not key.for_friends %} This is one end of a hop: the far end is not
-        changed with it, so a value the two must agree on leaves the tunnel down until
-        the other end matches.{% endif %}
       </div>
+      {% else %}
+      <div class="dialog-body text-muted">
+        The node is re-rendered and pushed as soon as you submit. No user holds anything
+        on it: this is one end of a hop, a tunnel between two of our own nodes. The far
+        end is not changed with it, so a value the two must agree on leaves that tunnel
+        down until the other end matches.
+      </div>
+      {% endif %}
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
         <button class="btn btn-primary" type="submit">replace</button>
