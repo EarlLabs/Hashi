@@ -273,12 +273,26 @@ async def enable_transport(
         # operator "internal error" for what is really "your port is out of range" —
         # and a 500 also means the message they need is only in the server log.
         #
-        # Only the transport's own field errors are surfaced, never the input values:
-        # the merged mapping at this point contains the private key we just minted.
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
-        )
+        # NEVER THE VALUES of the merged mapping: it holds the private key minted three
+        # lines up. This used to say "only the transport's own field errors are
+        # surfaced, never the input values" and leave it at that — which is exactly the
+        # assumption ``docs/decisions.md`` (2026-09-10) exists to stop relying on. A
+        # validator's own message can quote what it was handed whichever field it names,
+        # and this message goes straight into the error envelope that answers both
+        # ``POST /api/nodes/{id}/transports`` and the panel's form.
+        #
+        # So the sentences are composed by ``relay.refused_fields``, which strikes every
+        # minted secret out of them — the one function every path that validates
+        # operator parameters against a transport's model shares, precisely so that
+        # "what may not be printed" cannot be answered four different ways.
+        #
+        # Imported inside the function to break a cycle: ``relay`` imports this module
+        # for ``node_view`` and ``render_params``. Same deferred-import reasoning as the
+        # two ``friends`` imports below.
+        from control.app.services import relay  # noqa: PLC0415
+
+        fields = relay.refused_fields(exc, withholding=minted.secrets.values())
+        problems = "; ".join(f"{where}: {message}" for where, message in fields.items())
         raise DomainError(
             f"transport {transport_name!r} rejected these parameters — {problems}"
         ) from exc

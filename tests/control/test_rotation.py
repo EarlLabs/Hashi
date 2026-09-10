@@ -27,7 +27,7 @@ import pydantic
 import pytest
 from sqlalchemy import select
 
-from control.app.errors import ParamsRefused
+from control.app.errors import DomainError
 from control.app.models import Credential, NodeState, NodeTransport
 from control.app.services import apply, keymaterial, nodes, relay, rotation
 
@@ -474,34 +474,60 @@ async def _material_on(session, node_transport_id: str) -> dict[str, str]:
     (_QuotesUnderABoxTheFormHas, _QuotesTheWholeMapping, _QuotesFromInsideAList),
     ids=("a box the form has", "no location at all", "a nested location"),
 )
-@pytest.mark.parametrize("path", ("replace", "rotate"))
-async def test_neither_rotation_path_lets_a_refusal_carry_key_material(
+@pytest.mark.parametrize("path", ("enable", "replace", "rotate"))
+async def test_no_path_validating_a_transport_s_parameters_carries_key_material(
     client, session, monkeypatch, reality_params, model, path: str
 ) -> None:
-    """The guard, at the point the values are still in scope, on both paths at once.
+    """The guard, at the point the values are still in scope, on every path at once.
 
-    Every location shape and both callers, because the class being closed is the class
+    Every location shape and every caller, because the class being closed is the class
     of MESSAGES: a complaint may be quoting material whichever field it names, so a rule
     about WHERE it is filed can only ever be the second line of defence. What is asserted
-    is that no value this row holds — nor any minted in the same call — survives into
+    is that no value the row holds — nor any minted in the same call — survives into
     ``fields`` or into ``message``, while the transport's own words still do.
+
+    ENABLING is on this list because it was the path that was missed. It validates the
+    same shape of mapping and had its own hand-rolled flattening of ``exc.errors()``,
+    with a comment asserting the property rather than a call that holds it — and it
+    answers ``POST /api/nodes/{id}/transports`` and the panel's own form. Its refusal is
+    a plain ``DomainError`` with no ``fields`` on it, which is why the sentences under
+    test here are read off whatever the exception actually carries. The hop path is the
+    fourth and is proved in ``test_relay.py``, beside the code it belongs to.
     """
     _, node_transport_id, _, _ = await fleet(client, session, reality_params)
     monkeypatch.setattr(rotation, "profile", lambda name: _RefusingProfile(model))
+    monkeypatch.setattr(nodes, "profile", lambda name: _RefusingProfile(model))
 
     minted: list = []
-    freshly = keymaterial.rotate
+    freshly = keymaterial.mint
 
     def recording(specs, scope):
+        # ``mint`` and not ``rotate``: ``rotate`` is ``mint`` under another name at the
+        # call site that means something different, so patching the one records both.
         fresh = freshly(specs, scope)
         minted.append(fresh)
         return fresh
 
-    monkeypatch.setattr(keymaterial, "rotate", recording)
+    monkeypatch.setattr(keymaterial, "mint", recording)
     held = await _material_on(session, node_transport_id)
 
-    with pytest.raises(ParamsRefused) as refused:
-        if path == "replace":
+    with pytest.raises(DomainError) as refused:
+        if path == "enable":
+            fresh_node = await client.post(
+                "/api/nodes",
+                json={
+                    "name": "leaf-se",
+                    "address": "192.0.2.11",
+                    "location_label": "Sweden",
+                },
+            )
+            await nodes.enable_transport(
+                session,
+                node_id=fresh_node.json()["id"],
+                transport_name="vless-reality",
+                params=reality_params,
+            )
+        elif path == "replace":
             await rotation.replace_params(
                 session,
                 node_transport_id=node_transport_id,
@@ -513,10 +539,12 @@ async def test_neither_rotation_path_lets_a_refusal_carry_key_material(
         else:
             await rotation.rotate_keys(session, node_transport_id=node_transport_id)
 
-    if path == "rotate":
+    if path == "replace":
+        assert not minted, "this path must preserve existing material, not mint any"
+    else:
         # Nothing is written before the refusal, so the material this validator quoted
         # is only ever in memory — and a sweep of the database alone would miss it.
-        assert minted, "nothing was minted, so this run proves nothing about a rotation"
+        assert minted, f"nothing was minted, so this run proves nothing about {path}"
         held |= {
             f"the {name} just minted": value
             for fresh in minted
@@ -524,7 +552,13 @@ async def test_neither_rotation_path_lets_a_refusal_carry_key_material(
         }
     assert held
 
-    sentences = [refused.value.message, *refused.value.fields.values()]
+    # Whatever this particular refusal carries: ``ParamsRefused`` has both halves, a
+    # plain ``DomainError`` has only the message, and BOTH are rendered by a caller that
+    # never chose to.
+    sentences = [
+        refused.value.message,
+        *getattr(refused.value, "fields", {}).values(),
+    ]
     for label, value in held.items():
         for sentence in sentences:
             if value in sentence:
@@ -535,6 +569,6 @@ async def test_neither_rotation_path_lets_a_refusal_carry_key_material(
     # Non-vacuous, and the two halves of the claim: the transport's own sentence still
     # travels (a guard that dropped it would pass the loop above), and something was
     # actually struck out of it.
-    carried = " ".join(refused.value.fields.values())
+    carried = " ".join(sentences)
     assert VALIDATOR_QUOTED in carried
     assert relay.WITHHELD in carried

@@ -167,15 +167,35 @@ def refused_fields(
 ) -> dict[str, str]:
     """A transport's refusal as ``{parameter: sentence}``, carrying no held value.
 
-    THE ONE PLACE that decides what may not be printed, for every path that validates a
-    mapping holding key material — establishing a hop, rotating a node's material, and
-    replacing its parameters. It was three places, each sorting the risk differently at
-    its own caller, which is how one of them stopped being updated: the console's
-    allow-list closed the class of LOCATIONS and left the class of MESSAGES open. A
-    ``field_validator`` on a field the form legitimately has a box for reads the rest of
-    the already-validated mapping through ``info.data``, so Pydantic files the complaint
-    at a real box name and the sentence — carrying the node's decrypted private key —
-    is printed as visible text. See ``docs/decisions.md`` (2026-09-10).
+    THE ONE PLACE that decides what may not be printed. Every path in this codebase that
+    validates operator parameters against a transport's own model composes its refusal
+    here, and the list is written out rather than described so that the next path added
+    can see whether it is on it:
+
+    * ``nodes.enable_transport`` — first enabling a transport on a node;
+    * ``relay.establish_hop`` — both ends of a hop, below;
+    * ``rotation.rotate_keys`` — re-minting a node's material;
+    * ``rotation.replace_params`` — replacing an operator-supplied parameter.
+
+    All four validate a mapping into which freshly minted or stored secrets have just
+    been merged. It was four separate implementations, each answering "what may not be
+    printed" differently at its own caller, which is how one of them stopped being
+    updated: the console's allow-list closed the class of LOCATIONS and left the class
+    of MESSAGES open. A ``field_validator`` on a field the form legitimately has a box
+    for reads the rest of the already-validated mapping through ``info.data``, so
+    Pydantic files the complaint at a real box name and the sentence — carrying the
+    node's decrypted private key — is printed as visible text. See
+    ``docs/decisions.md`` (2026-09-10).
+
+    TWO THINGS THAT VALIDATE AND ARE DELIBERATELY NOT HERE, so that "every path" above
+    means what it says. The add-node form (``panel/routes.py``) validates a schema that
+    carries an SSH private key, but composes its own sentence from the error's TYPE and
+    never reads ``msg`` at all — it cannot print a validator's words, so there is
+    nothing here to strike. And ``apply.validate_before_push`` puts an external
+    checker's output about a RENDERED config into a failure message; that is not a
+    ``ValidationError`` and not a mapping of fields, and closing it is a different guard
+    on a different value — it is not covered by this function and must not be assumed to
+    be.
 
     So the values are removed here, while they are still in scope, rather than sorted
     four surfaces later: this closes ``fields``, the flattened message, the console, the
@@ -191,9 +211,20 @@ def refused_fields(
     asymmetry is the point: over-redaction costs a word, under-redaction prints a key.
 
     Matching is exact substring, longest value first so that a value containing another
-    is struck whole. The location is redacted too — a name is normally a Python
-    identifier and safe, but a nested one can carry a mapping key, and this costs one
-    line.
+    is struck whole.
+
+    WHAT THIS CANNOT SEE, which is the residual after it and the accurate record of it:
+    a value the validator TRANSFORMED before quoting — re-encoded (base64 to hex),
+    truncated to a prefix, case-folded, or reversed — is not the same substring and
+    survives. Nothing downstream covers that either; the console's allow-list is about
+    where a complaint is filed, not what it says. A transport whose validator quotes a
+    derivative of what it was given is the shape this guard would miss, and the only
+    real answer to it is the one the codebase already relies on everywhere else: a
+    transport's validator quotes the operator's input and not the material minted
+    alongside it.
+
+    The location is redacted too — a name is normally a Python identifier and safe, but
+    a nested one can carry a mapping key, and this costs one line.
     """
     values = sorted(
         {str(value) for value in withholding if value is not None and value != ""},
