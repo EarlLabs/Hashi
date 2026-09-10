@@ -322,6 +322,27 @@ same class as the redaction decision of 2026-09-10 but not the same mechanism: i
 is not a `ValidationError`, it carries no fields, and the withholding set would be
 the whole node's material rather than one mapping's.
 
+**This is demonstrable, not hypothetical, and the only thing standing between it
+and the key is luck.** Probed live by the reviewer: `xray run -test` quotes Reality
+material verbatim —
+
+```
+Failed to start: main: failed to load config files: [/tmp/.../config.json] >
+infra/conf: Failed to build REALITY config. > infra/conf: invalid "privateKey":
+<the node's real private key>
+```
+
+— and `edge/checker.py:215` puts `stderr + stdout` into `output`. Measured through
+`edge.checker.validate`: `len(output) == 415`, with the key at offset ~380, so
+`result.output[:300]` cuts it off **by about eighty characters** — and only because
+the fixed Xray banner (~190 chars) plus the temp path push it out of the window.
+**A shorter temp path, a different upstream message shape, or an Xray version bump
+reinstates the leak.** Do not read `[:300]` as the guard; it is a coincidence that
+currently holds.
+
 Pre-existing, out of the fix's scope, and recorded rather than silently inherited.
 **`relay.refused_fields`'s docstring names it as deliberately not covered**, so the
-next person adding a refusal path is not told the class is fully closed.
+next person adding a refusal path is not told the class is fully closed. Closing it
+needs a different instrument from the redaction decision — the withholding set is
+the whole node's material rather than one mapping's, and there is no field mapping
+to sort — which is why it is a task of its own rather than a line in this one.
