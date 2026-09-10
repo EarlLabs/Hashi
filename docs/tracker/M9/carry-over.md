@@ -283,13 +283,45 @@ refusal. Verified at the baseline with the fix stashed, so it is **pre-existing*
 not introduced.
 
 This is the live consequence of the `shared_between_peers` entry above, and it is
-worse than that entry describes: the carry-over says the operator gets two valid
-configs and a handshake that never completes, but on this carrier they do not even
-get that far — they get an unhandled exception.
+**much** worse than that entry describes. Two facts settle what the fix has to do:
+
+1. **The rotation is already committed when it fails.** `rotation.py` does
+   `await session.commit()` and only then `_push(...)`, and `HopNotRenderable` is
+   raised from `render_for_node`, which sits **outside** `apply_node`'s `try` — so
+   it escapes uncaught, `_push`'s `except DomainError` never sees it (it
+   subclasses `Exception`), the node is **not** marked degraded, and
+   `_record_failure` never runs. The entry end's PSK has been rewritten and the
+   tunnel is down before anything reports a problem.
+2. **The operator is told the opposite.** `app.js` swaps only 422, but
+   `htmx:responseError` fires on a 500 and calls `showFailure`, so a banner does
+   appear — reading *"the control plane refused that request (500). **Nothing was
+   changed.** Reload the page; if it happens again, the container's log has the
+   reason."*
+
+So the honest bug report is not "raises a 500" and not "shows nothing". It is:
+**it silently breaks the hop and then affirmatively states that nothing was
+changed.** A false reassurance is worse than an error, because the operator has no
+reason to look.
 
 **Not fixed, deliberately: fixing it IS the deferred symmetric-rotation fix** —
-mint once and copy across both ends in one transaction, then push both nodes. A
-`try/except` that turns the 500 into a sentence would be worse than the 500,
-because it would make a broken action look like a handled one. It is also why the
+mint once and copy across both ends **in one transaction**, then push both nodes.
+Fact 1 is why it must be one transaction rather than a reordering of commit and
+push: the material must never be committed in a state where only one end holds it.
+A `try/except` that turns the 500 into a sentence would be worse than the 500,
+because it would make a broken action look like a handled one — and fact 2 shows
+that is already happening. It is also why the
 surface-level hop-end test added with the redaction drives **replace** rather than
 **rotate**.
+
+## Reported by the fix loop, not closed — the same exposure class, a different mechanism
+
+`control/app/services/apply.py`'s `validate_before_push` puts an external
+checker's `result.output[:300]` into a `NodeOperationFailed` message. That output
+is **about a rendered config, which contains the node's key material**. It is the
+same class as the redaction decision of 2026-09-10 but not the same mechanism: it
+is not a `ValidationError`, it carries no fields, and the withholding set would be
+the whole node's material rather than one mapping's.
+
+Pre-existing, out of the fix's scope, and recorded rather than silently inherited.
+**`relay.refused_fields`'s docstring names it as deliberately not covered**, so the
+next person adding a refusal path is not told the class is fully closed.
