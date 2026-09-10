@@ -899,22 +899,28 @@ class _Controls(html.parser.HTMLParser):
     Written here rather than pulled in, because adding a dependency to `control`'s test
     path is an architect decision and the stdlib parser is enough: this reads RENDERED
     markup, not a template, so none of the Jinja that defeats it is present.
+
+    ``opened`` collects the disclosures that carry the ``open`` ATTRIBUTE, by the group
+    they belong to. Read as an attribute and not as a substring: `" open" in document`
+    matches the word anywhere in any prose the dialog happens to contain, so it would
+    pass a refusal that came back behind a shut summary the day someone writes a
+    sentence with "open" in it — which this dialog now does.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.controls: list[tuple[str, dict, bool]] = []
+        self.opened: set[str] = set()
         self._depth = 0
 
     def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
         if tag == "details":
             self._depth += 1
-        if tag in {"input", "select", "textarea"}:
-            attributes = dict(attrs)
-            if attributes.get("name"):
-                self.controls.append(
-                    (attributes["name"], attributes, self._depth > 0)
-                )
+            if "open" in attributes:
+                self.opened.add(attributes.get("data-transport-group", ""))
+        if tag in {"input", "select", "textarea"} and attributes.get("name"):
+            self.controls.append((attributes["name"], attributes, self._depth > 0))
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self.handle_starttag(tag, attrs)
@@ -924,10 +930,28 @@ class _Controls(html.parser.HTMLParser):
             self._depth -= 1
 
 
-def _form_controls(markup: str) -> list[tuple[str, dict, bool]]:
+def _read(markup: str) -> _Controls:
     parser = _Controls()
     parser.feed(markup)
-    return parser.controls
+    return parser
+
+
+def _form_controls(markup: str) -> list[tuple[str, dict, bool]]:
+    return _read(markup).controls
+
+
+def _hints(response) -> dict[str, str]:
+    """Each row's full-width hint, by the control it describes.
+
+    Read off the id the macro wires into ``aria-describedby``, so this asserts the
+    thing a screen reader is handed rather than a div that happens to sit nearby.
+    """
+    return {
+        name: html.unescape(text).strip()
+        for name, text in re.findall(
+            r'id="hop-([^"]+)-hint"[^>]*>(.*?)</div>', response.text, re.S
+        )
+    }
 
 
 async def test_the_hops_screen_lists_the_fleet_s_tunnels(client) -> None:
@@ -997,17 +1021,28 @@ async def test_establishing_a_hop_asks_three_questions(client) -> None:
     )
 
     # And every remaining parameter is inside it, for BOTH ends — a hop's two ends are
-    # not interchangeable, so one shared set of boxes would be a different bug.
+    # not interchangeable, so one shared set of boxes would be a different bug. Over
+    # EVERY hop-capable transport, because the dialog renders a group per transport and
+    # hides all but the chosen one: expecting only the first one's boxes would fail
+    # against a correct dialog the day a second carrier ships.
     inside = {name for name, _, behind in controls if behind}
     expected = {
         f"{side}-{parameter.name}"
         for side in ("entry", "leaf")
-        for parameter in transports_service.hop_tuning(transport)
+        for carrier in transports_service.hop_transports()
+        for parameter in transports_service.hop_tuning(carrier)
     }
     assert inside == expected
-    # The summary states the cost of opening it, in the transport's own count.
-    assert f"{len(transports_service.hop_tuning(transport))} parameters per end" \
-        in dialog.text
+
+    # The summary is what an operator sees while the disclosure is SHUT, so it carries
+    # both numbers: how many boxes there are, and how many of them this transport
+    # declares no default for. Derived from the transport, so it cannot go stale.
+    boxes = transports_service.hop_tuning(transport)
+    must_fill = [parameter for parameter in boxes if parameter.required]
+    assert f"advanced tuning — {len(boxes)} parameters per end" in dialog.text
+    assert f"{len(must_fill)} of them required by this transport" in dialog.text
+    # …and the same warning survives with the disclosure closed, in the dialog's body.
+    assert "Open advanced tuning before you submit" in dialog.text
 
 
 async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> None:
@@ -1023,31 +1058,42 @@ async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> 
     transport = a_hop_transport()
     fields = profile(transport).params_model.model_fields
 
-    controls = _form_controls((await client.get("/panel/hops/new")).text)
-    behind = {name: attrs for name, attrs, is_behind in controls if is_behind}
+    dialog = await client.get("/panel/hops/new")
+    behind = {
+        name: attrs for name, attrs, is_behind in _form_controls(dialog.text) if is_behind
+    }
     assert behind, "nothing is behind the disclosure at all"
+
+    described = _hints(dialog)
 
     for name, attrs in behind.items():
         parameter = name.split("-", 1)[1]
         info = fields[parameter]
         placeholder = attrs.get("placeholder", "")
-        assert placeholder, f"{name} has no placeholder, so an empty box says nothing"
+        # Either string may carry the guidance — a value goes in the box, prose goes
+        # under the row where it can be read — but a box that says NEITHER leaves the
+        # operator with no way to know what it takes.
+        assert placeholder or described.get(name), (
+            f"{name} carries neither a placeholder nor a hint, so an empty box says "
+            "nothing at all"
+        )
 
         if not info.is_required():
             # The transport declares a default, so the box may promise it — and the
             # promise is kept: an empty box is dropped before the model sees it
             # (services/transports.py:parse_form) and the model fills it with this.
-            assert placeholder == str(info.get_default(call_default_factory=True)), name
+            default = info.get_default(call_default_factory=True)
+            expected = (
+                (", ".join(str(item) for item in default) or "none")
+                if isinstance(default, (list, tuple, set, frozenset))
+                else str(default)
+            )
+            assert placeholder == expected, name
             continue
 
-        # No default to promise, so the box states what it will accept — either in the
-        # transport's own words, or as the range it declared.
-        if placeholder == (info.description or "").strip():
-            continue
-
-        # A range, and every number in it has to come from the field's own constraints
-        # or from the transport's declared port range — never from a value written into
-        # a template.
+        # No default to promise, so a placeholder — if there is one — is the range the
+        # field or its transport declared, and every number in it has to come from one
+        # of those two. Never from a value written into a template.
         declared = {
             str(getattr(constraint, edge, None))
             for constraint in info.metadata
@@ -1059,6 +1105,13 @@ async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> 
                 f"{name}'s placeholder shows {number}, which its transport declares "
                 "nowhere"
             )
+
+        # And where the transport describes the field, that description reaches the
+        # operator IN FULL, under the row, rather than being truncated inside a 136px
+        # box — these are the two longest strings in the form and the two fields most
+        # easily got wrong.
+        if info.description:
+            assert described.get(name) == info.description.strip(), name
 
 
 async def test_the_hop_dialog_never_asks_for_key_material(client) -> None:
@@ -1135,7 +1188,11 @@ async def test_a_box_left_empty_is_refused_under_that_box(client) -> None:
     """
     entry_id, leaf_id = await two_nodes(client)
     transport = a_hop_transport()
-    parameter = transports_service.hop_tuning(transport)[0].name
+    # A box the transport declares no default for — one it defaults would be correctly
+    # accepted empty, which is a different test.
+    parameter = next(
+        box.name for box in transports_service.hop_tuning(transport) if box.required
+    )
 
     form = {
         "entry_node_id": entry_id,
@@ -1161,8 +1218,10 @@ async def test_a_box_left_empty_is_refused_under_that_box(client) -> None:
     assert controls[f"entry-{parameter}"].get("aria-invalid") == "true"
     # The far end's value is untouched: a refusal about one box may not empty another.
     assert controls[f"leaf-{parameter}"].get("value") == kept
-    # …and the disclosure comes back OPEN, or the message is behind a closed summary.
-    assert "<details" in response.text and " open" in response.text
+    # …and the disclosure comes back OPEN, or the message is behind a shut summary.
+    # The attribute on the chosen transport's own group, not the word anywhere in the
+    # document — the dialog's own body now contains "Open advanced tuning…".
+    assert _read(response.text).opened == {transport}
 
     assert (await client.get("/api/hops")).json() == []
 
@@ -1229,10 +1288,12 @@ async def test_tearing_down_a_hop_confirms_first_then_says_what_is_left(client) 
 def test_a_box_promises_a_default_only_when_its_transport_declares_one() -> None:
     """The rule ``tuning_field`` applies, over a model this suite writes itself.
 
-    Against the shipped transports the "declares a default" branch never runs — every
-    hop parameter they declare is required — so the rule that matters most is the one
-    with no coverage from the dialog above. Written against a model of this test's own
-    so the branch is exercised whatever the image happens to ship.
+    The dialog above exercises this branch through exactly one shipped field, so the
+    rule that matters most is nearly uncovered by it: ``docs/decisions.md``
+    (2026-09-10) records that no transport declares a default for a hop parameter it
+    REQUIRES, and that none may be manufactured in `control`. This is what happens the
+    day one does — which is the correction that entry points at — written against a
+    model of this test's own so the branch holds whatever the image ships.
     """
     from pydantic import BaseModel, Field
 
@@ -1254,7 +1315,10 @@ def test_a_box_promises_a_default_only_when_its_transport_declares_one() -> None
     assert box("bounded").required
     # `gt` is not `ge`: the first value the field accepts is the one after it.
     assert box("floor_only").placeholder == "5 or more"
-    assert box("described").placeholder == "what this one takes"
+    # A description is the ROW's hint and never the box's text: 136px truncates it, and
+    # guidance the operator cannot read is guidance they do not have.
+    assert box("described").placeholder == ""
+    assert box("described").hint == "what this one takes"
     # A declared default is the one case where the placeholder is a promise, so it is
     # also the one case where it must be the value the transport would actually use.
     assert box("defaulted").placeholder == "7"
@@ -1266,6 +1330,7 @@ def test_a_box_promises_a_default_only_when_its_transport_declares_one() -> None
     # Nothing declared and nothing to fall back on — the transport's problem, said out
     # loud rather than papered over here.
     assert box("unbounded").placeholder == ""
+    assert box("unbounded").hint == ""
 
 
 def test_the_port_is_the_one_field_name_the_console_knows() -> None:

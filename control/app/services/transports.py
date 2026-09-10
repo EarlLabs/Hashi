@@ -3,8 +3,9 @@
 WHAT: ``operator_params(name)`` — the fields a transport requires that `control`
       does NOT mint for the operator — ``parse_form(name, items)``, which turns a
       flat HTML form into the mapping that transport's model expects, and, since M9.2,
-      ``hop_transports()`` and ``hop_tuning(name)``: which transports may carry an
-      entry→leaf hop, and what each of their boxes should say before it is filled.
+      ``hop_transports()``, ``hop_parameters(name)`` and ``hop_tuning(name)``: which
+      transports may carry an entry→leaf hop, which of their fields an operator may
+      supply, and what each of those boxes should say before it is filled.
 WHY:  two screens need exactly this list and must not disagree: the "enable a
       transport" form (item 7) and the "replace parameters" form (item 24). When the
       two were computed separately, a transport could offer a field on one screen and
@@ -161,59 +162,100 @@ def hop_transports() -> list[str]:
     )
 
 
-def hop_tuning(transport_name: str) -> tuple[TuningField, ...]:
-    """Every parameter one end of a hop needs, with what its box should say.
+def hop_parameters(transport_name: str) -> list[str]:
+    """Every field of ``transport_name`` an operator may supply, sorted.
 
-    The same list ``operator_params`` returns — the transport's own required fields
-    minus everything it mints — so the dialog and the two older forms cannot disagree
-    about what an operator supplies. What is added is the text of the box, which is the
-    whole of UI-PATTERNS §6: twenty-two boxes behind a disclosure are only leavable
-    alone if each of them says what leaving it alone does.
+    ``operator_params`` minus its ``is_required`` filter, and the difference is the
+    whole point rather than a nuance. That filter is right for its own two callers —
+    the enable and rotate forms ask what an operator MUST supply — and wrong here: a
+    field with a declared default is by definition not required, so filtering on it
+    would drop exactly the parameters whose box can honestly promise something. The
+    dialog would then show no box at all for a field the transport defaults, and adding
+    a default to a transport field would make its box vanish rather than gain a
+    placeholder.
+
+    Still minus every name the transport declares as key material, including the public
+    counterpart of a secret: those are minted, never typed, and a hop must not become
+    the place they surface.
+    """
+    transport = profile(transport_name)
+    generated = {spec.name for spec in transport.meta.key_material}
+    generated |= {
+        spec.public_name for spec in transport.meta.key_material if spec.public_name
+    }
+    return sorted(
+        field
+        for field in transport.params_model.model_fields
+        if field not in generated
+    )
+
+
+def hop_tuning(transport_name: str) -> tuple[TuningField, ...]:
+    """Every parameter one end of a hop takes, with what its box should say.
+
+    ``hop_parameters`` decides which boxes exist; ``tuning_field`` decides what each of
+    them says. The split matters because the two questions fail differently: a missing
+    box is a knob the operator cannot reach, and a box with nothing in it is a knob
+    they cannot leave alone.
+
+    Note what is NOT filtered here: a parameter a transport happens to ignore at a hop
+    end. Nothing declares that machine-readably, and control guessing it would be
+    control deciding what a protocol does with its own field. So it is offered, with
+    the transport's own default in it — which is the answer that changes nothing.
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields
     return tuple(
         tuning_field(name, fields[name], transport.meta.port_range)
-        for name in operator_params(transport_name)
+        for name in hop_parameters(transport_name)
     )
 
 
 def tuning_field(name: str, info: FieldInfo, port_range: tuple[int, int]) -> TuningField:
-    """One box's text, read out of the transport's declaration in a fixed order.
+    """One box's text, read out of the transport's declaration.
 
-    The order is the point, so it is written here once rather than guessed per screen:
+    Two strings, with different jobs, and keeping them apart is the whole of it:
 
-    1. **the default the transport declares.** Then the placeholder is literally the
-       value an empty box produces, and "leave it alone" is true.
-    2. **the bounds the field declares** (``Field(ge=…, le=…)``), rendered as a range.
-       The transport gives no default, so the box states what it will accept instead of
-       pretending there is one to fall back on.
-    3. **the range the TRANSPORT declares for its listening port**, for the one field
-       the hop contract names — see ``PORT_FIELD``. A port is the one parameter with no
-       bounds on the field itself, because a transport validates it against its own
-       ``port_range`` rather than against a constraint.
-    4. **the description the field declares**, which is where a transport puts the
-       shape of a value that is neither a number nor bounded.
+    ``placeholder`` — what an EMPTY box produces, when that is a value. The default the
+    transport declares, else the range the field declares, else the range the transport
+    declares for its listening port (see ``PORT_FIELD``, the one field name this module
+    knows). A placeholder is therefore either a promise the form keeps or a statement
+    of what the box will take — never a suggested value the transport would not use,
+    which reads as a promise and is not one.
 
-    A field that declares none of the four comes back with an empty placeholder, and
-    that is a defect in the transport rather than something to paper over here — the
-    console's own test refuses it, because a box with nothing in it is exactly the box
-    an operator cannot leave alone.
+    ``hint`` — the field's own ``description``, always, in full. It sits full-width
+    under the row rather than inside the box (see ``.tuning-field`` in app.css): the
+    input is 136 characters of nothing at 136px, and a description truncated at
+    seventeen characters is guidance the operator cannot read on the two fields most
+    easily got wrong.
+
+    A field that declares none of these comes back with both empty, and that is a defect
+    in the transport rather than something to paper over here — the console's own test
+    refuses it, because a box saying nothing at all is exactly the box an operator
+    cannot leave alone.
+
+    **No shipped transport declares a default for a hop parameter today, and none may
+    be manufactured here.** Why, field by field, is ``docs/decisions.md`` (2026-09-10),
+    which also records that this corrects the plan's M9 line — the short version is that
+    a port and an address are values ``CLAUDE.md`` forbids in code, a fleet-wide
+    obfuscation value would itself be the fingerprint, and an MTU chosen here would be
+    `control` overruling `edge` about a protocol. The order above is what makes that
+    correctable elsewhere: the day a transport declares a default, its box promises it
+    with no change to this function's callers.
     """
     declared = _declared_default(info)
+    description = (info.description or "").strip()
     if declared is not None:
-        return TuningField(name=name, placeholder=declared, hint="", default=declared)
+        return TuningField(
+            name=name, placeholder=declared, hint=description, default=declared
+        )
 
     bounds = _declared_bounds(info)
     if bounds is None and name == PORT_FIELD:
         bounds = f"{port_range[0]}–{port_range[1]}"
-
-    description = (info.description or "").strip()
-    if bounds is None:
-        # The description is doing the placeholder's job, so it must not also be
-        # repeated under the box: the same sentence twice reads as two different rules.
-        return TuningField(name=name, placeholder=description, hint="", default=None)
-    return TuningField(name=name, placeholder=bounds, hint=description, default=None)
+    return TuningField(
+        name=name, placeholder=bounds or "", hint=description, default=None
+    )
 
 
 def _declared_default(info: FieldInfo) -> str | None:

@@ -132,19 +132,29 @@
       {% for name in transports %}
       {#
         One disclosure per transport, all but the first hidden until the select says
-        otherwise. The count in the summary is `tuning`'s own length — the transport's
-        declaration decides how many boxes there are, so the label cannot come to say
-        a number the form does not have.
+        otherwise.
+
+        BOTH numbers in the summary are `tuning`'s own — how many boxes this transport
+        has, and how many of them it declares no default for. Derived and not written,
+        because the whole failure this line exists to prevent is a count that has gone
+        stale: an operator who does what the design tells them to do — answer three
+        questions and leave the tuning alone — must find out that this transport
+        defaults almost nothing BEFORE they submit, not from eleven refusals during a
+        rotation. The summary is what is visible while the disclosure is shut, so it is
+        where that has to be said.
       #}
+      {% set must_fill = tuning[name] | selectattr("required") | list %}
       <details class="disclosure" data-transport-group="{{ name }}"
                {% if not loop.first and values.get('transport_name') != name %}hidden{% endif %}
                {% if open_tuning and values.get('transport_name') == name %}open{% endif %}>
-        <summary>advanced tuning — {{ tuning[name] | length }} parameters per end</summary>
+        <summary>advanced tuning — {{ tuning[name] | length }} parameters per end,
+          {{ must_fill | length }} of them required by this transport</summary>
         <p class="text-muted section-note">
           Each box shows what this transport declares for it — the value it uses when
-          the box is left empty, or the shape it will accept when it declares no
-          default. Key material is generated for both ends and the value the two must
-          share is minted once for both. Never type a key here.
+          the box is left empty, or the range it will accept when it declares no
+          default. A box with no default behind it is refused when it is left empty,
+          not filled in. Key material is generated for both ends and the value the two
+          must share is minted once for both. Never type a key here.
         </p>
         <div class="grid-2">
           {% for side in sides %}
@@ -169,9 +179,12 @@
         network by definition, so a protocol that is identified there is refused rather
         than offered.
         {% else %}
-        Both ends are written together, and the hop exists only in the database until
-        you apply both nodes. Nothing reaches a user through it before that, and no
-        user has to do anything when it does.
+        Open advanced tuning before you submit. A parameter the chosen transport
+        declares no default for is refused when its box is left empty, rather than
+        filled in — the summary above says how many of them there are. Both ends are
+        then written together, and the hop exists only in the database until you apply
+        both nodes. Nothing reaches a user through it before that, and no user has to
+        do anything when it does.
         {% endif %}
       </div>
       <div class="dialog-actions">
