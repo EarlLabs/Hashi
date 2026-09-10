@@ -16,7 +16,7 @@ console screen.
 > the only unboosted, noted entry — was deleted along with the pre-redesign
 > pages. Every console entry is boosted now, so there is nothing to set. Passing
 > `boost: True` is harmless and does nothing; do not copy this line expecting it
-> to matter. The reasoning sits at `control/app/panel/routes.py:119-122` and
+> to matter. The reasoning sits at `control/app/panel/routes.py:118-121` and
 > `nav.html:8-11`.
 
 **Screen template shape:** `{% include "panel/console_header.html" %}` then
