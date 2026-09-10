@@ -1249,13 +1249,16 @@ async def test_the_sign_in_refusal_is_a_failure_and_not_a_notice(anonymous) -> N
     assert "Those credentials were not accepted." in refused.text
 
 
-# Defective banners the scan below must catch, keyed by the shape that used to hide
-# them. Each one was pasted into a real template first and watched to see the suite
-# stay green, which is the only evidence a scan of this kind is worth anything: the
-# first version demanded that `class` come first and be double-quoted, and the second
-# read the file with `<div\b[^>]*>` and split the class attribute on whitespace. Add
-# the next hole here, in the shape that found it.
+# Defective banners the scan below must catch, keyed by the shape that hid them, and
+# grouped by WHICH version of the scan each one got past. The provenance is per entry
+# on purpose: this table is documentation as much as it is a test, and a table claiming
+# evidence it does not have is the defect this whole file exists to prevent, one level
+# up. Add the next hole here, in the shape that found it, under the group it belongs to.
 AWKWARD_BANNERS = {
+    # Seven the scan before M9.1's fixes looked at and called fine. Each was pasted
+    # into a real template beside a real banner and the suite watched to stay green:
+    # that version demanded `class` come first and be double-quoted, then read the file
+    # with `<div\b[^>]*>` and split the class attribute on whitespace.
     "on an element that is not a div": (
         '<p class="banner banner-failure" role="status">'
         '<span class="banner-label">failed</span>it failed</p>'
@@ -1272,6 +1275,9 @@ AWKWARD_BANNERS = {
         """<div class="banner {{ 'banner-failure' if failed else '' }}" role="status">"""
         '<span class="banner-label">note</span>nothing is wrong</div>'
     ),
+    # One the old scan already CAUGHT, kept because it is the rest of the family and a
+    # reader should not have to guess where the family's edges are. Its `{% if %}` holds
+    # no `>`, so `<div\b[^>]*>` ran straight past it and read the role fine.
     "whose role is behind a Jinja block": (
         '<div class="banner" {% if failed %}role="alert"{% endif %}>'
         '<span class="banner-label">failed</span>it failed</div>'
@@ -1286,6 +1292,21 @@ AWKWARD_BANNERS = {
     ),
     "whose element is never closed": (
         '<div class="banner" role="status"><span class="banner-label">note</span>'
+    ),
+    # And three the FIRST version of this rewrite passed: it read one occurrence of each
+    # attribute, so an attribute written once per branch was judged on whichever branch
+    # came first. Found by review rather than by mutating a template.
+    "declaring its role in two Jinja branches": (
+        '<div class="banner"{% if failed %} role="status"{% else %} role="alert"'
+        '{% endif %}><span class="banner-label">failed</span>it failed</div>'
+    ),
+    "declaring its role in two Jinja branches beside a failure class": (
+        '<div class="banner banner-failure"{% if failed %} role="alert"{% else %}'
+        ' role="status"{% endif %}><span class="banner-label">failed</span>x</div>'
+    ),
+    "declaring its class attribute twice": (
+        '<div class="banner" role="status" class="banner-failure">'
+        '<span class="banner-label">note</span>nothing is wrong</div>'
     ),
 }
 
@@ -1352,11 +1373,12 @@ def test_the_banner_scan_is_not_blind_to_a_banner_written_in_an_awkward_shape() 
     """The scan above is worth exactly what its reading of the markup is worth.
 
     A verification that cannot fail is worse than none, because it is believed, and
-    this one has been that twice. So it gets a scan of its own: every shape in
-    ``AWKWARD_BANNERS`` is a defective banner a past version of the scan looked at and
-    called fine — found by pasting it into a real template and watching the suite stay
-    green. They live in the suite rather than in a review comment because the next hole
-    will be found the same way and belongs in the same place.
+    this one has been that three times. So it gets a scan of its own: every shape in
+    ``AWKWARD_BANNERS`` is a defective banner some version of the scan looked at and
+    called fine, and that table says per entry WHICH version, because "we mutated a
+    template and watched it stay green" is a claim about evidence and one of the entries
+    never had it. They live in the suite rather than in a review comment because the
+    next hole will be found the same way and belongs in the same place.
 
     The second half matters as much: a scan that flags everything gets loosened by the
     first person it inconveniences. ``SOUND_BANNERS`` holds the same awkward syntax
@@ -1387,6 +1409,9 @@ def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:
     # And every failure — banner or dialog — wears the failure frame, not the notice's.
     assert '"banner banner-failure"' in js
     assert 'className = "banner"' not in js
+    # Both halves of the rule, because the banner scan over the templates delegates this
+    # one banner here: the live region says which of the two it is, as it must in markup.
+    assert 'setAttribute("role", "alert")' in js
 
 
 def _banner_faults(name: str, source: str) -> tuple[list[str], int]:
@@ -1405,9 +1430,12 @@ def _banner_faults(name: str, source: str) -> tuple[list[str], int]:
     vanished" stops being a way to pass.
 
     What it still cannot see, said out loud so a green run is not read as more than it
-    is: a class that arrives whole from Python (``class="{{ css }}"``) names nothing in
-    the template, and a banner built in JavaScript is held by
-    ``test_a_failure_inside_a_dialog_is_stated_inside_that_dialog`` instead.
+    is: a class name that arrives through a variable rather than as a literal names
+    nothing here, whether the variable comes from Python (``class="{{ css }}"``) or from
+    a ``{% set cls = 'banner-failure' %}`` three lines up in the same template. Write
+    the literal into the class attribute. A banner built in JavaScript is not scanned
+    here either — ``test_a_failure_inside_a_dialog_is_stated_inside_that_dialog`` holds
+    both halves of the rule for that one.
     """
     markup, line_of = _html_only(source)
     openings = list(TAG.finditer(markup))
@@ -1415,23 +1443,37 @@ def _banner_faults(name: str, source: str) -> tuple[list[str], int]:
     checked = 0
 
     for opening in openings:
-        declared = _attribute(opening.group(0), "class")
+        # Every occurrence of each attribute, not the first: an attribute written once
+        # per Jinja branch is two occurrences of it, and judging the banner on whichever
+        # came first passed a refusal drawn as a notice in silence.
+        classes = _attributes(opening.group(0), "class")
+        declared = " ".join(classes)
         if "banner" not in declared.split():
             continue
         checked += 1
         where = f"{name}:{line_of[opening.start()]}"
-        role = _attribute(opening.group(0), "role").strip().lower()
-        # A substring of the whole attribute, not one of its tokens: a class the
-        # template only sometimes renders is still a class that can come out red, and
-        # the two ways of guessing wrong are not symmetric. Calling a notice a failure
-        # fails this suite; calling a failure a notice ships an operator a refusal that
-        # reads as information.
+        roles = _attributes(opening.group(0), "role")
+        role = roles[0].strip().lower() if roles else ""
+        # A substring of the whole attribute rather than one of its tokens. Belt and
+        # braces after the flattening rather than load-bearing today — nothing in
+        # AWKWARD_BANNERS needs it — but it holds if a future construct leaves the class
+        # name glued to its neighbour, and the two ways of guessing wrong are not
+        # symmetric: calling a notice a failure fails this suite, calling a failure a
+        # notice ships an operator a refusal that reads as information.
         failing = "banner-failure" in declared
         # This element's own content, up to ITS closing tag — the word must be on the
         # banner that was found, not merely somewhere in the file it lives in.
         inside = _element_body(markup, opening)
 
-        if role not in {"alert", "status"}:
+        if len(classes) > 1 or len(roles) > 1:
+            faults.append(
+                f"{where} — a banner that declares class or role twice. A browser keeps"
+                " the first and drops the second, and one element that renders as either"
+                " banner cannot have the role it renders paired with the class it"
+                " renders beside it; write the two banners as two elements, the way"
+                " panel/banner.html and panel/friends_table.html do"
+            )
+        elif role not in {"alert", "status"}:
             faults.append(f"{where} — a banner that says nothing about which of the two it is")
         elif role == "alert" and not failing:
             faults.append(f"{where} — a refusal drawn as an ordinary notice")
@@ -1462,10 +1504,13 @@ def _html_only(source: str) -> tuple[str, list[int]]:
     both why a banner drawn inside ``{# … #}`` is not scanned and why one cannot hide
     inside a comment either.
 
-    The substitution is character for character, so what comes back is the same length
-    as what went in and every offset still points at the same character. Line numbers
-    come from the lexer's own token positions rather than from counting newlines,
-    because whitespace control (``{%-``) legitimately eats a newline the source had.
+    What is guaranteed is that the markup and the line map are built from the same
+    pieces, so an offset into one indexes the other and reports the source line that
+    character came from. What is NOT guaranteed — and a later reader reusing this would
+    assume it — is that the result is the same length as the source or that an offset
+    indexes it: whitespace control (``{%-``) eats characters the source had, and a token
+    value need not be its source text. Line numbers therefore come from the lexer's own
+    token positions and never from counting newlines.
     """
     html: list[str] = []
     lines: list[int] = []
@@ -1528,8 +1573,8 @@ def _element_body(markup: str, opening: re.Match[str]) -> str | None:
     return None
 
 
-def _attribute(tag: str, name: str) -> str:
-    """One attribute's value out of an opening tag, whatever order or quotes it uses.
+def _attributes(tag: str, name: str) -> list[str]:
+    """EVERY value an attribute is given in one opening tag, in the order written.
 
     Deliberately forgiving about the markup and unforgiving about the rule: the scan
     above exists to catch a hand-written screen that got a banner wrong, and a screen
@@ -1537,19 +1582,24 @@ def _attribute(tag: str, name: str) -> str:
     in single quotes, and where a value has no quotes at all — that last one used to
     return "" and drop the element out of the scan as "not a banner".
 
+    All of them rather than the first, because ``{% if x %}role="status"{% else %}
+    role="alert"{% endif %}`` is one element declaring the attribute twice, and reading
+    whichever came first judged such a banner on the branch that happened to be written
+    first — a refusal drawn as a notice, passing in silence.
+
     ``data-role=`` is not ``role=``: with a word boundary in front, a banner that
     declared no role at all borrowed one from whichever data attribute came first, and
-    passed. Returns "" when the attribute is absent, which the caller reads as "this
+    passed. Returns [] when the attribute is absent, which the caller reads as "this
     banner declares nothing", not as "this is fine".
     """
-    found = re.search(
-        rf"""(?<![-\w]){name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
-        tag,
-        flags=re.I,
-    )
-    if not found:
-        return ""
-    return next(group for group in found.groups() if group is not None)
+    return [
+        next(group for group in found.groups() if group is not None)
+        for found in re.finditer(
+            rf"""(?<![-\w]){name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+            tag,
+            flags=re.I,
+        )
+    ]
 
 
 def _visible_text(html: str) -> str:
