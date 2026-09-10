@@ -11,10 +11,10 @@ WHY:  this is a field defect, not a hypothetical. On 2026-09-08 a real host was
       ``domain error: conflict``. The real cause was a permission error on the host
       and recovering it took a health probe, an inspection of the host and rerunning
       the command by hand.
-HOW:  the same cheap unreachable-node pattern the rest of this zone uses (M4.4): a
-      reserved documentation address that nothing routes to, with the connect ceiling
-      at one second from the ``settings`` fixture. No mock, no stub — a real SSH
-      attempt that really fails, which is the only kind of failure worth asserting on.
+HOW:  the same cheap unreachable-node pattern the rest of this zone uses (M4.4), with
+      the connect ceiling at one second from the ``settings`` fixture. No mock, no stub
+      — a real SSH attempt that really fails, which is the only kind of failure worth
+      asserting on.
 
 M4.5 extends the same file to the SECOND apply, because M4.1 only ever proved the
 first one. A node that is already ``degraded`` and fails again for a different reason
@@ -23,6 +23,15 @@ which was always true on a column that hands back a plain ``str``, so the refuse
 ``degraded -> degraded`` transition raised a Conflict, ``_record_failure`` swallowed it
 by design, and ``state_detail`` kept the first failure's text. The operator retried,
 got a new error, and the panel showed them the old one.
+
+M21.2 changed WHERE the node is. It used to be a reserved documentation address, on the
+assumption that nothing routes to it — an assumption about the host, which is how this
+file came to answer differently on different machines. The node is now reached at
+``refusing_ssh``: a loopback port this suite holds bound and never listens on, so every
+connect is refused by the local kernel, in a millisecond, identically on every host and
+without consulting a routing table. This file only ever needed "could not be reached";
+the one test that needs a connect to actually WAIT lives in ``test_node_timeouts.py``
+and uses the other fixture.
 
 M21.1 changed what these assertions are ABOUT. They used to pin the exact sentence a
 timed-out connect produces, which made them fail on any machine where an unroutable
@@ -45,9 +54,11 @@ from edge.bootstrap import NodeUnreachable
 
 from .conftest import assert_plain_reason
 
-# RFC 5737 TEST-NET-1, reserved for documentation. Nothing routes to it, which is the
-# property under test — the same address every other fixture in this zone uses.
-UNREACHABLE_ADDRESS = "192.0.2.10"
+# What a FRIEND would dial, and the only thing this address is here: RFC 5737
+# TEST-NET-1, the same one every other fixture in this zone uses. Nothing in this file
+# dials it — the control plane reaches a node at its ``ssh_host`` — so nothing here
+# depends on what a documentation address does.
+ADVERTISED_ADDRESS = "192.0.2.10"
 
 # The transition complaint that used to be handed to the operator instead of the real
 # reason. Asserted against by fragment, so a reworded 409 cannot quietly come back.
@@ -63,19 +74,25 @@ INTERNAL_ERROR_COMPLAINT = "unexpected internal error"
 
 # Obviously not a key, and never used to authenticate: asyncssh refuses to import it
 # before anything is dialled. That is the point — it is a genuinely DIFFERENT failure
-# from a node that never answers, arriving through a different arm of ``apply_node``,
+# from a node that cannot be reached, arriving through a different arm of ``apply_node``,
 # and M4.5 is about two consecutive failures with two different causes.
 UNIMPORTABLE_PRIVATE_KEY = "not-a-real-key"
 
 
-async def a_drafted_node(client, reality_params) -> str:
-    """A node exactly as an operator leaves it before their first apply: draft."""
+async def a_drafted_node(client, reality_params, ssh) -> str:
+    """A node exactly as an operator leaves it before their first apply: draft.
+
+    ``ssh`` is the endpoint the control plane will dial — the ``refusing_ssh`` socket,
+    so the apply fails because the test said it would, not because of a route.
+    """
     node_id = (await client.post(
         "/api/nodes",
         json={
             "name": "first-apply",
-            "address": UNREACHABLE_ADDRESS,
+            "address": ADVERTISED_ADDRESS,
             "location_label": "Testland",
+            "ssh_host": ssh.host,
+            "ssh_port": ssh.port,
         },
     )).json()["id"]
     enabled = await client.post(
@@ -86,9 +103,11 @@ async def a_drafted_node(client, reality_params) -> str:
     return node_id
 
 
-async def test_a_draft_node_may_become_degraded(client, session, reality_params) -> None:
+async def test_a_draft_node_may_become_degraded(
+    client, session, reality_params, refusing_ssh
+) -> None:
     """The transition itself, stated once, so the decision has a test of its own."""
-    node_id = await a_drafted_node(client, reality_params)
+    node_id = await a_drafted_node(client, reality_params, refusing_ssh)
 
     node = await nodes.set_node_state(
         session, node_id=node_id, state=NodeState.DEGRADED, detail="a reason"
@@ -99,10 +118,10 @@ async def test_a_draft_node_may_become_degraded(client, session, reality_params)
 
 
 async def test_a_first_apply_that_fails_records_the_real_reason(
-    client, session, reality_params
+    client, session, reality_params, refusing_ssh
 ) -> None:
     """The whole defect, in one test: the node was never active, and it failed."""
-    node_id = await a_drafted_node(client, reality_params)
+    node_id = await a_drafted_node(client, reality_params, refusing_ssh)
     assert (await nodes.get_node(session, node_id)).state == NodeState.DRAFT
 
     with pytest.raises(NodeOperationFailed) as raised:
@@ -111,7 +130,8 @@ async def test_a_first_apply_that_fails_records_the_real_reason(
     # WHY it failed, from the exception chain rather than from its wording: the apply
     # gave up because the node could not be reached, which is the only arm of
     # ``apply_node`` that raises ``from`` a ``NodeUnreachable``. Whether that node was
-    # slow or refused outright is the network's business, not this test's — M21.1.
+    # slow or refused outright is not something this file asserts on — M21.1 — even now
+    # that M21.2 has made it always the same one.
     assert isinstance(raised.value.__cause__, NodeUnreachable), raised.value.message
     assert TRANSITION_COMPLAINT not in raised.value.message, (
         "the operator was told about the state machine instead of about the node"
@@ -127,12 +147,12 @@ async def test_a_first_apply_that_fails_records_the_real_reason(
     # What was RECORDED is a reason a person can act on (words, no traceback, no bare
     # class name, no address — see ``assert_plain_reason``), and it is the same reason
     # the operator was handed rather than a second, separately written one.
-    assert_plain_reason(node.state_detail, address=UNREACHABLE_ADDRESS)
+    assert_plain_reason(node.state_detail, address=refusing_ssh.host)
     assert node.state_detail in raised.value.message
 
 
 async def test_the_real_reason_reaches_a_log(
-    client, session, reality_params, caplog
+    client, session, reality_params, caplog, refusing_ssh
 ) -> None:
     """One line saying ``domain error: conflict`` is the failure mode being fixed.
 
@@ -140,7 +160,7 @@ async def test_the_real_reason_reaches_a_log(
     error CODE and never the message, on purpose, so a failure that is only reported
     through the envelope leaves nothing behind for whoever reads the logs afterwards.
     """
-    node_id = await a_drafted_node(client, reality_params)
+    node_id = await a_drafted_node(client, reality_params, refusing_ssh)
 
     with caplog.at_level(logging.ERROR, logger="control.app.services.apply"):
         with pytest.raises(NodeOperationFailed) as raised:
@@ -152,7 +172,7 @@ async def test_the_real_reason_reaches_a_log(
     # replaced, which only checked that the log contained a sentence this file also
     # knew how to spell.
     reason = (await nodes.get_node(session, node_id)).state_detail
-    assert_plain_reason(reason, address=UNREACHABLE_ADDRESS)
+    assert_plain_reason(reason, address=refusing_ssh.host)
 
     logged = [record.getMessage() for record in caplog.records]
     assert any(reason in line for line in logged), logged
@@ -162,17 +182,17 @@ async def test_the_real_reason_reaches_a_log(
 
 
 async def test_the_api_reports_the_node_rather_than_the_state_machine(
-    client, reality_params
+    client, reality_params, refusing_ssh
 ) -> None:
     """End to end through the route, because the field report was an HTTP response."""
-    node_id = await a_drafted_node(client, reality_params)
+    node_id = await a_drafted_node(client, reality_params, refusing_ssh)
 
     outcome = await client.post(f"/api/nodes/{node_id}/apply")
 
     assert outcome.status_code == 502, outcome.text
     body = outcome.json()["error"]
     assert body["code"] == "node_operation_failed"
-    assert_plain_reason(body["message"], address=UNREACHABLE_ADDRESS)
+    assert_plain_reason(body["message"], address=refusing_ssh.host)
     assert TRANSITION_COMPLAINT not in body["message"]
     assert INTERNAL_ERROR_COMPLAINT not in body["message"]
 
@@ -181,12 +201,12 @@ async def test_the_api_reports_the_node_rather_than_the_state_machine(
     # Tied to the response rather than to a wording: the row the panel renders and the
     # answer the operator just got must be the same failure, whichever sentence the
     # connect attempt produced.
-    assert_plain_reason(node["state_detail"], address=UNREACHABLE_ADDRESS)
+    assert_plain_reason(node["state_detail"], address=refusing_ssh.host)
     assert node["state_detail"] in body["message"]
 
 
 async def test_a_refused_transition_never_replaces_the_reason(
-    client, session, reality_params
+    client, session, reality_params, refusing_ssh
 ) -> None:
     """A retired node still has nowhere to go, and must not hijack the message.
 
@@ -196,14 +216,14 @@ async def test_a_refused_transition_never_replaces_the_reason(
     operator is told what went wrong with the node, not what went wrong with the
     bookkeeping.
     """
-    node_id = await a_drafted_node(client, reality_params)
+    node_id = await a_drafted_node(client, reality_params, refusing_ssh)
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.RETIRED)
 
     with pytest.raises(NodeOperationFailed) as raised:
         await apply.apply_node(session, node_id=node_id)
 
     assert isinstance(raised.value.__cause__, NodeUnreachable), raised.value.message
-    assert_plain_reason(raised.value.message, address=UNREACHABLE_ADDRESS)
+    assert_plain_reason(raised.value.message, address=refusing_ssh.host)
     assert TRANSITION_COMPLAINT not in raised.value.message, (
         "the bookkeeping's own failure replaced the node's"
     )
@@ -212,7 +232,7 @@ async def test_a_refused_transition_never_replaces_the_reason(
 
 
 async def test_a_second_failure_replaces_the_first_ones_reason(
-    client, session, reality_params
+    client, session, reality_params, refusing_ssh
 ) -> None:
     """The operator retries, fails differently, and must be told the NEW reason — M4.5.
 
@@ -230,17 +250,17 @@ async def test_a_second_failure_replaces_the_first_ones_reason(
     Editing the record between the two is what an operator does between retries: they
     change something and try again. What must not survive that is the previous reason.
     """
-    node_id = await a_drafted_node(client, reality_params)
+    node_id = await a_drafted_node(client, reality_params, refusing_ssh)
 
     first = await client.post(f"/api/nodes/{node_id}/apply")
     assert first.status_code == 502, first.text
 
     # The first reason is READ, not spelled out: this test is about the second failure
-    # replacing the first, and which sentence the first one produced is the network's
-    # business (M21.1). Spelling it out is also how this assertion could pass while
+    # replacing the first, and which sentence the first one produced is not this test's
+    # subject (M21.1). Spelling it out is also how this assertion could pass while
     # proving nothing — a wrong guess makes ``not in`` below trivially true.
     first_reason = (await client.get(f"/api/nodes/{node_id}")).json()["state_detail"]
-    assert_plain_reason(first_reason, address=UNREACHABLE_ADDRESS)
+    assert_plain_reason(first_reason, address=refusing_ssh.host)
 
     node = await nodes.get_node(session, node_id)
     node.ssh_private_key = UNIMPORTABLE_PRIVATE_KEY

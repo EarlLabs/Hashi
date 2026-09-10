@@ -19,6 +19,9 @@ suite that silently passes without a database is a suite that proves nothing.
 """
 
 import os
+import socket
+from collections.abc import Iterator
+from typing import NamedTuple
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -99,11 +102,11 @@ async def settings(clean_database, operator_password_hash: str) -> Settings:
         # The in-process client speaks http, so the session cookie must not be
         # https-only or no test could ever hold a session.
         public_https=False,
-        # No test in this zone reaches a real node: every fixture points at a reserved
-        # documentation address that never answers, so the connect ceiling is time the
-        # suite spends waiting for a certainty. One second, and the whole suite stops
-        # costing minutes — the default of five is a field value, chosen for a lossy
-        # link, and nothing here is on a link at all.
+        # No test in this zone reaches a real node: the two that dial one at all dial a
+        # loopback socket this file opened (see ``unanswering_ssh`` below), so the
+        # connect ceiling is time the suite spends waiting for a certainty. One second,
+        # and the whole suite stops costing minutes — the default of five is a field
+        # value, chosen for a lossy link, and nothing here is on a link at all.
         node_connect_timeout=1,
     )
 
@@ -176,6 +179,82 @@ def ws_params() -> dict[str, object]:
         "certificate_path": "/etc/hashi/certs/fullchain.pem",
         "certificate_key_path": "/etc/hashi/certs/privkey.pem",
     }
+
+
+# --- an SSH endpoint whose behaviour this suite decides (M21.2) --------------
+#
+# Two tests here need a node the control plane cannot get a session from. They used
+# to get one by pointing at a reserved documentation address and trusting that
+# nothing routes to it — but what such an address DOES is a property of the host's
+# routing table, not of this code: silently dropped here, refused in a millisecond
+# on a machine that routes it over a tunnel. Both are the same fact and only one of
+# them was the fact the timing assertion needed, so the suite answered differently on
+# different machines.
+#
+# So the endpoint is opened here instead, on loopback, on a port the kernel picks.
+# The socket is held for the whole test: while it is bound, nothing else on the host
+# can take that port, which is what makes the answer the same every run. Loopback is
+# already a hard dependency of this zone — the database is reached over it — so this
+# adds no assumption the suite did not already make. It is not a "hardcoded IP" in
+# the sense CLAUDE.md forbids either: there is no node here to rotate away from, only
+# this machine talking to itself.
+
+# The interface, and the only address in this file that is not a node's.
+LOOPBACK = "127.0.0.1"
+
+
+class LoopbackSSH(NamedTuple):
+    """Where a test node's SSH endpoint is, and therefore what happens when it is dialled."""
+
+    host: str
+    port: int
+
+
+def _bound_loopback_socket() -> socket.socket:
+    """A TCP socket holding one ephemeral loopback port, not yet listening."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # No SO_REUSEADDR on purpose: the exclusivity of the bind is the point. A second
+    # process cannot take this port while the test runs, so nothing can answer where
+    # the test decided nothing answers.
+    sock.bind((LOOPBACK, 0))
+    return sock
+
+
+@pytest.fixture
+def unanswering_ssh() -> Iterator[LoopbackSSH]:
+    """A port that completes a TCP connection and then says nothing, ever.
+
+    This is what a blocked node looks like from outside, and it is the shape the
+    timeout path needs: a refusal would end the connect in a millisecond and the
+    ceiling would never be exercised. ``listen()`` without ``accept()`` is deliberate
+    — the kernel finishes the handshake into the accept queue by itself, so there is
+    no thread to start and none to join, and asyncssh sends its version banner and
+    waits for a reply that cannot come until ``connect_timeout`` ends the wait.
+    """
+    sock = _bound_loopback_socket()
+    try:
+        sock.listen()
+        yield LoopbackSSH(*sock.getsockname())
+    finally:
+        sock.close()
+
+
+@pytest.fixture
+def refusing_ssh() -> Iterator[LoopbackSSH]:
+    """A port that refuses instantly, because it is bound and never listening.
+
+    For the tests that only need "the node could not be reached" and say nothing about
+    how long that took: a connect here is one RST from the local kernel, so five
+    applies cost milliseconds instead of five seconds. Bound rather than closed-and-
+    released, for the port-exclusivity above and because a closed ephemeral port can
+    be handed back to the connecting socket as its own source port, at which point TCP
+    connects it to itself and the node answers.
+    """
+    sock = _bound_loopback_socket()
+    try:
+        yield LoopbackSSH(*sock.getsockname())
+    finally:
+        sock.close()
 
 
 # --- what the operator is told when a node cannot be reached (M21.1) ---------
