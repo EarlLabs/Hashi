@@ -1926,15 +1926,34 @@ A reserved address's behaviour is a property of the network the test runs on, no
 of the code. Consider a listener that accepts and never answers, or a closed port
 on loopback — something whose behaviour the test itself decides.
 
+### M21.3 — The gate must be runnable on the owner's own machine · scope extended by the owner 2026-09-10
+
+Two tests in `tests/edge/test_the_wireguard_family_can_start.py` cannot pass on
+macOS. `edge/bootstrap/node_stack.py`'s `_WG_QUICK_SUPERVISOR` ends in `sleep
+infinity` — a GNU coreutils extension that BSD `sleep` rejects — and that test
+deliberately runs the supervisor under the **host's** `/bin/sh`. On Linux CI it
+is green; on the owner's laptop `make verify` is red, so the owner cannot run
+their own gate. Same defect class as the rest of M21: a gate that goes red for
+reasons unrelated to the change.
+
+**The constraint the owner set.** The shipped supervisor only ever runs inside a
+Linux container. Do not contort production code for a host that never runs it
+*unless the portable form is genuinely no worse*. A portable idle, a host
+capability skip carrying a reason a reader can act on, or running that script the
+way the container does — any of the three is admissible; which one is for the
+implementer and the reviewer to settle.
+
 **E2E:** none — this is a unit-level fixture question. `make test-control` is the
-gate, and the honest proof is running it repeatedly under load and getting the
-same answer every time.
+gate for M21.1 and M21.2, `make test-edge` for M21.3, and the honest proof is
+running them repeatedly under load and getting the same answer every time.
 
 **Done when**
 - [ ] The unreachable-node tests give the same result on a loaded machine as on
       an idle one.
 - [ ] The assertion names the property the operator depends on, not the errno
       that happened to produce it.
+- [ ] `make verify` is not red on a host whose `sleep` is BSD's, and the reason
+      it is not is written where the next reader will find it.
 
 acceptance: no
 
