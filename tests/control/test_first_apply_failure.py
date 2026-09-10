@@ -23,6 +23,15 @@ which was always true on a column that hands back a plain ``str``, so the refuse
 ``degraded -> degraded`` transition raised a Conflict, ``_record_failure`` swallowed it
 by design, and ``state_detail`` kept the first failure's text. The operator retried,
 got a new error, and the panel showed them the old one.
+
+M21.1 changed what these assertions are ABOUT. They used to pin the exact sentence a
+timed-out connect produces, which made them fail on any machine where an unroutable
+address is refused fast instead of dropped silently — the same fact, a different
+sentence. What is asserted now is the property the operator depends on: the failure was
+about the NODE (an exception chain ending in ``NodeUnreachable``, never the state
+machine's complaint and never this control plane's own), the reason is words rather
+than a class name or a traceback (``assert_plain_reason``), and the reason stored,
+logged and answered are the same one.
 """
 
 import logging
@@ -32,6 +41,9 @@ import pytest
 from control.app.errors import Conflict, NodeOperationFailed
 from control.app.models import NodeState
 from control.app.services import apply, nodes
+from edge.bootstrap import NodeUnreachable
+
+from .conftest import assert_plain_reason
 
 # RFC 5737 TEST-NET-1, reserved for documentation. Nothing routes to it, which is the
 # property under test — the same address every other fixture in this zone uses.
@@ -40,6 +52,14 @@ UNREACHABLE_ADDRESS = "192.0.2.10"
 # The transition complaint that used to be handed to the operator instead of the real
 # reason. Asserted against by fragment, so a reworded 409 cannot quietly come back.
 TRANSITION_COMPLAINT = "cannot go from"
+
+# The other way the operator can be told the wrong thing: ``apply_node``'s broad catch,
+# which reports a bug in this control plane rather than a fact about the node. Named
+# here — M21.1 — because the assertions below no longer pin the unreachable sentence,
+# and without this fragment a genuine internal error would satisfy "a plain reason" and
+# these tests would stop distinguishing the two. Asserted against by fragment for the
+# same reason as above.
+INTERNAL_ERROR_COMPLAINT = "unexpected internal error"
 
 # Obviously not a key, and never used to authenticate: asyncssh refuses to import it
 # before anything is dialled. That is the point — it is a genuinely DIFFERENT failure
@@ -79,7 +99,7 @@ async def test_a_draft_node_may_become_degraded(client, session, reality_params)
 
 
 async def test_a_first_apply_that_fails_records_the_real_reason(
-    client, session, settings, reality_params
+    client, session, reality_params
 ) -> None:
     """The whole defect, in one test: the node was never active, and it failed."""
     node_id = await a_drafted_node(client, reality_params)
@@ -88,25 +108,31 @@ async def test_a_first_apply_that_fails_records_the_real_reason(
     with pytest.raises(NodeOperationFailed) as raised:
         await apply.apply_node(session, node_id=node_id)
 
-    reason = f"the node did not answer within {settings.node_connect_timeout}s"
-    assert reason in raised.value.message
+    # WHY it failed, from the exception chain rather than from its wording: the apply
+    # gave up because the node could not be reached, which is the only arm of
+    # ``apply_node`` that raises ``from`` a ``NodeUnreachable``. Whether that node was
+    # slow or refused outright is the network's business, not this test's — M21.1.
+    assert isinstance(raised.value.__cause__, NodeUnreachable), raised.value.message
     assert TRANSITION_COMPLAINT not in raised.value.message, (
         "the operator was told about the state machine instead of about the node"
+    )
+    assert INTERNAL_ERROR_COMPLAINT not in raised.value.message, (
+        "the operator was told this control plane broke instead of that the node did"
     )
 
     node = await nodes.get_node(session, node_id)
     assert node.state == NodeState.DEGRADED, (
         "a node that was written to and failed is still a draft"
     )
-    assert node.state_detail == reason
-    # The address must not travel with the reason: it reaches the panel and the
-    # database, and a node's address in operator-facing text is a step towards a
-    # connection record (core invariants §6).
-    assert UNREACHABLE_ADDRESS not in node.state_detail
+    # What was RECORDED is a reason a person can act on (words, no traceback, no bare
+    # class name, no address — see ``assert_plain_reason``), and it is the same reason
+    # the operator was handed rather than a second, separately written one.
+    assert_plain_reason(node.state_detail, address=UNREACHABLE_ADDRESS)
+    assert node.state_detail in raised.value.message
 
 
 async def test_the_real_reason_reaches_a_log(
-    client, session, settings, reality_params, caplog
+    client, session, reality_params, caplog
 ) -> None:
     """One line saying ``domain error: conflict`` is the failure mode being fixed.
 
@@ -117,10 +143,17 @@ async def test_the_real_reason_reaches_a_log(
     node_id = await a_drafted_node(client, reality_params)
 
     with caplog.at_level(logging.ERROR, logger="control.app.services.apply"):
-        with pytest.raises(NodeOperationFailed):
+        with pytest.raises(NodeOperationFailed) as raised:
             await apply.apply_node(session, node_id=node_id)
 
-    reason = f"the node did not answer within {settings.node_connect_timeout}s"
+    assert isinstance(raised.value.__cause__, NodeUnreachable), raised.value.message
+    # Read back rather than written out here, so this asserts that the log carries the
+    # reason the operator was actually given — a stronger claim than the one it
+    # replaced, which only checked that the log contained a sentence this file also
+    # knew how to spell.
+    reason = (await nodes.get_node(session, node_id)).state_detail
+    assert_plain_reason(reason, address=UNREACHABLE_ADDRESS)
+
     logged = [record.getMessage() for record in caplog.records]
     assert any(reason in line for line in logged), logged
     assert any(node_id in line for line in logged), (
@@ -129,7 +162,7 @@ async def test_the_real_reason_reaches_a_log(
 
 
 async def test_the_api_reports_the_node_rather_than_the_state_machine(
-    client, settings, reality_params
+    client, reality_params
 ) -> None:
     """End to end through the route, because the field report was an HTTP response."""
     node_id = await a_drafted_node(client, reality_params)
@@ -139,16 +172,21 @@ async def test_the_api_reports_the_node_rather_than_the_state_machine(
     assert outcome.status_code == 502, outcome.text
     body = outcome.json()["error"]
     assert body["code"] == "node_operation_failed"
-    assert f"the node did not answer within {settings.node_connect_timeout}s" in body["message"]
+    assert_plain_reason(body["message"], address=UNREACHABLE_ADDRESS)
     assert TRANSITION_COMPLAINT not in body["message"]
+    assert INTERNAL_ERROR_COMPLAINT not in body["message"]
 
     node = (await client.get(f"/api/nodes/{node_id}")).json()
     assert node["state"] == "degraded"
-    assert node["state_detail"]
+    # Tied to the response rather than to a wording: the row the panel renders and the
+    # answer the operator just got must be the same failure, whichever sentence the
+    # connect attempt produced.
+    assert_plain_reason(node["state_detail"], address=UNREACHABLE_ADDRESS)
+    assert node["state_detail"] in body["message"]
 
 
 async def test_a_refused_transition_never_replaces_the_reason(
-    client, session, settings, reality_params
+    client, session, reality_params
 ) -> None:
     """A retired node still has nowhere to go, and must not hijack the message.
 
@@ -164,14 +202,17 @@ async def test_a_refused_transition_never_replaces_the_reason(
     with pytest.raises(NodeOperationFailed) as raised:
         await apply.apply_node(session, node_id=node_id)
 
-    reason = f"the node did not answer within {settings.node_connect_timeout}s"
-    assert reason in raised.value.message
+    assert isinstance(raised.value.__cause__, NodeUnreachable), raised.value.message
+    assert_plain_reason(raised.value.message, address=UNREACHABLE_ADDRESS)
+    assert TRANSITION_COMPLAINT not in raised.value.message, (
+        "the bookkeeping's own failure replaced the node's"
+    )
     assert not isinstance(raised.value, Conflict)
     assert (await nodes.get_node(session, node_id)).state == NodeState.RETIRED
 
 
 async def test_a_second_failure_replaces_the_first_ones_reason(
-    client, session, settings, reality_params
+    client, session, reality_params
 ) -> None:
     """The operator retries, fails differently, and must be told the NEW reason — M4.5.
 
@@ -194,8 +235,12 @@ async def test_a_second_failure_replaces_the_first_ones_reason(
     first = await client.post(f"/api/nodes/{node_id}/apply")
     assert first.status_code == 502, first.text
 
-    first_reason = f"the node did not answer within {settings.node_connect_timeout}s"
-    assert (await client.get(f"/api/nodes/{node_id}")).json()["state_detail"] == first_reason
+    # The first reason is READ, not spelled out: this test is about the second failure
+    # replacing the first, and which sentence the first one produced is the network's
+    # business (M21.1). Spelling it out is also how this assertion could pass while
+    # proving nothing — a wrong guess makes ``not in`` below trivially true.
+    first_reason = (await client.get(f"/api/nodes/{node_id}")).json()["state_detail"]
+    assert_plain_reason(first_reason, address=UNREACHABLE_ADDRESS)
 
     node = await nodes.get_node(session, node_id)
     node.ssh_private_key = UNIMPORTABLE_PRIVATE_KEY

@@ -1,7 +1,9 @@
-"""Fixtures for the control zone's tests.
+"""Fixtures for the control zone's tests, and the assertions they share.
 
 WHAT: a real Postgres schema, freshly created per test, an application built against
-      it, and an HTTP client already authenticated as the operator.
+      it, an HTTP client already authenticated as the operator, and — at the bottom —
+      ``assert_plain_reason``, imported with ``from .conftest import`` the way
+      ``test_migrations.py`` does.
 WHY:  the control rulebook requires a real Postgres rather than SQLite — async
       drivers, JSONB and constraints all behave differently, and a suite that passes
       on SQLite proves nothing about production. This schema has a JSONB column and
@@ -174,3 +176,59 @@ def ws_params() -> dict[str, object]:
         "certificate_path": "/etc/hashi/certs/fullchain.pem",
         "certificate_key_path": "/etc/hashi/certs/privkey.pem",
     }
+
+
+# --- what the operator is told when a node cannot be reached (M21.1) ---------
+#
+# The two tests that assert on it used to pin the exact sentence
+# ``edge/bootstrap/ssh.py`` writes when a connect TIMES OUT. Which of its arms runs
+# is not a property of this code: at a reserved address nothing routes to, a loaded
+# machine (or one that routes TEST-NET-1 over a tunnel) gets a fast rejection and the
+# other arm's wording instead. Both outcomes are the same fact — the node could not
+# be reached — so the fact is asserted structurally by the caller (``reachable is
+# False``, or a ``NodeUnreachable`` cause) and the SHAPE of the sentence is asserted
+# here.
+
+# Enough of one to be recognisable in a single line of text: a reason is a sentence,
+# and any of these means an exception's rendering leaked into operator-facing text.
+_TRACEBACK_MARKERS = ("Traceback (most recent call last)", 'File "', ", line ")
+
+# Stripped off each token before it is judged, so ``session:`` counts as a word and
+# ``OSError(113,`` does not become one.
+_EDGES = "\"'`.,:;!?()[]{}<>—-"
+
+# A sentence has several ordinary words in it. Four is low enough that any reason
+# actually written for a person clears it, and high enough that a class name, a repr,
+# or an errno string does not — those are the three shapes this rejects.
+_WORDS_REQUIRED = 4
+
+
+def assert_plain_reason(reason: str | None, *, address: str) -> None:
+    """The operator was told, in words, why an operation on a node failed.
+
+    Asserts the property M4.4 introduced rather than the sentence it introduced:
+    non-empty, one line, prose, no traceback, no bare exception class name, and no
+    node address travelling with it (core invariants §6 — a node's address in
+    operator-facing text is a step towards a connection record).
+
+    ``address`` is required rather than optional: every caller has one, and the check
+    is worthless in exactly the tests that forget to pass it.
+    """
+    assert isinstance(reason, str), f"the operator was given no reason at all: {reason!r}"
+
+    text = reason.strip()
+    assert text, "the operator was given an empty reason"
+    assert "\n" not in text, f"a reason is one sentence, not a report: {text!r}"
+    for marker in _TRACEBACK_MARKERS:
+        assert marker not in text, f"a traceback reached the operator: {text!r}"
+
+    words = [token.strip(_EDGES) for token in text.split()]
+    prose = [word for word in words if len(word) > 1 and word.isalpha() and word.islower()]
+    assert len(prose) >= _WORDS_REQUIRED, (
+        f"{text!r} is not a reason a person can act on — it needs at least "
+        f"{_WORDS_REQUIRED} ordinary words, and has {len(prose)}"
+    )
+
+    assert address not in text, (
+        f"the node's address travelled with the reason: {text!r}"
+    )

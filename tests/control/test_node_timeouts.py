@@ -12,6 +12,13 @@ HOW:  the ceiling itself is asserted on, rather than wall-clock time, because
       "the suite got slower" is not a failure any assertion can state honestly.
       One elapsed-time assertion exists, with a very wide margin, and it is there
       only to catch the ceiling being configured but not honoured.
+
+M21.1 loosened one assertion here and tightened the rest. The reason the operator is
+shown is no longer compared to the timeout sentence, because which sentence they get
+depends on whether the connect timed out or was refused first — a property of the
+machine and the network, not of this code. The fact "the node could not be reached" is
+now asserted where it is actually recorded, on ``reachable``, and what is asserted
+about the sentence is that it IS one: see ``assert_plain_reason`` in conftest.
 """
 
 import time
@@ -19,6 +26,8 @@ import time
 import pytest
 
 from control.app.services import apply, health, nodes
+
+from .conftest import assert_plain_reason
 
 # A reserved documentation address (RFC 5737), the same one the rest of this zone's
 # fixtures use. Nothing routes to it, which is exactly the property under test.
@@ -60,7 +69,7 @@ async def test_the_configured_connect_ceiling_reaches_the_node_target(
 async def test_a_node_that_never_answers_is_reported_with_a_plain_reason(
     client, session, settings
 ) -> None:
-    """The operator gets a sentence naming how long we waited, not a class name.
+    """The operator gets a sentence, not a class name and not a traceback.
 
     ``check_node`` is the path used here because it reports without changing the
     node's state, so this test says nothing about the state machine — which is a
@@ -72,11 +81,13 @@ async def test_a_node_that_never_answers_is_reported_with_a_plain_reason(
     report = await health.check_node(session, node_id=node_id)
     elapsed = time.monotonic() - started
 
+    # The FACT that the node could not be reached is a flag, not a sentence, and this
+    # is where it is recorded — ``check_node`` sets it only for ``NodeUnreachable``.
     assert report.reachable is False
-    assert report.detail == f"the node did not answer within {settings.node_connect_timeout}s"
-    # The address must not travel with the reason: it reaches the panel, and a node's
-    # address in operator-facing text is a step towards a connection record.
-    assert UNANSWERING_ADDRESS not in report.detail
+    # And this is the part the operator reads. Asserted as a property (words, one
+    # line, no traceback, no bare class name, no address travelling with it) rather
+    # than as the particular sentence the timeout arm happens to write — M21.1.
+    assert_plain_reason(report.detail, address=UNANSWERING_ADDRESS)
 
     # Ten times the configured ceiling. Wide enough that a loaded machine cannot fail
     # it, tight enough that a ceiling which is configured but not honoured — the
