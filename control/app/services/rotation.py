@@ -39,6 +39,24 @@ from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
 
+# Why a rotation's refusal names its parameters and repeats none of their messages.
+# The message on a ``ParamsRefused`` is rendered by callers that never chose to — an
+# error envelope, and the pre-redesign page's outcome fragment — so the path that
+# validates freshly minted material states the rule there instead, exactly as the
+# console does on screen (UI-PATTERNS §9). It is not about which field was named: the
+# operator's own parameters are validated alongside the new key, so a complaint about
+# any of them is a complaint about a mapping that held one.
+MATERIAL_NOT_REPEATED = (
+    "The transport's own message for each is not repeated here: this check includes "
+    "the material just minted for the node, and a refusal can quote the value it "
+    "rejected."
+)
+
+# What a refusal with no field to its name is called, in the code's own vocabulary.
+# Pydantic reports a model-level validator at an empty location, which is a complaint
+# about the mapping rather than about any one parameter.
+WHOLE_MAPPING = "the parameters as a whole"
+
 
 @dataclass
 class RotationOutcome:
@@ -119,12 +137,21 @@ async def rotate_keys(
         validated = transport.validate(merged)
     except ValidationError as exc:
         # ``ParamsRefused`` rather than a plain ``DomainError``, and it matters MORE
-        # here than on the replacement path: this mapping holds the private key that
-        # was minted three lines up, and a validator's message may quote what it
-        # rejected. Carrying the complaint per field is what lets a caller decide which
-        # of them it may print — and on this path the answer is none of them, because
-        # nothing in this mapping was typed by anybody. See ``_refused_parameters`` in
-        # panel/routes.py, which is handed an empty set of boxes for exactly that.
+        # here than on the replacement path: this mapping was validated together with
+        # the private key minted three lines up, and a validator's message may quote
+        # what it rejected. Carrying the complaint per field is what lets a caller
+        # decide which of them it may print.
+        #
+        # THE MESSAGE ITSELF NAMES THE PARAMETERS AND REPEATS NONE OF THEIR SENTENCES,
+        # which is the difference between this raise and the one in ``replace_params``
+        # below. The message is the one part of a refusal that every caller renders
+        # without choosing to — the pre-redesign page prints it into ``outcome.html``,
+        # and ``POST /api/transports/{id}/rotate-keys`` returns it in the envelope — so
+        # on the one path whose mapping holds freshly minted material it may not carry
+        # words the transport wrote about a value. Nothing is lost by that: no field
+        # here was offered to the operator to correct, so the actionable content is
+        # WHICH parameters were refused, and the sentences are still on ``fields`` for a
+        # caller that has somewhere it may safely put them.
         #
         # Only the first error travelled before, so a rotation refused on two values
         # reported one of them.
@@ -132,10 +159,10 @@ async def rotate_keys(
         for error in exc.errors():
             where = ".".join(str(part) for part in error["loc"])
             fields.setdefault(where, relay._plainly(error["msg"]))
-        problems = "; ".join(f"{where}: {message}" for where, message in fields.items())
         raise ParamsRefused(
             f"the rotated parameters are not valid for "
-            f"{node_transport.transport_name!r} — {problems}",
+            f"{node_transport.transport_name!r} — refused: {_named(fields)}. "
+            f"{MATERIAL_NOT_REPEATED}",
             fields=fields,
         ) from exc
 
@@ -215,6 +242,17 @@ async def replace_params(
         # complaints may be PRINTED is decided by the caller, which knows which fields
         # it has boxes for.
         #
+        # The MESSAGE here does repeat those complaints, unlike ``rotate_keys`` above,
+        # and the difference is deliberate rather than an oversight. Nothing is minted
+        # on this path — existing material is preserved untouched — and every field a
+        # caller can act on is a value the operator has just typed into a form, so the
+        # sentence explaining why it was rejected is the whole content of the answer for
+        # an API caller, which has no ``fields`` to read. Note what that argument does
+        # NOT say: the mapping validated here still CARRIES the stored material, so this
+        # is a narrower exposure rather than none — the same one every ``HopEndRefused``
+        # has had since M9.2. The console's own screen withholds these anyway; what is
+        # left is two operator-only surfaces, one of which M9.6 deletes.
+        #
         # ``relay._plainly`` rather than a second copy of it: it strips the label
         # Pydantic puts in front of a custom validator's own sentence, and two
         # definitions of "what that prefix looks like" is how one of them stops being
@@ -247,6 +285,17 @@ async def replace_params(
 
     outcome = RotationOutcome(node_transport_id=node_transport.id, rotated=changed)
     return await _push(session, node_transport, outcome)
+
+
+def _named(fields: dict[str, str]) -> str:
+    """The parameters a refusal is about, named and sorted, with no sentence attached.
+
+    A name is safe to print anywhere — it is a field of the transport's own model, and
+    it is what tells the operator where to look. The message beside it is not, on the
+    path this is used from. Sorted so two refusals about the same parameters read
+    identically.
+    """
+    return ", ".join(sorted(field or WHOLE_MAPPING for field in fields))
 
 
 async def _push(

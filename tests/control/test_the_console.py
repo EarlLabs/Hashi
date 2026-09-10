@@ -17,8 +17,10 @@ import html.parser
 import json
 import pathlib
 import re
+import typing
 
 import jinja2
+import pydantic
 import pytest
 from sqlalchemy import select
 
@@ -2268,12 +2270,15 @@ async def test_a_refusal_prints_the_transport_s_words_only_under_a_box(
 async def test_a_rotation_refused_by_the_transport_prints_none_of_its_words(
     client, monkeypatch, reality_params
 ) -> None:
-    """The other rotation path, where NOTHING in the mapping was typed by anybody.
+    """The other rotation path, whose answer has no box for anything.
 
-    ``rotate_keys`` validates stored parameters plus the material it has just minted —
-    including the private key — so a validator that quotes its input would be quoting
-    key material, and this screen has no box for any of it. The refusal is therefore
-    named and never printed: an empty set of boxes is what says so.
+    ``rotate_keys`` validates the operator's existing parameters TOGETHER WITH the
+    material it has just minted, so a validator that quotes its input may be quoting a
+    private key whichever field it names — and the answer here is a banner, with nowhere
+    for a message about one parameter to belong. Both facts say the same thing, and an
+    empty set of boxes is how the route says it. (Note what is NOT the reason: that
+    nothing in the mapping was typed. Some of it was, which is exactly the reading that
+    would talk a later change into printing these.)
 
     Latent rather than live, which is why it is guarded instead of watched: no shipped
     transport's validator quotes its input today, and the day one does there is no
@@ -2353,6 +2358,174 @@ async def test_nothing_this_screen_serves_may_be_stored_or_remembered(
     # And nothing on the screen is written to localStorage at all: the console opts out
     # of htmx's history cache entirely, which is the other half of that decision.
     assert 'hx-history="false"' in (await client.get("/panel/keys")).text
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        # A validator that raised ``ValueError("")``: Pydantic reports ``Value error, ``
+        # and ``relay._plainly`` strips it to nothing. It landed under the box as an
+        # empty string, which the template's `{% if %}` skipped — a 422 that re-rendered
+        # the form with no message anywhere, which reads as a form that will not submit.
+        {"port": ""},
+        # And a refusal carrying no field at all, which had nothing to name.
+        {},
+    ),
+    ids=("an empty message on a box", "no field at all"),
+)
+async def test_a_refusal_is_never_silent(
+    client, monkeypatch, reality_params, fields: dict
+) -> None:
+    """Every refusal says something, and the sorting function is what guarantees it.
+
+    The rotation path had a fallback for this shape and the replacement path did not,
+    which is the wrong place for the rule to live: a caller can forget it. It is now an
+    invariant of ``_refused_parameters`` — a message that cannot be printed is treated
+    exactly like one that may not be, and a refusal with nothing to name is stated as a
+    complaint about the parameters as a whole.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+
+    async def refuse(session, *, node_transport_id, params):
+        raise ParamsRefused("transport rejected these parameters", fields=fields)
+
+    monkeypatch.setattr(rotation_service, "replace_params", refuse)
+
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={"decoy_host": "www.wikipedia.example"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    # Said where a person will read it, and drawn as a refusal rather than as a notice.
+    assert 'role="alert"' in refused.text
+    assert "field-error" in refused.text
+    assert "never displays" in _reading(refused.text)
+
+
+# Two transports that refuse the way a real one could, for the test below. They exist
+# because everything above plants a ``ParamsRefused`` by hand: that proves the CONSUMER
+# handles each location shape and proves nothing about the shapes its PRODUCER emits.
+# Narrowing rotation.py's ``".".join(...)`` to ``error["loc"][0]`` would collapse
+# ``server_names.0`` onto the real ``server_names`` box and start printing a nested
+# validator's sentence, with every hand-planted test still green.
+#
+# Both quote their input, which no shipped transport does — that is the whole hazard
+# being modelled. The assertion looks for a marker that can only have come from the
+# MESSAGE: the value itself is the operator's own text and is legitimately handed back
+# into its box on a refusal, so finding that in the response proves nothing either way.
+VALIDATOR_SAID = "QUOTED-BY-A-VALIDATOR"
+
+
+def _quoting_item(value: str) -> str:
+    raise ValueError(f"is not a name this decoy can present: {VALIDATOR_SAID} {value}")
+
+
+class _RefusesAnItem(pydantic.BaseModel):
+    """A per-item validator: Pydantic locates this at ``("server_names", 0)``."""
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    server_names: list[typing.Annotated[str, pydantic.AfterValidator(_quoting_item)]]
+
+
+class _RefusesTheMapping(pydantic.BaseModel):
+    """A model-level validator: Pydantic locates this at ``()``, which joins to ``""``."""
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    decoy_host: str
+
+    @pydantic.model_validator(mode="after")
+    def _refuse(self):
+        raise ValueError(f"these parameters disagree: {VALIDATOR_SAID} {self.decoy_host}")
+
+
+class _RefusingProfile:
+    """Whatever ``profile()`` hands back, narrowed to the one call rotation makes."""
+
+    def __init__(self, model) -> None:
+        self._model = model
+
+    def validate(self, values: dict) -> dict:
+        self._model(**values)
+        raise AssertionError("this model was supposed to refuse and did not")
+
+
+@pytest.mark.parametrize(
+    ("model", "field", "named"),
+    (
+        (_RefusesAnItem, "server_names", "server_names.0"),
+        (_RefusesTheMapping, "decoy_host", console_service.KEY_UNNAMED_REFUSAL),
+    ),
+    ids=("a nested location", "no location at all"),
+)
+async def test_the_locations_a_real_refusal_carries_are_the_ones_that_are_withheld(
+    client, monkeypatch, reality_params, model, field: str, named: str
+) -> None:
+    """The guard, against its OWN producer rather than a hand-built stand-in.
+
+    ``rotation.replace_params`` runs for real here — only the transport's model is
+    swapped, for one that refuses the way a real one could — so what the route sorts is
+    the location string the service actually composed. That is the half the planted
+    refusals above cannot reach: they prove the console handles ``server_names.0`` and
+    ``""``, not that anything ever produces them.
+
+    Both models quote their input, which is the hazard being modelled. Neither sentence
+    may reach the page; both parameters must be named, so the operator still knows what
+    was refused.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    monkeypatch.setattr(rotation_service, "profile", lambda name: _RefusingProfile(model))
+
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={field: "www.wikipedia.example"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    if VALIDATOR_SAID in refused.text:
+        # The label, never the value — the same instrument the sweep uses, for the same
+        # reason: a rewritten assertion prints both operands.
+        pytest.fail(f"a refusal located at {named!r} was printed with its own words")
+    reading = _reading(refused.text)
+    assert named in reading
+    assert "never displays" in reading
+
+
+async def test_a_rotation_refusal_repeats_no_sentence_wherever_it_is_rendered(
+    client, monkeypatch, reality_params
+) -> None:
+    """The one part of a refusal every caller renders without choosing to.
+
+    ``ParamsRefused.message`` goes into the error envelope and into the pre-redesign
+    page's ``outcome.html`` — a PANEL surface — with no filtering possible at either.
+    The console's own screen sorts ``fields`` and prints none of them on this path, but
+    that is a decision the console makes and those two surfaces cannot. So the ROTATION
+    path composes its message from the parameter NAMES and states the rule in place of
+    their sentences: that mapping is validated together with material minted moments
+    earlier, and a validator can quote what it rejected.
+
+    Driven through the old page deliberately, because that is the surface the rule is
+    written about and the one this file's screen sweep cannot reach.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    monkeypatch.setattr(
+        rotation_service, "profile", lambda name: _RefusingProfile(_RefusesTheMapping)
+    )
+
+    outcome = await client.post(f"/panel/transports/{node_transport_id}/rotate-keys")
+
+    assert outcome.status_code == 200
+    if VALIDATOR_SAID in outcome.text:
+        pytest.fail("a rotation's refusal carried the transport's own words")
+    reading = _reading(outcome.text)
+    # Named, so the operator still knows what was refused, and told why the rest is not
+    # here rather than left to wonder whether the panel simply lost it.
+    assert rotation_service.WHOLE_MAPPING in reading
+    assert "not repeated here" in reading
 
 
 async def test_a_transport_this_image_no_longer_ships_says_so_in_the_dialog(

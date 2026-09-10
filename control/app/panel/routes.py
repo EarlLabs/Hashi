@@ -760,22 +760,20 @@ async def rotate_keys_from_the_console(
     try:
         outcome = await rotation.rotate_keys(session, node_transport_id=node_transport_id)
     except ParamsRefused as exc:
-        # The transport refused what we just minted for it. NOTHING in that mapping was
-        # typed by anybody — it is stored parameters plus fresh material — so this
-        # screen has no box for any of it and may print none of the transport's own
-        # sentences: an empty box set is what says so, and the parameters are named with
-        # the rule in place of their messages. Latent rather than live today (no shipped
-        # validator quotes its input), which is precisely why it is guarded rather than
-        # watched.
+        # The transport refused what we just minted for it, and NONE of its sentences
+        # may be printed here. Not because nothing in that mapping was ever typed — the
+        # operator's own parameters are validated alongside the new material, so some of
+        # it was — but because this answer is a confirmation dialog with NO BOXES: there
+        # is nothing on screen for a message to belong to, and the mapping it complains
+        # about was checked together with a private key minted three lines earlier, so a
+        # complaint may be quoting material whichever field it names. An empty box set
+        # is what says both. Latent rather than live today (no shipped validator quotes
+        # its input), which is precisely why it is guarded rather than watched.
         return _mutation(
             request,
-            # ``or`` so this cannot go silent: a refusal carrying no field at all would
-            # otherwise render an empty banner slot, and a rotation that did nothing
-            # while saying nothing is the worst answer on this screen.
-            banner=(
-                _refused_parameters(exc, boxes=set())["failure"]
-                or console.withheld_note([""])
-            ),
+            # Never ``None``: ``_refused_parameters`` guarantees a refusal says
+            # something, so a rotation that did nothing cannot also say nothing.
+            banner=_refused_parameters(exc, boxes=set())["failure"],
             keeping=key.node,
             events="keys-changed",
         )
@@ -954,16 +952,28 @@ def _refused_parameters(exc: ParamsRefused, boxes: set[str]) -> dict:
     sentence. Erring this way costs a reason on a refusal about a field the operator
     cannot edit anyway; erring the other way prints key material.
 
-    ``boxes`` may be empty, which is the key-rotation path: nothing there was typed by
-    anybody, so nothing there may be printed.
+    ``boxes`` may be empty, which is the key-rotation path: that answer is a banner and
+    has no boxes at all, so there is nowhere for a message to land whatever it names.
+
+    A falsy message counts as unprintable and is treated like a withheld one. It is
+    reachable — a validator raising ``ValueError("")`` produces ``Value error, ``, which
+    ``relay._plainly`` strips to nothing — and it landed under a box as an empty string,
+    which the template's ``{% if %}`` then skipped: a 422 that re-rendered the dialog
+    with no message anywhere, which reads as a form that simply will not submit.
+
+    For the same reason this function, and not its callers, guarantees that a refusal
+    says SOMETHING: a ``ParamsRefused`` carrying no field at all is still stated, as a
+    complaint about the parameters as a whole.
     """
     errors = {}
     withheld = []
     for field, message in exc.fields.items():
-        if field in boxes:
+        if field in boxes and message:
             errors[field] = wording.for_the_page(message)
         else:
             withheld.append(field)
+    if not errors and not withheld:
+        withheld.append("")
     return {
         "errors": errors,
         "failure": console.withheld_note(withheld) if withheld else None,
