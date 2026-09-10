@@ -192,14 +192,27 @@ INTERFACE_NAME = re.compile(r"^[a-zA-Z0-9_=+.-]{1,15}$")
 #   replacement then fails with ``wg-quick: `<name>' already exists`` and crash-loops.
 #   Measured, not imagined. Its output is discarded because on the normal path there is
 #   nothing to take down and the tool says so on stderr.
-# * ``sleep infinity & wait`` rather than a bare ``sleep`` — a shell blocked in ``sleep``
+# * ``sleep ... & wait $!`` rather than a bare ``sleep`` — a shell blocked in ``sleep``
 #   does not run traps until it returns. Backgrounding it and waiting is what makes the
-#   trap fire at once; both images' shells are busybox and support ``infinity``.
+#   trap fire at once, and it is why an unexpected death of the idle child still ends
+#   the container: ``wait`` returns non-zero and ``set -e`` takes it from there.
+# * the LOOP, and the integer operand, are M21.3. This line used to read ``sleep
+#   infinity``, which busybox and GNU coreutils both accept and POSIX does not: the
+#   operand is specified as one non-negative decimal integer, so ``infinity`` is an
+#   extension. No node ever cared — both images ship busybox — but the test beside this
+#   file runs this exact string under the TEST HOST's ``/bin/sh``, and a BSD ``sleep``
+#   refuses the operand, so ``make verify`` was red on the owner's own laptop for a
+#   reason that had nothing to do with the change under test. Re-sleeping in a loop
+#   rather than naming one enormous number keeps any implementation's upper bound on the
+#   operand out of it as well; the number only decides how often the shell wakes, and a
+#   ``fork`` a day inside a container that lives for months is nothing. Behaviour on a
+#   node is unchanged in every respect: it still idles forever, still tears the tunnel
+#   down the instant a signal arrives, still dies if the idle dies.
 _WG_QUICK_SUPERVISOR = (
     """set -e; trap '"$0" down "$1" || true; exit 0' INT TERM; """
     '"$0" down "$1" >/dev/null 2>&1 || true; '
     '"$0" up "$1"; '
-    "sleep infinity & wait $!"
+    "while :; do sleep 86400 & wait $!; done"
 )
 
 

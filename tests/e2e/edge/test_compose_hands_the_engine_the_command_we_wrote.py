@@ -142,10 +142,11 @@ def test_a_dollar_sign_compose_would_eat_really_is_eaten(tmp_path) -> None:
     """The red half, and it is a check on the CHECK rather than on the product.
 
     The scenario above is only worth something if this round-trip can change a command
-    at all. So: splice a variable nothing sets into the same command, in the same place,
-    and confirm the engine does NOT get it back. If this ever fails, Compose has stopped
-    interpolating and the assertion above has quietly become an identity — which is
-    worth knowing, and is why this fails loudly rather than being written as a comment.
+    at all. So: splice a variable nothing sets into the same element of the same command
+    — the shell line — and confirm the engine does NOT get it back. If this ever fails,
+    Compose has stopped interpolating and the assertion above has quietly become an
+    identity — which is worth knowing, and is why this fails loudly rather than being
+    written as a comment.
     """
     family = [
         service
@@ -156,9 +157,13 @@ def test_a_dollar_sign_compose_would_eat_really_is_eaten(tmp_path) -> None:
 
     poisoned = copy.deepcopy(family[0])
     script = poisoned["command"].index(INTERPRETED) + 1
-    poisoned["command"][script] = poisoned["command"][script].replace(
-        "sleep infinity", f"sleep {CANARY} infinity"
-    )
+    # Appended rather than spliced into a clause the script happens to contain. The
+    # question is whether a ``$`` ANYWHERE in this element survives, so naming a word of
+    # the script buys nothing and costs everything: this line used to poison ``sleep
+    # infinity``, and M21.3's reword of that idle would have turned ``replace`` into a
+    # no-op, leaving the assertion below looking for a canary nothing had ever spliced in.
+    # A green red-half is worse than no red half. ``:`` is the shell's own no-op.
+    poisoned["command"][script] += f"; : {CANARY}"
 
     compose = node_stack.render_compose(transports=[poisoned])
     engine = argv_from_a_real_engine(compose, tmp_path)[poisoned["name"]]
