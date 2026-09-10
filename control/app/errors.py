@@ -78,6 +78,10 @@ class HopEndRefused(DomainError):
     Status and code are deliberately INHERITED. A caller that has always seen a 400
     with ``bad_request`` still does, envelope for envelope — this type adds a way to
     read the same refusal, and changes nothing for anybody who does not.
+
+    Both ``fields`` and ``message`` are composed through ``relay.refused_fields`` and so
+    carry no held value; see ``ParamsRefused``, whose note explains why that is done
+    where the exception is raised and not where it is rendered.
     """
 
     def __init__(self, message: str, *, purpose: str, fields: dict[str, str]) -> None:
@@ -99,11 +103,15 @@ class ParamsRefused(DomainError):
     enabled on a node has one, so there is nothing to disambiguate, and carrying an
     end's name on a refusal that has no end would be the console's own confusion.
 
-    What ``fields`` may carry is narrower than what Pydantic reports, and the narrowing
-    happens at the caller rather than here: a validator's message can quote the value it
-    rejected, and the mapping being validated contains this node's key material. The
-    panel therefore prints a message only for a field it actually has a box for — and a
-    box exists only for a value the operator typed.
+    What ``fields`` and ``message`` may carry is narrower than what Pydantic reports,
+    and the narrowing happens where they are BUILT — ``relay.refused_fields``, which
+    strikes every held value out of every sentence while those values are still in
+    scope. A validator's message can quote the value it rejected, and the mapping being
+    validated contains this node's key material, so neither surface that renders this
+    exception without choosing to (the API envelope, the pre-redesign outcome fragment)
+    can be left to sort it out. The panel narrows again on top of that, printing a
+    message only for a field it actually has a box for. See ``docs/decisions.md``
+    (2026-09-10).
     """
 
     def __init__(self, message: str, *, fields: dict[str, str]) -> None:

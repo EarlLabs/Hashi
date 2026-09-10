@@ -21,12 +21,15 @@ HOW:  no node is contacted. The nodes here have no SSH key, so the push half fai
 
 import base64
 import json
+import typing
 
+import pydantic
 import pytest
 from sqlalchemy import select
 
+from control.app.errors import ParamsRefused
 from control.app.models import Credential, NodeState, NodeTransport
-from control.app.services import apply, nodes, rotation
+from control.app.services import apply, keymaterial, nodes, relay, rotation
 
 
 async def fleet(client, session, reality_params):
@@ -357,3 +360,181 @@ async def test_rotation_service_refuses_a_transport_this_image_does_not_ship(
 
     with pytest.raises(DomainError):
         await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+
+
+# --- what a refusal may never carry -------------------------------------------
+#
+# Both paths above validate a mapping that HOLDS key material — ``replace_params``
+# merges in the row's decrypted secrets, ``rotate_keys`` merges in the ones it has just
+# minted — and a transport's own validator may quote what it was handed. No shipped
+# transport's does, which is exactly why this is guarded rather than watched: the day
+# one does there is no second chance to notice, and the surfaces that render a
+# ``ParamsRefused`` (the API envelope, the pre-redesign page's outcome fragment, the
+# console's dialog) render it without choosing to.
+#
+# The models below refuse the way a real one could, at every location shape Pydantic
+# reports, and each quotes the material back. ``docs/decisions.md`` (2026-09-10).
+
+VALIDATOR_QUOTED = "QUOTED-BY-A-VALIDATOR"
+
+
+def _everything_it_was_given(values) -> str:
+    """A careless validator's sentence: its own words, then its whole input.
+
+    The marker is what the assertions look for, because it can only have come from the
+    MESSAGE — the values themselves include what the operator typed, which a refusal is
+    entitled to hand back.
+    """
+    return f"{VALIDATOR_QUOTED} " + " ".join(str(value) for value in values)
+
+
+class _QuotesTheWholeMapping(pydantic.BaseModel):
+    """A model-level validator: Pydantic locates this at ``()``, which joins to ``""``."""
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    @pydantic.model_validator(mode="after")
+    def _refuse(self):
+        raise ValueError(
+            f"these parameters disagree: {_everything_it_was_given(self.model_dump().values())}"
+        )
+
+
+def _quoting_its_siblings(value: str, info: pydantic.ValidationInfo) -> str:
+    raise ValueError(
+        f"is not a name this decoy can present: {_everything_it_was_given(info.data.values())}"
+    )
+
+
+class _QuotesFromInsideAList(pydantic.BaseModel):
+    """A per-item validator that reads what was validated before it: ``("server_names", 0)``."""
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    private_key: str
+    server_names: list[
+        typing.Annotated[str, pydantic.AfterValidator(_quoting_its_siblings)]
+    ]
+
+
+class _QuotesUnderABoxTheFormHas(pydantic.BaseModel):
+    """The shape a location allow-list cannot sort, and the reason redaction is here.
+
+    A ``field_validator`` on a field the replace form legitimately has a box for, reading
+    the fields validated before it through ``info.data``. Pydantic locates the complaint
+    at ``("decoy_host",)`` — a real box — so every guard keyed on WHERE a refusal is
+    located passes it through with the private key inside it. Field order is
+    load-bearing: ``private_key`` is declared first, so it is in ``info.data`` by the
+    time ``decoy_host`` is checked.
+    """
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    private_key: str
+    decoy_host: str
+
+    @pydantic.field_validator("decoy_host")
+    @classmethod
+    def _refuse(cls, value: str, info: pydantic.ValidationInfo) -> str:
+        raise ValueError(
+            f"does not match the key {_everything_it_was_given(info.data.values())}"
+        )
+
+
+class _RefusingProfile:
+    """Whatever ``profile()`` hands back, narrowed to the one call rotation makes."""
+
+    def __init__(self, model) -> None:
+        self._model = model
+
+    def validate(self, values: dict) -> dict:
+        self._model(**values)
+        raise AssertionError("this model was supposed to refuse and did not")
+
+
+async def _material_on(session, node_transport_id: str) -> dict[str, str]:
+    """The decrypted values this row holds, labelled.
+
+    The KEYS are safe to print in a failure message and the values never are — the same
+    shape ``stored_material`` uses in the console's sweep, and for the same reason.
+
+    ``expunge_all`` first: the rows were written through the client's own session, and
+    SQLAlchemy hands back the instance this one already has rather than re-reading it.
+    """
+    session.expunge_all()
+    row = await session.get(NodeTransport, node_transport_id)
+    return {
+        f"{row.transport_name}'s {name} on node-transport {row.id}": value
+        for name, value in json.loads(row.secrets).items()
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    (_QuotesUnderABoxTheFormHas, _QuotesTheWholeMapping, _QuotesFromInsideAList),
+    ids=("a box the form has", "no location at all", "a nested location"),
+)
+@pytest.mark.parametrize("path", ("replace", "rotate"))
+async def test_neither_rotation_path_lets_a_refusal_carry_key_material(
+    client, session, monkeypatch, reality_params, model, path: str
+) -> None:
+    """The guard, at the point the values are still in scope, on both paths at once.
+
+    Every location shape and both callers, because the class being closed is the class
+    of MESSAGES: a complaint may be quoting material whichever field it names, so a rule
+    about WHERE it is filed can only ever be the second line of defence. What is asserted
+    is that no value this row holds — nor any minted in the same call — survives into
+    ``fields`` or into ``message``, while the transport's own words still do.
+    """
+    _, node_transport_id, _, _ = await fleet(client, session, reality_params)
+    monkeypatch.setattr(rotation, "profile", lambda name: _RefusingProfile(model))
+
+    minted: list = []
+    freshly = keymaterial.rotate
+
+    def recording(specs, scope):
+        fresh = freshly(specs, scope)
+        minted.append(fresh)
+        return fresh
+
+    monkeypatch.setattr(keymaterial, "rotate", recording)
+    held = await _material_on(session, node_transport_id)
+
+    with pytest.raises(ParamsRefused) as refused:
+        if path == "replace":
+            await rotation.replace_params(
+                session,
+                node_transport_id=node_transport_id,
+                params={
+                    "decoy_host": "www.wikipedia.example",
+                    "server_names": ["www.wikipedia.example"],
+                },
+            )
+        else:
+            await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+
+    if path == "rotate":
+        # Nothing is written before the refusal, so the material this validator quoted
+        # is only ever in memory — and a sweep of the database alone would miss it.
+        assert minted, "nothing was minted, so this run proves nothing about a rotation"
+        held |= {
+            f"the {name} just minted": value
+            for fresh in minted
+            for name, value in fresh.secrets.items()
+        }
+    assert held
+
+    sentences = [refused.value.message, *refused.value.fields.values()]
+    for label, value in held.items():
+        for sentence in sentences:
+            if value in sentence:
+                # ``pytest.fail`` and not ``assert``: a rewritten assertion prints both
+                # operands, which would put the key into the CI log.
+                pytest.fail(f"a refusal on the {path} path carried {label}")
+
+    # Non-vacuous, and the two halves of the claim: the transport's own sentence still
+    # travels (a guard that dropped it would pass the loop above), and something was
+    # actually struck out of it.
+    carried = " ".join(refused.value.fields.values())
+    assert VALIDATOR_QUOTED in carried
+    assert relay.WITHHELD in carried

@@ -17,12 +17,13 @@ HOW:  no node is contacted — nothing here pushes. The claim is about what the 
 import base64
 import json
 
+import pydantic
 import pytest
 from sqlalchemy import select
 
-from control.app.errors import DomainError
+from control.app.errors import DomainError, HopEndRefused
 from control.app.models import NodeState, NodeTransport, TransportPurpose
-from control.app.services import apply, nodes, relay
+from control.app.services import apply, keymaterial, nodes, relay
 
 HOP_TRANSPORT = "amneziawg"
 
@@ -347,3 +348,94 @@ async def test_the_panel_reports_a_refused_hop_rather_than_erroring(
 async def test_hop_routes_need_an_operator(anonymous, method: str, path: str) -> None:
     response = await getattr(anonymous, method)(path)
     assert response.status_code in (302, 303, 401, 403), response.status_code
+
+
+# --- what a refused end may never carry ---------------------------------------
+
+# A hop end is validated together with the private keys minted for BOTH ends moments
+# earlier, and a transport's own validator may quote what it was handed. None of the
+# shipped ones does, which is why this is guarded rather than watched — and why the
+# guard lives in ``relay.refused_fields``, one function shared with rotation, rather
+# than as a rule each caller applies its own way. ``docs/decisions.md`` (2026-09-10).
+VALIDATOR_QUOTED = "QUOTED-BY-A-VALIDATOR"
+
+
+class _QuotesTheWholeMapping(pydantic.BaseModel):
+    """A model-level validator: Pydantic locates this at ``()``, which joins to ``""``.
+
+    The shape that matters most here, because a refusal at an empty location is
+    flattened into ``HopEndRefused.message`` — which ``POST /api/hops`` returns in its
+    envelope and the pre-redesign page prints, neither of which can sort anything.
+    """
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    @pydantic.model_validator(mode="after")
+    def _refuse(self):
+        given = " ".join(str(value) for value in self.model_dump().values())
+        raise ValueError(f"these ends disagree: {VALIDATOR_QUOTED} {given}")
+
+
+class _RefusingProfile:
+    """Whatever ``profile()`` hands back, narrowed to the one call this path makes."""
+
+    def __init__(self, model) -> None:
+        self._model = model
+
+    def validate(self, values: dict) -> dict:
+        self._model(**values)
+        raise AssertionError("this model was supposed to refuse and did not")
+
+
+async def test_a_refused_hop_end_carries_none_of_the_material_it_minted(
+    client, session, monkeypatch, hop_params
+) -> None:
+    """The twin of the rotation guard, closed in the same place and proved the same way.
+
+    Nothing is written before this refusal, so the keys the validator quoted exist only
+    in memory — they are recorded off ``keymaterial.mint`` rather than read back from a
+    row, which is what makes the assertion exact rather than a guess at what a key looks
+    like.
+    """
+    entry_id, leaf_id = await two_nodes(client)
+    monkeypatch.setattr(relay, "profile", lambda name: _RefusingProfile(_QuotesTheWholeMapping))
+
+    minted: list = []
+    freshly = keymaterial.mint
+
+    def recording(specs, scope):
+        fresh = freshly(specs, scope)
+        minted.append(fresh)
+        return fresh
+
+    monkeypatch.setattr(keymaterial, "mint", recording)
+
+    body = hop_body(entry_id, leaf_id, hop_params)
+    with pytest.raises(HopEndRefused) as refused:
+        await relay.establish_hop(
+            session,
+            entry_node_id=entry_id,
+            leaf_node_id=leaf_id,
+            transport_name=HOP_TRANSPORT,
+            entry_params=body["entry_params"],
+            leaf_params=body["leaf_params"],
+        )
+
+    assert minted, "nothing was minted, so this run proves nothing"
+    held = {
+        f"the {name} minted for an end": value
+        for fresh in minted
+        for name, value in fresh.secrets.items()
+    }
+    assert held
+
+    sentences = [refused.value.message, *refused.value.fields.values()]
+    for label, value in held.items():
+        for sentence in sentences:
+            if value in sentence:
+                # The label, never the value: a rewritten assertion prints both operands.
+                pytest.fail(f"a refused hop end carried {label}")
+
+    # The transport's own words still travel, and something was struck out of them.
+    assert VALIDATOR_QUOTED in refused.value.message
+    assert relay.WITHHELD in refused.value.message

@@ -769,6 +769,10 @@ async def rotate_keys_from_the_console(
         # complaint may be quoting material whichever field it names. An empty box set
         # is what says both. Latent rather than live today (no shipped validator quotes
         # its input), which is precisely why it is guarded rather than watched.
+        #
+        # The service has already struck every held value out of these sentences
+        # (``relay.refused_fields``). That does not make an empty box set redundant:
+        # there is still no box on this answer for a per-parameter message to land in.
         return _mutation(
             request,
             # Never ``None``: ``_refused_parameters`` guarantees a refusal says
@@ -964,6 +968,15 @@ def _refused_parameters(exc: ParamsRefused, boxes: set[str]) -> dict:
     For the same reason this function, and not its callers, guarantees that a refusal
     says SOMETHING: a ``ParamsRefused`` carrying no field at all is still stated, as a
     complaint about the parameters as a whole.
+
+    IT IS NO LONGER THE ONLY GUARD, and it is kept anyway. Sorting closes the class of
+    LOCATIONS and not the class of MESSAGES: a ``field_validator`` on a field this form
+    does have a box for can read the rest of the mapping through ``info.data``, so the
+    complaint arrives at a real box name and this allow-list passes it. That class is
+    closed in the service now, where the values are still in scope — see
+    ``relay.refused_fields`` and ``docs/decisions.md`` (2026-09-10) — and this stays as
+    the second line of defence, because a message can still be about something the
+    operator never typed and a box is the only place a message has anywhere to belong.
     """
     errors = {}
     withheld = []

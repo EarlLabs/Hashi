@@ -148,17 +148,24 @@ KEY_SHARED_WITH_PEER = (
     "established again, which mints one value for both."
 )
 
-# The one sentence a refusal may carry about something the operator did not type, and
-# it carries no value. A transport's own complaint can quote what it rejected, and what
-# is validated on this path includes the material the node holds — so anything the form
-# has no box for is NAMED and the rule is printed in place of its message. Written to
+# The one sentence a refusal may carry in place of a message it will not print, and it
+# carries no value. A transport's own complaint can quote what it rejected, and what is
+# validated on these paths includes the material the node holds — so a complaint this
+# answer has nowhere safe to print is NAMED and the rule is printed instead. Written to
 # cover everything that is not a box rather than key material alone: the guard that
 # named only material closed two instances and left the class open, which is this
 # milestone's recurring shape. See ``ParamsRefused`` and ``_refused_parameters``.
+#
+# PHRASED ABOUT WHAT WAS WITHHELD, NOT ABOUT A FORM, because both of its callers are not
+# the same surface: on the rotation path this is a BANNER with no form on screen at all,
+# and on the replacement path it also covers a box that DOES exist whose message came
+# back empty. The earlier wording ("the transport also refused something this form has
+# no box for") was untrue of both, and its "also" announced a companion message that a
+# banner never has.
 KEY_MATERIAL_WITHHELD = (
-    "the transport also refused something this form has no box for: {names}. Its own "
-    "message is not printed — a refusal can quote the value it rejected, and what is "
-    "checked here includes material this panel never displays."
+    "the transport's own message is withheld for: {names}. A refusal can quote the "
+    "value it rejected, and what is checked here includes material this panel never "
+    "displays."
 )
 
 # What a refusal with no field to its name is called. A model-level validator reports
@@ -655,9 +662,25 @@ def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     that lists ``private_key`` beside a fingerprint invites the reader to look for the
     value. What changed is visible as the fingerprint on the row behind this message;
     what the operator needs in words is what it costs the people on that node.
+
+    A HOP END COSTS NOBODY A LINK, and now says so. Every other string on this screen
+    branches on ``for_friends``, including the confirmation the operator just read —
+    *"No user holds anything on it: this is a tunnel between two of our own nodes"* — so
+    an answer that then reports what users will pick up contradicts the sentence they
+    confirmed. The far end is named instead, because that is the only holder a hop end
+    has, and it is still running the material it was last given. What to DO about that
+    is deliberately not advised: with symmetric material an apply does not fix it (see
+    ``KEY_SHARED_WITH_PEER`` and M9's carry-over), and advice that is wrong for one
+    declaration is worse than none.
     """
     if not outcome.complete:
         return _unpushed(row, outcome, "its keys were re-minted here")
+    if not row.for_friends:
+        return (
+            f"keys rotated on {row.node} — {row.transport}, at this end of the hop; no "
+            "user holds anything on it, and the far end is still holding the material "
+            "it was given"
+        )
     return (
         f"keys rotated on {row.node} — {row.transport}; users keep the same link and "
         "pick this up the next time their client refreshes it"
@@ -670,10 +693,19 @@ def replacement_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     The field names ARE listed here, unlike a key rotation's: these are values the
     operator typed themselves, so naming them back is how they confirm the right box
     landed. Nothing minted can be in this list — the form has no box for one.
+
+    Branched on ``for_friends`` for the reason ``rotation_summary`` above is: a hop end
+    has no user on it to be told about, and the dialog behind this answer says so.
     """
     changed = ", ".join(outcome.rotated)
     if not outcome.complete:
         return _unpushed(row, outcome, f"{changed} replaced here")
+    if not row.for_friends:
+        return (
+            f"replaced {changed} on {row.node} — {row.transport}, at this end of the "
+            "hop; no user holds anything on it, and the far end is still running the "
+            "config it was last given"
+        )
     return (
         f"replaced {changed} on {row.node} — {row.transport}; users keep the same link "
         "and pick this up the next time their client refreshes it"
@@ -688,12 +720,25 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     Written in the present tense, naming what is still TRUE rather than reporting that
     a request failed — an operator who reads "failed" and walks away has been told the
     opposite of what happened.
+
+    Whose problem it is NOT differs by row, so that clause branches with its two
+    callers: a friend-facing transport still has people on the old material and they are
+    unaffected; a hop end has nobody on it at all, and the tunnel is untouched precisely
+    because the push did not land.
     """
+    if row.for_friends:
+        standing = (
+            "the node is still running the old material and users on it are unaffected"
+        )
+    else:
+        standing = (
+            "the node is still running the old material, so the tunnel to the far end "
+            "is unaffected — and no user holds anything on it either way"
+        )
     return (
         f"{row.node} — {row.transport}: {what}, but the node could not be updated: "
-        f"{outcome.failure.rstrip('.')}. Until it is, the node is still running the "
-        "old material and users on it are unaffected. Apply the node from the Nodes "
-        "screen once it can be reached."
+        f"{outcome.failure.rstrip('.')}. Until it is, {standing}. Apply the node from "
+        "the Nodes screen once it can be reached."
     )
 
 

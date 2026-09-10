@@ -34,6 +34,7 @@ from control.app.services import friends as friends_service
 from control.app.services import health as health_service
 from control.app.services import keymaterial
 from control.app.services import nodes as nodes_service
+from control.app.services import relay as relay_service
 from control.app.services import rotation as rotation_service
 from control.app.services import transports as transports_service
 from edge.registry import profile
@@ -2121,6 +2122,93 @@ async def test_a_rotation_that_could_not_reach_the_node_stays_on_screen(
     assert answer.headers["HX-Trigger"] == "keys-changed, nodes-changed"
 
 
+async def test_a_hop_end_is_never_told_what_its_users_will_pick_up(
+    client, reality_params
+) -> None:
+    """The dialog and its answer must agree about who holds this row.
+
+    ``rotate_keys_dialog.html`` branches on ``for_friends`` and tells the operator, in
+    so many words, *"No user holds anything on it: this is a tunnel between two of our
+    own nodes"*. The answer then reported what users would pick up the next time their
+    client refreshed — so the operator confirmed having read that no user is involved
+    and was immediately told about users' links. Every other string on this screen makes
+    that distinction; these two did not.
+
+    Driven at the surface rather than through the service, because the wiring is half
+    the claim: the row this answer is composed from has to be the row the dialog was.
+    The push cannot land here (nothing answers at these addresses), which is the
+    half-done branch — the one that used to end "users on it are unaffected" about a
+    tunnel with no user on either end.
+
+    The REPLACE action rather than rotate, and not by preference: rotating one end of a
+    hop on this image's carrier re-mints a value the far end holds a copy of, and the
+    re-render that follows refuses the pair — see ``carry-over.md``, where that is a
+    deferred Medium of its own. ``transports.PORT_FIELD`` is the one field name the
+    console is allowed to know.
+    """
+    entry_end = await a_hop(client)
+    boxes = {
+        name for name, _, _ in _form_controls(
+            (await client.get(f"/panel/keys/{entry_end}/params")).text
+        )
+    }
+    assert transports_service.PORT_FIELD in boxes, boxes
+
+    answer = await client.post(
+        f"/panel/keys/{entry_end}/params",
+        data={transports_service.PORT_FIELD: "51999"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200
+    reading = _reading(answer.text)
+    assert "no user holds anything on it" in reading
+    assert "users on it are unaffected" not in reading
+    assert "same link" not in reading
+
+
+async def test_every_rotation_sentence_branches_on_who_holds_the_row(
+    client, session, reality_params
+) -> None:
+    """Both sentences, both outcomes, both kinds of row — the whole four.
+
+    ``rotation_summary`` and ``replacement_summary`` each have a landed and a half-done
+    form, and the half-done one is shared (``_unpushed``). Composed here rather than
+    driven through a route because a successful push needs a host: what is under test is
+    the prose, which lives in ``services/console.py`` by this milestone's own rule, and
+    the surface above is what proves it is wired to the right row.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    entry_end = await a_hop(client)
+    session.expunge_all()
+    for_friends = await console_service.key_row(session, node_transport_id)
+    hop_end = await console_service.key_row(session, entry_end)
+    assert for_friends.for_friends and not hop_end.for_friends
+
+    landed = rotation_service.RotationOutcome(
+        node_transport_id=node_transport_id, rotated=["decoy_host"], node_pushed=True
+    )
+    half_done = rotation_service.RotationOutcome(
+        node_transport_id=node_transport_id,
+        rotated=["decoy_host"],
+        failure="the host refused the connection",
+    )
+
+    for compose in (console_service.rotation_summary, console_service.replacement_summary):
+        for outcome in (landed, half_done):
+            what = f"{compose.__name__} on a {'landed' if outcome.complete else 'half-done'} push"
+            hop_sentence = compose(hop_end, outcome)
+            assert "no user holds anything on it" in hop_sentence, what
+            assert "same link" not in hop_sentence, what
+            assert "users on it are unaffected" not in hop_sentence, what
+            # And the friend-facing row still says what it always said, so this is a
+            # branch rather than a sentence that stopped mentioning people.
+            friends_sentence = compose(for_friends, outcome)
+            assert ("same link" in friends_sentence) or (
+                "users on it are unaffected" in friends_sentence
+            ), what
+
+
 async def test_the_replace_dialog_offers_no_box_for_key_material(
     client, reality_params
 ) -> None:
@@ -2493,6 +2581,80 @@ async def test_the_locations_a_real_refusal_carries_are_the_ones_that_are_withhe
     reading = _reading(refused.text)
     assert named in reading
     assert "never displays" in reading
+
+
+class _QuotesAFieldItWasValidatedWith(pydantic.BaseModel):
+    """The shape the console's allow-list cannot see, and the reason it is not the guard.
+
+    A ``field_validator`` on a field this form DOES have a box for, reading the fields
+    validated before it through ``info.data`` — which on the replacement path is the
+    merged mapping, decrypted ``secrets`` column and all. Pydantic locates the complaint
+    at ``("decoy_host",)``, which IS a box, so the sorter prints the sentence verbatim
+    and the node's private key becomes visible text on this screen's own dialog. The
+    field order is load-bearing: ``private_key`` is declared first, so it is in
+    ``info.data`` by the time ``decoy_host`` is checked.
+
+    Closed by redaction in the service instead of by sorting here —
+    ``docs/decisions.md`` (2026-09-10) and ``relay.refused_fields``.
+    """
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    private_key: str
+    decoy_host: str
+
+    @pydantic.field_validator("decoy_host")
+    @classmethod
+    def _refuse(cls, value: str, info: pydantic.ValidationInfo) -> str:
+        raise ValueError(
+            f"does not match the key {VALIDATOR_SAID} {info.data.get('private_key')}"
+        )
+
+
+async def test_no_answer_to_a_replacement_shows_what_the_node_holds(
+    client, session, monkeypatch, reality_params
+) -> None:
+    """The half of the sweep nothing walked, which is how the leak above survived.
+
+    ``every_console_surface`` covers every GET, and ``test_no_answer_to_a_rotation_...``
+    covers the ROTATE post's answer. Nothing swept the answer to the one POST that
+    prints a transport's own sentence on purpose — so the surface with the only path
+    from the encrypted column to visible text was the surface with no sweep over it.
+
+    Driven by a model that refuses the way a real one could and quotes what it was
+    given, because no shipped transport's validator does: the hazard is latent, and a
+    latent hazard on the screen whose acceptance line reads "hunt for a private key —
+    you must not find one" is guarded rather than watched.
+    """
+    node_transport_id = await a_node_holding_material(client, reality_params)
+    monkeypatch.setattr(
+        rotation_service,
+        "profile",
+        lambda name: _RefusingProfile(_QuotesAFieldItWasValidatedWith),
+    )
+
+    refused = await client.post(
+        f"/panel/keys/{node_transport_id}/params",
+        data={"decoy_host": "www.wikipedia.example"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    held = await stored_material(session)
+    # Non-vacuous by construction, the way the GET sweep is: a fleet holding nothing
+    # would pass this for the wrong reason.
+    assert held
+    for label, value in held.items():
+        if value in refused.text:
+            # The label, never the value — a rewritten assertion prints both operands.
+            pytest.fail(f"the answer to a replacement rendered {label}")
+
+    # And the message DID arrive under its box: this is a redaction, not a message that
+    # went missing. A guard that dropped the whole sentence would pass the sweep above
+    # and cost the operator the only actionable answer this form gives them.
+    under_its_box = _described(refused, "error", prefix="param")["decoy_host"]
+    assert VALIDATOR_SAID in under_its_box
+    assert relay_service.WITHHELD in under_its_box
 
 
 async def test_a_rotation_refusal_repeats_no_sentence_wherever_it_is_rendered(

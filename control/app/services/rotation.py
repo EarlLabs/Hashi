@@ -155,10 +155,21 @@ async def rotate_keys(
         #
         # Only the first error travelled before, so a rotation refused on two values
         # reported one of them.
-        fields: dict[str, str] = {}
-        for error in exc.errors():
-            where = ".".join(str(part) for part in error["loc"])
-            fields.setdefault(where, relay._plainly(error["msg"]))
+        #
+        # ``relay.refused_fields`` strikes the material out of the sentences as well, so
+        # what is on ``fields`` is safe for a caller that has somewhere to put it. That
+        # is belt and braces on this path rather than the whole guard — the message here
+        # repeats no sentence at all — and it is the same call the replacement path
+        # below depends on completely. Both the freshly minted secrets and the ones the
+        # row still holds: the second set is not in ``merged``, and passing it costs a
+        # line rather than an argument about whether a validator could reach it.
+        fields = relay.refused_fields(
+            exc,
+            withholding=[
+                *minted.secrets.values(),
+                *json.loads(node_transport.secrets).values(),
+            ],
+        )
         raise ParamsRefused(
             f"the rotated parameters are not valid for "
             f"{node_transport.transport_name!r} — refused: {_named(fields)}. "
@@ -238,30 +249,29 @@ async def replace_params(
         # values reported one of them.
         #
         # Never the VALUES of the merged mapping: it holds this node's decrypted key
-        # material. What travels is the transport's own complaint, and which of those
-        # complaints may be PRINTED is decided by the caller, which knows which fields
-        # it has boxes for.
+        # material, and ``relay.refused_fields`` is what makes that true rather than
+        # hoped for. Every stored secret is struck out of every sentence HERE, while the
+        # values are still in scope — which is what lets the MESSAGE below repeat the
+        # transport's complaints at all.
         #
-        # The MESSAGE here does repeat those complaints, unlike ``rotate_keys`` above,
-        # and the difference is deliberate rather than an oversight. Nothing is minted
-        # on this path — existing material is preserved untouched — and every field a
-        # caller can act on is a value the operator has just typed into a form, so the
-        # sentence explaining why it was rejected is the whole content of the answer for
-        # an API caller, which has no ``fields`` to read. Note what that argument does
-        # NOT say: the mapping validated here still CARRIES the stored material, so this
-        # is a narrower exposure rather than none — the same one every ``HopEndRefused``
-        # has had since M9.2. The console's own screen withholds these anyway; what is
-        # left is two operator-only surfaces, one of which M9.6 deletes.
+        # The reason it may is not the one this comment used to give. That argument was
+        # "every field a caller can act on is a value the operator has just typed", and
+        # it was untrue of ``problems``, which is built from ALL of ``fields``: a
+        # model-level validator quoting the mapping, or a ``field_validator`` on a real
+        # box reading the rest of it through ``info.data``, put the node's private key
+        # into the pre-redesign page's outcome fragment and into the API envelope.
+        # The sentences are safe because the VALUES WERE REMOVED, not because of who
+        # typed what — ``docs/decisions.md`` (2026-09-10).
         #
-        # ``relay._plainly`` rather than a second copy of it: it strips the label
-        # Pydantic puts in front of a custom validator's own sentence, and two
-        # definitions of "what that prefix looks like" is how one of them stops being
-        # updated. M9.2 wrote it and the milestone's notes name it as the function any
-        # surface showing a transport's own validation message should use.
-        fields: dict[str, str] = {}
-        for error in exc.errors():
-            where = ".".join(str(part) for part in error["loc"])
-            fields.setdefault(where, relay._plainly(error["msg"]))
+        # Which of these complaints may be PRINTED is still decided by the caller, which
+        # knows which fields it has boxes for. That allow-list stays; it is now the
+        # second line of defence rather than the only one.
+        #
+        # Reached across modules rather than copied, the way ``relay._plainly`` was and
+        # for the same reason M9.2 gave when it wrote that one: two definitions of what
+        # a refusal may say is how one of them stops being updated. The hop path raises
+        # its own exception type through the very same function.
+        fields = relay.refused_fields(exc, withholding=stored_secrets.values())
         problems = "; ".join(f"{where}: {message}" for where, message in fields.items())
         raise ParamsRefused(
             f"transport {node_transport.transport_name!r} rejected these parameters — "

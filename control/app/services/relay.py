@@ -20,6 +20,7 @@ HOW:  a hop is two ordinary ``NodeTransport`` rows that point at each other, mar
 
 import json
 import logging
+from collections.abc import Iterable
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -154,6 +155,65 @@ def _plainly(message: str) -> str:
     return message
 
 
+# What stands in a refusal where a held value was struck out. A marker rather than an
+# ellipsis, because an operator reading *"does not match the key [withheld]"* can tell
+# that this panel removed something — a sentence that simply stopped short would read as
+# the transport's own words and send them looking for a value that was never there.
+WITHHELD = "[withheld]"
+
+
+def refused_fields(
+    exc: ValidationError, *, withholding: Iterable[object]
+) -> dict[str, str]:
+    """A transport's refusal as ``{parameter: sentence}``, carrying no held value.
+
+    THE ONE PLACE that decides what may not be printed, for every path that validates a
+    mapping holding key material — establishing a hop, rotating a node's material, and
+    replacing its parameters. It was three places, each sorting the risk differently at
+    its own caller, which is how one of them stopped being updated: the console's
+    allow-list closed the class of LOCATIONS and left the class of MESSAGES open. A
+    ``field_validator`` on a field the form legitimately has a box for reads the rest of
+    the already-validated mapping through ``info.data``, so Pydantic files the complaint
+    at a real box name and the sentence — carrying the node's decrypted private key —
+    is printed as visible text. See ``docs/decisions.md`` (2026-09-10).
+
+    So the values are removed here, while they are still in scope, rather than sorted
+    four surfaces later: this closes ``fields``, the flattened message, the console, the
+    pre-redesign page's outcome fragment and the API envelope at once. The console's
+    allow-list stays as the second line of defence.
+
+    ``withholding`` is **what is stored encrypted or minted as secret** — the same set
+    ``stored_material`` sweeps for in the tests — and deliberately not "everything
+    minted". A value the transport declared not-secret ships inside every user's own
+    link, so striking it out of a sentence protects nothing and costs the operator a
+    reason; some of those are also short enough that a blanket substring strike would
+    eat unrelated text. There is no minimum length on a value that IS secret, and that
+    asymmetry is the point: over-redaction costs a word, under-redaction prints a key.
+
+    Matching is exact substring, longest value first so that a value containing another
+    is struck whole. The location is redacted too — a name is normally a Python
+    identifier and safe, but a nested one can carry a mapping key, and this costs one
+    line.
+    """
+    values = sorted(
+        {str(value) for value in withholding if value is not None and value != ""},
+        key=len,
+        reverse=True,
+    )
+    fields: dict[str, str] = {}
+    for error in exc.errors():
+        where = _without(".".join(str(part) for part in error["loc"]), values)
+        fields.setdefault(where, _without(_plainly(error["msg"]), values))
+    return fields
+
+
+def _without(text: str, values: list[str]) -> str:
+    """One sentence with every held value struck out of it."""
+    for value in values:
+        text = text.replace(value, WITHHELD)
+    return text
+
+
 async def establish_hop(
     session: AsyncSession,
     *,
@@ -212,6 +272,10 @@ async def establish_hop(
             if spec.name in entry_side:
                 getattr(leaf_minted, side)[spec.name] = entry_side[spec.name]
 
+    # Both ends' secrets, gathered once: a refusal at either end is composed from a
+    # mapping that holds one of them, and a symmetric value is the same string in both.
+    withheld_values = [*entry_minted.secrets.values(), *leaf_minted.secrets.values()]
+
     ends = []
     for node, supplied, minted, purpose in (
         (entry_node, entry_params, entry_minted, TransportPurpose.RELAY_ENTRY),
@@ -226,13 +290,14 @@ async def establish_hop(
             # top of a twenty-four-box form makes the operator hunt for the parameter
             # the prose names. See ``HopEndRefused``.
             #
-            # Never the VALUES of the mapping: at this point it holds the private key we
-            # just minted. What travels is the transport's own complaint, which quotes
-            # only what the operator typed.
-            fields: dict[str, str] = {}
-            for error in exc.errors():
-                where = ".".join(str(part) for part in error["loc"])
-                fields.setdefault(where, _plainly(error["msg"]))
+            # Never the VALUES of the mapping: at this point it holds the private keys
+            # just minted for BOTH ends, and a validator's complaint may quote what it
+            # was given whichever field it names. It is not enough to assume it quotes
+            # only what the operator typed — that assumption is what
+            # ``refused_fields`` was written to stop relying on, so every minted secret
+            # is struck out of every sentence here, before ``fields`` or the flattened
+            # message reaches a caller that renders either without choosing to.
+            fields = refused_fields(exc, withholding=withheld_values)
             problems = "; ".join(
                 f"{where}: {message}" for where, message in fields.items()
             )
