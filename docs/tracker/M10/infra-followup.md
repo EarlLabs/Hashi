@@ -1,7 +1,7 @@
 # An `infra` change M10 could not make — recorded 2026-09-11
 
-M10.2's Settings screen names, beside each value, the environment variable it is
-read from. For **four of those variables the named place does nothing**, and the
+M10's Settings screen names, beside each value, the environment variable it is
+read from. For **five of those variables the named place does nothing**, and the
 reason is in a different zone, so it is written down here rather than fixed in a
 `control` diff.
 
@@ -15,12 +15,18 @@ HASHI_SECRET_KEY  HASHI_PUBLIC_HOST  HASHI_DATABASE_URL
 HASHI_OPERATOR_USERNAME  HASHI_OPERATOR_PASSWORD_HASH
 ```
 
-These four are **never passed into the container**:
+These **five** are never passed into the container:
 
 - `HASHI_PUBLIC_HTTPS`
 - `HASHI_SESSION_MAX_AGE`
 - `HASHI_NODE_SSH_TIMEOUT`
 - `HASHI_NODE_CONNECT_TIMEOUT`
+- **`HASHI_AUDIT_RETENTION_DAYS`** — added by M10.3 on 2026-09-11, and the one
+  that matters most. It controls **how long the only record that names friends is
+  kept.** An owner who wants to shorten that window cannot, today: the variable is
+  in neither the compose `environment:` block nor `.env.example`, so setting it
+  achieves nothing and the trail keeps its default 30 days. Whoever takes this
+  follow-up must not ship the other four and leave this one behind.
 
 So an owner who reads the Settings screen, puts one of them in `.env` and
 restarts gets **silence** — `--env-file` feeds compose *interpolation*, not the
