@@ -34,7 +34,7 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import audit, keymaterial
+from control.app.services import audit, keymaterial, placement
 from edge.egress import Egress
 from edge.node import NodeView
 from edge.registry import KeyScope, discover, profile
@@ -315,14 +315,6 @@ async def enable_transport(
 
     node = await get_node(session, node_id)
 
-    duplicate = await session.execute(
-        select(NodeTransport)
-        .where(NodeTransport.node_id == node.id)
-        .where(NodeTransport.transport_name == transport_name)
-    )
-    if duplicate.scalars().first() is not None:
-        raise Conflict(f"{transport_name!r} is already enabled on node {node.name!r}")
-
     transport = profile(transport_name)
     minted = keymaterial.mint(meta.key_material, KeyScope.NODE)
 
@@ -374,6 +366,16 @@ async def enable_transport(
             fields=fields,
         ) from exc
 
+    # What this row would collide with on this node, asked in the one place that answers
+    # it — M15. It replaces the ``(node, transport_name)`` duplicate check that used to
+    # stand a few lines above: a node may now run two instances of one transport, and
+    # what it may not do is give them one port or one config file. Asked AFTER
+    # validation, because the port that matters is the one that will be stored, which
+    # for a transport that defaults its port is not a value the operator typed.
+    config_name = await placement.claim(
+        session, node=node, transport_name=transport_name, params=validated
+    )
+
     # Split the validated result back apart for storage. Driven by which keys the
     # generator produced as secret, so a transport's own declaration decides what is
     # encrypted — this function never judges a value by its name.
@@ -381,6 +383,7 @@ async def enable_transport(
     node_transport = NodeTransport(
         node_id=node.id,
         transport_name=transport_name,
+        config_name=config_name,
         params={k: v for k, v in validated.items() if k not in secret_keys},
         secrets=json.dumps({k: v for k, v in validated.items() if k in secret_keys}),
         enabled=True,

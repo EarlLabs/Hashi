@@ -516,8 +516,12 @@ async def drift_of(session: AsyncSession, node: Node) -> str:
         logger.warning("could not render node %s for the drift cell", node.id)
         return UNRENDERABLE
 
+    # Keyed by ``config_name``, which is what ``render_for_node`` keys its answer by
+    # since M15: a node running two instances of one transport has two digests, and
+    # keying on the transport's name would have kept one of them and called the node
+    # in sync on the strength of the other.
     applied = {
-        row.transport_name: row.applied_digest
+        row.config_name: row.applied_digest
         for row in node.transports
         if row.enabled
     }

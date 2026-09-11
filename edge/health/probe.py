@@ -18,7 +18,7 @@ HOW:  every field of ``NodeHealth`` is about the NODE. There is deliberately no
 import logging
 from dataclasses import dataclass, field
 
-from edge.bootstrap.node_stack import config_path_for, digest_of, loaded_digests
+from edge.bootstrap.node_stack import config_path_of, digest_of, loaded_digests
 from edge.bootstrap.ssh import NodeConnection, NodeUnreachable
 
 logger = logging.getLogger(__name__)
@@ -68,14 +68,23 @@ class NodeHealth:
 
 
 async def probe(
-    connection: NodeConnection, *, expected: dict[str, str]
+    connection: NodeConnection,
+    *,
+    expected: dict[str, str],
+    transports: dict[str, str] | None = None,
 ) -> NodeHealth:
     """Probe one node.
 
-    ``expected`` maps transport name to the config we believe is on the node, so
-    this function does no rendering and needs no database — the caller renders and
-    passes the result in, which keeps the comparison honest and this module pure of
-    everything but SSH.
+    ``expected`` maps the name each config is PLACED under to the config we believe is
+    on the node, so this function does no rendering and needs no database — the caller
+    renders and passes the result in, which keeps the comparison honest and this module
+    pure of everything but SSH.
+
+    ``transports`` says which transport each of those names came from, and defaults to
+    the name itself — the single-instance case, which is every node that existed before
+    M15. It is needed only to find the file, because the EXTENSION is the transport's
+    (``EXTENSION``); a node running two instances of one transport passes it, and a
+    caller that does not gets exactly the behaviour it always had.
     """
     try:
         # The digest each running container was CREATED with, not merely which services
@@ -90,30 +99,32 @@ async def probe(
     health = NodeHealth(reachable=True, running=sorted(loaded))
     health.missing = sorted(set(expected) - set(loaded))
 
-    for transport_name, config in expected.items():
+    for config_name, config in expected.items():
         wanted = digest_of(config)
 
-        if transport_name in loaded and loaded[transport_name] != wanted:
+        if config_name in loaded and loaded[config_name] != wanted:
             # Up, and up on something else. A container from before this label existed
             # reports an empty digest and lands here too, which is correct: it is
             # provably not running the config we would push.
-            health.stale.append(transport_name)
+            health.stale.append(config_name)
 
-        # ``config_path_for``, never ``config_path``: the latter defaults to the Xray
+        # ``config_path_of``, never ``config_path``: the latter defaults to the Xray
         # JSON extension, so before M2 this looked for every transport's config at a
         # ``.json`` path. Latent only while the one live transport was an Xray one —
         # a WireGuard-family config is written ``.conf``, would never be found here,
         # and the node would be reported as permanently drifted. Carried over from M1
         # (docs/tracker/M1/carry-over.md) and fixed here because M2 is what makes it
         # bite.
-        remote = await connection.read_file(config_path_for(transport_name))
+        remote = await connection.read_file(
+            config_path_of(config_name, (transports or {}).get(config_name, config_name))
+        )
         if remote is None:
             # Absent config is reported as drift rather than as "missing service":
             # the container may still be running on a config that is no longer on
             # disk, which is the state that survives a restart as an outage.
-            health.drifted.append(transport_name)
+            health.drifted.append(config_name)
         elif digest_of(remote) != wanted:
-            health.drifted.append(transport_name)
+            health.drifted.append(config_name)
 
     health.drifted.sort()
     health.stale.sort()

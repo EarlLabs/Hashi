@@ -188,13 +188,15 @@ async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouche
     assert established.status_code == 201, established.text
     hop_port = 51822
 
-    # The same transport, now as an offer to friends — on a THIRD node, and that is not
-    # a convenience. ``uq_node_transport`` is unique on (node, transport_name) with no
-    # purpose in it, so one host cannot both run a hop and offer the same protocol to
-    # friends; ``apply.render_for_node`` also keys rendered configs by transport name,
-    # so two rows would collide there too. That is a real limitation of the topology
-    # this scenario would otherwise describe, and it is written down as backlog item 34
-    # rather than worked around silently here.
+    # The same transport, now as an offer to friends — on a THIRD node. That USED to be
+    # forced: ``uq_node_transport`` was unique on (node, transport_name) with no purpose
+    # in it, so one host could not both carry a hop and offer the same protocol to
+    # friends. M15 removed that limitation — uniqueness moved onto the port and the
+    # config name, and ``render_for_node`` keys by the latter — and the shape it unlocked
+    # has a scenario of its own
+    # (``test_the_runbook_shape_a_then_the_hop_it_mandates.py``). A third node is kept
+    # here because what THIS file is about is the purpose filter, and proving it on two
+    # separate nodes is the weaker and therefore more honest setting for it.
     exit_node = (
         await operator.post(
             "/api/nodes",

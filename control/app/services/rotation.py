@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import DomainError, NotFound, ParamsRefused
 from control.app.models import AuditAction, Credential, NodeTransport, TransportPurpose
-from control.app.services import apply, audit, keymaterial, nodes, relay
+from control.app.services import apply, audit, keymaterial, nodes, placement, relay
 from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
@@ -366,6 +366,18 @@ async def replace_params(
     )
     if not changed:
         raise DomainError("nothing to change — those values are already in place")
+
+    # A retyped port is a port, and it collides with the node's other transports exactly
+    # as a new one does — M15. Excluding this row, because a form resubmitted with the
+    # port unchanged must not be refused by its own value. Checked before anything is
+    # stored: the database holds the same rule as a constraint, and a caller that
+    # reached it would get a 500 over a change it had already made.
+    await placement.port_is_free(
+        session,
+        node=await nodes.get_node(session, node_transport.node_id),
+        port=placement.port_of(validated),
+        excluding=node_transport.id,
+    )
 
     ends = [node_transport]
     if node_transport.purpose in TransportPurpose.relays():

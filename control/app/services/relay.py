@@ -26,9 +26,9 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import Conflict, DomainError, HopEndRefused, NotFound
+from control.app.errors import DomainError, HopEndRefused, NotFound
 from control.app.models import AuditAction, Node, NodeTransport, TransportPurpose
-from control.app.services import audit, keymaterial, nodes
+from control.app.services import audit, keymaterial, nodes, placement
 from edge import relay as edge_relay
 from edge.registry import KeyScope, discover, profile
 
@@ -312,16 +312,11 @@ async def establish_hop(
     entry_node = await nodes.get_node(session, entry_node_id)
     leaf_node = await nodes.get_node(session, leaf_node_id)
 
-    for node in (entry_node, leaf_node):
-        existing = await session.execute(
-            select(NodeTransport)
-            .where(NodeTransport.node_id == node.id)
-            .where(NodeTransport.transport_name == transport_name)
-        )
-        if existing.scalars().first() is not None:
-            raise Conflict(
-                f"{transport_name!r} is already configured on node {node.name!r}"
-            )
+    # What used to stand here was a refusal when either node already had a row for this
+    # transport, whatever that row was FOR — so a node offering AmneziaWG to friends
+    # could never become a hop end over it, which is the defect M15 is about. The rule
+    # moved onto what actually collides (``services.placement``) and is asked per end
+    # below, once each end's parameters have been validated.
 
     meta = installed[transport_name]
     transport = profile(transport_name)
@@ -377,11 +372,19 @@ async def establish_hop(
                 fields=fields,
             ) from exc
 
+        # This end's collisions on ITS OWN node, in the same one place the enable route
+        # asks — M15. Per end rather than per hop: the two ends are on two different
+        # nodes and each is placed against whatever that node already runs.
+        config_name = await placement.claim(
+            session, node=node, transport_name=transport_name, params=validated
+        )
+
         secret_keys = set(minted.secrets)
         ends.append(
             NodeTransport(
                 node_id=node.id,
                 transport_name=transport_name,
+                config_name=config_name,
                 params={k: v for k, v in validated.items() if k not in secret_keys},
                 secrets=json.dumps(
                     {k: v for k, v in validated.items() if k in secret_keys}

@@ -1832,9 +1832,14 @@ async def test_a_refusal_about_the_request_is_stated_above_the_form(
 ) -> None:
     """Everything that is not about one box is stated once, above the form.
 
-    Driven with a transport already enabled on this node, which is the refusal an
-    operator actually meets: the list stops offering it, so this is what a stale dialog
-    answers with rather than a 409 the console would never swap.
+    Driven with the PORT this node already listens on, which since M15 is the refusal an
+    operator actually meets here: a second instance of a transport is allowed — the
+    runbook asks for one — and what is refused is two of them wanting one port. The
+    driver used to be "this transport is already enabled", a rule that no longer exists.
+
+    It arrives as a 422 the console can swap rather than the 409 the API answers with,
+    which is what this test is really about: a refusal with no box of its own is stated
+    once, above the form.
     """
     node_id, _ = await a_node_with_an_offer(client, reality_params)
 
@@ -1842,7 +1847,9 @@ async def test_a_refusal_about_the_request_is_stated_above_the_form(
         f"/panel/nodes/{node_id}/transports",
         data={
             "transport_name": "vless-reality",
-            "vless-reality-port": "8444",
+            # The port the node already offers, read off the fixture rather than typed
+            # again, so the collision cannot drift apart from what was enabled.
+            "vless-reality-port": str(reality_params[transports_service.PORT_FIELD]),
             "vless-reality-decoy_host": "www.example.com",
             "vless-reality-server_names": "www.example.com",
         },
@@ -1851,7 +1858,7 @@ async def test_a_refusal_about_the_request_is_stated_above_the_form(
 
     assert refused.status_code == 422
     reading = _reading(refused.text)
-    assert "already enabled" in reading
+    assert "already listens on port" in reading, reading
     assert 'role="alert"' in refused.text
 
 

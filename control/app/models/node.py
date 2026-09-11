@@ -20,9 +20,11 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -210,9 +212,39 @@ class NodeTransport(Base, TimestampMixin):
 
     __tablename__ = "node_transports"
     __table_args__ = (
-        # A node runs one instance of a given transport. Two would mean two ports
-        # and two sets of keys under one name, and every render would have to pick.
-        UniqueConstraint("node_id", "transport_name", name="uq_node_transport"),
+        # WHAT HAS TO BE UNIQUE ON ONE NODE, and it is not the transport — M15.
+        #
+        # It used to be ``(node_id, transport_name)``, on the reasoning that two
+        # instances of one transport would mean two ports and two sets of keys under
+        # one name. That is true and it is not a reason to forbid them: the runbook
+        # MANDATES AmneziaWG for the entry→leaf hop and RECOMMENDS it for friends on
+        # the same box, so the old rule made a node that followed both pieces of advice
+        # impossible — and, with no delete for a node transport, impossible forever.
+        #
+        # So uniqueness moved onto the two things that genuinely collide on a host:
+        #
+        # * the LISTENING PORT. The data plane runs with ``network_mode: host``, so two
+        #   transports asking for one port are two daemons and one bind. Expressed over
+        #   ``params`` because the port is the transport's own value in a document this
+        #   zone does not model — ``services.transports.PORT_FIELD`` is the one field
+        #   name `control` knows, and ``test_the_schema_and_the_console_agree_about_the
+        #   _port_field`` holds the two strings together. A transport that names no port
+        #   yields NULL here and Postgres treats NULLs as distinct, which is exactly
+        #   right: nothing to collide over.
+        # * the CONFIG NAME, which for the wg-quick family is also the network interface
+        #   name — ``edge`` derives it from the config file's stem. Two rows sharing it
+        #   would be two configs at one path and, for that family, one interface the
+        #   second container cannot create.
+        #
+        # Both are per NODE. Nothing here is unique across the fleet: two nodes
+        # listening on the same port is the ordinary case.
+        UniqueConstraint("node_id", "config_name", name="uq_node_transport_config_name"),
+        Index(
+            "uq_node_transport_port",
+            "node_id",
+            text("(params ->> 'port')"),
+            unique=True,
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -223,6 +255,16 @@ class NodeTransport(Base, TimestampMixin):
     # Whatever name the transport package declared. `control` stores and passes it
     # back to the registry; it never compares it to a literal.
     transport_name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # The name this row's rendered config is placed under on the node: the stem of its
+    # file, the name of its compose service and — for the wg-quick family — the network
+    # interface it brings up. Stored rather than derived, for two reasons. It is what
+    # the unique constraint above is written over, so the database can hold the rule
+    # instead of four services remembering it; and every node already in the field has
+    # its files named after the transport, so a derived name would rename them under a
+    # running daemon. ``services.placement`` chooses it — the transport's own name when
+    # that is free on this node, which is every row that existed before M15.
+    config_name: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # Non-secret parameters, validated by the transport's own Params model before
     # they land here. JSONB rather than columns because the shape belongs to the

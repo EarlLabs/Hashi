@@ -72,6 +72,12 @@ class TransportResponse(BaseModel):
     id: str
     node_id: str
     transport_name: str
+    # The name this row is placed under on the node: its config file's stem and, for the
+    # wg-quick family, its network interface. Equal to ``transport_name`` for a node
+    # running one of this transport, and the only thing telling two instances apart on a
+    # node running two — which M15 permits. Not secret and not inventable: it is already
+    # the filename on the host.
+    config_name: str
     enabled: bool
     applied_at: datetime.datetime | None
 
@@ -220,6 +226,10 @@ class HopEndResponse(BaseModel):
     id: str
     node_id: str
     transport_name: str
+    # Same field, same reason as ``TransportResponse``: on a node that offers this
+    # transport to friends AND carries a hop over it, this is what says which file on
+    # the host is this end.
+    config_name: str
     purpose: str
     # Never ``secrets``: this end's private key lives in the same row.
     params: dict

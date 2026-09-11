@@ -95,11 +95,19 @@ _NOT_PER_NODE: tuple[type[BaseException], ...] = (SecretUnreadable,)
 # ``edge/bootstrap/node_stack.py`` (``DATA_PLANES``), keyed by config FORMAT — naming a
 # daemon is naming a protocol, and `control` is not allowed to do either.
 async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
-    """Every enabled transport's config for one node, keyed by transport name.
+    """Every enabled transport's config for one node, keyed by the name it is placed under.
 
     Pure with respect to the node: it reads the database, then renders. Each
     transport gets exactly the friends who hold a live credential on it, which is
     what makes the rendered file the authoritative answer to "who can use this node".
+
+    THE KEY IS ``config_name``, not the transport's name, and since M15 those can
+    differ: a node may run a friend-facing AmneziaWG and the entry end of a hop over the
+    same transport, and they are two files, two compose services and two interfaces. For
+    every row written before M15 — and for every first instance since — the two strings
+    are equal, which is why every caller indexing this by a transport's name still finds
+    what it is looking for. A caller that needs the TRANSPORT behind a key (to resolve a
+    config format, or to name it in a message) asks ``placed_transports``.
     """
     rendered: dict[str, str] = {}
     view = nodes.node_view(node)
@@ -128,7 +136,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         # is topology, never on the transport's name.
         if node_transport.purpose in TransportPurpose.relays():
             peer = await relay.peer_of(session, node_transport)
-            rendered[node_transport.transport_name] = relay.render_end(
+            rendered[node_transport.config_name] = relay.render_end(
                 node_transport, peer
             )
             continue
@@ -163,7 +171,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
 
         transport = profile(node_transport.transport_name)
         try:
-            rendered[node_transport.transport_name] = transport.profile.render_server(
+            rendered[node_transport.config_name] = transport.profile.render_server(
                 view,
                 nodes.render_params(node_transport),
                 credentials,
@@ -209,6 +217,28 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             ) from exc
 
     return rendered
+
+
+async def placed_transports(session: AsyncSession, node: Node) -> dict[str, str]:
+    """Which transport each of this node's placed configs came from, by config name.
+
+    The other half of ``render_for_node``'s key, and it exists because two of the three
+    things done with a rendered config are the TRANSPORT's business rather than the
+    file's: which upstream checker validates it, and which extension and data plane it
+    gets (``edge.bootstrap.node_stack``). Before M15 the key was the transport's name and
+    both were free.
+
+    Its own query rather than a second return value, so no caller that indexes a config
+    by name had to change. It is the same filter ``render_for_node`` runs, in the same
+    transaction, against a database only the operator writes to — and the two are used
+    together within one request.
+    """
+    listed = await session.execute(
+        select(NodeTransport.config_name, NodeTransport.transport_name)
+        .where(NodeTransport.node_id == node.id)
+        .where(NodeTransport.enabled.is_(True))
+    )
+    return {config_name: transport_name for config_name, transport_name in listed.all()}
 
 
 def target_for(node: Node, node_settings: Settings) -> NodeTarget:
@@ -335,9 +365,14 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     node_settings = settings()
 
     configs = await render_for_node(session, node)
-    for transport_name, config in configs.items():
+    # Which transport is behind each placed config. Needed from here down wherever the
+    # answer is the TRANSPORT's rather than the file's — the checker, the extension, the
+    # data plane — because since M15 a config's name and its transport's name can differ.
+    placed = await placed_transports(session, node)
+    for config_name, config in configs.items():
         # The FORMAT comes from the transport's own declaration, so the right checker
         # runs without this module knowing which protocol it is looking at.
+        transport_name = placed[config_name]
         validate_before_push(
             transport_name, config, profile(transport_name).meta.config_format
         )
@@ -348,7 +383,9 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     # regardless of the order the transports were read in — an unstable one would
     # recreate every container on every apply.
     compose = node_stack.render_compose(
-        transports=node_stack.services_for({name: configs[name] for name in sorted(configs)})
+        transports=node_stack.services_for(
+            {name: configs[name] for name in sorted(configs)}, transports=placed
+        )
     )
 
     # Built before the connection, and its refusal RECORDED. A record that cannot
@@ -371,12 +408,12 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
                 node.ssh_host_key = connection.learned_host_key
 
             await node_stack.prepare(connection)
-            for transport_name, config in configs.items():
+            for config_name, config in configs.items():
                 await node_stack.place_config(
                     connection,
-                    transport_name=transport_name,
+                    transport_name=placed[config_name],
                     config=config,
-                    path=node_stack.config_path_for(transport_name),
+                    path=node_stack.config_path_of(config_name, placed[config_name]),
                 )
             await node_stack.place_compose(connection, compose=compose)
             await node_stack.restart(connection)
@@ -480,12 +517,12 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     applied = await session.execute(
         select(NodeTransport)
         .where(NodeTransport.node_id == node.id)
-        .where(NodeTransport.transport_name.in_(sorted(configs)))
+        .where(NodeTransport.config_name.in_(sorted(configs)))
     )
     for node_transport in applied.scalars().unique():
         node_transport.applied_at = now
         node_transport.applied_digest = node_stack.digest_of(
-            configs[node_transport.transport_name]
+            configs[node_transport.config_name]
         )
 
     node.state = NodeState.ACTIVE

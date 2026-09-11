@@ -32,10 +32,14 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
     """
     node = await nodes.get_node(session, node_id)
     expected = await apply.render_for_node(session, node)
+    # Which transport each placed config came from — the probe needs it to know which
+    # EXTENSION the file on the node carries, and since M15 a config's name and its
+    # transport's name are two strings (see ``apply.placed_transports``).
+    placed = await apply.placed_transports(session, node)
 
     try:
         async with NodeConnection(apply.target_for(node, apply.settings())) as connection:
-            health = await probe(connection, expected=expected)
+            health = await probe(connection, expected=expected, transports=placed)
     except NodeUnreachable as exc:
         return schemas.HealthResponse(
             node_id=node.id,
