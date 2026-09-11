@@ -158,3 +158,108 @@ decided rather than blocked on — but they are the three worth a glance.
 
 The Overview's "Recent activity" card (`design/README.md` §1). No M10 step asks
 for it.
+
+---
+
+# Established by M10.2 — the Settings screen
+
+Binds M10.3 and M10.4.
+
+## What it is
+
+A **read-only statement of what this control plane is running with**. One route on
+the operator-only `router`, one screen template, rows composed in
+`services/console.py` off `request.app.state.settings` — the **live object**,
+never `os.environ`, never a file. No form, no save control, no POST beside it.
+
+Shows: subscription base URL (`HASHI_PUBLIC_HOST · HASHI_PUBLIC_HTTPS` — both,
+because the URL is composed from both), panel session lifetime, and the two
+node-reach ceilings. Durations print in the unit the variable takes with an exact
+human reading beside them (`28800 seconds (8 hours)`) — **derived, never
+written**. Admins is one row: username / `operator` / `HASHI_OPERATOR_USERNAME`,
+**no last login**. No mesh name. **No retention row — that is M10.3's**, and two
+assertions in `test_nothing_on_the_settings_screen_offers_to_save_anything` exist
+to be **deleted by M10.3** (they assert no row names `RETENTION`). They are the
+boundary marker, not an obstacle.
+
+`HASHI_SECRET_KEY`, `HASHI_OPERATOR_PASSWORD_HASH` and `HASHI_DATABASE_URL` render
+as the single word **`configured`**. The password row additionally names
+`python -m control.cli hash-password`, because "edit this variable" is not
+actionable on its own.
+
+## The secret sweep — reuse it, and read its contract
+
+Two complementary instruments, because neither is the other's superset:
+
+1. **Structural** — the rendered *value cell* of every row marked `secret` must
+   **equal** `configured`. A prefix, a length, a digest and the value all fail one
+   assertion, reported with `pytest.fail(label)`, never an `assert` that would
+   print the operand.
+2. **Document-wide** — `_forms_a_secret_could_take()` expands each configured
+   secret into prefixes/suffixes of ≥`SECRET_FRAGMENT` characters **after the
+   value's scheme**, its length with a unit, and a digest under **every algorithm
+   `hashlib` guarantees**, whole / truncated to 8 / in the console's `abcd…ef01`
+   fingerprint shape — hunted over `response.text` **and**
+   `html.unescape(response.text)` across every URL in `every_console_surface()`.
+
+**The `html.unescape` half is load-bearing, not belt-and-braces.** Jinja
+autoescapes; a secret containing `&`, `'`, `<` or `>` is present in the markup as
+`&amp;` and a raw substring search walks straight past a fully rendered secret.
+Proven both directions.
+
+**`_forms_a_secret_could_take`'s docstring carries a `NOT HUNTED` list — that list
+is the instrument's contract.** A value re-encoded rather than digested; a value
+split across two elements outside a secret row's own cell; a scheme plus fewer
+than `SECRET_FRAGMENT` characters of what follows; a secret described in prose.
+**Extend that list rather than quietly relying on the sweep being exhaustive**,
+and put any new disclosure shape in that one function so every caller inherits it.
+
+`SCHEME` and `DIGESTS` live beside `SECRET_FRAGMENT` and are reusable.
+**`SECRET_SETTINGS` must gain any new secret setting in the same change**, or
+`test_every_secret_the_settings_screen_names_is_one_this_sweep_holds` goes red —
+by design, in both directions.
+
+## Proving "the live object" rather than a declared default
+
+`conftest` builds the app with `node_connect_timeout=1` against a declared default
+of `5`, and the test **asserts that premise** before asserting the screen shows
+`1 second` and not `5 second`. **Do not remove that override** — it is what makes
+the claim provable, and the premise assertion is what stops the test going vacuous
+the day the default changes. A second test plants contradicting `HASHI_*`
+variables in the environment and asserts the screen ignores them.
+
+## Divergences worth knowing
+
+- **The screen has no database session** — the second such screen, so M9.3's note
+  calling Transports "the only" one is superseded. It is still operator-only:
+  `router` carries `Depends(auth.require_operator_page)`. A later step wanting a
+  fleet fact here must add the session back, and at that point *"does it move when
+  a friend connects?"* applies again.
+- **Its standing prose lives in `services/console.py`, not the template.** That
+  follows the stronger rule (console sentences live in the service) and lets tests
+  assert a constant rather than a copy — but
+  `test_no_console_template_names_a_transport_a_country_an_address_or_a_port`
+  scans **templates only**, so prose moved into the service is outside that
+  backstop. M9.6's `test_no_sentence_this_panel_hands_an_operator_names_a_surface_that_is_gone`
+  does walk every `.py` under `control/app`, which is the cover that exists.
+- **All-caps is a comment convention in this codebase and must not reach the
+  screen.** One shouted word leaked into the footnote and was caught in review; it
+  was the only all-caps emphasis in any rendered panel string.
+
+## Wording acceptance will judge
+
+Sidebar `Settings`. Title `Settings`, subtitle *"what this control plane is
+running with, and where each value is changed"*. Section heads `This control
+plane` and `Admins`. Columns `setting / value / where it is changed` and `user /
+role / where it is configured`. The secret cell reads exactly `configured`; role
+reads `operator`.
+
+**M10.4's Audit log entry goes into `NAV` *before* `settings`** (design order), and
+the sidebar becomes eight entries.
+
+## A live gap this screen names but cannot close
+
+`docs/tracker/M10/infra-followup.md` — four of the variables the screen names are
+never passed into the container by `deploy/docker-compose.yml`, so editing them in
+`.env` is silent. The footnote was narrowed to be honest about it; the compose fix
+is `infra` and deferred.
