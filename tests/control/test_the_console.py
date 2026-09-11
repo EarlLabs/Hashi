@@ -4380,13 +4380,20 @@ async def test_nothing_on_the_settings_screen_offers_to_save_anything(
     # Nothing reads a mesh name, so the field's only reader would have been itself.
     assert "mesh" not in reads
 
-    # NO AUDIT-RETENTION ROW. It arrives with M10.3, the step that also builds the
-    # trail and enforces the window — a retention figure on a control plane with no
-    # trail is this screen's own lie in a different field. M10.3 replaces these two
-    # lines rather than working around them; that is what they are for.
-    for row in console_service.settings_rows(settings):
-        assert "RETENTION" not in " ".join(row.variables), row.label
-    assert "retention" not in reads
+    # The audit-retention row IS here now — M10.3 built the trail it bounds and the
+    # hourly sweep that enforces it, which is what the two assertions this replaces
+    # were waiting for. It is still a statement rather than a field: the loop above
+    # has already established that this screen has no box and no save, so what is
+    # left to say is that the row carrying the one editable-looking number on the
+    # screen did not arrive with a form under it.
+    retention = [
+        row
+        for row in console_service.settings_rows(settings)
+        if "HASHI_AUDIT_RETENTION_DAYS" in row.variables
+    ]
+    assert len(retention) == 1, "the audit-retention row is the trail's own window"
+    assert not retention[0].secret, "a retention window is not a secret"
+    assert str(settings.audit_retention_days) in reads
 
 
 async def test_the_admins_table_is_one_row_and_has_no_last_login(

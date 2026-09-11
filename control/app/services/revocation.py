@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.services import apply, friends
+from control.app.models import AuditAction
+from control.app.services import apply, audit, friends
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,24 @@ async def revoke_friend(session: AsyncSession, *, friend_id: str) -> RevocationO
     pushed", which a retry completes. The other order would leave a friend revoked on
     some nodes and live in the database, and the next apply would put them back.
     """
+    # Recorded BEFORE the database half runs, and deliberately not committed here: the
+    # entry sits pending in this session until ``friends.revoke`` commits, so both land
+    # in one transaction and a revocation that raises leaves no entry behind. Written
+    # from this module rather than from ``friends.revoke`` because this is the operation
+    # the operator performed — both surfaces call it — and because the nickname has to
+    # be read while the friend row is still the one being withdrawn.
+    #
+    # The label is the nickname, copied whole. Nothing about which nodes were reached is
+    # recorded: a push that failed is not a change that committed, the outcome sentence
+    # already tells the operator, and the node's own state carries it afterwards.
+    #
+    # A friend already revoked is recorded once and not again: withdrawing access from
+    # somebody who has none changes nothing, and a trail that grows on a retried request
+    # is a trail that says a thing happened twice.
+    friend = await friends.get_friend(session, friend_id)
+    if friend.is_active:
+        audit.record(session, AuditAction.FRIEND_REVOKED, first_label=friend.nickname)
+
     affected = await friends.revoke(session, friend_id=friend_id)
 
     outcome = RevocationOutcome(friend_id=friend_id)

@@ -19,9 +19,11 @@
     to say "we do not keep this" is where somebody later keeps it, which is the same
     reasoning decision 6 dropped the Traffic screen with.
 
-  There is no audit-retention row either. The window arrives with M10.3, the step that
-  also builds the trail and enforces the sweep: a retention figure on a control plane
-  with no trail would be this screen's own lie in a different field.
+  One value from that form did survive: how long the audit log keeps an entry. It is
+  here because M10.3 built the trail it bounds and the hourly sweep that enforces it —
+  a retention figure on a control plane with no trail, or with no sweep behind it,
+  would have been this screen's own lie in a different field. It is a row like every
+  other row: stated, not offered, and changed in the environment.
 
   Every string below arrives already composed in `configuration` and `admins` from
   services/console.py, which reads each one off the live Settings object. Nothing here

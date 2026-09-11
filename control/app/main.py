@@ -24,7 +24,7 @@ from control.app.crypto import SecretBox, session_secret
 from control.app.db import Database
 from control.app.models.base import bind_secret_box
 from control.app.panel import routes as panel_routes
-from control.app.services import apply
+from control.app.services import apply, audit
 from control.app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -66,8 +66,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The pool is opened here rather than at import so that building an app never
         # dials a database — which is what lets `--factory` and the tests share a
         # code path.
-        yield
-        await app.state.database.dispose()
+        #
+        # The audit trail's retention sweep is started here and nowhere else, because
+        # this is the only place in the process that outlives a request. Sweeping on
+        # write instead would mean a trail that expires only when the operator acts,
+        # which is not retention on an idle machine (docs/decisions.md, 2026-09-11).
+        # It is held on app state so a test can see it running rather than infer it.
+        app.state.audit_sweeper = audit.start_sweeper(
+            app.state.database, retention_days=settings.audit_retention_days
+        )
+        try:
+            yield
+        finally:
+            # Cancelled BEFORE the pool is disposed: the sweeper holds a session while
+            # it runs, and disposing an engine out from under it is how a clean
+            # shutdown turns into a traceback nobody reads.
+            await audit.stop_sweeper(app.state.audit_sweeper)
+            await app.state.database.dispose()
 
     # The panel is the highest-value target in the system, and a public schema of
     # its API is free reconnaissance. openapi_url is the load-bearing one of the

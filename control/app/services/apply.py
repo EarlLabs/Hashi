@@ -33,13 +33,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.crypto import SecretUnreadable
 from control.app.errors import Conflict, DomainError, NodeOperationFailed
 from control.app.models import (
+    AuditAction,
     Credential,
     Node,
     NodeState,
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import nodes, relay
+from control.app.services import audit, nodes, relay
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
@@ -489,6 +490,12 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
 
     node.state = NodeState.ACTIVE
     node.state_detail = None
+    # Success only, and only here — past every failure arm above, which record nothing.
+    # A push that failed is not a change that committed, and its reason is a sentence
+    # that can come from a remote host; the node's own row carries it for the operator.
+    # The node's name is the whole entry: not which transports, not their digests, not
+    # how long it took.
+    audit.record(session, AuditAction.NODE_APPLIED, first_label=node.name)
     await session.commit()
     logger.info("node applied: %s (%d transports)", node.id, len(configs))
     return configs

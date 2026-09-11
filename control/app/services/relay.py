@@ -27,8 +27,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict, DomainError, HopEndRefused, NotFound
-from control.app.models import Node, NodeTransport, TransportPurpose
-from control.app.services import keymaterial, nodes
+from control.app.models import AuditAction, Node, NodeTransport, TransportPurpose
+from control.app.services import audit, keymaterial, nodes
 from edge import relay as edge_relay
 from edge.registry import KeyScope, discover, profile
 
@@ -418,6 +418,16 @@ async def establish_hop(
     await session.flush()
     entry_end.peer_node_transport_id = leaf_end.id
     leaf_end.peer_node_transport_id = entry_end.id
+    # Which two nodes, by the names the operator gave them, in the order the tunnel
+    # runs: the entry dials, the leaf waits. Neither end's parameters and neither
+    # node's address — a hop's twenty-two typed values are what this table has no
+    # column for, on purpose.
+    audit.record(
+        session,
+        AuditAction.HOP_ESTABLISHED,
+        first_label=entry_node.name,
+        second_label=leaf_node.name,
+    )
     await session.commit()
 
     logger.info("hop established between nodes %s and %s", entry_node.id, leaf_node.id)
@@ -438,10 +448,23 @@ async def dissolve_hop(session: AsyncSession, *, node_transport_id: str) -> list
         raise DomainError("that transport is not part of a hop")
 
     affected = [end.node_id]
+    # Read before anything is deleted, and off the loaded rows: both names are gone
+    # from this transaction by the time the entry is written, and a label looked up
+    # afterwards would be a label that cannot be read.
+    # Fetched by id rather than reached through ``end.node``: an eagerly configured
+    # relationship is still unloaded on a row this session created itself, and touching
+    # it is lazy I/O, which an async session answers with MissingGreenlet.
+    labels = [(await nodes.get_node(session, end.node_id)).name, None]
     if end.peer_node_transport_id is not None:
         peer = await session.get(NodeTransport, end.peer_node_transport_id)
         if peer is not None:
             affected.append(peer.node_id)
+            labels[1] = (await nodes.get_node(session, peer.node_id)).name
+            if end.purpose == TransportPurpose.RELAY_LEAF:
+                # Entry first, the way the tunnel runs and the way ``establish_hop``
+                # wrote it, so the trail reads the same whichever end the operator
+                # happened to tear down from.
+                labels.reverse()
             # Unlinked first: with the FK still pointing at a row being deleted in the
             # same flush, the SET NULL and the delete race in an order SQLAlchemy is
             # free to choose.
@@ -450,6 +473,15 @@ async def dissolve_hop(session: AsyncSession, *, node_transport_id: str) -> list
             await session.flush()
             await session.delete(peer)
     await session.delete(end)
+    # Both ends' node names when there were two, one when the operator is removing what
+    # was left of a half hop — which is exactly the case the second label being nullable
+    # exists for.
+    audit.record(
+        session,
+        AuditAction.HOP_DISSOLVED,
+        first_label=labels[0],
+        second_label=labels[1],
+    )
     await session.commit()
     logger.info("hop dissolved from node-transport %s", node_transport_id)
     return affected

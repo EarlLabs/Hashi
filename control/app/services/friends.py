@@ -21,8 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict, DomainError, NotFound
-from control.app.models import Credential, Friend, NodeTransport, Subscription
-from control.app.services import keymaterial, nodes, subscriptions
+from control.app.models import AuditAction, Credential, Friend, NodeTransport, Subscription
+from control.app.services import audit, keymaterial, nodes, subscriptions
 from edge.registry import KeyScope, discover
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,12 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
 
     subscriptions.issue(session, friend)
     await grant_everywhere(session, friend)
+
+    # In the same transaction as the friend, their token and their credentials, so the
+    # trail cannot name somebody the database does not have. The label is the nickname
+    # the operator just chose, copied whole — never the subscription URL, which is the
+    # one artefact of this operation that must never reach a durable record.
+    audit.record(session, AuditAction.FRIEND_ADDED, first_label=friend.nickname)
 
     await session.commit()
     logger.info("friend created: %s", friend.id)

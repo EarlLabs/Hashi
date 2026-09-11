@@ -27,8 +27,14 @@ from control.app.errors import (
     NotFound,
     ParamsRefused,
 )
-from control.app.models import Node, NodeState, NodeTransport, TransportPurpose
-from control.app.services import keymaterial
+from control.app.models import (
+    AuditAction,
+    Node,
+    NodeState,
+    NodeTransport,
+    TransportPurpose,
+)
+from control.app.services import audit, keymaterial
 from edge.egress import Egress
 from edge.node import NodeView
 from edge.registry import KeyScope, discover, profile
@@ -254,6 +260,10 @@ async def create_node(
         ssh_private_key=ssh_private_key,
     )
     session.add(node)
+    # The name the operator just chose, copied whole. Not the address, not the SSH
+    # host, not the location: an address against a time is the record the charter says
+    # is absent, and the name is the only part of this row the panel names it by.
+    audit.record(session, AuditAction.NODE_ADDED, first_label=node.name)
     await session.commit()
     logger.info("node created: %s", node.id)
     return node
@@ -376,6 +386,18 @@ async def enable_transport(
         enabled=True,
     )
     session.add(node_transport)
+    # Two labels: which node, and which transport. Both read off rows — the node's own
+    # name and the name the transport package declared about itself — so this module
+    # still compares no transport name to a literal and still composes nothing. The
+    # parameters that were just validated are NOT here, and must not be: a parameter
+    # value is a port, a decoy host or a key, and none of the three belongs in a
+    # durable record.
+    audit.record(
+        session,
+        AuditAction.TRANSPORT_ENABLED,
+        first_label=node.name,
+        second_label=transport_name,
+    )
     await session.commit()
     logger.info("transport enabled on node %s", node.id)
     return node_transport
@@ -423,6 +445,22 @@ async def set_transport_enabled(
         return node_transport
 
     node_transport.enabled = enabled
+    # Fetched rather than reached through ``node_transport.node``. The relationship is
+    # eager, but a row this session created moments ago has never been LOADED, so
+    # touching it is lazy I/O — which on an async session is an immediate
+    # MissingGreenlet crash rather than a slow query. Same rule as in
+    # ``friends.grant_everywhere``.
+    node = await get_node(session, node_transport.node_id)
+    # Below the idempotence check above, so a retried click writes nothing: only a
+    # change that actually happened is an entry. Two actions rather than one action and
+    # a boolean, because the trail has no column for a value and is not getting one —
+    # what a row may carry is a label read off the inventory, and "true" is neither.
+    audit.record(
+        session,
+        AuditAction.TRANSPORT_OFFERED if enabled else AuditAction.TRANSPORT_WITHDRAWN,
+        first_label=node.name,
+        second_label=node_transport.transport_name,
+    )
     await session.commit()
     logger.info("node-transport %s enabled -> %s", node_transport.id, enabled)
 
@@ -468,10 +506,31 @@ async def set_node_state(
 
     became_serving = state in NodeState.serving() and node.state not in NodeState.serving()
 
+    changed = state != node.state
+
     node.state = state
     # ``==`` for the same reason as above: a caller handing this the raw string a route
     # parsed would otherwise silently drop the operator's explanation on the floor.
     node.state_detail = detail if state == NodeState.DEGRADED else None
+
+    if changed:
+        # THE LINE THIS TABLE'S SHAPE WAS WRITTEN AGAINST. The state is recorded and
+        # ``detail`` is not, and they sit one line apart: ``state_detail`` is 500
+        # characters that can carry a remote host's words, and an
+        # f-string joining the two would satisfy every other rule about this table. The
+        # state is a member of a closed enum read straight off the row; the reason for a
+        # degraded node lives on the node, where the operator already reads it.
+        #
+        # Recorded even when the new state is ``degraded``, which is not a contradiction
+        # of "no failures": what is recorded is the state change, which committed — not
+        # the operation that failed, and not why.
+        audit.record(
+            session,
+            AuditAction.NODE_STATE_CHANGED,
+            first_label=node.name,
+            second_label=str(state),
+        )
+
     await session.commit()
     logger.info("node %s state -> %s", node.id, state)
 

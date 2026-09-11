@@ -1306,9 +1306,12 @@ def settings_rows(settings: Settings) -> list[SettingRow]:
 
     No row is a form field and none of them is written anywhere. The design's Panel
     form — mesh name, subscription base URL, log retention days — is dropped whole:
-    nothing in this process reads a mesh name, there is no log to retain until M10.3
-    builds one, and a control that saved the base URL would be saving a value the
-    process only reads at boot, which is the lie M10's prose is written about.
+    nothing in this process reads a mesh name, and a control that saved the base URL
+    would be saving a value the process only reads at boot, which is the lie M10's
+    prose is written about. The retention row is the one value from that form which
+    survived, and only because M10.3 built the trail it bounds and the hourly sweep
+    that enforces it — a retention figure with no sweep behind it would be the same
+    lie in a different field. It is still a statement and not a field.
     """
     return [
         SettingRow(
@@ -1348,6 +1351,18 @@ def settings_rows(settings: Settings) -> list[SettingRow]:
                 "does not refuse the connection — it hangs, and you need an answer "
                 "rather than a spinner. Raise it for a node on a link so lossy that "
                 "the default is not enough."
+            ),
+        ),
+        SettingRow(
+            label="how long the audit log keeps an entry",
+            value=_plural(settings.audit_retention_days, "day", "").strip(),
+            variables=("HASHI_AUDIT_RETENTION_DAYS",),
+            note=(
+                "The audit log records what you changed — who you added, which node "
+                "you applied — and an entry older than this is deleted, swept once an "
+                "hour. Anything from 1 to 365 days is accepted, and no value means "
+                "forever: a record with no end is the thing this project is built not "
+                "to keep. Nothing is swept while this control plane is off."
             ),
         ),
         SettingRow(

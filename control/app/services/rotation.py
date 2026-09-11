@@ -33,8 +33,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import DomainError, NotFound, ParamsRefused
-from control.app.models import Credential, NodeTransport, TransportPurpose
-from control.app.services import apply, keymaterial, relay
+from control.app.models import AuditAction, Credential, NodeTransport, TransportPurpose
+from control.app.services import apply, audit, keymaterial, nodes, relay
 from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
@@ -259,6 +259,21 @@ async def rotate_keys(
                 credential.secrets = json.dumps({**fresh.secrets, **fresh.params})
             outcome.rotated.append("per-friend credentials")
 
+    # Which node and which transport, and nothing about WHAT was rotated: ``outcome``
+    # names the fields for the operator who is standing there, and a list of field
+    # names in a durable record is a map of which material a transport holds. The far
+    # end of a hop gets no entry of its own — one operator action is one entry, and the
+    # peer's copy is part of this one change rather than a second one.
+    # The node is fetched by id rather than reached through the relationship, for the
+    # reason ``friends.grant_everywhere`` gives: eager configuration does not help on a
+    # row this session has not loaded, and the lazy read raises.
+    audit.record(
+        session,
+        AuditAction.KEYS_ROTATED,
+        first_label=(await nodes.get_node(session, node_transport.node_id)).name,
+        second_label=node_transport.transport_name,
+    )
+
     # One commit for both ends. A second commit between them would be exactly the state
     # this function refuses to produce.
     await session.commit()
@@ -366,6 +381,17 @@ async def replace_params(
         ends.append(peer)
 
     _store(node_transport, validated, secret_names=set(stored_secrets))
+    # The node and the transport, never the parameters: ``changed`` holds the names of
+    # the fields the operator retyped and their new values are in ``validated``, and
+    # neither a port nor a decoy host belongs in a record that outlives the change.
+    # Past the "nothing to change" refusal above, so a form submitted unaltered leaves
+    # no entry.
+    audit.record(
+        session,
+        AuditAction.PARAMS_REPLACED,
+        first_label=(await nodes.get_node(session, node_transport.node_id)).name,
+        second_label=node_transport.transport_name,
+    )
     await session.commit()
     logger.info("replaced parameters on node-transport %s", node_transport.id)
 
