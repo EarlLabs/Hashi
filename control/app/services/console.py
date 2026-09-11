@@ -1300,6 +1300,14 @@ def _seconds(value: int) -> str:
     return spelled
 
 
+# How a frequency is said: the unit, the article that goes in front of it when there is
+# exactly one, and the unit's own size. The ARTICLE is in the table rather than in the
+# sentence below, and that is the whole reason this is a table: hardcoding "an" made
+# a one-minute sweep read "once an minute", and sixty seconds is the most likely value
+# anybody moves this to.
+_FREQUENCIES = ((3600, "an", "hour"), (60, "a", "minute"), (1, "a", "second"))
+
+
 def _how_often(seconds: int) -> str:
     """"once an hour" / "every 20 minutes" — the sweep's real interval, in words.
 
@@ -1307,12 +1315,21 @@ def _how_often(seconds: int) -> str:
     tells the operator how often their trail is swept, and a sentence that repeated the
     number would go false the day ``audit.SWEEP_INTERVAL_SECONDS`` moved, with nothing
     going red. This one is prose rather than a value cell, so it reads as a frequency.
+
+    The largest unit the interval divides exactly, which is what makes 3600 read as an
+    hour and 3601 fall all the way to seconds — an interval that is not a round number
+    of minutes is better stated awkwardly than rounded, since the screen is telling the
+    operator how long a deleted entry can still be on disk.
     """
-    for size, noun in ((3600, "hour"), (60, "minute")):
+    for size, article, noun in _FREQUENCIES:
         if seconds >= size and seconds % size == 0:
             count = seconds // size
-            return f"once an {noun}" if count == 1 else f"every {count} {noun}s"
-    return f"once every {_plural(seconds, 'second', '').strip()}"
+            return f"once {article} {noun}" if count == 1 else f"every {count} {noun}s"
+    # Only reachable for a non-positive interval, which is not a frequency at all. It
+    # cannot come from an operator — this is a constant in this repository, not a
+    # setting — so the honest answer is to print the number rather than invent a word
+    # for it, and the sweeper would be spinning either way.
+    return f"every {seconds} seconds"
 
 
 def settings_rows(settings: Settings) -> list[SettingRow]:

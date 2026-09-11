@@ -26,12 +26,14 @@ import pydantic
 import pytest
 from sqlalchemy import select
 
+from control.app import settings as settings_module
 from control.app.api import schemas
 from control.app.errors import Conflict, NodeOperationFailed, ParamsRefused
 from control.app.models import Credential, Node, NodeTransport, TransportPurpose
 from control.app.panel import routes as panel_routes
 from control.app.panel import wording
 from control.app.services import apply as apply_service
+from control.app.services import audit as audit_service
 from control.app.services import console as console_service
 from control.app.services import friends as friends_service
 from control.app.services import health as health_service
@@ -4394,6 +4396,81 @@ async def test_nothing_on_the_settings_screen_offers_to_save_anything(
     assert len(retention) == 1, "the audit-retention row is the trail's own window"
     assert not retention[0].secret, "a retention window is not a secret"
     assert str(settings.audit_retention_days) in reads
+
+
+@pytest.mark.parametrize(
+    ("seconds", "said"),
+    [
+        (1, "once a second"),
+        (45, "every 45 seconds"),
+        # The most likely value anybody moves the sweep to, and the one that read
+        # "once an minute" until the article moved into the table.
+        (60, "once a minute"),
+        (120, "every 2 minutes"),
+        (1200, "every 20 minutes"),
+        (3600, "once an hour"),
+        # Not a round number of minutes, so it falls all the way to seconds rather than
+        # being rounded: this sentence tells the operator how long a deleted entry can
+        # still be on disk, and a rounded answer to that is a wrong one.
+        (3601, "every 3601 seconds"),
+        (86400, "every 24 hours"),
+    ],
+)
+def test_a_frequency_is_said_the_way_a_person_says_it(seconds: int, said: str) -> None:
+    """``_how_often`` in full, because the screen's one derived sentence runs through it.
+
+    A table rather than a case, since what breaks here is grammar at a value nobody
+    tried: the article belongs to the noun ("an hour", "a minute"), and the largest
+    unit that divides exactly is the one used.
+    """
+    assert console_service._how_often(seconds) == said
+
+
+async def test_the_retention_row_states_the_intervals_this_process_actually_uses(
+    client, monkeypatch
+) -> None:
+    """The note is DERIVED, and this is what says so.
+
+    Same shape as the connect-ceiling guard above, and for the same reason: without a
+    value moved away from the real one, a sentence that had been reverted to the
+    literal "once an hour" would stay green while the sweep ran every six hours — which
+    is the failure the derivation was introduced to close, so the closing needs its own
+    assertion rather than a reading of the source.
+
+    Every premise is asserted before the claim, so this cannot go vacuous: the
+    constants the screen reads must still be the ones the sweeper and the validator
+    use, and the values planted here must still differ from them.
+    """
+    for name, real in (
+        ("AUDIT_RETENTION_MIN_DAYS", settings_module.AUDIT_RETENTION_MIN_DAYS),
+        ("AUDIT_RETENTION_MAX_DAYS", settings_module.AUDIT_RETENTION_MAX_DAYS),
+    ):
+        assert getattr(console_service, name) == real, (
+            f"the Settings screen no longer reads {name} from settings.py, so the "
+            "bound it prints and the bound the process enforces can now differ"
+        )
+
+    planted = {"AUDIT_RETENTION_MIN_DAYS": 2, "AUDIT_RETENTION_MAX_DAYS": 90}
+    for name, value in planted.items():
+        assert value != getattr(settings_module, name), f"{name} is not moved at all"
+        monkeypatch.setattr(console_service, name, value)
+    assert audit_service.SWEEP_INTERVAL_SECONDS != 20 * 60, "the interval is not moved"
+    monkeypatch.setattr(audit_service, "SWEEP_INTERVAL_SECONDS", 20 * 60)
+
+    reads = _reading(
+        (await client.get("/panel/settings", headers={"HX-Request": "true"})).text
+    )
+
+    assert "swept every 20 minutes" in reads, (
+        "the screen states a sweep interval this process does not use — compose it "
+        "from audit.SWEEP_INTERVAL_SECONDS rather than writing it"
+    )
+    assert "once an hour" not in reads
+    assert "from 2 to 90 days" in reads, (
+        "the screen states a window the running process would refuse — compose it from "
+        "the same constants settings.py enforces"
+    )
+    assert "365" not in reads
 
 
 async def test_the_admins_table_is_one_row_and_has_no_last_login(
