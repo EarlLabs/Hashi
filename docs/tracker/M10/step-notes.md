@@ -263,3 +263,119 @@ the sidebar becomes eight entries.
 never passed into the container by `deploy/docker-compose.yml`, so editing them in
 `.env` is silent. The footnote was narrowed to be honest about it; the compose fix
 is `infra` and deferred.
+
+---
+
+# Established by M10.3 — the audit trail
+
+Binds M10.4 and anything that later records an operator action.
+
+## The table
+
+`audit_entries`: `id` (String 36, PK), `at` (timestamptz, `server_default now()`,
+indexed), `action` (`EnumText(AuditAction, 32)`), `first_label`, `second_label`
+(String 64, nullable). **No `TimestampMixin`** — an `updated_at` on an append-only
+row invites the idea one can be edited. Migration `0003`, chain `0001→0002→0003`,
+single head.
+
+`test_the_trail_holds_exactly_these_columns_and_no_others` asserts the set is
+**exactly** that — proven to catch an appended `details` column, which is how a
+trail acquires a token in eighteen months without anyone deciding to.
+
+## The two rules that keep it out of charter territory
+
+**`action` is an enum through `EnumText`.** `process_bind_param` calls
+`AuditAction(value)`, so an undeclared value raises **at bind, before the
+statement is sent** — not at review. Twelve members: `friend-added`,
+`friend-revoked`, `node-added`, `node-state-changed`, `node-applied`,
+`transport-enabled`, `transport-offered`, `transport-withdrawn`,
+`hop-established`, `hop-dissolved`, `keys-rotated`, `params-replaced`.
+
+**Every label is READ off an inventory row, never COMPOSED.** The four permitted
+sources are `Node.name`, `Friend.nickname`, `NodeTransport.transport_name` and
+`str(NodeState)`. The concrete hole this closes: `Node.state_detail` is 500
+characters of free text that can carry a remote host's words, one attribute away
+from `state`. **The 64-character guard is not what carries this** — a composed
+`f"{node.name}: refused"` fits — the inventory-equality test does. Proven: wrapping
+`record` to compose put 8 tests red on `first_label` and 5 on `second_label`.
+
+`test_both_labels_are_exactly_as_wide_as_the_values_they_may_hold` guards all four
+sources in the other direction: **widen a source column and `record()` starts
+raising a 500 on a legitimate operation**, so that test tells whoever widens one to
+widen the label column in the same change.
+
+## Writing
+
+**Service, in the same transaction as the change. Never a route, never
+`/sub/{token}`.** `test_no_route_writes_the_trail` greps `api/` and `panel/` for
+`services import audit`, `services.audit` **and `AuditEntry`** — the last catches a
+hand-built `session.add(...)`, including through an alias.
+
+**Only changes that committed.** No probes, no logins, no failures, no refusals — a
+refusal's text can come from a remote host and the row has nowhere safe to put it.
+
+`revocation.revoke_friend` is the one non-obvious placement: `friends.revoke` owns
+the commit, so it records into the session **before** calling it and the
+revocation's own commit carries the entry. One transaction; a raised revocation
+takes the pending entry with it.
+
+**Fetch the node by id (`session.get`/`get_node`), not through
+`node_transport.node`.** The eager relationship is unloaded on a row the same
+session just created and reaching it is `MissingGreenlet`. Neighbouring code gets
+away with it only because those requests loaded the row with a fresh query.
+**Copy this line, not the neighbour's.**
+
+## The named deliverable
+
+`tests/e2e/control/test_the_audit_trail_never_learns_who_connected.py` **fetches a
+real subscription and asserts the trail gained no row at all** — not merely that no
+row mentions a token. One tests the write path; the other only the column set.
+Proven red twice, independently: by patching `delivery.py` in the repo, and by the
+reviewer patching it **inside the running container** (`assert 10 == 7`).
+
+## Retention
+
+`HASHI_AUDIT_RETENTION_DAYS`, default 30, bounded 1–365 — all three from
+`AUDIT_RETENTION_{MIN,MAX,DEFAULT}_DAYS` in `settings.py`, which are **the single
+source** for the `Field` bounds, the validator, the bounds test and the screen's
+sentence. Swept hourly by an `asyncio` task started in `create_app`'s lifespan and
+cancelled before the pool is disposed. A failing pass logs its traceback and the
+loop continues; `CancelledError` is re-raised so shutdown is immediate.
+
+**Nothing sweeps while the host is off** — stated in three places a reader will
+hit. **The operator cannot currently change the window at all**: the variable is
+not passed into the container — see `infra-followup.md`, where it is listed first
+because it governs how long the only record naming friends is kept.
+
+## Prose is derived, and there is now a test saying so
+
+`console._how_often(seconds)` sits beside `_seconds()`. The article travels with
+the noun (`(3600, "an", "hour")`, `(60, "a", "minute")`, `(1, "a", "second")`), so
+`60 → once a minute` rather than "once an minute".
+`test_the_retention_row_states_the_intervals_this_process_actually_uses` plants a
+20-minute sweep and a 2–90 day window and requires the screen to follow — with
+premise assertions first, in M10.2's shape, so it cannot go vacuous if the screen
+stops reading the constants.
+
+## What M10.4 must know
+
+- **Order by `(at, id)`.** `at` is `server_default=func.now()`, which in Postgres
+  is **transaction-start** time. No operation writes two entries in one transaction
+  today, so no two rows can tie — but a later step that records twice in one
+  transaction would need `clock_timestamp()` in a migration rather than assuming
+  per-statement ordering it does not have.
+- **The stored value is a machine key; the sentence is M10.4's**, rendered in
+  `panel/wording.py` from the existing toast vocabulary. **Hop labels are always
+  entry first**; `node-state-changed`'s second label is the `NodeState` value.
+- **No read helper exists yet** — `services/audit.py` has `record`, `sweep`,
+  `sweep_forever`, `start_sweeper`, `stop_sweeper` only. M10.4 adds the query.
+- The screen **has no session today** (neither does Settings), so M10.4 must add
+  one back — and at that point *"does it move when a friend connects?"* applies
+  again.
+- **M10.4's route must call a console/service function, not `audit` directly**, or
+  `test_no_route_writes_the_trail` goes red.
+- Test helpers in `tests/control/test_the_audit_trail.py`: `trail(session)` (**read
+  its docstring before adding an `expire_all`** — expiring detaches objects the
+  test still holds), `entries_for(session, action)`, `a_node(client, name,
+  with_key=)`, a local `hop_params`, and a `_FakeHost` that makes `apply_node`
+  succeed.
