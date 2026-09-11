@@ -1083,7 +1083,7 @@ M4's known bug and not a finding here.
 
 ---
 
-## → M10 — The two screens that need records this project does not keep · planned 2026-09-08
+## ✅ M10 — The two screens that need records this project does not keep · planned 2026-09-08 · done 2026-09-11
 
 Audit log and Settings. Both ask for something that does not exist, and one of
 them may be something the charter should refuse outright — which is why they are
@@ -1124,12 +1124,12 @@ connection — a record that grows those is the failure mode worth a test.
 model without being asked.
 
 **Done when**
-- [ ] Settings shows the owner what this control plane is actually configured
+- [x] Settings shows the owner what this control plane is actually configured
       with, and names where a value is changed when the panel cannot change it.
-- [ ] Nothing on Settings claims to save a value the running process would not
+- [x] Nothing on Settings claims to save a value the running process would not
       then use.
-- [ ] Decision 8 is written down in `docs/decisions.md`, whichever way it went.
-- [ ] If an audit trail exists, it holds no token, no subscription URL and nothing
+- [x] Decision 8 is written down in `docs/decisions.md`, whichever way it went.
+- [x] If an audit trail exists, it holds no token, no subscription URL and nothing
       about who connected.
 
 acceptance: yes
