@@ -34,8 +34,17 @@ repository ever unlinks a rendered config.** `apply` writes;
 the service and leaves the file. So the daemon is gone and the key material is
 still on the host until somebody deletes it by hand.
 
-**What to do:** `rm /opt/hashi/conf/<name>.conf` for anything no longer enabled.
-Do it every time, or the fleet accumulates orphaned key material on disk.
+**What to do:** `rm /opt/hashi/conf/<name>.conf` **for a transport that is no
+longer enabled on that node**. Do it every time, or the fleet accumulates orphaned
+key material on disk.
+
+**Never touch a `.conf` whose transport IS still enabled.** The runbook's standing
+rule — never edit anything under `/opt/hashi` — holds for those, and for the
+reason it gives: the control plane generates them and overwrites them on every
+apply. **An orphan is the one exception, because nothing regenerates it**, which
+is exactly why the standing rule's reason does not reach it. `docs/deploy/runbook.md`
+carries the same carve-out; if the two ever disagree, they are describing the same
+file and one of them is stale.
 
 **This is not a regression** — it is identical for all three actions and has
 always been true. The panel's wording (*"the material minted for it is gone with
@@ -59,7 +68,20 @@ and config name instead).
 > a different interface… Give this node's friends a transport that terminates
 > their connection and re-originates it, or take the hop away."*
 
-— and the node should be left **degraded**, not 500ing.
+— and, **importantly, the node's state should NOT change.**
+
+**Correcting something I got wrong when I first wrote this item.** I said the node
+would be left *degraded*. It is not, and the truth is worse.
+`apply.render_for_node` runs **before** the window `_record_failure` guards, so an
+`EgressNotRenderable` never reaches it: the panel answers 200 with the banner and
+the node's state is untouched. Verified by running it — state stays `draft`,
+`state_detail` stays `None`.
+
+**Why that matters on a live host.** `NodeState.serving()` is `(ACTIVE,)`. So an
+entry node that was **already active** stays active and **stays in every friend's
+link**, serving its last-applied config, while the apply is refused. Scanning the
+Nodes screen for a degraded node will find none. The only exit is to remove the
+friend-facing row (M15.2 shipped that) and apply again.
 
 **Why this matters.** The runbook's Shape A is refused **twice** and M15 only ever
 named the first. The second refusal is `edge/egress.py` enforcing your own
