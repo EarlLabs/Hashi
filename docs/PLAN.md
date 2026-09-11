@@ -1553,7 +1553,7 @@ were before.
 
 ---
 
-## → M15 — A transport enabled for friends locks that node out of a hop, permanently · found in the field 2026-09-09
+## ✅ M15 — A transport enabled for friends locks that node out of a hop, permanently · found in the field 2026-09-09 · done 2026-09-11
 
 **Found while setting up M3's two-hop on the real fleet.** Establishing a hop
 between the two live nodes was refused:
@@ -1618,11 +1618,11 @@ that would have caught this is "follow the runbook's own Shape A advice, then ad
 the hop it mandates". `make test-control` is the gate.
 
 **Done when**
-- [ ] Either a node can host a friend-facing and a hop end of the same transport,
+- [x] Either a node can host a friend-facing and a hop end of the same transport,
       or it is refused at the moment the *first* one is created, with the
       consequence named.
-- [ ] A node transport can be removed, not merely disabled.
-- [ ] The runbook's Shape A advice and its hop requirement do not contradict each
+- [x] A node transport can be removed, not merely disabled.
+- [x] The runbook's Shape A advice and its hop requirement do not contradict each
       other.
 
 acceptance: yes
