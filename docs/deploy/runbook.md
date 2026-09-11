@@ -544,10 +544,10 @@ Everything from Shape A applies to box E, plus:
 2. Prepare **L** with *Preparing a leaf* above, then register **E** as a node
    (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
    from E).
-3. Enable a **friend-facing** transport on E — a VLESS one, and **not** `amneziawg` or
-   `wireguard`. E dials a hop, and a kernel tunnel for friends on such a node is
-   accepted by the panel and refused at apply: *The one combination that will not
-   render*, below.
+3. Enable a **friend-facing** transport on E — `vless-reality` unless you have a reason
+   for the other one. E dials a hop, so it must be a transport the table in *The one
+   combination that will not render* (below) marks yes for a node with a hop; a kernel
+   tunnel here is accepted by the panel and refused at apply.
 4. Build the hop from the panel's hop form: entry = E, leaf = L, transport =
    `amneziawg`. The entry dials the leaf, always — E sits behind a Russian carrier NAT
    and cannot be dialled — so L listens and E reaches out.
@@ -609,14 +609,23 @@ names it, and `amneziawg` for the hop E dials, because the hop requires it.
 
 The panel now takes both rows. Two instances of one transport on one node are ordinary —
 they collide only on a **listening port** and on a **config name**, and two `amneziawg`
-rows on two ports share neither. What refuses is the **apply**, on the entry, which
-leaves the node `degraded` with this on its page:
+rows on two ports share neither. What refuses is the **apply**, on the entry, with this
+in a banner on the Nodes screen:
 
 > `amneziawg could not be rendered for this node — EgressNotRenderable:` … *A tunnel whose
 > packets this node's kernel routes cannot send them out through a different interface, so
 > they would leave by the node's own route instead — which is the silent failure the hop
 > exists to prevent. Give this node's friends a transport that terminates their connection
 > and re-originates it, or take the hop away.*
+
+**That banner is the only signal you get, and the node does not go `degraded`.** The
+refusal happens while the configuration is being rendered, before anything is written to
+the host, so there is no half-configured node to mark and the node's state is left exactly
+as it was. An entry that was already `active` therefore **stays active and stays in every
+user's link**, serving whatever its last successful apply left on the host — an operator
+scanning the Nodes screen for something red finds nothing. Read the banner, and treat a
+node whose apply you cannot complete as one that is serving a configuration you did not
+choose.
 
 **That is a refusal, not a defect.** A wg-quick-family tunnel hands a friend's decrypted
 packets to the entry's own routing table, and the only route this project renders for a
@@ -643,7 +652,20 @@ you already terminate TLS for a name you own.
 
 `amneziawg` and `wireguard` stay exactly right for friends on a node with **no** hop:
 Shape A's single box, and a leaf. There the same row renders a local exit, which is the
-shape a real client was measured carrying traffic on.
+shape a real client was measured carrying traffic on. Every transport this image ships,
+and what each one may be asked to do:
+
+| transport | friends on a node with a hop | friends on a node with no hop | the entry→leaf hop |
+|---|---|---|---|
+| `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — its configuration is a link rather than a file, so the hop form does not offer it |
+| `vless-ws-tls` | yes, once a certificate and key are on the node | yes, on the same condition | no, for the same reason |
+| `amneziawg` | no — the panel accepts the row and the apply refuses it | yes | yes, and today it is the only one |
+| `wireguard` | no — the same refusal, for the same reason | yes, but never as a way out of a filtering network | no — it is protocol-blocked where this matters, and the form will not offer it |
+
+Every cell in it is checked against the code by `tests/infra/test_deploy_runbook.py` —
+against the renderers for the first column, the declared delivery formats for the second,
+and the panel's own hop form for the third. A fifth transport, or a change to what one of
+these can do, turns that suite red rather than leaving this table quietly wrong.
 
 **The two families are delivered differently, and you find that out before your friends
 do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
@@ -680,8 +702,21 @@ config the last apply wrote under `/opt/hashi/conf/`: that file still holds the 
 private key and every credential that transport carried, and nothing in this project ever
 unlinks a rendered config — the same is true after a withdrawal and after a dissolved hop.
 Once you have applied, nothing on the node serves that file and no copy of what is in it
-remains in this panel; what is left is key material at rest on a host that can be seized. Do not go editing `/opt/hashi` by hand over it (see the rules below). It is one
-more reason a host you are finished with is rebuilt rather than tidied.
+remains in this panel; what is left is key material at rest on a host that can be seized.
+
+**So delete it, and it is the one exception to *never edit anything under `/opt/hashi`*.**
+After the apply that removed the service:
+
+```bash
+rm /opt/hashi/conf/THE_CONFIG_NAME.conf     # the name the panel showed on that row
+```
+
+**Only for a transport that is no longer enabled on that node.** The standing rule holds
+for every other file there, and for the reason it gives — the control plane generates them
+and overwrites them on every apply. An orphan is the exception precisely because nothing
+regenerates it, which is what puts it outside that reason. `docs/tracker/field-checklist.md`
+carries the same carve-out; if the two ever disagree, they are describing the same file and
+one of them is stale.
 
 To take the hop away instead, use the **Hops** screen. Removing or withdrawing one end of
 a hop is refused wherever you ask for it, because it would leave the other end holding a
@@ -713,11 +748,17 @@ tunnel to an exit that is no longer configured.
   above.
 - **One friend per node on the WireGuard family.** AmneziaWG and plain WireGuard mint a
   shared tunnel address today, so a second friend on the same node collides on
-  `AllowedIPs` and the node refuses, loudly, and goes `degraded` (backlog item 33). VLESS
-  transports have no such limit.
-- **Never edit anything under `/opt/hashi` on a node.** It is generated by the control
-  plane and overwritten on every apply. The control database is the source of truth, and
-  that is what makes replacing a node safe.
+  `AllowedIPs` and the render refuses, loudly (backlog item 33). It refuses the same way as
+  the combination above and with the same consequence: a banner, and a node whose state
+  does not move — so a node that was already serving keeps serving its last-applied
+  configuration. VLESS transports have no such limit.
+- **Never edit anything under `/opt/hashi` on a node — with one exception.** It is
+  generated by the control plane and overwritten on every apply. The control database is
+  the source of truth, and that is what makes replacing a node safe. The exception is a
+  `.conf` whose transport is **no longer enabled** on that node: nothing regenerates it, so
+  the reason above does not reach it, and what it holds is the node's private key and every
+  user's credential for that transport. Delete those, after the apply that removed the
+  service — see *If you already built it the other way*, above.
 
 ## Known-unproven
 

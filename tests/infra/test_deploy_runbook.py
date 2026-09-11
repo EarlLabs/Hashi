@@ -14,10 +14,14 @@ HOW:  the file is read, never rendered, and never followed. Same division as
       the runbook cannot quietly teach the harmful version of a step.
 """
 
+import inspect
 import pathlib
 import re
 
 import pytest
+
+from control.app.services.transports import hop_transports
+from edge.registry import discover, profile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 RUNBOOK = REPO / "docs" / "deploy" / "runbook.md"
@@ -390,4 +394,237 @@ def test_the_panel_section_does_not_render_forwarding_rules_into_the_admin_tunne
     for directive in ("PostUp", "PostDown", "MASQUERADE", "ip_forward"):
         assert not re.search(rf"^\s*{directive}\s*=", panel_section, re.M), (
             f"the section shows a {directive} line for the management tunnel"
+        )
+
+
+# --- the shapes, and the combination the product refuses — M15.3 ---------------------
+#
+# Everything above guards two sections; these guard the three shapes and the section
+# that answers them. The drift this file exists to catch is exactly the drift that cost
+# M15: the runbook mandated one transport for the hop and recommended the same one for
+# the friends of the box that dials it, and nothing anywhere compared the two claims
+# against the product. Prose is where that recommendation lives, so prose is where the
+# check has to be.
+#
+# ``control`` and ``edge`` are IMPORTED rather than described, the convention
+# ``test_node_bootstrap_agrees_with_the_control_plane.py`` established: the answer
+# compared against the page is the one the panel and the renderers really give, not a
+# second copy of it in a regex here.
+
+
+# The hop form's own field, as the runbook writes it. ``\s`` rather than a space because
+# the instruction wraps across a line in one of the shapes, and a check that missed a
+# wrapped hop would be a check that passes on the sentence it exists to read.
+HOP_FIELD = r"transport =\s*`([a-z0-9-]+)`"
+
+
+def _flat(text: str) -> str:
+    """``text`` with its line wrapping collapsed, so a phrase can be looked for at all.
+
+    The runbook wraps at about ninety columns and its cross-references wrap with it, so a
+    substring check against the raw text asks the prose to be laid out a particular way —
+    which is a test dictating typography rather than content.
+    """
+    return re.sub(r"\s+", " ", text)
+
+
+def _numbered_steps(body: str) -> list[str]:
+    """Each numbered instruction in a section, with its continuation lines.
+
+    Per STEP rather than per line: an instruction wraps, and the transport it names is as
+    likely to be on the second line as the first.
+    """
+    return re.findall(r"^\d+\. [^\n]*\n(?:   [^\n]*\n)*", body, re.M)
+
+
+def _transport_names(text: str) -> set[str]:
+    """Every installed transport named in backticks in ``text``."""
+    return {name for name in re.findall(r"`([a-z0-9-]+)`", text) if name in discover()}
+
+
+def _answer(cell: str) -> str:
+    """The yes/no a table cell opens with, whatever qualification follows it.
+
+    The table's own convention, and the reason the columns are worth checking at all: a
+    cell may explain itself at any length, but it must commit in its first word.
+    """
+    words = re.sub(r"[^a-z]+", " ", cell.lower()).split()
+    assert words and words[0] in ("yes", "no"), (
+        f"the capability table's cell {cell!r} does not start with yes or no, so nothing "
+        "can tell what it claims"
+    )
+    return words[0]
+
+
+def _egress_expression(transport_name: str) -> str:
+    """Whether this transport's data plane is routed by the kernel or re-originates.
+
+    Read off the transport's own render module — which of ``edge.egress``'s two
+    expressions it imports — rather than off its name, its family or its config format.
+    That import IS the distinction the runbook's first column describes: a package that
+    calls ``wg_quick_egress`` hands a friend's packets to the node's routing table and is
+    refused on a node whose way out is a hop, and one that calls ``exit_origin``
+    terminates the connection and opens its own from the hop's near address.
+    """
+    source = inspect.getsource(profile(transport_name).profile)
+    imported: set[str] = set()
+    for line in re.findall(r"^from edge\.egress import (.+)$", source, re.M):
+        imported |= {name.strip() for name in line.split(",")}
+    kernel = "wg_quick_egress" in imported
+    userspace = "exit_origin" in imported
+    assert kernel != userspace, (
+        f"{transport_name} imports neither of edge.egress's two expressions, or both, so "
+        "there is no answer to give an operator about what it does with a hop"
+    )
+    return "kernel" if kernel else "userspace"
+
+
+@pytest.fixture(scope="module")
+def capability_table(runbook: str) -> dict[str, tuple[str, str, str]]:
+    """The runbook's own table of what each installed transport may be asked to do."""
+    table = re.search(
+        r"^\| transport \|[^\n]*\n\|[-| ]+\|\n((?:\|[^\n]*\n)+)", runbook, re.M
+    )
+    assert table, (
+        "the runbook no longer states which transport may serve friends on a node that "
+        "dials a hop — which is the question following it used to get wrong"
+    )
+    rows: dict[str, tuple[str, str, str]] = {}
+    for line in table.group(1).splitlines():
+        cells = [cell.strip() for cell in line.split("|")[1:-1]]
+        assert len(cells) == 4, f"the capability table's row {line!r} is not four columns"
+        rows[cells[0].strip("`")] = (cells[1], cells[2], cells[3])
+    return rows
+
+
+def test_the_capability_table_covers_every_transport_this_image_ships(
+    capability_table: dict[str, tuple[str, str, str]],
+) -> None:
+    """A fifth transport is a fifth row, or the table is an answer with a hole in it.
+
+    An operator reads a table as complete. One that silently omits the protocol they just
+    enabled is worse than no table, because they stop looking.
+    """
+    assert set(capability_table) == set(discover()), (
+        "the runbook's transport table and the installed transports disagree about which "
+        "protocols exist"
+    )
+
+
+def test_the_table_agrees_with_the_code_about_friends_on_a_node_that_dials_a_hop(
+    capability_table: dict[str, tuple[str, str, str]],
+) -> None:
+    """M15.3's whole subject, checked against ``edge`` rather than against memory.
+
+    A friend-facing transport on a node whose way out is a hop must terminate the
+    connection and originate its own; one whose packets the kernel routes is accepted by
+    the panel and refused by ``edge/egress.py`` at apply. The table says which is which,
+    and this is what stops it saying it wrongly.
+    """
+    for name, (with_hop, _, _) in capability_table.items():
+        expected = "no" if _egress_expression(name) == "kernel" else "yes"
+        assert _answer(with_hop) == expected, (
+            f"the runbook says {name} is {_answer(with_hop)!r} for the friends of a node "
+            f"with a hop, and its renderer says {expected!r}"
+        )
+
+
+def test_the_table_agrees_with_the_panel_about_which_transport_can_carry_a_hop(
+    capability_table: dict[str, tuple[str, str, str]],
+) -> None:
+    """The other half of the same contradiction, and the half that is enforced.
+
+    The hop form offers exactly ``transports.hop_transports()``. A runbook naming one it
+    does not offer sends an operator looking for a missing option; one omitting a
+    transport the form offers hides a choice.
+    """
+    offered = set(hop_transports())
+    for name, (_, _, for_the_hop) in capability_table.items():
+        expected = "yes" if name in offered else "no"
+        assert _answer(for_the_hop) == expected, (
+            f"the runbook says {name} is {_answer(for_the_hop)!r} for the hop, and the "
+            f"panel's hop form says {expected!r}"
+        )
+
+
+def test_the_table_offers_friends_only_a_transport_they_could_receive(
+    capability_table: dict[str, tuple[str, str, str]],
+) -> None:
+    """The column for a node with no hop, against the rule that governs it.
+
+    ``nodes.enable_transport`` refuses a transport that declares no format a friend's
+    client can consume, so a yes here for such a transport is advice the panel rejects.
+    """
+    installed = discover()
+    for name, (_, without_hop, _) in capability_table.items():
+        expected = "yes" if installed[name].subscription_formats else "no"
+        assert _answer(without_hop) == expected, (
+            f"the runbook says {name} is {_answer(without_hop)!r} for the friends of a "
+            f"node with no hop, and its declared delivery formats say {expected!r}"
+        )
+
+
+@pytest.fixture(scope="module")
+def shapes(runbook: str) -> dict[str, str]:
+    """Each ``## Shape X`` section, by its letter."""
+    sections = re.findall(r"^## Shape (\w) — [^\n]*\n((?:.*\n)*?)(?=^## )", runbook, re.M)
+    assert sections, "the runbook no longer describes a deployment shape"
+    return {letter: body for letter, body in sections}
+
+
+def test_every_hop_the_runbook_builds_is_over_a_transport_that_can_carry_one(
+    shapes: dict[str, str],
+) -> None:
+    """The mandate half, read out of the instructions rather than out of the prose.
+
+    ``transport = `x`` is the hop form's own field, so every occurrence of it is a
+    transport an operator will type into that form — and the form offers only
+    ``hop_transports()``. Plain WireGuard is the one that matters: it is a config file
+    like AmneziaWG, so the shape of the advice looks right, and the hop it would build
+    crosses the border it is protocol-blocked at.
+    """
+    offered = set(hop_transports())
+    named = {
+        name for body in shapes.values() for name in re.findall(HOP_FIELD, body)
+    }
+    assert named, "no shape builds a hop, so the topology the charter needs is undocumented"
+    assert named <= offered, (
+        f"the runbook builds a hop over {sorted(named - offered)}, which the panel's hop "
+        "form does not offer"
+    )
+
+
+def test_no_shape_that_builds_a_hop_offers_its_friends_a_kernel_tunnel(
+    shapes: dict[str, str], capability_table: dict[str, tuple[str, str, str]]
+) -> None:
+    """The contradiction M15 was found in the field, guarded where it was written.
+
+    A shape that builds a hop is a shape whose entry node dials one, so the transport it
+    tells an operator to enable for that node's friends must be one the table above marks
+    yes. Checked per shape rather than per file, because the same transport is the right
+    answer in Shape A — one box, no hop — and the wrong one on the box that dials a hop,
+    and a check that could not tell the two apart would have to forbid the correct advice
+    to catch the incorrect one.
+
+    Each such shape must also point at the section that explains the refusal: an operator
+    who reads only their own shape has to be able to get there, since that is where the
+    way out of it is written.
+    """
+    for letter, body in shapes.items():
+        if not re.search(HOP_FIELD, body):
+            continue
+        steps = [step for step in _numbered_steps(body) if "friend-facing" in step]
+        assert steps, (
+            f"Shape {letter} builds a hop and never says to enable a friend-facing "
+            "transport, so it produces an entry node nobody can dial"
+        )
+        for step in steps:
+            for name in _transport_names(step):
+                assert _answer(capability_table[name][0]) == "yes", (
+                    f"Shape {letter} names {name} where it tells an operator what to give "
+                    f"the friends of a node that dials a hop: {step.strip()!r}"
+                )
+        assert "The one combination that will not render" in _flat(body), (
+            f"Shape {letter} builds a hop and does not point at the section that says "
+            "which friend-facing transport such a node can actually render"
         )
