@@ -22,10 +22,34 @@
   outbound left that could reach the internet by this node's own route, and when the hop
   is down the connection cannot be opened at all. Decision 3, fail closed, as a property
   of the file rather than as a rule someone has to remember.
+
+  And M16, the half of the same question `sendThrough` cannot reach: WHERE A NAME IS
+  LOOKED UP. A friend's client hands this node a hostname, and the outbound has to turn it
+  into an address before it can open anything — which, left alone, it does through the
+  host's own resolver: on an entry node, inside the network the hop exists to leave, one
+  query per site visited. So on a node with a hop this file carries a resolver of its own,
+  and three settings put the lookup through the hop. Each is necessary and none is enough
+  alone — measured against the pinned Xray, with the resolver's side watched on loopback:
+    - the outbound's `settings.domainStrategy`. Without it (`AsIs`) the outbound hands the
+      name to the host's resolver and the `dns` object is never consulted at all. Not to be
+      confused with `routing.domainStrategy`, which only decides how routing rules match.
+    - `dns.servers`: the resolver itself, from the node's record. Never a default here.
+    - `dns.tag` and the second routing rule. The resolver's own queries leave by the hop
+      outbound, so they are sent from the hop's address like the traffic they are for —
+      said in the file rather than left to "the first outbound is the default".
+  `UseIPv4` in both places because the hop carries IPv4 only: an AAAA answer is an address
+  the hop cannot reach. Xray does NOT reject a misspelt `queryStrategy` — it silently asks
+  for both — so the value is held by a test, not by the checker. `clientIp` is absent on
+  purpose: it would attach the asker's network to every query. And `log.dnsLog` is written
+  out as `false` wherever the resolver is in use: with it on, every name looked up would go
+  to the container log, the one record the charter says must not exist.
 #}
 {
   "log": {
     "loglevel": "warning",
+{% if exit_origin %}
+    "dnsLog": false,
+{% endif %}
     "access": "none"
   },
   "inbounds": [
@@ -64,11 +88,21 @@
     }
   ],
 {% if exit_origin %}
+  "dns": {
+    "servers": [{{ resolver | tojson }}],
+    "queryStrategy": "UseIPv4",
+    "tag": "lookup"
+  },
   "routing": {
     "rules": [
       {
         "type": "field",
         "inboundTag": ["in"],
+        "outboundTag": "hop"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["lookup"],
         "outboundTag": "hop"
       }
     ]
@@ -77,7 +111,10 @@
     {
       "tag": "hop",
       "protocol": "freedom",
-      "sendThrough": {{ exit_origin | tojson }}
+      "sendThrough": {{ exit_origin | tojson }},
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      }
     }
   ]
 {% else %}

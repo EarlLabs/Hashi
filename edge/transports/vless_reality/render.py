@@ -15,7 +15,7 @@ HOW:  the server config comes from ``server.j2``; the client entry is a URI this
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import Egress, exit_origin
+from edge.egress import Egress, exit_origin, lookup_resolver
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -54,6 +54,13 @@ def render_server(
     fall back to, which is decision 3 expressed structurally: when the hop is down the
     connection cannot be opened, and a friend gets no exit rather than a Russian one.
     With no hop, nothing changes — the same direct outbound as before, byte for byte.
+
+    M16 is the part of that ``sendThrough`` cannot reach. A friend's client sends a NAME,
+    and the outbound resolves it before it dials — left alone, through the host's own
+    resolver, which on an entry node is on the near side of the hop. So under a hop the
+    config also carries the resolver on the node's record (``node.resolver``) and routes
+    the lookup out through the same outbound as the traffic; a node with a hop and no
+    resolver is refused rather than rendered with the host's (``edge/egress.py``).
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
@@ -62,6 +69,10 @@ def render_server(
         # node's own route. Checked by ``edge/egress.py`` rather than here: that a policy
         # and an address agree is a question about the policy, not about this protocol.
         exit_origin=exit_origin(egress, exit_via),
+        # Where the names in those connections are looked up — M16, and the half
+        # ``sendThrough`` cannot reach: it binds the connection, not the lookup before it.
+        # ``None`` with no hop; refused, never defaulted, on a node with one.
+        resolver=lookup_resolver(egress, node.resolver),
         clients=[
             # `email` in an Xray client entry is a label, and Xray uses it in
             # statistics and log lines. It gets the friend's OPAQUE subject, never

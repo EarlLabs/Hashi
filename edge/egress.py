@@ -1,9 +1,11 @@
-"""What a node does with the packets it decrypts — M14.3, and its way out — M3.
+"""What a node does with the packets it decrypts — M14.3, its way out — M3, and where it
+looks a name up — M16.
 
 WHAT: ``Egress``, the closed vocabulary that says which way out traffic arriving over one
       tunnel takes, and the two expressions of it: ``wg_quick_egress`` for a data plane
       whose packets the kernel routes, ``exit_origin`` for one that terminates a
-      connection and opens a new one.
+      connection and opens a new one. Beside the second, ``lookup_resolver``: the resolver
+      such a proxy must ask, instead of its host's, when its way out is a hop.
 WHY:  M14, measured on a real entry node with a real client. The handshake completed in
       both directions, the interface was up, the container was up — and nothing moved,
       because a decrypted packet was dropped by the host's FORWARD chain having never
@@ -22,6 +24,13 @@ WHY:  M14, measured on a real entry node with a real client. The handshake compl
       own route. Same shape — a value, not a branch — because the failure has the same
       silence: friend connects, pages load, panel shows two active nodes and a live hop,
       and the exit is in Russia.
+
+      M16 found what M3 left behind. A proxy handed a hostname resolves it before it
+      dials, and ``exit_origin`` binds the dial, not the lookup: the exit moved abroad
+      while the list of names a friend asked for, in order and with timing, stayed with
+      the host's resolver on the near side of the hop. Same shape again — the answer is
+      a value from the node's record — and the same refusal when the value is missing,
+      because rendering without it IS the leak, with every screen green.
 HOW:  pure, like everything in this zone: text in, text out, no clock, no I/O, and
       nothing here reads a node, an interface or an address off this machine.
 
@@ -369,15 +378,110 @@ def exit_origin(egress: Egress, exit_via: str | None) -> str | None:
     return _bare_address(exit_via)
 
 
+# What an operator reads when a node whose traffic leaves through a hop has no resolver on
+# its record. A constant so the sentence acceptance judges is held by a test, not retyped.
+NO_RESOLVER = (
+    "this node's traffic leaves through a hop, and its record names no resolver for the "
+    "destinations its friends ask for. Without one they would be looked up by this host's "
+    "own resolver — on the near side of the hop, inside the network the hop exists to "
+    "leave — while the traffic itself exits at the far end. Nothing is rendered until the "
+    "node has one: an IPv4 address the far end of the hop can reach."
+)
+
+
+def resolver_problem(resolver: str) -> str | None:
+    """Why ``resolver`` cannot answer a node's lookups through its hop, or ``None``.
+
+    One rule, asked in two places: here at render, and by `control` when a node record is
+    written — a node cannot be edited afterwards, so a resolver that will never render has
+    to be refused while the operator is still looking at the box. A sentence rather than an
+    exception, so each caller raises the refusal its own surface speaks.
+
+    A plain IPv4 address and nothing else, and each exclusion is a way the lookup would
+    quietly stay on this side of the hop:
+
+    * **a name** needs a lookup of its own before it can be asked anything, and that one
+      is made by this host's resolver — the leak, one query earlier. The same test turns
+      away a URL and the proxy's own keywords (to Xray, ``localhost`` MEANS the host's
+      resolver) without this module having to know any of them.
+    * **IPv6** — the hop carries IPv4 only (``EXIT_ROUTE``), so a v6 resolver is one no
+      lookup can reach: every name fails, and nothing says why.
+    * **loopback or unspecified** — answered on this host, by a stub that asks the host's
+      upstream: the leak through a back door, and the most natural value for an operator
+      to copy out of a host's own resolver configuration.
+
+    A private address is deliberately NOT refused. The query is source-routed into the
+    tunnel whatever its destination, so a resolver inside the far end's own network is
+    reached through the hop like any other. What no node record can show is an address
+    this host holds on another interface — answered here, like loopback — which is why
+    the address should be one the far end can reach and this end does not own.
+    """
+    try:
+        address = ipaddress.ip_address(resolver)
+    except ValueError:
+        return (
+            f"the resolver {resolver!r} is not an IPv4 address. A name would itself have to "
+            "be looked up first, by this host's own resolver — the lookup the hop exists to "
+            "move. Give the resolver's address."
+        )
+    if address.version != 4:
+        return (
+            f"the resolver {resolver!r} is an IPv6 address, and the hop carries IPv4 only, so "
+            "no lookup could reach it. Give an IPv4 address."
+        )
+    if address.is_loopback or address.is_unspecified:
+        return (
+            f"the resolver {resolver!r} would be answered on this host, which asks its own "
+            "upstream — the lookup the hop exists to move. Give the address of a resolver "
+            "the far end of the hop can reach."
+        )
+    return None
+
+
+def lookup_resolver(egress: Egress, resolver: str | None) -> str | None:
+    """The resolver a proxy must look its destinations up at, or ``None`` for its host's.
+
+    ``exit_origin``'s companion, for the part of a connection that happens before it is
+    opened. A friend's client hands the proxy a NAME; the proxy resolves it, then dials.
+    ``exit_origin`` decides where the dial leaves from and says nothing about the lookup,
+    and a proxy left to itself asks its host's resolver — on an entry node, inside the
+    network the hop exists to leave. Under ``Egress.HOP`` the lookup gets a resolver of its
+    own, and the proxy's template sends the query out through the same hop as the traffic.
+
+    ``None`` for every policy that is not a hop, meaning "the host's own resolver" — what
+    every node without a hop has always used, and correctly: there the lookup and the exit
+    already leave one host by one route, so nothing needs moving and the config stays byte
+    for byte what it was. A resolver on such a node's record is not the contradiction an
+    ``exit_via`` would be: it is a fact about the node, kept for the day it dials a hop, and
+    not needed yet — so it is not checked here either, and a leaf never fails to render
+    over a field it does not use.
+
+    Under a hop with no usable resolver it REFUSES, for the reason ``exit_origin`` refuses
+    a hop with no address: rendering anyway is not neutral. It is the host's resolver — the
+    leak itself, with every screen green.
+    """
+    if egress is not Egress.HOP:
+        return None
+    if resolver is None or not resolver.strip():
+        raise EgressNotRenderable(NO_RESOLVER)
+    problem = resolver_problem(resolver)
+    if problem:
+        raise EgressNotRenderable(problem)
+    return resolver
+
+
 __all__ = [
     "EXIT_ROUTE",
     "HOP_ROUTE_TABLE",
+    "NO_RESOLVER",
     "NO_ROUTES",
     "Egress",
     "EgressNotRenderable",
     "WgQuickEgress",
     "WgQuickHooks",
     "exit_origin",
+    "lookup_resolver",
+    "resolver_problem",
     "wg_quick_egress",
     "wg_quick_hooks",
 ]

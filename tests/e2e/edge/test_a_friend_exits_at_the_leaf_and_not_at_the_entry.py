@@ -302,6 +302,7 @@ def measured(request, engine, tmp_path_factory, hop_tunnel) -> dict:
                     address=addresses[address],
                     location_label=role,
                     display_name=f"{role}-under-test",
+                    resolver=None,
                 ),
                 params=validate(
                     {

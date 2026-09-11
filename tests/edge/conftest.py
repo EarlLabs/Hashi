@@ -28,15 +28,21 @@ FAKE_ADDRESS = "192.0.2.10"
 FAKE_PRIVATE_KEY = "wEJ0aXpBQlFtNVFDbEZLTFVqRXFRUlRLZXJhcXZJZ0k"
 FAKE_PUBLIC_KEY = "0Rf8h2v0aFVQVGxLZ0VNQmxwQVVCMFJmOGgydjBhRlY"
 
+# RFC 5737 documentation address, standing in for the resolver a node's record names —
+# M16. Only a node whose traffic leaves through a hop ever renders it, so it changes no
+# golden file.
+FAKE_RESOLVER = "192.0.2.53"
+
 
 @pytest.fixture
 def node() -> NodeView:
-    """One fixed node. Reserved address, operator-chosen labels."""
+    """One fixed node. Reserved addresses, operator-chosen labels."""
     return NodeView(
         id="11111111-1111-4111-8111-111111111111",
         address=FAKE_ADDRESS,
         location_label="Netherlands",
         display_name="leaf-test-1",
+        resolver=FAKE_RESOLVER,
     )
 
 

@@ -9,7 +9,7 @@ result the second transport was built to demonstrate.
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import Egress, exit_origin
+from edge.egress import Egress, exit_origin, lookup_resolver
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -42,6 +42,11 @@ def render_server(
     fall back to, which is decision 3 expressed structurally: when the hop is down the
     connection cannot be opened, and a friend gets no exit rather than a Russian one.
     With no hop, nothing changes — the same direct outbound as before, byte for byte.
+
+    M16 is the part of that ``sendThrough`` cannot reach, and it is the first transport's
+    reasoning unchanged: a friend's client sends a NAME, the outbound resolves it before it
+    dials, and under a hop that lookup goes through the hop to the resolver on the node's
+    record (``node.resolver``) — or the node is refused, never given the host's resolver.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
@@ -50,6 +55,9 @@ def render_server(
         # node's own route. Checked by ``edge/egress.py`` rather than here: that a policy
         # and an address agree is a question about the policy, not about this protocol.
         exit_origin=exit_origin(egress, exit_via),
+        # Where the names in those connections are looked up — M16. ``None`` with no hop;
+        # refused, never defaulted, on a node with one. See ``edge/egress.py``.
+        resolver=lookup_resolver(egress, node.resolver),
         ws_path=ws_path(str(params["ws_path_secret"])),
         clients=[
             # Opaque subject only — see the note in the first transport's renderer.

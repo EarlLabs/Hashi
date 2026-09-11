@@ -199,6 +199,7 @@ PROBE = textwrap.dedent(
         address="192.0.2.99",
         location_label="Testland",
         display_name="leaf-brand-new",
+        resolver=None,
     )
 
     found = discover()

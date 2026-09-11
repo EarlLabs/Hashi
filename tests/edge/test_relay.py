@@ -32,6 +32,7 @@ def entry_node() -> NodeView:
         address="192.0.2.20",
         location_label="entry",
         display_name="entry-1",
+        resolver=None,
     )
 
 
@@ -224,6 +225,7 @@ def test_an_ipv6_endpoint_is_bracketed(leaf_node, entry_node, amneziawg_params) 
         address="2001:db8::1",
         location_label=leaf_node.location_label,
         display_name=leaf_node.display_name,
+        resolver=leaf_node.resolver,
     )
     entry, leaf = ends(entry_node, leaf_v6, amneziawg_params)
     assert relay.endpoint_of(leaf) == f"[2001:db8::1]:{leaf.params['port']}"
