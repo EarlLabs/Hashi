@@ -4031,15 +4031,29 @@ SECRET_SETTINGS = {
 }
 
 # The shortest run of a secret the sweep will call a leak. Eight, because below that a
-# fragment of a URL or of a base64 digest starts colliding with ordinary markup —
-# "postgres" is already eight characters — and a sweep that fails for the wrong reason
-# gets deleted. It is not a claim that seven characters of a key would be acceptable.
+# fragment of a URL or of a base64 digest starts colliding with ordinary markup and a
+# sweep that fails for the wrong reason gets deleted. It is not a claim that seven
+# characters of a key would be acceptable.
 SECRET_FRAGMENT = 8
 
-# Digests a value could be named by rather than shown. Five rather than one because
-# the rule is "no digest", not "no SHA-256": a length-8 prefix of a BLAKE2b hash is
-# exactly as much of an offline target as the same prefix of a SHA-256 one.
-DIGESTS = ("md5", "sha1", "sha256", "sha512", "blake2b")
+# What a value's scheme is separated from it by. A URL's scheme is not the secret — the
+# credentials after it are — and hunting for runs of the WHOLE value puts "postgres",
+# the first eight characters of the test database URL, into the hunted set. This suite
+# already greps a response for that literal elsewhere
+# (``test_api_is_closed_to_anyone_without_a_session``), and a database error surfaced in
+# a banner would contain it, so the sweep would eventually fail reporting a leak of a
+# scheme every reader already knows. ``docs/tracker/M9/fix-notes.md`` records what
+# happens to an instrument that cries wolf. The cost is stated rather than hidden: a
+# leak of the scheme plus fewer than SECRET_FRAGMENT characters of what follows it is
+# not caught, which is the same trade the floor itself makes.
+SCHEME = "://"
+
+# Digests a value could be named by rather than shown. Derived from hashlib rather than
+# written out, because the rule is "no digest", not "no SHA-256": a length-8 prefix of a
+# BLAKE2s hash is exactly as much of an offline target as the same prefix of a SHA-256
+# one, and a five-item tuple is a list of the algorithms whoever wrote it happened to
+# think of.
+DIGESTS = tuple(sorted(hashlib.algorithms_guaranteed))
 
 
 class _TableRows(html.parser.HTMLParser):
@@ -4098,9 +4112,13 @@ def _forms_a_secret_could_take(value: str) -> dict[str, str]:
     The keys are safe to print and the values never are; the sweep names the key.
     """
     forms = {"the value itself": value}
-    for size in range(SECRET_FRAGMENT, len(value)):
-        forms[f"its first {size} characters"] = value[:size]
-        forms[f"its last {size} characters"] = value[-size:]
+    # Runs are taken from the value WITHOUT its scheme — see SCHEME for why. The whole
+    # value is still hunted above, so a URL printed in full is still a leak.
+    body = value.split(SCHEME, 1)[-1]
+    after = "" if body == value else " after its scheme"
+    for size in range(SECRET_FRAGMENT, len(body)):
+        forms[f"its first {size} characters{after}"] = body[:size]
+        forms[f"its last {size} characters{after}"] = body[-size:]
     # How long it is, and the one form here that is deliberately NOT hunted as a bare
     # number. A two-digit integer appears all over this panel for honest reasons — a
     # count, part of an id, a port range — so ``str(len(value))`` on its own fails on
@@ -4114,7 +4132,16 @@ def _forms_a_secret_could_take(value: str) -> dict[str, str]:
         joiner = "" if unit.startswith("-") else " "
         forms[f"how long it is, in {unit}"] = f"{len(value)}{joiner}{unit}"
     for algorithm in DIGESTS:
-        digest = hashlib.new(algorithm, value.encode()).hexdigest()
+        computed = hashlib.new(algorithm, value.encode())
+        # SHAKE is extendable-output, so its hexdigest takes a length rather than
+        # having one. Thirty-two bytes, which is what the fixed-width members of the
+        # same family produce — the point is the shape somebody would reach for, not
+        # the size they would pick.
+        digest = (
+            computed.hexdigest(32)
+            if algorithm.startswith("shake_")
+            else computed.hexdigest()
+        )
         forms[f"a {algorithm} digest of it"] = digest
         forms[f"the first {SECRET_FRAGMENT} characters of a {algorithm} digest"] = (
             digest[:SECRET_FRAGMENT]
@@ -4290,8 +4317,18 @@ async def test_no_console_surface_shows_a_settings_secret_in_any_form(
     for surface in surfaces:
         response = await client.get(surface)
         assert response.status_code == 200, surface
+        # Hunted in BOTH readings of the same response, because neither is a superset
+        # of the other. The raw markup is where a value inside an attribute, a hidden
+        # input or an HTML comment lives; the unescaped one is what a person reads, and
+        # it is the only place a secret containing `&`, `'`, `<` or `>` can be found at
+        # all — Jinja autoescapes, so a database URL with a query string reaches the
+        # page as `&amp;` and a raw substring search walks straight past it. The
+        # fixtures' own values contain none of those characters, so this half cannot
+        # fail today; it is here because a real one can, and because the sweep would
+        # have been silently narrower than it claims.
+        readings = (response.text, html.unescape(response.text))
         for label, text in forms.items():
-            if text in response.text:
+            if any(text in reading for reading in readings):
                 pytest.fail(
                     f"{surface} rendered {label} — a secret this control plane was "
                     "configured with may appear in the panel as the word "
