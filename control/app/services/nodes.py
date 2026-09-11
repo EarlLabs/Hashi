@@ -438,11 +438,14 @@ async def set_transport_enabled(
     # change — it is half a tunnel that stops completing a handshake while both ends
     # still look configured. Refused by pointing at the operation that removes both.
     if node_transport.purpose != TransportPurpose.FRIENDS:
+        # The id is substituted rather than left as a placeholder, for the reason
+        # ``REMOVE_IS_FOR_AN_OFFER`` gives: an envelope naming ``{node_transport_id}``
+        # literally is one the script reading it has to decode.
         raise Conflict(
             "this transport is one end of an entry-to-leaf hop, not something "
             "friends are offered. Switching one end off would leave a tunnel that "
             "no longer completes while both ends still look configured — remove the "
-            "hop instead (DELETE /api/hops/{node_transport_id})."
+            f"hop instead (DELETE /api/hops/{node_transport_id})."
         )
 
     if node_transport.enabled == enabled:
@@ -486,8 +489,11 @@ async def set_transport_enabled(
 #
 # It names the API path for the same reason ``set_transport_enabled``'s does: ``/api`` is
 # this service's other caller and a script reading the envelope has nothing else to go
-# on. The console does not repeat it — it answers in its own words from
-# ``console.REMOVE_HOP_END``, because "no URL typed by hand" is what the panel promises.
+# on. FORMATTED WITH THE ROW'S OWN ID, so what the caller reads is the call they can
+# make rather than a placeholder they have to decode — the id is the one they just
+# addressed, so this discloses nothing they did not send. The console does not repeat
+# any of it: it answers in its own words from ``console.REMOVE_HOP_END``, because "no
+# URL typed by hand" is what the panel promises.
 REMOVE_IS_FOR_AN_OFFER = (
     "this transport is one end of an entry-to-leaf hop, not something friends are "
     "offered. Removing one end would leave the other holding a tunnel to an exit that "
@@ -532,7 +538,9 @@ async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> 
     node_transport = await get_node_transport(session, node_transport_id)
 
     if node_transport.purpose != TransportPurpose.FRIENDS:
-        raise Conflict(REMOVE_IS_FOR_AN_OFFER)
+        raise Conflict(
+            REMOVE_IS_FOR_AN_OFFER.format(node_transport_id=node_transport_id)
+        )
 
     # Both labels read BEFORE the delete, off rows this transaction still holds: after
     # the flush the transport row is gone and its attributes are not a source of

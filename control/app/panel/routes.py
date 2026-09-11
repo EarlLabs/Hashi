@@ -551,7 +551,12 @@ async def remove_transport(
         # shown rather than raised. The one thing this refuses is a hop end, and the
         # console answers that in its own words: the service's sentence ends by naming a
         # raw API path, which is the opposite of what this panel promises. Anything else
-        # it ever refuses keeps the service's words. Same split as ``_set_offered``.
+        # it ever refuses keeps the service's words. Same SPLIT as ``_set_offered``, and
+        # deliberately not the same plumbing: the service's sentence is handed over raw,
+        # because ``_mutation`` translates it already and does so with ``keeping``, where
+        # pre-translating it — as the neighbour does — runs the rule once over a sentence
+        # with the node's name unprotected. One translation, not two. Do not align this
+        # backwards.
         return _mutation(
             request,
             banner=console.REMOVE_HOP_END if not offer.for_friends else exc.message,

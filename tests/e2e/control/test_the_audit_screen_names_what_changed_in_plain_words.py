@@ -49,6 +49,10 @@ STORED_KEYS = (
     "hop-dissolved",
     "keys-rotated",
     "params-replaced",
+    # M15.2's. The newest key is the one most likely to reach the screen unrendered,
+    # so it joins the list in the change that adds it rather than the first time
+    # somebody sees it printed.
+    "transport-removed",
 )
 
 

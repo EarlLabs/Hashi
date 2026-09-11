@@ -269,12 +269,37 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
 # exit from a collision, and it is the operator's own route out of the state this
 # milestone was found in.
 
-# This scenario's own node and port. Its own, rather than ``shape_a_box``'s, because the
-# assertions below are ABSENCES: every other scenario in this file registers a box at the
-# same address, and a friend is granted every serving node, so a shared marker would make
-# "it is gone" depend on what else ran.
+# This scenario's own node, and a port band nothing else in this suite uses. Its own
+# rather than ``shape_a_box``'s because the assertion below is an ABSENCE: every other
+# scenario in this file registers a box at the same address, and a friend is granted
+# every SERVING node, so a shared endpoint would make "it is gone" depend on what else
+# ran.
+#
+# THE STAND IS NOT RESET BETWEEN RUNS, and that is the harder half. A second
+# ``make test-e2e`` against one stack leaves this scenario's own earlier box active at
+# whatever endpoint it used, and a friend created by the second run is granted it too —
+# so the endpoint is derived per run, and the assertion is a DELTA rather than a plain
+# absence. Either alone would pass on a cold stand and go red on a warm one, which is the
+# failure that reaches nobody until the day somebody re-runs the suite.
 REMOVAL_ADDRESS = "192.0.2.34"
-REMOVAL_PORT = 51830
+REMOVAL_PORT_BAND = (52000, 4000)
+
+
+def removal_port(unique: str) -> int:
+    """This run's listening port, inside a band no other scenario in this suite uses."""
+    first, width = REMOVAL_PORT_BAND
+    return first + int(unique[:4], 16) % width
+
+
+def endpoints_carrying(archive: bytes, marker: str) -> int:
+    """How many files in a user's archive point at one endpoint.
+
+    A count rather than a membership test, because what is being proven is that ONE row
+    left this user's configuration — true whether or not a warm stand is holding another
+    box at the same address and port.
+    """
+    return sum(1 for content in _entries(archive).values() if marker in content.decode())
+
 
 # Every panel action is htmx's, and nothing answers a header-less POST with a redirect
 # any more (M9.6).
@@ -321,6 +346,8 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
     PORT is free again — so the box that was locked out of the hop it was supposed to
     carry can be typed back into a working shape without touching the database.
     """
+    port = removal_port(unique)
+    marker = f"{REMOVAL_ADDRESS}:{port}"
     node_id = await a_node(
         operator, f"removal-{unique}", REMOVAL_ADDRESS, f"Removeland-{unique}"
     )
@@ -328,7 +355,7 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": RUNBOOK_TRANSPORT,
-            "params": side("10.65.0.1/24", "10.65.0.2/24", REMOVAL_PORT),
+            "params": side("10.65.0.1/24", "10.65.0.2/24", port),
         },
     )
     assert offered.status_code == 201, offered.text
@@ -345,8 +372,8 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
 
     archive = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
     assert archive.status_code == 200, archive.text
-    before = "\n".join(content.decode() for content in _entries(archive.content).values())
-    assert f"{REMOVAL_ADDRESS}:{REMOVAL_PORT}" in before, (
+    before = endpoints_carrying(archive.content, marker)
+    assert before >= 1, (
         "the fixture never reached this user, so its absence below would prove nothing"
     )
 
@@ -359,18 +386,16 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
 
     after = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
     assert after.status_code == 200, after.text
-    delivered = "\n".join(content.decode() for content in _entries(after.content).values())
-    assert f"{REMOVAL_ADDRESS}:{REMOVAL_PORT}" not in delivered, (
+    assert endpoints_carrying(after.content, marker) == before - 1, (
         "a removed transport is still in a user's configuration"
     )
-    assert "10.65.0." not in delivered
 
     # And the port it held is free on that node — the whole reason removal exists.
     reused = await operator.post(
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": RUNBOOK_TRANSPORT,
-            "params": side("10.66.0.1/24", "10.66.0.2/24", REMOVAL_PORT),
+            "params": side("10.66.0.1/24", "10.66.0.2/24", port),
         },
     )
     assert reused.status_code == 201, reused.text

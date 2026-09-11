@@ -59,6 +59,11 @@ PERMITTED_ACTIONS = {
     "hop-dissolved",
     "keys-rotated",
     "params-replaced",
+    # M15.2's, written down here in the change that added it — which is the rule the
+    # comment above states. This list is asserted against whatever the SHARED e2e
+    # database holds, so a scenario that removes a transport leaves a row this set has
+    # to admit, whichever order the files happen to run in.
+    "transport-removed",
 }
 
 
