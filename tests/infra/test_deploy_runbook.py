@@ -14,6 +14,7 @@ HOW:  the file is read, never rendered, and never followed. Same division as
       the runbook cannot quietly teach the harmful version of a step.
 """
 
+import ast
 import inspect
 import pathlib
 import re
@@ -21,6 +22,7 @@ import re
 import pytest
 
 from control.app.services.transports import hop_transports
+from edge.bootstrap.node_stack import EXTENSION
 from edge.registry import discover, profile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -466,15 +468,25 @@ def _egress_expression(transport_name: str) -> str:
     refused on a node whose way out is a hop, and one that calls ``exit_origin``
     terminates the connection and opens its own from the hop's near address.
     """
-    source = inspect.getsource(profile(transport_name).profile)
-    imported: set[str] = set()
-    for line in re.findall(r"^from edge\.egress import (.+)$", source, re.M):
-        imported |= {name.strip() for name in line.split(",")}
+    tree = ast.parse(inspect.getsource(profile(transport_name).profile))
+    # Parsed rather than scanned. A docstring in a render module may quote the OTHER
+    # expression while explaining why it does not use it — both of these packages explain
+    # themselves at length — and a regex over the source reads that as an import, then
+    # reports "imports neither, or both" about something that never happened. The
+    # diagnosis matters here more than usual: this is the fact the runbook's first column
+    # is checked against.
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "edge.egress"
+        for alias in node.names
+    }
     kernel = "wg_quick_egress" in imported
     userspace = "exit_origin" in imported
     assert kernel != userspace, (
-        f"{transport_name} imports neither of edge.egress's two expressions, or both, so "
-        "there is no answer to give an operator about what it does with a hop"
+        f"{transport_name} imports neither of edge.egress's two expressions, or imports "
+        f"both — from edge.egress it imports {sorted(imported)} — so there is no answer "
+        "to give an operator about what it does with a hop"
     )
     return "kernel" if kernel else "userspace"
 
@@ -627,4 +639,49 @@ def test_no_shape_that_builds_a_hop_offers_its_friends_a_kernel_tunnel(
         assert "The one combination that will not render" in _flat(body), (
             f"Shape {letter} builds a hop and does not point at the section that says "
             "which friend-facing transport such a node can actually render"
+        )
+
+
+def test_the_orphan_exception_covers_every_extension_a_config_is_written_with(
+    runbook: str,
+) -> None:
+    """The rendered config an operator is told to delete, named the way it is on disk.
+
+    A rendered config takes the TRANSPORT's extension (``node_stack.EXTENSION``), so the
+    WireGuard family leaves a ``.conf`` behind and the VLESS pair leaves a ``.json``. That
+    is not a detail: the section carrying this exception is the one that moves an entry
+    node's friends onto VLESS, so the very next orphan it creates is the one a ``.conf``
+    -only exception would not name — and the standing rule above it would then read as
+    "never touch it", leaving a node key and every user's id on a host that can be seized.
+
+    Both places that state the exception are checked, because an operator reads whichever
+    one they reach first.
+    """
+    exception = re.search(
+        r"^\*\*So delete it,(?:.*\n)*?(?=^### |^## )", runbook, re.M
+    )
+    assert exception, (
+        "the runbook no longer tells an operator to delete an orphaned config, so the "
+        "standing rule reads as forbidding it and the material stays on the host"
+    )
+    rule = re.search(
+        r"^- \*\*Never edit anything under `/opt/hashi`[^\n]*\n(?:  [^\n]*\n)*", runbook, re.M
+    )
+    assert rule, "the runbook no longer carries the rule this exception is an exception to"
+
+    for extension in sorted(set(EXTENSION.values())):
+        for where, text in (("the exception", exception.group(0)), ("the rule", rule.group(0))):
+            assert f"`.{extension}`" in text, (
+                f"{where} does not name .{extension}, which is how a rendered config for "
+                "one of the installed transports is written on a node"
+            )
+
+    # The target only — a trailing ``#`` comment is where the operator is told which name
+    # to substitute, the same convention as the firewall rules further up this file.
+    removals = re.findall(r"^rm /opt/hashi/conf/(\S+)", exception.group(0), re.M)
+    assert removals, "the exception shows no command, so what to type is left to the reader"
+    for target in removals:
+        assert not any(target.endswith(f".{ext}") for ext in EXTENSION.values()), (
+            f"the command removes {target!r}, which fixes one transport's extension into a "
+            "line an operator pastes for any of them"
         )
