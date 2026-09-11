@@ -498,3 +498,36 @@ five sentences it should leave, newest first.
 **The stand starts empty**, so the first thing a walk sees is the empty state:
 title `Nothing changed yet`, and a body that now also states the retention window
 and the sweep gap. **Change two things first**, then open it.
+
+---
+
+# From M10's acceptance walk — three clumsy findings, none blocking
+
+The walk returned **good** on its first round. `make verify` green at close.
+
+1. **A failed apply degrades the node, and the log cannot tell you that.** It
+   writes only `<node> is now degraded`, actor `owner` — the same shape as a state
+   change the operator set deliberately. **Recorded as a decision**
+   (`docs/decisions.md`, 2026-09-11) rather than fixed: the obvious remedy is a
+   reason column, which is precisely what the shape decision refuses. The cheap
+   narrower fix, if it is ever wanted, is a **distinct action** — `node-degraded`
+   beside `node-state-changed` — which costs one enum member and says *that* it
+   was automatic without saying why.
+2. **The audit screen says how long it keeps an entry but not where that is
+   changed** — on the one product whose stated habit is naming where each value is
+   changed. `HASHI_AUDIT_RETENTION_DAYS` is one click away and unmentioned. Worth
+   one clause in `trail_window`; the variable name is already on Settings.
+3. **Settings breaks its one URL mid-word**: `http://localhost` wraps as
+   `http://localh` / `ost` in a too-narrow value column. Cosmetic, but it is the
+   value an operator is most likely to copy.
+
+Two things the walk could not reach, both structural rather than gaps: **the
+success path of apply/push** (the stand has no reachable host, so every apply,
+probe and the push half of a rotation failed — only failure branches were seen),
+and **whether the hourly retention sweep actually deletes**. The four Settings
+values unset in the container print built-in defaults, and the screen warns about
+exactly that case.
+
+It also confirmed, by test rather than by reading: a nickname of
+`<img src=x onerror=alert(1)> & "q"` renders as escaped text in the log; a double
+click on revoke leaves exactly one row; eleven filled boxes abandoned leave none.
