@@ -795,6 +795,23 @@ async def test_no_probe_answer_says_anything_about_who_connected(
         assert cell not in _visible_text(body).lower()
 
 
+# Rendered panel prose that does not live in a template, and is therefore outside a scan
+# that walks ``templates/``. M10.4 put the audit screen's twelve sentences in
+# ``panel/wording.py`` — panel vocabulary, because ``user <nick> added`` is decision 9's
+# rendered word for a row the code calls a friend — which made this the second file
+# holding prose the scan below could not see (``docs/tracker/M10/step-notes.md`` records
+# the first: sentences composed in ``services/console.py``). The scan grows to the file
+# rather than the gap being written down: the risk is never the sentence somebody just
+# read, it is the thirteenth one added in a hurry.
+#
+# Only ``wording.py``, and not every module under ``panel/``, because this list must stay
+# a list of files whose literals are things a PERSON READS. ``routes.py``'s literals are
+# mostly template paths, event names and form field names, and a scan that flagged those
+# would be turned off within a week — which is the failure mode ``fix-notes.md`` records
+# for an instrument that cries wolf.
+PANEL_PROSE_MODULES = (APP / "panel" / "wording.py",)
+
+
 def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() -> None:
     """M9's own done-when, held over EVERY template this panel renders.
 
@@ -811,6 +828,13 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
     them, and what is left under ``pages/`` is ``console.html`` and ``login.html``, two
     live console templates that an exclusion written about deleted files would have kept
     silently outside this scan.
+
+    AND THE PANEL PROSE THAT IS NOT IN A TEMPLATE — ``PANEL_PROSE_MODULES``, read as
+    non-docstring literals through ``_sentences`` so that a comment explaining the rule
+    is history and a literal is something the code hands somebody. That distinction is
+    what makes it safe to point a markup scan at a ``.py``: this file's own comments
+    legitimately name protocols and addresses, and only the strings a person is handed
+    are judged.
     """
     from edge.registry import discover
 
@@ -829,8 +853,18 @@ def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() 
             offenders += [f"{path.name}: {found}" for found in pattern.findall(markup)]
         offenders += [f"{path.name}: {name}" for name in named if name in markup]
 
+    for module in PANEL_PROSE_MODULES:
+        assert module.exists(), module
+        for line, text in _sentences(module):
+            for pattern in (address, port, country):
+                offenders += [
+                    f"{module.name}:{line}: {found}" for found in pattern.findall(text)
+                ]
+            offenders += [f"{module.name}:{line}: {name}" for name in named if name in text]
+
     assert offenders == [], (
-        f"a console template names a value that belongs in a node record: {offenders}"
+        "a console template — or the panel prose beside them — names a value that "
+        f"belongs in a node record: {offenders}"
     )
 
 
@@ -4702,7 +4736,7 @@ async def test_the_audit_screen_names_what_the_operator_changed(
 
 
 async def test_an_empty_trail_says_what_would_appear_here_and_what_never_will(
-    client,
+    client, settings
 ) -> None:
     """The state the stand opens in, and the one a quiet fleet returns to.
 
@@ -4718,6 +4752,14 @@ async def test_an_empty_trail_says_what_would_appear_here_and_what_never_will(
     assert "<table" not in body
     assert console_service.TRAIL_NOTHING_YET in reads
 
+    # And it says how long the window is HERE, rather than sending a first-time operator
+    # to the Settings screen to find out: the sentence above is about "the window this
+    # trail keeps", and this is the only place on this screen that says what it is.
+    assert f"deleted {settings.audit_retention_days} days after it was written" in reads
+    assert "nothing is swept while this control plane is off" in reads
+    # No clock is on screen, so the sentence does not explain one.
+    assert "Times are UTC" not in reads
+
 
 async def test_the_audit_screen_states_the_window_this_process_actually_keeps(
     client, settings, monkeypatch, reality_params
@@ -4727,7 +4769,19 @@ async def test_the_audit_screen_states_the_window_this_process_actually_keeps(
     A trail's window is the operator's only defence against it becoming a record with no
     end, so the screen states it — and states it from the same constant the sweeper runs
     on, rather than from a sentence that would stay green the day either moved.
+
+    BOTH halves need a moved value, and the retention half is the one this test was
+    missing: conftest builds the application with nine days against a declared default of
+    thirty, so a footnote that had hardcoded "30 days" fails here instead of reading
+    correctly. Same shape as the Settings screen's connect-ceiling assertion, premise
+    first — without that premise the day the default becomes nine is the day this test
+    silently stops proving anything.
     """
+    declared = settings_module.AUDIT_RETENTION_DEFAULT_DAYS
+    assert declared != settings.audit_retention_days, (
+        "conftest no longer overrides the retention window, so this test can no longer "
+        "tell a rendered live value from a rendered default"
+    )
     assert audit_service.SWEEP_INTERVAL_SECONDS != 20 * 60, "the interval is not moved"
     monkeypatch.setattr(audit_service, "SWEEP_INTERVAL_SECONDS", 20 * 60)
     await a_trail(client, reality_params)
@@ -4735,6 +4789,7 @@ async def test_the_audit_screen_states_the_window_this_process_actually_keeps(
     reads = _reading((await client.get("/panel/audit")).text)
 
     assert f"deleted {settings.audit_retention_days} days after it was written" in reads
+    assert f"deleted {declared} days" not in reads
     assert "swept every 20 minutes" in reads
     assert "once an hour" not in reads
     assert "nothing is swept while this control plane is off" in reads

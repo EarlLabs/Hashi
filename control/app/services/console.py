@@ -4,8 +4,9 @@ WHAT: the Overview's four stat cards, the node rows they summarise, the friend r
       the Users screen lists, the hop rows the Hops screen lists, the capability row
       the Transports screen lists per protocol this image ships, and the key row the
       Keys & configs screen lists per transport enabled on a node, and the offer row
-      and state choices the Nodes screen's own actions are built from, and the rows
-      the Settings screen states this control plane's own configuration in.
+      and state choices the Nodes screen's own actions are built from, the rows
+      the Settings screen states this control plane's own configuration in, and the
+      rows the Audit log screen lists one per change the operator has made.
 WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       "throughput now", "last seen", node "load", and a whole Traffic screen. The
       charter's non-goals forbid every one of them: *"No traffic logging, no DNS
@@ -15,9 +16,12 @@ WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       becomes code — so there is one file to read to see what the console may know.
 HOW:  every figure here is derived from configuration rows: node states, credential
       grants, applied digests. Nothing counts an event, nothing has a clock in it
-      except ``created_at`` on a row the operator themselves created, and no function
-      in this module could be extended into a per-connection figure without adding a
-      column that ``test_no_model_records_anything_about_a_connection`` would refuse.
+      except ``created_at`` on a row the operator themselves created — and, since
+      M10.4, ``AuditEntry.at``, which is the same kind of clock: the moment a change
+      the OPERATOR made committed, never the moment anybody used the service — and no
+      function in this module could be extended into a per-connection figure without
+      adding a column that ``test_no_model_records_anything_about_a_connection`` would
+      refuse.
 
 The one figure that looks like a measurement and is not: ``nodes_served``. It counts
 the credentials WE minted for a friend against the node-transports currently serving —
@@ -1550,6 +1554,10 @@ def _in_utc(value: datetime.datetime) -> datetime.datetime:
 def trail_window(settings: Settings, *, shown: int, limit: int = TRAIL_LIMIT) -> str:
     """How long an entry survives and how much of the trail is on screen, derived.
 
+    Three readings, because the sentence has to be true of the screen it sits under: an
+    empty screen has no times to explain, a full one has older entries it is not showing,
+    and the ordinary one has neither.
+
     Every number in it is read from what this process is actually using — the operator's
     retention setting, the sweeper's own interval, and the cap above — for the reason
     the Settings screen's retention row is derived: a sentence that repeated a number
@@ -1561,6 +1569,11 @@ def trail_window(settings: Settings, *, shown: int, limit: int = TRAIL_LIMIT) ->
         f"it was written, swept {_how_often(audit.SWEEP_INTERVAL_SECONDS)}; nothing is "
         "swept while this control plane is off."
     )
+    # With no rows on the screen there is no clock to explain, and the empty state needs
+    # this sentence most: "older than the window this trail keeps" is what it says above,
+    # and this is the only place on the screen that says how long that window is.
+    if shown == 0:
+        return kept
     if shown < limit:
         return f"Times are UTC. {kept}"
     # Said as "anything older is not on it" rather than "there are older ones": at

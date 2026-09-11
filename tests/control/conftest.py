@@ -127,6 +127,16 @@ async def settings(clean_database, operator_password_hash: str) -> Settings:
         # and the whole suite stops costing minutes — the default of five is a field
         # value, chosen for a lossy link, and nothing here is on a link at all.
         node_connect_timeout=1,
+        # Moved off its declared default (30) for a different reason than the ceiling
+        # above — that one is about the suite's cost, this one is what makes two claims
+        # provable. Two screens STATE this window, the Settings row and the audit log's
+        # footnote, and both compose it from the live object; with the fixture on the
+        # default, a screen that had hardcoded "30 days" would read correctly and every
+        # assertion about it would stay green.
+        # Nine: not the default, not either bound, and not a value any other test uses.
+        # The tests that rely on this assert the premise first, so moving it back shows
+        # up as a failure rather than as a test quietly proving nothing.
+        audit_retention_days=9,
     )
 
 
