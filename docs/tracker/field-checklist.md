@@ -165,3 +165,91 @@ host (`docker ps` on the node, and the config file's mtime). That is the state t
 Nodes screen currently gives no red signal for — the only standing hint is the
 words *"cannot render"* in the config column.
 
+
+---
+
+## From M16 — the exit was Amsterdam, the DNS lookup was still Russia
+
+### 7. Set the entry node's resolver FIRST — before any apply or revocation touches it
+
+**Do this immediately after deploying M16, before anything else.**
+
+Migration `0005` leaves every existing node with **no resolver** — deliberately
+without a backfill, because any value it wrote would be a resolver the project
+chose, which the M16 decision forbids. On a node that **dials a hop**, the product
+now refuses to render a friend-facing proxy without one, because rendering
+without it *is* the leak.
+
+**What that means until you set it:**
+
+- **Apply is refused** on the entry node.
+- **A revocation's re-push to that node is refused too** — so a friend you revoke
+  keeps working on the entry, on its last-pushed config, until the resolver is set
+  and the node is applied.
+- **The node does not turn red.** A render refusal leaves a node's state untouched
+  (M15's finding, item 6 above), so the Nodes screen shows it as it was.
+
+**What to do:** in the panel, **Nodes → the entry's row → resolver**, set it, then
+**apply** the entry node (setting a resolver does not push). The API equivalent is
+`POST /api/nodes/<id>/resolver`. The runbook's section *"A node that dials a hop
+needs a resolver"* says the same thing, and says to do it before the next apply
+and before you revoke anybody.
+
+**If you revoke someone before doing this**, the revocation banner will now say so
+honestly — *"'entry-ru' has no resolver on its record, so its configuration cannot
+be rendered and retrying will not change that — set its resolver on the Nodes
+screen, then apply it"* — and that friend's credential stays live on the entry
+until you do.
+
+**Choosing the resolver:** a plain IPv4 address that **the far end of the hop can
+reach** — the query leaves from the leaf. Refused by the product: names, URLs,
+`localhost` and the `+local` forms, IPv6 (the hop carries IPv4 only), and loopback
+or `0.0.0.0`, which would be answered by the host's own upstream and put the leak
+back by another route. The resolver you choose sees the queries — but from the
+Netherlands, not from a Russian network. That residual is accepted knowingly
+(`docs/decisions.md`, the M16 row).
+
+### 8. Watch where a lookup actually leaves — the half the stand cannot show
+
+**The stand has no data plane, so nothing it ran could see a DNS query leave a
+host.** This is the observation M16's whole reason for existing depends on.
+
+On the **entry** host, while a friend browses to a name:
+
+```sh
+sudo tcpdump -ni any 'port 53'
+```
+
+**You should see no query leaving the entry's own public interface for the cloud
+provider's resolver.** Before M16, every name a friend visited went there, in
+order, with timing.
+
+On the **leaf** host at the same time:
+
+```sh
+sudo tcpdump -ni any 'port 53'
+```
+
+**You should see the friend's destination lookups leaving the leaf** for the
+resolver you set.
+
+> **Look, then stop. Do not save the capture and do not leave it running.** A
+> running packet capture of a friend's lookups is exactly the record the charter
+> forbids at any level. This is a one-off check on your own test host, taken by
+> you — not something the product records.
+
+A DNS-leak test site opened from the friend's device should report a resolver seen
+from the Netherlands.
+
+### 9. The entry's Xray log must stay silent about names
+
+On the entry host, during the same browsing:
+
+```sh
+docker logs <the entry's xray container> 2>&1 | tail -50
+```
+
+**Zero lines should name a destination.** M16.1 measured that at `loglevel:
+warning` a failed lookup writes nothing, while **the same flow at `info` writes the
+destination name 38 times**. So `loglevel: warning` is now load-bearing: confirm
+the deployed config says `warning`, and never lower it, even while debugging.
