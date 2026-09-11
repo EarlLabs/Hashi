@@ -796,20 +796,30 @@ async def test_no_probe_answer_says_anything_about_who_connected(
 
 
 # Rendered panel prose that does not live in a template, and is therefore outside a scan
-# that walks ``templates/``. M10.4 put the audit screen's twelve sentences in
-# ``panel/wording.py`` — panel vocabulary, because ``user <nick> added`` is decision 9's
-# rendered word for a row the code calls a friend — which made this the second file
-# holding prose the scan below could not see (``docs/tracker/M10/step-notes.md`` records
-# the first: sentences composed in ``services/console.py``). The scan grows to the file
-# rather than the gap being written down: the risk is never the sentence somebody just
-# read, it is the thirteenth one added in a hurry.
+# that walks ``templates/``. Two files, and BOTH of them are read here rather than
+# recorded as gaps — a scan that grows to where the prose actually lives is worth more
+# than a note saying it does not reach there, because the risk is never the sentence
+# somebody has just read, it is the next one added in a hurry.
 #
-# Only ``wording.py``, and not every module under ``panel/``, because this list must stay
-# a list of files whose literals are things a PERSON READS. ``routes.py``'s literals are
-# mostly template paths, event names and form field names, and a scan that flagged those
-# would be turned off within a week — which is the failure mode ``fix-notes.md`` records
-# for an instrument that cries wolf.
-PANEL_PROSE_MODULES = (APP / "panel" / "wording.py",)
+# * ``services/console.py`` — where this console's standing sentences live, by the
+#   stronger rule that a screen's prose belongs in the service (``health_summary``, the
+#   Transports capability cells, the Settings footnotes, M10.4's three audit-screen
+#   sentences). ``docs/tracker/M10/step-notes.md`` records it as a gap in this scan; it
+#   is not one any more, and that entry is stale.
+# * ``panel/wording.py`` — M10.4's twelve audit sentences, which are panel vocabulary
+#   rather than service prose: ``user <nick> added`` is decision 9's rendered word for a
+#   row the code calls a friend.
+#
+# NOT ``panel/routes.py``, and that stays deliberate: this list must remain a list of
+# files whose literals are things a PERSON READS. Routes' literals are mostly template
+# paths, event names and form field names, and a scan that flagged those would be turned
+# off within a week — the failure mode ``docs/tracker/M9/fix-notes.md`` records for an
+# instrument that cries wolf. A route composing a sentence is the thing to move into one
+# of the two files above, not the reason to widen this tuple.
+PANEL_PROSE_MODULES = (
+    APP / "services" / "console.py",
+    APP / "panel" / "wording.py",
+)
 
 
 def test_no_console_template_names_a_transport_a_country_an_address_or_a_port() -> None:
