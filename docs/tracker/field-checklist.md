@@ -22,8 +22,14 @@ Nothing in the run touched either of them.
 ls -la /opt/hashi/conf/
 ```
 
-**What you are looking for:** a `.conf` file whose transport is no longer enabled
-on that node. Every one of them contains **the node's private key and every
+**What you are looking for:** a rendered config whose transport is no longer
+enabled on that node. **Mind the extension — it is the transport's, not always
+`.conf`.** `edge/bootstrap/node_stack.py`'s `EXTENSION` map gives the WireGuard
+family `.conf` and the VLESS pair `.json`.
+
+That second case is the one to watch, because **item 2 below is what sends you to
+VLESS on an entry node** — so the next orphan you create is a `.json`, and it
+holds the Reality private key, the `ws_path_secret` and every user's UUID. Every one of them contains **the node's private key and every
 user's credential for that transport**.
 
 **Why it is there.** Removing a node transport, withdrawing one, or dissolving a
@@ -34,8 +40,8 @@ repository ever unlinks a rendered config.** `apply` writes;
 the service and leaves the file. So the daemon is gone and the key material is
 still on the host until somebody deletes it by hand.
 
-**What to do:** `rm /opt/hashi/conf/<name>.conf` **for a transport that is no
-longer enabled on that node**. Do it every time, or the fleet accumulates orphaned
+**What to do:** `rm /opt/hashi/conf/<name>.<ext>` — `.conf` or `.json` per the
+map above — **for a transport that is no longer enabled on that node**. Do it every time, or the fleet accumulates orphaned
 key material on disk.
 
 **Never touch a `.conf` whose transport IS still enabled.** The runbook's standing
@@ -93,6 +99,7 @@ The practical answer for a single-box entry node: give friends a transport that
 **terminates and re-originates** their connection (the VLESS family) rather than
 one the kernel routes.
 
-Confirm on the real host that the failure arrives as a sentence and a degraded
-node rather than as a hang or a 500 — that is the half the stand cannot show,
-because the stand has no host behind a node at all.
+Confirm on the real host that the failure arrives **as a sentence in a banner,
+with the node's state unmoved** — not as a hang, not as a 500, and not as a
+degraded node, because it will not be one. That is the half the stand cannot
+show, since the stand has no host behind a node at all.
