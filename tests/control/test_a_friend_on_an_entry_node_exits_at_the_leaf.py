@@ -284,9 +284,9 @@ async def test_the_resolver_is_kept_on_the_record_it_was_given_to(client) -> Non
 async def test_a_resolver_that_could_never_carry_a_lookup_is_refused_at_registration(
     client, resolver: str
 ) -> None:
-    """Refused while the operator is still at the form, because a node cannot be edited
-    afterwards: a value ``edge`` would refuse surfaces otherwise at the first apply after
-    a hop — on another screen, maybe weeks later — on a record nobody can correct."""
+    """Refused while the operator is still at the form: a value ``edge`` would refuse
+    surfaces otherwise at the first apply after a hop — on another screen, maybe weeks
+    later, after friends have been given the node."""
     refused = await client.post(
         "/api/nodes",
         json={

@@ -106,6 +106,7 @@ _EVENTS: dict[AuditAction, str] = {
     AuditAction.NODE_ADDED: "node {first} added",
     AuditAction.NODE_STATE_CHANGED: "{first} is now {second}",
     AuditAction.NODE_APPLIED: "config applied to {first}",
+    AuditAction.NODE_RESOLVER_SET: "resolver set for {first}",
     AuditAction.TRANSPORT_ENABLED: "{second} enabled on {first}",
     AuditAction.TRANSPORT_OFFERED: "{second} offered again on {first}",
     AuditAction.TRANSPORT_WITHDRAWN: "{second} withdrawn on {first}",

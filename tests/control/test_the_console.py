@@ -562,10 +562,9 @@ async def test_a_refused_node_comes_back_on_the_field_with_what_was_typed(
 async def test_a_resolver_the_hop_could_never_carry_comes_back_under_its_own_box(
     client,
 ) -> None:
-    """M16. A node cannot be edited once registered, so a resolver ``edge`` would refuse is
-    refused here — under the box it is about, with what was typed still in it — rather
-    than at the first apply after a hop, on another screen, on a record nobody can
-    correct. And a good one is kept."""
+    """M16. A resolver ``edge`` would refuse is refused here — under the box it is about,
+    with what was typed still in it — rather than at the first apply after a hop, on
+    another screen, possibly weeks later. And a good one is kept."""
     fields = {"name": "entry-1", "address": "192.0.2.20", "location_label": "Testland"}
 
     refused = await client.post(
@@ -3100,6 +3099,9 @@ async def every_console_surface(client, reality_params) -> list[str]:
         # it is addressed by a node-transport rather than by a node.
         f"/panel/nodes/{node_id}/transports",
         f"/panel/nodes/{node_id}/state",
+        # M16's, added in the change that added it: the one dialog that edits a node
+        # record after registration, and it renders the value it edits back into a box.
+        f"/panel/nodes/{node_id}/resolver",
         f"/panel/transports/{node_transport_id}/withdraw",
         # M15.2's, added in the change that added it. The second confirmation behind the
         # same row, and the one with the most to disclose: it is about the row whose
@@ -4651,6 +4653,7 @@ EVENT_SENTENCES = {
     AuditAction.NODE_ADDED: f"node {TRAIL_NODE} added",
     AuditAction.NODE_STATE_CHANGED: f"{TRAIL_NODE} is now {TRAIL_TRANSPORT}",
     AuditAction.NODE_APPLIED: f"config applied to {TRAIL_NODE}",
+    AuditAction.NODE_RESOLVER_SET: f"resolver set for {TRAIL_NODE}",
     AuditAction.TRANSPORT_ENABLED: f"{TRAIL_TRANSPORT} enabled on {TRAIL_NODE}",
     AuditAction.TRANSPORT_OFFERED: f"{TRAIL_TRANSPORT} offered again on {TRAIL_NODE}",
     AuditAction.TRANSPORT_WITHDRAWN: f"{TRAIL_TRANSPORT} withdrawn on {TRAIL_NODE}",

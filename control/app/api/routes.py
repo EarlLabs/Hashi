@@ -137,6 +137,22 @@ async def set_node_state(
     )
 
 
+@router.post("/nodes/{node_id}/resolver", response_model=schemas.NodeResponse)
+async def set_node_resolver(
+    node_id: str,
+    payload: schemas.ResolverChange,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Set the resolver a node's lookups are sent to through its hop — M16.
+
+    The one field on a node record that can change after registration: the upgrade that
+    added it gave every existing node none, and a node that dials a hop does not render
+    without one. A value ``edge`` would refuse is a 400 with its sentence, exactly as at
+    registration. It changes the record, not the host — apply the node afterwards.
+    """
+    return await nodes.set_resolver(session, node_id=node_id, resolver=payload.resolver)
+
+
 @router.post("/nodes/{node_id}/apply", response_model=schemas.ApplyResponse)
 async def apply_node(node_id: str, session: AsyncSession = Depends(session_dependency)):
     """Render, validate, push and verify. Marks the node degraded on any failure."""

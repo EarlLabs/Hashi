@@ -160,6 +160,9 @@ async def surfaces(operator, unique: str) -> list[str]:
         # image ships, every one of them carrying text this panel did not write.
         f"/panel/nodes/{node.json()['id']}/transports",
         f"/panel/nodes/{node.json()['id']}/state",
+        # M16's, added in the change that added it: the resolver dialog behind the same
+        # row, which renders the value it edits back into its box.
+        f"/panel/nodes/{node.json()['id']}/resolver",
         # …and the confirmation behind one of its buttons, which needs a protocol
         # actually enabled on that node before it exists.
         *await _with_an_offer(operator, node.json()["id"]),

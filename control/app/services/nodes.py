@@ -244,11 +244,12 @@ async def create_node(
     if ssh_private_key and not ssh_key_is_usable(ssh_private_key):
         raise DomainError(SSH_KEY_UNUSABLE)
 
-    # A resolver that could never carry a lookup through a hop is refused here too, for
-    # the key's reason: this row cannot be edited afterwards, and ``edge`` would refuse the
-    # value at the first apply after a hop is established — on another screen, maybe weeks
-    # later, on a record nobody can correct. Asked of ``edge``, which owns what the value
-    # means, so the rule this refuses by and the rule a render refuses by are one rule.
+    # A resolver that could never carry a lookup through a hop is refused here too, while
+    # the operator is still looking at the box, rather than by ``edge`` at the first apply
+    # after a hop is established — on another screen, maybe weeks later. It can be set
+    # again afterwards (``set_resolver``), but that is the repair, not the plan. Asked of
+    # ``edge``, which owns what the value means, so the rule this refuses by and the rule
+    # a render refuses by are one rule.
     if resolver:
         problem = resolver_problem(resolver)
         if problem:
@@ -279,6 +280,35 @@ async def create_node(
     audit.record(session, AuditAction.NODE_ADDED, first_label=node.name)
     await session.commit()
     logger.info("node created: %s", node.id)
+    return node
+
+
+async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) -> Node:
+    """Name the resolver a node's lookups are sent to through its hop — after registration.
+
+    The one field on a node record that can change once the node exists (M16). Everything
+    else there stays fixed and a new host is a new node, but this one could not: the
+    upgrade that added it gave every existing node none, a node that dials a hop does not
+    render without one, and a node that cannot be rendered cannot be reached by a
+    revocation either. So the value is node-record data that has to be writable onto the
+    node that needs it — which, the day this lands, is one already in the field.
+
+    Refused with ``edge``'s own sentence when the value could never carry a lookup: the
+    rule a render refuses by, in the same words. Setting the value a node already holds
+    changes nothing and records nothing — a retried click is not an event. It changes the
+    record and never the host; the operator's next apply carries it there.
+    """
+    node = await get_node(session, node_id)
+    problem = resolver_problem(resolver)
+    if problem:
+        raise DomainError(problem)
+    if resolver != node.resolver:
+        node.resolver = resolver
+        # The node's name and nothing else — never the resolver. An address against a
+        # time is the record this trail was shaped to refuse, and a resolver is one.
+        audit.record(session, AuditAction.NODE_RESOLVER_SET, first_label=node.name)
+        await session.commit()
+        logger.info("node %s resolver set", node.id)
     return node
 
 

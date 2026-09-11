@@ -267,6 +267,19 @@ class NodeStateChange(BaseModel):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class ResolverChange(BaseModel):
+    """Setting a node's resolver after it was registered — M16's one edit on a node record.
+
+    Required and non-empty: this is the path that gives a node the resolver it needs, not
+    one that takes it away. Whether the value can carry a lookup is the service's check,
+    for the reason ``NodeCreate.resolver`` gives.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resolver: str = Field(min_length=1, max_length=255)
+
+
 class TransportEnabledChange(BaseModel):
     """Switching one node-transport in or out of what friends are offered.
 

@@ -508,7 +508,9 @@ async def _push(
         if failure is None:
             outcome.nodes_updated.append(named[node_id])
         else:
-            outcome.nodes_failed[named[node_id]] = failure
+            # The operator's sentence, as rotation has always reported it. The kind of
+            # failure travelling beside it (``apply.NotUpdated``) is revocation's to use.
+            outcome.nodes_failed[named[node_id]] = failure.reason
     if outcome.nodes_failed:
         logger.error(
             "rotation on node-transport %s was not pushed to %d node(s); each is still "

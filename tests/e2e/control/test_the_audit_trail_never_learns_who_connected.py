@@ -64,6 +64,10 @@ PERMITTED_ACTIONS = {
     # database holds, so a scenario that removes a transport leaves a row this set has
     # to admit, whichever order the files happen to run in.
     "transport-removed",
+    # M16's, in the change that added it: a node's resolver set after registration. It
+    # records the node's name only — the resolver is an address, and this list admitting
+    # the action is not the same as the trail admitting the address.
+    "node-resolver-set",
 }
 
 

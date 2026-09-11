@@ -349,6 +349,27 @@ async def test_setting_a_state_or_a_switch_to_the_one_it_already_has_records_not
     assert await entries_for(session, AuditAction.TRANSPORT_OFFERED) == []
 
 
+async def test_setting_a_resolver_records_the_nodes_name_and_never_the_address(
+    client, session
+) -> None:
+    """M16's recording point. The resolver is an address, and an address against a time
+    is the record this trail was shaped to refuse — so the entry is the node's name and
+    nothing else. Setting the value the node already holds is a retried click, not an
+    event, and records nothing."""
+    resolver = "192.0.2.53"
+    node_id = await a_node(client)
+
+    await nodes.set_resolver(session, node_id=node_id, resolver=resolver)
+    await nodes.set_resolver(session, node_id=node_id, resolver=resolver)
+
+    node = await nodes.get_node(session, node_id)
+    written = [
+        (entry.first_label, entry.second_label)
+        for entry in await entries_for(session, AuditAction.NODE_RESOLVER_SET)
+    ]
+    assert written == [(node.name, None)]
+
+
 async def test_a_failed_apply_records_the_state_change_and_never_its_reason(
     client, session, reality_params, refusing_ssh
 ) -> None:

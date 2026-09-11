@@ -61,6 +61,10 @@ class AuditAction(enum.StrEnum):
     NODE_ADDED = "node-added"
     NODE_STATE_CHANGED = "node-state-changed"
     NODE_APPLIED = "node-applied"
+    # M16. The one edit a node record admits after registration, recorded by the node's
+    # NAME only: the resolver is an address, and an address against a time is the record
+    # this trail was shaped to refuse.
+    NODE_RESOLVER_SET = "node-resolver-set"
     TRANSPORT_ENABLED = "transport-enabled"
     TRANSPORT_OFFERED = "transport-offered"
     TRANSPORT_WITHDRAWN = "transport-withdrawn"

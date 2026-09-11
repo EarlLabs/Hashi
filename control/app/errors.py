@@ -127,6 +127,17 @@ class NodeOperationFailed(DomainError):
     code = "node_operation_failed"
 
 
+class ConfigRefused(NodeOperationFailed):
+    """A node's configuration could not be produced, or was refused before it was pushed.
+
+    Nothing reached the host, and trying again changes nothing until the node's record or
+    its topology does. That is a different fact from a node that could not be reached, and
+    a caller telling the operator what to do next has to be able to tell the two apart
+    without reading the message — which may quote an upstream checker's output. Same status
+    and code as its parent: to the API it is still a node operation that failed.
+    """
+
+
 class SecretsUnreadable(DomainError):
     """A stored secret cannot be decrypted with the configured key.
 

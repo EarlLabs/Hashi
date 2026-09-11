@@ -173,7 +173,9 @@ class Node(Base, TimestampMixin):
     #
     # Nullable because a node with no hop has no use for it, and because no value could be
     # backfilled onto an existing row that would not be one this project invented. Set when
-    # the node is created, like the address above: this row has no edit path.
+    # the node is created and, alone on this row, settable afterwards
+    # (``services/nodes.set_resolver``): without that, the upgrade that adds this column
+    # would leave every existing entry unable to render, with no way back in the product.
     resolver: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Indexed: every subscription render filters nodes by state, and that is the one

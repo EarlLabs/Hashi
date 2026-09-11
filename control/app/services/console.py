@@ -1648,3 +1648,20 @@ def trail_window(settings: Settings, *, shown: int, limit: int = TRAIL_LIMIT) ->
         f"Times are UTC, and this screen shows the most recent {limit} changes — "
         f"anything older than that is not on it. {kept}"
     )
+
+
+# --- M16: a node's resolver, set after registration ---------------------------
+
+# The refusal for an empty resolver box, the panel's own: the service is never asked about
+# nothing, and "not an IPv4 address" would be a strange answer to a box left blank.
+RESOLVER_REQUIRED = "required — the address this node's lookups are sent to through its hop"
+
+
+def resolver_set(node_name: str) -> str:
+    """The toast for a resolver that was set — naming the step the operator still owes.
+
+    Setting it changes the record and never the host, and on a node that dials a hop it is
+    the apply that finally takes its lookups through the hop. Said at the moment the
+    operator is most likely to believe they are done.
+    """
+    return f"resolver set for {node_name} — apply it for the change to reach the node"

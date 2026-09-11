@@ -24,14 +24,16 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 """
 
 import datetime
+import enum
 import json
 import logging
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.crypto import SecretUnreadable
-from control.app.errors import Conflict, DomainError, NodeOperationFailed
+from control.app.errors import ConfigRefused, Conflict, DomainError, NodeOperationFailed
 from control.app.models import (
     AuditAction,
     Credential,
@@ -44,6 +46,7 @@ from control.app.services import audit, nodes, relay
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
+from edge.egress import ResolverMissing
 from edge.node import Credential as EdgeCredential
 from edge.registry import profile
 
@@ -210,8 +213,10 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
                 "rendering %s for node %s failed", node_transport.transport_name, node.id
             )
             # The message is the transport's own; nothing here interprets it. Note the
-            # rendered text is NOT included: it holds key material.
-            raise NodeOperationFailed(
+            # rendered text is NOT included: it holds key material. ``ConfigRefused``
+            # rather than its parent, so a fan-out can tell "nothing was pushed and a
+            # retry changes nothing" from "unreachable" by type (``why_not_updated``).
+            raise ConfigRefused(
                 f"{node_transport.transport_name} could not be rendered for this node "
                 f"— {type(exc).__name__}: {exc}"
             ) from exc
@@ -314,7 +319,10 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
         )
         return
 
-    raise NodeOperationFailed(
+    # ``ConfigRefused``: nothing was pushed and a retry changes nothing — and this is the
+    # message known to be able to carry key material, which is why a fan-out learns the
+    # kind from the type rather than from these words (``NotUpdated``).
+    raise ConfigRefused(
         f"the rendered configuration for {transport_name!r} was rejected by the "
         f"upstream checker, so it was NOT pushed: {result.output[:300]}"
     )
@@ -538,17 +546,61 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     return configs
 
 
+class NotUpdated(enum.StrEnum):
+    """Why one node in a fan-out was not updated — a closed set, not a sentence.
+
+    A caller that has to tell the operator what to DO about a node needs to know which of
+    these it was, and it must not find out by reading the message: a refusal's message can
+    carry an upstream checker's output, which is known to quote the node's private key
+    (``validate_before_push``; docs/tracker/M9/carry-over.md). So the kind travels beside
+    the message as a value, and a surface with nowhere safe for the message — the
+    revocation banner — is composed from this and the node's name alone.
+    """
+
+    # The node dials a hop and its record names no resolver (M16): it cannot be rendered,
+    # and nothing but setting the resolver changes that.
+    NO_RESOLVER = "no-resolver"
+
+    # Its configuration could not be produced, or the upstream checker refused it. Nothing
+    # was pushed, and retrying changes nothing on its own.
+    REFUSED = "refused"
+
+    # Everything else: the host could not be reached, the push or its verification failed,
+    # or something unexpected happened. The one kind a retry can fix.
+    UNREACHED = "unreached"
+
+
+@dataclass(frozen=True)
+class NodeNotUpdated:
+    """One node a fan-out did not update: the operator's sentence, and which kind it was."""
+
+    # The DomainError's own message — what the API returns and rotation prints, as before.
+    # Never composed into the revocation banner; see ``NotUpdated``.
+    reason: str
+    why: NotUpdated
+
+
+def why_not_updated(exc: BaseException) -> NotUpdated:
+    """Which kind of failure ``exc`` was, read off its TYPE and never off its text."""
+    if isinstance(exc.__cause__, ResolverMissing):
+        return NotUpdated.NO_RESOLVER
+    if isinstance(exc, ConfigRefused):
+        return NotUpdated.REFUSED
+    return NotUpdated.UNREACHED
+
+
 async def apply_many(
     session: AsyncSession, node_transports: list[NodeTransport]
-) -> dict[str, str | None]:
+) -> dict[str, NodeNotUpdated | None]:
     """Apply every node named by a set of node-transports. Returns per-node outcome.
 
     Used by revocation, where several nodes must be re-pushed at once. Every node is
     attempted even if an earlier one failed — stopping at the first failure would
     leave a revoked friend live on nodes that were perfectly reachable, which is the
-    exact failure criterion 6 forbids. Failures are collected and reported.
+    exact failure criterion 6 forbids. Failures are collected and reported, each as its
+    message and its kind (``NodeNotUpdated``).
     """
-    outcomes: dict[str, str | None] = {}
+    outcomes: dict[str, NodeNotUpdated | None] = {}
     for node_id in dict.fromkeys(nt.node_id for nt in node_transports):
         try:
             await apply_node(session, node_id=node_id)
@@ -563,7 +615,7 @@ async def apply_many(
             # revocation's query and its turn in the fan-out — used to end the fan-out
             # in a 500 for that reason alone.
             logger.error("apply failed for node %s during fan-out", node_id)
-            outcomes[node_id] = exc.message
+            outcomes[node_id] = NodeNotUpdated(reason=exc.message, why=why_not_updated(exc))
         except _NOT_PER_NODE:
             raise
         except Exception as exc:
@@ -582,10 +634,13 @@ async def apply_many(
             #
             # Type only, no ``str(exc)``, for the reason given in ``apply_node``.
             logger.exception("unexpected failure applying node %s during fan-out", node_id)
-            outcomes[node_id] = (
-                f"this node was not updated because of an unexpected internal error "
-                f"({type(exc).__name__}); its state is unchanged and the traceback is "
-                f"in the control plane's log"
+            outcomes[node_id] = NodeNotUpdated(
+                reason=(
+                    f"this node was not updated because of an unexpected internal error "
+                    f"({type(exc).__name__}); its state is unchanged and the traceback "
+                    f"is in the control plane's log"
+                ),
+                why=NotUpdated.UNREACHED,
             )
             # Last, deliberately: the same ordering ``_record_failure`` uses. The
             # session is the only thing carried from one node to the next, and an

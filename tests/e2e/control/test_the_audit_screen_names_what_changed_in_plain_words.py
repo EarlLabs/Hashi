@@ -53,6 +53,8 @@ STORED_KEYS = (
     # so it joins the list in the change that adds it rather than the first time
     # somebody sees it printed.
     "transport-removed",
+    # M16's, in the change that adds it, for the same reason as the one above.
+    "node-resolver-set",
 )
 
 

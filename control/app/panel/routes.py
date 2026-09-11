@@ -686,6 +686,74 @@ def _on_its_boxes(exc: ParamsRefused, transport_name: str, boxes: set[str]) -> d
     }
 
 
+@router.get("/nodes/{node_id}/resolver", response_class=HTMLResponse)
+async def node_resolver_dialog(
+    node_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Where this node's lookups go through its hop — the one edit a node record admits."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_resolver_dialog.html",
+        {"node": await nodes.get_node(session, node_id), "values": {}, "errors": {}},
+    )
+
+
+@router.post("/nodes/{node_id}/resolver", response_class=HTMLResponse)
+async def set_node_resolver(
+    node_id: str,
+    request: Request,
+    resolver: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Set a node's resolver from the console — M16, after the node was registered.
+
+    It exists because a node that dials a hop does not render without one and the upgrade
+    that added the field gave every existing node none: without it, the field's own entry
+    node could not be applied again, nor reached by a revocation. Everything else on a
+    node record stays fixed, and a new host is still a new node.
+
+    Both refusals land under the one box at 422 — an empty box, and a value ``edge`` would
+    never render — with what was typed kept, because an address is not a secret.
+    """
+    node = await nodes.get_node(session, node_id)
+    typed = {"resolver": resolver.strip()}
+    if not typed["resolver"]:
+        return _refuse_resolver(
+            request, node, values=typed, errors={"resolver": console.RESOLVER_REQUIRED}
+        )
+    try:
+        node = await nodes.set_resolver(
+            session, node_id=node_id, resolver=typed["resolver"]
+        )
+    except DomainError as exc:
+        return _refuse_resolver(
+            request,
+            node,
+            values=typed,
+            errors={"resolver": wording.for_the_page(exc.message)},
+        )
+    return _mutation(
+        request,
+        toast=console.resolver_set(node.name),
+        keeping=node.name,
+        events="nodes-changed",
+    )
+
+
+def _refuse_resolver(
+    request: Request, node, *, values: dict, errors: dict
+) -> Response:
+    """The resolver dialog again, at 422, with the message under the box it is about."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_resolver_dialog.html",
+        {"node": node, "values": values, "errors": errors},
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
 @router.get("/nodes/{node_id}/state", response_class=HTMLResponse)
 async def node_state_dialog(
     node_id: str,

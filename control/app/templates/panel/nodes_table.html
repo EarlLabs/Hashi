@@ -119,6 +119,14 @@
                 <button class="btn btn-secondary" type="button"
                         hx-get="/panel/nodes/{{ node.id }}/state"
                         hx-target="#dialog-slot" hx-swap="innerHTML">set state</button>
+                {#
+                  M16's. The one edit a node record admits after registration: where this
+                  node's lookups go through its hop. Its own dialog, like the state, because
+                  it is about the node rather than about anything it runs.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/resolver"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">resolver</button>
               </span>
             </td>
           </tr>

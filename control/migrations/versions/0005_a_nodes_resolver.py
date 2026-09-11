@@ -13,9 +13,11 @@ NULL, because any value this migration wrote would be a resolver the project cho
 operator — a hardcoded address, which ``CLAUDE.md`` forbids, arriving through the one door
 nobody reviews. The consequence is stated rather than hidden: a node that already dials a
 hop refuses to render from its next apply until it has a resolver, which is decision 3's
-fail-closed rule applied to the lookup. The product sets the value only when a node is
-created, so for a node already in the field that is a decision to take before deploying
-this, not after. A node with no hop is untouched: it renders the same bytes as before.
+fail-closed rule applied to the lookup — and a revocation cannot reach it either. So the
+first thing after this upgrade, before the next apply and before anybody is revoked, is to
+set a resolver on every node that dials a hop, from the Nodes screen or through
+``POST /api/nodes/{id}/resolver``: docs/deploy/runbook.md, *A node that dials a hop needs a
+resolver*. A node with no hop is untouched: it renders the same bytes as before.
 
 Nothing here can fail on existing data — a nullable column with no default touches no
 row. Reversible: the downgrade drops the column, and nothing else refers to it.
