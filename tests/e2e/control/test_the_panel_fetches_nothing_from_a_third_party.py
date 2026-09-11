@@ -51,6 +51,10 @@ PANEL_PAGES = (
     # M9.4's. Same rule, and this one has the strongest reason to be walked: it is the
     # screen whose whole subject is material that may never be rendered.
     "/panel/keys",
+    # M10.2's, added in the change that added the screen. Same rule again: it has no
+    # fragment and no dialog, because nothing this panel can do changes what the
+    # process was started with.
+    "/panel/settings",
     # ``/panel/fleet`` was the eighth entry until M9.6 deleted the page.
 )
 

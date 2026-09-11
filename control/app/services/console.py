@@ -4,7 +4,8 @@ WHAT: the Overview's four stat cards, the node rows they summarise, the friend r
       the Users screen lists, the hop rows the Hops screen lists, the capability row
       the Transports screen lists per protocol this image ships, and the key row the
       Keys & configs screen lists per transport enabled on a node, and the offer row
-      and state choices the Nodes screen's own actions are built from.
+      and state choices the Nodes screen's own actions are built from, and the rows
+      the Settings screen states this control plane's own configuration in.
 WHY:  the design (``design/README.md``) drew four cells that measure PEOPLE —
       "throughput now", "last seen", node "load", and a whole Traffic screen. The
       charter's non-goals forbid every one of them: *"No traffic logging, no DNS
@@ -52,6 +53,7 @@ from control.app.services import (
     rotation,
     transports,
 )
+from control.app.settings import Settings
 from edge.bootstrap import node_stack
 from edge.registry import KeyScope, TransportMeta, discover
 
@@ -1162,3 +1164,234 @@ async def subscription_url(
     )
     live = [row for row in result.scalars().unique() if row.is_active]
     return f"{base_url}/sub/{live[0].token}" if live else None
+
+
+# --- Settings (M10.2) ---------------------------------------------------------
+#
+# What the Settings screen says, in one place, for the same reason every other
+# sentence on every other screen is here: a template choosing between them would be
+# a template deciding what this control plane is running with.
+#
+# The screen is a STATEMENT and not a form (docs/decisions.md, 2026-09-11). Every
+# value below is read off the live ``Settings`` object this process was built with —
+# never the environment, never a file — which is what makes it true of the control
+# plane the operator is signed into rather than of an env file that may have been
+# edited since boot. It is also what keeps it honest by construction: a variable this
+# process does not read has no attribute to render, so it would first have to be
+# declared in ``control/app/settings.py``, which is the same act as making the process
+# actually read it.
+
+# What a secret is shown as, and the only form it may ever take on this screen. Not
+# redacted, not a prefix, not a length, not a digest: ``settings.py`` goes out of its
+# way not to disclose the operator hash — ``OperatorHashMalformed`` exists so pydantic
+# cannot put it into a ``ValidationError`` on every failed boot — and one cell
+# rendering eight characters of it would undo that. A length or a digest is not a
+# compromise, only a smaller offline target.
+SETTING_CONFIGURED = "configured"
+
+# The one line the milestone's "done when" asks for: where a value is changed, when
+# the panel cannot change it. Phrased about the ENVIRONMENT this process was started
+# with rather than about a particular file, because how the container is started is
+# not something this code knows.
+SETTINGS_READ_AT_BOOT = (
+    "Nothing here can be edited, and nothing on this screen is stored in the "
+    "database. Each value is read from the environment variable beside it when this "
+    "control plane starts, so a change means editing that variable where this process "
+    "gets its environment and restarting it. Until it restarts, what is printed here "
+    "is what the running process is actually using."
+)
+
+# The footnote under the table, stating the rule the screen keeps in every secret cell
+# — the same shape as the Keys & configs lead paragraph, and for the same reason:
+# where a value may never appear, the panel prints the rule instead.
+SETTINGS_SECRETS_WITHHELD = (
+    "A secret reads “configured” and never anything else — not its first characters, "
+    "not how long it is, not a digest of it. This panel will tell you that the process "
+    "has one; it cannot show you any part of one, and there is nowhere on this screen "
+    "to type one in."
+)
+
+# The single Admins row. It is not a table waiting for a second row: “one operator,
+# one fleet” is the charter's non-goal of multi-tenancy, so there is no add-admin
+# control here and there is not going to be one.
+OPERATOR_ROLE = "operator"
+ONE_OPERATOR = (
+    "One operator, one fleet. There is no second account and no control here to add "
+    "one — this row is not a database table, it is the variable named beside it and "
+    "the password hash in the table above, so the panel can no more add an operator "
+    "than it can rename this one."
+)
+
+# Where the password itself is set. Named because the hash is the one value on this
+# screen an operator regularly has to replace, and “edit HASHI_OPERATOR_PASSWORD_HASH”
+# is not actionable on its own: the hash has to be generated, and generating it by
+# hand is how a panel ends up with a hash nobody can match.
+OPERATOR_PASSWORD_CHANGED_WITH = (
+    "The password itself is never stored and never shown. To change it: generate a "
+    "new hash with python -m control.cli hash-password, put that line in this "
+    "variable, and restart."
+)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SettingRow:
+    """One thing this control plane is configured with, as the screen states it.
+
+    ``value`` is either what the process holds or — for a secret — the single word
+    ``SETTING_CONFIGURED``. There is deliberately no third possibility and no field
+    carrying a redacted form: a row that could hold a masked value is a row a later
+    edit unmasks.
+
+    ``variables`` is every ``HASHI_*`` name the value is read from, which is usually
+    one and is two for the subscription base URL — it is composed from a host and a
+    scheme flag, and naming only one of them would send the operator to edit the
+    variable that is not the reason the URL reads the way it does.
+    """
+
+    label: str
+    value: str
+    variables: tuple[str, ...]
+    # A second, muted line under the label: what the value does, or what changing it
+    # costs. ``None`` where the label is already the whole story.
+    note: str | None = None
+    # Whether ``value`` is the withheld word. The template reads this to decide how
+    # loud the cell is; the TEST reads it to decide which cells must equal that word,
+    # which is what makes "a secret is shown one way" mechanical rather than watched.
+    secret: bool = False
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AdminRow:
+    """The one account that can sign into this panel.
+
+    The design drew user / role / last login. There is no ``last_login`` column here
+    and there is not going to be one: it is a per-person temporal record, the person
+    being the owner, on the machine the charter calls most worth seizing — and it is
+    dropped rather than rendered blank, for the reason decision 6 dropped the Traffic
+    screen. A cell that exists to say "we do not keep this" is where somebody later
+    keeps it. ``docs/decisions.md`` (2026-09-11) has the full argument.
+    """
+
+    username: str
+    role: str
+    variables: tuple[str, ...]
+
+
+def _seconds(value: int) -> str:
+    """A ceiling in the unit it is configured in, with the human reading beside it.
+
+    The variable holds seconds, so seconds is what the screen prints — an operator
+    editing ``HASHI_SESSION_MAX_AGE`` types a number of them, and a cell reading only
+    "8 hours" would be a cell they cannot copy. The parenthetical is DERIVED and
+    appears only when the division is exact: "480 minutes" beside 28800 is help, and
+    "0.08 hours" beside 300 would be noise.
+    """
+    spelled = _plural(value, "second", "").strip()
+    for size, noun in ((3600, "hour"), (60, "minute")):
+        if value >= size and value % size == 0:
+            return f"{spelled} ({_plural(value // size, noun, '').strip()})"
+    return spelled
+
+
+def settings_rows(settings: Settings) -> list[SettingRow]:
+    """Everything the Settings screen states, read off the live configuration object.
+
+    ``settings`` is the object the application was built with
+    (``request.app.state.settings``), not a fresh read of anything. That is the whole
+    guarantee the screen rests on: what is printed is what this process is using, so a
+    value cannot go stale between boot and now, and an env file edited since boot
+    cannot make the screen lie about the running service.
+
+    No row is a form field and none of them is written anywhere. The design's Panel
+    form — mesh name, subscription base URL, log retention days — is dropped whole:
+    nothing in this process reads a mesh name, there is no log to retain until M10.3
+    builds one, and a control that saved the base URL would be saving a value the
+    process only reads at boot, which is the lie M10's prose is written about.
+    """
+    return [
+        SettingRow(
+            label="subscription base URL",
+            value=settings.public_base_url,
+            variables=("HASHI_PUBLIC_HOST", "HASHI_PUBLIC_HTTPS"),
+            note=(
+                "Every subscription URL this panel hands out is built on it. Change it "
+                "and the links already handed out still point at the old one, so a user "
+                "whose link stops resolving has to be given the new one."
+            ),
+        ),
+        SettingRow(
+            label="how long a panel session lasts",
+            value=_seconds(settings.session_max_age),
+            variables=("HASHI_SESSION_MAX_AGE",),
+            note=(
+                "How long this sign-in stays valid. There is deliberately no "
+                "“remember me”: a forgotten tab should stop being a way in."
+            ),
+        ),
+        SettingRow(
+            label="ceiling on one operation over an open node session",
+            value=_seconds(settings.node_ssh_timeout),
+            variables=("HASHI_NODE_SSH_TIMEOUT",),
+            note=(
+                "A command or a file transfer on a session that is already open. "
+                "Generous, because pulling an image legitimately takes time."
+            ),
+        ),
+        SettingRow(
+            label="ceiling on reaching a node at all",
+            value=_seconds(settings.node_connect_timeout),
+            variables=("HASHI_NODE_CONNECT_TIMEOUT",),
+            note=(
+                "Much shorter, and separate, because a node that is blocked or seized "
+                "does not refuse the connection — it hangs, and you need an answer "
+                "rather than a spinner. Raise it for a node on a link so lossy that "
+                "the default is not enough."
+            ),
+        ),
+        SettingRow(
+            label="key that encrypts stored node credentials",
+            value=SETTING_CONFIGURED,
+            variables=("HASHI_SECRET_KEY",),
+            note=(
+                "Everything this control plane stores encrypted is encrypted with it. "
+                "Replacing it does not re-encrypt anything: every credential already "
+                "stored, and every backup of them, becomes unreadable."
+            ),
+            secret=True,
+        ),
+        SettingRow(
+            label="operator password hash",
+            value=SETTING_CONFIGURED,
+            variables=("HASHI_OPERATOR_PASSWORD_HASH",),
+            note=OPERATOR_PASSWORD_CHANGED_WITH,
+            secret=True,
+        ),
+        SettingRow(
+            label="database this control plane runs on",
+            value=SETTING_CONFIGURED,
+            variables=("HASHI_DATABASE_URL",),
+            note=(
+                "Withheld whole rather than trimmed, because the value carries the "
+                "database password — and the rest of it is the sort of thing a "
+                "screenshot should not be carrying either."
+            ),
+            secret=True,
+        ),
+    ]
+
+
+def admin_rows(settings: Settings) -> list[AdminRow]:
+    """Who can sign into this panel — one row, and a list only so the table has a loop.
+
+    A list rather than a single object on purpose: the template then draws a table the
+    same way every other screen does, and the fact that there is exactly one row is a
+    property of the product rather than a shape the markup assumes. It still cannot
+    grow — there is no query here and no second account to find.
+    """
+    return [
+        AdminRow(
+            username=settings.operator_username,
+            role=OPERATOR_ROLE,
+            variables=("HASHI_OPERATOR_USERNAME",),
+        )
+    ]

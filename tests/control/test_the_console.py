@@ -14,6 +14,7 @@ HOW:  the in-process client from conftest, already holding an operator session. 
 """
 
 import ast
+import hashlib
 import html.parser
 import json
 import pathlib
@@ -39,6 +40,7 @@ from control.app.services import nodes as nodes_service
 from control.app.services import relay as relay_service
 from control.app.services import rotation as rotation_service
 from control.app.services import transports as transports_service
+from control.app.settings import Settings
 from edge.registry import profile
 
 TEMPLATES = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "templates"
@@ -2987,6 +2989,7 @@ async def every_console_surface(client, reality_params) -> list[str]:
         *HOP_SURFACES,
         *TRANSPORT_SURFACES,
         *KEY_SURFACES,
+        *SETTINGS_SURFACES,
         f"/panel/hops/{entry_end}/dissolve",
         # Both rotation dialogs, on both kinds of row: one friend-facing transport and
         # one end of a hop. They are the surfaces closest to the material, so a sweep
@@ -4005,6 +4008,387 @@ async def test_an_empty_keys_screen_says_where_material_comes_from(client) -> No
     assert "<table" not in body
 
 
+# --- Settings (M10.2) ---------------------------------------------------------
+
+# THE LIST IS THE TEST, and this screen contributes exactly one entry — the same
+# reason the Transports screen does. Nothing this panel can do changes what the
+# process was started with, so there is no self-swapping fragment to refresh and no
+# dialog to open: a `/panel/settings/table` URL would exist only to be listed.
+SETTINGS_SURFACES = ("/panel/settings",)
+
+# Which ``Settings`` attribute each secret named on that screen is actually read from.
+# This mapping is what the sweep below hunts the panel for, and
+# ``test_every_secret_the_settings_screen_names_is_one_this_sweep_holds`` pins it to
+# the screen's OWN rows in both directions — so a fourth secret row cannot be added
+# without extending this mapping, and an existing one cannot quietly stop being
+# treated as a secret. Without that pin the sweep would be a hand-written list that
+# goes stale the first time the screen grows, which is the defect class
+# ``docs/tracker/M9/fix-notes.md`` names: an instrument trusted past what it proves.
+SECRET_SETTINGS = {
+    "HASHI_SECRET_KEY": "secret_key",
+    "HASHI_OPERATOR_PASSWORD_HASH": "operator_password_hash",
+    "HASHI_DATABASE_URL": "database_url",
+}
+
+# The shortest run of a secret the sweep will call a leak. Eight, because below that a
+# fragment of a URL or of a base64 digest starts colliding with ordinary markup —
+# "postgres" is already eight characters — and a sweep that fails for the wrong reason
+# gets deleted. It is not a claim that seven characters of a key would be acceptable.
+SECRET_FRAGMENT = 8
+
+# Digests a value could be named by rather than shown. Five rather than one because
+# the rule is "no digest", not "no SHA-256": a length-8 prefix of a BLAKE2b hash is
+# exactly as much of an offline target as the same prefix of a SHA-256 one.
+DIGESTS = ("md5", "sha1", "sha256", "sha512", "blake2b")
+
+
+class _TableRows(html.parser.HTMLParser):
+    """Every ``<tr>`` on a page, as the collapsed text of its cells.
+
+    A substring search over the document cannot tell a cell holding exactly the word
+    ``configured`` from one holding it beside eight characters of the value, and "a
+    secret is shown as one word and in no other form" is a claim about the CELL. So
+    this reads cells, and the sweep below reads the document — two instruments,
+    because neither is the other's superset.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[str]] = []
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "tr":
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._cell is not None and self._row is not None:
+            # Collapsed, so the template's indentation is not part of the assertion —
+            # a cell is what a person reads, not how it was typed.
+            self._row.append(" ".join("".join(self._cell).split()))
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _table_rows(markup: str) -> list[list[str]]:
+    parser = _TableRows()
+    parser.feed(markup)
+    return parser.rows
+
+
+def _forms_a_secret_could_take(value: str) -> dict[str, str]:
+    """Every shape a secret could reach a screen in, short of being described in prose.
+
+    The value itself, every prefix and every suffix of it from ``SECRET_FRAGMENT``
+    characters up, how long it is, and five digests of it — each whole, each truncated
+    to eight, and each in the console's own ``abcd…ef01`` fingerprint shape, because
+    this codebase already has a place where a digest of a secret is legitimately drawn
+    that way and the obvious way to "compromise" on a settings secret would be to copy
+    it.
+
+    The keys are safe to print and the values never are; the sweep names the key.
+    """
+    forms = {"the value itself": value}
+    for size in range(SECRET_FRAGMENT, len(value)):
+        forms[f"its first {size} characters"] = value[:size]
+        forms[f"its last {size} characters"] = value[-size:]
+    # How long it is, and the one form here that is deliberately NOT hunted as a bare
+    # number. A two-digit integer appears all over this panel for honest reasons — a
+    # count, part of an id, a port range — so ``str(len(value))`` on its own fails on
+    # the Overview for a reason that has nothing to do with a secret, and a sweep that
+    # cries wolf gets deleted. What a disclosure of a length actually looks like on a
+    # screen is a number WITH ITS UNIT, so those are the forms hunted; a length that
+    # reaches the value cell with no unit at all is caught by the cell-level equality
+    # in ``test_a_secret_on_the_settings_screen_is_the_single_word_configured``, which
+    # is where such a thing would have to be rendered to mean anything.
+    for unit in ("characters", "chars", "bytes", "long", "-character"):
+        joiner = "" if unit.startswith("-") else " "
+        forms[f"how long it is, in {unit}"] = f"{len(value)}{joiner}{unit}"
+    for algorithm in DIGESTS:
+        digest = hashlib.new(algorithm, value.encode()).hexdigest()
+        forms[f"a {algorithm} digest of it"] = digest
+        forms[f"the first {SECRET_FRAGMENT} characters of a {algorithm} digest"] = (
+            digest[:SECRET_FRAGMENT]
+        )
+        forms[f"a {algorithm} digest in the console's fingerprint shape"] = (
+            f"{digest[:4]}…{digest[-4:]}"
+        )
+    return forms
+
+
+async def test_the_settings_screen_states_what_this_process_is_running_with(
+    client, settings
+) -> None:
+    """M10's first "done when": the owner is shown what this control plane really has.
+
+    The connect ceiling is the load-bearing assertion and the reason this test takes
+    the ``settings`` fixture. ``Settings`` DECLARES five seconds and conftest builds
+    this application with one, so a screen reading five would be a screen reading the
+    declaration, the environment or an env file rather than the live object the
+    process is using — which is exactly the failure ``docs/decisions.md``
+    (2026-09-11) picked rendering the live object to avoid. The premise is asserted
+    too, so the day the default changes to one this stops proving nothing silently.
+    """
+    declared = Settings.model_fields["node_connect_timeout"].default
+    assert declared != settings.node_connect_timeout, (
+        "conftest no longer overrides the connect ceiling, so this test can no longer "
+        "tell a rendered live value from a rendered default"
+    )
+
+    reads = _reading((await client.get("/panel/settings")).text)
+
+    assert f"{settings.node_connect_timeout} second" in reads
+    assert f"{declared} second" not in reads
+    assert settings.public_base_url in reads
+    assert settings.operator_username in reads
+    assert console_service.OPERATOR_ROLE in reads
+    # And every row the service composes arrives, value and variable both. Driven off
+    # the rows rather than a written list: a row added to that function without a home
+    # in this template fails here.
+    for row in console_service.settings_rows(settings):
+        assert row.value in reads, row.label
+        assert row.label in reads, row.label
+        for variable in row.variables:
+            assert variable in reads, variable
+
+
+async def test_settings_names_where_each_value_is_changed_and_when_it_takes_effect(
+    client, settings
+) -> None:
+    """The second half of that "done when", which is the half a screen usually skips.
+
+    A read-only screen that does not say where the value IS changed is a dead end: the
+    owner reads it, cannot edit it, and has nowhere to go. So every row names its
+    ``HASHI_*`` variable and the screen says once that a change takes effect at the
+    next boot.
+    """
+    reads = _reading((await client.get("/panel/settings")).text)
+
+    assert console_service.SETTINGS_READ_AT_BOOT in reads
+    assert console_service.SETTINGS_SECRETS_WITHHELD in reads
+    assert console_service.ONE_OPERATOR in reads
+    # The password is the one value an operator regularly has to replace, so "edit this
+    # variable" is not enough on its own — the hash has to be generated.
+    assert console_service.OPERATOR_PASSWORD_CHANGED_WITH in reads
+    for admin in console_service.admin_rows(settings):
+        for variable in admin.variables:
+            assert variable in reads, variable
+
+
+async def test_every_secret_the_settings_screen_names_is_one_this_sweep_holds(
+    settings,
+) -> None:
+    """The pin that keeps the sweep below honest as the screen grows.
+
+    Both directions. A row marked secret whose variable this sweep does not know about
+    would be a value nothing hunts for; a row NOT marked secret whose variable is one
+    of these would be a value the template is free to print in full. Either way the
+    sweep would still be green, which is the whole failure mode of a hand-written list
+    standing in for a rule.
+    """
+    rows = console_service.settings_rows(settings)
+    withheld = {name for row in rows if row.secret for name in row.variables}
+    printed = {name for row in rows if not row.secret for name in row.variables}
+
+    assert withheld == set(SECRET_SETTINGS), (
+        "the Settings screen's secrets and the sweep's list have drifted — extend "
+        "SECRET_SETTINGS in the same change that adds a secret row"
+    )
+    assert printed & set(SECRET_SETTINGS) == set(), (
+        "a value this sweep treats as a secret is rendered by a row that does not"
+    )
+    for attribute in SECRET_SETTINGS.values():
+        assert hasattr(settings, attribute), attribute
+
+
+async def test_a_secret_on_the_settings_screen_is_the_single_word_configured(
+    client, settings
+) -> None:
+    """``docs/decisions.md`` (2026-09-11): not redacted, not a prefix, not a length,
+    not a digest — the one word, and nothing else in the cell.
+
+    Asserted on the CELL rather than by searching the document, because that is what
+    makes every rejected shape fail at once: a cell reading ``scrypt$1…`` , ``86
+    characters`` or ``9f3c…a17d`` is not equal to ``configured``, and none of those
+    three needs its own assertion. The document-wide sweep is the next test and covers
+    the other half — a value that reaches an attribute, a comment or a second line
+    rather than this cell.
+
+    ``pytest.fail`` and never a bare ``assert`` on the cell's contents: pytest rewrites
+    a failing assertion into a message containing both operands, so asserting equality
+    against a leaking cell would print the leak into the CI log. Same rule as
+    ``test_no_console_surface_ever_shows_key_material``.
+    """
+    body = (await client.get("/panel/settings")).text
+    rendered = {cells[2]: cells for cells in _table_rows(body) if len(cells) == 3}
+
+    rows = console_service.settings_rows(settings)
+    assert [row for row in rows if row.secret], "no secret rows — this would be vacuous"
+
+    for row in rows:
+        key = " · ".join(row.variables)
+        assert key in rendered, f"the {row.label} row is not on the screen"
+        label, value, _ = rendered[key]
+        assert label.startswith(row.label), row.label
+        if not row.secret:
+            assert value == row.value, row.label
+        elif value != console_service.SETTING_CONFIGURED:
+            pytest.fail(
+                f"the {row.label} cell is not the single word "
+                f"'{console_service.SETTING_CONFIGURED}' — a secret on this screen may "
+                "not be redacted, prefixed, measured or digested (docs/decisions.md, "
+                "2026-09-11)"
+            )
+
+
+async def test_no_console_surface_shows_a_settings_secret_in_any_form(
+    client, settings, reality_params
+) -> None:
+    """The mechanical half of "and in no other form", swept over the whole panel.
+
+    The secrets this screen names are CONFIGURATION rather than database rows, so
+    ``stored_material`` cannot see them: they are the key that encrypts everything the
+    fleet holds, the hash the operator signs in against, and the database URL that
+    carries the Postgres password. This is their sweep, and it walks the same
+    ``every_console_surface`` list as the key-material one so a screen cannot be in one
+    and missing from the other.
+
+    It hunts for far more than the values. ``_forms_a_secret_could_take`` expands each
+    one into every prefix and suffix of eight characters or more, its length, and five
+    digests whole, truncated and in the console's own fingerprint shape — so an edit
+    that "compromises" by showing the first eight characters, or how long the key is,
+    or a short hash of it, goes red rather than passing a sweep that only looked for
+    the value itself.
+
+    The failure message names the FORM and never the text that was found.
+    """
+    surfaces = await every_console_surface(client, reality_params)
+    held = {
+        variable: getattr(settings, attribute)
+        for variable, attribute in SECRET_SETTINGS.items()
+    }
+    # Non-vacuous by construction: a fixture that stopped setting one of these would
+    # otherwise make this sweep hunt for the empty string, which every page contains.
+    for variable, value in held.items():
+        assert len(value) > SECRET_FRAGMENT * 2, variable
+
+    forms = {
+        f"{variable} — {shape}": text
+        for variable, value in held.items()
+        for shape, text in _forms_a_secret_could_take(value).items()
+    }
+
+    for surface in surfaces:
+        response = await client.get(surface)
+        assert response.status_code == 200, surface
+        for label, text in forms.items():
+            if text in response.text:
+                pytest.fail(
+                    f"{surface} rendered {label} — a secret this control plane was "
+                    "configured with may appear in the panel as the word "
+                    f"'{console_service.SETTING_CONFIGURED}' and in no other form"
+                )
+
+
+async def test_nothing_on_the_settings_screen_offers_to_save_anything(
+    client, settings
+) -> None:
+    """M10's second "done when": nothing here claims to save a value the process would
+    not then use.
+
+    The design's Panel form is dropped WHOLE rather than drawn and refused — a form
+    that saves a value the process only reads from the environment at boot is a lie
+    told in a text field, and drawing the boxes and refusing the save is the same lie
+    with a worse message. So the assertion is about markup that does not exist rather
+    than about a refusal that does.
+
+    Read as the FRAGMENT, because the console shell carries one form on every screen —
+    the sidebar's log-out button — and that form is not this screen's.
+    """
+    fragment = (
+        await client.get("/panel/settings", headers={"HX-Request": "true"})
+    ).text
+    reads = _reading(fragment).lower()
+
+    for markup in ("<form", "<input", "<textarea", "<select", "hx-post", "hx-put"):
+        assert markup not in fragment.lower(), markup
+    for word in ("save", "mesh name", "apply changes"):
+        assert word not in reads, word
+    # Nothing reads a mesh name, so the field's only reader would have been itself.
+    assert "mesh" not in reads
+
+    # NO AUDIT-RETENTION ROW. It arrives with M10.3, the step that also builds the
+    # trail and enforces the window — a retention figure on a control plane with no
+    # trail is this screen's own lie in a different field. M10.3 replaces these two
+    # lines rather than working around them; that is what they are for.
+    for row in console_service.settings_rows(settings):
+        assert "RETENTION" not in " ".join(row.variables), row.label
+    assert "retention" not in reads
+
+
+async def test_the_admins_table_is_one_row_and_has_no_last_login(
+    client, settings
+) -> None:
+    """The design's third column is dropped, not blanked, and the table cannot grow.
+
+    ``last login`` survives the LETTER of the cell test — it does not move when a
+    friend connects — and fails what that test is a proxy for: it is a per-person
+    temporal record, the person being the owner, and it would be the only place in
+    this codebase where a human merely being present causes a durable row. Dropped
+    rather than rendered empty, for the reason decision 6 dropped the Traffic screen.
+
+    "One row" is asserted against the rendered table and not against the service,
+    because a template looping over one row is one edit away from looping over a query.
+    """
+    body = (await client.get("/panel/settings")).text
+    reads = _reading(body)
+
+    assert ">last login<" not in body
+    assert "last login" not in reads.lower()
+    assert "last seen" not in reads.lower()
+
+    admins = [
+        cells
+        for cells in _table_rows(body)
+        if len(cells) == 3 and cells[1] == console_service.OPERATOR_ROLE
+    ]
+    assert len(admins) == 1, "the Admins table is one row — there is no second account"
+    assert admins[0][0] == settings.operator_username
+    assert admins[0][2] == "HASHI_OPERATOR_USERNAME"
+
+
+async def test_the_settings_screen_reads_the_live_object_and_not_the_environment(
+    client, app, monkeypatch
+) -> None:
+    """The rule that keeps this screen from going stale, held as behaviour.
+
+    The screen is true of the PROCESS, not of a file: an env file edited after boot is
+    not what the control plane is running with, and a screen that re-read one would
+    report a value no request would use. Planting a contradicting variable in the
+    environment and watching the screen ignore it is the only way to assert that from
+    outside — ``test_only_settings_reads_the_environment`` greps for two literals and
+    would not see a second ``BaseSettings`` subclass or a hand-rolled read.
+    """
+    monkeypatch.setenv("HASHI_OPERATOR_USERNAME", "not-the-running-operator")
+    monkeypatch.setenv("HASHI_NODE_CONNECT_TIMEOUT", "999")
+
+    reads = _reading((await client.get("/panel/settings")).text)
+
+    assert "not-the-running-operator" not in reads
+    assert "999 second" not in reads
+    assert app.state.settings.operator_username in reads
+
+
+
 # --- what a browser is allowed to keep (acceptance round 1) -------------------
 
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
@@ -4028,6 +4412,11 @@ TWO_REPRESENTATION_URLS = (
     # is about. This screen holds fingerprints rather than values, and it is on here so
     # that stays a property of the response and not of the reader.
     "/panel/keys",
+    # M10.2's, added in the change that added the screen. It is a statement of what
+    # this process was configured with, so a fragment of it kept under the page's own
+    # URL would be a picture of a configuration the control plane may since have been
+    # restarted out of.
+    "/panel/settings",
 )
 
 

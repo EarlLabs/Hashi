@@ -1,7 +1,7 @@
 """The admin panel — the screen the owner lives in.
 
-WHAT: login, the console (Overview, Users, Nodes, Hops, Transports, Keys & configs),
-      and every action on each.
+WHAT: login, the console (Overview, Users, Nodes, Hops, Transports, Keys & configs,
+      Settings), and every action on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -15,10 +15,11 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 
 ONE panel, since M9.6. The CONSOLE is the redesign in ``design/`` — a persistent
 sidebar over a swappable ``#main``, one screen per route, every creation flow in a
-dialog. Overview, Users, Nodes, Hops, Transports and Keys & configs are its six
-screens, and every action the pre-redesign fleet page carried has a home on one of
-them: enabling, withdrawing and offering a transport and moving a node between states
-on the Nodes screen, both rotations on Keys & configs, both halves of a hop on Hops.
+dialog. Overview, Users, Nodes, Hops, Transports, Keys & configs and Settings are its
+seven screens — the last of them read-only, with no action on it at all — and every
+action the pre-redesign fleet page carried has a home on one of them: enabling,
+withdrawing and offering a transport and moving a node between states on the Nodes
+screen, both rotations on Keys & configs, both halves of a hop on Hops.
 
 ``pages/index.html`` and ``pages/node.html`` are gone, and with them the two fragments
 only they rendered into, ``panel/outcome.html`` and ``panel/health.html``. Every route
@@ -131,6 +132,7 @@ NAV = (
     {"key": "hops", "label": "Hops", "url": "/panel/hops"},
     {"key": "transports", "label": "Transports", "url": "/panel/transports"},
     {"key": "keys", "label": "Keys & configs", "url": "/panel/keys"},
+    {"key": "settings", "label": "Settings", "url": "/panel/settings"},
 )
 
 
@@ -1968,4 +1970,57 @@ async def revoke_friend(
         banner=None if outcome.complete else outcome.summary(),
         events="friends-changed",
         keeping=nickname,
+    )
+
+
+# --- Settings (M10.2) --------------------------------------------------------
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_screen(request: Request) -> Response:
+    """Settings — what this control plane is running with, and where each value changes.
+
+    READ-ONLY, and there is no POST beside it. ``docs/decisions.md`` (2026-09-11): the
+    design's Panel form is dropped whole rather than drawn and refused, because a form
+    that saves a value the process only reads from the environment at boot is a lie
+    told in a text field, and the narrower reading — draw it, refuse the save — is the
+    same lie with a worse error message.
+
+    It renders ``request.app.state.settings``: the live object this application was
+    built with, never ``os.environ`` and never a file. That is what makes the screen
+    true of the process the operator is signed into rather than of an env file that
+    may have been edited since boot — and it is what stops the screen going stale,
+    since there is no second copy of a value here to drift from the one in use.
+
+    The SECOND console screen with no session dependency (the Transports screen was
+    the first, and M9.3's note calling it "the only" one is superseded here). Nothing
+    on it is a fact about the fleet, so there is no query to make; it is on ``router``,
+    so it is still operator-only. A later step wanting a fleet fact on this screen adds
+    the session back — and at that point *"does it move when a friend connects?"*
+    applies to whatever it wants to put here.
+
+    No self-swapping fragment and no ``-changed`` trigger, for the Transports screen's
+    reason: nothing this panel can do changes what this process was started with, so a
+    ``/panel/settings/table`` URL would exist only to be listed.
+    """
+    settings = request.app.state.settings
+    return _screen(
+        request,
+        screen="panel/screens/settings.html",
+        current="settings",
+        title="Settings",
+        subtitle=(
+            "what this control plane is running with, and where each value is changed"
+        ),
+        context={
+            "configuration": console.settings_rows(settings),
+            "admins": console.admin_rows(settings),
+            # The screen's three standing sentences, handed over rather than written
+            # in the template, for the reason every other console sentence lives in
+            # ``services/console.py``: they are the panel's claims about what it can
+            # and cannot do with a value, and a test asserts them against the constant
+            # rather than against a copy of the words.
+            "read_at_boot": console.SETTINGS_READ_AT_BOOT,
+            "secrets_withheld": console.SETTINGS_SECRETS_WITHHELD,
+            "one_operator": console.ONE_OPERATOR,
+        },
     )
