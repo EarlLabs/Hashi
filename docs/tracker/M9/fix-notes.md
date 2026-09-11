@@ -83,3 +83,104 @@ All non-blocking; both rounds returned `VERDICT: 0 critical, 0 high`.
   closed, and the fully-branched two-element shape the fault message recommends
   does pass; but this is exactly the over-flagging `SOUND_BANNERS` exists to guard
   against, and it is not in that table.
+
+## The acceptance fixes, 2026-09-10 → 09-11
+
+M9's acceptance walk came back **BLOCKED** with four defects. Two fix loops closed
+them. Both root causes were more interesting than the symptoms, and both are the
+kind of thing that would have been patched at the wrong layer by anyone in a
+hurry.
+
+### Loop A — rotation, probe, and a banner nobody ever saw
+
+**A failed hop-end rotation said "Nothing was changed" and the key had changed.**
+`rotate_keys` now treats a hop as one unit: mint once, copy every value the
+transport **declares** `shared_between_peers` into the far end, render the pair
+through `relay.check_renders_as_a_pair` **before anything is written**, write both
+rows and commit **once**, then push both nodes. Attacked by review and not broken:
+a failed commit writes nothing; a peer row deleted between read and write gives a
+zero-row UPDATE → `StaleDataError` → full rollback; `apply_many` re-raises only
+after a consistent commit. **There is no window in which one end holds new
+material and the other does not.** That is why it is one transaction rather than a
+reordering of commit and push — the half-written state *is* the bug, and no
+sentence makes it safe.
+
+**Probe reported nothing — and neither had anything else.** The cause was one
+line: `app.js` cleared the banner slot on `htmx:afterRequest`, which fires
+**after** the swap. Verified against the vendored htmx 2.0.4 source: `xhr.onload`
+runs the response handling (performing the OOB swap synchronously at `swapDelay`
+0) and only then fires `afterRequest`. So **every banner this panel ever sent on a
+2xx was written and wiped in the same exchange** — probe, failed apply, incomplete
+revocation, half-done rotation. The answer now owns the slot from the server;
+`app.js` clears it only on sidebar navigation.
+
+**A malformed SSH key was an internal error.** Refused before dialling now, at
+registration and at `target_for`, in words under the key box.
+
+### Loop B — two dialogs, two third-party behaviours
+
+**The enable dialog stacked all four transports' boxes at once.** It already had
+the hop dialog's mechanism verbatim — the markup was never the problem.
+**`[hidden]` is a user-agent rule, and any author rule setting `display` beats it
+regardless of specificity.** The groups wear `.dialog-form { display: flex }`, so
+the attribute did nothing, and `app.js` was setting the same attribute the
+stylesheet was overruling. The hop dialog escaped only by accident, because
+`.disclosure` sets no `display`. Fix: `[hidden] { display: none !important; }` —
+and the `!important` is load-bearing, not defensive: both rules are specificity
+(0,1,0) and the class rule is 390 lines later, so source order alone would win.
+
+**Opening a dialog rewrote the address bar.** `hx-push-url` is one of htmx's
+**inherited** attributes, resolved by walking up from the requesting element, and
+`#main` carried `hx-push-url="/panel/friends"` for one navigation — so every
+control inside it pushed that URL. Fix: `hx-disinherit="hx-push-url"` on `#main`;
+htmx exempts an element from its **own** disinherit (`if(e!==t)` in 2.0.4), so
+that one navigation still pushes.
+
+**Not pre-selecting the chooser was deliberate:** it would turn "submit without
+choosing" from a refusal on the control into a real choice, and the refusal the
+operator then gets would be about boxes rather than about the choice they never
+made.
+
+### Conventions this leaves
+
+- **`[hidden] { display: none !important; }` is load-bearing.** Before giving a
+  hideable group a class, check that rule.
+  `test_a_group_the_server_hides_is_actually_hidden` asserts it *and* scans for
+  classes that would overrule it, failing if the scan finds none — so it cannot
+  rot into decoration.
+- **`#main` disinherits `hx-push-url`.** A new screen control that needs to push
+  one must declare it on itself. `_HtmxControls` models htmx's ancestor walk
+  including `hx-disinherit` — reuse it for any other inherited-attribute question.
+- **One string, two surfaces.** `console.HOP_PUSH_OUTCOME` /
+  `HOP_ONE_END_TOOK_IT` / `HOP_NEITHER_END_TOOK_IT` is the pattern for any claim a
+  dialog makes that an answer must repeat: compose it once in `console`, render it
+  in the dialog, compose the answer from the same clauses. A phrase list is not
+  enough — the first attempt was one, and a differently-worded contradiction
+  walked straight through it.
+- **`relay.check_renders_as_a_pair`** — call it between validating and committing
+  on any path that rewrites one hop end.
+- **`conftest.GENERATED_SSH_KEY`** is a real ed25519 key generated per run. Any
+  fixture registering a node must use it; `"not-a-real-key"` is now refused.
+
+### Left open by the acceptance fixes — all Low, both caps spent
+
+- `tests/control/test_the_console.py:1165` — `_transport_groups` gives the **last**
+  group a text region running to the end of the document, so it swallows the
+  key-material paragraph and the dialog actions, and the refusal branch asserts on
+  exactly that over-wide group. No false pass today; the instrument measures more
+  than it claims.
+- `tests/control/test_the_console.py:4253-4255` — the new push-url test holds only
+  the negative half: controls targeting `#main` are skipped without asserting they
+  still resolve a push. **The whole fix rests on htmx's self-exemption keeping
+  `#main`'s own `hx-push-url` alive, and nothing pins it** — deleting the
+  attribute, or disinheriting with `*`, stays green.
+- `templates/panel/node_transports_dialog.html:181-183` — the comment says an
+  accidental enable "mints key material"; for every shipped transport the
+  empty-required-box refusal stops that first, so the claim only bites for a
+  transport whose operator params are all defaulted. The decision is right, the
+  reason is stated more strongly than it holds.
+- `templates/panel/node_transports_dialog.html:185-190` — the group heading is a
+  bare `<p>` beside the group rather than tied to it, so a screen-reader user
+  landing in `port` hears `port` with no group context: the same orphaned-box
+  problem the finding was about, in the one mode where visual proximity does not
+  help. `<fieldset><legend>`, or an id plus `aria-labelledby`.
