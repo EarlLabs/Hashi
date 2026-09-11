@@ -154,3 +154,130 @@ unique)` and `side(address, peer, port)`.
 gained a `listens_on=frozenset()` case — **the empty form, not an omitted one**: a
 missing field dies as `TypeError` at import and can never reach
 `_check_declaration`.
+
+---
+
+# Established by M15.2 — removal
+
+## What removal is
+
+`nodes.remove_transport(session, *, node_transport_id) -> node_id` **deletes** the
+`NodeTransport` row and, by the same ORM cascade plus `ON DELETE CASCADE` that
+`dissolve_hop` relies on, **every `Credential` minted under it**. Verified at the
+database level, not only in the ORM: `credentials_node_transport_id_fkey` is
+`confdeltype = 'c'`, and a raw `DELETE FROM node_transports` removes the
+credentials too. Only two FKs reference the table — `credentials` (CASCADE) and
+`fk_node_transports_peer` (SET NULL), and the peer case is the one refused.
+
+**It deliberately leaves:** the friend (**removing a protocol is not revoking a
+person** — those users lose that entry from their subscription at the next
+refresh and keep everything else), the audit trail (append-only), and the daemon
+on the host.
+
+**It does not push.** The caller is handed the node that needs re-applying, for
+`dissolve_hop`'s reason: a removal that failed because the host is down is useless
+exactly when it is needed. The operator is told in three places — the confirmation
+dialog, the toast, and the API's `{"needs_apply": [node_id]}`. That instruction is
+genuinely actionable: `node_stack.restart` runs `docker compose up -d
+--remove-orphans` against a compose file regenerated **without** the removed
+service, so applying really does stop the container.
+
+## What it refuses
+
+**A hop end**, 409. The service sentence names the API call that does work
+(`DELETE /api/hops/{id}`, now actually substituted); the **console answers in its
+own words** (`console.REMOVE_HOP_END`, *"Tear the hop down from the Hops screen:
+that takes both ends…"*) because an API path is not what the panel promises. No
+remove button is drawn on a hop-end row, so the refusal is typed-URL only.
+
+## It frees exactly what `placement` claims
+
+This is the whole point: M15.1 made a **disabled** row keep holding its port and
+config name *on the promise that removal is the exit*. Proven — remove a row, then
+re-enable the same transport on the same port: 201, and `config_name` comes back
+as the **plain** name rather than a suffix. Removing the plain first instance
+while `amneziawg-2` survives lets a new row take the plain name back.
+
+`placement.NO_NAME_LEFT` now ends *"Remove one of them from this node, or put this
+one on another."* — the second answer M15.1 deferred to here.
+
+## The trail
+
+A thirteenth `AuditAction`, **`transport-removed`**, labels = node name and
+transport name read off the rows **before** the delete, rendered `<transport>
+removed from <node>`. Distinct from `transport-withdrawn` on purpose: the row is
+gone when the entry is read, so the entry is the only place the difference
+survives.
+
+**A new action must be written down in four places, and three of them are lists
+that fail late.** `AuditAction`, `_EVENTS` in `wording.py`, and then
+`PERMITTED_ACTIONS` and `STORED_KEYS` in the two e2e scenarios. **The e2e database
+is shared across scenarios with no reset**, so a missing `PERMITTED_ACTIONS` entry
+is green or red depending on **filename order** — this step's gate passed only
+because `test_the_audit_...` sorts before the scenario that removes. Reproduced
+red by running the removal scenario first.
+
+**A stronger guard was proposed and not built** (out of scope here, worth doing):
+a unit test that reads the e2e file's literal set with `ast` and compares it to
+`AuditAction`, failing in `make test-control` seconds after the enum grows. Keep
+the hand-written list — its value is that a new action must be written down a
+second time where somebody asks what it records; what is fragile is the *silence*,
+not the duplication.
+
+## Re-run safety on a warm stand — a trap this step fell into
+
+A scenario asserting an **absence** is not re-run safe on a shared stand: an
+earlier run's own artefacts satisfy the thing it is proving absent. Here, the
+scenario's closing re-enable left an active box, and a second run's friend was
+granted it too.
+
+**Fixed the right way, and this is the pattern to copy:** derive the endpoint per
+run (`removal_port(unique)`, band 52000–55999 — a census of the dirty stack shows
+every other scenario at 8443–8471, 51820–51823, 51931–51932), **and** make the
+claim a **delta** — `endpoints_carrying(after) == before - 1` — so it says *one row
+left this user's configuration* regardless of what else the stand holds.
+
+The delta still discriminates: it cannot pass while the removal did nothing
+(`after == before` fails), and a mere *withdrawal* would pass the delta but then
+**409 on the re-enable**, because M15.1 keeps a disabled row holding its port. The
+toast assertion (`"removed from"` vs `"withdrawn on"`) is the second
+discriminator.
+
+## Reusable
+
+`nodes.remove_transport`, `nodes.REMOVE_IS_FOR_AN_OFFER`,
+`console.removal_summary`, `console.REMOVE_HOP_END`, `DELETE
+/api/transports/{id}` → `{"needs_apply": [node_id]}`, template
+`panel/remove_transport_dialog.html`. Unit helper `a_user_on(client, node_id,
+nickname)` — **activate the node, then create the friend; that order is what mints
+a credential.** E2E helper `remove_from_the_panel(operator, node_id, transport)`
+reads both URLs off the markup.
+
+**Two buttons per row** in the transports dialog now, inside the existing
+`.row-actions`; the e2e `withdraw_button` regex still works because it anchors on
+`/withdraw`.
+
+## Do not align this backwards
+
+The remove route passes `exc.message` **raw** to `_mutation` with
+`keeping=offer.node`. The neighbouring `_set_offered` pre-wraps in
+`wording.for_the_page` and `_mutation` then translates again — **translating once
+unprotected**, so a node literally named "friend" is mangled. The new route is the
+correct one of the two; the comment says so.
+
+## The scope of "gone" — accurate wording for anyone who repeats it
+
+*"The material minted for it is gone with it"* is true of **the control plane's
+database only**: the row, its encrypted `secrets`, and every credential minted
+under it are deleted, and nothing this control plane will ever render, deliver or
+push contains that material again.
+
+**It is not true of the node's disk.** The rendered config — containing the node's
+private key and every user's credential for that transport — was written to
+`/opt/hashi/conf/<config_name>.conf` by the last apply, and **no code path in this
+repository ever unlinks a rendered config.** Identical for `withdraw` and for
+`dissolve_hop`, so it is a property of the product rather than anything this step
+introduced. **On the field checklist** (`docs/tracker/field-checklist.md`, item 1),
+because it is observable only on a real host. A product fix would be an apply that
+reconciles the directory against what it just rendered — `apply`/`edge.bootstrap`,
+a step of its own.

@@ -294,7 +294,8 @@ trail acquires a token in eighteen months without anyone deciding to.
 
 **`action` is an enum through `EnumText`.** `process_bind_param` calls
 `AuditAction(value)`, so an undeclared value raises **at bind, before the
-statement is sent** — not at review. Twelve members: `friend-added`,
+statement is sent** — not at review. The declared members (a thirteenth, `transport-removed`, was added by M15.2 —
+do not read this list as closed): `friend-added`,
 `friend-revoked`, `node-added`, `node-state-changed`, `node-applied`,
 `transport-enabled`, `transport-offered`, `transport-withdrawn`,
 `hop-established`, `hop-dissolved`, `keys-rotated`, `params-replaced`.
@@ -403,7 +404,7 @@ its own.
 The route reaches the trail through `console.trail_entries`, **never
 `services.audit` directly** — `test_no_route_writes_the_trail` greps for that.
 
-## The twelve sentences
+## The sentences
 
 Stored value is a machine key; the sentence is rendered in `panel/wording.py`.
 
