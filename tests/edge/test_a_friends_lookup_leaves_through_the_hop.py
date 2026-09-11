@@ -33,6 +33,7 @@ from edge.egress import (
     NO_RESOLVER,
     Egress,
     EgressNotRenderable,
+    ResolverMissing,
     lookup_resolver,
     resolver_problem,
 )
@@ -188,9 +189,11 @@ def test_a_hop_with_no_resolver_is_refused_rather_than_answered_at_home(
     """Decision 3, applied to the lookup.
 
     Rendering without a resolver is not neutral: it is the host's resolver — the leak
-    itself, with every screen green.
+    itself, with every screen green. Refused as its own type, because it is the one
+    refusal an operator fixes on the node's record, and a caller that has to tell them so
+    must not have to read the message to find out which refusal it was.
     """
-    with pytest.raises(EgressNotRenderable) as refusal:
+    with pytest.raises(ResolverMissing) as refusal:
         rendered(
             name,
             dataclasses.replace(node, resolver=None),
@@ -221,10 +224,15 @@ def test_a_hop_with_no_resolver_is_refused_rather_than_answered_at_home(
     ],
 )
 def test_a_resolver_that_would_be_answered_on_this_side_is_refused(resolver: str) -> None:
-    """Each of these is a file Xray would load and a lookup that never leaves home."""
+    """Each of these is a file Xray would load and a lookup that never leaves home.
+
+    Refused as the general type and NOT as ``ResolverMissing``: the node HAS a resolver,
+    it is the wrong kind, and a caller telling the operator to "set one" would be wrong.
+    """
     assert resolver_problem(resolver)
-    with pytest.raises(EgressNotRenderable):
+    with pytest.raises(EgressNotRenderable) as refusal:
         lookup_resolver(Egress.HOP, resolver)
+    assert not isinstance(refusal.value, ResolverMissing)
 
 
 def test_a_resolver_is_asked_for_only_where_there_is_a_hop() -> None:
@@ -239,7 +247,7 @@ def test_a_resolver_is_asked_for_only_where_there_is_a_hop() -> None:
     assert lookup_resolver(Egress.LOCAL, "localhost") is None
     assert lookup_resolver(Egress.NONE, None) is None
     for missing in (None, "", "   "):
-        with pytest.raises(EgressNotRenderable, match="names no resolver"):
+        with pytest.raises(ResolverMissing, match="names no resolver"):
             lookup_resolver(Egress.HOP, missing)
 
 

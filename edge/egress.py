@@ -389,13 +389,24 @@ NO_RESOLVER = (
 )
 
 
+class ResolverMissing(EgressNotRenderable):
+    """A node whose traffic leaves through a hop, and whose record names no resolver.
+
+    Its own type beside the general refusal, because it is the one refusal an operator
+    fixes on the node's RECORD rather than in its topology — and a caller that has to tell
+    them so, such as a revocation that could not reach the node, must not have to read this
+    message to learn which refusal it was. Raised only for a MISSING resolver: one that is
+    present and wrong is the general refusal, since "set one" would be the wrong advice.
+    """
+
+
 def resolver_problem(resolver: str) -> str | None:
     """Why ``resolver`` cannot answer a node's lookups through its hop, or ``None``.
 
-    One rule, asked in two places: here at render, and by `control` when a node record is
-    written — a node cannot be edited afterwards, so a resolver that will never render has
-    to be refused while the operator is still looking at the box. A sentence rather than an
-    exception, so each caller raises the refusal its own surface speaks.
+    One rule, asked in two places: here at render, and by `control` whenever a node's
+    resolver is written — at registration and when it is set afterwards — so a value that
+    will never render is refused while the operator is still looking at the box. A sentence
+    rather than an exception, so each caller raises the refusal its own surface speaks.
 
     A plain IPv4 address and nothing else, and each exclusion is a way the lookup would
     quietly stay on this side of the hop:
@@ -463,7 +474,7 @@ def lookup_resolver(egress: Egress, resolver: str | None) -> str | None:
     if egress is not Egress.HOP:
         return None
     if resolver is None or not resolver.strip():
-        raise EgressNotRenderable(NO_RESOLVER)
+        raise ResolverMissing(NO_RESOLVER)
     problem = resolver_problem(resolver)
     if problem:
         raise EgressNotRenderable(problem)
@@ -477,6 +488,7 @@ __all__ = [
     "NO_ROUTES",
     "Egress",
     "EgressNotRenderable",
+    "ResolverMissing",
     "WgQuickEgress",
     "WgQuickHooks",
     "exit_origin",
