@@ -103,3 +103,65 @@ Confirm on the real host that the failure arrives **as a sentence in a banner,
 with the node's state unmoved** — not as a hang, not as a 500, and not as a
 degraded node, because it will not be one. That is the half the stand cannot
 show, since the stand has no host behind a node at all.
+
+### 3. Prove the two instances actually bind two ports
+
+**On the entry node**, once the fleet is back up and a node carrying both a
+friend-facing and a hop-end instance has been applied:
+
+```sh
+ss -lunp | grep 5182
+ip -brief link | grep -E 'awg|wg'
+```
+
+**What you should see:** **two** listeners, one per port, and **two** interfaces
+— one per config name. The stand proved the control plane will *write* two rows
+with distinct ports and config names; it cannot show that the node's kernel
+accepts them side by side, because nothing was ever applied (`applied_at` was null
+throughout the walk).
+
+This is the half M15's whole decision rests on. If the two interfaces do not come
+up together, the uniqueness rule is right about the database and wrong about the
+host.
+
+### 4. Prove a removed port is genuinely released on the box
+
+**On whichever host you test removal on:**
+
+```sh
+ss -lunp | grep <the port>      # before
+# then: remove the transport in the panel, and APPLY the node
+ss -lunp | grep <the port>      # after
+```
+
+Removal does not push — **the apply is a separate step and is what stops the
+container.** The control plane frees the port in its own bookkeeping immediately;
+whether the daemon lets go of it on the host is only observable here.
+
+### 5. The exit address, end to end
+
+**With a friend's config from the entry node:**
+
+```sh
+curl ifconfig.me
+```
+
+**It must show the LEAF's address.** This is M3's criterion re-checked after M15
+moved the uniqueness rule and M15.2 added removal — neither should have touched
+it, and the stand cannot show it at all.
+
+### 6. The hazard the stand could not reach
+
+The acceptance walk saw a node in the un-renderable shape keep its state
+untouched — but **its node had never been successfully applied**, so it never saw
+the half that matters: an **already-active** node whose render now refuses,
+**still serving a config you did not choose**, with nothing red on the Nodes
+screen.
+
+**To see it:** apply an entry node successfully, then add the combination that
+will not render, then apply again. The apply is refused; check that the node is
+still `active`, still in a user's link, and still running the *old* config on the
+host (`docker ps` on the node, and the config file's mtime). That is the state the
+Nodes screen currently gives no red signal for — the only standing hint is the
+words *"cannot render"* in the config column.
+
