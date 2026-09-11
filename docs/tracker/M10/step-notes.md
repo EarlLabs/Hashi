@@ -239,9 +239,17 @@ variables in the environment and asserts the screen ignores them.
   follows the stronger rule (console sentences live in the service) and lets tests
   assert a constant rather than a copy — but
   `test_no_console_template_names_a_transport_a_country_an_address_or_a_port`
-  scans **templates only**, so prose moved into the service is outside that
-  backstop. M9.6's `test_no_sentence_this_panel_hands_an_operator_names_a_surface_that_is_gone`
-  does walk every `.py` under `control/app`, which is the cover that exists.
+  scanned **templates only**, so prose moved into the service was outside that
+  backstop. **Closed by M10.4 on 2026-09-11:** that scan now also walks
+  `PANEL_PROSE_MODULES` — `services/console.py` and `panel/wording.py` — reading
+  **non-docstring literals**, which is what makes it safe to point a markup scan
+  at a `.py` (a comment there legitimately names protocols and addresses). Proven
+  both directions: five offender shapes in a literal are all reported with file
+  and line; the same five in a comment produce nothing. `panel/routes.py` stays
+  out deliberately — its literals are template paths, event names and form field
+  names, and a scan that flagged those is one that gets turned off. **A route
+  composing a sentence is a reason to move that sentence into one of the two
+  scanned files, not a reason to widen the tuple.**
 - **All-caps is a comment convention in this codebase and must not reach the
   screen.** One shouted word leaked into the footnote and was caught in review; it
   was the only all-caps emphasis in any rendered panel string.
@@ -379,3 +387,114 @@ stops reading the constants.
   test still holds), `entries_for(session, action)`, `a_node(client, name,
   with_key=)`, a local `hop_params`, and a `_FakeHost` that makes `apply_node`
   succeed.
+
+---
+
+# Established by M10.4 — the audit log screen
+
+## What it is
+
+`/panel/audit`, the **eighth** sidebar entry (`Audit log`, before `Settings`). A
+read-only three-column table — `time / actor / event` — newest first. `actor` is
+`settings.operator_username`, **rendered from the shell's `operator` context
+value, never stored**. No `source` column. No fragment, no dialog, no control of
+its own.
+
+The route reaches the trail through `console.trail_entries`, **never
+`services.audit` directly** — `test_no_route_writes_the_trail` greps for that.
+
+## The twelve sentences
+
+Stored value is a machine key; the sentence is rendered in `panel/wording.py`.
+
+| stored | rendered |
+|---|---|
+| `friend-added` | `user <nick> added` |
+| `friend-revoked` | `user <nick> revoked — link is dead` |
+| `node-added` | `node <name> added` |
+| `node-state-changed` | `<node> is now <state>` |
+| `node-applied` | `config applied to <node>` |
+| `transport-enabled` | `<transport> enabled on <node>` |
+| `transport-offered` | `<transport> offered again on <node>` |
+| `transport-withdrawn` | `<transport> withdrawn on <node>` |
+| `hop-established` | `hop established from <entry> to <leaf>` |
+| `hop-dissolved` | `hop torn down from <entry> to <leaf>` |
+| `hop-dissolved`, one label | `hop torn down at <node> — the other end was already missing` |
+| `keys-rotated` | `keys rotated for <transport> on <node>` |
+| `params-replaced` | `parameters replaced for <transport> on <node>` |
+
+Title `Audit log`, subtitle *"what you changed, and when — never who connected to
+what"*. Times print `12 Sep 2026 14:03`, normalised to UTC **in the service**, so
+the footnote's claim is true of every cell.
+
+`EVENT_SENTENCES` in the test is **written out literally and driven off
+`AuditAction`**, so a thirteenth member fails there rather than rendering blank.
+
+## Order, cap, and the three footnote readings
+
+Ordered `(at, id)` **descending**, capped at `TRAIL_LIMIT = 200` in one query.
+`at` is Postgres **transaction-start** time, so entries written in one transaction
+tie and the `id` tiebreaker decides — a test planting several must commit each one.
+
+`trail_window` has **three** readings, each true of the screen it sits under:
+`shown == 0` (the retention half, **without** the `Times are UTC.` clause, since
+no clock is on screen), `shown < limit`, and `shown == limit` (gains *"shows the
+most recent 200 changes — anything older than that is not on it"*, which is honest
+at exactly 200 because it asserts nothing about rows existing).
+
+**Every number in it is derived** from the live settings and
+`audit.SWEEP_INTERVAL_SECONDS`, and `conftest` now builds with
+`audit_retention_days=9` against a declared default of 30 so the derivation test
+has a premise to assert. **Do not remove that override** — it is the same guard as
+`node_connect_timeout=1`, and adding it revealed that the Settings screen's own
+retention assertion had been vacuous.
+
+**The cap was chosen knowing its cost:** a fleet busy enough to write more than 200
+entries inside the retention window leaves entries 201..N on disk and unreachable
+from the product until the sweep deletes them. A second page is a second place the
+record of what the operator did can be read from, which is why a count was
+preferred to paging. **If revisited, bound by the retention window rather than a
+count** — `trail_entries` already takes `limit` as a keyword and `trail_window`
+already composes from what it was given, so the change is the query predicate and
+one sentence, not the screen.
+
+## How "no token, no link" is held
+
+Three ways, and a reviewer could not find a path past them: the screen is handed
+**pre-composed lines, never the model**, so nothing in template reach can look a
+friend up; a unit test issues a real subscription and hunts the raw **and
+unescaped** page for the live URL and token with `pytest.fail` (never `assert`,
+which would print the credential); and an e2e scenario does the same against the
+booted stack, plus `"/sub/" not in body`. Mutations that injected a live decrypted
+token into a label, and that taught the delivery path to write a row, were both
+caught.
+
+**Nothing moves when a friend connects:** a unit test renders the fragment,
+fetches a real subscription three times, re-renders and requires **byte
+equality**; the e2e scenario does the same. That is the screen-level twin of
+M10.3's "no row is written".
+
+**A populated trail is among the swept surfaces** —
+`test_the_swept_console_walks_a_trail_that_is_not_empty` asserts the fleet
+`every_console_surface` builds leaves ≥6 rows, so the secret and key-material
+sweeps are not passing over an empty state.
+
+## Testing
+
+`tests/control/test_the_console.py`, section `# --- Audit log (M10.4) ---`.
+`a_trail(client, reality_params)` performs one walk of the product and returns the
+five sentences it should leave, newest first.
+
+- **Never sweep a console page for the word "friend" in e2e** — the stand has a
+  user nicknamed `hopfriend-…` and that is the operator's own text, handed back
+  untouched on purpose. Assert on the sentence the panel composed instead.
+- **A failed revocation push marks the node degraded**, which itself records
+  `node-state-changed` — so a revocation in a fixture leaves **two** entries.
+- `console.trail_entries(session, limit=…)` takes the cap as a keyword so a test
+  need not plant 201 rows.
+
+## What acceptance meets
+
+**The stand starts empty**, so the first thing a walk sees is the empty state:
+title `Nothing changed yet`, and a body that now also states the retention window
+and the sweep gap. **Change two things first**, then open it.
