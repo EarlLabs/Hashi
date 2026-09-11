@@ -1198,9 +1198,9 @@ SETTINGS_READ_AT_BOOT = (
     "database. Each value is read from the environment variable beside it when this "
     "control plane starts, so a change means setting that variable in the environment "
     "this process is actually handed — and a value still at its default is usually one "
-    "nothing passes in yet, so it has to be ADDED there rather than edited somewhere "
-    "the process never reads. Then restart: until it does, what is printed here is what "
-    "the running process is using."
+    "nothing passes in yet, so it has to be added there rather than edited somewhere "
+    "the process never reads. Then restart this control plane; until it restarts, what "
+    "is printed here is what the running process is using."
 )
 
 # The footnote under the table, stating the rule the screen keeps in every secret cell

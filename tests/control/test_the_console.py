@@ -4100,16 +4100,30 @@ def _table_rows(markup: str) -> list[list[str]]:
 
 
 def _forms_a_secret_could_take(value: str) -> dict[str, str]:
-    """Every shape a secret could reach a screen in, short of being described in prose.
+    """The shapes of a secret this sweep hunts for, and — as importantly — which it does not.
 
-    The value itself, every prefix and every suffix of it from ``SECRET_FRAGMENT``
-    characters up, how long it is, and five digests of it — each whole, each truncated
-    to eight, and each in the console's own ``abcd…ef01`` fingerprint shape, because
-    this codebase already has a place where a digest of a secret is legitimately drawn
-    that way and the obvious way to "compromise" on a settings secret would be to copy
-    it.
+    HUNTED. The value itself; every prefix and every suffix from ``SECRET_FRAGMENT``
+    characters up, taken **after the value's scheme** where it has one (see ``SCHEME``,
+    which is why "postgres" is not in the set); how long it is, as a number with a unit;
+    and a digest under every algorithm ``hashlib`` guarantees — each whole, each
+    truncated to eight characters, and each in the console's own ``abcd…ef01``
+    fingerprint shape, because this codebase already has a place where a digest of a
+    secret is legitimately drawn that way and the obvious way to "compromise" on a
+    settings secret would be to copy it.
 
-    The keys are safe to print and the values never are; the sweep names the key.
+    NOT HUNTED, and stated so the next reader does not take a green run for a complete
+    one — this is the ``_banner_faults`` rule, that an instrument records what it cannot
+    see:
+
+    * a value **re-encoded** — base64 or hex of the secret, rather than a digest of it;
+    * a value **split across two elements** anywhere other than a secret row's own value
+      cell, where the cell-level equality in
+      ``test_a_secret_on_the_settings_screen_is_the_single_word_configured`` catches it;
+    * a **scheme plus fewer than ``SECRET_FRAGMENT`` characters** of what follows it;
+    * a secret **described in prose** rather than shown ("it starts with a p").
+
+    The keys of the mapping are safe to print and the values never are; the sweep names
+    the key.
     """
     forms = {"the value itself": value}
     # Runs are taken from the value WITHOUT its scheme — see SCHEME for why. The whole
@@ -4290,11 +4304,14 @@ async def test_no_console_surface_shows_a_settings_secret_in_any_form(
     and missing from the other.
 
     It hunts for far more than the values. ``_forms_a_secret_could_take`` expands each
-    one into every prefix and suffix of eight characters or more, its length, and five
-    digests whole, truncated and in the console's own fingerprint shape — so an edit
-    that "compromises" by showing the first eight characters, or how long the key is,
-    or a short hash of it, goes red rather than passing a sweep that only looked for
-    the value itself.
+    one into every prefix and suffix of eight characters or more (after the scheme,
+    where there is one), its length with a unit, and a digest under every algorithm
+    ``hashlib`` guarantees — whole, truncated, and in the console's own fingerprint
+    shape — so an edit that "compromises" by showing the first eight characters, or how
+    long the key is, or a short hash of it, goes red rather than passing a sweep that
+    only looked for the value itself. **What it deliberately does not hunt is listed in
+    that function's own docstring**, which is the thing to read before treating a green
+    run here as a complete one.
 
     The failure message names the FORM and never the text that was found.
     """
