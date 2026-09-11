@@ -21,8 +21,10 @@ import re
 
 import pytest
 
+from control.app.api.routes import router as api_router
 from control.app.services.transports import hop_transports
 from edge.bootstrap.node_stack import EXTENSION
+from edge.egress import NO_RESOLVER, ResolverMissing
 from edge.registry import discover, profile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -31,6 +33,12 @@ SCRIPT = REPO / "scripts" / "node-bootstrap.sh"
 TUNNEL_SCRIPT = REPO / "scripts" / "management-tunnel.sh"
 PANEL_SCRIPT = REPO / "scripts" / "panel-bootstrap.sh"
 CADDYFILE = REPO / "deploy" / "caddy" / "Caddyfile"
+NODES_TABLE = REPO / "control" / "app" / "templates" / "panel" / "nodes_table.html"
+MIGRATIONS = REPO / "control" / "migrations" / "versions"
+
+# M16's section, by its exact title: the shapes that build a hop and the migration that
+# empties the field both point at it by these words.
+RESOLVER_SECTION = "A node that dials a hop needs a resolver"
 
 # Ports that mean something to somebody, so a literal one is a value that gets copied.
 # The same list the script's own test uses, for the same reason.
@@ -685,3 +693,94 @@ def test_the_orphan_exception_covers_every_extension_a_config_is_written_with(
             f"the command removes {target!r}, which fixes one transport's extension into a "
             "line an operator pastes for any of them"
         )
+
+
+# --- M16: a node that dials a hop needs a resolver ------------------------------------
+
+@pytest.fixture(scope="module")
+def resolver_section(runbook: str) -> str:
+    """The section that says what the upgrade makes of every existing entry node."""
+    section = re.search(
+        rf"^## {RESOLVER_SECTION}\n(?:.*\n)*?(?=^## |^---$)", runbook, re.M
+    )
+    assert section, (
+        "the runbook does not say that a node dialling a hop refuses to render without a "
+        "resolver — the state an upgrade to M16 puts every existing entry node into, "
+        "silently, until an operator reads why their revocation did not finish"
+    )
+    return section.group(0)
+
+
+def test_the_runbook_quotes_the_refusal_a_node_without_a_resolver_gets(
+    resolver_section: str,
+) -> None:
+    """Quoted from ``edge``, and checked against it.
+
+    An operator searching the runbook for the words in their banner has to find these
+    words; a refusal reworded in the code turns this red instead of leaving the runbook
+    describing a banner that no longer reads like this. The type name is the prefix the
+    banner carries, so it is checked too.
+    """
+    quoted = _flat(re.sub(r"^> ?", "", resolver_section, flags=re.M))
+    assert _flat(NO_RESOLVER) in quoted, (
+        "the runbook's quotation of the no-resolver refusal is not what edge says"
+    )
+    assert f"{ResolverMissing.__name__}:" in quoted
+
+
+def test_the_runbook_says_to_set_it_right_after_the_upgrade_before_anything_else(
+    resolver_section: str,
+) -> None:
+    """The instruction the migration cannot carry itself, said where an upgrader looks.
+
+    Before the next apply AND before a revocation: from the moment the column exists, an
+    entry that dials a hop cannot be rendered, so a revoked user keeps working there.
+    """
+    flat = _flat(resolver_section)
+    for phrase in ("right after the upgrade", "before the next apply", "before you revoke"):
+        assert phrase in flat, f"the resolver section no longer says {phrase!r}"
+
+
+def test_the_runbook_sends_an_operator_to_an_edit_path_that_exists(
+    resolver_section: str,
+) -> None:
+    """An instruction is only as good as the button and the route it names.
+
+    ``Nodes → resolver`` is checked against the Nodes table's own row button — its label
+    and the dialog it opens — and the API call against the API's own routes, so neither
+    can be renamed without this saying so.
+    """
+    flat = _flat(resolver_section)
+    assert "Nodes → resolver" in flat
+    assert re.search(
+        r'hx-get="/panel/nodes/\{\{ node\.id \}\}/resolver"[^>]*>resolver</button>',
+        NODES_TABLE.read_text(),
+    ), "the Nodes table has no row button labelled resolver opening the resolver dialog"
+    routes = {
+        (method, route.path)
+        for route in api_router.routes
+        for method in getattr(route, "methods", ())
+    }
+    assert any(
+        method == "POST" and path.endswith("/nodes/{node_id}/resolver")
+        for method, path in routes
+    ), "the API has no POST route that sets a node's resolver"
+    assert "POST /api/nodes/<id>/resolver" in flat
+
+
+def test_every_shape_that_builds_a_hop_gives_its_entry_a_resolver(
+    shapes: dict[str, str],
+) -> None:
+    """Where an operator actually registers the entry node is where they have to hear it."""
+    for letter, body in shapes.items():
+        if not re.search(HOP_FIELD, body):
+            continue
+        assert RESOLVER_SECTION in _flat(body), (
+            f"Shape {letter} builds a hop and never says its entry node needs a resolver"
+        )
+
+
+def test_the_migration_that_empties_the_field_points_at_this_section() -> None:
+    """The thing that creates the stranded state names the page that says what to do."""
+    migration = next(MIGRATIONS.glob("*_a_nodes_resolver.py")).read_text()
+    assert RESOLVER_SECTION in _flat(migration)

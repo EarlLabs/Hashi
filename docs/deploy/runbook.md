@@ -543,7 +543,8 @@ Everything from Shape A applies to box E, plus:
 1. Bootstrap the control plane on **E** exactly as in Shape A.
 2. Prepare **L** with *Preparing a leaf* above, then register **E** as a node
    (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
-   from E).
+   from E). Give **E** a `resolver` as you register it: E dials a hop, and such a node does
+   not render without one (*A node that dials a hop needs a resolver*, below).
 3. Enable a **friend-facing** transport on E — `vless-reality` unless you have a reason
    for the other one. E dials a hop, so it must be a transport the table in *The one
    combination that will not render* (below) marks yes for a node with a hop; a kernel
@@ -581,7 +582,8 @@ node. Nothing is contested and nothing is co-located.
 1. Bootstrap the control plane on **C** (the Shape A control-plane block, unchanged).
 2. Prepare **E** and **L** with *Preparing a leaf* above — one script run each — and
    register both as nodes. Both `ssh_host` values are real remote addresses this time; the
-   control container needs outbound SSH to each.
+   control container needs outbound SSH to each. Give **E** a `resolver` as you register
+   it (*A node that dials a hop needs a resolver*).
 3. Enable **`vless-reality` on E, port 443** — free here, because the panel is on another
    box. Give it a `decoy_host` of your own choosing. A VLESS transport is not merely
    convenient here: E dials a hop, and that is the only kind of friend-facing transport
@@ -731,6 +733,49 @@ one of them is stale.
 To take the hop away instead, use the **Hops** screen. Removing or withdrawing one end of
 a hop is refused wherever you ask for it, because it would leave the other end holding a
 tunnel to an exit that is no longer configured.
+
+## A node that dials a hop needs a resolver
+
+**On a node that dials a hop, a friend's destination names are looked up through the hop,
+at a resolver named on the node's record — never by the host's own.** Before this, the exit
+had moved abroad and the lookups had not: the proxy asked the entry host's resolver, inside
+the network the hop exists to leave, one query per site a friend visited
+(`docs/decisions.md`, 2026-09-09). Whichever resolver you name still sees the names — from
+the far end of the hop rather than from the entry's network, which is the exposure that
+decision accepts knowingly.
+
+A node that dials a hop and has no resolver is refused at **apply**, on the entry, with this
+in a banner on the Nodes screen:
+
+> `vless-reality could not be rendered for this node — ResolverMissing:` *this node's
+> traffic leaves through a hop, and its record names no resolver for the destinations its
+> friends ask for. Without one they would be looked up by this host's own resolver — on
+> the near side of the hop, inside the network the hop exists to leave — while the traffic
+> itself exits at the far end. Nothing is rendered until the node has one: an IPv4 address
+> the far end of the hop can reach.*
+
+Like the refusal above, it happens while the configuration is being rendered, so the node
+does not go `degraded`: an entry that was already `active` **stays active on whatever its
+last successful apply left** — its friends' lookups still going to the host's resolver — and
+a user you revoke **keeps working there**, because a revocation's re-push is a render too.
+The revocation's banner says so, naming the node.
+
+**Do it right after the upgrade that brings this refusal — before the next apply, and before
+you revoke anybody: give every node that dials a hop its resolver.** The upgrade adds the
+field empty on every existing node, because any value it wrote would be a resolver this
+project chose for you; from that moment each existing entry is in the state described above.
+
+1. **Nodes → resolver** on each node that is the entry end of a hop — the Hops screen lists
+   them. Give an IPv4 address the far end of the hop can reach: a public resolver of your
+   choosing, or one inside the leaf's own network. Not a name, and not an address on the
+   entry itself — either would be answered on the entry's side of the hop, and the panel
+   refuses both. The same call without the panel is `POST /api/nodes/<id>/resolver` with
+   `{"resolver": "<address>"}`.
+2. **Apply the node.** Setting the resolver changes the record, not the host.
+
+A new node takes its resolver in **Add a node**, in the box of the same name. A node that
+never dials a hop leaves it empty: its lookups and its exit already leave from the same
+place, and its configuration does not change.
 
 ---
 
