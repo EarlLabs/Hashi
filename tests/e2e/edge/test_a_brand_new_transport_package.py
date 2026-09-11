@@ -424,6 +424,31 @@ BROKEN_DECLARATIONS = {
         ).lstrip(),
         "port range",
     ),
+    "declares no listening protocol": (
+        textwrap.dedent(
+            '''
+            from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+
+            META = TransportMeta(
+                name="acme-tunnel",
+                family="udp",
+                # EMPTY rather than omitted, and the difference is why this case exists
+                # at all: a field left out dies as a TypeError at import, before
+                # `_check_declaration` is ever reached, so only the empty form can
+                # exercise the check. A transport declaring nothing here would be read as
+                # colliding with nothing, and the first pair on one port would be found
+                # by a container that cannot bind (M15).
+                listens_on=frozenset(),
+                needs_tls=False,
+                port_range=(1024, 65535),
+                key_material=(
+                    KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
+                ),
+            )
+            '''
+        ).lstrip(),
+        "which transport-layer protocols its listener binds",
+    ),
     "identified on the wire AND allowed on a hop": (
         textwrap.dedent(
             '''

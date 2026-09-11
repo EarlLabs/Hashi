@@ -24,7 +24,7 @@ HOW:  pre-read by every agent that touches `edge/**` or `tests/edge/**`.
 edge/
   transports/
     <name>/
-      meta.py        TransportMeta: name, family, needs_tls, default ports
+      meta.py        TransportMeta: name, family, needs_tls, listens_on, port range
       params.py      Pydantic model for this transport's parameters
       render.py      render_server(node, params) -> str
                      render_client(node, credential) -> ClientEntry
@@ -61,7 +61,15 @@ package under `transports/` provides exactly:
 
 | Symbol | Shape | Must be true |
 |---|---|---|
-| `META` | `TransportMeta` | unique `name`, protocol family, whether it needs TLS, default port range |
+| `META` | `TransportMeta` | unique `name`, protocol family, whether it needs TLS, `listens_on`, port range |
+
+**All five of those are required — they have no defaults, so a `META` missing one
+raises `TypeError` at import, before `registry._check_declaration` can say which.**
+`listens_on` is a `frozenset[Layer4]`: which transport-layer protocols this
+transport's listener actually binds. `control` reads it for exactly one decision —
+whether two transports on one node may hold the same port number (M15) — and it is
+not `family`, which is free text this contract says `control` reads to decide
+nothing at all.
 | `Params` | Pydantic model | every knob validated: ports in range, hostnames resolvable-shaped, no free-text passed to a shell |
 | `render_server(node, params) -> str` | pure | deterministic; identical inputs → identical bytes |
 | `render_client(node, credential) -> ClientEntry` | pure | the transport's own finished serialisation of one client entry, plus protocol-agnostic metadata — see below |

@@ -34,6 +34,18 @@ HOW:  one function, ``claim``, called just before a row is written, plus ``port_
       config name — which is ours to choose and true of the row — is a constraint, and
       the port rule lives here, in the one function every writing path goes through.
 
+      WHICH MEANS THE PORT RULE IS A READ AND NOT A LOCK, and that is worth saying plainly
+      rather than leaving as an inference from the paragraph above. ``claim`` and
+      ``port_is_free`` look at the node's rows and decide; nothing serialises them, so two
+      enables submitted at the same instant could both find a port free and both take it.
+      The config name cannot go that way — it loses at the flush, because the schema holds
+      it. This is accepted rather than closed: the charter's product is one operator on one
+      console, the window is the few milliseconds between the read and the commit, and the
+      symptom is legible (a second container that will not bind, on a node that has not
+      been applied yet). The repair is to remove one of the two rows and apply again. A
+      lock here would be a row-level lock on a table the delivery endpoint reads, taken on
+      every enable, to close a race one person cannot have with themselves.
+
       Nothing here compares a transport name to a literal. ``PORT_FIELD`` is the hop
       contract's vocabulary rather than any protocol's (see ``services.transports``),
       and both "would this name work as an interface" and "what does this bind" are
@@ -196,7 +208,9 @@ async def claim(
     Nothing is committed here and nothing is reserved: the caller adds its row in the
     same transaction, and the config name it answers with is held by a unique constraint
     in the schema too (``NodeTransport.__table_args__``), so a race loses at the flush
-    rather than silently producing a node with two configs at one path.
+    rather than silently producing a node with two configs at one path. THE PORT ANSWER
+    HAS NO SUCH BACKSTOP — it is a read, and this module's header says what that costs
+    and why it is accepted.
     """
     await port_is_free(
         session, node=node, transport_name=transport_name, port=port_of(params)

@@ -1763,8 +1763,8 @@ async def enable_transport(
         )
     except DomainError as exc:
         # Everything else is about the request rather than about one value: a transport
-        # this image does not ship, one no client could receive, one already enabled
-        # here. Stated once, above the form.
+        # this image does not ship, one no client could receive, a listening port this
+        # node already uses. Stated once, above the form.
         if not _is_htmx(request):
             raise
         return await _refuse_enable(

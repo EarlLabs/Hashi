@@ -442,8 +442,9 @@ async def test_a_transport_that_names_no_port_collides_over_nothing(
     """A row with no port in its parameters is not constrained by the port rule.
 
     Asked of the service rather than through a transport, because every transport this
-    image ships declares a port. The behaviour has to be right anyway: the database's own
-    index leaves such a row NULL, and Postgres treats NULLs as distinct.
+    image ships declares a port. The behaviour has to be right anyway: a transport whose
+    listener takes its address some other way has nothing to collide over, and refusing
+    it would be this zone inventing a property its packages never declared.
     """
     node_id = await a_node(client, "noport-1", "192.0.2.98")
     node = await nodes.get_node(session, node_id)

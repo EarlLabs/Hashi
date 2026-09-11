@@ -370,8 +370,10 @@ async def replace_params(
     # A retyped port is a port, and it collides with the node's other transports exactly
     # as a new one does — M15. Excluding this row, because a form resubmitted with the
     # port unchanged must not be refused by its own value. Checked before anything is
-    # stored: the database holds the same rule as a constraint, and a caller that
-    # reached it would get a 500 over a change it had already made.
+    # stored, and this is the ONLY place it is checked on this path: there is no database
+    # constraint behind the port rule, deliberately (``services.placement``'s header says
+    # why), so a caller that skipped this would write a node that cannot start rather
+    # than meet a refusal.
     await placement.port_is_free(
         session,
         node=await nodes.get_node(session, node_transport.node_id),

@@ -115,7 +115,8 @@
     {% if failure %}
     {#
       A refusal about the request rather than about one box — a protocol this image
-      cannot hand over, one already enabled here, a complaint with no box to land on.
+      cannot hand over, a listening port this node is already using, a complaint with no
+      box to land on.
       Outside the form on purpose: it is still the answer when there is nothing left to
       offer and therefore no form to put it in. Same treatment as a field error because
       it is the same thing: a request that was refused.
@@ -129,9 +130,13 @@
       <div class="field">
         <label for="enable-transport_name">enable a transport</label>
         {# `data-transport-select` is what static/app.js watches to show the matching
-           group of boxes. The list is what this image ships that a client can receive,
-           minus what this node already runs — services/transports.py and
-           services/console.py; nothing here knows one protocol from another. #}
+           group of boxes. The list is what this image ships that a client can receive —
+           services/transports.py; nothing here knows one protocol from another.
+           NOTHING IS SUBTRACTED from it, and that changed with M15: a node may run a
+           second instance of a protocol it already has, which is what the runbook asks
+           for on a box that both serves users and carries a hop. Whether this particular
+           second one is legal is services/placement.py's single answer, and it arrives
+           as a refusal that names the clash. #}
         <select class="input" id="enable-transport_name" name="transport_name"
                 data-transport-select
                 aria-describedby="enable-transport_name-hint{% if errors.get('transport_name') %} enable-transport_name-error{% endif %}"
@@ -142,8 +147,9 @@
           {% endfor %}
         </select>
         <div class="field-hint" id="enable-transport_name-hint">Only what this image
-          ships and can hand to a user's client. What this node already runs is not
-          offered twice.</div>
+          ships and can hand to a user's client. Something already on this node can be
+          added again — it is refused only if it wants a listening port the node is
+          already using.</div>
         {% if errors.get('transport_name') %}
         <div class="field-error" id="enable-transport_name-error" role="alert">{{ errors['transport_name'] }}</div>
         {% endif %}
