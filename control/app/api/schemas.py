@@ -23,6 +23,13 @@ class NodeCreate(BaseModel):
     address: str = Field(min_length=1, max_length=255)
     location_label: str = Field(min_length=1, max_length=64)
 
+    # Where this node's users' destination names are looked up once it dials a hop — M16.
+    # Optional because a node with no hop never uses it. WHETHER IT CAN CARRY A LOOKUP is
+    # checked in services/nodes.py, by the rule ``edge`` renders with, rather than here:
+    # that is what lets the panel place the sentence under its own box, as it does for the
+    # key below, instead of a type error's generic "not a value this field can take".
+    resolver: str | None = Field(default=None, max_length=255)
+
     ssh_host: str | None = Field(default=None, max_length=255)
     ssh_port: int = Field(default=22, ge=1, le=65535)
     ssh_user: str = Field(default="root", max_length=32)
@@ -47,6 +54,7 @@ class NodeResponse(BaseModel):
     name: str
     address: str
     location_label: str
+    resolver: str | None
     state: str
     state_detail: str | None
     created_at: datetime.datetime

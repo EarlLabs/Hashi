@@ -35,7 +35,7 @@ from control.app.models import (
     TransportPurpose,
 )
 from control.app.services import audit, keymaterial, placement
-from edge.egress import Egress
+from edge.egress import Egress, resolver_problem
 from edge.node import NodeView
 from edge.registry import KeyScope, discover, profile
 
@@ -141,6 +141,7 @@ def node_view(node: Node) -> NodeView:
         address=node.address,
         location_label=node.location_label,
         display_name=node.name,
+        resolver=node.resolver,
     )
 
 
@@ -219,6 +220,7 @@ async def create_node(
     name: str,
     address: str,
     location_label: str,
+    resolver: str | None = None,
     ssh_host: str | None = None,
     ssh_port: int = DEFAULT_SSH_PORT,
     ssh_user: str = DEFAULT_SSH_USER,
@@ -242,6 +244,16 @@ async def create_node(
     if ssh_private_key and not ssh_key_is_usable(ssh_private_key):
         raise DomainError(SSH_KEY_UNUSABLE)
 
+    # A resolver that could never carry a lookup through a hop is refused here too, for
+    # the key's reason: this row cannot be edited afterwards, and ``edge`` would refuse the
+    # value at the first apply after a hop is established — on another screen, maybe weeks
+    # later, on a record nobody can correct. Asked of ``edge``, which owns what the value
+    # means, so the rule this refuses by and the rule a render refuses by are one rule.
+    if resolver:
+        problem = resolver_problem(resolver)
+        if problem:
+            raise DomainError(problem)
+
     existing = await session.execute(select(Node).where(Node.name == name))
     if existing.scalars().first() is not None:
         raise Conflict(f"a node named {name!r} already exists")
@@ -250,6 +262,7 @@ async def create_node(
         name=name,
         address=address,
         location_label=location_label,
+        resolver=resolver or None,
         state=NodeState.DRAFT,
         # Defaults to the routable address, since the common case is one host doing
         # both jobs — but it is a separate column because an entry node fronting a

@@ -1472,6 +1472,7 @@ async def create_node(
     name: str = Form(""),
     address: str = Form(""),
     location_label: str = Form(""),
+    resolver: str = Form(""),
     ssh_host: str = Form(""),
     ssh_user: str = Form(""),
     ssh_port: str = Form(""),
@@ -1496,6 +1497,7 @@ async def create_node(
         "name": name.strip(),
         "address": address.strip(),
         "location_label": location_label.strip(),
+        "resolver": resolver.strip(),
         "ssh_host": ssh_host.strip(),
         "ssh_user": ssh_user.strip(),
         "ssh_port": ssh_port.strip(),
@@ -1505,6 +1507,8 @@ async def create_node(
             name=typed["name"],
             address=typed["address"],
             location_label=typed["location_label"],
+            # Empty means "this node will never dial a hop", and is stored as nothing.
+            resolver=typed["resolver"] or None,
             # An empty box means "the usual one", and the usual one is declared in
             # services/nodes.py. Empty string means "not supplied" for the key too —
             # storing "" would encrypt an empty key and make the failure look like a
@@ -1538,6 +1542,19 @@ async def create_node(
             # the problem. A dialog that kept the rejected key would be the one place
             # this panel renders key material.
             key_dropped=True,
+        )
+
+    # The resolver, asked the same way and for the same reason as the key: the service
+    # refuses it with this sentence for every other caller, and asking first is only so
+    # the answer lands under its own box. Kept in the form when refused — an address the
+    # operator chose is not a secret, and retyping it is how a second mistake gets in.
+    problem = typed["resolver"] and nodes.resolver_problem(typed["resolver"])
+    if problem:
+        return _refuse_node(
+            request,
+            values=typed,
+            errors={"resolver": wording.for_the_page(problem)},
+            key_dropped=bool(ssh_private_key),
         )
 
     try:

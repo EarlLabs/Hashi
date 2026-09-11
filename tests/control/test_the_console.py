@@ -559,6 +559,38 @@ async def test_a_refused_node_comes_back_on_the_field_with_what_was_typed(
     assert len((await client.get("/api/nodes")).json()) == 1
 
 
+async def test_a_resolver_the_hop_could_never_carry_comes_back_under_its_own_box(
+    client,
+) -> None:
+    """M16. A node cannot be edited once registered, so a resolver ``edge`` would refuse is
+    refused here — under the box it is about, with what was typed still in it — rather
+    than at the first apply after a hop, on another screen, on a record nobody can
+    correct. And a good one is kept."""
+    fields = {"name": "entry-1", "address": "192.0.2.20", "location_label": "Testland"}
+
+    refused = await client.post(
+        "/panel/nodes",
+        data={**fields, "resolver": "localhost"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422
+    assert 'id="node-resolver-error"' in refused.text
+    assert "not an IPv4 address" in refused.text
+    assert 'value="localhost"' in refused.text
+    assert (await client.get("/api/nodes")).json() == []
+
+    kept = await client.post(
+        "/panel/nodes",
+        data={**fields, "resolver": "192.0.2.53"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert kept.status_code == 200
+    listed = (await client.get("/api/nodes")).json()
+    assert [node["resolver"] for node in listed] == ["192.0.2.53"]
+
+
 @pytest.mark.parametrize(
     "field,value,expected",
     [

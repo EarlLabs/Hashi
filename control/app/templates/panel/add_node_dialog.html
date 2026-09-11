@@ -61,6 +61,18 @@
       </div>
 
       {#
+        M16. On its own row rather than in the grid because its hint is the one on this
+        form that has to say WHEN the box matters: a node that never dials a hop has no use
+        for it, and a node that does is not applied without it. No placeholder: a suggested
+        value would be a resolver this panel chose for every node — the hardcoded address
+        CLAUDE.md forbids, arriving through markup. Refilled on a refusal like every field
+        but the key, because it is not a secret.
+      #}
+      {{ field("resolver", "resolver",
+               "Where a user's destination names are looked up once this node dials a hop — asked through the hop, so the lookup leaves from its far end. An address, not a name. Leave it empty on a node that will never dial one; a node that does is not applied without it.",
+               values.get("resolver"), errors) }}
+
+      {#
         The one key this panel ever accepts, and it is write-only.
 
         UI-PATTERNS §9 and CLAUDE.md: where key material could appear, the panel states

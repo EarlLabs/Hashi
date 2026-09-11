@@ -164,6 +164,18 @@ class Node(Base, TimestampMixin):
     # would stop being true.
     location_label: Mapped[str] = mapped_column(String(64), nullable=False)
 
+    # Where this node's users' destination names are looked up while its traffic leaves
+    # through a hop — M16 (docs/decisions.md, 2026-09-09). An address the operator gives,
+    # like every other address on this row, and never a project default: a default would
+    # be a resolver this code chose for the whole fleet. ``edge`` reads it only on a node
+    # that dials a hop, and refuses to render such a node without one rather than let the
+    # host's own resolver answer — on an entry node, the network the hop exists to leave.
+    #
+    # Nullable because a node with no hop has no use for it, and because no value could be
+    # backfilled onto an existing row that would not be one this project invented. Set when
+    # the node is created, like the address above: this row has no edit path.
+    resolver: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # Indexed: every subscription render filters nodes by state, and that is the one
     # query that must stay fast when a node has just been blocked and every friend is
     # refreshing at once.
