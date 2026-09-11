@@ -1149,14 +1149,41 @@ async def test_the_enable_form_asks_only_what_the_transport_declares(
     assert "never type a key" in _reading(dialog.text).lower()
 
 
+def _transport_groups(markup: str) -> dict[str, tuple[bool, str]]:
+    """Each ``[data-transport-group]`` in a rendered form, in document order, as
+    ``name -> (hidden, the text a person reads inside it)``.
+
+    The text matters as much as the hiding: one group being on screen is only half the
+    claim, and the other half is that the operator can tell whose boxes they are.
+    """
+    starts = [
+        (match.group(1), "hidden" in match.group(2), match.end())
+        for match in re.finditer(r'data-transport-group="([^"]+)"([^>]*)>', markup)
+    ]
+    groups = {}
+    for index, (name, is_hidden, start) in enumerate(starts):
+        end = starts[index + 1][2] if index + 1 < len(starts) else len(markup)
+        groups[name] = (is_hidden, _visible_text(markup[start:end]))
+    return groups
+
+
 async def test_exactly_one_transport_s_boxes_are_ever_on_screen(
     client, reality_params
 ) -> None:
-    """The hop dialog's rule, on the other form that renders a group per transport.
+    """The hop dialog's rule, on the other form that renders a group per transport —
+    and the second half of it, which this test used to pin the wrong way round.
 
     ``static/app.js`` only re-hides on a ``change`` event, which an htmx swap does not
     fire — so the server decides which group is visible, and a refusal that came back
     showing two groups would offer two boxes under the same label.
+
+    THE VISIBLE GROUP MUST NAME ITSELF. On first paint nothing is chosen, so the select
+    reads "choose…" while ``shown`` falls back to the first transport: the operator saw
+    boxes labelled ``port`` and ``decoy_host`` with nothing on screen saying which
+    protocol wanted them, and could fill in a group the chooser had never named. The
+    earlier version of this test asserted the hiding alone and therefore pinned that
+    state as intended. The name is ``name`` from ``transports`` — data, so the template
+    still names no protocol, which the template scan separately holds.
     """
     node = await client.post(
         "/api/nodes",
@@ -1167,10 +1194,17 @@ async def test_exactly_one_transport_s_boxes_are_ever_on_screen(
     assert len(offerable) > 1, "one transport proves nothing about hiding the others"
 
     dialog = await client.get(f"/panel/nodes/{node_id}/transports")
-    groups = re.findall(r'data-transport-group="([^"]+)"([^>]*)>', dialog.text)
+    groups = _transport_groups(dialog.text)
 
-    assert [name for name, _ in groups] == offerable
-    assert [name for name, rest in groups if "hidden" not in rest] == [offerable[0]]
+    assert list(groups) == offerable
+    assert [name for name, (is_hidden, _) in groups.items() if not is_hidden] == [
+        offerable[0]
+    ]
+    # Nothing is chosen yet, so the chooser says nothing — the group has to.
+    assert "choose…" in _reading(dialog.text)
+    assert offerable[0] in groups[offerable[0]][1], (
+        "the group on screen does not name the transport its boxes belong to"
+    )
 
     chosen = offerable[-1]
     refused = await client.post(
@@ -1178,8 +1212,9 @@ async def test_exactly_one_transport_s_boxes_are_ever_on_screen(
         data={"transport_name": chosen},
         headers={"HX-Request": "true"},
     )
-    groups = re.findall(r'data-transport-group="([^"]+)"([^>]*)>', refused.text)
-    assert [name for name, rest in groups if "hidden" not in rest] == [chosen]
+    groups = _transport_groups(refused.text)
+    assert [name for name, (is_hidden, _) in groups.items() if not is_hidden] == [chosen]
+    assert chosen in groups[chosen][1]
 
 
 #: The attribute a template writes when it wants an element gone, as a standalone word
@@ -4088,6 +4123,13 @@ async def test_the_console_is_never_snapshotted_into_local_storage(client) -> No
 
 HTMX_VERBS = ("hx-get", "hx-post", "hx-put", "hx-patch", "hx-delete")
 
+#: Elements a boost turns into an htmx request without any verb on them. htmx resolves
+#: ``hx-push-url`` for one of these exactly as it does for a verb, so a scan that looked
+#: only at ``HTMX_VERBS`` would be blind to a whole shape of control. M9.6 removed the
+#: last ``hx-boost`` from this console, which is precisely when a scan stops being
+#: exercised and starts being believed.
+BOOSTABLE = frozenset(("a", "form"))
+
 VOID_ELEMENTS = frozenset(
     ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
      "source", "track", "wbr")
@@ -4102,6 +4144,14 @@ class _HtmxControls(html.parser.HTMLParser):
     That inheritance is the whole subject: an attribute three elements up is the
     answer for a button that declares nothing, and reading the button alone says the
     opposite of what the browser does.
+
+    IT FAILS CLOSED, and that is deliberate: this is a reimplementation of somebody
+    else's behaviour, so the way it rots is by quietly resolving ``None`` for a control
+    whose real answer is an ancestor's. An end tag is popped only when it matches the
+    element on top of the stack, so any unbalanced markup — an optional end tag, or one
+    Jinja branch opening an element another closes — leaves ``open_elements`` non-empty
+    at the end of the feed instead of silently shifting every ancestor list after it.
+    Check that; ``feed`` will not.
     """
 
     #: ``(tag, id, resolved hx-target, resolved hx-push-url)`` per requesting element.
@@ -4109,16 +4159,27 @@ class _HtmxControls(html.parser.HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._open: list[dict[str, str]] = []
+        self._open: list[tuple[str, dict[str, str]]] = []
         self.controls = []
+
+    @property
+    def open_elements(self) -> list[str]:
+        """What was still open when the document ran out. Anything here means the walk
+        was reading the wrong ancestors and every answer in ``controls`` is suspect."""
+        return [tag for tag, _ in self._open]
 
     def handle_startendtag(self, tag, attrs) -> None:
         self.handle_starttag(tag, attrs)
+        if tag not in VOID_ELEMENTS:
+            self._open.pop()
 
     def handle_starttag(self, tag, attrs) -> None:
         element = {name: (value or "") for name, value in attrs}
-        self._open.append(element)
-        if any(verb in element for verb in HTMX_VERBS):
+        self._open.append((tag, element))
+        requests = any(verb in element for verb in HTMX_VERBS) or (
+            tag in BOOSTABLE and self._resolve("hx-boost") == "true"
+        )
+        if requests:
             self.controls.append(
                 (
                     tag,
@@ -4131,7 +4192,9 @@ class _HtmxControls(html.parser.HTMLParser):
             self._open.pop()
 
     def handle_endtag(self, tag) -> None:
-        if self._open:
+        # Only when it matches. A pop that guesses is how the stack gets out of step
+        # with the document and a control is judged against somebody else's ancestors.
+        if self._open and self._open[-1][0] == tag:
             self._open.pop()
 
     def _resolve(self, attribute: str) -> str | None:
@@ -4144,7 +4207,7 @@ class _HtmxControls(html.parser.HTMLParser):
         a push-url without handing it to everything inside it.
         """
         for depth in range(len(self._open) - 1, -1, -1):
-            element = self._open[depth]
+            _, element = self._open[depth]
             itself = depth == len(self._open) - 1
             disinherit = element.get("hx-disinherit", "").split()
             if not itself and ("*" in disinherit or attribute in disinherit):
@@ -4177,6 +4240,13 @@ async def test_opening_a_dialog_does_not_rename_the_screen(client, path: str) ->
     parser = _HtmxControls()
     parser.feed(document)
 
+    # The instrument before what it measured. An ancestor stack that did not drain means
+    # the document did not nest the way the walk assumed, and every answer below it was
+    # resolved against the wrong ancestors — which would PASS, silently.
+    assert not parser.open_elements, (
+        f"{path}: unbalanced markup left {parser.open_elements} open — the ancestor "
+        "walk below this is not reading what a browser would"
+    )
     dialogs = [c for c in parser.controls if c[2] == "#dialog-slot"]
     assert dialogs, f"{path}: no dialog opens from this screen — the walk proves nothing"
 
@@ -4486,10 +4556,20 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
     reworded answer fails the second. A divergent wording is not something that can
     exist here to be caught.
 
-    The negative list at the end is a BACKSTOP and is hand-maintained. It holds only the
-    half of each dialog that is still free prose — the sentence naming what is changed —
-    and it holds exactly three wordings that have actually shipped and become false. It
-    proves nothing about a fourth.
+    WHAT THE NEGATIVE LIST AT THE END IS, EXACTLY, because it is weaker than it looks.
+    It is a hand-maintained backstop over the half of each dialog that is still free
+    prose, and it holds three wordings that are false OF A HOP END — not three wordings
+    that are false. One of them, "the node keeps running what it has", is live in
+    ``rotate_keys_dialog.html`` right now and is TRUE there: it is the friend-facing
+    branch, about the node rather than about the far end. The assertion only holds
+    because this test drives a hop-end row and that branch never renders. It proves
+    nothing about a fourth wording, and nothing at all about the friend-facing branch,
+    which no test on this screen pairs with its answer.
+
+    One more thing is unheld: ``HOP_PUSH_OUTCOME``'s lead clause ("Both nodes are
+    pushed:") belongs to neither of the two constants, so a rewrite of that clause alone
+    — "Only this node is pushed:", say — stays green here. The pair is held on the two
+    OUTCOMES; the sentence that introduces them is not.
 
     Composed with outcomes rather than driven through a push, because a real one would
     need two hosts; the POST itself is exercised by the test below.
@@ -4556,8 +4636,10 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
                 f"{action}: both nodes took it and the answer says {clause!r}"
             )
 
-        # The backstop, over the prose each dialog still writes for itself: three
-        # promises about the far end that have shipped and are no longer true.
+        # The backstop, over the prose each dialog still writes for itself. Three
+        # wordings that are false OF A HOP END — the third is live in the friend-facing
+        # branch of the rotate dialog and true there, and is only absent here because
+        # this row is a hop end. See the docstring: this is weaker than it reads.
         for promise in (
             "The far end is not changed",
             "the far end is still holding",

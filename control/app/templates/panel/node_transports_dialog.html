@@ -170,6 +170,20 @@
          as every other dialog's fields. #}
       <div class="dialog-form" data-transport-group="{{ name }}"
            {% if name != shown %}hidden{% endif %}>
+        {#
+          THE GROUP SAYS WHOSE BOXES THESE ARE. On first paint nothing is chosen yet and
+          the select above reads "choose…", while `shown` falls back to the first
+          transport — so without this line the operator is looking at boxes labelled
+          `port` and `decoy_host` with nothing on screen saying which protocol wants
+          them, and could fill in a group the chooser never named. It is `name` from
+          `transports`, which is data: this file still names no protocol.
+
+          Deliberately NOT fixed by pre-selecting `shown` in the select instead. That
+          would make "submit without choosing" enable a transport rather than be
+          refused on the control, and an accidental enable mints key material.
+        #}
+        <p class="text-muted section-note">what
+          <span class="mono">{{ name }}</span> needs on this node</p>
         {% for parameter in tuning[name] %}
         {{ box(name, parameter, values, errors) }}
         {% endfor %}
