@@ -91,16 +91,28 @@
           refused or failed (docs/decisions.md, 2026-09-10), and this is an action the
           operator meant to take. Offering again takes nothing away, so it does not
           confirm; what it gives is on the line beside it.
+
+          TWO buttons since M15.2, in `.row-actions` — the console's existing inline
+          group (UI-PATTERNS §3), not a new class. Removing is beside withdrawing rather
+          than instead of it because they are different changes: one is reversible and
+          keeps the row's port and material, the other frees the port and destroys the
+          material. Each confirms with its own reach, and a row nobody can act on — one
+          end of a hop — still gets neither.
         #}
-        {% if offer.offered %}
-        <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
-                hx-get="/panel/transports/{{ offer.id }}/withdraw"
-                hx-target="#dialog-slot" hx-swap="innerHTML">withdraw</button>
-        {% else %}
-        <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
-                hx-post="/panel/transports/{{ offer.id }}/offer"
-                hx-target="#dialog-slot" hx-swap="innerHTML">offer</button>
-        {% endif %}
+        <div class="row-actions">
+          {% if offer.offered %}
+          <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
+                  hx-get="/panel/transports/{{ offer.id }}/withdraw"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">withdraw</button>
+          {% else %}
+          <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
+                  hx-post="/panel/transports/{{ offer.id }}/offer"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">offer</button>
+          {% endif %}
+          <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
+                  hx-get="/panel/transports/{{ offer.id }}/remove"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">remove</button>
+        </div>
         {% endif %}
       </div>
       {% endfor %}

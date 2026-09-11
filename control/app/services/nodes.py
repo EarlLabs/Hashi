@@ -429,7 +429,8 @@ async def set_transport_enabled(
     what `control` DELIVERS, not what a node is running. A friend who already holds a
     fetched config keeps connecting until the node is re-applied without them. Use
     it to withdraw a protocol from the fleet's offer; use revocation (item 9) to
-    withdraw a person's access.
+    withdraw a person's access; use ``remove_transport`` to take the row away
+    altogether, which is also the only thing that frees its port and its config name.
     """
     node_transport = await get_node_transport(session, node_transport_id)
 
@@ -477,6 +478,88 @@ async def set_transport_enabled(
         await session.commit()
 
     return node_transport
+
+
+# What an operator is told when they ask to remove one END OF A HOP. Removal is for a
+# transport this node OFFERS; a hop is a pair, and the operation that takes a pair away
+# already exists — so the refusal names it rather than merely declining.
+#
+# It names the API path for the same reason ``set_transport_enabled``'s does: ``/api`` is
+# this service's other caller and a script reading the envelope has nothing else to go
+# on. The console does not repeat it — it answers in its own words from
+# ``console.REMOVE_HOP_END``, because "no URL typed by hand" is what the panel promises.
+REMOVE_IS_FOR_AN_OFFER = (
+    "this transport is one end of an entry-to-leaf hop, not something friends are "
+    "offered. Removing one end would leave the other holding a tunnel to an exit that "
+    "is no longer configured — remove the hop instead, which takes both ends "
+    "(DELETE /api/hops/{node_transport_id})."
+)
+
+
+async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> str:
+    """Delete one friend-facing transport, and everything minted under it — M15.2.
+
+    Returns the id of the node that now needs re-applying.
+
+    DISABLING IS NOT REMOVING, and until this existed only the first was expressible.
+    ``set_transport_enabled`` flips a flag: the row keeps its listening port and its
+    config name, deliberately, because freeing them on a switch-off would move the
+    collision to the moment the operator switches it back on (``services.placement``).
+    So a row was the one thing in this product that could be created and never taken
+    back — and since M15 moved uniqueness onto the port and the config name, THIS is
+    what frees them. An operator who enabled a transport on the port the hop needs had,
+    before this function, no exit but editing the database by hand.
+
+    WHAT GOES WITH THE ROW. Every ``Credential`` minted for it, by the same cascade
+    ``dissolve_hop`` relies on — ``NodeTransport.credentials`` is ``delete-orphan`` and
+    the foreign key is ON DELETE CASCADE, so the material a person held on this node ×
+    transport is destroyed rather than orphaned. That is the difference from withdrawing,
+    where every credential stays minted against a row that is merely switched off.
+    Nothing else points at this row: a hop peer would, and a hop end is refused above.
+
+    WHAT DOES NOT GO WITH IT, and must not be reported as going: the daemon on the host.
+    Deleting a row changes what this control plane DELIVERS and what it would RENDER, not
+    what the node is running — the file is still on disk and the container still serves
+    it until the node is applied again, which is why the caller is handed the node that
+    needs it and why the console's sentence says so. Exactly the distinction
+    ``set_transport_enabled`` insists on, and it is sharper here: the operator has just
+    watched the row disappear from the panel.
+
+    NOT PUSHED FROM HERE, for ``dissolve_hop``'s reason: a node may be unreachable, and a
+    removal that failed because the host is down would leave the operator unable to free a
+    port on a machine that no longer exists — which is exactly when they need to.
+    """
+    node_transport = await get_node_transport(session, node_transport_id)
+
+    if node_transport.purpose != TransportPurpose.FRIENDS:
+        raise Conflict(REMOVE_IS_FOR_AN_OFFER)
+
+    # Both labels read BEFORE the delete, off rows this transaction still holds: after
+    # the flush the transport row is gone and its attributes are not a source of
+    # anything. The node is fetched by id rather than reached through
+    # ``node_transport.node`` — the relationship is eager but unloaded on a row another
+    # session created, and touching it is lazy I/O, which an async session answers with
+    # MissingGreenlet.
+    node = await get_node(session, node_transport.node_id)
+    transport_name = node_transport.transport_name
+
+    # ``await`` because the cascade may have to LOAD the credentials it is about to
+    # delete, and a lazy load on an async session only runs inside this call.
+    await session.delete(node_transport)
+    # Which node and which transport, both copied whole off inventory rows — the same
+    # two labels the enable that created this row wrote, so a reader sees the pair. The
+    # config name it was placed under is NOT here: it is this control plane's own
+    # bookkeeping rather than a name the operator chose, and the trail's rule is that a
+    # label is a value read off a row the operator recognises.
+    audit.record(
+        session,
+        AuditAction.TRANSPORT_REMOVED,
+        first_label=node.name,
+        second_label=transport_name,
+    )
+    await session.commit()
+    logger.info("node-transport %s removed from node %s", node_transport_id, node.id)
+    return node.id
 
 
 async def set_node_state(

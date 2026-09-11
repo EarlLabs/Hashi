@@ -14,10 +14,10 @@ HOW:  through the real services and a real database. The half that cannot be pro
 """
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from control.app.errors import Conflict, NodeOperationFailed
-from control.app.models import NodeTransport
+from control.app.models import Credential, NodeTransport
 from control.app.services import apply, console, nodes, placement, rotation
 from control.app.services import transports as transports_service
 from edge.bootstrap import node_stack
@@ -302,7 +302,8 @@ async def test_a_switched_off_transport_still_holds_its_port(
 
     Freeing the port when a row is switched off would move the collision to the moment
     it is switched back on — the same "found months later" failure M15 exists to close.
-    Removing a row is what frees it, and making a row removable is M15.2.
+    Removing a row is what frees it, and the removal is asserted below
+    (``test_removing_a_transport_frees_the_port_and_the_name_it_held``).
     """
     node_id = await a_node(client, "off-1", "192.0.2.95")
     row = await offered(client, node_id, wg_params)
@@ -568,3 +569,195 @@ async def test_the_enable_dialog_still_offers_a_transport_the_node_already_runs(
 
     assert dialog.status_code == 200
     assert f'data-transport-group="{HOP_TRANSPORT}"' in dialog.text
+
+
+# --- removing a row is the exit (M15.2) ---------------------------------------
+#
+# The rule above only holds together if a row can be taken away: ``enabled`` is
+# deliberately not consulted, so a switched-off transport keeps its port and its name
+# forever and the operator who typed the wrong one has nowhere to go. These assert what
+# removal frees, what it destroys, and what it refuses — the same three questions
+# ``test_dissolving_a_hop_frees_what_it_held`` asks of the path that already had a
+# delete.
+
+async def a_user_on(client, node_id: str, nickname: str) -> str:
+    """One person holding material on this node, which is what removal must destroy.
+
+    The node is put into service first: a friend is granted every SERVING node at the
+    moment they are created, so the order is what puts a credential on the row.
+    """
+    activated = await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
+    assert activated.status_code == 200, activated.text
+    created = await client.post("/api/friends", json={"nickname": nickname})
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+async def test_removing_a_transport_frees_the_port_and_the_name_it_held(
+    client, session, wg_params
+) -> None:
+    """The whole point of M15.2, asserted the way the hop path is.
+
+    Both halves, because they are two different rules with two different holders: the
+    port lives in ``services.placement`` and nowhere else, and the config name is a
+    database constraint. A removal that freed only one of them would be found by an
+    operator, months later, in exactly the shape M15 was found in.
+    """
+    node_id = await a_node(client, "gone-1", "192.0.2.100")
+    row = await offered(client, node_id, wg_params)
+    assert row["config_name"] == HOP_TRANSPORT
+
+    removed = await client.delete(f"/api/transports/{row['id']}")
+    assert removed.status_code == 200, removed.text
+    # The same shape ``DELETE /api/hops/{id}`` answers in: what the caller still owes.
+    assert removed.json() == {"needs_apply": [node_id]}
+
+    reused = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": HOP_TRANSPORT, "params": wg_params},
+    )
+
+    assert reused.status_code == 201, reused.text
+    # The PORT is free: this is the same number the removed row listened on.
+    assert reused.json()["params"][transports_service.PORT_FIELD] == FRIEND_PORT
+    # …and so is the NAME: a second instance would have been placed under a suffix.
+    assert reused.json()["config_name"] == HOP_TRANSPORT
+
+
+async def test_removing_a_transport_takes_every_credential_minted_under_it(
+    client, session, wg_params
+) -> None:
+    """"Taking its credentials with it" is the step's own phrase, and this is it.
+
+    The difference from withdrawing, which is one button away and leaves every credential
+    minted against a row that is merely switched off. Asserted on the rows themselves
+    rather than on a count, and on what the delivery path would hand out afterwards:
+    a credential whose node-transport is gone is material nobody can be routed onto, and
+    leaving one behind would be a row referencing a transport that no longer exists.
+    """
+    node_id = await a_node(client, "creds-1", "192.0.2.101")
+    row = await offered(client, node_id, wg_params)
+    await a_user_on(client, node_id, "removed-from-under-them")
+
+    held = await session.execute(
+        select(Credential).where(Credential.node_transport_id == row["id"])
+    )
+    assert len(list(held.scalars().unique())) == 1, "the fixture minted nothing to destroy"
+
+    assert (await client.delete(f"/api/transports/{row['id']}")).status_code == 200
+
+    session.expire_all()
+    left = await session.execute(select(Credential))
+    assert list(left.scalars().unique()) == [], "a user's material outlived its transport"
+    assert await session.get(NodeTransport, row["id"]) is None
+    # And the person is untouched: removing a protocol is not revoking anybody.
+    friends = (await client.get("/api/friends")).json()
+    assert [friend["nickname"] for friend in friends] == ["removed-from-under-them"]
+    assert friends[0]["revoked_at"] is None
+
+
+async def test_a_hop_end_is_not_removed_this_way_and_the_refusal_names_what_is(
+    client, session, wg_params
+) -> None:
+    """A hop is a pair, so the refusal points at the operation that takes the pair.
+
+    The mirror of ``dissolve_hop`` refusing anything that is not already a hop end — the
+    refusal that made a friend-facing row unclearable in the first place. Neither path
+    silently does half the other's job, and each names the other.
+    """
+    entry_id, friend_row, hop = await a_box_carrying_both(client, wg_params)
+
+    refused = await client.delete(f"/api/transports/{hop['entry']['id']}")
+
+    assert refused.status_code == 409, refused.text
+    message = refused.json()["error"]["message"]
+    assert "hop" in message, message
+    assert "/api/hops/" in message, message
+    # Still there, and still half of a pair that points at itself.
+    assert await session.get(NodeTransport, hop["entry"]["id"]) is not None
+
+    # …and the operation the refusal names does work, on the same row.
+    assert (await client.delete(f"/api/hops/{hop['entry']['id']}")).status_code == 200
+    # The friend-facing row on that node is untouched by either operation.
+    assert await session.get(NodeTransport, friend_row["id"]) is not None
+
+
+async def test_removing_from_the_console_says_what_the_node_is_still_running(
+    client, session, wg_params
+) -> None:
+    """The operator's own route to it: the button, the confirmation, the toast.
+
+    Driven through the panel rather than the API because that is the only surface the
+    owner has, and the sentence is what the milestone is judged on: the row is gone from
+    this panel and the HOST is not, until it is applied. An operator who reads a removal
+    as "stopped" has been told the opposite of what happened — the same trap the
+    withdrawal toast is written against, and sharper here because the row has just
+    vanished from the screen.
+    """
+    node_id = await a_node(client, "console-1", "192.0.2.102")
+    row = await offered(client, node_id, wg_params)
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+    assert dialog.status_code == 200
+    assert f'hx-get="/panel/transports/{row["id"]}/remove"' in dialog.text
+
+    confirmation = await client.get(f"/panel/transports/{row['id']}/remove")
+    assert confirmation.status_code == 200
+    assert f'hx-post="/panel/transports/{row["id"]}/remove"' in confirmation.text
+    # It states the reach before the press: what goes, and what stays running.
+    assert "apply the node" in confirmation.text
+    assert "withdraw it instead" in confirmation.text
+
+    removed = await client.post(f"/panel/transports/{row['id']}/remove")
+
+    assert removed.status_code == 200, removed.text
+    assert "<html" not in removed.text.lower()
+    assert "apply it to stop that" in removed.text
+    # Three collections move when a row leaves, and the tables refresh themselves.
+    assert removed.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
+    assert await console.offers_on(session, node_id) == []
+
+
+async def test_the_console_will_not_remove_a_hop_end_and_says_so_in_its_own_words(
+    client, session, wg_params
+) -> None:
+    """Reachable only by a typed URL, because the dialog draws no button on that row.
+
+    Both halves are asserted: the dialog offers nothing, and the route behind it still
+    refuses — in the console's sentence rather than the service's, which ends by naming a
+    raw API path on the one panel whose promise is that no URL is typed by hand.
+    """
+    entry_id, _, hop = await a_box_carrying_both(client, wg_params)
+
+    dialog = await client.get(f"/panel/nodes/{entry_id}/transports")
+    assert f'/panel/transports/{hop["entry"]["id"]}/remove' not in dialog.text
+
+    refused = await client.post(f"/panel/transports/{hop['entry']['id']}/remove")
+
+    assert refused.status_code == 200, refused.text
+    assert "Hops screen" in refused.text
+    assert "/api/hops/" not in refused.text
+    assert await session.get(NodeTransport, hop["entry"]["id"]) is not None
+
+
+async def test_the_removal_confirmation_names_which_of_two_instances_it_is(
+    client, session, wg_params
+) -> None:
+    """A node may run two of one transport, so "remove amneziawg?" is not a question.
+
+    The dialog's subject is ``console.offer_row``, whose label is ``placed_as`` — the one
+    place a transport is named on a node. Without it this confirmation asks about one of
+    two identical words and the operator cannot tell which row they are destroying.
+    """
+    node_id = await a_node(client, "twice-1", "192.0.2.103")
+    first = await offered(client, node_id, wg_params)
+    second = await offered(client, node_id, {**wg_params, "port": HOP_PORT})
+    assert second["config_name"] != first["config_name"]
+
+    confirmation = await client.get(f"/panel/transports/{second['id']}/remove")
+
+    assert confirmation.status_code == 200
+    assert console.placed_as(HOP_TRANSPORT, second["config_name"]) in confirmation.text
+    # The first instance keeps the plain name, so the two dialogs cannot read alike.
+    plain = await client.get(f"/panel/transports/{first['id']}/remove")
+    assert console.placed_as(HOP_TRANSPORT, second["config_name"]) not in plain.text

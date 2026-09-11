@@ -806,7 +806,7 @@ async def test_no_probe_answer_says_anything_about_who_connected(
 #   Transports capability cells, the Settings footnotes, M10.4's three audit-screen
 #   sentences). ``docs/tracker/M10/step-notes.md`` records it as a gap in this scan; it
 #   is not one any more, and that entry is stale.
-# * ``panel/wording.py`` — M10.4's twelve audit sentences, which are panel vocabulary
+# * ``panel/wording.py`` — M10.4's audit sentences, which are panel vocabulary
 #   rather than service prose: ``user <nick> added`` is decision 9's rendered word for a
 #   row the code calls a friend.
 #
@@ -3069,6 +3069,10 @@ async def every_console_surface(client, reality_params) -> list[str]:
         f"/panel/nodes/{node_id}/transports",
         f"/panel/nodes/{node_id}/state",
         f"/panel/transports/{node_transport_id}/withdraw",
+        # M15.2's, added in the change that added it. The second confirmation behind the
+        # same row, and the one with the most to disclose: it is about the row whose
+        # material is being destroyed.
+        f"/panel/transports/{node_transport_id}/remove",
     ]
 
 
@@ -4618,6 +4622,7 @@ EVENT_SENTENCES = {
     AuditAction.TRANSPORT_ENABLED: f"{TRAIL_TRANSPORT} enabled on {TRAIL_NODE}",
     AuditAction.TRANSPORT_OFFERED: f"{TRAIL_TRANSPORT} offered again on {TRAIL_NODE}",
     AuditAction.TRANSPORT_WITHDRAWN: f"{TRAIL_TRANSPORT} withdrawn on {TRAIL_NODE}",
+    AuditAction.TRANSPORT_REMOVED: f"{TRAIL_TRANSPORT} removed from {TRAIL_NODE}",
     AuditAction.HOP_ESTABLISHED: f"hop established from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
     AuditAction.HOP_DISSOLVED: f"hop torn down from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
     AuditAction.KEYS_ROTATED: f"keys rotated for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
@@ -4626,7 +4631,7 @@ EVENT_SENTENCES = {
 
 
 def test_every_recorded_change_is_said_in_plain_words() -> None:
-    """Twelve actions, twelve sentences, and no machine key on the screen.
+    """One sentence per declared action, and no machine key on the screen.
 
     The trail stores an enum value because a free-text column is where a reason, a
     parameter or a remote host's words end up (decision 8). The cost of that is that
@@ -4634,8 +4639,9 @@ def test_every_recorded_change_is_said_in_plain_words() -> None:
     pays it: every declared action has a sentence, the sentence is the console's own
     vocabulary rather than the database's, and no two actions read alike.
 
-    Driven off ``AuditAction`` itself, so a thirteenth action fails here — in the change
-    that adds it, which is the only moment anybody is deciding what it should say.
+    Driven off ``AuditAction`` itself, so a NEW action fails here — in the change that
+    adds it, which is the only moment anybody is deciding what it should say. That is
+    how M15.2's ``transport-removed`` got its own sentence rather than a blank cell.
     """
     said = {}
     for action in AuditAction:

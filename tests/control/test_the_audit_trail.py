@@ -462,6 +462,72 @@ async def test_a_hop_records_both_node_names_and_dissolving_it_records_them_agai
             assert label is None or "10.44.0" not in label
 
 
+async def test_removing_a_transport_is_its_own_entry_and_outlives_the_row(
+    client, session, reality_params
+) -> None:
+    """M15.2's recording point: the one entry whose subject no longer exists.
+
+    A removal and a withdrawal are different changes and the trail has to tell them
+    apart — one leaves the row holding its port, the other frees it and destroys every
+    credential minted under it. After the fact the row is gone, so the entry is the only
+    place that distinction survives, which is exactly what the journal names as the
+    trail's whole marginal disclosure and what retention bounds.
+
+    Both labels are still values read off inventory rows: they are read BEFORE the
+    delete, which is the same rule ``dissolve_hop`` follows and the reason a label
+    looked up afterwards would be a label that cannot be read.
+    """
+    node_id = await a_node(client)
+    node_transport_id = (
+        await client.post(
+            f"/api/nodes/{node_id}/transports",
+            json={"transport_name": TRANSPORT, "params": reality_params},
+        )
+    ).json()["id"]
+
+    await nodes.remove_transport(session, node_transport_id=node_transport_id)
+
+    node = await nodes.get_node(session, node_id)
+    written = await entries_for(session, AuditAction.TRANSPORT_REMOVED)
+    assert [(e.first_label, e.second_label) for e in written] == [(node.name, TRANSPORT)]
+    # Not confusable with the switch-off next to it, which did not happen here.
+    assert await entries_for(session, AuditAction.TRANSPORT_WITHDRAWN) == []
+    # The row it describes is gone, and the entry says nothing the row held: no port, no
+    # config name, no parameter value.
+    assert await session.get(NodeTransport, node_transport_id) is None
+    for entry in await trail(session):
+        for label in (entry.first_label, entry.second_label):
+            assert label is None or str(reality_params["port"]) not in label
+
+
+async def test_removing_one_end_of_a_hop_is_refused_and_records_nothing(
+    client, session, hop_params
+) -> None:
+    """A refusal is not a change, so the trail gains no row for it.
+
+    The rule is "only changes that committed", and this is the one refusal M15.2 adds —
+    worth asserting because the refusal happens after the row has been fetched and one
+    line before the recording point.
+    """
+    entry_id = await a_node(client, "entry-ru")
+    leaf_id = await a_node(client, "leaf-nl")
+    ends = await relay.establish_hop(
+        session,
+        entry_node_id=entry_id,
+        leaf_node_id=leaf_id,
+        transport_name=HOP_TRANSPORT,
+        entry_params={**hop_params, "tunnel_address": "10.46.0.1/24",
+                      "peer_tunnel_address": "10.46.0.2/24"},
+        leaf_params={**hop_params, "tunnel_address": "10.46.0.2/24",
+                     "peer_tunnel_address": "10.46.0.1/24"},
+    )
+
+    with pytest.raises(DomainError):
+        await nodes.remove_transport(session, node_transport_id=ends[0].id)
+
+    assert await entries_for(session, AuditAction.TRANSPORT_REMOVED) == []
+
+
 async def test_rotating_and_replacing_record_the_node_and_the_transport(
     client, session, reality_params
 ) -> None:

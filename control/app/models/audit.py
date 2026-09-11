@@ -64,6 +64,12 @@ class AuditAction(enum.StrEnum):
     TRANSPORT_ENABLED = "transport-enabled"
     TRANSPORT_OFFERED = "transport-offered"
     TRANSPORT_WITHDRAWN = "transport-withdrawn"
+    # M15.2. A withdrawal and a removal are two different changes and the trail has to
+    # be able to tell them apart: one leaves the row holding its port and its config
+    # name, the other frees both and takes every credential minted under it. The row
+    # they describe is gone by the time anybody reads this entry, which is exactly what
+    # the trail adds over the inventory — and what retention bounds.
+    TRANSPORT_REMOVED = "transport-removed"
     HOP_ESTABLISHED = "hop-established"
     HOP_DISSOLVED = "hop-dissolved"
     KEYS_ROTATED = "keys-rotated"

@@ -438,6 +438,21 @@ OFFER_HOP_END = (
     "while both ends still look configured."
 )
 
+# The same row, answering the other action — M15.2. Its own sentence rather than the one
+# above, because what the operator asked for is different and so is the reason it cannot
+# be done here: withdrawing one end would stop a handshake, removing one end would leave
+# a node holding a tunnel to an exit that is gone. Both name the screen that does the
+# whole job, so neither is a dead end.
+#
+# Reachable only by a typed URL — the dialog draws no remove button on a hop end — which
+# is why it is a banner's worth of words and not a tooltip.
+REMOVE_HOP_END = (
+    "one end of a hop — not something a user is offered, and not something to remove on "
+    "its own. Tear the hop down from the Hops screen: that takes both ends, where "
+    "removing this one would leave the other holding a tunnel to an exit that is no "
+    "longer configured."
+)
+
 # What each state a node may be moved into MEANS, in the one place that decides it.
 # Keyed on this project's own topology enum rather than on prose in a template, so the
 # dialog offering a transition and the sentence explaining it cannot drift — and so a
@@ -1037,6 +1052,28 @@ def withdrawal_summary(node: str, transport: str) -> str:
     )
 
 
+def removal_summary(node: str, transport: str) -> str:
+    """What removing a transport took with it, and what it did not — M15.2.
+
+    Beside ``withdrawal_summary`` and deliberately not a louder version of it: the two
+    actions differ in what survives them. A withdrawal leaves every credential minted and
+    the row holding its port; a removal destroys the material and frees the port and the
+    config name for something else on this node. Saying so here is what stops the
+    operator reading the two toasts as the same event with different words.
+
+    The half they share is the half both are most likely to be read wrongly: the host is
+    still running it. The row is gone from every screen in this panel and the daemon on
+    the node is not, until the node is applied — which is why the sentence ends on the
+    one action that is still owed.
+    """
+    return (
+        f"{transport} removed from {node} — out of every user's link at their next "
+        "refresh, and the material minted for it is gone with it. Its listening port "
+        "and its config name on this node are free again. The node is still configured "
+        "to serve it: apply it to stop that."
+    )
+
+
 def offer_summary(node: str, transport: str) -> str:
     """What offering a transport again costs the people on it: nothing.
 
@@ -1551,7 +1588,7 @@ async def trail_entries(session: AsyncSession, *, limit: int = TRAIL_LIMIT) -> l
 
     Every field here moves when the OPERATOR acts and none of them moves when a person
     uses the service (``docs/decisions.md``, 2026-09-09): the time is when a change
-    committed, the action is one of twelve declared changes, and a label is a name the
+    committed, the action is one of the declared changes, and a label is a name the
     operator chose or the registry holds. The delivery endpoint writes no row at all, so
     there is nothing on this screen for a friend's client to move — asserted in
     ``tests/control/test_the_audit_trail.py`` and again against the real stack.

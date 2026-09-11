@@ -217,7 +217,9 @@ class NodeTransport(Base, TimestampMixin):
         # one name. That is true and it is not a reason to forbid them: the runbook
         # MANDATES AmneziaWG for the entry→leaf hop and RECOMMENDS it for friends on
         # the same box, so the old rule made a node that followed both pieces of advice
-        # impossible — and, with no delete for a node transport, impossible forever.
+        # impossible — and, with no delete for a node transport at the time, impossible
+        # forever. Removing one is ``nodes.remove_transport`` since M15.2, which is also
+        # the only thing that gives a config name below back to the node.
         #
         # So uniqueness moved onto the two things that genuinely collide on a host: the
         # CONFIG NAME, which this table holds, and the LISTENING PORT, which it cannot.

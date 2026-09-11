@@ -346,6 +346,12 @@ def _node_form(
 # button and the form that adds another sits under them. Moving a node between states is
 # its own dialog because it is about the node rather than about what it runs.
 #
+# M15.2 added a FOURTH action to the same dialog — removing the row altogether, which is
+# the only thing that frees the port and the config name it holds — and it lives beside
+# withdraw for the same reason: it is about one node-transport, and the list of them is
+# already here. Two buttons on a row rather than one toggle with a mode, because
+# withdrawing and removing differ in what survives them and each states its own reach.
+#
 # The dialogs are on ``/nodes/{node_id}/...`` and the two mutations on
 # ``/transports/{node_transport_id}/...``, because they are about different subjects: a
 # dialog is about a NODE and asks what it offers, while withdrawing or offering is about
@@ -497,6 +503,69 @@ async def _set_offered(
         toast=summary(offer.node, offer.transport),
         keeping=offer.node,
         events=events,
+    )
+
+
+@router.get("/transports/{node_transport_id}/remove", response_class=HTMLResponse)
+async def remove_transport_dialog(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """The confirmation for the one destructive action on this row — M15.2.
+
+    Its own dialog rather than a second button on the withdraw one: UI-PATTERNS §3 asks
+    a destructive action to state its blast radius, and these two have different ones.
+    The subject is ``console.offer_row``, so the title names the row the way every other
+    screen does — qualified by the config name where a node runs two instances of one
+    transport, which is the only thing telling them apart.
+    """
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/remove_transport_dialog.html",
+        {"offer": await console.offer_row(session, node_transport_id)},
+    )
+
+
+@router.post("/transports/{node_transport_id}/remove", response_class=HTMLResponse)
+async def remove_transport(
+    node_transport_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Delete one transport from a node, with the material minted under it — M15.2.
+
+    The row is read BEFORE the service runs, which is not the ordering the neighbouring
+    withdraw route merely happens to use: after this commits there is no row to project,
+    so the toast's subject has to have been taken while it existed.
+
+    A toast rather than a banner, like every other deliberate act that succeeded. What it
+    leaves behind — a host still serving what this panel no longer knows about — is in
+    the sentence, and the confirmation said it before they pressed.
+    """
+    offer = await console.offer_row(session, node_transport_id)
+    try:
+        await nodes.remove_transport(session, node_transport_id=node_transport_id)
+    except DomainError as exc:
+        # Nothing was changed and the operator is on the screen this is about, so it is
+        # shown rather than raised. The one thing this refuses is a hop end, and the
+        # console answers that in its own words: the service's sentence ends by naming a
+        # raw API path, which is the opposite of what this panel promises. Anything else
+        # it ever refuses keeps the service's words. Same split as ``_set_offered``.
+        return _mutation(
+            request,
+            banner=console.REMOVE_HOP_END if not offer.for_friends else exc.message,
+            keeping=offer.node,
+            events="nodes-changed",
+        )
+    return _mutation(
+        request,
+        toast=console.removal_summary(offer.node, offer.transport),
+        keeping=offer.node,
+        # Three, because a row leaving takes three collections with it: the node's chips,
+        # the Keys screen's row for it, and the Users table's counts, which are derived
+        # from ``serving_transports``.
+        events="nodes-changed, keys-changed, friends-changed",
     )
 
 

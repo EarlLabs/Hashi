@@ -6,11 +6,11 @@ WHAT: the one answer to "may this transport be placed on this node, and under wh
 WHY:  the rule used to be one row per ``(node, transport_name)``, which is not what
       collides. It made the runbook's own advice impossible to follow: AmneziaWG is
       MANDATED for the entry→leaf hop and RECOMMENDED for friends on the same box, so
-      whichever was enabled first excluded the other — permanently, because there is
-      no delete for a node transport (M15.2 is the exit). What actually collides on a
-      host is the listening port, because the data planes run with
-      ``network_mode: host``, and the config file's name, because ``edge`` derives the
-      wg-quick family's network interface from it.
+      whichever was enabled first excluded the other — permanently, because at the time
+      there was no delete for a node transport (``nodes.remove_transport`` is that exit
+      and arrived with M15.2). What actually collides on a host is the listening port,
+      because the data planes run with ``network_mode: host``, and the config file's
+      name, because ``edge`` derives the wg-quick family's network interface from it.
 HOW:  one function, ``claim``, called just before a row is written, plus ``port_is_free``
       for the path that retypes a port on a row that already exists. Both read the
       node's existing rows and nothing else. The refusal is a ``Conflict`` — 409, the
@@ -78,14 +78,14 @@ PORT_TAKEN = (
 # transport this image ships, and stated rather than assumed away: the wg-quick family's
 # interface names are capped at 15 characters by the kernel, so a long transport name
 # runs out of suffixes.
-# There is deliberately no "remove one and try again" in this sentence: until M15.2
-# lands there is no delete for a node transport, and a refusal that names an action the
-# product does not have sends the operator looking for a button. It says what is true
-# today — another node — and M15.2 is where the second answer appears.
+# It names BOTH answers since M15.2, which is the step that made the first one true: a
+# node transport can be removed, and removal is what gives its name back. Until then the
+# sentence deliberately offered only another node, because a refusal that names an action
+# the product does not have sends the operator looking for a button.
 NO_NAME_LEFT = (
     "node {node!r} cannot take another {transport!r}: this transport's tool takes its "
     "network interface name from its config file, and every name that would fit on this "
-    "node is already used. Put this one on another node."
+    "node is already used. Remove one of them from this node, or put this one on another."
 )
 
 # How many instances of one transport a node may be asked for before the names run out.
@@ -133,8 +133,8 @@ async def _rows_on(
     switched off and will switch back on, and its port and its interface name are still
     reserved for it — letting a second row take them would move the collision to the
     moment the first is re-enabled, which is the same "found months later" failure M15
-    exists to close. Removing a row is what frees its port, and making a row removable
-    is M15.2.
+    exists to close. Removing a row is what frees its port, and removing one is
+    ``nodes.remove_transport`` (M15.2) — the exit this rule always assumed.
     """
     result = await session.execute(
         select(NodeTransport).where(NodeTransport.node_id == node_id)

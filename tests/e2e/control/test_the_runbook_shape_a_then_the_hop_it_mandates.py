@@ -22,6 +22,7 @@ for and still refuses what a host would.
 """
 
 import io
+import re
 import uuid
 import zipfile
 
@@ -258,3 +259,120 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
     # entry↔leaf tunnel directly, the network because it is the topology itself.
     assert f":{HOP_PORT}" not in received, "a hop end reached a friend's configuration"
     assert "10.64.0." not in received, "the hop's tunnel network reached a friend"
+
+
+# --- the way back out (M15.2) -------------------------------------------------
+#
+# Everything above is about what the box may now carry. This is about what it can stop
+# carrying: since uniqueness moved onto the port and the config name, and ``enabled`` is
+# deliberately not consulted, a row switched off still holds both — so removal is the only
+# exit from a collision, and it is the operator's own route out of the state this
+# milestone was found in.
+
+# This scenario's own node and port. Its own, rather than ``shape_a_box``'s, because the
+# assertions below are ABSENCES: every other scenario in this file registers a box at the
+# same address, and a friend is granted every serving node, so a shared marker would make
+# "it is gone" depend on what else ran.
+REMOVAL_ADDRESS = "192.0.2.34"
+REMOVAL_PORT = 51830
+
+# Every panel action is htmx's, and nothing answers a header-less POST with a redirect
+# any more (M9.6).
+HTMX = {"HX-Request": "true"}
+
+
+async def remove_from_the_panel(operator, node_id: str, transport: str) -> str:
+    """Remove one transport the way the owner does: the button, then the confirmation.
+
+    Both URLs are READ off the rendered markup rather than written down here, which is
+    this suite's standard since M9.6: the operator's route to this action is a button, and
+    a scenario that posted to a remembered URL would keep passing while the button opened
+    a dialog that removed nothing.
+    """
+    dialog = await operator.get(f"/panel/nodes/{node_id}/transports")
+    assert dialog.status_code == 200, dialog.text
+    button = re.search(
+        rf'data-transport="{re.escape(transport)}"[^>]*?'
+        r'hx-get="(/panel/transports/[^"]+/remove)"',
+        dialog.text,
+        re.S,
+    )
+    assert button, f"no remove button for {transport} on the Nodes screen"
+
+    confirmation = await operator.get(button.group(1))
+    assert confirmation.status_code == 200, confirmation.text
+    posts_to = re.search(r'hx-post="(/panel/transports/[^"]+/remove)"', confirmation.text)
+    assert posts_to, "the remove confirmation confirms nothing"
+
+    removed = await operator.post(posts_to.group(1), headers=HTMX)
+    assert removed.status_code == 200, removed.text
+    # A fragment, never a document — the control rulebook's HTMX trap.
+    assert "<html" not in removed.text.lower()
+    return removed.text
+
+
+async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
+    operator, client, unique: str
+) -> None:
+    """The milestone's second done-when, end to end, from the only surface there is.
+
+    Three claims, and the last one is the one the field needed: what a user receives loses
+    it, the material minted for them goes with the row rather than being orphaned, and the
+    PORT is free again — so the box that was locked out of the hop it was supposed to
+    carry can be typed back into a working shape without touching the database.
+    """
+    node_id = await a_node(
+        operator, f"removal-{unique}", REMOVAL_ADDRESS, f"Removeland-{unique}"
+    )
+    offered = await operator.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": RUNBOOK_TRANSPORT,
+            "params": side("10.65.0.1/24", "10.65.0.2/24", REMOVAL_PORT),
+        },
+    )
+    assert offered.status_code == 201, offered.text
+    assert (
+        await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
+    ).status_code == 200
+
+    friend_id = (
+        await operator.post("/api/friends", json={"nickname": f"removed-{unique}"})
+    ).json()["id"]
+    token = (
+        await operator.get(f"/api/friends/{friend_id}/subscription")
+    ).json()["url"].rsplit("/", 1)[-1]
+
+    archive = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
+    assert archive.status_code == 200, archive.text
+    before = "\n".join(content.decode() for content in _entries(archive.content).values())
+    assert f"{REMOVAL_ADDRESS}:{REMOVAL_PORT}" in before, (
+        "the fixture never reached this user, so its absence below would prove nothing"
+    )
+
+    toast = await remove_from_the_panel(operator, node_id, RUNBOOK_TRANSPORT)
+
+    # What the operator is told, and the half of it they are most likely to get wrong:
+    # the row is gone from this panel and the HOST is still serving it until they apply.
+    assert "removed from" in toast, toast
+    assert "apply it to stop that" in toast, toast
+
+    after = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
+    assert after.status_code == 200, after.text
+    delivered = "\n".join(content.decode() for content in _entries(after.content).values())
+    assert f"{REMOVAL_ADDRESS}:{REMOVAL_PORT}" not in delivered, (
+        "a removed transport is still in a user's configuration"
+    )
+    assert "10.65.0." not in delivered
+
+    # And the port it held is free on that node — the whole reason removal exists.
+    reused = await operator.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": RUNBOOK_TRANSPORT,
+            "params": side("10.66.0.1/24", "10.66.0.2/24", REMOVAL_PORT),
+        },
+    )
+    assert reused.status_code == 201, reused.text
+    # Under the plain name, too: nothing is left holding the first instance's name.
+    assert reused.json()["config_name"] == RUNBOOK_TRANSPORT

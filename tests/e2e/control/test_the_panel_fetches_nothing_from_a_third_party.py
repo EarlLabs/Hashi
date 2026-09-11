@@ -182,11 +182,12 @@ AN_OFFER = {
 
 
 async def _with_an_offer(operator, node_id: str) -> list[str]:
-    """The withdraw confirmation, and the offer it does not exist without.
+    """The two confirmations on one offered transport, and the offer they need.
 
-    M9.5 moved withdrawing a transport onto the Nodes screen, and its confirmation is a
-    fragment like any other — so it goes on this list in the change that added it, which
-    is the rule this whole scenario exists to enforce.
+    M9.5 moved withdrawing a transport onto the Nodes screen and M15.2 put removing it
+    beside that; each confirmation is a fragment like any other — so each goes on this
+    list in the change that added it, which is the rule this whole scenario exists to
+    enforce.
     """
     installed = (await operator.get("/api/transports")).json()
     offerable = sorted(
@@ -211,7 +212,11 @@ async def _with_an_offer(operator, node_id: str) -> list[str]:
         },
     )
     assert enabled.status_code == 201, enabled.text
-    return [f"/panel/transports/{enabled.json()['id']}/withdraw"]
+    node_transport_id = enabled.json()["id"]
+    return [
+        f"/panel/transports/{node_transport_id}/withdraw",
+        f"/panel/transports/{node_transport_id}/remove",
+    ]
 
 
 async def _with_a_hop(operator, unique: str) -> list[str]:

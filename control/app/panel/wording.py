@@ -109,6 +109,10 @@ _EVENTS: dict[AuditAction, str] = {
     AuditAction.TRANSPORT_ENABLED: "{second} enabled on {first}",
     AuditAction.TRANSPORT_OFFERED: "{second} offered again on {first}",
     AuditAction.TRANSPORT_WITHDRAWN: "{second} withdrawn on {first}",
+    # Deliberately unlike the withdrawal above rather than a synonym of it: the two are
+    # different changes with different blast radii, and the trail is read after the row
+    # it describes is gone, so the sentence is the only thing left saying which happened.
+    AuditAction.TRANSPORT_REMOVED: "{second} removed from {first}",
     AuditAction.HOP_ESTABLISHED: "hop established from {first} to {second}",
     AuditAction.HOP_DISSOLVED: "hop torn down from {first} to {second}",
     AuditAction.KEYS_ROTATED: "keys rotated for {second} on {first}",
@@ -159,7 +163,7 @@ def an_event(
 ) -> str:
     """One recorded change in plain words, from its machine key and its labels.
 
-    A thirteenth action with no sentence here falls back to its own machine key rather
+    A NEW action with no sentence here falls back to its own machine key rather
     than raising: this screen is a record of what the operator changed, and answering a
     request for it with a 500 because somebody added an action last week is the wrong
     failure. ``test_every_recorded_change_is_said_in_plain_words`` requires a sentence

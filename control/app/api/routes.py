@@ -305,6 +305,24 @@ async def set_transport_enabled(
     )
 
 
+@router.delete("/transports/{node_transport_id}", status_code=status.HTTP_200_OK)
+async def remove_transport(
+    node_transport_id: str, session: AsyncSession = Depends(session_dependency)
+):
+    """Remove one friend-facing transport, with every credential minted under it — M15.2.
+
+    Answers in ``dissolve_hop``'s shape, because it is the same kind of answer: what is
+    left for the caller is to re-apply, and the node may be unreachable right now. A
+    delete that pushed would report failure for a host that is down — which is exactly
+    when an operator needs to free a port on a machine that no longer exists.
+
+    ``DELETE`` here and ``DELETE /hops/{id}`` there, addressed by the same kind of id:
+    one end of a hop is refused on this path (409) and names the other.
+    """
+    node_id = await nodes.remove_transport(session, node_transport_id=node_transport_id)
+    return {"needs_apply": [node_id]}
+
+
 @router.post(
     "/transports/{node_transport_id}/params", response_model=schemas.RotationResponse
 )
