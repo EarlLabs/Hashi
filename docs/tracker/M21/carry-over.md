@@ -72,3 +72,28 @@ left guessing.
 
 Recorded rather than fixed because M21 was already closed and committed when this
 appeared, and `infra` is a different zone from the `control` work in flight.
+
+### And the timeout LEAKS ITS STACK, which is why it gets worse
+
+Found 2026-09-11, and it explains why this looked like bad luck rather than a
+mechanism. When `test_a_control_plane_that_never_answers_is_reported_as_a_failure`
+times out at 600s, **the compose project it started is never torn down.** Twelve
+containers were found still running from two such runs — `feecfa07` (2026-09-09,
+up 40 hours) and `f3d64920` (2026-09-10 22:16, the baseline run of this very
+session) — each a full three-service stack, and in each the `unhealthy-control`
+container is in a **health-restart loop**, burning CPU indefinitely.
+
+So the failure feeds itself: a timeout leaves a stack behind, the leaked stacks
+compete for the same engine, and the next run is likelier to time out and leak
+another. Two runs had leaked six containers each before anyone looked.
+
+**This strengthens the fix already named above** (build the images before starting
+the clock) and adds a second, independent one: the scenario must tear its project
+down in a `finally`, so a timeout cleans up after itself. A test that leaks a
+service stack on the one path it is designed to exercise — the *unhealthy* control
+plane — is leaking on its most-travelled failure route.
+
+Clean-up for anyone who meets this: `docker compose -p <project> down -v`, or
+remove by the `hashi-panel-bootstrap-` name prefix. Nothing in them is worth
+keeping; they are disposable scenario stacks with random hex suffixes.
+
