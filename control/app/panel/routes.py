@@ -1093,6 +1093,10 @@ async def rotate_keys_dialog(
             "shared_with_peer": (
                 console.KEY_SHARED_WITH_PEER if key.shared_with_peer else None
             ),
+            # The one sentence about what a hop-end push leaves behind, shared with the
+            # replace dialog and with the answer both of them produce — see
+            # console.HOP_PUSH_OUTCOME for why it is a constant and not prose.
+            "hop_push_outcome": console.HOP_PUSH_OUTCOME,
         },
     )
 
@@ -1292,6 +1296,10 @@ async def _params_form(
         "values": values or {},
         "errors": errors or {},
         "failure": failure or (None if key.installed else console.KEY_NOT_IN_THIS_IMAGE),
+        # Shared with the rotate dialog and with the answer both of them produce — see
+        # console.HOP_PUSH_OUTCOME. Rendered only on the hop branch, which the template
+        # already decides from ``key.for_friends``.
+        "hop_push_outcome": console.HOP_PUSH_OUTCOME,
     }
 
 

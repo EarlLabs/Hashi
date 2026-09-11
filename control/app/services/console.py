@@ -151,6 +151,31 @@ KEY_SHARED_WITH_PEER = (
     "does — and if the second cannot be reached, it stays down until you apply it."
 )
 
+# THE ONE CLAIM BOTH KEY DIALOGS MAKE ABOUT A HOP END, AND BOTH ANSWERS REPORT BACK.
+#
+# A rotation and a replacement on a hop end each push TWO nodes, and the operator has to
+# know before they press it that a push reaching one of the two is a tunnel that is
+# down. Each dialog used to say that in its own prose and each answer said it again in
+# more prose, four wordings of one fact in three files — and three times the dialog
+# ended up stating the opposite of the answer it produced. A test held them together by
+# looking for a phrase in both, which a fourth wording carrying that phrase walked
+# straight through.
+#
+# So it is ONE STRING. The dialogs render ``HOP_PUSH_OUTCOME``; ``_unpushed`` composes
+# its answers out of the same two clauses, which are what makes the pair checkable
+# rather than merely similar. A divergent wording is not something that can exist here.
+#
+# Neither clause names material or parameters: one sentence has to be true of a
+# rotation, which re-mints, and of a replacement, which does not.
+HOP_ONE_END_TOOK_IT = "the tunnel is down until you apply the other"
+HOP_NEITHER_END_TOOK_IT = (
+    "both are still running what they had and the tunnel is unaffected"
+)
+HOP_PUSH_OUTCOME = (
+    f"Both nodes are pushed: if only one of the two takes it, {HOP_ONE_END_TOOK_IT}; "
+    f"if neither does, {HOP_NEITHER_END_TOOK_IT}. This screen says which."
+)
+
 # The one sentence a refusal may carry in place of a message it will not print, and it
 # carries no value. A transport's own complaint can quote what it rejected, and what is
 # validated on these paths includes the material the node holds — so a complaint this
@@ -909,6 +934,13 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     as "the node is still running the old material" would be right about one of them and
     a false reassurance about the other. A friend-facing row has one node and people on
     the old material, who are unaffected.
+
+    THE TWO HOP CLAUSES ARE NOT WRITTEN HERE. They are ``HOP_ONE_END_TOOK_IT`` and
+    ``HOP_NEITHER_END_TOOK_IT``, and the same two make up ``HOP_PUSH_OUTCOME``, which is
+    what both confirmation dialogs render. That is the whole point of them being
+    constants: the dialog states the two outcomes as possibilities and this states one
+    of them as fact, in the same words, so the pair cannot drift into contradicting each
+    other again.
     """
     if row.for_friends:
         standing = (
@@ -916,13 +948,13 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
         )
     elif outcome.nodes_updated:
         standing = (
-            "one end of the hop has taken it and the other has not, so the tunnel is "
-            "down until it does — no user holds anything on it either way"
+            f"one end of the hop has taken it and the other has not, so "
+            f"{HOP_ONE_END_TOOK_IT} — no user holds anything on it either way"
         )
     else:
         standing = (
-            "neither end took it, so both are still running the material they had and "
-            "the tunnel is unaffected — no user holds anything on it either way"
+            f"neither end took it, so {HOP_NEITHER_END_TOOK_IT} — no user holds "
+            "anything on it either way"
         )
     unreached = sorted(outcome.nodes_failed)
     many = len(unreached) > 1

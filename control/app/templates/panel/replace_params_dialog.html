@@ -102,10 +102,10 @@
       </div>
       {% else %}
       <div class="dialog-body text-muted">
-        Both ends of the hop are re-rendered and pushed as soon as you submit: the far
-        end's own configuration is built from this one. No user holds anything on it:
-        this is one end of a hop, a tunnel between two of our own nodes. If the push
-        reaches only one of the two, the tunnel is down until you apply the other.
+        Both ends of the hop are re-rendered as soon as you submit: the far end's own
+        configuration is built from this one. No user holds anything on it: this is one
+        end of a hop, a tunnel between two of our own nodes.
+        {{ hop_push_outcome }}
       </div>
       {% endif %}
       <div class="dialog-actions">

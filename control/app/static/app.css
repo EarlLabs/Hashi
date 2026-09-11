@@ -55,6 +55,27 @@
   --color-danger-900: #7d2419;
 }
 
+/* ── the `hidden` attribute, which this sheet was overruling ──────────────── */
+
+/* HIDDEN MUST WIN. The browser hides `[hidden]` from its OWN stylesheet, and any
+ * author rule that sets `display` beats a user-agent one whatever its specificity —
+ * so `.dialog-form { display: flex }` further down was quietly cancelling the
+ * attribute on every element that wore both.
+ *
+ * What that cost: the enable-a-transport dialog renders one group of boxes per
+ * transport and hides all but the chosen one, exactly as the establish-hop dialog
+ * does. The hop dialog's groups are `<details class="disclosure">`, which sets no
+ * display, so it worked; the enable dialog's groups carry `.dialog-form`, so it did
+ * not — every transport's boxes were on screen at once, with three boxes labelled
+ * `port` and nothing saying which protocol any belonged to, and choosing a transport
+ * changed nothing because static/app.js sets the same attribute the same sheet was
+ * overruling. Both halves of the mechanism were correct and this was the fault.
+ *
+ * `!important` is what the HTML rendering spec itself recommends for this rule, and
+ * it is the reason it can sit here once rather than as a `display: none` on each
+ * class a group might wear. */
+[hidden] { display: none !important; }
+
 /* ── shell ────────────────────────────────────────────────────────────────── */
 
 .app {

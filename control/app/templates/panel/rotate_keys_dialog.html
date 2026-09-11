@@ -66,11 +66,16 @@
       node once it can be reached.
     </div>
     {% else %}
+    {#
+      What is at stake, and NOT in this file's words. `hop_push_outcome` is
+      services/console.py's one sentence about a hop-end push, and the answer the
+      operator gets afterwards is composed from the same two clauses — so the
+      confirmation and its answer cannot say opposite things about the far end, which
+      they have now done three times. Do not paraphrase it here; change the constant.
+    #}
     <div class="dialog-body text-muted">
-      Both ends are written in one step and then pushed to both nodes. If only one of
-      them takes it, the two ends hold different material and the tunnel is down until
-      you apply the other; if neither does, both keep running what they have and the
-      tunnel is unaffected. This screen says which.
+      Both ends are written in one step.
+      {{ hop_push_outcome }}
     </div>
     {% endif %}
     <div class="dialog-actions">

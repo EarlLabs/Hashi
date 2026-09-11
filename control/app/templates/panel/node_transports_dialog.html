@@ -154,6 +154,12 @@
         only when nothing is chosen yet — and NEVER two: static/app.js re-hides on a
         `change` event, which an htmx swap does not fire, so the server decides this. The
         same rule the establish-hop dialog states at more length, for the same reason.
+
+        `hidden` ONLY WORKS BECAUSE app.css SAYS SO. The browser's own rule for the
+        attribute loses to any author rule setting `display`, and `.dialog-form` on the
+        line below is `display: flex` — so this markup was correct and every group was
+        on screen anyway, with the select changing nothing because app.js sets the same
+        attribute. See `[hidden]` in app.css before you give a group a new class.
       #}
       {% set shown = values.get('transport_name')
                      if values.get('transport_name') in transports

@@ -68,10 +68,22 @@
     The region a nav click replaces. It also listens for `friends-created`, which is
     how "on submit: create the user … and route to Users" (design/README.md) happens
     without the add-user dialog knowing which screen it was opened from.
+
+    `hx-disinherit="hx-push-url"` — WITHOUT IT THIS ELEMENT RENAMES EVERY SCREEN.
+    `hx-push-url` is one of htmx's inherited attributes: it is resolved by walking up
+    from the element that made the request, so `/panel/friends` here was the answer
+    for EVERY htmx control inside #main. Open the add-node dialog on Nodes and the
+    address bar said Users; a table refreshing itself after a mutation said the same;
+    a reload then landed the operator on a screen they had not been on. The route that
+    served the screen was right, the nav link that pushed it was right, and this
+    attribute overwrote both from three elements up. Disinheriting affects children
+    only — htmx skips the check when the element and the ancestor are the same one —
+    so the `friends-created` navigation this was written for still pushes its URL.
   #}
   <main class="console-main" id="main"
         hx-get="/panel/friends" hx-trigger="friends-created from:body"
-        hx-target="#main" hx-swap="innerHTML" hx-push-url="/panel/friends">
+        hx-target="#main" hx-swap="innerHTML" hx-push-url="/panel/friends"
+        hx-disinherit="hx-push-url">
     {% include screen %}
   </main>
 </div>

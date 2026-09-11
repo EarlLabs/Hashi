@@ -1182,6 +1182,57 @@ async def test_exactly_one_transport_s_boxes_are_ever_on_screen(
     assert [name for name, rest in groups if "hidden" not in rest] == [chosen]
 
 
+#: The attribute a template writes when it wants an element gone, as a standalone word
+#: rather than as the tail of ``aria-hidden`` or the head of ``hidden="…"``.
+BARE_HIDDEN = re.compile(r"(?<![-\w])hidden(?![-\w=])")
+
+
+def test_a_group_the_server_hides_is_actually_hidden() -> None:
+    """The markup above was right and the operator still saw all four groups.
+
+    ``hidden`` is hidden by the BROWSER'S stylesheet, and any author rule setting
+    ``display`` beats a user-agent rule whatever its specificity. The enable-a-transport
+    dialog puts ``.dialog-form`` on each transport's group, and ``.dialog-form`` is
+    ``display: flex`` — so every group was on screen at once, twenty-four boxes with
+    three labelled ``port`` and nothing saying which protocol any belonged to, and
+    choosing a transport changed nothing because static/app.js sets the same attribute
+    the same sheet was overruling. The establish-hop dialog escaped it only because
+    ``.disclosure`` happens to set no display.
+
+    So the rule is asserted here rather than left to whichever class a future group
+    wears: ``[hidden]`` must win outright. The second half of this test is what keeps it
+    from being a rule about nothing — it finds the classes that templates actually
+    combine with ``hidden`` and reports the ones that would overrule it.
+    """
+    rules = _css_rules()
+
+    hidden = rules.get("[hidden]", "")
+    assert "display" in hidden and "none" in hidden, (
+        "app.css does not hide [hidden]; a class that sets display cancels the attribute"
+    )
+    assert "!important" in hidden, (
+        "[hidden] must be !important — a later class rule of equal specificity wins"
+    )
+
+    # Non-vacuity: at least one element this panel hides carries a class that WOULD
+    # overrule it, which is the defect the rule above exists to close.
+    overruled = set()
+    for template in sorted(TEMPLATES.rglob("*.html")):
+        for match in TAG.finditer(template.read_text()):
+            tag = match.group(0)
+            if not BARE_HIDDEN.search(tag):
+                continue
+            for names in re.findall(r'class="([^"{}]*)"', tag):
+                for name in names.split():
+                    if "display" in rules.get(f".{name}", ""):
+                        overruled.add(name)
+
+    assert overruled, (
+        "nothing this panel hides wears a class that sets display — either the rule "
+        "above has become decoration, or this scan stopped finding hidden elements"
+    )
+
+
 async def test_enabling_a_transport_from_the_console_names_it_and_refreshes_the_tables(
     client, reality_params
 ) -> None:
@@ -4035,6 +4086,109 @@ async def test_the_console_is_never_snapshotted_into_local_storage(client) -> No
     assert 'hx-history="false"' in (await client.get("/panel/")).text
 
 
+HTMX_VERBS = ("hx-get", "hx-post", "hx-put", "hx-patch", "hx-delete")
+
+VOID_ELEMENTS = frozenset(
+    ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+     "source", "track", "wbr")
+)
+
+
+class _HtmxControls(html.parser.HTMLParser):
+    """Every element in a document that makes an htmx request, with what htmx would
+    resolve for it — which means walking its ANCESTORS, because most ``hx-*``
+    attributes are inherited.
+
+    That inheritance is the whole subject: an attribute three elements up is the
+    answer for a button that declares nothing, and reading the button alone says the
+    opposite of what the browser does.
+    """
+
+    #: ``(tag, id, resolved hx-target, resolved hx-push-url)`` per requesting element.
+    controls: list[tuple[str, str, str | None, str | None]]
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._open: list[dict[str, str]] = []
+        self.controls = []
+
+    def handle_startendtag(self, tag, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_starttag(self, tag, attrs) -> None:
+        element = {name: (value or "") for name, value in attrs}
+        self._open.append(element)
+        if any(verb in element for verb in HTMX_VERBS):
+            self.controls.append(
+                (
+                    tag,
+                    element.get("id", element.get("class", "")),
+                    self._resolve("hx-target"),
+                    self._resolve("hx-push-url"),
+                )
+            )
+        if tag in VOID_ELEMENTS:
+            self._open.pop()
+
+    def handle_endtag(self, tag) -> None:
+        if self._open:
+            self._open.pop()
+
+    def _resolve(self, attribute: str) -> str | None:
+        """htmx's own lookup, including ``hx-disinherit``.
+
+        Read off htmx 2.0.4's minified source rather than guessed: it walks up from the
+        element, an ancestor naming the attribute in ``hx-disinherit`` answers "unset"
+        and STOPS the walk (so the value above it is never reached), and the element
+        itself is exempt from its own disinherit — which is what lets one element keep
+        a push-url without handing it to everything inside it.
+        """
+        for depth in range(len(self._open) - 1, -1, -1):
+            element = self._open[depth]
+            itself = depth == len(self._open) - 1
+            disinherit = element.get("hx-disinherit", "").split()
+            if not itself and ("*" in disinherit or attribute in disinherit):
+                return None
+            if attribute in element:
+                return element[attribute]
+        return None
+
+
+@pytest.mark.parametrize("path", TWO_REPRESENTATION_URLS)
+async def test_opening_a_dialog_does_not_rename_the_screen(client, path: str) -> None:
+    """The acceptance defect: Nodes → add node → cancel → reload landed on Users.
+
+    The cause was not the cache entry its neighbour (docs/decisions.md, 2026-09-09) was
+    about, and not the dialog. ``#main`` in the shell carries
+    ``hx-push-url="/panel/friends"`` for the ``friends-created`` navigation, and
+    ``hx-push-url`` is one of the attributes htmx INHERITS: it is resolved by walking up
+    from whatever made the request, so ``/panel/friends`` was the answer for every htmx
+    control on every screen. Opening a dialog pushed it. So did a table refreshing
+    itself after a mutation. The address bar then named a screen the operator was not
+    on, and a reload took them there.
+
+    The rule this holds, which is wider than the dialog: AN ELEMENT THAT DOES NOT
+    REPLACE THE SCREEN MAY NOT PUSH A URL. A navigation targets ``#main`` and says where
+    it went; everything else — a dialog, a self-swapping table, a mutation answering the
+    slots — leaves the address bar alone. Resolved the way htmx resolves it, so a
+    parent's attribute counts against a child exactly as it does in a browser.
+    """
+    document = (await client.get(path)).text
+    parser = _HtmxControls()
+    parser.feed(document)
+
+    dialogs = [c for c in parser.controls if c[2] == "#dialog-slot"]
+    assert dialogs, f"{path}: no dialog opens from this screen — the walk proves nothing"
+
+    for tag, name, target, push in parser.controls:
+        if target == "#main":
+            continue  # a navigation: saying where it went is its job
+        assert push is None, (
+            f"{path}: <{tag} {name}> targets {target} and would push {push!r} — "
+            "using it renames the screen in the address bar"
+        )
+
+
 # --- a nickname the layout was not drawn for (acceptance round 1) -------------
 
 async def test_the_nickname_field_states_its_limit_instead_of_truncating(
@@ -4313,14 +4467,32 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
     Both of this screen's confirmations have now stated the opposite of their own answer
     on a hop end, and the second time was ON THE SAME PARAGRAPH as a comment recording
     the first. What makes that recur is that the two halves live in different files and
-    nothing reads them together, so this does: the claim under test is not a wording but
-    the PAIR — what the operator confirms and what they are then told must be the same
-    fact about the far end.
+    nothing reads them together.
 
-    The fact both must carry, since the rotation was fixed: the far end is written and
-    pushed WITH this one, and a push that reaches only one of the two leaves the tunnel
-    down. Composed with outcomes rather than driven through a push, because a real one
-    would need two hosts; the POST itself is exercised by the test below.
+    WHAT THIS HOLDS, EXACTLY, and it is no longer a phrase list. The previous instrument
+    asserted the literal "the tunnel is down" was present in both halves and that three
+    named sentences were absent from both, and a reviewer showed it GREEN over a rotate
+    dialog reading *"Only this node is written and pushed; the far end is left exactly as
+    it is, so the tunnel is down until you go and re-key the other end yourself"* — the
+    opposite of what ``rotate_keys`` does and of the answer the operator gets, carrying
+    the one phrase the list looked for. A list of phrases cannot hold two sentences
+    against each other; only one sentence can.
+
+    So the claim is ONE STRING. ``console.HOP_PUSH_OUTCOME`` is what both dialogs render
+    and it is built from the two clauses ``console._unpushed`` composes its answers out
+    of, and this test asserts both halves of that: the constant appears verbatim in each
+    rendered dialog, and each clause appears in the answer for the outcome it describes.
+    A dialog rewritten in its own words fails the first assertion whatever it says; a
+    reworded answer fails the second. A divergent wording is not something that can
+    exist here to be caught.
+
+    The negative list at the end is a BACKSTOP and is hand-maintained. It holds only the
+    half of each dialog that is still free prose — the sentence naming what is changed —
+    and it holds exactly three wordings that have actually shipped and become false. It
+    proves nothing about a fourth.
+
+    Composed with outcomes rather than driven through a push, because a real one would
+    need two hosts; the POST itself is exercised by the test below.
     """
     entry_end = await a_hop(client)
     session.expunge_all()
@@ -4338,6 +4510,20 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
         nodes_updated=["entry-1"],
         nodes_failed={"exit-1": "the node did not answer"},
     )
+    neither = rotation_service.RotationOutcome(
+        node_transport_id=entry_end,
+        rotated=["decoy_host"],
+        nodes_failed={
+            "entry-1": "the node did not answer",
+            "exit-1": "the node did not answer",
+        },
+    )
+
+    # The dialogs state two possibilities and the answers state one of them as fact, so
+    # the possibilities have to be the same strings the facts are. If this ever stops
+    # holding, the rest of the test is comparing a sentence with itself.
+    assert console_service.HOP_ONE_END_TOOK_IT in console_service.HOP_PUSH_OUTCOME
+    assert console_service.HOP_NEITHER_END_TOOK_IT in console_service.HOP_PUSH_OUTCOME
 
     actions = (
         ("rotate", f"/panel/keys/{entry_end}/rotate", console_service.rotation_summary),
@@ -4346,13 +4532,32 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
     for action, url, compose in actions:
         dialog = _reading((await client.get(url)).text)
 
-        # What the operator is asked to confirm, and what they are told when only one of
-        # the two nodes took it: the same state, named the same way.
-        assert "the tunnel is down" in dialog, f"{action}: the dialog does not name it"
-        assert "the tunnel is down" in compose(row, half), f"{action}: the answer does not"
+        # What the operator is asked to confirm — the sentence itself, not a phrase from
+        # it. A paraphrase in the template is a failure here even if it happens to be
+        # true, because a paraphrase is how the pair drifted apart three times.
+        assert console_service.HOP_PUSH_OUTCOME in dialog, (
+            f"{action}: the dialog does not render console.HOP_PUSH_OUTCOME"
+        )
 
-        # And neither may promise the far end is left as it was. Both did, in the two
-        # sentences this test was written for.
+        # …and what they are then told, for each of the two outcomes the dialog named.
+        assert console_service.HOP_ONE_END_TOOK_IT in compose(row, half), (
+            f"{action}: one node took it and the answer does not say what the dialog did"
+        )
+        assert console_service.HOP_NEITHER_END_TOOK_IT in compose(row, neither), (
+            f"{action}: neither node took it and the answer does not say what the "
+            "dialog did"
+        )
+        # A complete push is neither of those states, so it may claim neither.
+        for clause in (
+            console_service.HOP_ONE_END_TOOK_IT,
+            console_service.HOP_NEITHER_END_TOOK_IT,
+        ):
+            assert clause not in compose(row, landed), (
+                f"{action}: both nodes took it and the answer says {clause!r}"
+            )
+
+        # The backstop, over the prose each dialog still writes for itself: three
+        # promises about the far end that have shipped and are no longer true.
         for promise in (
             "The far end is not changed",
             "the far end is still holding",
