@@ -46,6 +46,7 @@ from control.app.models import (
 )
 from control.app.services import (
     apply,
+    audit,
     friends,
     keymaterial,
     nodes,
@@ -53,7 +54,11 @@ from control.app.services import (
     rotation,
     transports,
 )
-from control.app.settings import Settings
+from control.app.settings import (
+    AUDIT_RETENTION_MAX_DAYS,
+    AUDIT_RETENTION_MIN_DAYS,
+    Settings,
+)
 from edge.bootstrap import node_stack
 from edge.registry import KeyScope, TransportMeta, discover
 
@@ -1295,6 +1300,21 @@ def _seconds(value: int) -> str:
     return spelled
 
 
+def _how_often(seconds: int) -> str:
+    """"once an hour" / "every 20 minutes" — the sweep's real interval, in words.
+
+    Derived rather than written, the same rule ``_seconds`` follows above: the screen
+    tells the operator how often their trail is swept, and a sentence that repeated the
+    number would go false the day ``audit.SWEEP_INTERVAL_SECONDS`` moved, with nothing
+    going red. This one is prose rather than a value cell, so it reads as a frequency.
+    """
+    for size, noun in ((3600, "hour"), (60, "minute")):
+        if seconds >= size and seconds % size == 0:
+            count = seconds // size
+            return f"once an {noun}" if count == 1 else f"every {count} {noun}s"
+    return f"once every {_plural(seconds, 'second', '').strip()}"
+
+
 def settings_rows(settings: Settings) -> list[SettingRow]:
     """Everything the Settings screen states, read off the live configuration object.
 
@@ -1359,10 +1379,12 @@ def settings_rows(settings: Settings) -> list[SettingRow]:
             variables=("HASHI_AUDIT_RETENTION_DAYS",),
             note=(
                 "The audit log records what you changed — who you added, which node "
-                "you applied — and an entry older than this is deleted, swept once an "
-                "hour. Anything from 1 to 365 days is accepted, and no value means "
-                "forever: a record with no end is the thing this project is built not "
-                "to keep. Nothing is swept while this control plane is off."
+                "you applied — and an entry older than this is deleted, swept "
+                f"{_how_often(audit.SWEEP_INTERVAL_SECONDS)}. Anything from "
+                f"{AUDIT_RETENTION_MIN_DAYS} to {AUDIT_RETENTION_MAX_DAYS} days is "
+                "accepted, and no value means forever: a record with no end is the "
+                "thing this project is built not to keep. Nothing is swept while this "
+                "control plane is off."
             ),
         ),
         SettingRow(

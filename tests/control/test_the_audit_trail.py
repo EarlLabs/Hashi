@@ -44,7 +44,12 @@ from control.app.models import (
 )
 from control.app.models.audit import LABEL_MAX_LENGTH
 from control.app.services import apply, audit, nodes, relay, revocation, rotation
-from control.app.settings import Settings
+from control.app.settings import (
+    AUDIT_RETENTION_DEFAULT_DAYS,
+    AUDIT_RETENTION_MAX_DAYS,
+    AUDIT_RETENTION_MIN_DAYS,
+    Settings,
+)
 from edge.bootstrap import node_stack
 
 from .conftest import GENERATED_SSH_KEY
@@ -116,11 +121,25 @@ def test_both_labels_are_exactly_as_wide_as_the_values_they_may_hold() -> None:
     characters of text that can come from a remote host, it sits one attribute away
     from ``state`` (which this table is allowed to record), and a label composed from
     it does not fit here.
+
+    ALL FOUR permitted sources are checked, not the two obvious ones. The guard cuts
+    both ways: a source column widened past this one would make ``record`` raise on a
+    perfectly legitimate change — a 500 out of ``enable_transport`` for a long
+    transport name — and nothing else would fail first. Widening a source means
+    widening this column in the same change, or narrowing the source back.
     """
     for column in ("first_label", "second_label"):
         assert AuditEntry.__table__.columns[column].type.length == LABEL_MAX_LENGTH
-    assert Node.__table__.columns["name"].type.length <= LABEL_MAX_LENGTH
-    assert Friend.__table__.columns["nickname"].type.length <= LABEL_MAX_LENGTH
+    for table, column in (
+        (Node, "name"),
+        (Friend, "nickname"),
+        (NodeTransport, "transport_name"),
+    ):
+        assert table.__table__.columns[column].type.length <= LABEL_MAX_LENGTH, (
+            f"{table.__tablename__}.{column} no longer fits in an audit label, so "
+            "recording a change about it would raise instead of being recorded"
+        )
+    assert max(len(state.value) for state in NodeState) <= LABEL_MAX_LENGTH
     assert Node.__table__.columns["state_detail"].type.length > LABEL_MAX_LENGTH
 
 
@@ -161,13 +180,20 @@ def test_no_route_writes_the_trail() -> None:
 
     A route that recorded would be a rule that holds for the surface somebody
     remembered — and the delivery endpoint is a route.
+
+    ``AuditEntry`` is searched for as well as the service, and that is not belt and
+    braces: the helper is one way to write this table and ``session.add(AuditEntry(…))``
+    off ``control.app.models`` is the other, so a sweep for the import alone would be
+    an instrument narrower than the rule it states.
     """
     offenders = [
         path.relative_to(APP)
         for directory in ("api", "panel")
         for path in sorted((APP / directory).rglob("*.py"))
-        if "services import audit" in path.read_text()
-        or "services.audit" in path.read_text()
+        if any(
+            marker in path.read_text()
+            for marker in ("services import audit", "services.audit", "AuditEntry")
+        )
     ]
     assert offenders == [], (
         "a route writes the audit trail — it belongs in the service that makes the "
@@ -598,8 +624,20 @@ def test_the_window_is_bounded_and_no_value_means_forever() -> None:
     A record with no end is what the charter objects to, so the absence of an off
     switch is the decision rather than a missing feature.
     """
-    assert Settings.model_fields["audit_retention_days"].default == 30
-    for refused in (0, -1, 366, 10_000):
+    assert (
+        Settings.model_fields["audit_retention_days"].default
+        == AUDIT_RETENTION_DEFAULT_DAYS
+        == 30
+    )
+    # Driven off the same constants the Settings screen composes its sentence from, so
+    # a bound that moves moves both, and the screen cannot come to state a window this
+    # field would refuse.
+    for refused in (
+        AUDIT_RETENTION_MIN_DAYS - 1,
+        -1,
+        AUDIT_RETENTION_MAX_DAYS + 1,
+        10_000,
+    ):
         with pytest.raises(pydantic.ValidationError):
             Settings(
                 secret_key="x" * 32,
@@ -607,7 +645,11 @@ def test_the_window_is_bounded_and_no_value_means_forever() -> None:
                 operator_password_hash="scrypt$32768$8$1$c2FsdA==$aGFzaA==",
                 audit_retention_days=refused,
             )
-    for accepted in (1, 30, 365):
+    for accepted in (
+        AUDIT_RETENTION_MIN_DAYS,
+        AUDIT_RETENTION_DEFAULT_DAYS,
+        AUDIT_RETENTION_MAX_DAYS,
+    ):
         assert (
             Settings(
                 secret_key="x" * 32,
