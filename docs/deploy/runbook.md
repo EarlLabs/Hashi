@@ -507,9 +507,14 @@ public hostname (*Reaching the panel*):
    container dials out and back, which works; `172.17.0.1` is the fallback if the public
    address is awkward. `ssh_user root`, port 22, private key = the contents of
    `~/.ssh/hashi-node`.
-2. **Enable a transport: `amneziawg` (or `wireguard`) on UDP 51820.**
+2. **Enable a transport: `amneziawg` (or `wireguard`) on UDP 51820.** Right here it
+   is the right choice, because this box dials no hop. Read *The one combination that
+   will not render* before you make it the entry end of one.
 3. **Apply.**
-4. **Add a friend**, open their subscription link, load it into a stock client.
+4. **Add a friend**, open their subscription link, load it into a stock client. The
+   WireGuard family is a config *file* rather than a URI, so it is the
+   `?format=client-config-file` form of that link that carries it — the plain link is
+   empty on a box that offers only `amneziawg`, and empty is not an error.
 
 **Not Reality on this box.** Caddy holds 443/TCP for the panel, and Reality's whole
 camouflage is *being* on 443. Its declared range is `(443, 65535)`, so 8443 validates —
@@ -539,7 +544,10 @@ Everything from Shape A applies to box E, plus:
 2. Prepare **L** with *Preparing a leaf* above, then register **E** as a node
    (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
    from E).
-3. Enable a **friend-facing** transport on E.
+3. Enable a **friend-facing** transport on E — a VLESS one, and **not** `amneziawg` or
+   `wireguard`. E dials a hop, and a kernel tunnel for friends on such a node is
+   accepted by the panel and refused at apply: *The one combination that will not
+   render*, below.
 4. Build the hop from the panel's hop form: entry = E, leaf = L, transport =
    `amneziawg`. The entry dials the leaf, always — E sits behind a Russian carrier NAT
    and cannot be dialled — so L listens and E reaches out.
@@ -574,8 +582,10 @@ node. Nothing is contested and nothing is co-located.
 2. Prepare **E** and **L** with *Preparing a leaf* above — one script run each — and
    register both as nodes. Both `ssh_host` values are real remote addresses this time; the
    control container needs outbound SSH to each.
-3. Enable **`vless_reality` on E, port 443** — free here, because the panel is on another
-   box. Give it a `decoy_host` of your own choosing.
+3. Enable **`vless-reality` on E, port 443** — free here, because the panel is on another
+   box. Give it a `decoy_host` of your own choosing. A VLESS transport is not merely
+   convenient here: E dials a hop, and that is the only kind of friend-facing transport
+   such a node can render at all (*The one combination that will not render*).
 4. Build the hop: entry = E, leaf = L, transport = `amneziawg`.
 5. Apply both nodes. Add friends. Their subscription contains E and never L: a hop is
    never granted to a friend and never appears in a subscription, because a friend
@@ -591,20 +601,116 @@ both.
 
 ---
 
+## The one combination that will not render
+
+**On a node that dials a hop, friends may not be on a kernel tunnel.** Following this
+runbook used to produce exactly that: `amneziawg` for box E's friends, because Shape A
+names it, and `amneziawg` for the hop E dials, because the hop requires it.
+
+The panel now takes both rows. Two instances of one transport on one node are ordinary —
+they collide only on a **listening port** and on a **config name**, and two `amneziawg`
+rows on two ports share neither. What refuses is the **apply**, on the entry, which
+leaves the node `degraded` with this on its page:
+
+> `amneziawg could not be rendered for this node — EgressNotRenderable:` … *A tunnel whose
+> packets this node's kernel routes cannot send them out through a different interface, so
+> they would leave by the node's own route instead — which is the silent failure the hop
+> exists to prevent. Give this node's friends a transport that terminates their connection
+> and re-originates it, or take the hop away.*
+
+**That is a refusal, not a defect.** A wg-quick-family tunnel hands a friend's decrypted
+packets to the entry's own routing table, and the only route this project renders for a
+hop is source-based, from the hop interface's own address. A friend's packets never match
+it, so they would leave by the entry's own route — an exit in the country the hop exists
+to leave, with every screen green. Refusing beats that (`docs/decisions.md`, decision 3).
+The **leaf** end of the same hop renders fine; it is the friend-facing side on the entry
+that cannot.
+
+**What to give an entry node's friends instead.** A transport whose data plane
+*terminates* the connection and originates a new one, which is what the refusal asks for.
+In this image that is the VLESS pair, `vless-reality` and `vless-ws-tls`. Both are Xray,
+which forwards no packet in the kernel: it accepts the friend's connection and opens its
+own, and on a node with a hop that new connection is bound to the hop's near address. So
+it can only reach the internet through the hop, and while the hop is down it cannot be
+opened at all — fail closed, as a property of the rendered file rather than a rule someone
+has to remember.
+
+Between the two, `vless-reality` needs nothing placed on the host: it borrows a decoy's
+handshake, so give it a `decoy_host` of your own choosing and never a shared one.
+`vless-ws-tls` needs a real certificate and key **already on the node**, named by path —
+nothing in this project puts them there — so it is the right answer only on a host where
+you already terminate TLS for a name you own.
+
+`amneziawg` and `wireguard` stay exactly right for friends on a node with **no** hop:
+Shape A's single box, and a leaf. There the same row renders a local exit, which is the
+shape a real client was measured carrying traffic on.
+
+**The two families are delivered differently, and you find that out before your friends
+do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
+is a config file: the same token, `?format=client-config-file`, an archive. A friend whose
+node offers only AmneziaWG and whose client opens the plain link gets an empty document
+rather than an error — so hand them the `?format=` URL, and expect the plain link to carry
+entries again once that node's friends are on a VLESS transport.
+
+### If you already built it the other way
+
+The way out is in the panel, and it is **removal** rather than withdrawal. Withdrawing the
+friend-facing `amneziawg` does stop the apply failing — a withdrawn row is not rendered at
+all — but it leaves the row on the node still holding its listening port and its config
+name, its users' material still minted for a transport that node can no longer render, and
+a trap for whoever offers it again: the same apply fails the same way. Removing it takes
+the row, the material, the port and the name.
+
+1. **Nodes → transports** on the entry box. Both `amneziawg` rows are listed, and the
+   second one created carries a config name of its own — it reads `amneziawg
+   (amneziawg-2)` — so the two cannot be confused. The hop end is the row whose standing
+   begins *one end of a hop*, and it is drawn with no buttons at all.
+2. **remove** the friend-facing one, and read the dialog before you confirm: removal
+   destroys the material every user holds on that row and frees its port and its config
+   name, and it is the only action that does either. `withdraw` beside it is the
+   reversible one, and it is not what gets you out of this.
+3. **Enable a VLESS transport** for friends on that node, on a port nothing else there
+   listens on.
+4. **Apply the node.** Removal does not push: until you apply, the host is still running
+   the container the panel has stopped showing.
+
+Two things removal deliberately does not do. It does not revoke anybody — those users lose
+that one entry at their next refresh and keep everything else. And it does not unlink the
+config the last apply wrote under `/opt/hashi/conf/`: that file still holds the node's
+private key and every credential that transport carried, and nothing in this project ever
+unlinks a rendered config — the same is true after a withdrawal and after a dissolved hop.
+Once you have applied, nothing on the node serves that file and no copy of what is in it
+remains in this panel; what is left is key material at rest on a host that can be seized. Do not go editing `/opt/hashi` by hand over it (see the rules below). It is one
+more reason a host you are finished with is rebuilt rather than tidied.
+
+To take the hop away instead, use the **Hops** screen. Removing or withdrawing one end of
+a hop is refused wherever you ask for it, because it would leave the other end holding a
+tunnel to an exit that is no longer configured.
+
+---
+
 ## Rules that are not optional
 
 - **Never plain WireGuard on the entry→leaf hop.** That hop crosses the border by
   definition, and a protocol-blocked transport there defeats the topology even in phase
-  1. Use AmneziaWG or another obfuscated transport.
+  1. Use AmneziaWG or another obfuscated transport. This one is enforced rather than
+  advised: the hop form offers only the transports that can carry a hop at all, which
+  in this image is `amneziawg` and nothing else.
 - **Never present plain WireGuard to a friend as something that works from a Russian
   mobile network.** TSPU protocol-blocks it. It works everywhere else.
 - **A decoy host is chosen per node and never shared.** There is no project default and
   there must never be one — if every node borrows the same handshake, the fleet becomes
   enumerable by that fact alone.
-- **One transport per node, once.** Enabling a transport that a node already has is
-  refused, hop or not. So the hop transport and the friend-facing transport on the same
-  node must be *different transports* (backlog item 34 is the fix; until then, plan
-  around it).
+- **A node may run one transport twice. What it may not do is run it twice on one
+  port.** Two rows on one node collide on the **listening port** — with its protocol,
+  so a TCP transport and a UDP one on the same number are two sockets and no conflict —
+  and on the **config name**, which for the wg-quick family is also the interface name.
+  Nothing else collides. A **disabled** row still holds both, because freeing them would
+  move the collision to the moment somebody switches it back on; removing the row is the
+  only thing that gives them back.
+- **A friend-facing kernel tunnel and a hop still cannot share a node**, which is a
+  different rule and the one that bites — *The one combination that will not render*,
+  above.
 - **One friend per node on the WireGuard family.** AmneziaWG and plain WireGuard mint a
   shared tunnel address today, so a second friend on the same node collides on
   `AllowedIPs` and the node refuses, loudly, and goes `degraded` (backlog item 33). VLESS
