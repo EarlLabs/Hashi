@@ -13,6 +13,7 @@ from edge.registry import (
     KeyKind,
     KeyScope,
     KeySpec,
+    Layer4,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -24,6 +25,10 @@ META = TransportMeta(
     # It terminates TLS itself, from the decoy's certificate chain — it must NOT
     # be given one of ours, and it must not sit behind our Caddy.
     needs_tls=True,
+    # The socket it binds, which is a different question from ``family`` above —
+    # `control` reads this one to decide whether two transports on one node may
+    # hold the same port number, and reads ``family`` for nothing at all.
+    listens_on=frozenset({Layer4.TCP}),
     # 443 is included deliberately (Reality is *supposed* to look like HTTPS) but
     # is not a default: a fleet where every node listens on 443 is still a fleet
     # you can enumerate by probing 443. The operator picks per node.

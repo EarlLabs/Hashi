@@ -62,6 +62,7 @@ def _package_files() -> dict[str, str]:
                 KeyKind,
                 KeyScope,
                 KeySpec,
+                Layer4,
                 SubscriptionFormat,
                 TransportMeta,
             )
@@ -69,6 +70,7 @@ def _package_files() -> dict[str, str]:
             META = TransportMeta(
                 name="acme-tunnel",
                 family="tcp-tls",
+                listens_on=frozenset({Layer4.TCP}),
                 needs_tls=True,
                 port_range=(443, 65535),
                 config_format=ConfigFormat.XRAY_JSON,
@@ -382,11 +384,12 @@ BROKEN_DECLARATIONS = {
     "no client-scoped identity": (
         textwrap.dedent(
             '''
-            from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+            from edge.registry import KeyKind, KeyScope, KeySpec, Layer4, TransportMeta
 
             META = TransportMeta(
                 name="acme-tunnel",
                 family="tcp-tls",
+                listens_on=frozenset({Layer4.TCP}),
                 needs_tls=True,
                 port_range=(443, 65535),
                 key_material=(
@@ -405,11 +408,12 @@ BROKEN_DECLARATIONS = {
     "a nonsensical port range": (
         textwrap.dedent(
             '''
-            from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+            from edge.registry import KeyKind, KeyScope, KeySpec, Layer4, TransportMeta
 
             META = TransportMeta(
                 name="acme-tunnel",
                 family="tcp-tls",
+                listens_on=frozenset({Layer4.TCP}),
                 needs_tls=True,
                 port_range=(65535, 443),
                 key_material=(
@@ -423,11 +427,12 @@ BROKEN_DECLARATIONS = {
     "identified on the wire AND allowed on a hop": (
         textwrap.dedent(
             '''
-            from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+            from edge.registry import KeyKind, KeyScope, KeySpec, Layer4, TransportMeta
 
             META = TransportMeta(
                 name="acme-tunnel",
                 family="udp",
+                listens_on=frozenset({Layer4.UDP}),
                 needs_tls=False,
                 port_range=(1024, 65535),
                 key_material=(

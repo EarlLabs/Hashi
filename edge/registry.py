@@ -178,6 +178,29 @@ class SubscriptionFormat(StrEnum):
     CLIENT_CONFIG_FILE = "client-config-file"
 
 
+class Layer4(StrEnum):
+    """A transport-layer protocol a transport's listening socket binds.
+
+    Declared because `control` has to answer one question the node's kernel would
+    otherwise answer for it at three in the morning: may these two transports sit on
+    one node's one port? Two sockets on one number are a collision only when they are
+    the same protocol — a TCP proxy on 8443 and an obfuscated UDP tunnel on 8443 are
+    two sockets and no conflict, and the data planes run with ``network_mode: host``,
+    so this is a real question about a real bind.
+
+    NOT ``TransportMeta.family``, which is the answer to a different question and says
+    so: its contract check states that `control` reads it *"to decide nothing at all —
+    an operator reads it to tell UDP from TCP"*. It is free text (``"tcp-tls" | "udp" |
+    …``), so a transport declaring ``"quic"`` or ``"udp-obfuscated"`` would be sorted
+    into a bucket of its own and would collide with nothing. A rule keyed on it would
+    be a rule expressed in terms of the wrong concept, which is the exact defect M15
+    exists to close, pointed the other way.
+    """
+
+    TCP = "tcp"
+    UDP = "udp"
+
+
 class KeyScope(StrEnum):
     """Whether a piece of material belongs to a node or to one friend."""
 
@@ -244,6 +267,16 @@ class TransportMeta:
     name: str
     family: str          # "tcp-tls" | "udp" | ...
     needs_tls: bool
+
+    # Which transport-layer protocols this transport's listener actually binds, on the
+    # port below. A SET because a transport may legitimately bind both, and because the
+    # question asked of it is "do these two overlap" rather than "are these two equal".
+    #
+    # Read by `control` to decide whether two transports on one node may hold the same
+    # port number (``control/app/services/placement.py``). It is the one thing in this
+    # declaration that is about the SOCKET rather than about the protocol's shape, which
+    # is why it is not ``family``: see ``Layer4``.
+    listens_on: frozenset[Layer4]
 
     # The ports this transport may legitimately listen on, inclusive. A range
     # rather than a single number because the operator picks within it per node —
@@ -578,6 +611,18 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
             f"transport {meta.name!r} declares no protocol family. `control` reads it to "
             "decide nothing at all — but an operator reads it to tell UDP from TCP, and "
             "an empty one is a blank column on the fleet page."
+        )
+
+    if not meta.listens_on or not all(
+        isinstance(layer, Layer4) for layer in meta.listens_on
+    ):
+        raise ContractViolation(
+            f"transport {meta.name!r} does not declare which transport-layer protocols "
+            "its listener binds. `control` reads it to decide whether two transports may "
+            "share one node's port number, and a transport that declares none would be "
+            "treated as colliding with nothing — so the first pair on one port would be "
+            "found by a container that cannot bind. Declare `listens_on`, as a frozenset "
+            "of Layer4."
         )
 
     low, high = meta.port_range

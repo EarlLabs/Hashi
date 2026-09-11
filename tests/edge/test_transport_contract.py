@@ -26,6 +26,7 @@ from edge.registry import (
     FormatNotDeclared,
     KeyKind,
     KeyScope,
+    Layer4,
     SubscriptionFormat,
     TransportMeta,
     discover,
@@ -63,6 +64,15 @@ def test_meta_is_well_formed(name: str) -> None:
     assert isinstance(meta, TransportMeta)
     assert meta.name == name
     assert meta.family, f"{name}: no protocol family declared"
+    # What its listener BINDS, which is a different question from the family above and
+    # the only one `control` decides anything with: whether two transports on one node
+    # may hold the same port number (M15, ``control/app/services/placement.py``). A
+    # transport declaring none would be read as colliding with nothing, and the pair
+    # would be found by a container that cannot bind.
+    assert meta.listens_on, f"{name}: does not declare what its listener binds"
+    assert all(isinstance(layer, Layer4) for layer in meta.listens_on), (
+        f"{name}: listens_on must hold Layer4 members, got {meta.listens_on!r}"
+    )
     low, high = meta.port_range
     assert 1 <= low <= high <= 65535, f"{name}: nonsensical port range {meta.port_range}"
 

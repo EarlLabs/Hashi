@@ -224,12 +224,32 @@ class Stat:
     meta: str
 
 
+def placed_as(transport_name: str, config_name: str) -> str:
+    """What to call one transport ON one node, given a node may run two of them — M15.
+
+    The transport's own name while that is the whole truth, which it is for every row
+    written before M15 and for every first instance since — so nothing already on a
+    screen changes appearance. A second instance is qualified by the name it is placed
+    under, because that name is the config file on the host and, for the wg-quick family,
+    the network interface: it is the answer to "which of these two am I looking at", and
+    it is the same answer ``/api`` gives as ``config_name``.
+
+    Here rather than in a template, like every other sentence this screen shows: a
+    template that composed this would be a second definition of it, and the three screens
+    that list a node's transports would eventually disagree.
+    """
+    if config_name == transport_name:
+        return transport_name
+    return f"{transport_name} ({config_name})"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class TransportChip:
     """One transport enabled on a node, as the Nodes screen tags it.
 
-    ``name`` is whatever the transport declared about itself — the console compares it
-    to nothing, and the template that renders these prints it without ever naming one.
+    ``name`` is whatever the transport declared about itself, qualified by ``placed_as``
+    when this node runs more than one of it — the console compares it to nothing, and the
+    template that renders these prints it without ever naming one.
     ``offered`` is the operator's own answer to "is this in a subscription", and
     ``for_friends`` distinguishes a friend-facing transport from one end of a hop, so a
     tunnel between two of our own nodes cannot be misread as something a person is
@@ -458,6 +478,10 @@ class OfferRow:
     so it has no offer to withdraw and the screen says so rather than showing a button
     whose only outcome is a refusal.
 
+    ``transport`` is qualified by ``placed_as`` where a node runs two instances of one
+    transport, which M15 permits — without it the two are the same word twice on every
+    screen that lists them.
+
     Nothing here moves when a user connects. Both flags move when the operator acts,
     which is the test ``docs/decisions.md`` sets for whether a cell may be on a screen.
     """
@@ -563,7 +587,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
             drift=await drift_of(session, node),
             transports=tuple(
                 TransportChip(
-                    name=row.transport_name,
+                    name=placed_as(row.transport_name, row.config_name),
                     offered=row.enabled,
                     for_friends=row.purpose == TransportPurpose.FRIENDS,
                 )
@@ -677,7 +701,7 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
         OfferRow(
             id=row.id,
             node=node.name,
-            transport=row.transport_name,
+            transport=placed_as(row.transport_name, row.config_name),
             offered=row.enabled,
             for_friends=row.purpose == TransportPurpose.FRIENDS,
             standing=_standing(row.purpose, row.enabled),
@@ -827,7 +851,7 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                 KeyRow(
                     id=row.id,
                     node=node.name,
-                    transport=row.transport_name,
+                    transport=placed_as(row.transport_name, row.config_name),
                     scope=KEY_SCOPE_NODE if for_friends else KEY_SCOPE_HOP,
                     fingerprint=fingerprint,
                     # The rule, printed exactly where a value could otherwise have gone.

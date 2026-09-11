@@ -20,11 +20,9 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     String,
     UniqueConstraint,
-    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -221,30 +219,27 @@ class NodeTransport(Base, TimestampMixin):
         # the same box, so the old rule made a node that followed both pieces of advice
         # impossible — and, with no delete for a node transport, impossible forever.
         #
-        # So uniqueness moved onto the two things that genuinely collide on a host:
+        # So uniqueness moved onto the two things that genuinely collide on a host: the
+        # CONFIG NAME, which this table holds, and the LISTENING PORT, which it cannot.
         #
-        # * the LISTENING PORT. The data plane runs with ``network_mode: host``, so two
-        #   transports asking for one port are two daemons and one bind. Expressed over
-        #   ``params`` because the port is the transport's own value in a document this
-        #   zone does not model — ``services.transports.PORT_FIELD`` is the one field
-        #   name `control` knows, and ``test_the_schema_and_the_console_agree_about_the
-        #   _port_field`` holds the two strings together. A transport that names no port
-        #   yields NULL here and Postgres treats NULLs as distinct, which is exactly
-        #   right: nothing to collide over.
-        # * the CONFIG NAME, which for the wg-quick family is also the network interface
-        #   name — ``edge`` derives it from the config file's stem. Two rows sharing it
-        #   would be two configs at one path and, for that family, one interface the
-        #   second container cannot create.
+        # The config name is the stem of the row's file on the node and, for the
+        # wg-quick family, the network interface name ``edge`` derives from it. Two rows
+        # sharing it would be two configs at one path and one interface the second
+        # container cannot create. It is ours to choose and true of the row, so it is a
+        # constraint here — per NODE, never fleet-wide: two nodes writing
+        # ``amneziawg.conf`` is the ordinary case.
         #
-        # Both are per NODE. Nothing here is unique across the fleet: two nodes
-        # listening on the same port is the ordinary case.
+        # THE PORT RULE IS NOT HERE, and that is a decision rather than an omission. Two
+        # transports collide on a port only when they bind the same number over the same
+        # transport-layer PROTOCOL — a TCP proxy and an obfuscated UDP tunnel on 8443 are
+        # two sockets — and the protocol is declared by the transport's own package
+        # (``TransportMeta.listens_on``), not by anything in this row. Expressing it in
+        # SQL would mean storing a copy of somebody else's declaration on every row,
+        # which goes stale the day they change it; this codebase already makes that call
+        # the same way for ``config_format``. So the port rule lives in
+        # ``services.placement``, which every path that writes a port goes through, and
+        # that module's header says why.
         UniqueConstraint("node_id", "config_name", name="uq_node_transport_config_name"),
-        Index(
-            "uq_node_transport_port",
-            "node_id",
-            text("(params ->> 'port')"),
-            unique=True,
-        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

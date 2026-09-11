@@ -375,6 +375,7 @@ async def replace_params(
     await placement.port_is_free(
         session,
         node=await nodes.get_node(session, node_transport.node_id),
+        transport_name=node_transport.transport_name,
         port=placement.port_of(validated),
         excluding=node_transport.id,
     )

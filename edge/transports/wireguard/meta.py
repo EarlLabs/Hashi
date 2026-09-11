@@ -12,6 +12,7 @@ from edge.registry import (
     KeyKind,
     KeyScope,
     KeySpec,
+    Layer4,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -25,6 +26,10 @@ META = TransportMeta(
     # No TLS at all, and no impersonation of anything. It must not be given a
     # certificate and must not sit behind our Caddy.
     needs_tls=False,
+    # The socket it binds, which is a different question from ``family`` above —
+    # `control` reads this one to decide whether two transports on one node may
+    # hold the same port number, and reads ``family`` for nothing at all.
+    listens_on=frozenset({Layer4.UDP}),
     # 51820 is WireGuard's conventional port and is inside the range, but there is no
     # default: a fleet where every node listens on 51820 is a fleet you can enumerate
     # with one scan, and this protocol is already identifiable by its handshake.

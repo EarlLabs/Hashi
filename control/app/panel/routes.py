@@ -535,9 +535,18 @@ async def _enable_form(
     ``tuning`` is per transport and comes from ``services/transports.py``, which reads
     every box out of the transport's own model — so this dialog names no protocol, no
     field and no port, exactly as the establish-hop dialog does not. The list of
-    protocols it may offer at all is the image's own answer (``offerable_transports``)
-    minus what this node already runs, so the form cannot present an action whose only
-    outcome is a refusal.
+    protocols it may offer is the image's own answer (``offerable_transports``) and
+    nothing is subtracted from it.
+
+    IT USED TO SUBTRACT what the node already ran, on the reasoning that the form should
+    not present an action whose only outcome is a refusal. That reasoning went with the
+    rule it was built on: since M15 a node may carry two instances of one transport —
+    the runbook asks for exactly that, a friend-facing AmneziaWG and a hop over
+    AmneziaWG on one box — and the subtraction counted hop ends too, so hop-then-friends
+    was impossible from the only surface an operator has while friends-then-hop worked.
+    A filter cannot answer "is a second one legal here" without repeating the port rule,
+    which is ``services.placement``'s single answer; so it does not try, and a genuine
+    collision arrives as a refusal on this dialog with the port named.
 
     NO BOX CAN EXIST FOR KEY MATERIAL and that is structural: ``operator_tuning`` is
     built from ``operator_params``, which subtracts everything the transport declares as
@@ -546,10 +555,7 @@ async def _enable_form(
     """
     node = await nodes.get_node(session, node_id)
     offers = await console.offers_on(session, node_id)
-    running = {offer.transport for offer in offers}
-    installed = [
-        name for name in transports.offerable_transports() if name not in running
-    ]
+    installed = list(transports.offerable_transports())
     return {
         "node": node,
         "offers": offers,
@@ -558,8 +564,8 @@ async def _enable_form(
         "values": values or {},
         "errors": errors or {},
         # A refusal about the request rather than about one box — a transport this image
-        # cannot deliver, one already enabled here, a node that is gone. Shown inside the
-        # dialog because that is where the operator is.
+        # cannot deliver, a port this node already binds, a node that is gone. Shown
+        # inside the dialog because that is where the operator is.
         "failure": failure,
     }
 

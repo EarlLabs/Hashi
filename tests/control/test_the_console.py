@@ -1188,11 +1188,14 @@ async def test_the_enable_form_asks_only_what_the_transport_declares(
     dialog = await client.get(f"/panel/nodes/{node_id}/transports")
 
     assert dialog.status_code == 200
-    # vless-reality is already on this node, so it is not offered twice.
-    assert _enable_boxes(dialog.text, "vless-reality") == {}
+    # Every offerable transport gets its boxes, INCLUDING one this node already runs.
+    # The dialog used to subtract those, which since M15 would hide a legitimate action:
+    # a node may carry a second instance of one transport on another port, and the
+    # subtraction counted hop ends too — so a node carrying a hop could never be offered
+    # the same protocol to friends from the only surface an operator has. Whether a
+    # second one is legal here is ``services.placement``'s single answer and arrives as a
+    # refusal naming the port, not as a missing form.
     for name in transports_service.offerable_transports():
-        if name == "vless-reality":
-            continue
         boxes = _enable_boxes(dialog.text, name)
         assert set(boxes) == set(transports_service.operator_params(name)), name
         material = transports_service.key_material_names(name)
@@ -1542,7 +1545,7 @@ async def test_a_transport_this_form_cannot_offer_gets_the_service_s_answer(
     ``NOT_ITS_PARAMETER`` naming every box on the form, which is what the second half of
     each assertion is written against.
     """
-    from edge.registry import TransportMeta
+    from edge.registry import Layer4, TransportMeta
 
     node = await client.post(
         "/api/nodes",
@@ -1577,6 +1580,7 @@ async def test_a_transport_this_form_cannot_offer_gets_the_service_s_answer(
         name="unreceivable-shape",
         family="tcp",
         needs_tls=False,
+        listens_on=frozenset({Layer4.TCP}),
         port_range=(1024, 65535),
         subscription_formats=frozenset(),
     )
@@ -1858,7 +1862,7 @@ async def test_a_refusal_about_the_request_is_stated_above_the_form(
 
     assert refused.status_code == 422
     reading = _reading(refused.text)
-    assert "already listens on port" in reading, reading
+    assert "already listens on" in reading and "8443" in reading, reading
     assert 'role="alert"' in refused.text
 
 
@@ -2854,13 +2858,14 @@ async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
     ``TransportMeta`` to the rendered cell recognised a protocol by name, the warning
     would follow the name and neither of these rows would move.
     """
-    from edge.registry import TransportMeta
+    from edge.registry import Layer4, TransportMeta
 
     def a_fleet_of_one(**declared) -> None:
         meta = TransportMeta(
             name="unshipped-shape",
             family="udp",
             needs_tls=False,
+            listens_on=frozenset({Layer4.UDP}),
             port_range=(1024, 65535),
             **declared,
         )

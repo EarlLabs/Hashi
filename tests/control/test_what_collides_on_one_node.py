@@ -18,7 +18,7 @@ from sqlalchemy import text
 
 from control.app.errors import Conflict, NodeOperationFailed
 from control.app.models import NodeTransport
-from control.app.services import apply, nodes, placement, rotation
+from control.app.services import apply, console, nodes, placement, rotation
 from control.app.services import transports as transports_service
 from edge.bootstrap import node_stack
 
@@ -342,13 +342,20 @@ async def test_retyping_a_port_onto_one_the_node_already_uses_is_refused(
 
 # --- the schema holds the same rule -------------------------------------------
 
-async def test_the_database_holds_both_rules_itself(session) -> None:
-    """A rule nobody can bypass is a constraint, and both of these are.
+async def test_the_database_holds_the_half_of_the_rule_it_can_hold(session) -> None:
+    """The config name is a constraint. The port is not, and that is the decision.
 
     Read out of Postgres rather than off the model, because the claim is about the
     database an operator's script talks to: a rule that lives only in Python is one a
-    fixture, a migration or a future service walks around, and the failure mode is a node
-    whose second container cannot start.
+    fixture, a migration or a future service walks around.
+
+    The absent one is asserted too. A unique index over ``(node_id, params ->> 'port')``
+    would be WRONG rather than merely strict — it cannot see which transport-layer
+    protocol a row binds, so it refuses a TCP transport and a UDP transport sharing a
+    port number, which collide over nothing. A pre-M15 database is free to hold exactly
+    that pair, and ``deploy/docker/entrypoint.sh`` runs ``alembic upgrade head`` on every
+    boot, so such an index would have turned sound data into a control plane that does
+    not start.
     """
     names = set(
         (
@@ -361,32 +368,59 @@ async def test_the_database_holds_both_rules_itself(session) -> None:
     )
 
     assert "uq_node_transport_config_name" in names
-    assert "uq_node_transport_port" in names
     # The rule that was replaced is gone rather than left beside the new one: two rules
     # about the same thing is how one of them stops being true.
     assert "uq_node_transport" not in names
+    assert "uq_node_transport_port" not in names
 
 
-async def test_the_schema_and_the_console_agree_about_the_port_field(session) -> None:
-    """``PORT_FIELD`` is one string in two places, and they must not drift.
+async def test_a_tcp_and_a_udp_transport_may_share_one_port_number(
+    client, wg_params, reality_params
+) -> None:
+    """A port number is not a port, and the runbook puts this pair within reach.
 
-    ``NodeTransport``'s unique index is written over ``params ->> 'port'`` because a
-    model cannot import a service, so the literal is in the schema and the name the rest
-    of `control` knows is ``transports.PORT_FIELD``. This is the join between them: the
-    index's own definition, read back out of Postgres, has to name the same field.
+    ``docs/deploy/runbook.md`` names 8443 as a port Reality validates on, and the
+    obfuscated UDP transport's own range covers it. Two sockets, no bind conflict — and
+    a refusal here would be the M15 defect pointed the other way: a rule expressed in
+    terms of the wrong concept, namely the number rather than the number AND the
+    protocol.
     """
-    definition = (
-        await session.execute(
-            text(
-                "SELECT indexdef FROM pg_indexes "
-                "WHERE tablename = 'node_transports' "
-                "AND indexname = 'uq_node_transport_port'"
-            )
-        )
-    ).scalar_one()
+    node_id = await a_node(client, "layers-1", "192.0.2.85")
+    shared = reality_params[transports_service.PORT_FIELD]
 
-    assert f"'{transports_service.PORT_FIELD}'" in definition, definition
-    assert "node_id" in definition
+    tcp = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert tcp.status_code == 201, tcp.text
+
+    udp = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": HOP_TRANSPORT,
+            "params": {**wg_params, "port": shared},
+        },
+    )
+
+    assert udp.status_code == 201, udp.text
+    # And the two declarations that make it true are what was consulted, not a name.
+    assert placement.binds_of("vless-reality").isdisjoint(
+        placement.binds_of(HOP_TRANSPORT)
+    )
+
+
+async def test_the_port_a_row_holds_is_compared_as_the_database_would(
+    client, session, wg_params
+) -> None:
+    """``8443`` and ``"8443"`` are one port, whatever a transport stored it as.
+
+    Every shipped transport declares an ``int`` and pydantic coerces, so this is a
+    property of ``params`` being a document the transport owns rather than a live bug —
+    which is exactly why it is asserted rather than assumed.
+    """
+    assert placement.port_of({transports_service.PORT_FIELD: 8443}) == "8443"
+    assert placement.port_of({transports_service.PORT_FIELD: "8443"}) == "8443"
+    assert placement.port_of({}) is None
 
 
 async def test_the_port_constraint_is_per_node_and_not_fleet_wide(
@@ -483,3 +517,53 @@ async def test_dissolving_a_hop_frees_what_it_held(client, session, wg_params) -
 
     assert reused.status_code == 201, reused.text
     assert reused.json()["config_name"] != HOP_TRANSPORT
+
+
+# --- the operator can create it, read it back and reach it --------------------
+
+async def test_the_console_tells_the_two_instances_apart(
+    client, session, wg_params
+) -> None:
+    """Two rows of one transport must not be the same word twice on every screen.
+
+    The whole complaint M15 makes about the old rule is that it was invisible. Unlocking
+    the shape and then drawing it as two identical chips would be the same failure one
+    screen over — so the placed name qualifies the label, and only where it differs, so
+    nothing that existed before this milestone changes appearance.
+    """
+    leaf_id, _, _ = await a_leaf_carrying_both(client, wg_params)
+
+    rows = await console.offers_on(session, leaf_id)
+    labels = sorted(row.transport for row in rows)
+
+    assert len(labels) == 2, labels
+    assert len(set(labels)) == 2, labels
+    assert HOP_TRANSPORT in labels, labels
+    # The qualified one names the file on the host, which is the answer to "which of
+    # these two am I looking at".
+    qualified = next(label for label in labels if label != HOP_TRANSPORT)
+    assert qualified.startswith(f"{HOP_TRANSPORT} ("), qualified
+
+    # A node running ONE of a transport is untouched: no parentheses, no change.
+    plain = await console.offers_on(session, await a_node(client, "solo-1", "192.0.2.86"))
+    assert plain == []
+    assert console.placed_as(HOP_TRANSPORT, HOP_TRANSPORT) == HOP_TRANSPORT
+
+
+async def test_the_enable_dialog_still_offers_a_transport_the_node_already_runs(
+    client, wg_params
+) -> None:
+    """The new freedom has to work in both directions, from the only surface there is.
+
+    The dialog used to subtract every transport the node already had a row for, hop ends
+    included — so friends-then-hop worked and hop-then-friends did not, and the second is
+    the shape a leaf legitimately takes. Whether a second instance is legal is
+    ``placement``'s single answer; the form no longer pre-empts it.
+    """
+    node_id = await a_node(client, "dialog-1", "192.0.2.87")
+    await offered(client, node_id, wg_params)
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert dialog.status_code == 200
+    assert f'data-transport-group="{HOP_TRANSPORT}"' in dialog.text
