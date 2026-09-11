@@ -969,7 +969,7 @@ still operable rather than merely still rendering.
 
 ---
 
-## → M9 — The fleet screens, and the old page retires · planned 2026-09-08
+## ✅ M9 — The fleet screens, and the old page retires · planned 2026-09-08 · done 2026-09-11
 
 Nodes, Hops, Transports and Keys & configs, with the add-node and establish-hop
 dialogs. Same design, same rules as M8 — read its prose first, it carries the
@@ -1031,10 +1031,10 @@ scenarios that already cover it must stay green against the new screens:
 `test_rotation_does_not_move_the_link.py`. `make test-control` is the gate.
 
 **Done when**
-- [ ] Every action the old pages offered has a home on a new screen: add node,
+- [x] Every action the old pages offered has a home on a new screen: add node,
       enable and disable a transport, apply, probe, set state, establish and tear
       down a hop, rotate keys, replace params.
-- [ ] Establishing a hop asks three questions; the other 24 parameters are behind
+- [x] Establishing a hop asks three questions; the other 24 parameters are behind
       the disclosure, each showing its own transport's default as a placeholder.
       **Correction, 2026-09-10 — the second clause was written on an assumption
       that was never true, and the line is left in place with this beside it.**
@@ -1056,13 +1056,13 @@ scenarios that already cover it must stay green against the new screens:
       so an empty box means "this will be refused", not "use the default", and the
       operator learns it before they submit rather than after 22 refusals. The
       reasoning is recorded in `docs/decisions.md`.
-- [ ] The disclosure says, before it is opened, how many of its parameters this
+- [x] The disclosure says, before it is opened, how many of its parameters this
       transport requires. Derived from the transport; a written number goes stale.
       **Added 2026-09-10 with the correction above** — it is what makes the
       acceptance line below answerable at all.
-- [ ] No template names a transport, a country, an address or a port.
-- [ ] No key material appears anywhere in the panel; fingerprints are truncated.
-- [ ] `pages/index.html` and `pages/node.html` are gone and nothing links to them.
+- [x] No template names a transport, a country, an address or a port.
+- [x] No key material appears anywhere in the panel; fingerprints are truncated.
+- [x] `pages/index.html` and `pages/node.html` are gone and nothing links to them.
 
 acceptance: yes
 On the stand, register a node, enable a transport on it and apply — every step
