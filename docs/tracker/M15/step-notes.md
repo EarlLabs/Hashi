@@ -281,3 +281,120 @@ introduced. **On the field checklist** (`docs/tracker/field-checklist.md`, item 
 because it is observable only on a real host. A product fix would be an apply that
 reconciles the directory against what it just rendered — `apply`/`edge.bootstrap`,
 a step of its own.
+
+---
+
+# Established by M15.3 — the runbook, and a belief that was wrong in three documents
+
+## The contradiction was never only about uniqueness
+
+`amneziawg` on Shape A's single box is **right**, because that box dials no hop:
+`nodes._EGRESS` gives `(FRIENDS, no hop) → Egress.LOCAL`, which renders. The advice
+becomes wrong **the moment that box becomes an entry with a hop** — the flip is
+`relay.exit_through_hop`, which selects `RELAY_ENTRY` rows only and ignores
+`enabled`. So a leaf is genuinely unaffected, and the runbook now says exactly
+that rather than condemning Shape A wholesale.
+
+**For friends on a node that dials a hop:** the VLESS pair. They qualify because
+their `render.py` imports `exit_origin` and their templates emit `sendThrough`
+bound to the hop's near address, where the wg-quick family goes through
+`wg_quick_egress` and is refused when `exit_via` is not the tunnel's own address.
+**`vless-reality` is the practical answer** — `vless_ws_tls/params.py` requires
+`certificate_path`/`certificate_key_path` and nothing in `scripts/`, `deploy/` or
+`edge/bootstrap/` places a certificate on a node.
+
+**The hop's `amneziawg` mandate survived the check**: `hop_transports()` returns
+exactly `['amneziawg']` — `wireguard` excluded by `hop_capable=False`, both VLESS
+by `subscription_expressible` — and the hop form reads that same function.
+
+## The capability table, and why three of its columns are machine-checked
+
+The runbook now carries one four-row table stating which transport may serve
+friends on a hop-dialling node, on a hop-less node, and which may carry the hop.
+`tests/infra/test_deploy_runbook.py` derives all three columns from code:
+
+- column 2 from **which of `edge.egress`'s two expressions a transport's render
+  module imports** — read with `ast.parse`/`ast.ImportFrom`, not a line regex, so
+  a docstring quoting the other import cannot trip it;
+- column 3 from `meta.subscription_formats`;
+- column 4 from `transports.hop_transports()`.
+
+Plus: every `transport = \`x\`` a shape tells an operator to type must be
+hop-capable; no shape that builds a hop may name a table-"no" transport in a
+numbered step about friend-facing transports; and each such shape must point at
+the new section.
+
+**`_egress_expression` is sound for the question asked** because
+`nodes.egress_for` assigns `Egress.HOP` per purpose-and-hop, never per transport —
+so "imports `wg_quick_egress`" really is "refused when its packets must leave via
+a hop". Column 4 is derived separately for the same reason: `wg_quick_egress` is
+also what lets `amneziawg` carry the hop end.
+
+**A transport added to `edge/transports/` without a table row turns
+`make test-infra` red.** That is the intended cost, and it is the durable half of
+M15: the contradiction that survived eleven milestones cannot come back silently.
+
+**The table's convention is load-bearing:** every cell in columns 2–4 must commit
+in its **first word** to `yes` or `no`; qualification comes after. The new section
+is titled `## The one combination that will not render` and three places
+cross-reference it by that exact title.
+
+## A wrong belief, traced to its source — record this rather than re-learning it
+
+**"A failed apply marks the node degraded" is true of two of the three ways an
+apply fails, and false of the third.**
+
+`apply.apply_node` calls `render_for_node` at `apply.py:367`; then `target_for`
+inside its own `try/except` that calls `_record_failure` (`:398-401`); then opens
+the connection inside the second `try:` at `:403`, whose handler records and
+degrades.
+
+- A **push** failure (SSH, `prepare`, `place_config`, `restart`, the verify) and a
+  **`target_for`** failure (no address, an unloadable stored key) **do** record the
+  reason and mark the node `degraded`.
+- A **render** refusal does **neither**. `render_for_node` raises before either
+  `try:` is entered, nothing is written to the host, no `_record_failure` runs —
+  and `models/node.py` notes a draft→degraded transition would be refused by the
+  state machine anyway.
+
+**The panel still shows the banner**, because the route catches `DomainError`
+regardless, which is why the belief reads as correct from the screen.
+
+**The consequence is the part worth keeping:** `NodeState.serving()` is
+`(ACTIVE,)`, so an **already-active node whose render now refuses stays active and
+stays in every friend's link**, serving its last-applied config, with nothing red
+anywhere on the Nodes screen.
+
+**Two render refusals reach real operators today** — `EgressNotRenderable` on a
+friend-facing kernel tunnel on a hop-dialling node (M15.3's subject), and
+`AmbiguousPeerRoute` on a second friend on the WireGuard family (backlog item 33,
+which is M17's subject).
+
+**The source: `control/app/panel/routes.py:1659` and `:1665-1666`** still say a
+failed apply marks the node degraded. `control`-zone, so out of M15.3's diff —
+**it is a one-line correction whenever a control task next opens that file.** It
+is the likely origin of the belief that reached `docs/deploy/runbook.md` (twice)
+and `docs/tracker/field-checklist.md`, both now corrected.
+
+**And it leaves a real question that is a decision, not a comment fix:** *should*
+a render refusal degrade the node? Doing so would need the state machine to allow
+draft→degraded. Today an operator has no signal on the Nodes screen that a node
+is serving a configuration they did not choose.
+
+## The orphaned config's extension is the transport's
+
+`edge/bootstrap/node_stack.py`'s `EXTENSION` is keyed by `ConfigFormat`:
+WireGuard family `.conf`, VLESS pair **`.json`**. The `.json` case is the one that
+matters, because this section is what sends an operator to VLESS on an entry node
+— so the next orphan they create holds the Reality node key, the
+`ws_path_secret` and every friend's UUID.
+`test_the_orphan_exception_covers_every_extension_a_config_is_written_with` reads
+`set(EXTENSION.values())` and requires every one to be named in both statements of
+the exception, and the `rm` target to end in no literal extension — so a third
+config format turns it red rather than leaving one orphan unnamed.
+
+## Backlog
+
+Item 34 was closed by M15.1/M15.2 and carries a paragraph saying so; **its status
+cell was deliberately left `queued`**, following item 25's precedent (row still
+`blocked` beside prose recording it closed). An implementer marks nothing done.
