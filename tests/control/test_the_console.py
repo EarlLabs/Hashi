@@ -29,7 +29,13 @@ from sqlalchemy import select
 from control.app import settings as settings_module
 from control.app.api import schemas
 from control.app.errors import Conflict, NodeOperationFailed, ParamsRefused
-from control.app.models import Credential, Node, NodeTransport, TransportPurpose
+from control.app.models import (
+    AuditAction,
+    Credential,
+    Node,
+    NodeTransport,
+    TransportPurpose,
+)
 from control.app.panel import routes as panel_routes
 from control.app.panel import wording
 from control.app.services import apply as apply_service
@@ -2991,6 +2997,7 @@ async def every_console_surface(client, reality_params) -> list[str]:
         *HOP_SURFACES,
         *TRANSPORT_SURFACES,
         *KEY_SURFACES,
+        *AUDIT_SURFACES,
         *SETTINGS_SURFACES,
         f"/panel/hops/{entry_end}/dissolve",
         # Both rotation dialogs, on both kinds of row: one friend-facing transport and
@@ -4527,6 +4534,350 @@ async def test_the_settings_screen_reads_the_live_object_and_not_the_environment
 
 
 
+# --- Audit log (M10.4) --------------------------------------------------------
+
+# THE LIST IS THE TEST. One entry, like the Transports and Settings screens: nothing an
+# operator can do from this screen changes what is on it, so there is no self-swapping
+# fragment to refresh and no dialog to open.
+AUDIT_SURFACES = ("/panel/audit",)
+
+# What each recorded change says on the screen, written out here rather than read from
+# ``wording._EVENTS`` — a test that imports the answer agrees with the code by
+# construction. The duplication IS the instrument: the stored value is a machine key, so
+# this table is the only place the sentence an operator reads is stated twice, and the
+# second time is where somebody asks whether it says what happened. Acceptance judges
+# this wording.
+#
+# The labels are deliberately unlike each other so an argument swapped in a format
+# string cannot pass: a sentence naming the transport where the node belongs reads
+# wrongly here, and would read plausibly with two node-shaped labels.
+TRAIL_NODE = "leaf-ams-1"
+TRAIL_TRANSPORT = "vless-reality"
+EVENT_SENTENCES = {
+    AuditAction.FRIEND_ADDED: f"user {TRAIL_NODE} added",
+    AuditAction.FRIEND_REVOKED: f"user {TRAIL_NODE} revoked — link is dead",
+    AuditAction.NODE_ADDED: f"node {TRAIL_NODE} added",
+    AuditAction.NODE_STATE_CHANGED: f"{TRAIL_NODE} is now {TRAIL_TRANSPORT}",
+    AuditAction.NODE_APPLIED: f"config applied to {TRAIL_NODE}",
+    AuditAction.TRANSPORT_ENABLED: f"{TRAIL_TRANSPORT} enabled on {TRAIL_NODE}",
+    AuditAction.TRANSPORT_OFFERED: f"{TRAIL_TRANSPORT} offered again on {TRAIL_NODE}",
+    AuditAction.TRANSPORT_WITHDRAWN: f"{TRAIL_TRANSPORT} withdrawn on {TRAIL_NODE}",
+    AuditAction.HOP_ESTABLISHED: f"hop established from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
+    AuditAction.HOP_DISSOLVED: f"hop torn down from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
+    AuditAction.KEYS_ROTATED: f"keys rotated for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
+    AuditAction.PARAMS_REPLACED: f"parameters replaced for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
+}
+
+
+def test_every_recorded_change_is_said_in_plain_words() -> None:
+    """Twelve actions, twelve sentences, and no machine key on the screen.
+
+    The trail stores an enum value because a free-text column is where a reason, a
+    parameter or a remote host's words end up (decision 8). The cost of that is that
+    ``node-state-changed`` is not English, and this is the test that says the screen
+    pays it: every declared action has a sentence, the sentence is the console's own
+    vocabulary rather than the database's, and no two actions read alike.
+
+    Driven off ``AuditAction`` itself, so a thirteenth action fails here — in the change
+    that adds it, which is the only moment anybody is deciding what it should say.
+    """
+    said = {}
+    for action in AuditAction:
+        assert action in EVENT_SENTENCES, (
+            f"{action.value} has no sentence on the audit screen — a recorded change "
+            "that reads as its own machine key is a change the operator has to decode"
+        )
+        sentence = wording.an_event(action, TRAIL_NODE, TRAIL_TRANSPORT)
+        assert sentence == EVENT_SENTENCES[action], action.value
+        assert action.value not in sentence, (
+            f"the {action.value} sentence still carries the stored key"
+        )
+        assert "{" not in sentence and "}" not in sentence, action.value
+        said.setdefault(sentence, action)
+    assert len(said) == len(AuditAction), "two actions read identically on the screen"
+
+
+def test_tearing_down_a_half_hop_says_what_it_can_and_nothing_it_cannot() -> None:
+    """The one row that legitimately arrives with a single label.
+
+    ``relay.dissolve_hop`` records one label when the far end was already gone, which is
+    what the second column being nullable is for — and the row stores no side, so the
+    sentence cannot claim this was the entry or the leaf. It says what is true instead
+    of guessing, and it does not print the word ``None`` where a name would be, which is
+    what a two-label sentence would do with a missing one.
+    """
+    sentence = wording.an_event(AuditAction.HOP_DISSOLVED, TRAIL_NODE, None)
+
+    assert sentence == f"hop torn down at {TRAIL_NODE} — the other end was already missing"
+    assert "None" not in sentence
+
+
+async def a_trail(client, reality_params) -> list[str]:
+    """One walk of the product, and the sentences it should leave on the screen.
+
+    Newest first, the way the screen orders them — so a test can assert the order by
+    reading down the page.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={"name": "leaf-ams-1", "address": "192.0.2.40", "location_label": "Testland"},
+    )
+    assert node.status_code == 201, node.text
+    node_id = node.json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+    assert (
+        await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
+    ).status_code == 200
+    added = await client.post("/api/friends", json={"nickname": "mira"})
+    assert added.status_code == 201, added.text
+    revoked = await client.post(f"/api/friends/{added.json()['id']}/revoke")
+    assert revoked.status_code == 200, revoked.text
+
+    return [
+        "user mira revoked — link is dead",
+        "user mira added",
+        "leaf-ams-1 is now active",
+        "vless-reality enabled on leaf-ams-1",
+        "node leaf-ams-1 added",
+    ]
+
+
+async def test_the_audit_screen_names_what_the_operator_changed(
+    client, settings, reality_params
+) -> None:
+    """M10's acceptance line: change things about the fleet, then read them back.
+
+    Three columns and no fourth. ``actor`` is the configured operator RENDERED — there
+    is one, the trail stores none, and a stored actor would be a per-person record on
+    the machine the charter calls most worth seizing. ``source`` is dropped outright
+    rather than left blank (docs/decisions.md, 2026-09-11).
+    """
+    expected = await a_trail(client, reality_params)
+
+    body = (await client.get("/panel/audit")).text
+    reads = _reading(body)
+
+    headers = [cells for cells in _table_rows(body) if cells == ["time", "actor", "event"]]
+    assert len(headers) == 1, "the audit table's columns are time / actor / event"
+    assert "source" not in reads.lower()
+
+    for sentence in expected:
+        assert sentence in reads, sentence
+    for action in AuditAction:
+        assert action.value not in reads, (
+            f"the screen printed the stored key {action.value!r} — the sentence is "
+            "rendered, and a machine key in front of the operator is the design's own "
+            "failure mode"
+        )
+    # The actor column, on every row, from the live settings object.
+    assert reads.count(settings.operator_username) >= len(expected)
+
+    # Newest first, read down the page. The five changes above happened in one order and
+    # this is the only assertion that would catch them being shown in the other.
+    positions = [reads.index(sentence) for sentence in expected]
+    assert positions == sorted(positions), (
+        "the trail is not newest first — what the operator changed most recently is "
+        "what they came to this screen to see"
+    )
+
+    # Read-only, like Settings: there is nothing to do here and nothing to undo. An
+    # audit log with a control on it is a log somebody can act on rather than read.
+    # Read as the FRAGMENT, and ``<button`` is deliberately not on this list: every
+    # screen includes the console header, whose one button is the panel's global "add
+    # user" primary. It belongs to the shell rather than to this screen, exactly as the
+    # log-out form does on the Settings screen's own version of this assertion.
+    fragment = (
+        await client.get("/panel/audit", headers={"HX-Request": "true"})
+    ).text.lower()
+    for markup in ("<form", "<input", "<textarea", "<select", "hx-post", "hx-delete"):
+        assert markup not in fragment, markup
+    assert fragment.count("<button") == 1, (
+        "the audit screen has a control of its own — there is nothing on this screen to "
+        "do, and the one button a console screen carries is the shell's"
+    )
+
+
+async def test_an_empty_trail_says_what_would_appear_here_and_what_never_will(
+    client,
+) -> None:
+    """The state the stand opens in, and the one a quiet fleet returns to.
+
+    An entry older than the window is deleted, so "empty" is not only a first-run
+    state — and an operator who reads an empty screen as "nothing is being recorded"
+    stops trusting a record they may later need. It also says the half that matters more
+    than any of it: what is never named here is anybody using the service.
+    """
+    body = (await client.get("/panel/audit")).text
+    reads = _reading(body)
+
+    assert "Nothing changed yet" in body
+    assert "<table" not in body
+    assert console_service.TRAIL_NOTHING_YET in reads
+
+
+async def test_the_audit_screen_states_the_window_this_process_actually_keeps(
+    client, settings, monkeypatch, reality_params
+) -> None:
+    """The footnote is DERIVED, in M10.2's shape, with its premise asserted first.
+
+    A trail's window is the operator's only defence against it becoming a record with no
+    end, so the screen states it — and states it from the same constant the sweeper runs
+    on, rather than from a sentence that would stay green the day either moved.
+    """
+    assert audit_service.SWEEP_INTERVAL_SECONDS != 20 * 60, "the interval is not moved"
+    monkeypatch.setattr(audit_service, "SWEEP_INTERVAL_SECONDS", 20 * 60)
+    await a_trail(client, reality_params)
+
+    reads = _reading((await client.get("/panel/audit")).text)
+
+    assert f"deleted {settings.audit_retention_days} days after it was written" in reads
+    assert "swept every 20 minutes" in reads
+    assert "once an hour" not in reads
+    assert "nothing is swept while this control plane is off" in reads
+    # Times are stated as UTC exactly because the cells print a clock with no zone on
+    # them; the rows are normalised in the service so the claim is true of every one.
+    assert "Times are UTC" in reads
+    # Nothing is being hidden: with a handful of entries and a cap of two hundred, the
+    # screen must not carry the clause that says older ones are being left off.
+    assert "anything older than that is not on it" not in reads
+
+
+async def test_a_trail_longer_than_the_screen_says_so_rather_than_truncating_quietly(
+    client, session, settings
+) -> None:
+    """The cap is stated, because an audit log that silently drops rows is worse.
+
+    Written straight through the service rather than by performing two hundred and one
+    operations: the claim is about what the screen does with more entries than it shows,
+    and the recording points have their own tests.
+
+    COMMITTED ONE AT A TIME, and that is not tidiness. ``at`` is a ``server_default`` of
+    ``now()``, which in Postgres is transaction-START time, so four entries written in
+    one transaction carry the same instant and come back in whatever order the id
+    tiebreaker happens to give — which would make the assertion below about a UUID
+    sort. One transaction each is also what every recording point in this codebase
+    actually does.
+    """
+    cap = 3
+    for index in range(cap + 1):
+        audit_service.record(session, AuditAction.NODE_ADDED, first_label=f"leaf-{index}")
+        await session.commit()
+
+    entries = await console_service.trail_entries(session, limit=cap)
+    assert len(entries) == cap, "the cap is not applied at all"
+
+    shown = console_service.trail_window(settings, shown=len(entries), limit=cap)
+    assert f"the most recent {cap} changes" in shown
+    assert "anything older than that is not on it" in shown
+    # The newest are the ones kept — the oldest is also what the retention sweep deletes
+    # first, so the screen and the sweep agree about which end of the trail goes.
+    assert [entry.first_label for entry in entries] == ["leaf-3", "leaf-2", "leaf-1"]
+
+
+async def test_no_subscription_link_or_token_can_reach_the_audit_screen(
+    client, settings, reality_params
+) -> None:
+    """M10's acceptance line's second half, asserted rather than read.
+
+    The trail cannot hold either of them — the labels are values read off inventory rows
+    and there is no free-text column — so this is a check on the SCREEN: a template that
+    looked up a friend by nickname to link to their subscription would satisfy every
+    rule the table keeps and put a bearer credential on the one page whose subject is a
+    permanent-looking record.
+
+    ``pytest.fail`` and never a bare ``assert`` on the token, for the reason the key
+    sweep gives: pytest rewrites a failing assertion into a message containing both
+    operands, and a scenario that put a live credential into a CI log would be a worse
+    defect than the one it closes.
+    """
+    await a_serving_node(client, reality_params)
+    added = await client.post("/api/friends", json={"nickname": "mira"})
+    assert added.status_code == 201, added.text
+    url = (
+        await client.get(f"/api/friends/{added.json()['id']}/subscription")
+    ).json()["url"]
+    token = url.rsplit("/", 1)[-1]
+    assert len(token) > 16, "the premise: a real bearer token was issued"
+
+    body = (await client.get("/panel/audit")).text
+    readings = (body, html.unescape(body))
+
+    for label, text in (("a subscription token", token), ("a subscription URL", url)):
+        if any(text in reading for reading in readings):
+            pytest.fail(
+                f"the audit screen rendered {label}. This screen names what the "
+                "operator changed; a link or the token in one is a bearer credential, "
+                "and this is the page it would sit on longest"
+            )
+    assert "/sub/" not in body
+    assert settings.public_base_url not in body
+
+
+async def test_nothing_on_the_audit_screen_moves_when_somebody_uses_the_service(
+    client, reality_params
+) -> None:
+    """The cell test (docs/decisions.md, 2026-09-09), applied to the whole screen.
+
+    Every column here moves when the OPERATOR acts. None of them may move because a
+    person used the service — so the screen is rendered, a real subscription is fetched
+    the way a friend's client fetches it, and the screen is rendered again and required
+    to be the same page. It is the screen-level twin of
+    ``test_fetching_a_subscription_writes_nothing_to_the_trail``: that one proves no row
+    was written, this one proves nothing a reader could see moved either.
+    """
+    await a_serving_node(client, reality_params)
+    added = await client.post("/api/friends", json={"nickname": "mira"})
+    token = (
+        await client.get(f"/api/friends/{added.json()['id']}/subscription")
+    ).json()["url"].rsplit("/", 1)[-1]
+
+    before = (await client.get("/panel/audit", headers={"HX-Request": "true"})).text
+
+    for _ in range(3):
+        served = await client.get(f"/sub/{token}")
+        assert served.status_code == 200, "the premise: a real subscription was served"
+
+    after = (await client.get("/panel/audit", headers={"HX-Request": "true"})).text
+
+    assert after == before, (
+        "the audit screen changed because somebody fetched their subscription — a "
+        "record that moves when a person uses the service is the record this project "
+        "exists not to keep"
+    )
+
+
+async def test_the_swept_console_walks_a_trail_that_is_not_empty(
+    client, reality_params
+) -> None:
+    """The premise the two document-wide sweeps rest on, for this screen.
+
+    ``every_console_surface`` feeds decision 9's sweep and both material sweeps, and the
+    audit screen is now on that list — but an empty trail renders an empty state, and a
+    screen with no rows passes every sweep for the wrong reason. This asserts the fleet
+    that list builds actually leaves entries on it, so a leak in a rendered row is
+    something those sweeps could see.
+    """
+    surfaces = await every_console_surface(client, reality_params)
+    assert set(AUDIT_SURFACES) <= set(surfaces), (
+        "the audit screen is not on the list the console's sweeps walk"
+    )
+
+    body = (await client.get(AUDIT_SURFACES[0])).text
+
+    assert "Nothing changed yet" not in body, (
+        "the fleet every_console_surface builds leaves no audit entry, so every sweep "
+        "over this screen is reading an empty state"
+    )
+    rows = [cells for cells in _table_rows(body) if len(cells) == 3]
+    # A node, a transport, a state change, a user and a hop at the very least.
+    assert len(rows) >= 6, rows
+
+
+
 # --- what a browser is allowed to keep (acceptance round 1) -------------------
 
 # Every console URL a browser can navigate to AND htmx can fetch as a fragment. The
@@ -4555,6 +4906,10 @@ TWO_REPRESENTATION_URLS = (
     # URL would be a picture of a configuration the control plane may since have been
     # restarted out of.
     "/panel/settings",
+    # M10.4's, added in the change that added the screen. A fragment of it kept under
+    # the page's own URL would be a picture of the trail as it stood at some earlier
+    # moment — on the one screen whose whole subject is when things happened.
+    "/panel/audit",
 )
 
 

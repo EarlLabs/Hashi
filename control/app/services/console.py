@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.api import schemas
 from control.app.errors import NotFound
 from control.app.models import (
+    AuditAction,
     Credential,
     Friend,
     Node,
@@ -1451,3 +1452,121 @@ def admin_rows(settings: Settings) -> list[AdminRow]:
             variables=("HASHI_OPERATOR_USERNAME",),
         )
     ]
+
+
+# --- the audit log screen (M10.4) --------------------------------------------
+
+# How many entries one navigation renders. The screen has no paging and is not going to
+# grow one: the trail is bounded by retention already, and a second page is a second
+# place a record of what the operator did can be read from. The cap is what keeps a busy
+# month from rendering as one enormous table, and the screen states the number rather
+# than silently truncating — an audit log that quietly hides rows is worse than one that
+# says it is showing the most recent two hundred.
+TRAIL_LIMIT = 200
+
+# What this screen is, said once, at the top — and what it is NOT, which is the half
+# worth the words. The charter's argument is that a record of who used the service is
+# absent rather than withheld, and this is the screen where a reader would otherwise
+# reasonably assume they were looking at one.
+TRAIL_WHAT_IT_HOLDS = (
+    "Every change made to the fleet from this panel or its API, newest first. What it "
+    "does not hold is the point of it: nothing here is about anybody using the service. "
+    "There is no link, no token, no address and no record of a connection — not "
+    "withheld from this screen, but never written down anywhere."
+)
+
+# The empty state, which is what the stand and a fresh install open on — and what an
+# operator sees again on a quiet fleet, since an entry older than the window is deleted
+# rather than kept. It names the two reasons the screen can be empty, because "nothing
+# here" reading as "nothing is being recorded" is how an operator stops trusting a trail
+# they may later need. The second half is the same refusal the lead note makes: this is
+# the screen where a reader would otherwise assume the fleet keeps a connection log.
+TRAIL_NOTHING_YET = (
+    "Nothing has been changed on this control plane yet — or every change that was is "
+    "older than the window this trail keeps, and has been deleted. Add a user, apply a "
+    "node or rotate a key and it is named here. What is never named here is anybody "
+    "using the service: no link, no token, no address and no record of a connection, "
+    "because none of that is written down anywhere."
+)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TrailEntry:
+    """One recorded change, as the screen needs it and no wider.
+
+    The ORM row is deliberately not what the panel is handed. Two of its five columns —
+    the id, and the raw action value — are machine values the screen has no use for, and
+    the sentence an operator reads is composed from ``action`` and the labels at render
+    time (``panel/wording.py``) rather than stored. Handing over the model would put the
+    table itself in the template's reach, which is how a screen acquires a cell nobody
+    decided to show.
+
+    There is no ``actor`` field, and that is decision 8: the trail stores no actor
+    because there is exactly one, so the column is RENDERED from
+    ``settings.operator_username`` — the screen's own ``operator``, which every console
+    screen already has. A stored actor would be a per-person record on the one machine
+    the charter calls most worth seizing, for a value that cannot vary.
+    """
+
+    at: datetime.datetime
+    action: AuditAction
+    first_label: str | None
+    second_label: str | None
+
+
+async def trail_entries(session: AsyncSession, *, limit: int = TRAIL_LIMIT) -> list[TrailEntry]:
+    """The audit screen's rows, newest first.
+
+    Every field here moves when the OPERATOR acts and none of them moves when a person
+    uses the service (``docs/decisions.md``, 2026-09-09): the time is when a change
+    committed, the action is one of twelve declared changes, and a label is a name the
+    operator chose or the registry holds. The delivery endpoint writes no row at all, so
+    there is nothing on this screen for a friend's client to move — asserted in
+    ``tests/control/test_the_audit_trail.py`` and again against the real stack.
+
+    The timestamp is normalised to UTC here rather than in the template, because the
+    screen says once that it prints UTC and that sentence has to be true of every cell:
+    Postgres hands back an aware datetime, and a value that ever arrived naive would
+    otherwise be printed under a claim nothing checked.
+    """
+    return [
+        TrailEntry(
+            at=_in_utc(entry.at),
+            action=entry.action,
+            first_label=entry.first_label,
+            second_label=entry.second_label,
+        )
+        for entry in await audit.recent(session, limit=limit)
+    ]
+
+
+def _in_utc(value: datetime.datetime) -> datetime.datetime:
+    """An aware timestamp in UTC, whatever the driver handed back."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.UTC)
+    return value.astimezone(datetime.UTC)
+
+
+def trail_window(settings: Settings, *, shown: int, limit: int = TRAIL_LIMIT) -> str:
+    """How long an entry survives and how much of the trail is on screen, derived.
+
+    Every number in it is read from what this process is actually using — the operator's
+    retention setting, the sweeper's own interval, and the cap above — for the reason
+    the Settings screen's retention row is derived: a sentence that repeated a number
+    would go false the day one moved, with nothing going red. The last clause is the gap
+    stated rather than hidden, in the same words the Settings row uses.
+    """
+    kept = (
+        f"An entry is deleted {_plural(settings.audit_retention_days, 'day', '').strip()} after "
+        f"it was written, swept {_how_often(audit.SWEEP_INTERVAL_SECONDS)}; nothing is "
+        "swept while this control plane is off."
+    )
+    if shown < limit:
+        return f"Times are UTC. {kept}"
+    # Said as "anything older is not on it" rather than "there are older ones": at
+    # exactly the cap there may be nothing older at all, and a screen that asserts
+    # hidden rows which do not exist is as wrong as one that hides rows silently.
+    return (
+        f"Times are UTC, and this screen shows the most recent {limit} changes — "
+        f"anything older than that is not on it. {kept}"
+    )

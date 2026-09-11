@@ -1,7 +1,8 @@
 """Writing the audit trail, and sweeping it clean again.
 
-WHAT: ``record`` — the one way an entry is written — and the retention sweep that
-      deletes entries older than the configured window.
+WHAT: ``record`` — the one way an entry is written — ``recent``, the one way it is
+      read, and the retention sweep that deletes entries older than the configured
+      window.
 WHY:  decision 8 (``docs/decisions.md``, 2026-09-11). The trail records what the
       operator changed, and its safety is entirely a matter of what CANNOT reach it:
       one function writes it, its labels are values copied whole off inventory rows,
@@ -28,7 +29,7 @@ import contextlib
 import datetime
 import logging
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.db import Database
@@ -82,6 +83,32 @@ def record(
     entry = AuditEntry(action=action, first_label=first_label, second_label=second_label)
     session.add(entry)
     return entry
+
+
+async def recent(session: AsyncSession, *, limit: int) -> list[AuditEntry]:
+    """The newest entries first, capped at ``limit``. The only way the trail is read.
+
+    ORDERED BY ``(at, id)``, descending. The second half is not decoration: ``at`` is a
+    ``server_default`` of ``now()``, which in Postgres is TRANSACTION-start time, so two
+    entries written in one transaction would carry the same instant and come back in
+    whatever order the plan happened to produce. No operation writes twice in one
+    transaction today, so nothing can tie; the id keeps the answer stable if one ever
+    does, and a step that starts recording twice in one transaction needs
+    ``clock_timestamp()`` in a migration rather than the per-statement ordering this
+    column does not have. The id is a UUID, so as a tiebreaker it is arbitrary — what it
+    buys is that two renderings of the same trail agree, not that the later row wins.
+
+    Capped because the screen is a list with no paging: the window is measured in days
+    and a busy fleet can fill it, so the cap is what keeps one navigation from rendering
+    a month of rows. What is dropped is the OLDEST, which is also what the sweep deletes
+    first, and the screen says how many it is showing.
+    """
+    result = await session.execute(
+        select(AuditEntry)
+        .order_by(AuditEntry.at.desc(), AuditEntry.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().unique())
 
 
 async def sweep(session: AsyncSession, *, retention_days: int) -> int:

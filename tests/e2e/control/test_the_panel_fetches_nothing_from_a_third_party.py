@@ -55,6 +55,10 @@ PANEL_PAGES = (
     # fragment and no dialog, because nothing this panel can do changes what the
     # process was started with.
     "/panel/settings",
+    # M10.4's, added in the change that added the screen. Same rule again: nothing an
+    # operator can do from it changes what is on it, so it is one document with no
+    # fragment and no dialog.
+    "/panel/audit",
     # ``/panel/fleet`` was the eighth entry until M9.6 deleted the page.
 )
 

@@ -1,7 +1,7 @@
 """The admin panel — the screen the owner lives in.
 
 WHAT: login, the console (Overview, Users, Nodes, Hops, Transports, Keys & configs,
-      Settings), and every action on each.
+      Audit log, Settings), and every action on each.
 WHY:  criteria 2 and 3 are both phrased "from the panel", so this is not a
       convenience layer over the API — it is where those criteria are met.
 HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
@@ -15,9 +15,9 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
 
 ONE panel, since M9.6. The CONSOLE is the redesign in ``design/`` — a persistent
 sidebar over a swappable ``#main``, one screen per route, every creation flow in a
-dialog. Overview, Users, Nodes, Hops, Transports, Keys & configs and Settings are its
-seven screens — the last of them read-only, with no action on it at all — and every
-action the pre-redesign fleet page carried has a home on one of them: enabling,
+dialog. Overview, Users, Nodes, Hops, Transports, Keys & configs, Audit log and
+Settings are its eight screens — the last two read-only, with no action on either —
+and every action the pre-redesign fleet page carried has a home on one of them: enabling,
 withdrawing and offering a transport and moving a node between states on the Nodes
 screen, both rotations on Keys & configs, both halves of a hop on Hops.
 
@@ -132,6 +132,9 @@ NAV = (
     {"key": "hops", "label": "Hops", "url": "/panel/hops"},
     {"key": "transports", "label": "Transports", "url": "/panel/transports"},
     {"key": "keys", "label": "Keys & configs", "url": "/panel/keys"},
+    # M10.4's, in the design's own order: before Settings, so the two screens that are
+    # about this control plane rather than about the fleet sit together at the bottom.
+    {"key": "audit", "label": "Audit log", "url": "/panel/audit"},
     {"key": "settings", "label": "Settings", "url": "/panel/settings"},
 )
 
@@ -1970,6 +1973,60 @@ async def revoke_friend(
         banner=None if outcome.complete else outcome.summary(),
         events="friends-changed",
         keeping=nickname,
+    )
+
+
+# --- Audit log (M10.4) -------------------------------------------------------
+
+@router.get("/audit", response_class=HTMLResponse)
+async def audit_screen(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """Audit log — what the operator changed, in plain words.
+
+    Three columns, and the design's fourth one — ``source`` — does not exist:
+    ``docs/decisions.md`` (2026-09-11) drops it outright rather than leaving it blank,
+    because an address of a person against a time is the record the charter says is
+    absent here. TIME is when the change committed, ACTOR is the configured operator
+    RENDERED rather than stored (there is one, so the column cannot vary), and EVENT is
+    a sentence composed in ``panel/wording.py`` from a machine key and two labels.
+
+    Every cell passes the test this console applies to every cell (``docs/decisions.md``,
+    2026-09-09): *does it move when a friend connects?* None of them does, and that is a
+    property of the table rather than of this route — the delivery endpoint writes no row
+    at all, which has a scenario of its own in both suites.
+
+    It reads the trail through ``console.trail_entries`` rather than through
+    ``services/audit``, and the reason is mechanical as well as tidy:
+    ``test_no_route_writes_the_trail`` refuses the audit service and the model anywhere
+    under ``api/`` or ``panel/``, so a route that reached for the table directly would go
+    red whether it read it or wrote it. The rule is stronger than the thing it is aimed
+    at, deliberately.
+
+    THE FIRST CONSOLE SCREEN SINCE M9.5 WITH A SESSION AGAIN. Transports and Settings
+    have none; this one is a fact about the fleet, so it queries. No self-swapping
+    fragment and no ``-changed`` trigger: nothing an operator can do from this screen
+    changes what is on it, and every mutation that WOULD is on another screen, which
+    they will navigate back from — a refresh URL here would exist only to be listed.
+    """
+    entries = await console.trail_entries(session)
+    return _screen(
+        request,
+        screen="panel/screens/audit.html",
+        current="audit",
+        title="Audit log",
+        subtitle="what you changed, and when — never who connected to what",
+        context={
+            "entries": wording.the_trail(entries),
+            # The screen's three standing sentences — the lead, the empty state and
+            # the footnote — composed in ``services/console.py`` like every other piece
+            # of console prose, so the tests assert a constant rather than a copy of the
+            # words. The last one is derived from this process's own retention setting
+            # and sweep interval, so it cannot go false the day either moves.
+            "records": console.TRAIL_WHAT_IT_HOLDS,
+            "nothing_yet": console.TRAIL_NOTHING_YET,
+            "window": console.trail_window(
+                request.app.state.settings, shown=len(entries)
+            ),
+        },
     )
 
 

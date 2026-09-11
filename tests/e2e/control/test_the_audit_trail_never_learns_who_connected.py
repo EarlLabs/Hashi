@@ -13,9 +13,11 @@ WHY:  M10's "done when": *"if an audit trail exists, it holds no token, no
       a token" but **no row at all**, because a row saying only "something happened" at
       the second a friend refreshed is already the record.
 HOW:  over real HTTP against the booted stack, and over ``psql`` inside the database
-      container for the reading — there is no screen for the trail until M10.4 and no
-      API that exposes it, and reading the table directly is in any case the honest
-      place to look: the claim is about what is ON DISK, not about what a page renders.
+      container for the reading — deliberately, and still deliberately now that M10.4
+      has given the trail a screen: the claim here is about what is ON DISK, not about
+      what a page renders, and a scenario that read the screen would be blind to a row
+      the screen does not show. What the screen says is
+      ``test_the_audit_screen_names_what_changed_in_plain_words``.
 
       The instrument proves itself inside the scenario. Every count below is taken with
       the same query, and the operator's own actions demonstrably move it — so when the
