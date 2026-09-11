@@ -166,11 +166,21 @@ def test_no_model_records_anything_about_a_connection() -> None:
     The one record that can hurt a real person is the one that must not exist. This
     checks column NAMES across the models, because the way this rule breaks is a
     well-meant ``last_seen_at`` added to help debugging.
+
+    The second group of terms was added by M10.1, before the audit model it guards
+    exists — decision 8 (``docs/decisions.md``, 2026-09-11) refuses the design's
+    ``source`` column on the Audit log and the ``last login`` cell on Settings, and a
+    refusal that lives only in prose is one the next implementer re-decides. Both are
+    about the OPERATOR rather than about a friend, which is exactly why they need
+    pinning here: the charter's argument is about what a seized machine yields, and an
+    address or a login time against the one human at the keyboard is that record.
     """
     models = sorted((CONTROL / "app" / "models").rglob("*.py"))
     forbidden = (
         "last_seen", "last_connected", "connection", "traffic", "bytes_",
         "ip_address", "client_ip", "dns", "usage", "session_count",
+        "source_ip", "remote_addr", "client_address", "actor_ip", "user_agent",
+        "last_login",
     )
     offenders = []
     for path in models:
@@ -179,8 +189,9 @@ def test_no_model_records_anything_about_a_connection() -> None:
             if term in code:
                 offenders.append(f"{path.relative_to(CONTROL)}: {term!r}")
     assert offenders == [], (
-        "a model records something about connections or traffic, which the charter "
-        f"says must not exist anywhere: {offenders}"
+        "a model records something about connections or traffic — or, for the last six "
+        "terms, about where the operator was and when they were there — which the "
+        f"charter says must not exist anywhere: {offenders}"
     )
 
 
