@@ -8,7 +8,44 @@ the part that needed hardware is recorded as *"could not — needs the field"*
 rather than passed.
 
 **Before you start:** the Amsterdam leaf and the Russian entry are the two hosts.
-Nothing in the run touched either of them.
+**Both were read during the run, read-only, with your authorisation of
+2026-09-12** — state was inspected, key material was redacted in anything echoed,
+nothing was written to either host and no capture was taken or kept.
+
+---
+
+## ZERO — two walls that block most of this list. Clear them first.
+
+**Neither is a defect. Both are preconditions, and almost nothing below can be
+observed until they are cleared.**
+
+### 0a. The branch has to be merged and applied before any of this is visible
+
+Every config in `/opt/hashi/conf` on the leaf is dated **2026-09-09 08:41**. The
+live `vless-reality.json` greps **zero** for `"dns"`, `domainStrategy` and
+`sendThrough`. The fleet is running pre-M16 code.
+
+So: **merge the run's branches, then apply to each node**, and only then work
+this list. Checking any DNS item against the fleet as it stands today measures
+the old behaviour and will look like a failure of the new one.
+
+### 0b. The entry will not take the key — and it is the only node that can answer the DNS items
+
+`158.160.67.252` answers and refuses. Seven accounts were tried — `root`,
+`ubuntu`, `hashi`, `admin`, `debian`, `yc-user`, `cloud-user` — every one
+`Permission denied (publickey)`.
+
+The host is **healthy**, not down: the leaf's `amneziawg` shows a live hop to it
+with a handshake seconds old and ~744 KiB in / ~760 KiB out. It is up and
+carrying your traffic. It simply will not take this key.
+
+**Per M19's own finding, that box takes keys from cloud metadata, not from a
+file on disk** — so `authorized_keys` on the host is not where to add one. Add
+it through the provider's metadata for the instance.
+
+**Why this blocks so much:** the entry is the node that dials the hop, so it is
+the only node that gets a `dns` block at all. Items 7, 8, 9, 10, 11, 12 and 13
+are all observations on the entry. The leaf cannot stand in for it.
 
 ---
 
@@ -256,47 +293,76 @@ the deployed config says `warning`, and never lower it, even while debugging.
 
 ---
 
-## Found ON THE LEAF, 2026-09-12 — a container "Up 3 days" serving nothing
+## RETRACTED, 2026-09-12 — "a container Up 3 days serving nothing"
 
-**This was not a checklist item. It was found by looking at the real host, and it
-is the failure shape the charter fears: every signal green, nothing carried.**
+**This section previously claimed the leaf's plain-WireGuard interface was gone
+while its container reported healthy. That claim was false, and the reasoning
+built on top of it was invented. Both are retracted here rather than deleted,
+because the way it went wrong is the same defect this run keeps finding.**
 
-On the Amsterdam leaf (`45.151.69.107`), observed live:
+**What was actually observed, re-checked on the host:**
 
-- `docker ps` shows `hashi-node-wireguard-1` **Up 3 days, RestartCount 0**.
-- Its log shows `wg-quick up` **succeeding** at `2026-09-09T08:41:25Z` — interface
-  created, `10.66.0.1/24` added, MTU set, forward and masquerade rules installed.
-- **There is no `wireguard` interface on the host now**, and nothing listening on
-  its port. `ip -brief link` shows only `amneziawg`. `ss -lnup` shows `51830`
-  (amneziawg) and `49443` (xray) — the plain-WireGuard port is absent.
-- The container's supervisor is alive and sitting in `sleep infinity`.
+- `wireguard` **is up**, addressed `10.66.0.1/24`, listening on `51840`.
+- It has **one peer**, `allowed ips 10.66.0.2/32`.
+- **Last handshake 3 days 13 hours ago; 1.02 KiB received, 252 B sent.**
+- Both node containers run `network_mode: host`, so these are the host's own
+  interfaces — there is no namespace to look inside.
 
-**Why it does not notice.** The supervisor runs `wg-quick up` once and then waits
-on a sleep. It never watches the interface. So the interface can disappear —
-taken down, cleaned up, or never surviving whatever happened on 9 September —
-and the container stays "Up" forever, with `docker ps` and the panel both content.
+**How the false claim was manufactured.** The check was
+`ip -brief link | grep -Ei "wg|awg"`. The string `wireguard` **does not contain
+the substring `wg`**. The pattern could match `amneziawg` and could never match
+`wireguard`, whatever the host's state. It was a grep that could only return one
+answer — *the same "verification that cannot fail" this run has now found seven
+times, and the first one found in the orchestrator's own checking rather than in
+the code.* The companion `ss` check did print `51840`, with an empty process
+column, and that was read as "absent" instead of as what it is.
 
-**This is NOT the recorded image-pin limitation.** That one
-(`docs/decisions.md`, 2026-09-09) is about a legacy-iptables build whose FORWARD
-rules cannot front-run ufw's nft DROP — a *forwarding* problem, with the interface
-present. Here the interface is not present at all.
+**Why the process column is empty, and why it is not a symptom.** Plain
+WireGuard is a **kernel module**: the UDP socket belongs to the kernel and no
+userspace process owns it. `amneziawg` shows `amneziawg-go` beside its port
+because that one *is* a userspace daemon. An empty process column on `51840` is
+the correct and expected output.
 
-**What to check, on both hosts, whenever a transport is enabled:**
+**Item 1 of this checklist — orphaned key material — is NOT confirmed by this
+host.** `/opt/hashi/conf/wireguard.conf` is a **live, bound, in-use config**, not
+an orphan. The item itself stands as written and still needs a field check; what
+is withdrawn is the claim that this host demonstrated it.
+
+### What the host does show, and it matters for M17
+
+`wireguard` carries **exactly one peer, holding exactly one address**
+(`10.66.0.2/32`) out of a `/24`. That is M17.1's problem statement standing on
+real hardware: the transport as deployed today can serve **one friend**, because
+nothing mints a second address. The `/24` is there; 253 addresses in it are
+unreachable because no code hands them out. When M17 lands, this same command is
+the acceptance evidence — the peer list should grow one entry per credential,
+each with its own `/32`.
+
+### The one real hazard, correctly demoted
+
+The supervisor **does** run `wg-quick up` once and then wait on a sleep, never
+watching the interface. So a container *could* report healthy with its interface
+gone. That is a true property of `edge/bootstrap/node_stack.py`'s
+`_WG_QUICK_SUPERVISOR` — but it is a **latent hazard, not an observed failure**,
+and nothing on either host has exhibited it. It is recorded here so it is not
+lost, and it is **not** a defect report.
+
+**The product-side question, unchanged and still for the owner:** a data-plane
+container should not be able to report healthy while the interface it exists to
+run is absent. M1 made `apply` verify the daemon *loaded the config*; nothing
+verifies the interface *stays up*. The cheapest honest fix is for the supervisor
+to watch what it brought up and exit when that goes away — a change to
+`_WG_QUICK_SUPERVISOR`, which M21 has already shown is portability-sensitive.
+
+**The check that actually works** — use this one, not the retracted one:
 
 ```sh
-ip -brief link                 # one interface per enabled wg-family transport
-ss -lnup                       # one listener per enabled transport's port
-docker ps                      # compare: "Up" must not be the only evidence
+ip -brief link | grep -Ei 'wireguard|amneziawg|wg[0-9]'   # matches all three names
+ss -lnup                       # a listener with an EMPTY process column is normal
+                               # for kernel WireGuard; it is not evidence of absence
+docker exec <container> wg show   # peers, handshakes, transfer — the real evidence
+docker ps                      # "Up" must never be the only evidence
 ```
-
-**The product-side question this raises** — for the owner, not decided here: a
-data-plane container should not be able to report healthy while the interface it
-exists to run is absent. M1 made `apply` verify the daemon *loaded the config*;
-nothing verifies the interface *stays up*. The supervisor waits on a sleep rather
-than on the interface, so the cheapest honest fix is for it to watch what it
-brought up and exit when that goes away — which is a change to
-`edge/bootstrap/node_stack.py`'s `_WG_QUICK_SUPERVISOR`, and M21 has already shown
-that script is portability-sensitive.
 
 ---
 
@@ -311,7 +377,8 @@ Checked directly on `45.151.69.107` (root). **Read-only; nothing was changed.**
 | The charter's logging line already holds | `log: {"loglevel": "warning", "access": "none"}` in the live config. M16.1 measured that `warning` is load-bearing — at `info` the same flow writes a destination name 38 times. |
 | The exit address | `curl ifconfig.me` from the leaf returns `45.151.69.107` — its own, as a leaf should. |
 | The host's own resolver | `46.254.22.138` / `46.254.23.138` (the provider's). This is what an **entry** would leak a friend's lookups to before M16 — the whole reason M16 exists. |
-| **Orphaned key material on disk (item 1)** | **Confirmed.** `/opt/hashi/conf/wireguard.conf` — 2008 bytes, 1 `PrivateKey`, 1 `PublicKey`, 1 `[Peer]` — with **no interface and no listener**. `amneziawg.conf` and `vless-reality.json` are live; this one is not. |
+| **Orphaned key material on disk (item 1)** | **NOT confirmed — an earlier "Confirmed" here was withdrawn.** `/opt/hashi/conf/wireguard.conf` is a **live, bound config**: `wireguard` is up on `10.66.0.1/24`, listening on `51840`, one peer. All three files on this host are in use. The retraction and how the false reading was produced are in the RETRACTED section above. Item 1 still needs a field check; this host did not supply it. |
+| **A wg-family transport serves one friend today (M17's premise)** | `wg show` on the leaf: **one peer, `allowed ips 10.66.0.2/32`**, out of a `/24`. Last handshake 3 d 13 h ago, 1.02 KiB in / 252 B out — configured and listening, effectively idle. This is M17.1's problem on real hardware, and the same command is its acceptance evidence once M17 lands. |
 
 **Still to do on the leaf**, once M17 lands: two `amneziawg` instances binding two
 ports side by side (checklist item 3) — the thing M15's whole uniqueness decision

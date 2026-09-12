@@ -1633,7 +1633,7 @@ must have been said earlier, when the friend-facing transport was enabled.
 
 ---
 
-## → M16 — The exit is Amsterdam, the DNS lookup is still Russia · found in review 2026-09-09
+## ✅ M16 — The exit is Amsterdam, the DNS lookup is still Russia · found in review 2026-09-09 · done 2026-09-12 (acceptance: partial — needs the field)
 
 **Found by M3's reviewer, immediately after M3 was proven in the field.** The
 two-hop works: a friend dialling the entry exits at the leaf's address, measured
