@@ -323,3 +323,56 @@ Everything about where a friend's **lookup** leaves (items 8 and 9) needs that
 host, because the leaf has no hop to dial and so is not the node under test.
 Per M19's own finding, that box takes keys from cloud metadata, so a key may have
 to be added there rather than in `authorized_keys`.
+
+---
+
+## HOW ACCEPTANCE VERIFIES ON THE REAL HOSTS — owner's instruction, 2026-09-12
+
+The owner has authorised using the two hosts as test hardware and asked that the
+acceptance agent verify on them, not only on the stand. The permission rule lives
+in `.claude/settings.local.json`.
+
+**Access, as measured 2026-09-12:**
+
+- **Leaf `45.151.69.107` — the `root` account works.** Verified live.
+- **Entry `158.160.67.252` — refuses every account tried** (`root`, `ubuntu`,
+  `hashi`, `admin`, `debian`: `Permission denied (publickey)`). The host is up and
+  healthy: the leaf's `amneziawg` shows a **live hop to `158.160.67.252:51830`**,
+  handshake seconds old, ~744 KiB in / ~760 KiB out. So it is reachable and
+  carrying traffic — it simply will not take this key. Per M19's own finding, that
+  box takes keys from cloud metadata, so a key may have to be added **there**
+  rather than in the file.
+
+**Two capabilities are blocked by the local harness, not by the hosts**, and
+acceptance will hit the same wall:
+
+- A packet capture run remotely is refused by the auto-mode classifier. So the DNS
+  observation (items 8 and 9) cannot be taken that way. **Alternatives that need
+  no capture:** read the entry's rendered config for the `dns` block and the
+  `lookup`-tag routing rule; have the friend's device ask for a name whose
+  authoritative side you control and see which address asked; or open a DNS-leak
+  test page through the tunnel, which reports the resolver's location directly.
+- A raw TCP reachability probe to the hosts is likewise refused, though the shell
+  session itself is allowed.
+
+**The rule that does not bend, whatever the access.** These are live hosts
+carrying a friend's traffic. **Look, do not keep.** A saved packet capture of a
+friend's lookups is exactly the record the charter forbids — the one thing that
+can hurt a real person. Read state, count things, redact key material in anything
+echoed, and never write a capture to disk on either host or bring one back.
+
+**What acceptance should do on the hosts, per milestone:**
+
+- **M15** — two `amneziawg` instances on one node binding two ports, with two
+  interfaces (`ip -brief link`, `ss -lnup`). This is what M15's uniqueness
+  decision rests on and no stand can show.
+- **M16** — the entry's rendered config carries the `dns` block and the routing
+  rule; the leaf's does not (**already verified: it does not**). Then where a
+  lookup lands, by the indirect means above.
+- **M17** — two users on one WireGuard-family transport, each with their own
+  address, both carrying traffic. The interface's peer list and its `transfer:`
+  counters are the evidence; no key material need be read.
+- **M18/M19** — the first-run messages and the bootstrap script's refusals, on a
+  host that has never run hashi. **Do not run the bootstrap script against either
+  live host**: it is written to prepare a fresh node and would rewrite state these
+  two are serving from.
