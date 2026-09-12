@@ -767,10 +767,12 @@ project chose for you; from that moment each existing entry is in the state desc
 
 1. **Nodes → resolver** on each node that is the entry end of a hop — the Hops screen lists
    them. Give an IPv4 address the far end of the hop can reach: a public resolver of your
-   choosing, or one inside the leaf's own network. Not a name, and not an address on the
-   entry itself — either would be answered on the entry's side of the hop, and the panel
-   refuses both. The same call without the panel is `POST /api/nodes/<id>/resolver` with
-   `{"resolver": "<address>"}`.
+   choosing, or one inside the leaf's own network. A name is refused, and so is a loopback
+   address — a stub resolver on the entry would answer from the entry. **An address the
+   entry itself holds on one of its own interfaces is the case nothing here can catch:**
+   the host answers it locally, on the near side of the hop, and neither the panel nor
+   `edge` can see which addresses a host holds. Avoiding that one is yours. The same call
+   without the panel is `POST /api/nodes/<id>/resolver` with `{"resolver": "<address>"}`.
 2. **Apply the node.** Setting the resolver changes the record, not the host.
 
 A new node takes its resolver in **Add a node**, in the box of the same name. A node that
