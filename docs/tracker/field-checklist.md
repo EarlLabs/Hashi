@@ -376,3 +376,58 @@ echoed, and never write a capture to disk on either host or bring one back.
   host that has never run hashi. **Do not run the bootstrap script against either
   live host**: it is written to prepare a fresh node and would rewrite state these
   two are serving from.
+
+---
+
+## From M16.2 — what the real hosts must show that a container fleet cannot
+
+M16.2 built a scenario that proves, in containers, that a friend's lookup leaves
+from the **leaf** and that removing `domainStrategy` makes the resolver see
+nothing at all — while the friend's page loads identically either way. That is the
+bug reproduced, not approximated. **Five things it still cannot answer**, and each
+needs the two hosts.
+
+### 10. The resolver must answer *through the hop*, in time
+
+A tunnel inside a tunnel fragments and adds latency; two containers on a bridge do
+not. **A resolver that answers in the lab can time out from Amsterdam**, and a
+friend then has a node where nothing resolves.
+
+With a friend's config up, ask for a name and time it. If lookups are slow or
+intermittent, the resolver — not the code — is the thing to change; it is
+node-record data precisely so it can be.
+
+### 11. No UDP/53 may leave the entry's own public interface
+
+The scenario counts packets at the **resolver's** side. On the real entry, watch
+its **own** side: while a friend browses, nothing on UDP/53 should leave the
+entry's public address for anywhere.
+
+*(A capture is the natural tool and the local harness refuses to run one remotely.
+Ask the friend's device for a name whose authoritative side you control and see
+which address asked, or open a DNS-leak test page through the tunnel — it reports
+the resolver's location with no capture at all. **Whatever you use: look, do not
+keep.**)*
+
+### 12. The node's own resolver stays the node's own
+
+`/etc/resolv.conf` on the entry still points at the provider's resolver inside the
+Russian VPC — **and that is correct** for the node's own traffic (package updates,
+its own name lookups). What must not appear there is a **friend's** destination
+name. The two paths are meant to be separate; confirm they are.
+
+### 13. The entry must have a resolver at all before any of this can pass
+
+Migration `0005` leaves every existing node with `resolver = NULL`, deliberately.
+A hop-dialling node without one **refuses to render** — surfacing as
+`ConfigRefused`, not as a leak. So on the real entry the first step is to set the
+resolver through the new edit path (**Nodes → resolver**, or
+`POST /api/nodes/<id>/resolver`), then apply. Until then there is nothing to
+observe.
+
+### 14. What must never be claimed from any of this
+
+The charter's first criterion — **surviving a mobile whitelist shutdown** —
+is untouched by M16 and by every test in this run. It is a field observation on a
+real Russian mobile network and nothing here covers it. Do not let a green run be
+read as covering it.
