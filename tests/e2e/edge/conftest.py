@@ -345,6 +345,32 @@ def golden_server_config():
     return golden_config
 
 
+@pytest.fixture(scope="session")
+def material_a_config_names():
+    """Place whatever a rendered config OPENS, and say where each file must be mounted.
+
+    The other half of ``files_the_config_names``: that one says which paths a config
+    expects to find, this one puts a throwaway file at each and hands back the ``-v``
+    arguments that mount them where the config looks. A scenario starting a daemon by
+    hand needs both, and ``DataPlaneStack`` — which does the same two things for a
+    scenario starting one through compose — is no use to it.
+
+    A fixture rather than an import for the reason ``golden_server_config`` gives: pytest
+    runs with ``--import-mode=importlib``, under which importing across test modules is
+    not reliable.
+    """
+
+    def place(config: str, directory: pathlib.Path) -> list[str]:
+        mounts = []
+        for named in files_the_config_names(config):
+            source = directory / pathlib.PurePosixPath(named).name
+            source.write_bytes(throwaway_certificate())
+            mounts.append(f"{source}:{named}:ro")
+        return mounts
+
+    return place
+
+
 @pytest.fixture(scope="module")
 def data_plane_stack(engine, tmp_path_factory):
     """A factory for node data-plane stacks, torn down whatever the test does.
