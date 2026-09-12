@@ -28,7 +28,8 @@
         <div class="field-hint" id="node-resolver-hint">
           Where a user's destination names are looked up while {{ node.name }} dials a
           hop — asked through the hop, so the lookup leaves from its far end. An address,
-          not a name, and not one on this node itself.
+          not a name. One this node itself answers on is the case this panel cannot check
+          for you: the host would answer it here, on the near side of the hop.
         </div>
         {% if errors.get('resolver') %}
         <div class="field-error" id="node-resolver-error" role="alert">{{ errors['resolver'] }}</div>
