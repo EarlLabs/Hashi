@@ -1739,40 +1739,98 @@ this run happened to have exactly one active friend at that moment — including
 M14's proof that a friend carries traffic. That proof stands for what it
 measured; it was one friend, and two would not have rendered at all.
 
-### M17.1 — Decide whether a WireGuard-family transport is friend-facing at all
+### M17.1 — Decided by the owner, 2026-09-11: WireGuard-family transports stay friend-facing, and each user gets a tunnel address of their own
 
-Three honest answers, and the choice is the milestone:
+The plan's M17.1 asked whether a WireGuard-family transport is friend-facing at all. The owner has answered, choosing the first option: yes. The tunnel address becomes per-credential state. It is minted with the credential, released on revocation, and drawn from a pool the operator sizes on the node-transport record. It is never a hardcoded range. The refusal (`AmbiguousPeerRoute`) is not weakened.
 
-- **Allocate a tunnel address per credential.** The natural fix and the largest:
-  the address becomes per-friend state, minted with the credential, released on
-  revocation, and drawn from a pool the operator sizes. It is real IP-address
-  management, which this project has deliberately never had.
-- **Say WireGuard-family transports are hop-only** and stop offering them to
-  friends. `wireguard` is already `hop_capable=False`, which would make it
-  configurable and useful for nothing — so this answer probably means removing
-  it, and keeping `amneziawg` for hops where one peer per end is exactly right.
-- **Say they serve one friend, deliberately** — a personal node for the owner.
-  Honest, narrow, and it should then be refused at *enable* time for a node that
-  already has more than one friend, rather than at apply.
+Carrying out that answer is most of this milestone, and it spans two zones. `CLAUDE.md` keeps cross-zone work in separate diffs, so M17.1 is split into three steps, divided by zone and by what each can prove on its own:
+- **M17.1a** — `edge`.
+- **M17.1b** — `control`.
+- **M17.1c** — `control`.
+
+M17.2 keeps the plan's wording and its meaning, the one the owner named: *"the panel shows how much of the pool is used before I commit."* There is no release between steps. The milestone deploys as a whole.
+
+### M17.1a — edge: a transport declares that each user needs their own address, and edge does the address arithmetic
+
+This is a sixth recorded widening of `edge/registry.py`: `TransportMeta.peer_address: PeerAddress(name, within) | None = None`.
+- `name` is the key the renderers already read a consumer's own address from (`secrets.get(name) or params[name]`). In `params` it is also the pool's first address.
+- `within` is the field whose network bounds the pool.
+- Both WireGuard-family packages declare `PeerAddress("peer_tunnel_address", "tunnel_address")`.
+
+A new pure module, `edge/addressing.py`, sits beside `egress.py`. It is a second argued shared exception, because the arithmetic is protocol-agnostic and the overlap rule is inherently cross-transport. It holds:
+- `pool_problem(first, within, size)`: a sentence or `None`, in `resolver_problem`'s shape;
+- a lazy enumeration of the pool, with pool[0] written byte-identical to the renderers' fallback;
+- `host_of`;
+- `networks_overlap`.
+
+The two packages also refuse a `client_dns` address inside the tunnel's own network. With a pool, that address would be another user's device, and every user's lookups would go to them.
+
+No renderer, template or golden file changes. The pool size is **not** a `Params` field, so the establish-hop dialog, stored hop parameters and hop renders are untouched.
+
+### M17.1b — control: every user on a WireGuard-family transport holds their own address, and a pool too small is refused before anything commits
+
+- **Schema.**
+  - `node_transports.pool_size` (nullable, ≥1).
+  - On `credentials`: an encrypted `tunnel_address`, and a keyed digest over (row, canonical host) under a new HKDF label, unique per row.
+  - Migration `0006`: no backfill, with a downgrade that refuses once pools are in use.
+- **Allocation.**
+  - One allocator (`services/addresses.py`) gives each new credential the lowest free pool address, in `(created_at, id)` order.
+  - One projection feeds both the node's config and the user's file, so `AllowedIPs` and `Address =` cannot diverge.
+  - A transport enabled before this milestone gives out exactly its one typed address, byte-identical.
+- **Sizing and refusals.**
+  - The size is asked for at enable, from the API and the panel.
+  - Every path that grants now grants inside the transaction it commits in: add user, enable, offer, and a node becoming serving.
+  - A pool too small is therefore refused with nothing written. Before this step, four of the five paths committed first and granted afterwards.
+  - No lock is taken. The unique constraint turns a race into a clean refusal, never a shared address.
+- **The pinned test is inverted.** `test_second_subscription_format.py`'s two-user refusal becomes two users rendering at two addresses.
+
+### M17.1c — control: nothing moves an address a device holds, and two interfaces on one node never share a network
+
+- **Resizing.**
+  - Resizing is part of replacing parameters: `replace_params` gains a pool size, audited as `params-replaced`, with no new action and no new endpoint.
+  - Before anything changes, every user still without a stored address is pinned to the address their device already uses, then the new pool is checked against every held address.
+  - This is how a row enabled before pools gets sized, and how the field's two-user row is repaired without touching the working device.
+- **Overlapping networks.**
+  - Placement also refuses a tunnel network that overlaps another WireGuard-family row on the same node, hop ends and withdrawn rows included.
+  - It is checked on enable, on establishing a hop, and on replacing parameters.
+  - The data planes share the host's routing table, so a reply to one interface's user could otherwise reach whoever holds the same address on the other. That is a cross-person hijack no single-file check can see.
 
 ### M17.2 — Whatever is chosen, the panel must say it before the operator commits
 
-Today an operator enables the transport, adds a second friend, and learns at
-apply. See also **M15**: the same shape, where a friend-facing transport
-permanently blocks a hop and nothing says so until the hop is attempted. These
-two are the same class of defect and may share a fix — a transport's constraints
-should be visible where it is chosen.
+Before the operator commits:
+- **Keys & configs** reads `<holders> of <pool>`.
+- **The enable dialog** says how many active users will each take an address.
+- **The add-user dialog** names every full pool and offers no submit button.
+- **Offer and set-active** are withheld on a node whose pool is short, with the pool named.
+- **The Transports screen** says, from the registry's own declaration, which transports give each user an address from a pool sized per node.
 
-**E2E:** `tests/e2e/control/` — enable a WireGuard-family transport on a node
-with two active friends and assert whichever behaviour M17.1 chooses. Note the
-existing suite would not have caught this: it needs *two* friends, and one is the
-natural number to test with.
+No user's address appears anywhere. The runbook stops saying "one friend per node", backlog 33 closes, and the field checklist gains M17's section.
+
+**E2E:** Existing scenarios, updated in M17.1b so the warm shared stand stays green, each give their pool far above any active-user count:
+- `tests/e2e/control/test_the_runbook_shape_a_then_the_hop_it_mandates.py`
+- `test_a_hop_never_reaches_a_friend.py`
+- `test_the_same_token_serves_two_shapes.py`
+
+M17.2 adds `tests/e2e/control/test_a_wireguard_family_transport_serves_every_user.py`:
+- two users on one transport, at two addresses;
+- a pool smaller than the active users refused under its box;
+- a full pool refusing the next user before anything is written, then a resize letting them in (the row is removed in `finally`);
+- rotation keeping every address;
+- revocation freeing one;
+- the hop dialog unchanged.
+
+The stand has no data plane. "Both work" as traffic is a field observation on `amneziawg` on a node with no hop, recorded in `docs/tracker/field-checklist.md`. `make verify` is the gate.
 
 **Done when**
 - [ ] Either a WireGuard-family transport serves every friend on its node, or it
       is refused before an operator can commit to it, with the reason named.
 - [ ] The charter's scale and the transport registry agree about which transports
       can serve a fleet.
+- [ ] Two and three users on one friend-facing `amneziawg` row, and on one `wireguard` row, render with distinct `/32` `AllowedIPs`. Each user's file names the host the node authorises for that user.
+- [ ] A row enabled before M17 with one user renders byte-identical after the upgrade. No working device's address ever moves: not by rotation, revocation, resize or a replaced parameter.
+- [ ] Enable, add user, offer, set active and replace each refuse a pool that cannot hold every active user before anything commits. Each refusal names the node and the transport.
+- [ ] Two WireGuard-family rows on one node cannot share a tunnel network. `AmbiguousPeerRoute` is still tested directly in `edge`, for both packages.
+- [ ] Hop ends are unchanged: no address, no pool, the same dialog boxes, byte-identical renders.
 
 acceptance: yes
 On a node with two friends, offer a WireGuard-family transport and take both
