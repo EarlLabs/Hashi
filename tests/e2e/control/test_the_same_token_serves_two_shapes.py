@@ -21,6 +21,7 @@ tests/edge/test_upstream_validation.py.
 
 import base64
 import io
+import re
 import uuid
 import zipfile
 
@@ -40,6 +41,14 @@ CONFIG_FILE_FORMAT = "client-config-file"
 REALITY_PORT = 8471
 AWG_PORT_SHAPES = 51931
 AWG_PORT_UNTOUCHED = 51932
+
+# How many users a friend-facing row of this transport may hand an address to — M17. The
+# stand is WARM: every scenario in this directory adds users to one control plane and
+# none are removed, so a pool is measured against a fleet that only grows. Low thousands
+# against a /20 tunnel for that reason — the number is a ceiling on people, not a
+# resource, and a pool that only just fitted would turn this file red on the day an
+# unrelated scenario adds a user.
+POOL_SIZE = 2000
 
 
 @pytest.fixture
@@ -64,6 +73,11 @@ def awg_params(port: int, address: str, peer: str) -> dict[str, str]:
         "port": str(port),
         "tunnel_address": address,
         "peer_tunnel_address": peer,
+        # M17's box, which the enable form renders for exactly the transports that give
+        # every user their own address. It is named for its group like every other box on
+        # that form, so the caller's own ``f"{chosen}-{key}"`` mapping carries it without
+        # knowing it is not a parameter of the transport.
+        "pool_size": str(POOL_SIZE),
         "mtu": "1280",
         "junk_packet_count": "4",
         "junk_packet_min_size": "40",
@@ -160,7 +174,7 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
         country=f"Shapeland-{unique}",
         transport={
             "transport_name": "amneziawg",
-            **awg_params(AWG_PORT_SHAPES, "10.81.0.1/24", "10.81.0.2/24"),
+            **awg_params(AWG_PORT_SHAPES, "10.81.0.1/20", "10.81.0.2/20"),
         },
     )
     token = await friend_token(operator, f"twoshapes-{unique}")
@@ -184,7 +198,13 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
     assert f":{AWG_PORT_SHAPES}" in next(iter(mine.values()))
     body = next(iter(mine.values()))
     assert "[Interface]" in body and "[Peer]" in body
-    assert "10.81.0.2/24" in body
+    # AN address out of this transport's pool, written with the prefix the operator typed
+    # — M17, where this used to name the one address every user shared. Deliberately not
+    # the pool's first: this stand is WARM, so every user an earlier scenario created was
+    # granted this transport the moment its node started serving, and they hold the
+    # addresses below this one. That is the behaviour, not a nuisance — what a friend's
+    # file must carry is an address of their own inside the tunnel this node was given.
+    assert re.search(r"Address\s*=\s*10\.81\.\d+\.\d+/20", body), body
 
     # The credential-protecting headers are on BOTH shapes. A second shape that lost
     # no-store would be a bearer-credential body sitting in someone else's cache, and
@@ -251,7 +271,7 @@ async def test_a_friend_on_uri_transports_only_sees_no_change_at_all(
         country=country,
         transport={
             "transport_name": "amneziawg",
-            **awg_params(AWG_PORT_UNTOUCHED, "10.82.0.1/24", "10.82.0.2/24"),
+            **awg_params(AWG_PORT_UNTOUCHED, "10.82.0.1/20", "10.82.0.2/20"),
         },
     )
 

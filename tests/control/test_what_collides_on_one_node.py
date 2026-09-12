@@ -29,6 +29,13 @@ HOP_TRANSPORT = "amneziawg"
 FRIEND_PORT = 51820
 HOP_PORT = 51821
 
+# How many users a friend-facing row of this transport may hand an address to — M17.
+# Far above anything this file creates, and comfortably inside the /24s below: nothing
+# here is about the pool, and a size that only just fitted would turn a port test red the
+# day somebody adds a user to it. A HOP end takes none of this: a hop is a pair of peers,
+# so ``POST /api/hops`` neither asks for a size nor accepts one.
+POOL_SIZE = 100
+
 
 @pytest.fixture
 def wg_params() -> dict[str, object]:
@@ -61,7 +68,11 @@ async def offered(client, node_id: str, params: dict) -> dict:
     """The runbook's Shape A step 2: this transport, offered to friends, on this box."""
     response = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": HOP_TRANSPORT, "params": params},
+        json={
+            "transport_name": HOP_TRANSPORT,
+            "params": params,
+            "pool_size": POOL_SIZE,
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -252,6 +263,7 @@ async def test_two_transports_on_one_node_may_not_share_a_port(
                 "tunnel_address": "10.72.0.1/24",
                 "peer_tunnel_address": "10.72.0.2/24",
             },
+            "pool_size": POOL_SIZE,
         },
     )
 
@@ -400,6 +412,7 @@ async def test_a_tcp_and_a_udp_transport_may_share_one_port_number(
         json={
             "transport_name": HOP_TRANSPORT,
             "params": {**wg_params, "port": shared},
+            "pool_size": POOL_SIZE,
         },
     )
 
@@ -514,6 +527,7 @@ async def test_dissolving_a_hop_frees_what_it_held(client, session, wg_params) -
                 "tunnel_address": "10.75.0.1/24",
                 "peer_tunnel_address": "10.75.0.2/24",
             },
+            "pool_size": POOL_SIZE,
         },
     )
 
@@ -614,7 +628,11 @@ async def test_removing_a_transport_frees_the_port_and_the_name_it_held(
 
     reused = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": HOP_TRANSPORT, "params": wg_params},
+        json={
+            "transport_name": HOP_TRANSPORT,
+            "params": wg_params,
+            "pool_size": POOL_SIZE,
+        },
     )
 
     assert reused.status_code == 201, reused.text

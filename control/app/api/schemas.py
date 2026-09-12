@@ -73,6 +73,23 @@ class TransportEnable(BaseModel):
     transport_name: str = Field(min_length=1, max_length=64)
     params: dict = Field(default_factory=dict)
 
+    # How many people this transport may hand an address of their own to — M17.
+    # A FIELD OF ITS OWN AND NOT A MEMBER OF ``params``, because it is not a parameter of
+    # the transport: it is a column on the node-transport record, and a transport's model
+    # forbids what it does not declare, so it could not travel inside ``params`` at all.
+    #
+    # Optional here and required by the SERVICE for exactly the transports that declare
+    # each consumer needs an address (``TransportMeta.peer_address``) — refused for the
+    # rest. Optional rather than required because this schema must not learn which
+    # transports those are: the answer is the transport's own declaration, and a required
+    # field here would make every VLESS enable send a number that means nothing.
+    #
+    # A BREAKING CHANGE for one caller only: a script enabling a WireGuard-family
+    # transport on a node now gets a 400 naming the box until it sends this. That is the
+    # intended answer — before it, the same call produced a transport that served exactly
+    # one person and refused to render for the second.
+    pool_size: int | None = None
+
 
 class TransportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -92,6 +109,11 @@ class TransportResponse(BaseModel):
     # Non-secret parameters only. The ``secrets`` column is deliberately not a field
     # here, and adding one would be how a node's private key reaches an API response.
     params: dict
+
+    # How many addresses this row may hand out, or null on a transport that hands out
+    # none — and on a row enabled before M17, whose pool is the single address already in
+    # ``params``. A count, never a list: no address a person holds is in any response.
+    pool_size: int | None
 
 
 class TransportMetaResponse(BaseModel):

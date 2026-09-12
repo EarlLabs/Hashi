@@ -25,7 +25,6 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 
 import datetime
 import enum
-import json
 import logging
 from dataclasses import dataclass
 
@@ -42,12 +41,11 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import audit, nodes, relay
+from control.app.services import addresses, audit, nodes, relay
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
 from edge.egress import ResolverMissing
-from edge.node import Credential as EdgeCredential
 from edge.registry import profile
 
 logger = logging.getLogger(__name__)
@@ -147,6 +145,9 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         result = await session.execute(
             select(Credential).where(Credential.node_transport_id == node_transport.id)
         )
+        # What this transport says about giving each consumer an address of its own,
+        # resolved once per row rather than per credential — M17.
+        spec = addresses.spec_for(node_transport.transport_name)
         credentials = [
             # The friend's own client-scoped material travels with the subject, and it
             # has to. A VLESS server config needs only the subject, so this looked
@@ -161,7 +162,12 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             # picking them here would mean `control` recognising field names. That a
             # friend's PRIVATE half never reaches a server config is asserted instead —
             # see tests/control/test_second_subscription_format.py.
-            EdgeCredential(subject=row.subject, secrets=json.loads(row.secrets))
+            #
+            # Built through ``addresses.edge_credential``, which is also what the user's
+            # own config file is built through: this config's ``AllowedIPs`` and that
+            # file's ``Address`` are two renders of one allocation, and a second builder
+            # here is how they would come to disagree.
+            addresses.edge_credential(row, spec)
             for row in result.scalars().unique()
             # A revoked friend's rows are deleted rather than flagged, so this is a
             # belt-and-braces filter rather than the mechanism — see

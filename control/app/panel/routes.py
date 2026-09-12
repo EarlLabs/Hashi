@@ -37,6 +37,7 @@ has nowhere to render a field error, so it still gets the ``DomainError`` envelo
 rather than a dialog fragment it could not use.
 """
 
+import dataclasses
 import logging
 import pathlib
 
@@ -53,6 +54,7 @@ from control.app.errors import DomainError, HopEndRefused, ParamsRefused
 from control.app.models import NodeState, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
+    addresses,
     apply,
     console,
     friends,
@@ -374,6 +376,12 @@ NO_DEFAULT = "required — this transport declares no default to fall back on"
 # of the form is built from.
 NO_TRANSPORT_CHOSEN = "required — choose which protocol this node should offer"
 
+# What the pool box is answered with when what arrived is not a count — M17. The panel's
+# own refusal rather than the service's, because the service's parameter is a number and
+# a form gives it text: there is nothing to hand over. It echoes nothing back and names no
+# figure, since the box's own placeholder already says what it will take.
+POOL_NOT_A_NUMBER = "a whole number — how many people this transport hands an address to"
+
 # What a submission naming something this form cannot read is answered with. Above the
 # form and not under a box, because the name it is about has no box — that is the whole
 # complaint.
@@ -634,7 +642,18 @@ async def _enable_form(
         "node": node,
         "offers": offers,
         "transports": installed,
-        "tuning": {name: transports.operator_tuning(name) for name in installed},
+        "tuning": {
+            name: _in_the_pages_words(transports.operator_tuning(name))
+            for name in installed
+        },
+        # ONE MORE BOX, and only for the transports that declare each person needs an
+        # address of their own — M17. Keyed by transport so the template renders it in
+        # that group and nowhere else, and composed in ``services/console.py`` so the
+        # number in its placeholder is not a literal in markup. It is deliberately NOT in
+        # ``tuning`` above: that list is the transport's own required parameters, and the
+        # pool size is a column on the node-transport record rather than anything the
+        # transport declares or validates.
+        "pools": await console.pool_boxes(session, installed),
         "values": values or {},
         "errors": errors or {},
         # A refusal about the request rather than about one box — a transport this image
@@ -927,6 +946,29 @@ async def establish_hop_dialog(
     )
 
 
+def _in_the_pages_words(boxes: tuple) -> tuple:
+    """Every box's hint in the words the operator reads, not the code's.
+
+    A box's hint is the FIELD'S OWN ``description``, written in the transport's package
+    and rendered straight onto a console dialog — which makes it a server-composed
+    sentence a console template renders, and decision 9 says every one of those comes
+    through ``wording.for_the_page``. It was the one that did not, and it went unnoticed
+    while no shipped transport's description used the word: the moment one did (M17
+    widened ``peer_tunnel_address``'s description to say what it means on a transport
+    offered to friends), three dialogs started saying ``friends`` to an operator whose
+    every other word is ``user``.
+
+    Applied here rather than in ``services/transports.py`` for the reason ``wording``'s
+    own header gives: a service writes in the code's vocabulary by design, and the
+    translation belongs at the moment the sentence becomes page copy. It is the hint and
+    never the NAME: a box is labelled with the field the transport declared, and renaming
+    that would be renaming a parameter the operator may have to type.
+    """
+    return tuple(
+        dataclasses.replace(box, hint=wording.for_the_page(box.hint)) for box in boxes
+    )
+
+
 async def _hop_form(
     session: AsyncSession,
     values: dict | None = None,
@@ -952,7 +994,9 @@ async def _hop_form(
     return {
         "nodes": await nodes.list_nodes(session),
         "transports": installed,
-        "tuning": {name: transports.hop_tuning(name) for name in installed},
+        "tuning": {
+            name: _in_the_pages_words(transports.hop_tuning(name)) for name in installed
+        },
         "sides": HOP_SIDES,
         "values": values or {},
         "errors": errors or {},
@@ -1440,8 +1484,10 @@ async def _params_form(
         # swaps (static/app.js allows one status through, and it is 422). The operator
         # would get an open dialog with nothing in it and no message anywhere.
         "boxes": (
-            transports.replaceable_params(
-                node_transport.transport_name, node_transport.params
+            _in_the_pages_words(
+                transports.replaceable_params(
+                    node_transport.transport_name, node_transport.params
+                )
             )
             if key.installed
             else ()
@@ -1816,6 +1862,14 @@ async def enable_transport(
     boxes = transports.operator_tuning(transport_name) if offerable else ()
     declared = transports.supplied_params(transport_name) if offerable else frozenset()
 
+    # The pool box, for exactly the transports that declare each person needs an address
+    # of their own — M17, and asked of the transport's own declaration rather than of its
+    # name. ``None`` for every other transport, which is what makes every check below
+    # skip it: the box is not rendered for them, so a submission naming it is a name this
+    # form cannot read, like any other.
+    pool_spec = addresses.spec_for(transport_name) if offerable else None
+    pool_field = f"{transport_name}-{addresses.POOL_BOX}"
+
     def supplied(field: str) -> str:
         return typed.get(f"{transport_name}-{field}", "")
 
@@ -1834,9 +1888,16 @@ async def enable_transport(
     # this complaint would displace the service's own — which is the one the operator
     # needs.
     def its_own_box(field: str) -> bool:
+        # ``declared`` is every field the TRANSPORT lets an operator supply; the pool box
+        # is neither a field of the transport nor something it validates, so it is
+        # admitted here explicitly and only for a transport that declares it needs one.
+        # Written as an addition rather than by widening ``declared`` because that set is
+        # also what ``parse_form`` reads, and the pool size must not reach the
+        # transport's model — which forbids what it did not declare.
+        readable = declared | ({addresses.POOL_BOX} if pool_spec else frozenset())
         return (
             field.startswith(f"{transport_name}-")
-            and field.removeprefix(f"{transport_name}-") in declared
+            and field.removeprefix(f"{transport_name}-") in readable
         )
 
     def another_group(field: str) -> bool:
@@ -1862,7 +1923,14 @@ async def enable_transport(
             failure=NOT_ITS_PARAMETER.format(names=", ".join(unreadable)),
         )
 
+    # The pool box is in this list when the transport declares one, so an empty one is
+    # refused UNDER ITSELF rather than as a sentence above the form — the same treatment
+    # every other box on this dialog gets, and the same sentence: nothing defaults it,
+    # because a default pool size would be a number this project chose for somebody
+    # else's node.
     empty = [box.name for box in boxes if not supplied(box.name)]
+    if pool_spec and not supplied(addresses.POOL_BOX):
+        empty.append(addresses.POOL_BOX)
     if empty:
         return await _refuse_the_form(
             request,
@@ -1872,6 +1940,24 @@ async def enable_transport(
             {f"{transport_name}-{name}": NO_DEFAULT for name in empty},
             plainly="; ".join(f"{name}: {NO_DEFAULT}" for name in empty),
         )
+
+    pool_size = None
+    if pool_spec:
+        try:
+            pool_size = int(supplied(addresses.POOL_BOX))
+        except ValueError:
+            # Refused here rather than passed on, because the service's parameter is a
+            # count and a form gives it text. The sentence says what the box takes and
+            # quotes nothing back: what arrived is not a number, and echoing it would put
+            # unvalidated text in the markup for no gain.
+            return await _refuse_the_form(
+                request,
+                session,
+                node_id,
+                typed,
+                {pool_field: POOL_NOT_A_NUMBER},
+                plainly=f"{addresses.POOL_BOX}: {POOL_NOT_A_NUMBER}",
+            )
 
     # Reading the form is shared with the rotation form below: a field the transport
     # declared as a sequence becomes a list whether or not the operator typed a comma.
@@ -1900,8 +1986,12 @@ async def enable_transport(
     )
 
     try:
-        node_transport = await nodes.enable_transport(
-            session, node_id=node_id, transport_name=transport_name, params=params
+        node_transport = await nodes.enable_and_grant(
+            session,
+            node_id=node_id,
+            transport_name=transport_name,
+            params=params,
+            pool_size=pool_size,
         )
     except ParamsRefused as exc:
         # The transport refused what it was given, field by field, and this dialog has a
@@ -1913,12 +2003,21 @@ async def enable_transport(
         # moment material is minted and the mapping that was validated held it.
         if not _is_htmx(request):
             raise
+        # The pool box is in the allowed set for the transports that have one, so a
+        # refusal about the SIZE lands under the number it is about. Without it the
+        # sentence would be withheld as a complaint with no box — which is the right
+        # default for a name this form does not render, and wrong for the one it does.
         return await _refuse_enable(
             request,
             session,
             node_id,
             values=typed,
-            **_on_its_boxes(exc, transport_name, {box.name for box in boxes}),
+            **_on_its_boxes(
+                exc,
+                transport_name,
+                {box.name for box in boxes}
+                | ({addresses.POOL_BOX} if pool_spec else set()),
+            ),
         )
     except DomainError as exc:
         # Everything else is about the request rather than about one value: a transport

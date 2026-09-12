@@ -206,9 +206,15 @@ async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouche
     ).json()["id"]
     offered = await operator.post(
         f"/api/nodes/{exit_node}/transports",
-        json={"transport_name": HOP_TRANSPORT, "params": hop_side(
-            "10.56.0.1/24", "10.56.0.2/24", 51823
-        )},
+        json={
+            "transport_name": HOP_TRANSPORT,
+            # Friend-facing, unlike both ends of the hop above — so since M17 it says how
+            # many users it may hand an address to. Low thousands against a /20 because
+            # the stand is warm and its fleet only grows; a hop end takes none of this,
+            # which is what the two calls above show by not having it.
+            "pool_size": 2000,
+            "params": hop_side("10.56.0.1/20", "10.56.0.2/20", 51823),
+        },
     )
     assert offered.status_code == 201, offered.text
     assert offered.json()["params"]["port"] == 51823

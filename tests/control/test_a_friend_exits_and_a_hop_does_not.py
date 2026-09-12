@@ -53,6 +53,10 @@ WG_PARAMS: dict[str, object] = {
 ENTRY_TUNNEL = "10.77.0.1/24"
 LEAF_TUNNEL = "10.77.0.2/24"
 
+# How many users a friend-facing row here may hand an address to — M17. Comfortably
+# inside the /24 above and comfortably above any count this file reaches.
+POOL_SIZE = 200
+
 
 def params_for(transport_name: str, **overrides) -> dict[str, object]:
     """The operator-supplied half, minus knobs this transport does not declare.
@@ -85,6 +89,12 @@ async def friend_facing_node(client, session, transport_name: str) -> str:
                 tunnel_address=ENTRY_TUNNEL,
                 peer_tunnel_address=LEAF_TUNNEL,
             ),
+            # Every user on such a transport holds an address of their own since M17, so
+            # enabling one says how many it may hand out. Far above anything this file
+            # creates, on purpose: nothing here is about the pool's edges, and a size
+            # that only just fits would make an unrelated test fail the day somebody adds
+            # a user to it. The /24 above leaves room for this and more.
+            "pool_size": POOL_SIZE,
         },
     )
     assert enabled.status_code == 201, enabled.text

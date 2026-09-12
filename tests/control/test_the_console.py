@@ -38,6 +38,7 @@ from control.app.models import (
 )
 from control.app.panel import routes as panel_routes
 from control.app.panel import wording
+from control.app.services import addresses as addresses_service
 from control.app.services import apply as apply_service
 from control.app.services import audit as audit_service
 from control.app.services import console as console_service
@@ -1228,7 +1229,15 @@ async def test_the_enable_form_asks_only_what_the_transport_declares(
     # refusal naming the port, not as a missing form.
     for name in transports_service.offerable_transports():
         boxes = _enable_boxes(dialog.text, name)
-        assert set(boxes) == set(transports_service.operator_params(name)), name
+        expected = set(transports_service.operator_params(name))
+        # ONE MORE BOX since M17, and only for a transport that declares each user needs
+        # an address of their own. Asserted as an addition rather than folded into the
+        # list above, because it is not a parameter of the transport at all: the size is
+        # a column on the node-transport record, the transport's model never sees it, and
+        # a transport that declares nothing must not grow a box for it.
+        if addresses_service.spec_for(name) is not None:
+            expected.add(addresses_service.POOL_BOX)
+        assert set(boxes) == expected, name
         material = transports_service.key_material_names(name)
         assert set(boxes) & material == set(), name
         # Not markup-required, deliberately: a required box inside a HIDDEN group makes
@@ -2398,8 +2407,19 @@ async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> 
         # operator IN FULL, under the row, rather than being truncated inside a 136px
         # box — these are the two longest strings in the form and the two fields most
         # easily got wrong.
+        #
+        # IN FULL BUT IN THE PAGE'S WORDS. The comparison is against the description
+        # after ``wording.for_the_page``, which is decision 9's boundary and not a
+        # weakening of "in full": a description is a server-composed sentence rendered
+        # on a console dialog, so it crosses that boundary like every other one, and the
+        # rule this line is really about is that nothing is TRUNCATED. It began to
+        # matter with M17, which widened one field's description to say what the value
+        # means on a transport offered to friends — the code's word, on a screen where
+        # every other word is "user".
         if info.description:
-            assert described.get(name) == info.description.strip(), name
+            assert described.get(name) == wording.for_the_page(
+                info.description.strip()
+            ), name
 
 
 def _render_hop_dialog(**context) -> str:

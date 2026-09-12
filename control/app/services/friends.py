@@ -11,6 +11,12 @@ HOW:  ``grant_everywhere`` is called both when a friend is created and when a ne
       reach. Revocation is a database change here; pushing the new configs is
       ``services/apply.py``, and ``revoke`` returns which nodes need it so the
       caller cannot forget.
+
+      Since M17 granting has a second half: on a transport that gives each person an
+      address of their own, the credential is not complete until it holds one. That is
+      ``services/addresses.py``, called from inside this module's own transaction — so a
+      pool with no room refuses the operation instead of producing a node that cannot be
+      rendered afterwards.
 """
 
 import datetime
@@ -18,11 +24,12 @@ import json
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict, DomainError, NotFound
 from control.app.models import AuditAction, Credential, Friend, NodeTransport, Subscription
-from control.app.services import audit, keymaterial, nodes, subscriptions
+from control.app.services import addresses, audit, keymaterial, nodes, subscriptions
 from edge.registry import KeyScope, discover
 
 logger = logging.getLogger(__name__)
@@ -30,6 +37,20 @@ logger = logging.getLogger(__name__)
 # The width of ``Friend.nickname``. Stated here because this is the layer that
 # refuses a value the column could not hold; the model is the other half of the pair.
 NICKNAME_MAX_LENGTH = 64
+
+# What the operator is told when two changes reached one address at the same instant —
+# M17. The allocator takes the lowest address nobody holds, which is a READ, and nothing
+# serialises two of them; ``uq_credential_tunnel_address`` is what stops the second one
+# landing, so this is the sentence the constraint's own error becomes.
+#
+# IT SAYS NOTHING WAS CHANGED, and that is a promise this module keeps rather than a
+# reassurance: the rollback below is what makes it true, and it runs before the refusal
+# is raised precisely so the surface that catches it is looking at a session it can still
+# read — the console re-renders its dialog in the same session, and a ``PendingRollbackError``
+# there would turn a refusal into an internal error.
+ADDRESS_TAKEN_MEANWHILE = (
+    "another change took that address at the same moment; nothing was changed. Try again."
+)
 
 
 async def get_friend(session: AsyncSession, friend_id: str) -> Friend:
@@ -67,6 +88,17 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
     existing = await session.execute(select(Friend).where(Friend.nickname == nickname))
     if existing.scalars().first() is not None:
         raise Conflict(f"a friend called {nickname!r} already exists")
+
+    # BEFORE ANY WRITE — M17. A transport that gives each person an address of their own
+    # would refuse this friend when ``settle`` ran, which is correct but late: the
+    # refusal would arrive with the friend, their subscription and their credentials
+    # already built in this transaction, and the operator would be told "nothing was
+    # changed" by a path that had to roll back to make it true. Asked here, the pool is
+    # measured against the fleet the friend is about to join (``extra=1``) and the answer
+    # names which pool and by how much, while nothing has been touched at all.
+    short = await addresses.shortfalls(session, extra=1)
+    if short:
+        raise Conflict(addresses.too_small(short))
 
     friend = Friend(nickname=nickname)
     session.add(friend)
@@ -106,6 +138,10 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
 
     installed = discover()
     granted: list[Credential] = []
+    # The rows this call minted something on, by id so a friend granted twice in one
+    # transaction settles each row once. Keyed rather than a list because ``settle`` is
+    # the one operation here that is about the row rather than about the person.
+    touched: dict[str, NodeTransport] = {}
 
     # Queried rather than read off ``friend.credentials``. The relationship is
     # configured to load eagerly, but a friend created moments ago in this same
@@ -151,8 +187,35 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
         )
         session.add(credential)
         granted.append(credential)
+        # Settled below rather than here, and only for the rows this call actually
+        # granted on: the allocation is a property of the ROW (who already holds what),
+        # not of this friend, so it is asked once per row after every credential is in.
+        touched[node_transport.id] = node_transport
 
     await session.flush()
+
+    # An address of their own, on every row whose transport says each consumer needs one
+    # — M17. Inside the caller's transaction, which is what makes a pool with no room a
+    # refusal that changed nothing rather than a render failure discovered after the
+    # commit, on a node that then cannot be pushed to at all.
+    try:
+        for node_transport in touched.values():
+            await addresses.settle(session, node_transport)
+    except addresses.PoolFull as exc:
+        # Rolled back HERE rather than left to the route, because this function is called
+        # from inside four other services' transactions and each of them would otherwise
+        # have to know that a refusal from here poisons the session. The message was
+        # composed before the rollback, so it survives it.
+        await session.rollback()
+        raise Conflict(exc.message) from exc
+    except IntegrityError as exc:
+        if "uq_credential_tunnel_address" not in str(exc.orig):
+            raise
+        # The race the constraint exists for: two changes read the same free address and
+        # both tried to take it. The loser is refused, never given a shared address.
+        await session.rollback()
+        raise Conflict(ADDRESS_TAKEN_MEANWHILE) from exc
+
     return granted
 
 

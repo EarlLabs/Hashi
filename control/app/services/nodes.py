@@ -17,7 +17,7 @@ import logging
 
 import asyncssh
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import (
@@ -29,12 +29,14 @@ from control.app.errors import (
 )
 from control.app.models import (
     AuditAction,
+    Friend,
     Node,
     NodeState,
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import audit, keymaterial, placement
+from control.app.services import addresses, audit, keymaterial, placement
+from edge.addressing import pool_problem
 from edge.egress import Egress, resolver_problem
 from edge.node import NodeView
 from edge.registry import KeyScope, discover, profile
@@ -125,7 +127,17 @@ async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
         # routed straight past the entry node the whole topology exists to hide behind.
         .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
         .where(Node.state.in_(NodeState.serving()))
-        .order_by(Node.location_label, Node.name, NodeTransport.transport_name)
+        # The row's own id last, so the order is TOTAL — M17. Two instances of one
+        # transport on one node (which M15 permits) tied on every other key, and the
+        # order a subscription is built in, and the order addresses are handed out in,
+        # were then whatever Postgres returned. A tie-break nobody can see is a fleet
+        # whose allocation is not reproducible.
+        .order_by(
+            Node.location_label,
+            Node.name,
+            NodeTransport.transport_name,
+            NodeTransport.id,
+        )
     )
     return list(result.scalars().unique())
 
@@ -318,8 +330,83 @@ async def enable_transport(
     node_id: str,
     transport_name: str,
     params: dict,
+    pool_size: int | None = None,
 ) -> NodeTransport:
     """Enable one transport on one node, minting whatever material it declared.
+
+    Commits. The variant that also hands the new transport to every active friend is
+    ``enable_and_grant`` below, and both surfaces call that one — see its note for why
+    the grant may not be a second transaction.
+    """
+    node_transport = await _enable(
+        session,
+        node_id=node_id,
+        transport_name=transport_name,
+        params=params,
+        pool_size=pool_size,
+    )
+    await session.commit()
+    logger.info("transport enabled on node %s", node_transport.node_id)
+    return node_transport
+
+
+async def enable_and_grant(
+    session: AsyncSession,
+    *,
+    node_id: str,
+    transport_name: str,
+    params: dict,
+    pool_size: int | None = None,
+) -> NodeTransport:
+    """Enable a transport and hand it to every active friend — in ONE transaction.
+
+    Criterion 3 stated as an operation: a protocol enabled from the panel is in every
+    subscriber's config at their next refresh with no further action from anybody.
+
+    IT IS ONE TRANSACTION SINCE M17, and that is the reason this function exists at all
+    rather than each surface running its own loop after the enable committed. Granting
+    now allocates an address per person on a transport that gives each of them one, and a
+    pool too small refuses — so with the enable already committed, the operator would be
+    left with a row on the node that nobody can be granted, having been told the
+    operation failed. Both surfaces call this, so neither can drift back.
+
+    The grant is a no-op on a node that is not serving yet, which is the ordinary case: a
+    transport is normally enabled while the node is still a draft, and the moment the
+    node starts serving is where ``set_node_state`` does the same fan-out.
+    """
+    node_transport = await _enable(
+        session,
+        node_id=node_id,
+        transport_name=transport_name,
+        params=params,
+        pool_size=pool_size,
+    )
+
+    # Deferred for the cycle ``set_node_state`` names: ``friends`` imports this module.
+    from control.app.services import friends  # noqa: PLC0415
+
+    for friend in await friends.list_friends(session):
+        if friend.is_active:
+            await friends.grant_everywhere(session, friend)
+
+    await session.commit()
+    logger.info("transport enabled on node %s", node_transport.node_id)
+    return node_transport
+
+
+async def _enable(
+    session: AsyncSession,
+    *,
+    node_id: str,
+    transport_name: str,
+    params: dict,
+    pool_size: int | None = None,
+) -> NodeTransport:
+    """Everything enabling a transport does except commit.
+
+    Split out so that the grant fan-out above can run in the same transaction as the row
+    it is about. Flushes, so the new row is visible to ``serving_transports`` — without
+    that, enabling a transport on a node that is ALREADY serving would grant nobody.
 
     The order of operations matters and is the reason this is one function rather
     than three: material is minted BEFORE validation, then validation runs over the
@@ -419,6 +506,18 @@ async def enable_transport(
         session, node=node, transport_name=transport_name, params=validated
     )
 
+    # How many people this row can hand an address to — M17. AFTER ``claim`` on purpose:
+    # a request that gets both wrong is answered about the port first, which is the older
+    # refusal, the one every existing caller asserts on, and the one that is about the
+    # node rather than about a number the operator typed.
+    await _sized_pool(
+        session,
+        node=node,
+        transport_name=transport_name,
+        params=validated,
+        pool_size=pool_size,
+    )
+
     # Split the validated result back apart for storage. Driven by which keys the
     # generator produced as secret, so a transport's own declaration decides what is
     # encrypted — this function never judges a value by its name.
@@ -430,6 +529,10 @@ async def enable_transport(
         params={k: v for k, v in validated.items() if k not in secret_keys},
         secrets=json.dumps({k: v for k, v in validated.items() if k in secret_keys}),
         enabled=True,
+        # NULL for every transport that hands out no address of its own, which is what
+        # ``_sized_pool`` has just insisted on — so "this row has a pool" and "this
+        # transport declares one" cannot come apart in the database.
+        pool_size=pool_size,
     )
     session.add(node_transport)
     # Two labels: which node, and which transport. Both read off rows — the node's own
@@ -444,9 +547,99 @@ async def enable_transport(
         first_label=node.name,
         second_label=transport_name,
     )
-    await session.commit()
-    logger.info("transport enabled on node %s", node.id)
+    # Flushed and not committed: the caller owns the transaction. It has to be flushed,
+    # though — ``serving_transports`` is a query, and a row that is only pending would be
+    # invisible to the grant fan-out that may follow this in the same transaction.
+    await session.flush()
     return node_transport
+
+
+# What an operator is told about the pool box, in the three ways it can be wrong. Each
+# names what to do rather than only what was refused, and none of them names an address:
+# the value in question is a count.
+POOL_SIZE_REQUIRED = (
+    "this transport gives every friend an address of its own, so it needs to be told how "
+    "many addresses it may hand out. Size the pool for the fleet this node will serve."
+)
+POOL_SIZE_NOT_TAKEN = (
+    "this transport identifies each friend by their own material rather than by an "
+    "address, so there is no pool to size on it."
+)
+POOL_SIZE_BELOW_THE_FLEET = (
+    "a pool of {size} cannot hold the {people} friends this control plane already has, "
+    "and every one of them is granted a credential here the moment this node serves. "
+    "Nothing has been changed — size the pool for the fleet."
+)
+
+
+async def _sized_pool(
+    session: AsyncSession,
+    *,
+    node: Node,
+    transport_name: str,
+    params: dict,
+    pool_size: int | None,
+) -> None:
+    """Refuse a pool that cannot work, before the row exists — M17.
+
+    Four questions, and the first two are about whether there is a pool at all: a
+    transport that declares each consumer needs an address of their own MUST be told how
+    many there are, and one that declares nothing must not be given a number that would
+    then mean nothing. Both are read off ``TransportMeta.peer_address`` through
+    ``addresses.spec_for``, so this function names no transport and no field.
+
+    The third is ``edge``'s own sentence about the pool: whether it fits inside the
+    tunnel, clears the node's own address, and stays in private space. Asked here, while
+    the operator is still looking at the box, rather than at the first render.
+
+    The fourth is this control plane's: a pool smaller than the fleet is one that refuses
+    the next person to be granted, and the moment to say so is before the row exists
+    rather than at whichever later operation happens to trip over it.
+
+    Refused as ``ParamsRefused`` with the complaint under the pool's own box, which is
+    what lets the console put the sentence where the number was typed. The box is not a
+    parameter of the transport — nothing of this reaches the transport's model.
+    """
+    spec = addresses.spec_for(transport_name)
+
+    if spec is None:
+        if pool_size is not None:
+            raise ParamsRefused(
+                f"transport {transport_name!r} rejected these parameters — "
+                f"{addresses.POOL_BOX}: {POOL_SIZE_NOT_TAKEN}",
+                fields={addresses.POOL_BOX: POOL_SIZE_NOT_TAKEN},
+            )
+        return
+
+    if pool_size is None:
+        raise ParamsRefused(
+            f"transport {transport_name!r} rejected these parameters — "
+            f"{addresses.POOL_BOX}: {POOL_SIZE_REQUIRED}",
+            fields={addresses.POOL_BOX: POOL_SIZE_REQUIRED},
+        )
+
+    # Over the VALIDATED parameters, so the addresses measured are the ones that will be
+    # stored — normalised by the transport's own validator, not as they were typed.
+    problem = pool_problem(str(params[spec.name]), str(params[spec.within]), pool_size)
+    if problem:
+        raise ParamsRefused(
+            f"transport {transport_name!r} rejected these parameters — "
+            f"{addresses.POOL_BOX}: {problem}",
+            fields={addresses.POOL_BOX: problem},
+        )
+
+    people = (
+        await session.execute(
+            select(func.count()).select_from(Friend).where(Friend.revoked_at.is_(None))
+        )
+    ).scalar_one()
+    if pool_size < people:
+        short = POOL_SIZE_BELOW_THE_FLEET.format(size=pool_size, people=people)
+        raise ParamsRefused(
+            f"transport {transport_name!r} rejected these parameters — "
+            f"{addresses.POOL_BOX}: {short}",
+            fields={addresses.POOL_BOX: short},
+        )
 
 
 async def set_transport_enabled(
@@ -511,17 +704,27 @@ async def set_transport_enabled(
         first_label=node.name,
         second_label=node_transport.transport_name,
     )
-    await session.commit()
-    logger.info("node-transport %s enabled -> %s", node_transport.id, enabled)
 
     if enabled:
+        # INSIDE THE TRANSACTION SINCE M17, and the order of these two statements is the
+        # whole of it. This used to commit the flag and then grant in a second
+        # transaction: with an address per friend to allocate, a pool with no room then
+        # refused AFTER the transport was already back in everybody's subscription, and
+        # the operator was told the offer failed while the row said it had succeeded.
+        # Now a refusal from the fan-out rolls this back with it and nothing committed.
+        #
+        # Flushed above (the flag is what makes the row serving), so the grant sees it.
+        #
         # Same deferred import, same cycle, same reasoning as ``set_node_state``.
         from control.app.services import friends  # noqa: PLC0415
 
+        await session.flush()
         for friend in await friends.list_friends(session):
             if friend.is_active:
                 await friends.grant_everywhere(session, friend)
-        await session.commit()
+
+    await session.commit()
+    logger.info("node-transport %s enabled -> %s", node_transport.id, enabled)
 
     return node_transport
 
@@ -668,9 +871,6 @@ async def set_node_state(
             second_label=str(state),
         )
 
-    await session.commit()
-    logger.info("node %s state -> %s", node.id, state)
-
     if became_serving:
         # THE moment charter criterion 2 depends on. A node becoming serving must hand
         # a credential to every existing friend, or their subscription resolves to a
@@ -683,14 +883,28 @@ async def set_node_state(
         # Getting this wrong is silent — every friend simply gets an empty
         # subscription — which is why the ordering has its own test.
         #
+        # IN THIS TRANSACTION SINCE M17. The state change used to commit first and grant
+        # afterwards, which with an address per friend to allocate meant a node could go
+        # active — recorded, on every screen, in every subscription — and only then be
+        # unable to give somebody an address. The operator was told the operation failed
+        # by a control plane that had already done half of it. Now a pool with no room
+        # anywhere in the fleet rolls this state change back with it.
+        #
+        # Flushed rather than committed first, because ``serving_transports`` is a query:
+        # without the flush the node is still draft as far as the database is concerned
+        # and the fan-out below would grant nobody anything.
+        #
         # Imported inside the function to break a cycle: ``friends`` imports this
         # module for ``serving_transports``. A deferred import is the honest fix here;
         # the alternative is a third module that exists only to hold one call.
         from control.app.services import friends  # noqa: PLC0415
 
+        await session.flush()
         for friend in await friends.list_friends(session):
             if friend.is_active:
                 await friends.grant_everywhere(session, friend)
-        await session.commit()
+
+    await session.commit()
+    logger.info("node %s state -> %s", node.id, state)
 
     return node

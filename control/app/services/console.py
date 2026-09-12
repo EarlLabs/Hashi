@@ -50,6 +50,7 @@ from control.app.models import (
     TransportPurpose,
 )
 from control.app.services import (
+    addresses,
     apply,
     audit,
     friends,
@@ -1665,3 +1666,62 @@ def resolver_set(node_name: str) -> str:
     operator is most likely to believe they are done.
     """
     return f"resolver set for {node_name} — apply it for the change to reach the node"
+
+
+# --- M17: the box an operator sizes a pool of addresses in --------------------
+
+# What the pool box says under itself, and the whole of what it has to teach: that one
+# person takes one address, and that the number is a ceiling on how many people this
+# transport can serve on this node. Written here rather than in the template for the
+# reason every other sentence on that dialog is — a screen's words are this module's, and
+# a count composed in markup is a number nobody can find when it has to change.
+#
+# In the panel's vocabulary (``user``), like every other constant in this file, because
+# these are read straight onto the page rather than passed through ``wording``.
+POOL_BOX_HINT = (
+    "This protocol gives every user their own address inside the tunnel, so it has to be "
+    "told how many it may hand out. One address is one user, counted upwards from the "
+    "first one this transport is given above; a pool smaller than the users you already "
+    "have is refused before anything is saved."
+)
+
+
+async def pool_boxes(
+    session: AsyncSession, offered: list[str]
+) -> dict[str, transports.TuningField]:
+    """The pool box for each offered transport that gives every user their own address.
+
+    Keyed by transport and absent for the rest, so the dialog renders it in exactly the
+    group it belongs to and nowhere else — the same shape ``tuning`` already has, and
+    reusing ``TuningField`` because the box behaves like every other one on that form: an
+    empty one is refused, and its placeholder states what it will take rather than a value
+    the form would assume.
+
+    The placeholder is the floor and is composed HERE, in ``_declared_bounds``' own
+    vocabulary ("N or more"), so no number is written into the markup. The floor is the
+    number of people this control plane already has, because every one of them is granted
+    a credential on this transport the moment the node serves — the same count
+    ``nodes._sized_pool`` refuses below, so the box and the refusal cannot disagree.
+
+    Asked of the transport's own declaration (``TransportMeta.peer_address``) rather than
+    of its name, so a protocol added later gets this box with no edit here and one that
+    identifies its users by material never sees it.
+    """
+    boxed = [name for name in offered if addresses.spec_for(name) is not None]
+    if not boxed:
+        return {}
+    people = (
+        await session.execute(
+            select(func.count()).select_from(Friend).where(Friend.revoked_at.is_(None))
+        )
+    ).scalar_one()
+    floor = max(people, 1)
+    return {
+        name: transports.TuningField(
+            name=addresses.POOL_BOX,
+            placeholder=f"{floor} or more",
+            hint=POOL_BOX_HINT,
+            default=None,
+        )
+        for name in boxed
+    }

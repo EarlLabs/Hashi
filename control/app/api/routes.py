@@ -101,18 +101,19 @@ async def enable_transport(
     Then grant it to every active friend, so enabling a protocol appears in every
     subscriber's config at their next refresh with no further action — which is
     criterion 3 stated as an operation.
+
+    Both halves are ONE transaction since M17, which is why this route no longer runs
+    the fan-out itself: granting now allocates an address per person on a transport that
+    gives each of them one, and a pool too small must refuse with nothing written rather
+    than leave a committed row nobody can be granted on. See ``nodes.enable_and_grant``.
     """
-    node_transport = await nodes.enable_transport(
+    return await nodes.enable_and_grant(
         session,
         node_id=node_id,
         transport_name=payload.transport_name,
         params=payload.params,
+        pool_size=payload.pool_size,
     )
-    for friend in await friends.list_friends(session):
-        if friend.is_active:
-            await friends.grant_everywhere(session, friend)
-    await session.commit()
-    return node_transport
 
 
 @router.post("/nodes/{node_id}/state", response_model=schemas.NodeResponse)

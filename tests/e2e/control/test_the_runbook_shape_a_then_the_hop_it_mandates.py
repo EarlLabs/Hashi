@@ -42,6 +42,14 @@ RUNBOOK_TRANSPORT = "amneziawg"
 FRIEND_PORT = 51820
 HOP_PORT = 51821
 
+# How many users a friend-facing row of this transport may hand an address to — M17. The
+# stand is WARM: every scenario in this directory adds users to one control plane and
+# none of them are removed, so a pool is measured against a fleet that only grows. Sized
+# in the low thousands against a /20 tunnel for that reason — the number is an upper
+# bound on people, not a resource, and a pool that only just fitted would turn this file
+# red on the day an unrelated scenario adds a user.
+POOL_SIZE = 2000
+
 
 def _entries(archive: bytes) -> dict[str, bytes]:
     """Every file in a config archive, by name.
@@ -103,7 +111,8 @@ async def shape_a_box(operator, unique: str) -> tuple[str, str]:
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": RUNBOOK_TRANSPORT,
-            "params": side("10.60.0.1/24", "10.60.0.2/24", FRIEND_PORT),
+            "pool_size": POOL_SIZE,
+            "params": side("10.60.0.1/20", "10.60.0.2/20", FRIEND_PORT),
         },
     )
     assert offered.status_code == 201, offered.text
@@ -193,7 +202,8 @@ async def test_two_transports_on_one_node_may_not_share_a_port(
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": RUNBOOK_TRANSPORT,
-            "params": side("10.63.0.1/24", "10.63.0.2/24", FRIEND_PORT),
+            "pool_size": POOL_SIZE,
+            "params": side("10.63.0.1/20", "10.63.0.2/20", FRIEND_PORT),
         },
     )
 
@@ -355,7 +365,8 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": RUNBOOK_TRANSPORT,
-            "params": side("10.65.0.1/24", "10.65.0.2/24", port),
+            "pool_size": POOL_SIZE,
+            "params": side("10.65.0.1/20", "10.65.0.2/20", port),
         },
     )
     assert offered.status_code == 201, offered.text
@@ -395,7 +406,8 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": RUNBOOK_TRANSPORT,
-            "params": side("10.66.0.1/24", "10.66.0.2/24", port),
+            "pool_size": POOL_SIZE,
+            "params": side("10.66.0.1/20", "10.66.0.2/20", port),
         },
     )
     assert reused.status_code == 201, reused.text

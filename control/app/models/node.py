@@ -18,6 +18,7 @@ import enum
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -256,6 +257,19 @@ class NodeTransport(Base, TimestampMixin):
         # ``services.placement``, which every path that writes a port goes through, and
         # that module's header says why.
         UniqueConstraint("node_id", "config_name", name="uq_node_transport_config_name"),
+        # A pool of no addresses hands nobody one — M17. The column is nullable and the
+        # constraint says so explicitly rather than relying on SQL's three-valued logic
+        # being read correctly by the next person to change it: NULL is a row enabled
+        # before pools existed and is a legitimate value, zero and below are not.
+        #
+        # Held in the database as well as in ``edge.addressing.pool_problem`` because,
+        # unlike the port rule one constraint up, this one needs nothing a transport
+        # package declares: "at least one" is true of every pool whatever hands the
+        # addresses out, so Postgres can hold it and a row written by hand cannot slip
+        # past the service that normally refuses it.
+        CheckConstraint(
+            "pool_size IS NULL OR pool_size >= 1", name="ck_node_transport_pool_size"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -282,6 +296,27 @@ class NodeTransport(Base, TimestampMixin):
     # transport — a column per knob would mean a migration per protocol, which is
     # exactly the surgery the charter's fourth criterion forbids.
     params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # How many consumers this row can hand an address of its own to — M17, and only for
+    # a transport that declares each of them needs one (``TransportMeta.peer_address``).
+    # The pool starts at the address already in ``params`` under the declared name and
+    # runs for this many; ``services/addresses.py`` does the handing out and
+    # ``edge/addressing.py`` the arithmetic.
+    #
+    # A COLUMN AND NOT A ``params`` FIELD, decided 2026-09-11. A size that lived in the
+    # transport's own model would be a REQUIRED box on both ends of the establish-hop
+    # dialog — a hop has two peers and no pool — and it would leave a key in every
+    # re-validated row's JSONB that the pre-M17 models (``extra='forbid'``) refuse after
+    # a downgrade. It is also literally what the decision asked for: a size the operator
+    # sets on the node-transport record.
+    #
+    # NULL MEANS A ROW ENABLED BEFORE M17, and it is not "unlimited" and not "one": such
+    # a row's pool is exactly ``(params[name],)``, unvalidated, which is the single
+    # address it renders today. Sizing it is M17.1c's ``replace_params``, which pins
+    # every address a device already holds before it widens anything. No backfill was
+    # written, because any number chosen here would be a pool this project invented for
+    # an operator's node — see migration 0006.
+    pool_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Node-scoped secret material, as a JSON object in one encrypted string.
     # Encrypted as a whole rather than per value so a dump reveals not even how

@@ -205,6 +205,25 @@
         {% for parameter in tuning[name] %}
         {{ box(name, parameter, values, errors) }}
         {% endfor %}
+        {#
+          ONE MORE BOX, for a protocol that gives every user their own address inside the
+          tunnel — and for no other. `pools` holds an entry only for those, from the
+          transport's own declaration (services/console.py), so this file still names no
+          protocol and cannot tell one from another.
+
+          It is rendered through the same macro and named for the same group, so it
+          submits, refuses and comes back exactly as every box above it does. What it is
+          NOT is one of them: the boxes above are the transport's own parameters, read
+          back into its model, and this one is a column on the node-transport record that
+          the transport never sees.
+
+          The number in its placeholder and every word of its hint are composed on the
+          server. Nothing numeric is written here — a count typed into markup is a count
+          that goes stale the moment a user is added.
+        #}
+        {% if name in pools %}
+        {{ box(name, pools[name], values, errors) }}
+        {% endif %}
       </div>
       {% endfor %}
 
