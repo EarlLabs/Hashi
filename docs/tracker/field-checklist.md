@@ -297,3 +297,29 @@ than on the interface, so the cheapest honest fix is for it to watch what it
 brought up and exit when that goes away — which is a change to
 `edge/bootstrap/node_stack.py`'s `_WG_QUICK_SUPERVISOR`, and M21 has already shown
 that script is portability-sensitive.
+
+---
+
+## VERIFIED ON THE LEAF, 2026-09-12 — what the real host actually shows
+
+Checked directly on `45.151.69.107` (root). **Read-only; nothing was changed.**
+
+| claim | on the host |
+|---|---|
+| It is the **leaf end** of the hop, exiting locally | `10.90.0.2/30` on `amneziawg`; **no `ip rule`** diverts anything through it — only `local`/`main`/`default`. So `Egress.LOCAL`, and it correctly gets **no `dns` block** even after M16. |
+| M16's premise, pre-upgrade | The deployed `vless-reality.json` has **no `dns` object**, no `domainStrategy`, no routing rules, `sendThrough` null. Exactly the state M16 was written to fix. |
+| The charter's logging line already holds | `log: {"loglevel": "warning", "access": "none"}` in the live config. M16.1 measured that `warning` is load-bearing — at `info` the same flow writes a destination name 38 times. |
+| The exit address | `curl ifconfig.me` from the leaf returns `45.151.69.107` — its own, as a leaf should. |
+| The host's own resolver | `46.254.22.138` / `46.254.23.138` (the provider's). This is what an **entry** would leak a friend's lookups to before M16 — the whole reason M16 exists. |
+| **Orphaned key material on disk (item 1)** | **Confirmed.** `/opt/hashi/conf/wireguard.conf` — 2008 bytes, 1 `PrivateKey`, 1 `PublicKey`, 1 `[Peer]` — with **no interface and no listener**. `amneziawg.conf` and `vless-reality.json` are live; this one is not. |
+
+**Still to do on the leaf**, once M17 lands: two `amneziawg` instances binding two
+ports side by side (checklist item 3) — the thing M15's whole uniqueness decision
+rests on, and which no stand can show.
+
+**Blocked on the entry** (`158.160.67.252`): it answers but refuses my key —
+`root`, `ubuntu`, `hashi`, `admin`, `debian` all `Permission denied (publickey)`.
+Everything about where a friend's **lookup** leaves (items 8 and 9) needs that
+host, because the leaf has no hop to dial and so is not the node under test.
+Per M19's own finding, that box takes keys from cloud metadata, so a key may have
+to be added there rather than in `authorized_keys`.
