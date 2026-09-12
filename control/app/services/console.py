@@ -1700,8 +1700,10 @@ async def pool_boxes(
     The placeholder is the floor and is composed HERE, in ``_declared_bounds``' own
     vocabulary ("N or more"), so no number is written into the markup. The floor is the
     number of people this control plane already has, because every one of them is granted
-    a credential on this transport the moment the node serves — the same count
-    ``nodes._sized_pool`` refuses below, so the box and the refusal cannot disagree.
+    a credential on this transport the moment the node serves — read from
+    ``addresses.fleet_size``, which is the same call ``nodes._sized_pool`` refuses below
+    and the same one the add-a-friend refusal measures against, so the box and the two
+    refusals cannot disagree about who is in the fleet.
 
     Asked of the transport's own declaration (``TransportMeta.peer_address``) rather than
     of its name, so a protocol added later gets this box with no edit here and one that
@@ -1710,12 +1712,7 @@ async def pool_boxes(
     boxed = [name for name in offered if addresses.spec_for(name) is not None]
     if not boxed:
         return {}
-    people = (
-        await session.execute(
-            select(func.count()).select_from(Friend).where(Friend.revoked_at.is_(None))
-        )
-    ).scalar_one()
-    floor = max(people, 1)
+    floor = max(await addresses.fleet_size(session), 1)
     return {
         name: transports.TuningField(
             name=addresses.POOL_BOX,

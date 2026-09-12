@@ -20,8 +20,10 @@ allocation is read back through a RENDER, which is what the node and the device 
 receive, rather than by printing who holds what.
 """
 
+import ast
 import hashlib
 import json
+import pathlib
 import re
 
 import pytest
@@ -37,6 +39,7 @@ from control.app.models import (
     TransportPurpose,
 )
 from control.app.models.base import secret_box
+from control.app.panel import routes as panel_routes
 from control.app.services import addresses, apply, friends, nodes, rotation, subscriptions
 from edge.addressing import host_of
 from edge.registry import ConfigFormat, discover, profile
@@ -89,10 +92,20 @@ def params_for(transport_name: str, **overrides) -> dict[str, object]:
     return {key: value for key, value in supplied.items() if key in declared}
 
 
+# AT MODULE LEVEL, because that is the only place it can fire. An empty
+# ``params`` list makes pytest generate one item skipped with its own generic reason
+# ("got empty parameter set") and never run the fixture BODY — so a guard written inside
+# the fixture is a sentence that cannot be printed, and an image that shipped no such
+# transport would report this whole file as skipped with nothing in its own vocabulary
+# saying why the milestone's verification had vanished.
+pytestmark = pytest.mark.skipif(
+    not POOL_TRANSPORTS,
+    reason="this image ships no transport that gives each user an address",
+)
+
+
 @pytest.fixture(params=POOL_TRANSPORTS)
 def pool_transport(request) -> str:
-    if not POOL_TRANSPORTS:
-        pytest.skip("this image ships no transport that gives each user an address")
     return request.param
 
 
@@ -147,25 +160,37 @@ async def as_the_node_sees_it(session, node_id: str, config_name: str) -> str:
 
 # --- what the milestone is for ------------------------------------------------
 
-async def test_two_users_on_one_row_are_routed_separately(
-    client, session, pool_transport: str
+@pytest.mark.parametrize("people", [2, 3])
+async def test_users_on_one_row_are_routed_separately(
+    client, session, pool_transport: str, people: int
 ) -> None:
     """Both shipped members of the family, not only the one another file happens to use.
 
     ``test_second_subscription_format`` asserts the same property for the first
-    file-serialising transport this image ships; the plan's done-when names BOTH, and a
-    family whose second member was never exercised is a family with one member tested.
+    file-serialising transport this image ships; the plan's done-when names BOTH — "two
+    and three users on one friend-facing amneziawg row, AND on one wireguard row" — and
+    a family whose second member was never exercised at three is a family with one
+    member tested. The two counts are not the same claim: two is "the second person gets
+    a second address", three is "the allocator keeps walking the pool".
     """
     node_id = await a_node(client, name="pair", address="192.0.2.40")
     assert (await enable_pool(client, node_id, pool_transport)).status_code == 201
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    for nickname in ("ann", "bob"):
+    for nickname in ("ann", "bob", "cara")[:people]:
         assert (await add_user(client, nickname)).status_code == 201
 
     config = await as_the_node_sees_it(session, node_id, pool_transport)
     routes = routes_in(config)
-    assert len(routes) == 2 and len(set(routes)) == 2, config
+    assert len(routes) == people, config
+    assert len(set(routes)) == people, (
+        f"{people} users share {len(set(routes))} routes — one of them silently takes "
+        "over another's return path"
+    )
+    # Each of them is one host and not a range: AllowedIPs is the authorisation list as
+    # well as the routing table, so a wide entry lets that user source traffic as anybody.
+    for route in routes:
+        assert route.endswith("/32"), route
 
 
 async def test_the_address_a_device_holds_is_the_one_its_node_routes(
@@ -296,6 +321,20 @@ async def test_a_row_from_before_this_milestone_with_two_users_still_refuses(
     with pytest.raises(NodeOperationFailed) as refused:
         await apply.render_for_node(session, node)
     assert "tunnel address" in str(refused.value).lower()
+    # AND IT CARRIES NO KEY MATERIAL. This sentence is composed from the peers it could
+    # not place apart, each of which holds a private half, and it reaches an operator
+    # through the panel's banner and the API's envelope — and, as a degraded node's
+    # ``state_detail``, a durable record. Asserted against the stored values rather than
+    # against a field name, so it holds for a transport that calls its key something else.
+    private = [
+        str(value)
+        for row in (await session.execute(select(Credential))).scalars().unique()
+        for name, value in json.loads(row.secrets).items()
+        if "private" in name
+    ]
+    assert private, "this transport mints no private half, so pick another for this"
+    for secret in private:
+        assert secret not in str(refused.value), "a render refusal quoted key material"
 
     third = await add_user(client, "third")
     assert third.status_code == 409, third.text
@@ -665,6 +704,14 @@ async def test_a_hop_end_is_given_no_address_and_no_pool(
     The establish-hop dialog is untouched by this milestone, and this is the assertion
     that says so from the other side: the rows it writes carry no pool size, and nothing
     allocates against them.
+
+    BOTH NODES SERVE AND A FRIEND EXISTS, which is what gives the second assertion
+    anything to be false about: with no friend in the database no credential can exist
+    whatever the code does, so "a hop end minted a credential" would have been green
+    against any production. With a friend added AFTER both ends are serving, a
+    ``serving_transports`` that stopped filtering on purpose — or an
+    ``establish_hop`` that minted per end — puts a credential on a relay row and this
+    turns red.
     """
     entry = await a_node(client, name="entry-node", address="192.0.2.54")
     leaf = await a_node(client, name="leaf-node", address="192.0.2.55")
@@ -694,6 +741,10 @@ async def test_a_hop_end_is_given_no_address_and_no_pool(
     )
     assert established.status_code == 201, established.text
 
+    for node_id in (entry, leaf):
+        await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    assert (await add_user(client, "ann")).status_code == 201
+
     rows = (
         await session.execute(
             select(NodeTransport).where(
@@ -704,9 +755,14 @@ async def test_a_hop_end_is_given_no_address_and_no_pool(
     assert len(rows) == 2
     for row in rows:
         assert row.pool_size is None, "a hop end was given a pool of addresses"
-    assert (
-        await session.execute(select(Credential))
-    ).scalars().unique().all() == [], "a hop end minted a credential"
+    on_a_hop_end = (
+        await session.execute(
+            select(Credential).where(
+                Credential.node_transport_id.in_([row.id for row in rows])
+            )
+        )
+    ).scalars().unique().all()
+    assert on_a_hop_end == [], "a hop end was granted to a friend"
 
 
 async def test_a_node_with_two_users_on_one_tunnel_renders_through_a_revocation(
@@ -743,3 +799,225 @@ async def test_a_node_with_two_users_on_one_tunnel_renders_through_a_revocation(
     config = await as_the_node_sees_it(session, node_id, pool_transport)
     routes = routes_in(config)
     assert len(routes) == 2 and len(set(routes)) == 2, config
+
+
+# --- the box the operator types the size into ---------------------------------
+
+# The form the console submits, and the id its dialog wires an error to. The panel names
+# every box for its transport's GROUP — one group is rendered per transport and the
+# hidden ones still submit — so the prefix belongs here rather than in each test.
+ENABLE_ERROR = re.compile(r'id="enable-(.+?)-error"[^>]*>(.*?)</div>', re.S)
+HTMX = {"HX-Request": "true"}
+
+
+def enable_form(transport_name: str, *, pool_size: str | None = str(ROOMY)) -> dict:
+    """The enable dialog's own submission, with every box filled and named for its group.
+
+    ``pool_size=None`` leaves the box out entirely, which is what an operator who tabbed
+    past it sends — a form control submits its name with an empty value, and the route
+    treats both the same way.
+    """
+    typed = {
+        f"{transport_name}-{name}": str(value)
+        for name, value in params_for(
+            transport_name,
+            port=51820,
+            tunnel_address="10.90.0.1/24",
+            peer_tunnel_address="10.90.0.2/24",
+        ).items()
+    }
+    if pool_size is not None:
+        typed[f"{transport_name}-{addresses.POOL_BOX}"] = pool_size
+    return {"transport_name": transport_name, **typed}
+
+
+def field_errors(response) -> dict[str, str]:
+    """Each complaint by the box it was wired to, read off ``aria-describedby``'s id."""
+    return {
+        name: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text)).strip()
+        for name, text in ENABLE_ERROR.findall(response.text)
+    }
+
+
+async def test_the_panel_refuses_an_empty_pool_box_under_the_box(
+    client, session, pool_transport: str
+) -> None:
+    """Nothing defaults the size, and the console says so where the number goes.
+
+    A default pool size would be a number this project chose for somebody else's node,
+    which is the same rule that keeps a range out of the tree. So the empty box gets the
+    answer every other empty box on this form gets, under itself rather than as a
+    sentence above the form the operator has to map back onto a control.
+    """
+    node_id = await a_node(client, name="panel-empty", address="192.0.2.60")
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data=enable_form(pool_transport, pool_size=""),
+        headers=HTMX,
+    )
+
+    assert refused.status_code == 422, refused.text
+    errors = field_errors(refused)
+    assert errors.get(f"{pool_transport}-{addresses.POOL_BOX}") == panel_routes.NO_DEFAULT
+    session.expire_all()
+    assert (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().all() == [], "a refused form enabled a transport"
+
+
+async def test_the_panel_refuses_a_pool_box_that_is_not_a_count(
+    client, session, pool_transport: str
+) -> None:
+    """Text where a count goes is a refusal, not a 500 and not a silent zero.
+
+    The service's parameter is an integer and a form gives it text, so the conversion is
+    the panel's and so is its failure. The SENTENCE quotes nothing back — what arrived is
+    not a number and repeating it inside the complaint tells the operator nothing — while
+    the BOX keeps it, like every other refusal on this form, so nothing has to be retyped.
+    """
+    node_id = await a_node(client, name="panel-text", address="192.0.2.61")
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data=enable_form(pool_transport, pool_size="lots"),
+        headers=HTMX,
+    )
+
+    assert refused.status_code == 422, refused.text
+    errors = field_errors(refused)
+    assert (
+        errors.get(f"{pool_transport}-{addresses.POOL_BOX}")
+        == panel_routes.POOL_NOT_A_NUMBER
+    )
+    assert "lots" not in errors[f"{pool_transport}-{addresses.POOL_BOX}"]
+    # And it is still in the box: a refused form this operator has to retype is one they
+    # retype wrongly.
+    assert 'value="lots"' in refused.text
+
+
+async def test_the_size_typed_in_the_panel_is_the_size_the_row_is_given(
+    client, session, pool_transport: str
+) -> None:
+    """The box reaches the column, and two users on the row get two addresses.
+
+    The end the API half of this milestone cannot reach: the size is a column on the
+    node-transport record and not a parameter of the transport, so it travels beside the
+    transport's own mapping the whole way. Dropped anywhere on that journey, the enable
+    is refused as unsized — or, worse, the row is created at a size nobody typed.
+    """
+    node_id = await a_node(client, name="panel-sized", address="192.0.2.62")
+
+    enabled = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data=enable_form(pool_transport, pool_size="7"),
+        headers=HTMX,
+    )
+
+    assert enabled.status_code == 200, enabled.text
+    session.expire_all()
+    row = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().one()
+    assert row.pool_size == 7
+
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+    routes = routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    assert len(set(routes)) == 2, "the panel's own row hands two users one address"
+
+
+STATE_ERROR = re.compile(r'id="node-state-error"[^>]*>(.*?)</div>', re.S)
+
+
+async def test_a_node_that_cannot_be_granted_says_so_in_the_dialog_it_was_moved_from(
+    client, session, pool_transport: str
+) -> None:
+    """The refusal reaches the operator on the path where the session was rolled back.
+
+    THE SETUP IS REACHABLE FROM THE CONSOLE AND FROM NOWHERE ELSE IN THIS FILE: a pool
+    sized while the node is still a DRAFT is measured against the fleet of that moment,
+    and every friend added afterwards is accepted, because ``create_friend`` asks only
+    about rows that are SERVING. Move the node to serving later and the fan-out meets a
+    pool that cannot hold everybody.
+
+    Nothing commits, which was already true. What this pins is the other half: the
+    operator is TOLD. ``friends.grant_everywhere`` rolls the session back before raising,
+    and a rollback expires every object in the identity map — so a ``Node`` this route
+    had fetched before the call cannot be read afterwards without lazy I/O, which on an
+    async session raises ``MissingGreenlet``, which is not a ``DomainError`` and leaves
+    as a 500. The console swaps 422 and nothing else, so the operator saw a spinner stop
+    and no sentence at all.
+    """
+    node_id = await a_node(client, name="late-fleet", address="192.0.2.63")
+    assert (await add_user(client, "ann")).status_code == 201
+    assert (
+        await enable_pool(client, node_id, pool_transport, pool_size=1)
+    ).status_code == 201
+    # Accepted, and correctly: this node serves nobody yet.
+    assert (await add_user(client, "bob")).status_code == 201
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/state", data={"state": "active"}, headers=HTMX
+    )
+
+    assert refused.status_code == 422, refused.text
+    said = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", STATE_ERROR.search(refused.text).group(1)))
+    assert "late-fleet" in said and pool_transport in said, said
+    # In the page's words, like every other sentence a service composes (decision 9).
+    assert "friend" not in said.lower(), said
+
+    # And the node did not move, on the screen behind the dialog as well as in the record.
+    session.expire_all()
+    assert (await nodes.get_node(session, node_id)).state == NodeState.DRAFT
+    assert (
+        await session.execute(select(Credential))
+    ).scalars().unique().all() == [], "a refused state change minted a credential"
+
+
+# --- no surface grants outside the transaction that commits it ----------------
+
+APP = pathlib.Path(__file__).resolve().parents[2] / "control" / "app"
+ROUTE_MODULES = (APP / "api" / "routes.py", APP / "panel" / "routes.py")
+
+
+def calls_in(module: pathlib.Path) -> set[str]:
+    """Every ``module.function(...)`` this file calls, as ``"module.function"``."""
+    return {
+        f"{node.func.value.id}.{node.func.attr}"
+        for node in ast.walk(ast.parse(module.read_text()))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+    }
+
+
+def test_no_surface_enables_a_transport_without_granting_it() -> None:
+    """Neither route grants after a commit, and neither enables without granting — M17.
+
+    The defect this is written against is a real one and it survived a review: the panel
+    kept the fan-out loop the API route had deleted, sitting after
+    ``nodes.enable_and_grant`` had already granted everybody and COMMITTED, and outside
+    the route's own try/except. In the window where a friend is created between the two,
+    the second pass raises ``Conflict`` — a bare 409 the console does not swap — for an
+    enable that had already succeeded.
+
+    Asserted as an absence in the SOURCE rather than by driving the window, because the
+    window needs two concurrent writes and the thing that must not come back is a call,
+    not a timing. ``nodes.enable_transport`` is the other half of the same rule: it
+    commits without granting, has no production caller, and a route drifting back onto it
+    would put the enable and the grant in two transactions again.
+    """
+    for module in ROUTE_MODULES:
+        called = calls_in(module)
+        assert "friends.grant_everywhere" not in called, (
+            f"{module} grants outside the service transaction that commits the change"
+        )
+        assert "nodes.enable_transport" not in called, (
+            f"{module} enables a transport without granting it in the same transaction"
+        )

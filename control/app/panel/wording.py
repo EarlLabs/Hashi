@@ -12,15 +12,21 @@ WHY:  ``docs/decisions.md`` decision 9 draws one line and it has two sides. Noth
       ``services/`` is written in the code's vocabulary by design, so the
       translation belongs at the moment that sentence becomes page copy.
 HOW:  every server-composed sentence a CONSOLE template renders passes through
-      ``for_the_page`` — the mutation result's toast and banner, and the add-user
-      dialog's field error. Applying it in one helper each is what makes the rule
+      ``for_the_page`` — the mutation result's toast and banner, the add-user dialog's
+      field error, and, since M17.1b, a tuning box's HINT (``panel/routes.py``'s
+      ``_in_the_pages_words``, wired into the establish-hop, enable-transport and
+      replace-parameters dialogs). Applying it in one helper each is what makes the rule
       checkable by reading ``panel/routes.py`` rather than every service.
 
-      There is no longer anywhere it is NOT applied: it was held back from
-      ``panel/outcome.html``, the pre-redesign fleet page's fragment, whose own prose
-      said "friend" throughout — translating only its messages would have left one page
-      speaking two vocabularies. M9.6 deleted that page and its fragment, so every
-      server-composed sentence the panel renders now comes through here.
+      The hint was the one that had been missed, and it went unnoticed while no shipped
+      transport's ``description`` used the word: a box's hint is written in a transport's
+      own package and rendered straight onto a dialog, which makes it as much page copy
+      as any sentence a service composes. M17 widened ``peer_tunnel_address``'s
+      description and three dialogs started saying "friends" at once. So the claim this
+      header used to make — that there is nowhere it is NOT applied — is not made any
+      more: it was true of the surfaces M9.6 left, and a new surface is how it stops
+      being true. What replaces it is the list above and the audit of it in
+      ``tests/control/test_the_console.py``.
 
 Two things are never translated, because they are not ours to rewrite:
 

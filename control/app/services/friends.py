@@ -238,6 +238,21 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
     NOT complete a revocation: until those configs are pushed, the friend's
     credential is still live in the running daemon on each node. The caller pushes;
     see ``services/apply.py``.
+
+    THE ADDRESS IS FREED AT THIS COMMIT — M17 — which is strictly earlier than "no node
+    still authorises it", and the difference is the window this note exists for.
+    ``addresses.held_digests`` reads credential rows and nothing else, so the moment the
+    rows above are deleted the address is the lowest free one and the next person granted
+    takes it, while the node the revoked person was on may still carry their peer entry.
+    What keeps that window shut today is the push and not the allocator: a failed apply
+    marks the node DEGRADED (``apply._record_failure``), and a degraded node is not in
+    ``nodes.serving_transports`` — so nobody is granted anything on it at all until it is
+    applied successfully, and the address cannot be re-let in the meantime. What is NOT
+    covered is an operator moving such a node back to serving by hand without applying
+    it, where the console shows drift and the allocator does not read it. Closing that
+    properly needs state this schema does not carry — which addresses a node was last
+    applied with, not just a digest of the whole file — so it is left to M17.1c, whose
+    subject is exactly what may and may not move an address a device holds.
     """
     friend = await get_friend(session, friend_id)
     now = datetime.datetime.now(datetime.UTC)

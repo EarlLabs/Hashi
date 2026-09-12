@@ -825,19 +825,18 @@ async def set_node_state(
     — which is exactly when the operator needs to see the current answer, and re-rendering
     the dialog is what gives them one.
     """
-    node = await nodes.get_node(session, node_id)
     typed = {"state": state, "detail": detail}
     if not state:
-        return _refuse_state(
-            request, node, values=typed, errors={"state": NO_STATE_CHOSEN}
+        return await _refuse_state(
+            request, session, node_id, values=typed, errors={"state": NO_STATE_CHOSEN}
         )
     try:
         wanted = NodeState(state)
     except ValueError:
         # An unknown word, before the service ever sees it. The message names no value:
         # this one came from a form, and the states themselves are on screen already.
-        return _refuse_state(
-            request, node, values=typed, errors={"state": NO_SUCH_STATE}
+        return await _refuse_state(
+            request, session, node_id, values=typed, errors={"state": NO_SUCH_STATE}
         )
 
     try:
@@ -845,9 +844,10 @@ async def set_node_state(
             session, node_id=node_id, state=wanted, detail=detail or None
         )
     except DomainError as exc:
-        return _refuse_state(
+        return await _refuse_state(
             request,
-            node,
+            session,
+            node_id,
             values=typed,
             errors={"state": wording.for_the_page(exc.message)},
         )
@@ -870,14 +870,27 @@ NO_STATE_CHOSEN = "required — choose the state to move this node into"
 NO_SUCH_STATE = "that is not a state this node can be moved into"
 
 
-def _refuse_state(
-    request: Request, node, *, values: dict, errors: dict
+async def _refuse_state(
+    request: Request, session: AsyncSession, node_id: str, *, values: dict, errors: dict
 ) -> Response:
-    """The state dialog again, at 422, with the message under the control it is about."""
+    """The state dialog again, at 422, with the message under the control it is about.
+
+    IT RE-READS THE NODE, like ``_refuse_enable`` and ``_refuse_params`` do, and that is
+    required rather than symmetrical — M17. Since this milestone, moving a node to
+    serving grants every active friend inside the same transaction, and a pool with no
+    room refuses by ROLLING BACK (``friends.grant_everywhere``). A rollback expires every
+    object in the session's identity map whatever ``expire_on_commit`` says, so a ``Node``
+    this route had fetched before the call is a husk afterwards: reading ``node.state``
+    to compose this dialog would emit a SELECT from a plain frame on an async session —
+    ``MissingGreenlet``, which is not a ``DomainError``, so it escapes as a 500 and the
+    console swaps nothing at all. The operator would watch the spinner stop and never see
+    the refusal. Re-reading inside the answer is what makes every refusal on this route
+    renderable, whatever the service did to the session on its way out.
+    """
     return TEMPLATES.TemplateResponse(
         request,
         "panel/node_state_dialog.html",
-        _state_form(node, values=values, errors=errors),
+        _state_form(await nodes.get_node(session, node_id), values=values, errors=errors),
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
@@ -2033,11 +2046,13 @@ async def enable_transport(
             failure=wording.for_the_page(exc.message),
         )
 
-    for friend in await friends.list_friends(session):
-        if friend.is_active:
-            await friends.grant_everywhere(session, friend)
-    await session.commit()
-
+    # NO SECOND FAN-OUT HERE, and its absence is the point — M17. This route used to
+    # grant every active friend again, in a second transaction, after the enable had
+    # committed. ``nodes.enable_and_grant`` above does that INSIDE the transaction it
+    # commits, which is what makes a pool with no room a refusal that changed nothing;
+    # a second pass afterwards could still raise ``Conflict`` — outside this route's
+    # try/except, so htmx would get a bare 409 envelope it does not swap — for an
+    # operation that had already succeeded. ``api/routes.py`` has no such loop either.
     node = await nodes.get_node(session, node_id)
     return _mutation(
         request,

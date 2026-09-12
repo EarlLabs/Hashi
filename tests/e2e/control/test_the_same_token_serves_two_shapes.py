@@ -134,6 +134,17 @@ async def friend_token(operator, nickname: str) -> str:
     return url.rsplit("/", 1)[-1]
 
 
+def address_in(config: str) -> str | None:
+    """The tunnel address a config file configures its interface with, or ``None``.
+
+    Whatever it says, rather than a pattern: the shape is one assertion and comparing two
+    friends' addresses is another, and a helper that matched only the expected shape would
+    make the second one green by returning ``None`` twice.
+    """
+    found = re.search(r"Address\s*=\s*(\S+)", config)
+    return found.group(1) if found else None
+
+
 def files_in(archive: bytes) -> dict[str, str]:
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
         return {name: bundle.read(name).decode() for name in bundle.namelist()}
@@ -199,12 +210,25 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
     body = next(iter(mine.values()))
     assert "[Interface]" in body and "[Peer]" in body
     # AN address out of this transport's pool, written with the prefix the operator typed
-    # — M17, where this used to name the one address every user shared. Deliberately not
-    # the pool's first: this stand is WARM, so every user an earlier scenario created was
-    # granted this transport the moment its node started serving, and they hold the
-    # addresses below this one. That is the behaviour, not a nuisance — what a friend's
-    # file must carry is an address of their own inside the tunnel this node was given.
-    assert re.search(r"Address\s*=\s*10\.81\.\d+\.\d+/20", body), body
+    # — M17, where this used to name the one address every user shared.
+    ours = address_in(body)
+    assert ours and re.fullmatch(r"10\.81\.\d+\.\d+/20", ours), body
+
+    # AND NOT THE SAME ONE TWICE, which is the half the pattern above cannot see: the
+    # pre-M17 fallback put the row's single ``peer_tunnel_address`` into every user's
+    # file, and that value satisfies the pattern too. So a second friend is added on the
+    # same row and the two files are compared — remove the allocator and both read
+    # 10.81.0.2/20, which is this assertion and not the one above turning red.
+    also_theirs = await client.get(
+        f"/sub/{await friend_token(operator, f'twoshapes-{unique}-b')}",
+        params={"format": CONFIG_FILE_FORMAT},
+    )
+    assert also_theirs.status_code == 200, also_theirs.text
+    theirs = mine_in(also_theirs.content, unique)
+    assert len(theirs) == 1, theirs
+    assert address_in(next(iter(theirs.values()))) != ours, (
+        "two friends on one row were handed one address"
+    )
 
     # The credential-protecting headers are on BOTH shapes. A second shape that lost
     # no-store would be a bearer-credential body sitting in someone else's cache, and

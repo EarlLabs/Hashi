@@ -31,13 +31,24 @@ for somebody else's node, and an address written into a credential would be an a
 device is not configured with. Both are the kind of value ``CLAUDE.md`` forbids arriving
 through the one door nobody reviews.
 
-The consequence, stated rather than hidden, and it is smaller than 0005's: **nothing
-changes for any existing row.** A transport enabled before this migration keeps rendering
-the same bytes, because a pool of one starting at the address already in ``params`` is
-byte-identical to the fallback the renderers have always used. A row that already has two
-friends on it is still refused at render, exactly as it is today — this migration neither
-fixes nor worsens it; sizing such a row is a later step (``replace_params``), which pins
-every address a device already holds before it widens anything.
+The consequence, stated rather than hidden, in 0005's shape — it names the action this
+upgrade requires, because there is one.
+
+**Every existing row renders the same bytes.** A pool of one starting at the address
+already in ``params`` is byte-identical to the fallback the renderers have always used,
+so no file on a node and no file on anybody's device is touched by this upgrade, and a
+row that already has two friends on it is still refused at render exactly as it is today.
+
+**What changes is what the control plane will accept next.** ``pool_size`` is NULL on
+every upgraded row and a NULL pool is one address long, so while such a row is SERVING it
+is measured as holding one person — and ``friends.create_friend`` refuses the next friend
+FLEET-WIDE, naming that node and that transport, whether or not the new person would ever
+have been routed onto it. So the first thing after this upgrade, before adding anybody,
+is to give every serving friend-facing WireGuard-family row a pool size, by replacing
+that row's parameters — which pins every address a device already holds before it widens
+anything, and is also what repairs the two-friend row above. Nothing else sizes a row:
+no backfill writes one here, for the reason given above, and a row enabled from now on is
+sized at the moment it is enabled.
 
 WHAT THIS UPGRADE CAN FAIL ON: nothing. ``deploy/docker/entrypoint.sh`` runs
 ``alembic upgrade head`` on every boot, so a migration that aborts is a control plane
@@ -50,8 +61,12 @@ Pre-M17 code reads no address off a credential, so it falls back to ``params`` f
 everybody — which on a row that has handed out several addresses means either a render
 refused for ambiguity (and every push to that node blocked, including a revocation's) or,
 for a lone holder at a later pool address, a working-looking config whose traffic goes
-nowhere. So it stops, names the nodes, and changes nothing. A row still at one address,
-and any row nobody holds an address on, downgrades cleanly.
+nowhere. So it stops, names the nodes, and changes nothing. What downgrades cleanly is a
+row nobody holds an address on, whatever its size, and a row that was never sized — there
+the only holder is at the pool's first address, which is the value ``params`` already
+carries, so old code renders it identically. A SIZED row with a holder does not, not even
+with a single one: nothing here can decrypt an address to tell ``pool[0]`` from
+``pool[5]``, so it refuses on the size.
 """
 
 from collections.abc import Sequence
@@ -113,6 +128,13 @@ def _refuse_while_a_pool_is_in_use() -> None:
     the pool's first one — which is the value ``params`` already carries, so old code
     renders it identically. It is the pair that cannot survive: several people on one
     row, each at a different address, read back by code that knows only the first.
+
+    IT KEYS ON THE SIZE AND NOT ON HOW MANY PEOPLE HOLD AN ADDRESS, because it cannot
+    tell ``pool[0]`` from ``pool[5]`` without the key — so a lone holder on a sized row
+    is refused too. That is the right refusal and the wrong instruction to pair with
+    "take it back to one user": the operator who revoked friends to get there would have
+    destroyed real people's access and still be refused. So the sentence below names the
+    remedy that actually clears this query.
     """
     in_use = (
         op.get_bind()
@@ -137,6 +159,10 @@ def _refuse_while_a_pool_is_in_use() -> None:
         "such a transport falls back to the one address in the transport's parameters, "
         "which is either a render refused for two peers on one address (and every push "
         "to that node blocked, a revocation's included) or, for a single holder, a "
-        "config that looks right and carries nothing. Take those transports back to one "
-        "user, or remove them, and run this again. Nothing has been changed."
+        "config that looks right and carries nothing. This asks how big the pool is and "
+        "not how many people are on it — nothing here can decrypt an address to tell the "
+        "pool's first from its fifth — so taking a transport down to one user does not "
+        "clear it, and revoking friends to get there would cost them their access for "
+        "nothing. Remove those transports, which takes their credentials with them, and "
+        "run this again. Nothing has been changed."
     )

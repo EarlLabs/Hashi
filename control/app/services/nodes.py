@@ -17,7 +17,7 @@ import logging
 
 import asyncssh
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import (
@@ -29,7 +29,6 @@ from control.app.errors import (
 )
 from control.app.models import (
     AuditAction,
-    Friend,
     Node,
     NodeState,
     NodeTransport,
@@ -334,9 +333,11 @@ async def enable_transport(
 ) -> NodeTransport:
     """Enable one transport on one node, minting whatever material it declared.
 
-    Commits. The variant that also hands the new transport to every active friend is
-    ``enable_and_grant`` below, and both surfaces call that one — see its note for why
-    the grant may not be a second transaction.
+    Commits, and grants nobody. NO PRODUCTION CALLER SINCE M17: both surfaces call
+    ``enable_and_grant`` below, because the grant may not be a second transaction — see
+    its note. What is left here is the plain enable, which is what a test wanting a row
+    without a fan-out asks for, and ``test_no_surface_enables_a_transport_without
+    _granting_it`` is what keeps a route from drifting back onto it.
     """
     node_transport = await _enable(
         session,
@@ -628,11 +629,12 @@ async def _sized_pool(
             fields={addresses.POOL_BOX: problem},
         )
 
-    people = (
-        await session.execute(
-            select(func.count()).select_from(Friend).where(Friend.revoked_at.is_(None))
-        )
-    ).scalar_one()
+    # THE FLEET COUNT IS ``addresses``', not this module's own query — M17.
+    # The same number is the floor in the enable dialog's placeholder and the threshold
+    # the add-a-friend refusal uses; written out here as well, a later change to who
+    # counts as being in the fleet would land in one copy and the box would offer a size
+    # this refuses.
+    people = await addresses.fleet_size(session)
     if pool_size < people:
         short = POOL_SIZE_BELOW_THE_FLEET.format(size=pool_size, people=people)
         raise ParamsRefused(

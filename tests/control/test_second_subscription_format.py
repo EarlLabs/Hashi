@@ -339,9 +339,13 @@ async def test_every_user_on_one_wireguard_row_renders_at_an_address_of_their_ow
     This test used to assert the opposite: two friends on one config-file transport
     could not be rendered at all, and the value of the test was that the refusal reached
     the operator as a NODE failure carrying the transport's own sentence rather than as
-    a 500. That refusal is still right and is still tested — in ``edge``, against the
-    renderers directly — but it is no longer what `control` produces, because `control`
-    no longer hands two people one address.
+    a 500. That refusal is still right and is still pinned — by
+    ``tests/control/test_every_user_holds_their_own_address.py``'s
+    ``test_a_row_from_before_this_milestone_with_two_users_still_refuses``, which drives
+    a row into the state the migration leaves one in and asserts both that it refuses and
+    that the sentence carries no key material. It is no longer what `control` produces
+    from any state a surface can create, because `control` no longer hands two people one
+    address.
 
     What it asserts now is the charter's scale: every user on the row holds their own
     address, and the node's config routes each of them separately. A ``/32`` per peer is
