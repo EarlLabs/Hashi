@@ -43,6 +43,18 @@ carrying your traffic. It simply will not take this key.
 file on disk** — so `authorized_keys` on the host is not where to add one. Add
 it through the provider's metadata for the instance.
 
+**The exact key to install** (this is a *public* key; it is safe to paste
+anywhere, and it is the only key this machine has — the leaf already accepts it):
+
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPqVn7EoK1SIxlD3sv+PkkavpgVVlFAn2g/ZTTZy2AnU
+```
+
+The entry runs `OpenSSH_9.6p1 Ubuntu-3ubuntu13.19` and offers **`publickey`
+only** — no password fallback, so there is no other way in. Add the key to the
+instance's metadata for whichever account you use, and the remaining DNS items
+become answerable in one sitting.
+
 **Why this blocks so much:** the entry is the node that dials the hop, so it is
 the only node that gets a `dns` block at all. Items 7, 8, 9, 10, 11, 12 and 13
 are all observations on the entry. The leaf cannot stand in for it.
