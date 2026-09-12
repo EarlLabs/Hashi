@@ -13,6 +13,7 @@ from edge.registry import (
     KeyScope,
     KeySpec,
     Layer4,
+    PeerAddress,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -84,4 +85,11 @@ META = TransportMeta(
     # is what AmneziaWG exists for — so the panel must never present it to a friend as a
     # working exit from a filtering network.
     blocked_by_inspection=True,
+    # Every friend on this transport holds a tunnel address of their own, drawn from the
+    # room inside the interface's own address. AllowedIPs is this protocol's
+    # authorisation list AND its routing table, so two friends on one address is not a
+    # duplicate the daemon merges — it is the second silently taking over the first's
+    # return path, which ``render_server`` refuses rather than renders. This transport is
+    # never on a hop (``hop_capable`` is False), so its consumers are always people.
+    peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
 )

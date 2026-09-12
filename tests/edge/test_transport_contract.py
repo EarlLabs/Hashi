@@ -486,17 +486,43 @@ def test_a_package_that_declares_a_format_it_cannot_produce_is_refused() -> None
 
     from edge.registry import _check_contract
 
+    transport = profile(INSTALLED[0])
     meta = replace(
-        discover()[INSTALLED[0]],
+        transport.meta,
         subscription_formats=frozenset(
             {SubscriptionFormat.V1_URI_LIST, SubscriptionFormat.CLIENT_CONFIG_FILE}
         ),
     )
     with pytest.raises(ContractViolation) as refused:
         _check_contract(meta, SimpleNamespace(render_server=lambda: None,
-                                             render_client=lambda: None))
+                                              render_client=lambda: None),
+                        transport.params_model)
     # The message has to name the missing symbol, or it is a puzzle rather than a report.
     assert "render_client_config" in str(refused.value)
+
+
+def test_a_transport_whose_pool_names_a_field_its_params_lack_is_refused() -> None:
+    """The other half of the same load-time check — M17.
+
+    ``PeerAddress`` names two PARAMETERS, and a name the model does not have is a pool
+    whose bounds nothing can read: `control` would size it against a field that is not
+    there, and every user would be allocated an address out of nowhere. Checked against
+    the loaded model rather than at discovery, because ``meta.py`` alone cannot see it.
+    """
+    from types import SimpleNamespace
+
+    from edge.registry import PeerAddress, _check_contract
+
+    transport = profile(INSTALLED[0])
+    real_field = next(iter(transport.params_model.model_fields))
+    meta = replace(
+        transport.meta,
+        subscription_formats=frozenset(),
+        peer_address=PeerAddress(name="no_such_field", within=real_field),
+    )
+    with pytest.raises(ContractViolation) as refused:
+        _check_contract(meta, SimpleNamespace(), transport.params_model)
+    assert "no_such_field" in str(refused.value)
 
 
 @pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)

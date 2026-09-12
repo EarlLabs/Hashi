@@ -13,6 +13,7 @@ from edge.registry import (
     KeyScope,
     KeySpec,
     Layer4,
+    PeerAddress,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -84,4 +85,12 @@ META = TransportMeta(
     # existing is not the same as the endpoint handing it over, and this declaration
     # does not pretend otherwise.
     subscription_formats=frozenset({SubscriptionFormat.CLIENT_CONFIG_FILE}),
+    # Each consumer holds an address of its own, and the interface's own address says
+    # how much room there is for them. A kernel tunnel authorises and routes by address
+    # — AllowedIPs is both lists at once — so two consumers on one address is a silent
+    # hijack of the first one's return path, which ``render_server`` refuses outright.
+    # On a hop the consumer is a single far node and the pool is one address long; when
+    # the transport is offered to friends instead, it is as long as the operator sizes
+    # it. The renderer cannot tell the two apart and does not need to.
+    peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
 )

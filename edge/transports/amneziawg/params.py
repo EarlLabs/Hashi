@@ -27,7 +27,16 @@ class Params(BaseModel):
     # The tunnel's own address range. A private range, and NOT hardcoded anywhere in
     # code — the operator picks it, because two hops on one host must not collide.
     tunnel_address: str = Field(description="this end's tunnel address, e.g. 10.x.y.1/24")
-    peer_tunnel_address: str = Field(description="the far end's tunnel address")
+    # Dual-use, and the description says so because the establish-hop dialog and the
+    # enable dialog both show it: on a hop this is the single far end's address, and on
+    # a transport offered to friends it is the FIRST address given out — the pool starts
+    # here and runs as far as the operator sized it.
+    peer_tunnel_address: str = Field(
+        description=(
+            "the far end's tunnel address on a hop; the first address given out when "
+            "this transport is offered to friends"
+        )
+    )
 
     # Node-scoped material from META.key_material.
     private_key: str = Field(repr=False)
@@ -110,6 +119,36 @@ class Params(BaseModel):
                     "tunnel's DNS setting cannot be a name, because resolving that "
                     "name is what the setting is for"
                 ) from exc
+        return value
+
+    @field_validator("client_dns")
+    @classmethod
+    def _resolvers_are_not_inside_the_tunnel(cls, value: tuple[str, ...], info):
+        """No resolver may be an address out of this tunnel's own range.
+
+        With a pool, every address in that range is one a USER's device holds — so a
+        resolver set to one of them points every user's lookups at whichever person was
+        given it, which is the one record this project must never create. The
+        interface's own address is refused by the same rule and for a second reason:
+        nothing on the node answers a query there, so every name would simply fail.
+
+        Read out of ``info.data`` and skipped quietly when ``tunnel_address`` is absent,
+        which means the tunnel address itself failed validation a moment ago. That is
+        the error worth reading; a second complaint about the resolver would bury it.
+        """
+        tunnel = info.data.get("tunnel_address")
+        if not tunnel:
+            return value
+        network = ipaddress.ip_interface(tunnel).network
+        for entry in value:
+            if ipaddress.ip_address(entry) in network:
+                raise ValueError(
+                    f"{entry!r} is inside {network}, which is this tunnel's own range. "
+                    "Every address in it is one a user's device is given, so a resolver "
+                    "there would send every user's lookups to whoever holds it — and the "
+                    "node's own address in that range answers no lookups at all. Give a "
+                    "resolver outside the tunnel."
+                )
         return value
 
     @field_validator("private_key", "public_key", "preshared_key")
