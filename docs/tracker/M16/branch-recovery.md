@@ -1,7 +1,19 @@
-# M16's commits are on `task/M17` — how to put them back
+# M16's commits are on `task/M17` — RESOLVED 2026-09-12
 
-**Recorded 2026-09-12. This is an orchestration mistake, not a defect in the work.
-Nothing is lost; everything is committed and reachable.**
+**RESOLVED.** All four commits were cherry-picked onto `task/M16` in an isolated
+worktree on 2026-09-12 — `8515b90`, `a21eb8f`, `fac0d2f`, `672cc5c`. Every pick
+applied cleanly. Verified afterwards: M16's own files are present
+(`tests/edge/test_a_friends_lookup_leaves_through_the_hop.py`,
+`control/migrations/versions/0005_a_nodes_resolver.py`), M17's are **absent**
+(`edge/addressing.py`, `control/app/services/addresses.py`), no M17 step commit is
+on the branch, and `make test-edge` there is **250 passed, 10 skipped, EXIT 0** —
+the skips being M17.1a's tests correctly not present.
+
+**A worktree was used deliberately**: the M17.1b review was reading the main
+checkout at the time, and switching branches under it would have made it review
+code that was not there. `git worktree add` left that checkout untouched.
+
+The original record is kept below because the reasoning is the point.
 
 ## What happened
 
