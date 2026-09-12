@@ -124,8 +124,24 @@ def test_a_pool_is_lazy_and_is_never_built_to_be_measured() -> None:
     assert list(islice(run, 3)) == ["10.0.0.2/8", "10.0.0.3/8", "10.0.0.4/8"]
 
 
-def test_a_workable_pool_has_no_problem() -> None:
-    assert pool_problem("10.66.0.2/24", "10.66.0.1/24", 200) is None
+@pytest.mark.parametrize(
+    ("description", "first", "within", "size"),
+    [
+        ("an ordinary tunnel", "10.66.0.2/24", "10.66.0.1/24", 200),
+        # RFC 3021: a /31 is two addresses and BOTH are hosts — it has no network or
+        # broadcast address to keep clear of. So the node takes one and a single user
+        # takes the other, and that user's address is the one a /24 would have called
+        # the broadcast. This is the only case that exercises ``has_edges`` being False:
+        # mutating it to an unconditional True refuses this pool, which is a working
+        # point-to-point tunnel turned away.
+        ("a two-address tunnel, which has no edges to keep clear of", "10.66.0.1/31",
+         "10.66.0.0/31", 1),
+    ],
+)
+def test_a_workable_pool_has_no_problem(
+    description: str, first: str, within: str, size: int
+) -> None:
+    assert pool_problem(first, within, size) is None, description
 
 
 @pytest.mark.parametrize(

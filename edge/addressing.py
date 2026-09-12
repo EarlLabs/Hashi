@@ -50,6 +50,12 @@ from collections.abc import Iterator
 # length the first and last addresses of the range are not hosts, and a device handed
 # one of them cannot be reached — which is why the rule is stated as a prefix length
 # rather than as a pair of addresses.
+#
+# Consulted in exactly three places in ``pool_problem``, and nowhere else: the
+# network-address refusal, the broadcast-address refusal, and the room left in the
+# "runs past the end" sentence. Every other refusal there applies at any prefix length.
+# The count is written down because a guard nothing exercises is a guard that drifts:
+# ``test_a_workable_pool_has_no_problem`` carries a /31 case for that reason.
 SHORTEST_PREFIX_WITHOUT_EDGES = 31
 
 
