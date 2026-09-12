@@ -253,3 +253,47 @@ docker logs <the entry's xray container> 2>&1 | tail -50
 warning` a failed lookup writes nothing, while **the same flow at `info` writes the
 destination name 38 times**. So `loglevel: warning` is now load-bearing: confirm
 the deployed config says `warning`, and never lower it, even while debugging.
+
+---
+
+## Found ON THE LEAF, 2026-09-12 — a container "Up 3 days" serving nothing
+
+**This was not a checklist item. It was found by looking at the real host, and it
+is the failure shape the charter fears: every signal green, nothing carried.**
+
+On the Amsterdam leaf (`45.151.69.107`), observed live:
+
+- `docker ps` shows `hashi-node-wireguard-1` **Up 3 days, RestartCount 0**.
+- Its log shows `wg-quick up` **succeeding** at `2026-09-09T08:41:25Z` — interface
+  created, `10.66.0.1/24` added, MTU set, forward and masquerade rules installed.
+- **There is no `wireguard` interface on the host now**, and nothing listening on
+  its port. `ip -brief link` shows only `amneziawg`. `ss -lnup` shows `51830`
+  (amneziawg) and `49443` (xray) — the plain-WireGuard port is absent.
+- The container's supervisor is alive and sitting in `sleep infinity`.
+
+**Why it does not notice.** The supervisor runs `wg-quick up` once and then waits
+on a sleep. It never watches the interface. So the interface can disappear —
+taken down, cleaned up, or never surviving whatever happened on 9 September —
+and the container stays "Up" forever, with `docker ps` and the panel both content.
+
+**This is NOT the recorded image-pin limitation.** That one
+(`docs/decisions.md`, 2026-09-09) is about a legacy-iptables build whose FORWARD
+rules cannot front-run ufw's nft DROP — a *forwarding* problem, with the interface
+present. Here the interface is not present at all.
+
+**What to check, on both hosts, whenever a transport is enabled:**
+
+```sh
+ip -brief link                 # one interface per enabled wg-family transport
+ss -lnup                       # one listener per enabled transport's port
+docker ps                      # compare: "Up" must not be the only evidence
+```
+
+**The product-side question this raises** — for the owner, not decided here: a
+data-plane container should not be able to report healthy while the interface it
+exists to run is absent. M1 made `apply` verify the daemon *loaded the config*;
+nothing verifies the interface *stays up*. The supervisor waits on a sleep rather
+than on the interface, so the cheapest honest fix is for it to watch what it
+brought up and exit when that goes away — which is a change to
+`edge/bootstrap/node_stack.py`'s `_WG_QUICK_SUPERVISOR`, and M21 has already shown
+that script is portability-sensitive.
