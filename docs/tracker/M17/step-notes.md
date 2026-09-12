@@ -110,3 +110,82 @@ four M16 commits landed here. Recovered by cherry-picking in an isolated
 
 **Do not branch the next milestone until this one's last commit has landed**,
 and never leave two milestones' agents sharing one checkout.
+
+---
+
+## From M17.1b's fix round (2026-09-12) — what the next step inherits
+
+**Gate at that point: `make verify` green — control 604 / 1 skipped, edge 299 / 3
+skipped, infra 174, e2e 163.**
+
+### Call these, do not re-derive them
+
+- **`addresses.fleet_size(session, extra=0)` is the single definition of "who is
+  in the fleet."** The count used to be copied in three places. Call it; do not
+  re-query `Friend`.
+- **`addresses.settle` writes nothing when it refuses.** It plans the whole
+  allocation and writes only after every waiting credential has an address, so
+  its "Nothing has been changed" is true *at the raise* rather than true because
+  the caller rolled back. M17.1c's resize may therefore catch `PoolFull`, report
+  it, and continue its own transaction. (`grant_everywhere` still rolls back, for
+  its own separate reason.)
+
+### The rule that came out of the BLOCKING defect — it will bite again
+
+**A panel refusal helper must be `async` and must re-read its subject after any
+service that can roll back.**
+
+Why: a rollback expires **every** object in the identity map — `expire_on_commit=False`
+does not save you. A `Node` fetched before the call is a husk in the
+`except DomainError` branch, and touching any attribute emits a SELECT from a sync
+frame on an AsyncSession → `MissingGreenlet` → not a `DomainError` → a 500 the
+console never swaps, because the htmx dialog only swaps 422. The operator sees a
+spinner stop and nothing else.
+
+**Known divergence, deliberate and scoped:** `_refuse_state` now re-queries;
+`_refuse_resolver` still takes a pre-fetched node, as do the handlers on
+`health.check_node` and `apply.apply_node`. Those paths have no rollback today.
+**If a later change puts a rollback on any of them, that handler gets the same
+500** — and the fix is the same three-line shape.
+
+### Operator-facing wording acceptance will judge — match it, do not re-word it
+
+- `PoolFull`: *"… 2 are taken and 1 more friend needs one. Nothing has been
+  changed. Make the pool bigger on that transport, or take somebody off it."*
+- `0006`'s downgrade: *"Remove those transports, which takes their credentials
+  with them, and run this again."*
+
+**Migration 0006 now promises, in writing, that a serving pre-M17 row is sized by
+replacing that row's parameters.** If M17.1c ships resizing under a different
+name or surface, **that paragraph has to change with it.**
+
+### Test harness in `tests/control/test_every_user_holds_their_own_address.py`
+
+`enable_form(transport, pool_size=...)` builds the panel submission with the group
+prefix; `field_errors(response)` reads the enable dialog's per-box errors; `HTMX`
+is the header dict; `enable_pool` / `params_for` / `as_the_node_sees_it` /
+`add_user` drive the API half; `calls_in(module)` + `ROUTE_MODULES` is the ast
+helper for static route assertions. Paths resolve from `__file__`; no chdir.
+
+### Carried forward to M17.1c — these are yours
+
+1. **`control/app/services/rotation.py:286`** — `replace_params` can move or
+   narrow the tunnel network under addresses already held, with **no pool
+   re-check**.
+2. **Overlapping tunnel networks between two wg-family rows on one node.**
+3. **The release/apply window's residual hole.** A revoked friend's address is
+   freed at revoke's commit, before the node is re-applied. This is *mostly*
+   safe and the reason is worth knowing: a failed push runs `_record_failure`
+   (inside `apply_node`'s try at line 417) which marks the node `degraded`, and
+   `NodeState.serving()` is `(ACTIVE,)`, so `serving_transports` excludes it and
+   `create_friend` grants nobody on that row. **The hole is an operator returning
+   such a node to serving by hand without applying** — the console shows drift,
+   the allocator does not read it. Closing it needs state the schema does not
+   carry: *which addresses a node was last applied with*, not a digest of the
+   file. Decide deliberately whether that is in scope; it may not be.
+
+**Note the asymmetry, because it has already misled this run once:**
+`render_for_node` is called at `apply.py:381`, **outside** both try blocks, so a
+*render* failure leaves node state **unchanged** — an already-active node keeps
+serving its last config. A *push* failure is inside the try and does degrade the
+node. Do not generalise either one to the other.

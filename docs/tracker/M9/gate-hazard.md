@@ -49,3 +49,47 @@ It is `control`/`infra` scaffolding, not M9's subject, and changing how every
 control test gets its database mid-milestone would put a large unreviewed change
 under a milestone about panel screens. It is written down instead — with the
 warning that it has already caused at least one wrong conclusion in this run.
+
+---
+
+## A third hazard: tests that leak a whole compose project — 2026-09-12
+
+**Three distinct leaks found in one run, all the same shape, all of them able to
+turn a green gate red for reasons that have nothing to do with the change.**
+
+| leaked project | how it was found | what it cost |
+|---|---|---|
+| `hashi-panel-bootstrap-*` | 12 containers, two in health-restart loops since 9 Sept | the 600s bootstrap timeout never tears its compose project down, so the flake feeds itself |
+| `hashi-e2e-browser-1` | a reviewer captured `docker ps` **before** running its first gate | `make verify` red on `test_every_service_is_running` — expected `{control, db, caddy}`, found `{browser, caddy, control, db}`. Nothing to do with the diff under review |
+| `hashi-restore-src-*` | `docker compose ls -a` during a later cleanup | a whole stack (caddy, control, db) left `Up 4 hours` after the restore scenario finished |
+
+**The shape.** A scenario creates a compose project with a generated name, and
+teardown is not guaranteed on every exit path — a timeout, an assertion failure
+or an interrupt leaves the project running. The next run then measures a stand
+that has something extra in it.
+
+**Why it is worse than an ordinary flake.** The failure it produces is *specific
+and plausible*: a service-inventory assertion naming a real container. A reader
+believes it. One reviewer only avoided reporting it as a regression because it
+had recorded `docker ps` before starting, and could therefore prove the container
+predated its own run.
+
+**What to do before believing any red gate:**
+
+```sh
+docker compose ls -a            # any project that is not the one you started?
+docker ps -a --format '{{.Names}}\t{{.Status}}' | grep -i hashi
+```
+
+If anything unexpected is there, remove it and **re-run before reporting a
+failure**. A red gate on a stand you did not fully own is not evidence.
+
+**Capture `docker ps` BEFORE your first gate.** It is the only way to prove
+afterwards that a stray container predated your run rather than being something
+your change created. One reviewer did this unprompted and it was the difference
+between a correct verdict and a false regression report.
+
+**The product-side question, for the owner:** teardown belongs in a `finally`
+that cannot be skipped, and a scenario that generates a project name should
+register that name for cleanup at session end regardless of outcome. Three
+independent leak sites suggest the pattern, not the sites, is what needs fixing.
