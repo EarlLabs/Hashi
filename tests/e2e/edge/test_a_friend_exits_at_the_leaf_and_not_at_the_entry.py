@@ -138,12 +138,23 @@ PROXY_TRANSPORTS = sorted(
 # by arriving or turns this file red until somebody says why it cannot be.
 NO_FRIEND_HERE = {
     "vless-reality": (
-        "a Reality server proxies every ClientHello to a real decoy site before it "
-        "authenticates anyone, so no friend can complete a handshake here without a TLS "
-        "host for it to borrow — a second instrument, and a different question. What this "
-        "scenario measures with packets is asserted for this transport too, on the "
-        "rendered config, by tests/edge/test_a_friends_lookup_leaves_through_the_hop.py, "
-        "which is parametrised over every transport rather than over this shortlist."
+        "a Reality server dials its decoy `dest` for every connection and fails the "
+        "connection when that dial fails — including for a client holding CORRECT keys. "
+        "So no friend can be dialled into one here without also standing up a TLS 1.3 "
+        "host for it to borrow: a second instrument, and a different question. "
+        "MEASURED, not recalled, against the pinned binary in .tools/xray (1.8.24, the "
+        "same version DATA_PLANES pins) on loopback, because an excuse resting on "
+        "remembered protocol behaviour is worth nothing: with `dest` pointed at a closed "
+        "port, a correctly-keyed client received NOTHING and the server logged "
+        "`REALITY: failed to dial dest: ... connection refused`; with the same client, "
+        "the same keys and the same config except a live TLS 1.3 `dest`, the request "
+        "completed. The two runs differed in nothing but whether the decoy answered. "
+        "(What is NOT established is the ordering — whether the dial strictly precedes "
+        "authentication in the code. It does not need to be: what excuses this transport "
+        "is that the decoy is required at all.) What this scenario measures with packets "
+        "is asserted for this transport too, on the rendered config, by "
+        "tests/edge/test_a_friends_lookup_leaves_through_the_hop.py, which is "
+        "parametrised over every transport rather than over this shortlist."
     ),
 }
 
@@ -1002,7 +1013,12 @@ def looked_up(request, measured, material_a_config_names) -> dict:
             DEVICE_IMAGE, "-c", "tail -f /dev/null",
         ],
     )
-    daemon("client", build_client(client_entry.entry), ["--network", f"container:{device}"])
+    client = daemon(
+        "client", build_client(client_entry.entry), ["--network", f"container:{device}"]
+    )
+    # The three that stand for the length of both measurements, tracked so they can be
+    # taken down again at the end. Read the teardown's comment before simplifying it.
+    borrowed = [resolver, device, client]
 
     sources = {"leaf": addresses["leaf_internet"], "entry": addresses["entry_internet"]}
     time.sleep(PROXY_SECONDS)
@@ -1038,6 +1054,22 @@ def looked_up(request, measured, material_a_config_names) -> dict:
         "config": proxy_config,
         **runs,
     }
+
+    # Given back, because this fixture BORROWS the single ``Fleet`` that ``measured``
+    # built rather than owning one. It is parametrised over ``FRIEND_TRANSPORTS``, and
+    # every instantiation shares that one fleet's tag, its container names and its
+    # addresses — so three containers left standing are three collisions for the next
+    # friend-facing transport to be added, which is exactly the day
+    # ``test_every_proxy_transport_is_measured_or_excused`` exists to bring about.
+    #
+    # Removing them is the fix rather than giving each a per-transport NAME, and the
+    # difference matters: ``Fleet.start`` composes a name with nothing per-transport in
+    # it, but the resolver and the device also hold a FIXED ``--ip`` from the internet
+    # subnet, which a unique name does not free. The two proxies above are removed one
+    # step sooner for the same kind of reason — both halves bind one port in one
+    # namespace. ``Fleet.down()`` is the backstop if this is never reached.
+    for container in borrowed:
+        run(["docker", "rm", "-f", container], timeout=120)
 
 
 def test_the_lookup_leaves_by_the_leaf_and_not_by_the_entry(looked_up) -> None:
