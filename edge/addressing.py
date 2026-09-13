@@ -2,8 +2,9 @@
 
 WHAT: the arithmetic behind a pool of tunnel addresses. ``pool`` enumerates one,
       ``pool_problem`` says in a single sentence why an operator's pool cannot work,
-      ``host_of`` gives one address's canonical bare host, and ``networks_overlap``
-      answers whether two tunnels would share a range.
+      ``carriage_problem`` says why one address already in somebody's hands could not be
+      carried by a proposed tunnel, ``host_of`` gives one address's canonical bare host,
+      and ``networks_overlap`` answers whether two tunnels would share a range.
 WHY:  M17, found in the field. ``peer_tunnel_address`` was a single operator parameter,
       so a WireGuard-family transport had exactly one address to give out and therefore
       exactly one friend — against a charter scale of ~30-50. The renderers' refusal to
@@ -227,6 +228,67 @@ def pool_problem(first: str, within: str, size: int) -> str | None:
     return None
 
 
+def carriage_problem(address: str, within: str) -> str | None:
+    """Why a tunnel at ``within`` could not carry ``address``, as a clause, or ``None``.
+
+    ``pool_problem`` asks whether a RUN of addresses can be handed out; this asks the
+    same rules, in the same order, about ONE address somebody is already using — which
+    is a different question only in what the answer may say. The two agree about WHETHER
+    (``test_what_a_tunnel_cannot_carry_is_what_a_pool_of_one_refuses`` pins it), and a
+    rule added to one without the other is what that test turns red for.
+
+    IT NAMES NOTHING AT ALL — not the address it was handed, and not a value derived
+    from the tunnel either. Its caller is composing a refusal about addresses that
+    PEOPLE are holding, and which person holds which address is the one record this
+    project does not keep; the tunnel it is about is already quoted in the sentence this
+    clause lands in, so repeating its network or its broadcast address here would add
+    nothing but a second place a held value could appear verbatim.
+
+    A CLAUSE RATHER THAN A SENTENCE, which is the shape the caller needs: it counts how
+    many addresses each answer applies to and writes "1 is <clause>; 2 are <clause>", so
+    every answer below has to read after a count. That is also why the answer is not
+    ``pool_problem``'s own sentence, which quotes the address it was asked about and
+    speaks about a pool nobody was sizing.
+    """
+    try:
+        interface = ipaddress.ip_interface(within)
+    except ValueError:
+        return "on a tunnel whose own address is not an address with a prefix"
+
+    try:
+        held = ipaddress.ip_interface(address).ip
+    except ValueError:
+        return "not an address at all"
+
+    if interface.version != 4 or held.version != 4:
+        return (
+            "on an IPv6 tunnel, and the forwarding rules this project renders are IPv4 "
+            "only — see edge/egress.py"
+        )
+
+    network = interface.network
+    if held not in network:
+        return "outside the range this tunnel describes"
+
+    if held == interface.ip:
+        return (
+            "the node's own address on this tunnel, which would authorise whoever holds "
+            "it to send as the node"
+        )
+
+    has_edges = network.prefixlen < SHORTEST_PREFIX_WITHOUT_EDGES
+    if has_edges and held == network.network_address:
+        return "this range's network address, which names the network rather than a host"
+
+    if has_edges and held == network.broadcast_address:
+        return "this range's broadcast address, which is not a host in it either"
+
+    if not held.is_private:
+        return "outside private address space, which this node does not own"
+
+    return None
+
+
 def networks_overlap(a: str, b: str) -> bool:
     """Whether two tunnel addresses describe networks that share any address.
 
@@ -249,6 +311,7 @@ def networks_overlap(a: str, b: str) -> bool:
 
 __all__ = [
     "SHORTEST_PREFIX_WITHOUT_EDGES",
+    "carriage_problem",
     "host_of",
     "networks_overlap",
     "pool",

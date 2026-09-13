@@ -21,7 +21,13 @@ from itertools import islice
 import pytest
 from pydantic import ValidationError
 
-from edge.addressing import host_of, networks_overlap, pool, pool_problem
+from edge.addressing import (
+    carriage_problem,
+    host_of,
+    networks_overlap,
+    pool,
+    pool_problem,
+)
 from edge.registry import ConfigFormat, discover, profile
 
 # The formats a wg-quick-style tool runs. Derived from the config-format vocabulary
@@ -196,6 +202,109 @@ def test_the_room_left_is_named_so_the_operator_can_pick_a_number() -> None:
     assert problem is not None
     # .250 through .254 — the broadcast address is not one of them.
     assert "5 are left" in problem
+
+
+# --- what a tunnel could not carry (M17.1c) -----------------------------------
+#
+# The other side of ``pool_problem``: not "can this pool be handed out" but "is an
+# address somebody is ALREADY using still carried by the tunnel the operator has just
+# retyped". Same rules, different answer — a clause naming the cause, for a refusal that
+# counts people rather than listing them.
+
+
+@pytest.mark.parametrize(
+    ("description", "address", "within"),
+    [
+        ("an ordinary user's address", "10.66.0.2", "10.66.0.1/24"),
+        ("written with its prefix", "10.66.0.2/24", "10.66.0.1/24"),
+        ("the last host in the range", "10.66.0.254", "10.66.0.1/24"),
+        ("the other end of a /31, which has no edges", "10.66.0.0", "10.66.0.1/31"),
+    ],
+)
+def test_an_address_a_tunnel_can_still_carry_has_no_problem(
+    description: str, address: str, within: str
+) -> None:
+    assert carriage_problem(address, within) is None, description
+
+
+@pytest.mark.parametrize(
+    ("description", "address", "within", "phrase"),
+    [
+        ("outside the range", "10.67.0.2", "10.66.0.1/24", "outside the range"),
+        ("the node's own address", "10.66.0.1", "10.66.0.1/24", "node's own address"),
+        ("the network address", "10.66.0.0", "10.66.0.1/24", "network address"),
+        ("the broadcast address", "10.66.0.255", "10.66.0.1/24", "broadcast address"),
+        ("out of private space", "11.0.0.2", "11.0.0.1/8", "private address space"),
+        ("an IPv6 tunnel", "fd00::2", "fd00::1/64", "IPv6"),
+        ("a tunnel address with no prefix", "10.66.0.2", "nonsense", "not an address"),
+        ("a stored value that is not an address", "ten.sixty.six", "10.66.0.1/24",
+         "not an address"),
+    ],
+)
+def test_what_a_tunnel_cannot_carry_says_which_of_the_causes_it_is(
+    description: str, address: str, within: str, phrase: str
+) -> None:
+    """The cause, not a catch-all — the operator's next move differs for each.
+
+    "Outside the range" is fixed with a wider prefix; "the node's own address" is fixed
+    by moving the node, and a wider prefix does not touch it. A single sentence covering
+    both sends the operator round a loop on the second one, which is the case with a
+    victim: whoever holds the node's own address is authorised to send as the node.
+    """
+    problem = carriage_problem(address, within)
+
+    assert problem is not None, f"{description} was accepted"
+    assert phrase in problem, f"{description}: {problem}"
+
+
+@pytest.mark.parametrize(
+    ("address", "within"),
+    [
+        ("10.66.0.2", "10.66.0.1/24"),
+        ("10.66.0.1", "10.66.0.1/24"),
+        ("10.66.0.0", "10.66.0.1/24"),
+        ("10.66.0.255", "10.66.0.1/24"),
+        ("10.67.0.2", "10.66.0.1/24"),
+        ("11.0.0.2", "11.0.0.1/8"),
+        ("10.66.0.0", "10.66.0.1/31"),
+        ("fd00::2", "fd00::1/64"),
+        ("10.66.0.2", "nonsense"),
+    ],
+)
+def test_what_a_tunnel_cannot_carry_is_what_a_pool_of_one_refuses(
+    address: str, within: str
+) -> None:
+    """Two functions, one set of rules — and this is what keeps them that way.
+
+    A held address is a pool of exactly one at that address, so the two must never
+    disagree about WHETHER there is a problem. They differ only in what the answer may
+    say: ``pool_problem`` quotes the address it was asked about, which is why a refusal
+    counting the people on a row cannot use it.
+    """
+    assert (carriage_problem(address, within) is None) == (
+        pool_problem(address, within, 1) is None
+    ), f"{address} in {within}"
+
+
+def test_what_a_tunnel_cannot_carry_names_neither_the_address_nor_the_tunnel() -> None:
+    """The clause is about the tunnel's shape and quotes no value at all.
+
+    Its caller composes a refusal an operator reads about addresses other people hold,
+    and the tunnel is already named in that sentence. A clause repeating either is a
+    second place a held address can appear verbatim — which is the one record this
+    project does not keep.
+    """
+    for address, within in (
+        ("10.66.0.1", "10.66.0.1/24"),
+        ("10.66.0.0", "10.66.0.1/24"),
+        ("10.66.0.255", "10.66.0.1/24"),
+        ("10.67.0.2", "10.66.0.1/24"),
+    ):
+        problem = carriage_problem(address, within)
+        assert problem is not None
+        assert address not in problem, problem
+        assert within not in problem, problem
+        assert "10.66.0." not in problem, problem
 
 
 # --- one address's canonical form, and two networks ---------------------------
