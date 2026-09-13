@@ -1789,6 +1789,8 @@ No renderer, template or golden file changes. The pool size is **not** a `Params
 - **Resizing.**
   - Resizing is part of replacing parameters: `replace_params` gains a pool size, audited as `params-replaced`, with no new action and no new endpoint.
   - Before anything changes, every user still without a stored address is pinned to the address their device already uses, then the new pool is checked against every held address.
+    - **Corrected 2026-09-13, beside itself rather than rewritten.** "Every" cannot hold: a pre-pool row has **one** fallback address, so every address-less credential on it renders **the same** one and only one can hold it. What ships: **one** credential is pinned — the earliest by `(created_at, id)`, which is `settle`'s own adoption rule — and the rest are given addresses from the new pool. The done-when below is unaffected: no working device's address moves, because only one device was ever actually using that address. See `docs/decisions.md`.
+    - "Checked against every held address" means **can this tunnel still carry it**, not *is it inside the new run*. An address outside the run is still routed and is never re-handed out, so the stricter reading would refuse a change that strands nobody.
   - This is how a row enabled before pools gets sized, and how the field's two-user row is repaired without touching the working device.
 - **Overlapping networks.**
   - Placement also refuses a tunnel network that overlaps another WireGuard-family row on the same node, hop ends and withdrawn rows included.
