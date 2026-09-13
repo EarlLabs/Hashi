@@ -329,6 +329,16 @@ mistake you want stopped here rather than found on a node that says it is ready:
   record, encrypted, and never on a node — a key generated or pasted on the host would sit
   in clear on the machine most likely to be seized. Generate the pair where the control
   plane lives (*Before any shape*, above) and pass the `.pub` half.
+- **More than one key.** `authorized_keys` holds one key per line, so a value with a
+  newline in it authorises *every* line in it for that account — including one you did not
+  read. `--authorized-key-file` reads the whole file for the same reason: it used to take
+  the first line and say nothing about the rest. Pass the one key the control plane
+  authenticates with; if the file you are copying from holds several, choose there. This
+  one is refused **before anything is installed**, so the host is untouched and the run is
+  safe to repeat.
+- **An argument that is not a port.** `--port` and `--ssh-port` are both checked on the
+  command line, before the host is touched at all — a typo costs you a re-run and not a
+  half-prepared node.
 - **It cannot tell which port sshd listens on.** It reads the port this session arrived on
   and the ports `sshd -T` reports, and if neither answers it stops rather than enabling a
   firewall it cannot prove leaves you a way back in. Pass `--ssh-port`.
@@ -338,20 +348,28 @@ mistake you want stopped here rather than found on a node that says it is ready:
   account in the `docker` group; it does not create one. Make it first, name another with
   `--user`, or leave the flag off.
 - **sshd on this host will not read the file the key was installed in.** The run asks
-  `sshd -T` which files the daemon really consults, because a key in a file sshd never
-  opens is not an authorisation. The shape that does this is a host taking its keys from
-  an `AuthorizedKeysCommand` — instance metadata, on most cloud providers — with no
-  `AuthorizedKeysFile` beside it. Add the key to whatever feeds that command, or set
+  `sshd -T -C user=THE_ACCOUNT` which files the daemon really consults *for that account*,
+  because a key in a file sshd never opens is not an authorisation. The shape that does
+  this is a host taking its keys from an `AuthorizedKeysCommand` — instance metadata, on
+  most cloud providers — with no `AuthorizedKeysFile` beside it. Add the key to whatever feeds that command, or set
   `AuthorizedKeysFile` in `/etc/ssh/sshd_config`, reload sshd, and run this again.
 - **sshd reads that file and still will not let this account in with a key.** A different
   sentence from the one above, and the run asks both: `PubkeyAuthentication no` accepts no
-  key from anybody; an `AuthenticationMethods` list with no alternative that is a key *on
+  key from that account; an `AuthenticationMethods` list with no alternative that is a key *on
   its own* — `publickey,password`, where the comma means both are required — leaves the
   control plane, which has only a key, half way in; and with the default `ssh_user`,
   `PermitRootLogin no` or `forced-commands-only` keeps that key out of root. Fix the
   directive it names and reload sshd, or prepare another account with `--user` and
   register **that** name. `prohibit-password` is not one of these: it permits a key and
   refuses only a password, which is what a hardened host should have.
+
+  **Both questions are asked about the account you are preparing**, not about the top of
+  `sshd_config`: the run hands sshd `-C user=THE_ACCOUNT`, so a `Match User` or `Match
+  Group` block that moves this account's keys or switches them back on for it is part of
+  the answer. It hands sshd **no address**, which is deliberate and is the limit — a
+  `Match Address`, `Match Host`, `Match LocalAddress` or `Match LocalPort` block is not
+  seen, because an address in that script would be a piece of node topology the fleet
+  could not rotate away from.
 - **`net.ipv4.ip_forward` is not 1.** Then the kernel moves no packet from a tunnel out to
   the internet, and every other signal stays green while nothing arrives anywhere. It is 1
   on most hosts only because the docker daemon sets it at every start. Set it, put it in a
