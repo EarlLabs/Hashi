@@ -198,11 +198,16 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
         "was already open",
         "incoming was already denied by default",
         "the firewall was already up — its existing rules were kept",
-        "/opt/hashi was already here — its contents were left alone, and <user> owns the "
-        "directory",
+        # M18.3: the two lines about an already-prepared directory now say that its
+        # CONTENTS changed hands as well. They are quoted here for the reason the whole
+        # test exists — an operator matching a terminal against this page — and because
+        # this is the one claim in the run that an operator would otherwise have to
+        # verify by hand on a live node.
+        "/opt/hashi was already here — <user> now owns it and everything an earlier "
+        "apply left inside it; nothing in it was read, changed or removed",
         "/opt/hashi was already here before this run — whatever an earlier apply left in "
-        "it, this run neither changed nor removed it, only re-asserted that <user> owns "
-        "the directory",
+        "it, this run neither read, changed nor removed it; it now belongs to <user> "
+        "along with the directory, so an apply as that account can replace it",
         # the boundary the run ends on
         "the provider's own firewall sits in front of this host and outside this script's "
         "reach",

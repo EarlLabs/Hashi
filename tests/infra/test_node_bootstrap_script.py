@@ -15,6 +15,12 @@ HOW:  the script is read, not run. Same division as ``test_panel_bootstrap_scrip
 
       M11.2 added the second half: that a re-run changes nothing and claims nothing untrue,
       and that the script states the boundaries an operator would otherwise assume away.
+
+      M18.3 added the one thing a re-run now DOES change on a host that has already been
+      applied to: who owns what an earlier apply left under the node directory. That is
+      the only way an account change can be carried out without the operator typing a
+      recursive chown on a live node, and the assertions for it sit beside the ones that
+      keep the re-run's claims honest, because the two constrain each other.
 """
 
 import pathlib
@@ -449,12 +455,61 @@ def test_it_stays_honest_about_hashi_state_on_a_host_already_applied_to(script: 
         "is always yes — the correction then fires on every run, including the first, and "
         "the closing line is wrong in the other direction"
     )
-    assert re.search(r"neither changed nor removed it", script), (
+    assert re.search(r"neither read, changed nor removed it", script), (
         "the line does not say that this run left the existing contents alone"
     )
-    assert re.search(r"only re-asserted that \$\{TARGET_USER\} owns", script), (
-        "the run claims it changed nothing, while `install -d` does re-assert ownership — "
-        "which is the one thing it changes on a host prepared for a different account"
+    # M18.3 made the claim narrower again, in the other direction. The run now takes
+    # ownership of the CONTENTS as well, so a line ending "only re-asserted that the
+    # account owns the directory" would understate what it did — and understating a
+    # change of ownership is how an operator concludes their files were left as they
+    # were. The contents are still neither read nor written; what moved is who they
+    # belong to, and the line has to say so.
+    assert re.search(r"it now belongs to \$\{TARGET_USER\} along with the directory", script), (
+        "the run hands the existing contents to the prepared account without saying so — "
+        "which is the half-measure M18.3 forbids, in reverse"
+    )
+
+
+def test_it_hands_an_existing_node_directorys_contents_to_the_prepared_account(
+    script: str,
+) -> None:
+    """M18.3 — the step's whole subject, and the reason "re-run the script" was not enough.
+
+    A node applied as one account and later prepared for another kept root-owned files
+    inside a directory the new account owned. The next apply died three layers away, in
+    ``node_stack.prepare``, on a ``chmod`` of a directory the account cannot chmod — and
+    the bootstrap that caused it had just printed ``ready``.
+
+    The step allowed either carrying the files or saying plainly that it does not. This
+    is the carrying half, and the assertion is deliberately about the RECURSION: a
+    non-recursive chown, or the ``install -d`` alone, is precisely the half-measure that
+    looks like it carries them. Both the mode and the owner must still be asserted on the
+    directory itself, which is what ``install -d`` is for, so neither line replaces the
+    other.
+    """
+    handover = re.search(
+        r'^as_root chown -R\S* "\$\{TARGET_USER\}:\$\{TARGET_GROUP\}" "\$\{NODE_ROOT\}"$',
+        script,
+        re.M,
+    )
+    assert handover, (
+        "the node directory's contents are never handed to the account this run prepares "
+        "for, so a host applied to as another account is left with files it cannot replace"
+    )
+    created = re.search(r'^as_root install -d[^\n]*"\$\{NODE_ROOT\}"$', script, re.M)
+    assert created and created.start() < handover.start(), (
+        "the contents are chowned before the directory is known to exist"
+    )
+    # It must not follow a symlink out of the directory it is recursing through. GNU's
+    # `-R` already implies `-P` and so changes the link rather than its target, but POSIX
+    # leaves that default unspecified — and the implementation where it goes the other way
+    # is one where a link planted under the node directory chowns an arbitrary path on the
+    # host, as root. Pinned because it is invisible in a passing run on this developer's
+    # own coreutils.
+    assert "-Rh" in handover.group(0), (
+        "the recursive chown does not state that it leaves symlinks alone, so on a chown "
+        "that dereferences by default a link planted under the node directory redirects "
+        "it at an arbitrary path on the host"
     )
 
 

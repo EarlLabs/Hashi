@@ -399,13 +399,28 @@ or a first run on a host with a past, reports rather than changes:
 ==> <port>/<proto> was already open
 ==> incoming was already denied by default
 ==> the firewall was already up — its existing rules were kept
-==> /opt/hashi was already here — its contents were left alone, and <user> owns the directory
-==> /opt/hashi was already here before this run — whatever an earlier apply left in it, this run neither changed nor removed it, only re-asserted that <user> owns the directory
+==> /opt/hashi was already here — <user> now owns it and everything an earlier apply left inside it; nothing in it was read, changed or removed
+==> /opt/hashi was already here before this run — whatever an earlier apply left in it, this run neither read, changed nor removed it; it now belongs to <user> along with the directory, so an apply as that account can replace it
 ```
 
 Nothing there is a warning. What the script never does is **close** anything: the rule set
 is the union of every run, because a script that withdrew a rule could withdraw the one
 carrying the session running it. Narrowing a rule set is an operator's job, done knowingly.
+
+### Changing the account a node is driven as
+
+The last two lines above are the whole of it, and they are there because the obvious
+reading of this section used to be wrong. A node applied as one account and then handed
+to another kept the **files** of the first: `/opt/hashi` belonged to the new account, and
+everything an apply had written inside it still belonged to the old one. The next apply
+failed on a permission error naming a path — three layers away from the account that
+caused it, on a host whose bootstrap had just said `ready`.
+
+So re-running the script with `--user <new account>` now **is** sufficient. It takes
+ownership of the directory's contents along with the directory, reading none of them and
+removing none of them; the account it prepares can then replace every file an earlier
+apply left. Change `ssh_user` on the node record to match, and apply. If the two ever
+disagree, the node's own record is the one that decides which account is dialled.
 
 ### The layer the script cannot see, and the evening it costs
 
