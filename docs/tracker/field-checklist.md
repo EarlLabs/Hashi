@@ -175,7 +175,8 @@ host.
 
 ### 4. Prove a removed port is genuinely released on the box
 
-**On whichever host you test removal on:**
+**On a node that still has another transport enabled after the removal** — that
+part is not a detail, see below:
 
 ```sh
 ss -lunp | grep <the port>      # before
@@ -186,6 +187,16 @@ ss -lunp | grep <the port>      # after
 Removal does not push — **the apply is a separate step and is what stops the
 container.** The control plane frees the port in its own bookkeeping immediately;
 whether the daemon lets go of it on the host is only observable here.
+
+**Why the node needs a second transport:** applying a node with nothing enabled
+renders no config, and since M18.1 that apply is **refused** rather than pushed —
+so removing (or withdrawing) a node's *last* transport leaves nothing to apply
+and the container keeps running the config it already has. The panel says so in
+the toast and again on the apply. That is a real gap and not a test artefact: on
+a node whose last row was **withdrawn**, the host keeps authorising everyone who
+already holds a credential on it until some transport there is offered again and
+applied. Worth exercising once on purpose, on a node nobody depends on, so you
+have read the sentences before you meet them.
 
 ### 5. The exit address, end to end
 

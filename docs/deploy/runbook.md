@@ -364,11 +364,12 @@ two ways out: run this script against the host, or create the directory once, as
 install -d -m 700 -o THE_SSH_USER /opt/hashi
 ```
 
-**Changing the account of a node that has already been applied to** takes one more step:
-the files an earlier apply left in `/opt/hashi` still belong to whoever placed them. Re-run
-this script with the new `--user` — it hands the directory over — and then either `chown -R`
-its contents to the new account or delete them. A node holds nothing that cannot be
-regenerated, so the next apply puts them all back.
+**Changing the account of a node that has already been applied to** has its own section
+below — *Changing the account a node is driven as*. Re-running this script with the new
+`--user` is now enough for the **host** half, and no recursive chown typed by hand is
+needed or wanted. The half it cannot do is change which account the control plane dials,
+and that is where the cost is — read that section before you change the account of a node
+that is serving.
 
 ### What a finished run says
 
@@ -416,11 +417,32 @@ everything an apply had written inside it still belonged to the old one. The nex
 failed on a permission error naming a path — three layers away from the account that
 caused it, on a host whose bootstrap had just said `ready`.
 
-So re-running the script with `--user <new account>` now **is** sufficient. It takes
-ownership of the directory's contents along with the directory, reading none of them and
-removing none of them; the account it prepares can then replace every file an earlier
-apply left. Change `ssh_user` on the node record to match, and apply. If the two ever
-disagree, the node's own record is the one that decides which account is dialled.
+So re-running the script with `--user <new account>` now **is** sufficient — **for the
+host**. It takes ownership of the directory's contents along with the directory, reading
+none of them and removing none of them; the account it prepares can then replace every
+file an earlier apply left.
+
+**The control plane's half cannot be changed today, and it is the expensive half.** A
+node's `ssh_user` is written once, at registration: nothing in the panel or the API
+updates it, no screen displays it, and there is no way to delete a node record either. So
+a host handed to a new account and a record still naming the old one disagree for ever —
+the record is what decides which account is dialled, and every apply fails on an account
+that no longer owns `/opt/hashi`. There are two repairs and neither is the one the last
+paragraph of this section used to promise:
+
+- **Prepare the host for the account the record already names.** Run this script again
+  with that `--user`. Cheapest by far, and the right answer whenever the new account was
+  a convenience rather than the point.
+- **Or register the host a second time**, as a new node with the new `ssh_user`, enable
+  the same transports on it, apply *it*, and then set the old record to `retired`. Two
+  records may point at one host — the node table allows a repeated address precisely for
+  a migration like this — but only one of them may ever be applied, because both push
+  into the same `/opt/hashi` and the later apply overwrites the earlier one. The cost is
+  that this is a **new node in every user's subscription**: everyone picks it up at their
+  next refresh, and loses the retired one at the same refresh.
+
+If you no longer know which account a record names, nothing in the product will tell you —
+take the second repair.
 
 ### The layer the script cannot see, and the evening it costs
 
