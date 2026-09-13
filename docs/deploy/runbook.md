@@ -343,6 +343,15 @@ mistake you want stopped here rather than found on a node that says it is ready:
   an `AuthorizedKeysCommand` — instance metadata, on most cloud providers — with no
   `AuthorizedKeysFile` beside it. Add the key to whatever feeds that command, or set
   `AuthorizedKeysFile` in `/etc/ssh/sshd_config`, reload sshd, and run this again.
+- **sshd reads that file and still will not let this account in with a key.** A different
+  sentence from the one above, and the run asks both: `PubkeyAuthentication no` accepts no
+  key from anybody; an `AuthenticationMethods` list with no alternative that is a key *on
+  its own* — `publickey,password`, where the comma means both are required — leaves the
+  control plane, which has only a key, half way in; and with the default `ssh_user`,
+  `PermitRootLogin no` or `forced-commands-only` keeps that key out of root. Fix the
+  directive it names and reload sshd, or prepare another account with `--user` and
+  register **that** name. `prohibit-password` is not one of these: it permits a key and
+  refuses only a password, which is what a hardened host should have.
 - **`net.ipv4.ip_forward` is not 1.** Then the kernel moves no packet from a tunnel out to
   the internet, and every other signal stays green while nothing arrives anywhere. It is 1
   on most hosts only because the docker daemon sets it at every start. Set it, put it in a
