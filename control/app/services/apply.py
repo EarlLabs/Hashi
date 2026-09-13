@@ -32,7 +32,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.crypto import SecretUnreadable
-from control.app.errors import ConfigRefused, Conflict, DomainError, NodeOperationFailed
+from control.app.errors import (
+    ConfigRefused,
+    Conflict,
+    DomainError,
+    NodeOperationFailed,
+    NothingToApply,
+)
 from control.app.models import (
     AuditAction,
     Credential,
@@ -64,6 +70,35 @@ logger = logging.getLogger(__name__)
 # Every service sentence that tells an operator where to go uses this. A screen that
 # moves moves here, and nothing composed in ``services/`` may name a page again.
 WHERE_TO_RETRY = "the Nodes screen"
+
+# What an operator is told when they press apply on a node that offers nothing — M18.1.
+#
+# This is the first button a new node's row invites, and until this sentence existed the
+# answer to pressing it was a 502 quoting `services must be a mapping` from the node's
+# own docker compose, with the node left degraded. Every part of that was working as
+# designed: no enabled transport renders no config, no config makes an empty `services:`
+# block, and M4 surfaces a node's real stderr verbatim rather than swallowing it. The
+# situation is simply not a failure — a node with nothing enabled has nothing to serve —
+# and the operator needed a sentence about transports, not about YAML.
+#
+# Refusal rather than a silent no-op, and the deciding case is not the console: the
+# revocation fan-out re-pushes every node a withdrawn friend held a credential on, and a
+# withdrawn row KEEPS its minted credentials, so a node whose last row was withdrawn
+# arrives here with nothing to render while its container is still running the config
+# that authorises that person. A no-op would report such a node as updated. It is
+# reported as not updated instead, and ``why_not_updated`` calls it REFUSED.
+#
+# It names ``WHERE_TO_RETRY`` like every other service sentence that sends an operator
+# somewhere, so a screen that moves moves in one place.
+#
+# Named for the ACT rather than for the state, because ``console.NOTHING_ENABLED`` is the
+# drift cell's two words for the same node and the two must not be mistaken for one
+# another: that one is a table cell, this one is a refusal.
+NOTHING_TO_APPLY = (
+    "this node has no transports enabled, so there is nothing to apply — nothing was "
+    "pushed and nothing on the node was changed. Offer it a transport from "
+    f"{WHERE_TO_RETRY}, then apply it."
+)
 
 # The boundary between "this node failed" and "stop the whole operation".
 #
@@ -379,6 +414,19 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     node_settings = settings()
 
     configs = await render_for_node(session, node)
+    # NOTHING ENABLED IS NOT A FAILURE — M18.1, and the position of this check is the
+    # whole of it. It sits where ``render_for_node`` returned, OUTSIDE both try blocks
+    # below, so the node's recorded state is not touched: a draft stays a draft and an
+    # already-active node keeps serving its last config, which is the same asymmetry a
+    # render failure has always had. Inside either block it would degrade the node,
+    # which is exactly the outcome this step exists to remove.
+    #
+    # Before validation and before the compose file, because the compose file is where
+    # the old answer came from: zero services renders an empty ``services:`` mapping,
+    # which the daemon rejects, and the operator was handed that rejection.
+    if not configs:
+        raise NothingToApply(NOTHING_TO_APPLY)
+
     # Which transport is behind each placed config. Needed from here down wherever the
     # answer is the TRANSPORT's rather than the file's — the checker, the extension, the
     # data plane — because since M15 a config's name and its transport's name can differ.
@@ -590,7 +638,14 @@ def why_not_updated(exc: BaseException) -> NotUpdated:
     """Which kind of failure ``exc`` was, read off its TYPE and never off its text."""
     if isinstance(exc.__cause__, ResolverMissing):
         return NotUpdated.NO_RESOLVER
-    if isinstance(exc, ConfigRefused):
+    # ``NothingToApply`` joins ``ConfigRefused`` here rather than falling through to
+    # UNREACHED, and the case is real rather than defensive: a withdrawn row keeps its
+    # minted credentials, so revoking the last friend on a node whose only transport was
+    # withdrawn re-pushes a node with nothing to render. "Could not be reached — apply it
+    # again once it can be" would send the operator to retry a button that will refuse
+    # for the same reason for ever. Nothing was pushed and retrying changes nothing,
+    # which is precisely what REFUSED means.
+    if isinstance(exc, ConfigRefused | NothingToApply):
         return NotUpdated.REFUSED
     return NotUpdated.UNREACHED
 

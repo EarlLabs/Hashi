@@ -120,6 +120,31 @@ class ParamsRefused(DomainError):
         self.fields = fields
 
 
+class NothingToApply(Conflict):
+    """An apply was asked for on a node that has no transports enabled.
+
+    Its own type because this is NOT a node operation that failed — M18.1. A node with
+    nothing enabled renders no configs, and the empty compose file that used to be built
+    from them was pushed and rejected by the daemon with ``services must be a mapping``:
+    a 502 about YAML, and a node left ``degraded``, for the most ordinary first-run
+    mistake there is — register a node, press the obvious next button. Nothing was wrong
+    with the node, nothing had been attempted on it, and nothing about that answer told
+    the operator to enable a transport.
+
+    ``Conflict`` rather than ``NodeOperationFailed``: the request was answerable and the
+    answer is about the RECORD, not the host. Nothing is dialled, nothing is pushed and
+    the node's state is left exactly as it was — which is what the raise being outside
+    ``apply_node``'s try blocks buys, and it is the half of M18.1 that a status code
+    alone would not give (an ``active`` node applied by mistake keeps serving).
+
+    Its own code as well as its own type, so a script can tell "you have not enabled
+    anything yet" from every other 409 this API answers with — all of which are the
+    node state machine refusing a transition.
+    """
+
+    code = "nothing_to_apply"
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 

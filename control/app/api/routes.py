@@ -156,7 +156,12 @@ async def set_node_resolver(
 
 @router.post("/nodes/{node_id}/apply", response_model=schemas.ApplyResponse)
 async def apply_node(node_id: str, session: AsyncSession = Depends(session_dependency)):
-    """Render, validate, push and verify. Marks the node degraded on any failure."""
+    """Render, validate, push and verify. Marks the node degraded on any failure.
+
+    A node with no transports enabled is answered 409 ``nothing_to_apply`` instead —
+    M18.1. Nothing is dialled, nothing is pushed and the node's state is untouched: it
+    is not a failure, it is a node that has nothing to serve yet.
+    """
     applied = await apply.apply_node(session, node_id=node_id)
     return schemas.ApplyResponse(node_id=node_id, transports_applied=sorted(applied))
 

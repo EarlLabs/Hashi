@@ -33,6 +33,11 @@ without consulting a routing table. This file only ever needed "could not be rea
 the one test that needs a connect to actually WAIT lives in ``test_node_timeouts.py``
 and uses the other fixture.
 
+M18.1 added the file's counterpart at the bottom: the first apply that must NOT record
+a failure, because a node with nothing enabled has nothing to serve and never reaches a
+host at all. It is here rather than in a file of its own because it is the same button,
+the same fixtures and the same moment — and because the contrast is the point.
+
 M21.1 changed what these assertions are ABOUT. They used to pin the exact sentence a
 timed-out connect produces, which made them fail on any machine where an unroutable
 address is refused fast instead of dropped silently — the same fact, a different
@@ -47,7 +52,7 @@ import logging
 
 import pytest
 
-from control.app.errors import Conflict, NodeOperationFailed
+from control.app.errors import Conflict, NodeOperationFailed, NothingToApply
 from control.app.models import NodeState
 from control.app.services import apply, nodes
 from edge.bootstrap import NodeUnreachable
@@ -293,3 +298,158 @@ async def test_a_second_failure_replaces_the_first_ones_reason(
     # Tied to the failure that was just reported rather than to a wording, so this stays
     # true if the message for an unexpected error is ever rewritten.
     assert shown["state_detail"] in message, shown
+
+
+# --- M18.1: the first apply of a node that has nothing enabled ----------------
+#
+# The other half of this file's subject, found in the field on 2026-09-09 and the exact
+# inverse of everything above: an apply that must NOT record a failure, because there is
+# no failure to record.
+#
+# What the operator did was the most ordinary thing there is — register a node, press the
+# button its row invites — and what came back was
+#
+#     502  the node could not be configured and has been marked degraded: command failed
+#          (1): 'cd /opt/hashi && docker compose up -d --remove-orphans': services must
+#          be a mapping
+#
+# with the node left ``degraded``. Every layer was working as designed, which is why this
+# survived: no enabled transport renders no config, no config makes an empty ``services:``
+# block, and M4 hands the node's own stderr back verbatim rather than losing it the way
+# the tests above exist to prevent. The defect is that this is not a failure at all.
+
+
+async def an_empty_node(client, ssh) -> str:
+    """A node exactly as registration leaves it: a record, and nothing enabled on it.
+
+    Deliberately given a reachable-looking ``ssh_host`` — the ``refusing_ssh`` socket the
+    rest of this file uses — so that a regression cannot pass by failing for the other
+    reason. If the refusal below is ever removed, this node gets as far as a real connect
+    and the assertions see a degraded node, which is the field's own outcome.
+    """
+    return (await client.post(
+        "/api/nodes",
+        json={
+            "name": "nothing-enabled",
+            "address": ADVERTISED_ADDRESS,
+            "location_label": "Testland",
+            "ssh_host": ssh.host,
+            "ssh_port": ssh.port,
+        },
+    )).json()["id"]
+
+
+async def test_applying_a_node_with_nothing_enabled_is_refused_not_failed(
+    client, session, refusing_ssh
+) -> None:
+    """The sentence is about transports, and the node is left exactly as it was."""
+    node_id = await an_empty_node(client, refusing_ssh)
+
+    with pytest.raises(NothingToApply) as raised:
+        await apply.apply_node(session, node_id=node_id)
+
+    assert not isinstance(raised.value, NodeOperationFailed), (
+        "the operator is told a node operation failed, when nothing was attempted"
+    )
+    # The sentence names what is missing and what to do about it. Asserted on the two
+    # things it must contain rather than on the whole string, so it can be reworded.
+    assert "no transports enabled" in raised.value.message
+    assert apply.WHERE_TO_RETRY in raised.value.message, (
+        "the refusal does not say where to go and offer the node a transport"
+    )
+    # And it is not the old answer: nothing about YAML, the compose file, or the daemon.
+    for leaked in ("mapping", "compose", "docker", "yml"):
+        assert leaked not in raised.value.message.lower(), (
+            f"the refusal still talks about {leaked!r} — the operator is being shown the "
+            f"node's parser instead of being told to enable a transport"
+        )
+
+    node = await nodes.get_node(session, node_id)
+    assert node.state == NodeState.DRAFT, (
+        "a node that was never dialled has been marked degraded"
+    )
+    assert node.state_detail is None, node.state_detail
+
+
+async def test_a_serving_node_whose_last_transport_was_withdrawn_keeps_serving(
+    client, session, reality_params, refusing_ssh
+) -> None:
+    """The case that decides where the refusal is raised, rather than merely that it is.
+
+    An ``active`` node that is applied after its only transport is withdrawn renders
+    nothing. Marking it degraded would take it out of ``nodes.serving_transports`` and so
+    out of every subscription — for a mistake at the console, on a host that is still up
+    and still serving the config it was last given. The refusal therefore lives where a
+    render failure already did, outside ``apply_node``'s try blocks, and the property
+    worth pinning is that the node's recorded state does not move.
+    """
+    node_id = (await client.post(
+        "/api/nodes",
+        json={
+            "name": "withdrawn-everything",
+            "address": ADVERTISED_ADDRESS,
+            "location_label": "Testland",
+            "ssh_host": refusing_ssh.host,
+            "ssh_port": refusing_ssh.port,
+        },
+    )).json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+    assert (await client.post(
+        f"/api/nodes/{node_id}/state", json={"state": "active"}
+    )).status_code == 200
+    withdrawn = await client.post(
+        f"/api/transports/{enabled.json()['id']}/state", json={"enabled": False}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    shown = (await client.get(f"/api/nodes/{node_id}")).json()
+    assert shown["state"] == "active", (
+        "a node still serving its last config was degraded by an apply that pushed nothing"
+    )
+    assert shown["state_detail"] is None, shown
+
+
+async def test_the_api_says_nothing_to_apply_rather_than_a_bad_gateway(
+    client, refusing_ssh
+) -> None:
+    """A script has to tell "you have not enabled anything" from "this node is broken".
+
+    502 is the answer to the second and was the answer to both. The code is its own
+    value rather than one of the node state machine's conflicts, because every other 409
+    this API gives about a node is a refused transition and this one is not.
+    """
+    node_id = await an_empty_node(client, refusing_ssh)
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "nothing_to_apply", refused.text
+
+
+async def test_the_console_shows_the_refusal_and_leaves_the_row_undegraded(
+    client, refusing_ssh
+) -> None:
+    """The operator's actual path — the apply button on the Nodes screen.
+
+    A banner rather than a toast, because the next thing they do is go and offer the node
+    a transport and the sentence has to still be there when they come back.
+    """
+    node_id = await an_empty_node(client, refusing_ssh)
+
+    pressed = await client.post(
+        f"/panel/nodes/{node_id}/apply", headers={"HX-Request": "true"}
+    )
+
+    assert pressed.status_code == 200, pressed.text
+    assert "no transports enabled" in pressed.text, pressed.text
+    assert "config applied" not in pressed.text, (
+        "the console reported an apply that never happened"
+    )
+    assert "degraded" not in (await client.get("/panel/nodes/table")).text

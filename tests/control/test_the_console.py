@@ -515,6 +515,37 @@ async def test_the_add_node_dialog_shows_its_defaults_without_naming_them(client
     assert nodes_service.DEFAULT_SSH_USER not in source
 
 
+async def test_the_ssh_user_box_says_which_account_to_name(client) -> None:
+    """M18.2. The default is fine; offering it with no hint is not.
+
+    ``scripts/node-bootstrap.sh`` ends by telling the operator to register a named
+    account, and on a host prepared for anything other than the suggested one this box
+    is where that instruction is either followed or silently lost. The form used to say
+    "Leave empty for the usual account", which names no account at all — and the cost of
+    getting it wrong arrives much later, as an apply refused for a reason that reads
+    like a broken host.
+
+    What is asserted is that the hint sends the operator to the script and qualifies the
+    empty box, not the sentence itself. It still may not NAME the account: the previous
+    test holds that line, and the two are checked separately because they pull in
+    opposite directions.
+    """
+    dialog = (await client.get("/panel/nodes/new")).text
+
+    hint = re.search(
+        r'id="node-ssh_user-hint">(.*?)</div>', dialog, re.S
+    )
+    assert hint, "the ssh user box has no hint at all"
+    said = " ".join(hint.group(1).split())
+    assert "node-bootstrap.sh" in said, (
+        "the box that chooses the account does not point at the script that prepared one"
+    )
+    assert "Leave this empty only if" in said, (
+        "leaving the box empty is still presented as the ordinary thing to do, with no "
+        "condition attached — which is the silent pointer this step removes"
+    )
+
+
 async def test_adding_a_node_names_it_and_refreshes_the_table(client) -> None:
     """The console's answer: the dialog closes, a toast names the node, the list
     re-fetches itself. And what it says is what a draft node actually is."""

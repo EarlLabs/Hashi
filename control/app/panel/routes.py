@@ -1965,27 +1965,35 @@ async def apply_node(
     A failure is a banner rather than a toast, and that is the point of this button on
     the stand: a failed apply marks the node degraded, and the operator has to be able
     to read why while they fix it instead of watching it disappear after 2200ms.
+
+    THE BANNER NOW ALSO CARRIES A REFUSAL — M18.1 — and it is deliberately the same
+    element. A node with nothing enabled is refused before anything is dialled and is
+    NOT degraded, so that one message is not about a broken node; it still has to stay
+    on the screen while the operator goes and offers the node a transport, which is the
+    one thing a toast could not do for it.
     """
     node = await nodes.get_node(session, node_id)
     try:
         applied = await apply.apply_node(session, node_id=node_id)
     except DomainError as exc:
-        # Shown, not raised: apply_node has already recorded the failure and marked the
-        # node degraded, and what the operator needs is the reason on the screen they
-        # are on rather than an error envelope.
+        # Shown, not raised: a failed apply has already recorded its reason and marked
+        # the node degraded, a refused one has changed nothing at all, and in both cases
+        # what the operator needs is the sentence on the screen they are on rather than
+        # an error envelope.
         return _mutation(
             request,
             banner=exc.message,
             keeping=node.name,
             events="nodes-changed",
         )
+    # ``applied`` cannot be empty: since M18.1 a node with nothing enabled is refused
+    # above rather than pushed, and that was the only way this line was ever reached with
+    # an empty mapping. The branch that used to toast "nothing enabled to apply" went
+    # with it — it described an outcome this button never actually had, since the push it
+    # was written for failed and degraded the node instead.
     return _mutation(
         request,
-        toast=(
-            f"config applied to {node.name} — {', '.join(sorted(applied))}"
-            if applied
-            else f"{node.name} has nothing enabled to apply"
-        ),
+        toast=f"config applied to {node.name} — {', '.join(sorted(applied))}",
         keeping=node.name,
         events="nodes-changed",
     )

@@ -54,7 +54,23 @@
         {{ field("ssh_host", "ssh host",
                  "Leave empty to administer it at the address above.",
                  values.get("ssh_host"), errors) }}
-        {{ field("ssh_user", "ssh user", "Leave empty for the usual account.",
+        {#
+          M18.2. The hint used to read "Leave empty for the usual account", which said
+          nothing about WHICH account — while scripts/node-bootstrap.sh ends by printing
+          the one it prepared, and that one is frequently not the account shown here.
+          Nothing is wrong with the default (the script supports being run as that
+          account, and then it is the right answer), but this box is where the choice is
+          made and it offered no help: an operator who prepared a host for a different
+          account and left this empty registers a node whose every apply is refused for
+          a reason that reads like a broken host.
+
+          It names the script and not an account, deliberately — the account is the
+          host's, it differs per host, and a second place in this repository claiming to
+          know it is a second place to be wrong. The suggested value still arrives in
+          `defaults` from services/nodes.py, because this file may not name it.
+        #}
+        {{ field("ssh_user", "ssh user",
+                 "The account scripts/node-bootstrap.sh told you to register — it prints that line when it finishes preparing the host. Leave this empty only if the account it named is the one shown here.",
                  values.get("ssh_user"), errors, placeholder=defaults.ssh_user) }}
         {{ field("ssh_port", "ssh port", "Leave empty for the usual port.",
                  values.get("ssh_port"), errors, placeholder=defaults.ssh_port) }}

@@ -177,6 +177,44 @@ async def test_each_node_is_named_with_what_is_actually_wrong_with_it(
     assert summary.count("could not be reached") == 1, summary
 
 
+async def test_a_node_left_with_nothing_enabled_is_reported_as_refused_not_unreached(
+    client, session, reality_params
+) -> None:
+    """The fourth way a node keeps a credential, and the one M18.1 created — M18.1.
+
+    Withdrawing a transport does not take back a minted credential and does not touch the
+    host: the daemon goes on serving the config it was last given, and everybody in it is
+    still authorised. Revoke the last friend on a node whose only row was withdrawn and
+    the re-push has nothing to render.
+
+    That case used to push an empty compose file, be told ``services must be a mapping``,
+    and be reported as UNREACHED — "apply it again once it can be", about a node that is
+    up and that no retry will change. It is REFUSED: nothing was pushed and nothing but a
+    change to the record will alter that. The credential is still live on it either way,
+    which is why the kind has to be right rather than merely non-fatal.
+    """
+    node_id = await a_node(client, "withdrawn-1", LEAF)
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    friend = await client.post("/api/friends", json={"nickname": "kolya"})
+    assert friend.status_code < 300, friend.text
+    withdrawn = await client.post(
+        f"/api/transports/{enabled.json()['id']}/state", json={"enabled": False}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+
+    outcome = await revocation.revoke_friend(session, friend_id=friend.json()["id"])
+
+    assert outcome.why_failed == {node_id: NotUpdated.REFUSED}, outcome.why_failed
+    summary = outcome.summary()
+    assert "'withdrawn-1' could not be given a configuration" in summary, summary
+    assert "could not be reached" not in summary, summary
+
+
 async def test_the_sentence_cannot_carry_what_a_nodes_refusal_carries(
     client, session, reality_params, hop_params, monkeypatch
 ) -> None:
