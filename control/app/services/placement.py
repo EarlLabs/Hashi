@@ -51,12 +51,27 @@ HOW:  one function, ``claim``, called just before a row is written, plus ``port_
       the node's rows and decide; nothing serialises them, so two
       enables submitted at the same instant could both find a port free and both take it.
       The config name cannot go that way — it loses at the flush, because the schema holds
-      it. This is accepted rather than closed: the charter's product is one operator on one
-      console, the window is the few milliseconds between the read and the commit, and the
-      symptom is legible (a second container that will not bind, on a node that has not
-      been applied yet). The repair is to remove one of the two rows and apply again. A
-      lock here would be a row-level lock on a table the delivery endpoint reads, taken on
-      every enable, to close a race one person cannot have with themselves.
+      it. For the PORT this is accepted rather than closed: the charter's product is one
+      operator on one console, the window is the few milliseconds between the read and the
+      commit, and the symptom is legible (a second container that will not bind, on a node
+      that has not been applied yet). The repair is to remove one of the two rows and
+      apply again. A lock here would be a row-level lock on a table the delivery endpoint
+      reads, taken on every enable, to close a race one person cannot have with themselves.
+
+      THE RANGE RULE IS LEFT OPEN ON DIFFERENT TERMS, AND THEY ARE WORSE. Do not read the
+      paragraph above as covering it: a lost port race announces itself and a lost RANGE
+      race is silent and permanent. Two interfaces come up, each config file is correct on
+      its own, ``AmbiguousPeerRoute`` reads one file and cannot see the other, and
+      ``uq_credential_tunnel_address`` is scoped ``(node_transport_id, digest)`` with the
+      digest keyed by the row id — so one address on two rows is two digests in two scopes
+      and the constraint cannot see it either. Nothing re-checks on read, render, apply or
+      migration, so the state this rule exists to forbid, once it exists, is invisible on
+      every screen while two people are handed one address. It is left open because the
+      probability is genuinely small for one operator on one console — and because closing
+      it means a per-node lock taken by every writer of that node's rows, which
+      ``relay.establish_hop`` takes on TWO nodes at once, so it would need a fixed lock
+      order or two hops laid in opposite directions deadlock. That is the trade, written
+      down (``docs/decisions.md``, 2026-09-13) rather than inherited from the port.
 
       Nothing here compares a transport name to a literal. ``PORT_FIELD`` is the hop
       contract's vocabulary rather than any protocol's (see ``services.transports``),

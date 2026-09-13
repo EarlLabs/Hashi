@@ -503,6 +503,51 @@ async def test_retyping_a_tunnel_onto_one_the_node_already_carries_is_refused(
     assert moved.params["tunnel_address"] == "10.71.0.1/24"
 
 
+async def test_a_node_whose_two_ranges_already_meet_can_still_be_rotated(
+    client, session, wg_params
+) -> None:
+    """The rule refuses new overlaps — it does not seal a node that already has one.
+
+    Every node in the field pre-dates this rule, so the state it forbids can exist
+    already. Re-asking it of a parameter the operator did not touch made every
+    replacement on either row answer with a sentence about a RANGE to somebody who
+    retyped a PORT — and that is not a cosmetic loss: rotating away from a blocked value
+    is the charter's first job for the operator, and sizing a pre-M17 row through this
+    same call is what migration 0006 promises them in writing. The refusal's own remedy
+    ("give this tunnel a range of its own") is refused in turn by the addresses in hand,
+    so the only exit left was deleting a row, with its credentials or the mandated hop
+    end inside it.
+
+    The overlap is written by hand because no surface can produce one any more, which is
+    the point: this is the upgrade path, not a state the product still creates.
+    """
+    entry_id, friend_row, hop = await a_box_carrying_both(client, wg_params)
+    end = await session.get(NodeTransport, hop["entry"]["id"])
+    end.params = {
+        **end.params,
+        "tunnel_address": "10.70.5.1/16",
+        "peer_tunnel_address": "10.70.5.2/16",
+    }
+    await session.commit()
+
+    replaced = await rotation.replace_params(
+        session, node_transport_id=friend_row["id"], params={"port": 51999}
+    )
+
+    assert replaced.rotated == ["port"]
+    session.expire_all()
+    assert (await session.get(NodeTransport, friend_row["id"])).params["port"] == 51999
+
+    # And the rule itself is untouched: a range that MOVES is still measured against
+    # every other tunnel on the node, overlap already present or not.
+    with pytest.raises(Conflict):
+        await rotation.replace_params(
+            session,
+            node_transport_id=friend_row["id"],
+            params={"tunnel_address": "10.70.0.1/23"},
+        )
+
+
 async def test_a_switched_off_transport_still_holds_its_range(
     client, session, wg_params
 ) -> None:
@@ -746,6 +791,43 @@ async def test_the_console_tells_the_two_instances_apart(
     plain = await console.offers_on(session, await a_node(client, "solo-1", "192.0.2.86"))
     assert plain == []
     assert console.placed_as(HOP_TRANSPORT, HOP_TRANSPORT) == HOP_TRANSPORT
+
+
+async def test_a_list_retyped_on_the_second_instance_is_still_read_as_a_list(
+    client, session, reality_params
+) -> None:
+    """The replace dialog looks a transport up by ITS name, not by what the screen calls it.
+
+    ``console.placed_as`` qualifies the second instance on a node as
+    "vless-reality (vless-reality-2)", which is the right label for a person and is not a
+    name the registry can resolve. Handed to ``transports.parse_form`` it fell through to
+    an empty field map — silently, since that fallback exists for a transport this image
+    does not ship — and the comma-split for sequence parameters stopped happening. The
+    only replaceable sequence parameter in this image is Reality's accepted SNIs, and the
+    rotation that needs them is the one that matters most: a blocked decoy is replaced by
+    changing the decoy AND the names it serves, together, or the borrowed handshake stops
+    verifying.
+    """
+    node_id = await a_node(client, "two-reality", "192.0.2.120")
+    for port in (8443, 8444):
+        enabled = await client.post(
+            f"/api/nodes/{node_id}/transports",
+            json={"transport_name": "vless-reality", "params": {**reality_params, "port": port}},
+        )
+        assert enabled.status_code == 201, enabled.text
+    second = enabled.json()
+    assert second["config_name"] != "vless-reality", second
+
+    answer = await client.post(
+        f"/panel/keys/{second['id']}/params",
+        data={"server_names": "one.example.com, two.example.com"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert answer.status_code == 200, answer.text
+    session.expire_all()
+    row = await session.get(NodeTransport, second["id"])
+    assert row.params["server_names"] == ["one.example.com", "two.example.com"], row.params
 
 
 async def test_the_enable_dialog_still_offers_a_transport_the_node_already_runs(

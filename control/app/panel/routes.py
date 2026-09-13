@@ -1437,8 +1437,16 @@ async def replace_params(
     # enable route keeps it out of ``parse_form``'s input. Left in ``typed`` all the same,
     # because that is what re-fills the boxes on a refusal and this one has a box.
     pool_typed = typed.get(addresses.POOL_BOX, "")
+    # THE TRANSPORT'S OWN NAME, never ``key.transport``, which is what the SCREEN calls
+    # this row: ``console.placed_as`` qualifies a second instance on one node as
+    # "amneziawg (amneziawg-2)", and ``parse_form`` looks the name up in the registry and
+    # falls back to an empty field map when it cannot resolve one. That fallback is
+    # silent, and what it disables is the comma-split for sequence parameters — so on the
+    # second instance of a transport on one node (which M15 exists to allow, and which the
+    # runbook's entry box has) a list typed correctly arrived as one string and the
+    # transport refused a value the operator had got right.
     supplied = transports.parse_form(
-        key.transport,
+        node_transport.transport_name,
         ((name, value) for name, value in typed.items() if name != addresses.POOL_BOX),
     )
     if not supplied and not pool_typed:
@@ -1520,6 +1528,15 @@ def _replaceable_boxes(node_transport) -> tuple:
     on a form whose pool starts at one of those parameters — the size is read counting
     upwards from the address above it, and the hint says so.
 
+    AND NOT AT ALL ON A HOP END, which is the row's own fact and not the transport's. The
+    transport the runbook mandates for the hop is also the one it recommends for friends,
+    so deciding from the declaration alone put this box on both ends of every hop: a
+    control hinted "how many users this protocol may hand an address to" on a tunnel
+    between two of the owner's own nodes, two lines above this same dialog's "No user
+    holds anything on it: this is one end of a hop". The plan's done-when is that hop ends
+    keep the same dialog boxes, and ``rotation._resize`` refuses a size on such a row from
+    the other side, so the API cannot store what this no longer offers.
+
     ``placeholder`` is the size in place now, empty on a row enabled before pools existed,
     exactly as every other box on this form shows what it is replacing. It is a
     ``ParamBox`` and not the enable dialog's ``TuningField`` for that dialog's own reason:
@@ -1528,7 +1545,10 @@ def _replaceable_boxes(node_transport) -> tuple:
     boxes = transports.replaceable_params(
         node_transport.transport_name, node_transport.params
     )
-    if addresses.spec_for(node_transport.transport_name) is None:
+    if (
+        addresses.spec_for(node_transport.transport_name) is None
+        or node_transport.purpose in TransportPurpose.relays()
+    ):
         return boxes
     return (
         *boxes,

@@ -251,8 +251,13 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
     covered is an operator moving such a node back to serving by hand without applying
     it, where the console shows drift and the allocator does not read it. Closing that
     properly needs state this schema does not carry — which addresses a node was last
-    applied with, not just a digest of the whole file — so it is left to M17.1c, whose
-    subject is exactly what may and may not move an address a device holds.
+    applied with, not just a digest of the whole file.
+
+    M17.1c DID NOT CLOSE IT, and that is a decision rather than an oversight: the column
+    it needs is not in this schema and adding one is not what that step was written to do
+    (``docs/decisions.md``, 2026-09-13). This note stays because the window is still open,
+    and the next step that gives a node a record of what it was last applied WITH is the
+    one that can shut it — not the next step that touches addresses.
     """
     friend = await get_friend(session, friend_id)
     now = datetime.datetime.now(datetime.UTC)

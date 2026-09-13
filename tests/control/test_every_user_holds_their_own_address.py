@@ -765,6 +765,64 @@ async def test_a_hop_end_is_given_no_address_and_no_pool(
     assert on_a_hop_end == [], "a hop end was granted to a friend"
 
 
+async def test_a_hop_end_is_offered_no_pool_box_and_refuses_a_size_typed_at_it(
+    client, session, pool_transport: str
+) -> None:
+    """The other half of the promise above: the replace dialog leaves a hop end alone.
+
+    "A hop end has no pool" was asserted at CREATION only, and creation is not where a
+    pool size can arrive. The transport the runbook mandates for the hop is the one it
+    recommends for friends, so a box decided from the transport's declaration appeared on
+    both ends of every hop — hinted "how many users this protocol may hand an address to"
+    on a tunnel between two of the owner's own nodes, two lines above this same dialog's
+    own "No user holds anything on it: this is one end of a hop".
+
+    BOTH SURFACES, because the box is only half of it: the API takes a ``pool_size`` on
+    the same route, so a dialog that stopped offering the control would still leave a
+    script able to write the number.
+    """
+    if not profile(pool_transport).meta.hop_capable:
+        pytest.skip(f"{pool_transport} declares it cannot carry a hop")
+    entry = await a_node(client, name="hop-box-entry", address="192.0.2.82")
+    leaf = await a_node(client, name="hop-box-leaf", address="192.0.2.83")
+    established = await client.post(
+        "/api/hops",
+        json={
+            "entry_node_id": entry,
+            "leaf_node_id": leaf,
+            "transport_name": pool_transport,
+            "entry_params": params_for(
+                pool_transport,
+                tunnel_address="10.93.0.1/24",
+                peer_tunnel_address="10.93.0.2/24",
+            ),
+            "leaf_params": params_for(
+                pool_transport,
+                tunnel_address="10.93.0.2/24",
+                peer_tunnel_address="10.93.0.1/24",
+            ),
+        },
+    )
+    assert established.status_code == 201, established.text
+    end_id = established.json()["entry"]["id"]
+
+    dialog = await client.get(f"/panel/keys/{end_id}/params")
+    assert dialog.status_code == 200
+    # The dialog itself is there and unchanged — the transport's own boxes are rendered.
+    assert 'name="port"' in dialog.text
+    assert f'name="{addresses.POOL_BOX}"' not in dialog.text
+
+    refused = await resize(client, end_id, pool_size=5)
+
+    assert refused.status_code == 400, refused.text
+    message = refused.json()["error"]["message"]
+    assert addresses.POOL_BOX in message, message
+    # Named, so a script resizing rows by id is told which of them it was.
+    assert "hop-box-entry" in message, message
+    session.expire_all()
+    assert (await session.get(NodeTransport, end_id)).pool_size is None
+
+
 async def test_a_node_with_two_users_on_one_tunnel_renders_through_a_revocation(
     client, session, pool_transport: str, reality_params
 ) -> None:
@@ -829,6 +887,12 @@ async def test_a_row_from_before_pools_is_sized_without_moving_the_address_in_us
     as the BYTES of their own file, which is the file this project cannot reissue without
     them doing something — and the second person has an address of their own, so the node
     renders two distinct routes.
+
+    WHAT THIS ONE DOES NOT PROVE, said here because the name suggests otherwise: with the
+    pool left where it is, ``settle``'s own adoption rule reaches the same answer as
+    ``pin_in_use``, so this stays green with the pin deleted. It is the end-to-end claim —
+    the field's row, repaired, bytes unchanged. The pin itself is proven by the two tests
+    below, which are the shapes where the two answers differ.
     """
     node_id = await a_node(client, name="repaired", address="192.0.2.70")
     enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
@@ -882,6 +946,53 @@ async def test_a_row_from_before_pools_is_sized_without_moving_the_address_in_us
     # And the person who was already on it is still authorised for the address their
     # file carries — the two renders of one allocation, after a resize.
     assert host_of(address_in(before)) in {host_of(route) for route in routes}
+
+
+async def test_a_pre_pool_row_cannot_be_moved_off_the_address_it_is_handing_out(
+    client, session, pool_transport: str
+) -> None:
+    """THE PIN AGAIN, from the other side: what it makes VISIBLE to the range check.
+
+    On a row from before pools the address in use is nowhere in the database — it is the
+    row's own parameter and a renderer's fallback — so ``stranded_by`` has nothing to
+    measure and a tunnel moved out from under it is accepted in silence. ``pin_in_use``
+    writes it down first, which is the only reason the refusal below exists.
+
+    The test above it asserts the same setup is sized without moving anybody; it is
+    satisfied by ``settle``'s own adoption rule even with the pin absent, because the pool
+    does not move there. This one is not: delete the pin and the submission below is
+    accepted, with a working device stranded and every screen green.
+    """
+    node_id = await a_node(client, name="pre-pool-moved", address="192.0.2.84")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("early", "later"):
+        assert (await add_user(client, nickname)).status_code == 201
+    await as_it_was_before_m17(session, row_id)
+
+    spec = addresses.spec_for(pool_transport)
+    refused = await resize(
+        client,
+        row_id,
+        params={spec.within: "10.94.0.1/24", spec.name: "10.94.0.2/24"},
+        pool_size=ROOMY,
+    )
+
+    assert refused.status_code == 400, refused.text
+    assert spec.within in refused.json()["error"]["message"]
+    session.expire_all()
+    row = await session.get(NodeTransport, row_id)
+    assert row.params[spec.within] != "10.94.0.1/24", "a refused move was stored anyway"
+    assert row.pool_size is None, "a refused resize sized the row anyway"
+    # And the pin itself left nothing behind: the refusal rolled back before it returned.
+    assert (
+        await session.execute(
+            select(Credential.tunnel_address_digest).where(
+                Credential.node_transport_id == row_id
+            )
+        )
+    ).scalars().all() == [None, None]
 
 
 async def test_moving_the_pool_under_an_unwritten_address_leaves_that_device_alone(
@@ -1029,6 +1140,8 @@ async def test_moving_the_tunnel_out_from_under_a_held_address_is_refused(
     message = refused.json()["error"]["message"]
     assert spec.within in message, message
     assert "10.99.0.1/24" in message, message
+    # The cause, and the right one of the five: this address is genuinely outside.
+    assert "outside the range" in message, message
     # A COUNT and not an address: what is refused is stated without saying who holds what.
     for route in before:
         assert host_of(route) not in message, "a refusal named an address somebody holds"
@@ -1036,6 +1149,49 @@ async def test_moving_the_tunnel_out_from_under_a_held_address_is_refused(
     session.expire_all()
     assert (await session.get(NodeTransport, row_id)).params[spec.within] != "10.99.0.1/24"
     assert routes_in(await as_the_node_sees_it(session, node_id, pool_transport)) == before
+
+
+async def test_the_refusal_names_which_of_the_causes_stranded_somebody(
+    client, session, pool_transport: str
+) -> None:
+    """The case with a victim, and the one the first wording sent round a loop.
+
+    Moving the node's own address onto an address somebody holds is the hazard this whole
+    milestone exists for: that person would be authorised to send as the node, and
+    everything the node is sent on the tunnel would be routed to them. It is refused —
+    and it used to be refused with "would fall outside", about an address that is INSIDE
+    the range. The operator's obvious answer to "outside" is a wider prefix, which leaves
+    the node's own address exactly where it is, so the identical sentence comes back.
+
+    Not asserted here: that no held address appears in the message. In this shape the
+    range the operator typed IS that address — it is their own submission coming back —
+    and the neighbour above pins the general rule.
+    """
+    node_id = await a_node(client, name="renumbered", address="192.0.2.85")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+
+    spec = addresses.spec_for(pool_transport)
+    # The range stays; the node moves onto the second person's address, and the pool's
+    # first address moves out of the way so the SIZE is not what refuses this.
+    refused = await resize(
+        client,
+        row_id,
+        params={spec.within: "10.90.0.3/24", spec.name: "10.90.0.20/24"},
+    )
+
+    assert refused.status_code == 400, refused.text
+    message = refused.json()["error"]["message"]
+    assert "node's own address" in message, message
+    assert "outside" not in message, message
+    assert "renumbered" in message, message
+    # One person, not both: ann at .2 is still carried by this tunnel and is not counted.
+    assert "1 is" in message, message
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).params[spec.within] != "10.90.0.3/24"
 
 
 async def test_a_resize_a_transport_hands_out_no_address_for_is_refused(
@@ -1087,6 +1243,63 @@ async def test_replacing_a_parameter_on_a_short_pool_is_not_refused_by_the_fleet
     assert replaced.status_code == 200, replaced.text
     session.expire_all()
     assert (await session.get(NodeTransport, row_id)).params[spec.within] == "10.95.0.1/24"
+
+
+async def test_a_serving_row_whose_pool_is_short_can_still_be_rotated(
+    client, session, pool_transport: str
+) -> None:
+    """The same carve-out on the row it was written for — the field's own, after 0006.
+
+    The test above it takes a node that never became serving, so nobody holds a credential
+    on that row and the allocator has nothing to refuse. On a SERVING row the two
+    conditions are one: every active friend is granted there, so a pool smaller than the
+    fleet means credentials with no address, and ``settle`` raised ``PoolFull`` a few
+    lines after ``sized_pool`` had deliberately let the rotation through — rolling back the
+    whole thing. The escape hatch was dead in exactly the state it names.
+
+    What must NOT happen is that the swallowed refusal hides the shortfall: the pool is
+    as short afterwards as it was before, nobody's address moves, and the operator is told
+    by the push — which cannot render a row whose users have no address of their own, and
+    reports that node as not updated. Sizing the row afterwards still repairs it.
+    """
+    node_id = await a_node(client, name="short-and-serving", address="192.0.2.79")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+    # After migration 0006: no size, and nobody's address written down.
+    await as_it_was_before_m17(session, row_id)
+
+    rotated = await resize(client, row_id, params={"port": 51999})
+
+    assert rotated.status_code == 200, rotated.text
+    # Told, and by the honest channel: the database took the new port and the node did not.
+    assert rotated.json()["complete"] is False
+    assert "short-and-serving" in rotated.json()["summary"]
+    session.expire_all()
+    row = await session.get(NodeTransport, row_id)
+    assert row.params["port"] == 51999
+    assert row.pool_size is None, "a rotation that asked for no size gave the row one"
+    # One address written down — the one the row was ALREADY handing out, which the pin
+    # records and never moves — and the person who arrived second still waiting, exactly
+    # as they were before this call.
+    written = (
+        await session.execute(
+            select(Credential.tunnel_address_digest).where(
+                Credential.node_transport_id == row_id
+            )
+        )
+    ).scalars().all()
+    assert sorted(held is None for held in written) == [False, True], written
+
+    # And the repair is still available: sizing the row places everybody who was waiting.
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    sized = await resize(client, row_id, pool_size=ROOMY)
+    assert sized.status_code == 200, sized.text
+    session.expire_all()
+    routes = routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    assert len(routes) == 2 and len(set(routes)) == 2, routes
 
 
 async def test_a_resize_that_loses_a_race_for_an_address_is_a_refusal(
@@ -1525,4 +1738,26 @@ def test_no_surface_enables_a_transport_without_granting_it() -> None:
         )
         assert "nodes.enable_transport" not in called, (
             f"{module} enables a transport without granting it in the same transaction"
+        )
+
+
+def test_no_transport_declares_a_parameter_the_pool_box_would_shadow() -> None:
+    """``pool_size`` is `control`'s own field name, and nothing else may claim it — M17.1c.
+
+    Both forms that can carry a size strip it from the submission BY NAME before the rest
+    reaches the transport's model, because the size is a column on the node-transport
+    record and a model forbids what it did not declare. A transport declaring a required
+    parameter of the same name would therefore have two boxes rendered under one name,
+    have its own value lifted out of the mapping and fed to ``int()``, and be refused as a
+    count — or, worse, have a numeric value of its own silently accepted as a pool size.
+
+    The registry is the one place `control` learns field names from, so this is the place
+    to say that one of them is spoken for. It is a guard on a transport package that does
+    not exist yet, which is exactly when it is cheap to meet.
+    """
+    for name in sorted(discover()):
+        declared = profile(name).params_model.model_fields
+        assert addresses.POOL_BOX not in declared, (
+            f"{name} declares a parameter called {addresses.POOL_BOX!r}, which is the "
+            "name the pool box already uses on the enable and replace forms"
         )

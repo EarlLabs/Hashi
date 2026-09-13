@@ -7,8 +7,9 @@ WHAT: the allocator. ``settle`` gives every credential on a row an address of it
       written. ``pin_in_use`` and ``stranded_by`` are M17.1c's pair, and they exist for
       one promise: an address a device already holds never moves — not by rotation, not
       by revocation, not by a resize and not by a replaced parameter. The first writes
-      down the address a pre-pool row is already handing out; the second counts how many
-      of the addresses in hand a proposed tunnel could no longer carry.
+      down the address a pre-pool row is already handing out; the second says why a
+      proposed tunnel could no longer carry the addresses in hand, and how many of them
+      each reason applies to.
 WHY:  found in the field. A WireGuard-family transport had one ``peer_tunnel_address``
       for everybody, so it served exactly one friend against a charter scale of ~30-50 —
       and the second friend was refused at RENDER, after the row was committed, which
@@ -50,7 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict
 from control.app.models import Credential, Friend, Node, NodeTransport
-from edge.addressing import host_of, pool, pool_problem
+from edge.addressing import carriage_problem, host_of, pool
 from edge.node import Credential as EdgeCredential
 from edge.registry import PeerAddress, discover
 
@@ -350,8 +351,8 @@ async def pin_in_use(
 
 async def stranded_by(
     session: AsyncSession, node_transport: NodeTransport, *, within: str
-) -> int:
-    """How many addresses already handed out on this row a new tunnel could not carry.
+) -> dict[str, int]:
+    """Why a new tunnel could not carry addresses already handed out here, and how many.
 
     The other half of "nothing moves an address a device holds": nothing here MOVES one,
     so the danger is not the address changing but the tunnel changing under it. Narrow the
@@ -359,39 +360,51 @@ async def stranded_by(
     address is still in the database, still in their config file, and no longer reachable
     — or worse, now the node's own, which authorises them to send as the node.
 
-    Each held address is asked of ``edge`` as a pool of one inside the proposed tunnel:
-    the same ten refusals the operator met when they sized the pool, applied one person at
-    a time. That is deliberately not "is it inside the new pool's run" — an address below
-    or above the run is still carried by the interface and is never re-handed to anybody
-    else, because ``settle`` skips every digest already held, so it costs a slot and
-    nothing else. What is refused here is an address the tunnel could not carry at all.
+    Each held address is asked of ``edge`` against the proposed tunnel: the same rules the
+    operator met when they sized the pool, applied one person at a time. That is
+    deliberately not "is it inside the new pool's run" — an address below or above the run
+    is still carried by the interface and is never re-handed to anybody else, because
+    ``settle`` skips every digest already held, so it costs a slot and nothing else. What
+    is refused here is an address the tunnel could not carry at all.
 
-    A COUNT, and never an address: the answer travels into a refusal an operator reads, and
-    which person holds which address is the one record this project does not produce. It
-    is also why the addresses are decrypted here and compared here rather than handed out
-    — ``held_digests`` cannot answer this question, because a digest cannot be measured
-    against a range.
+    CAUSES WITH COUNTS, and never an address. A count alone was what shipped first, and
+    the refusal built from it had to name ONE cause for five conditions — so an operator
+    who had moved the node's own address onto somebody's was told their address "would
+    fall outside" a range it was inside, and the obvious response (a wider prefix) left
+    the sentence unchanged. ``edge.carriage_problem`` answers with the cause as a clause
+    that names nothing it was handed, which is what lets the answer stay counts: which
+    person holds which address is the one record this project does not produce.
+
+    Sorted, so two identical refusals read identically — the rows come back in whatever
+    order the database liked.
+
+    THE ADDRESS COLUMN AND NOT THE ROW, because a ``select(Credential)`` here would
+    decrypt every holder's key material and subject as well (both are ``EncryptedText``,
+    and ``Credential.friend`` / ``.node_transport`` are joined eagerly) to read one
+    address. The module header makes a point of ``held_digests`` being the one query that
+    could otherwise decrypt every address on a row; this is the second, and it decrypts
+    addresses and nothing else.
     """
     if spec_for(node_transport.transport_name) is None:
-        return 0
+        return {}
     with session.no_autoflush:
         held = (
             (
                 await session.execute(
-                    select(Credential)
+                    select(Credential.tunnel_address)
                     .where(Credential.node_transport_id == node_transport.id)
                     .where(Credential.tunnel_address.is_not(None))
                 )
             )
             .scalars()
-            .unique()
             .all()
         )
-    return sum(
-        1
-        for credential in held
-        if pool_problem(host_of(credential.tunnel_address), within, 1) is not None
-    )
+    counted: dict[str, int] = {}
+    for address in held:
+        cause = carriage_problem(host_of(address), within)
+        if cause is not None:
+            counted[cause] = counted.get(cause, 0) + 1
+    return dict(sorted(counted.items()))
 
 
 def edge_credential(

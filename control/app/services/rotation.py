@@ -69,16 +69,39 @@ MATERIAL_NOT_REPEATED = (
 )
 
 # What an operator is told when the tunnel they typed would leave friends who are already
-# on this transport holding an address it cannot carry — M17.1c. A COUNT and never an
+# on this transport holding an address it cannot carry — M17.1c. COUNTS and never an
 # address: which person holds which address is the one record this project does not keep,
 # and this sentence reaches an operator through the API's envelope and the console's
 # dialog. It names the action that is refused rather than only the state, because the
 # operator's next move is a different range — or taking those people off first.
+#
+# THE CAUSE IS NAMED PER CASE, and the first version of this sentence did not do that: it
+# said "would fall outside {within}" for all five of the conditions ``stranded_by``
+# counts, three of which are addresses INSIDE the range — the node's own address, the
+# network address and the broadcast address. The worst of those is the one with a victim
+# (whoever holds the node's own address is authorised to send as the node), and the
+# obvious answer to "falls outside" is a wider prefix, which does not clear it: the
+# operator was sent round a loop by a diagnosis that was false. ``edge.carriage_problem``
+# writes each clause and names nothing it was handed, so the causes can be stated without
+# the sentence ever carrying an address somebody holds.
 POOL_WOULD_STRAND = (
-    "{held} already handed out on this transport would fall outside {within}. "
-    "Moving an address a device already holds is the one thing this cannot do — the "
-    "device is configured with it and nobody is going to reconfigure it. Nothing has "
-    "been changed — leave this tunnel where it is, or take them off this transport first."
+    "a tunnel at {within} could not carry addresses already handed out on this "
+    "transport: {causes}. Moving an address a device already holds is the one thing this "
+    "cannot do — the device is configured with it and nobody is going to reconfigure it. "
+    "Nothing has been changed — leave this tunnel where it is, or take them off this "
+    "transport first."
+)
+
+# What an operator is told when they type a pool size into a hop end's replace dialog —
+# M17.1c. A hop is a pair of peers and the far end's single address is what the row's own
+# parameter already means there, so a size on such a row is a number that would describe
+# nothing. It stands beside ``nodes.POOL_SIZE_NOT_TAKEN`` rather than reusing it: that one
+# is about a TRANSPORT that identifies its users by material, and saying it here would be
+# untrue of a transport that does hand friends addresses on its other row.
+POOL_SIZE_NOT_ON_A_HOP = (
+    "this row is one end of a hop, and no user holds anything on it — the far end is "
+    "another of your own nodes, at the single address this row already names. There is "
+    "no pool to size here."
 )
 
 # What a refusal with no field to its name is called, in the code's own vocabulary.
@@ -454,13 +477,29 @@ async def replace_params(
     # by its own value. Before anything is stored, and before the addresses are touched:
     # a range that collides with another interface on the host is refused whether or not
     # anybody holds an address in it yet.
-    await placement.tunnel_network_is_free(
-        session,
-        node=node,
-        transport_name=node_transport.transport_name,
-        params=validated,
-        excluding=node_transport.id,
-    )
+    #
+    # ONLY WHEN THE RANGE IS ACTUALLY MOVING, and that is the same carve-out
+    # ``nodes.sized_pool``'s ``against_the_fleet`` makes, for the same reason. A node
+    # whose two rows already overlap — enabled before this rule existed, which is every
+    # node in the field — would otherwise have EVERY replacement on either row refused,
+    # with a sentence about a range on a form where the operator retyped a port. That
+    # takes away the charter's first job for them (rotate what gets blocked) and the
+    # sizing migration 0006 promises them in writing, on a state they cannot otherwise
+    # repair: the refusal's own instruction is to give this tunnel a range of its own, and
+    # typing one is refused in turn by ``_resize``, because the addresses in hand are in
+    # the old one. The only exit left was removing the row, which takes its credentials —
+    # or the mandated hop end — with it. Every NEW overlap is still refused: a range that
+    # is not moving cannot be the one that created the collision.
+    if placement.tunnel_of(
+        node_transport.transport_name, validated
+    ) != placement.tunnel_of(node_transport.transport_name, node_transport.params):
+        await placement.tunnel_network_is_free(
+            session,
+            node=node,
+            transport_name=node_transport.transport_name,
+            params=validated,
+            excluding=node_transport.id,
+        )
 
     ends = [node_transport]
     if node_transport.purpose in TransportPurpose.relays():
@@ -511,7 +550,36 @@ async def replace_params(
         # time, everybody who has been waiting without an address of their own is given
         # one here, inside this transaction, so a pool that still cannot hold them refuses
         # the whole replacement instead of committing half a repair.
-        await addresses.settle(session, node_transport)
+        #
+        # A FULL POOL REFUSES THE SIZING AND NOT THE ROTATION, which is what makes
+        # ``sized_pool(against_the_fleet=False)`` above mean anything at all. That
+        # carve-out exists so a row whose pool is already smaller than the fleet can still
+        # have a blocked value rotated away from it — and on a SERVING row the two
+        # conditions are one condition: every active friend holds a credential there, so a
+        # short pool means credentials without addresses, and ``settle`` raised
+        # ``PoolFull`` a few lines later and rolled the whole rotation back. The escape
+        # hatch was dead in exactly the state it was written for: the field's own row
+        # after migration 0006.
+        #
+        # Swallowed only when the operator is NOT sizing. Then the size has not changed,
+        # so any shortfall is one this replacement did not cause and does not worsen:
+        # ``settle`` writes NOTHING when it refuses (its own docstring promises a caller
+        # may catch this and go on), so the addresses in hand are exactly as they were.
+        # What the operator is still told is the truth by a different route — the push
+        # that follows cannot render a row whose users have no address of their own, and
+        # ``_push`` reports that node as not updated. A replacement that DOES carry a size
+        # is refused as before: somebody asking for a number that cannot hold the row's
+        # own people must hear so.
+        try:
+            await addresses.settle(session, node_transport)
+        except addresses.PoolFull:
+            if pool_size is not None:
+                raise
+            logger.info(
+                "the pool on node-transport %s is still short after a replacement that "
+                "did not size it; nobody new was given an address",
+                node_transport.id,
+            )
 
         await session.commit()
     except DomainError:
@@ -567,7 +635,29 @@ async def _resize(
 
     The fleet question is asked only when the operator is actually sizing — see
     ``nodes.sized_pool``.
+
+    A HOP END IS ASKED NOTHING AND REFUSES A SIZE. The plan's done-when is that hop ends
+    are unchanged by this milestone — no address, no pool, the same dialog boxes — and a
+    hop end is a row of a transport that DOES declare each consumer needs an address, so
+    deciding from the transport's declaration alone put a pool on the runbook's own entry
+    box. Nothing downstream reads it (``nodes.serving_transports`` filters on ``FRIENDS``,
+    so no friend is ever granted there and ``settle`` finds nobody to place), which is
+    exactly why it had to be refused here: a number stored on a relay row is a fact about
+    that row that is not true, and the fleet refusal it can produce — "every one of them
+    is granted a credential here the moment this node serves" — is false of a hop. The two
+    addresses on a hop end are judged as a pair by ``relay.check_renders_as_a_pair``,
+    which ``replace_params`` calls; the range rule above still applies to it in full.
     """
+    if node_transport.purpose in TransportPurpose.relays():
+        if pool_size is not None:
+            raise ParamsRefused(
+                f"transport {node_transport.transport_name!r} on node {node.name!r} "
+                f"rejected these parameters — {addresses.POOL_BOX}: "
+                f"{POOL_SIZE_NOT_ON_A_HOP}",
+                fields={addresses.POOL_BOX: POOL_SIZE_NOT_ON_A_HOP},
+            )
+        return
+
     spec = addresses.spec_for(node_transport.transport_name)
     if spec is None:
         if pool_size is not None:
@@ -595,8 +685,7 @@ async def _resize(
     within = str(validated[spec.within])
     stranded = await addresses.stranded_by(session, node_transport, within=within)
     if stranded:
-        counted = f"{stranded} address" if stranded == 1 else f"{stranded} addresses"
-        refusal = POOL_WOULD_STRAND.format(held=counted, within=within)
+        refusal = POOL_WOULD_STRAND.format(within=within, causes=_causes(stranded))
         # UNDER THE BOX THE RANGE IS TYPED IN, not under the pool's size: the size cannot
         # cause this — it is the tunnel that moved out from under the addresses — and a
         # complaint under a number the operator did not touch sends them to change the
@@ -606,10 +695,25 @@ async def _resize(
         # form instead, which is what the console does with every complaint it cannot
         # place.
         raise ParamsRefused(
-            f"transport {node_transport.transport_name!r} rejected these parameters — "
-            f"{spec.within}: {refusal}",
+            f"transport {node_transport.transport_name!r} on node {node.name!r} "
+            f"rejected these parameters — {spec.within}: {refusal}",
             fields={spec.within: refusal},
         )
+
+
+def _causes(stranded: dict[str, int]) -> str:
+    """Each reason a tunnel could not carry what is in hand, with how many it applies to.
+
+    A count per cause rather than one total, because the causes are not interchangeable:
+    "outside the range" is answered with a wider prefix and "the node's own address" is
+    answered by moving the node, and an operator given the wrong one of those retypes the
+    same box twice. The clauses are ``edge``'s, in ``edge``'s order; nothing here parses
+    an address or decides what a cause is.
+    """
+    return "; ".join(
+        f"{count} {'is' if count == 1 else 'are'} {cause}"
+        for cause, count in stranded.items()
+    )
 
 
 def _validated(

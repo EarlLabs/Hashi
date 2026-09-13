@@ -602,6 +602,13 @@ async def sized_pool(
     what lets the console put the sentence where the number was typed. The box is not a
     parameter of the transport — nothing of this reaches the transport's model.
 
+    EVERY SENTENCE NAMES THE NODE AS WELL AS THE TRANSPORT, which the milestone's own
+    done-when asks for and which only the message can carry: the per-box sentence goes
+    under a box in a dialog the operator opened from one row, but the message travels out
+    of ``POST /api/transports/{id}/params``, whose caller addressed an opaque id and has
+    no node in the request at all. A script sizing two rows in a loop was told twice that
+    one transport had rejected a size, with nothing saying whose row it was.
+
     PUBLIC SINCE M17.1c, and asked by the second path that can change a pool:
     ``rotation.replace_params``, which resizes a row that already exists. One definition
     of what a workable pool is, for the same reason ``addresses.fleet_size`` is one
@@ -621,16 +628,16 @@ async def sized_pool(
     if spec is None:
         if pool_size is not None:
             raise ParamsRefused(
-                f"transport {transport_name!r} rejected these parameters — "
-                f"{addresses.POOL_BOX}: {POOL_SIZE_NOT_TAKEN}",
+                f"transport {transport_name!r} on node {node.name!r} rejected these "
+                f"parameters — {addresses.POOL_BOX}: {POOL_SIZE_NOT_TAKEN}",
                 fields={addresses.POOL_BOX: POOL_SIZE_NOT_TAKEN},
             )
         return
 
     if pool_size is None:
         raise ParamsRefused(
-            f"transport {transport_name!r} rejected these parameters — "
-            f"{addresses.POOL_BOX}: {POOL_SIZE_REQUIRED}",
+            f"transport {transport_name!r} on node {node.name!r} rejected these "
+            f"parameters — {addresses.POOL_BOX}: {POOL_SIZE_REQUIRED}",
             fields={addresses.POOL_BOX: POOL_SIZE_REQUIRED},
         )
 
@@ -639,8 +646,8 @@ async def sized_pool(
     problem = pool_problem(str(params[spec.name]), str(params[spec.within]), pool_size)
     if problem:
         raise ParamsRefused(
-            f"transport {transport_name!r} rejected these parameters — "
-            f"{addresses.POOL_BOX}: {problem}",
+            f"transport {transport_name!r} on node {node.name!r} rejected these "
+            f"parameters — {addresses.POOL_BOX}: {problem}",
             fields={addresses.POOL_BOX: problem},
         )
 
@@ -656,8 +663,8 @@ async def sized_pool(
     if pool_size < people:
         short = POOL_SIZE_BELOW_THE_FLEET.format(size=pool_size, people=people)
         raise ParamsRefused(
-            f"transport {transport_name!r} rejected these parameters — "
-            f"{addresses.POOL_BOX}: {short}",
+            f"transport {transport_name!r} on node {node.name!r} rejected these "
+            f"parameters — {addresses.POOL_BOX}: {short}",
             fields={addresses.POOL_BOX: short},
         )
 
