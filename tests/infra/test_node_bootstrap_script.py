@@ -7,11 +7,11 @@ WHY:  the only honest proof of this script is a host that has never run hashi, a
       tree is that the script cannot quietly do the dangerous version of each step —
       prompt on a pipe, guess a port, generate a private key on the machine most likely
       to be seized, or leave the host writing down who connected to it.
-HOW:  the script is read, not run — with one exception at the bottom of this file, added
-      by M18's acceptance: the three tests that RUN its checking half, cut at the section
-      where it first touches the host. Reading cannot catch a refusal that is written
-      correctly and can never fire, which is what a `getent` that ends the run by itself
-      under ``set -e`` produced. Everything else keeps the division
+HOW:  the script is read, not run — with one growing exception at the bottom of this
+      file, added by M18's acceptance: the tests that RUN its checking half, cut at the
+      section where it first touches the host. Reading cannot catch a refusal that is
+      written correctly and can never fire, which is what a `getent` that ends the run by
+      itself under ``set -e`` produced. Everything else keeps the division
       ``test_panel_bootstrap_script.py`` and ``test_backup_script.py`` use.
 
       Stated plainly: nothing here proves a host becomes a node. It proves the script
@@ -25,6 +25,17 @@ HOW:  the script is read, not run — with one exception at the bottom of this f
       the only way an account change can be carried out without the operator typing a
       recursive chown on a live node, and the assertions for it sit beside the ones that
       keep the re-run's claims honest, because the two constrain each other.
+
+      M19 added the two checks that are about the HOST rather than about the run — will
+      sshd read the file the key went into, and can this kernel forward — and both of
+      them had to be RUN rather than read, for the reason M18's acceptance established:
+      a refusal that cannot fire reads exactly like one that can. Both run late in the
+      script, which the cut cannot reach, so the test supplies the CALL and the script
+      supplies the function (``function_in``). What is exercised is the script's own
+      code; what is stubbed is only what sshd and the kernel answer. The scenario in
+      ``tests/e2e/infra/test_a_real_host_answers_the_bootstrap_preconditions.py`` puts
+      the same functions in front of a real OpenSSH and a real ``/proc/sys``, because a
+      stub can only repeat what its author believed the output looks like.
 """
 
 import os
