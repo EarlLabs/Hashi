@@ -286,11 +286,14 @@ async def _add_friend_form(
     here is that a nickname refused by name gets its message under the field, while "the
     fleet has no room" is not a complaint about anything the operator typed.
     """
+    full = await console.full_pools(session)
     return {
         "nickname": nickname,
         "error": error,
-        "full_pools": await console.full_pools(session),
-        "no_room": console.NO_ROOM_FOR_ANOTHER_USER,
+        "full_pools": full,
+        # Composed from the length of the list it introduces, so the sentence cannot say
+        # "one of those pools" over two of them — M17.2's acceptance.
+        "no_room": console.no_room_for_another_user(len(full)),
         "what_to_do": console.NO_ROOM_WHAT_TO_DO,
     }
 
@@ -415,6 +418,28 @@ NO_TRANSPORT_CHOSEN = "required — choose which protocol this node should offer
 # a form gives it text: there is nothing to hand over. It echoes nothing back and names no
 # figure, since the box's own placeholder already says what it will take.
 POOL_NOT_A_NUMBER = "a whole number — how many people this transport hands an address to"
+
+# The longest a typed box may be, and what it is answered with over that — M17.2's
+# acceptance. THE CAUSE, where ``relay.TOO_LONG_TO_REPEAT`` is the symptom: a transport's
+# validator quotes the value it rejected, so a thousand characters pasted into an address
+# box came back as a thousand characters under it and pushed the form off the screen. The
+# echo is bounded in the service for every path at once; this is the box saying no first,
+# in a sentence of its own, so what the operator reads is a limit rather than a
+# validator's complaint about a value they can see is wrong.
+#
+# NO ``maxlength`` IN THE MARKUP, which this console has already learned once
+# (``panel/add_friend_dialog.html``): the attribute silently clips a paste and the record
+# is then written under something other than what the operator typed. Refused, not
+# trimmed.
+#
+# 255 is what ``api/schemas.py`` bounds a node's own address and host at, and no parameter
+# any shipped transport declares takes more — the longest is a hostname. It echoes nothing
+# back: the value is in the box beside the sentence, and repeating it is the defect.
+VALUE_MAX_LENGTH = 255
+VALUE_TOO_LONG = (
+    f"{VALUE_MAX_LENGTH} characters or fewer — nothing was enabled, and the value is not "
+    "repeated here"
+)
 
 # What a submission naming something this form cannot read is answered with. Above the
 # form and not under a box, because the name it is about has no box — that is the whole
@@ -694,6 +719,11 @@ async def _enable_form(
         # cannot deliver, a port this node already binds, a node that is gone. Shown
         # inside the dialog because that is where the operator is.
         "failure": failure,
+        # …and the pointer to a refusal that IS about a box, because this dialog is
+        # taller than the window and comes back from a 422 at the top of itself, with the
+        # pool box last — M17.2's acceptance. Composed here rather than in the template so
+        # the count agrees with the list and the group prefix is stripped once.
+        "refused": console.refused_under_boxes(sorted(errors)) if errors else None,
     }
 
 
@@ -2085,6 +2115,24 @@ async def enable_transport(
             typed,
             {f"{transport_name}-{name}": NO_DEFAULT for name in empty},
             plainly="; ".join(f"{name}: {NO_DEFAULT}" for name in empty),
+        )
+
+    # A value longer than any parameter this image ships takes — refused HERE, before the
+    # transport's own validator sees it, because that one quotes what it rejected and the
+    # quote is the defect (``VALUE_TOO_LONG``). Over the boxes this dialog actually drew,
+    # which is what an operator can type into; anything else that reaches the validator is
+    # bounded on the way back out, in ``relay.refused_fields``.
+    over_long = [box.name for box in boxes if len(supplied(box.name)) > VALUE_MAX_LENGTH]
+    if pool_spec and len(supplied(addresses.POOL_BOX)) > VALUE_MAX_LENGTH:
+        over_long.append(addresses.POOL_BOX)
+    if over_long:
+        return await _refuse_the_form(
+            request,
+            session,
+            node_id,
+            typed,
+            {f"{transport_name}-{name}": VALUE_TOO_LONG for name in over_long},
+            plainly="; ".join(f"{name}: {VALUE_TOO_LONG}" for name in over_long),
         )
 
     pool_size = None

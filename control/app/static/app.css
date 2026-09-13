@@ -430,6 +430,23 @@
 
 .input[aria-invalid="true"] { border-color: var(--color-danger-700); }
 
+/* A refusal that IS the whole content of a dialog, rather than one field's complaint.
+   The add-user dialog when a serving pool has no room is the only one: nothing was
+   submitted, so there is no box to sit under and no failed request to banner, and it
+   was drawn in .dialog-body — the muted grey every consequence line on every form
+   wears. An acceptance walk read it as ordinary copy, which is the same defect M8's
+   acceptance found in slate blue and M9 answered with the danger hue. Same size as the
+   body it replaces (14px, not .field-error's 12px: this is three lines of prose, not a
+   note under an input) and the same left edge, so a refusal looks like a refusal
+   wherever the operator meets one. */
+.dialog-refusal {
+  font-size: 14px;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-danger-700);
+  color: var(--color-danger-900);
+  overflow-wrap: anywhere;
+}
+
 /* A limit stated before it is hit. Same place and size as .field-error, muted rather
    than accented, because it is not a complaint — it is what stops the operator ever
    meeting one. The field used to carry `maxlength` instead, which silently discarded

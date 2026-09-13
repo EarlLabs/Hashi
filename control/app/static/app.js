@@ -198,7 +198,24 @@
   watch("dialog-slot", (host) => {
     const dialog = host.querySelector(".dialog");
     if (!dialog) return;
-    const first = dialog.querySelector("input, textarea, select, button");
+    // A REFUSED CONTROL FIRST, and only then the first one. A dialog taller than the
+    // window comes back from a 422 scrolled to the top, because the swap replaced the
+    // scroll container itself — so on the enable form, whose refusal lands under the
+    // LAST box, the operator saw a dialog that had not visibly moved, pressed again and
+    // got the same nothing. Focusing the control that was refused scrolls it into view
+    // and, for a screen reader, announces the sentence its aria-describedby points at.
+    //
+    // Not specific to that form: every dialog in this console marks a refused control
+    // with aria-invalid, so the hop dialog's twenty-four boxes and the replace-params
+    // dialog get it too. The selector names the three element types on purpose — an
+    // attribute selector alone would match a div that carried it and could not be
+    // focused, and a comma list returns the first match in DOCUMENT order rather than
+    // the first selector's, which is why this is two queries and not one.
+    const refused = dialog.querySelector(
+      'input[aria-invalid="true"], select[aria-invalid="true"], ' +
+      'textarea[aria-invalid="true"]'
+    );
+    const first = refused || dialog.querySelector("input, textarea, select, button");
     if (first) first.focus();
   });
 

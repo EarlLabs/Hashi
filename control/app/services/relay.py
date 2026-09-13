@@ -198,6 +198,25 @@ def _plainly(message: str) -> str:
 # the transport's own words and send them looking for a value that was never there.
 WITHHELD = "[withheld]"
 
+# The longest value a refusal may repeat back, and what stands in its place when it is
+# longer. Not a rule about what a transport may be GIVEN — its own model decides that —
+# but about what this control plane PRINTS: a validator quotes the value it rejected, so
+# a thousand characters pasted into an address box came back as a thousand characters of
+# the operator's own paste in a dialog, pushing every control below it off the screen.
+# Found in M16's acceptance on the resolver box and again in M17's on an address box, so
+# it is closed once, here, where every refusal about a parameter is already composed —
+# which also closes the API envelope, where the same thousand characters were echoed.
+#
+# 128 is generous against real input: the longest value any shipped transport legitimately
+# takes is a hostname, and an address with its prefix is under twenty. Nothing a working
+# submission produces comes near it.
+#
+# A named marker rather than an ellipsis, for ``WITHHELD``'s own reason: a sentence that
+# simply stopped short reads as the transport's own words, and the operator goes looking
+# for a value that was never there.
+TOO_LONG_TO_REPEAT = 128
+OVER_LONG = "[too long to repeat]"
+
 
 def refused_fields(
     exc: ValidationError, *, withholding: Iterable[object]
@@ -263,23 +282,51 @@ def refused_fields(
 
     The location is redacted too — a name is normally a Python identifier and safe, but
     a nested one can carry a mapping key, and this costs one line.
+
+    AND WHAT IS PRINTABLE IS ALSO BOUNDED IN LENGTH — see ``TOO_LONG_TO_REPEAT``. A
+    validator quotes the value it rejected, so an over-long paste was echoed whole into a
+    dialog and into the API envelope; it is struck out here by the same mechanism as a
+    held value, with its own marker, because the reason is different.
     """
     values = sorted(
         {str(value) for value in withholding if value is not None and value != ""},
         key=len,
         reverse=True,
     )
+    # What the operator themselves sent, where it is too long to put back on a screen.
+    # Struck out by the same mechanism and for a different reason: not because it is
+    # secret, but because a refusal that repeats it is a refusal nobody can read past.
+    # Taken from Pydantic's own record of what failed, so no caller has to hand it over.
+    bulky = sorted(
+        {
+            error["input"]
+            for error in exc.errors()
+            if isinstance(error.get("input"), str)
+            and len(error["input"]) > TOO_LONG_TO_REPEAT
+        },
+        key=len,
+        reverse=True,
+    )
     fields: dict[str, str] = {}
     for error in exc.errors():
-        where = _without(".".join(str(part) for part in error["loc"]), values)
-        fields.setdefault(where, _without(_plainly(error["msg"]), values))
+        where = _readable(".".join(str(part) for part in error["loc"]), values, bulky)
+        fields.setdefault(where, _readable(_plainly(error["msg"]), values, bulky))
     return fields
 
 
-def _without(text: str, values: list[str]) -> str:
-    """One sentence with every held value struck out of it."""
+def _readable(text: str, values: list[str], bulky: list[str]) -> str:
+    """One sentence with every held value struck out and every unprintable one shortened.
+
+    Held values first, so a value that is both secret and over-long is named as withheld
+    rather than merely as long: over-redaction costs a word, under-redaction prints a key.
+    """
+    return _without(_without(text, values), bulky, OVER_LONG)
+
+
+def _without(text: str, values: list[str], marker: str = WITHHELD) -> str:
+    """One sentence with every listed value struck out of it."""
     for value in values:
-        text = text.replace(value, WITHHELD)
+        text = text.replace(value, marker)
     return text
 
 

@@ -1501,6 +1501,89 @@ async def test_the_panel_refuses_a_pool_box_that_is_not_a_count(
     assert 'value="lots"' in refused.text
 
 
+async def test_a_refused_box_is_also_stated_where_the_dialog_reopens(
+    client, session, pool_transport: str
+) -> None:
+    """A refusal below the fold is a refusal nobody reads — M17.2's acceptance.
+
+    This dialog is taller than a laptop's window (a line per transport the node already
+    runs, then a group of boxes per transport this image ships) and a 422 re-renders it
+    scrolled back to its own TOP, because the swap replaced the scrolling element. The
+    pool box is the last field on the form, so its refusal was correctly worded,
+    correctly styled and entirely off screen: the operator pressed again and got the
+    same nothing. The project has met this before — M9's banner slot, cleared on
+    ``htmx:afterRequest``, silently ate every banner the panel ever sent.
+
+    What is asserted is the POSITION as well as the words: above the list of what the
+    node already runs, which is the thing that pushed it down. ``app.js`` also moves
+    focus to the refused control, which scrolls it into view; this is the half a test
+    without a browser can hold.
+    """
+    node_id = await a_node(client, name="panel-top", address="192.0.2.62")
+    # A list for the refusal to be pushed below, which is the condition of the finding.
+    assert (await enable_pool(client, node_id, pool_transport)).status_code == 201
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data=enable_form(pool_transport, pool_size=""),
+        headers=HTMX,
+    )
+
+    assert refused.status_code == 422, refused.text
+    said = _text_of(refused)
+    assert f"The reason is under {addresses.POOL_BOX}" in said, said
+    # Above the list, not after it. ``stack-6`` is the wrapper around the node's own rows.
+    assert "stack-6" in refused.text, "no list, so this proves nothing"
+    assert refused.text.index("Nothing was enabled.") < refused.text.index("stack-6")
+    # …and the sentence itself has NOT moved up here: it is still under the box, which is
+    # the only place it can be corrected from.
+    assert (
+        field_errors(refused)[f"{pool_transport}-{addresses.POOL_BOX}"]
+        == panel_routes.NO_DEFAULT
+    )
+    # The box is marked, which is what ``app.js`` focuses and what a screen reader reads.
+    assert 'aria-invalid="true"' in refused.text
+
+
+async def test_a_value_too_long_for_a_box_is_refused_without_being_repeated(
+    client, session, pool_transport: str
+) -> None:
+    """A thousand characters pasted into an address box came back as a thousand — M16, M17.
+
+    A transport's validator quotes the value it rejected, so the refusal was the paste
+    again, in a dialog, pushing every control below it off the screen. Two bounds close
+    it: the box says no first, in its own sentence, and ``relay.refused_fields`` strikes
+    an over-long value out of any complaint that still reaches one.
+
+    WHAT IS STILL IN THE BOX is the paste, deliberately — every other refusal on this
+    form keeps what was typed, and an operator who has to find a long value again finds a
+    different one. An ``<input>`` does not grow with its value; a sentence does.
+    """
+    node_id = await a_node(client, name="panel-long", address="192.0.2.63")
+    spec = addresses.spec_for(pool_transport)
+    huge = "9" * 1000
+    typed = enable_form(pool_transport)
+    typed[f"{pool_transport}-{spec.name}"] = huge
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports", data=typed, headers=HTMX
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert (
+        field_errors(refused)[f"{pool_transport}-{spec.name}"]
+        == panel_routes.VALUE_TOO_LONG
+    )
+    assert huge not in _text_of(refused), "the refusal repeated the value"
+    assert f'value="{huge}"' in refused.text, "the paste has to be found again"
+    session.expire_all()
+    assert (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().all() == [], "a refused form enabled a transport"
+
+
 async def test_the_size_typed_in_the_panel_is_the_size_the_row_is_given(
     client, session, pool_transport: str
 ) -> None:
@@ -2044,6 +2127,68 @@ async def test_a_transport_whose_pool_covers_the_fleet_is_offered(
     assert "replace params" not in said, said
 
 
+async def test_the_offer_a_stale_page_still_draws_is_refused_before_anything_commits(
+    client, session, pool_transport: str
+) -> None:
+    """The withheld button is the courtesy; this is the rule — M17.2's acceptance.
+
+    Reached with buttons only, exactly as the walk reached it. Withdraw a row whose pool
+    still covers the fleet, open the transports dialog — the offer button is drawn, which
+    is CORRECT at that moment — then add a user somewhere else and press the button the
+    open page is still showing. Whether a control is drawn is decided when the page is
+    rendered, and a page can go stale.
+
+    THE NODE IS NOT SERVING, which is where the gap was. ``grant_everywhere`` grants on
+    serving rows only, so the fan-out inside the offer allocated nothing, refused nothing,
+    and the row came back into every user's link at a size that cannot hold the fleet —
+    the one state M17's done-when says may not be committed.
+
+    Both surfaces, because the done-when is about the control plane and not about the
+    console: the panel gets the sentence in a banner with nothing changed behind it, and
+    a script pressing the API gets the refusal envelope.
+    """
+    node_id = await a_node(client, name="stale-offer", address="192.0.2.89")
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    assert enabled.status_code == 201, enabled.text
+    row_id = enabled.json()["id"]
+    assert (
+        await client.post(f"/api/transports/{row_id}/state", json={"enabled": False})
+    ).status_code == 200
+
+    # The page the operator is looking at. The button is here, and that is not the defect.
+    open_page = await client.get(f"/panel/nodes/{node_id}/transports", headers=HTMX)
+    assert f"/panel/transports/{row_id}/offer" in open_page.text, "nothing went stale"
+
+    # …and now it is stale. A withdrawn row is not counted toward pool pressure, so this
+    # is allowed and the dialog is never told.
+    assert (await add_user(client, "cyd")).status_code == 201
+
+    before = await audit_rows(session)
+    pressed = await client.post(f"/panel/transports/{row_id}/offer", headers=HTMX)
+
+    assert pressed.status_code == 200, pressed.text
+    said = _text_of(pressed)
+    assert f"{pool_transport} on stale-offer is sized for 2 and would need 3" in said, said
+    assert "Nothing has been changed" in said, said
+    # In the page's words, like every other sentence a service composes (decision 9).
+    assert "friend" not in said.lower(), said
+
+    session.expire_all()
+    row = await session.get(NodeTransport, row_id)
+    assert row.enabled is False, "a refused offer put the transport back in every link"
+    assert (
+        await session.execute(select(Credential).where(Credential.node_transport_id == row_id))
+    ).scalars().unique().all() == [], "a refused offer minted material"
+    assert await audit_rows(session) == before, "a refused offer reached the audit trail"
+
+    # The same refusal to a caller that never saw a button.
+    refused = await client.post(f"/api/transports/{row_id}/state", json={"enabled": True})
+    assert refused.status_code == 409, refused.text
+    assert "stale-offer" in refused.text and pool_transport in refused.text, refused.text
+
+
 async def test_a_node_whose_pool_covers_the_fleet_is_offered_the_serving_state(
     client, session, pool_transport: str
 ) -> None:
@@ -2155,6 +2300,59 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     assert (
         await session.execute(select(Friend).where(Friend.nickname == "bob"))
     ).scalars().first() is None
+
+
+async def test_the_add_user_refusal_counts_its_list_and_wears_the_danger_hue(
+    client, session, pool_transport: str
+) -> None:
+    """Two findings from one walk, on the same three lines — M17.2's acceptance.
+
+    The sentence above the list said *"one of those pools is full:"* whatever followed
+    it, and two serving rows with no room printed two. A count is the one thing this
+    sentence can get wrong and the operator can check, directly beneath it.
+
+    And the whole answer was drawn in ``.dialog-body`` — the muted grey the "they get one
+    subscription URL" consequence line under the ordinary form wears — so the one thing
+    the operator opened this dialog to be told read as ordinary copy. Same defect M8's
+    acceptance found in the primary button's slate blue and M9 answered with the danger
+    hue, wearing a third colour.
+    """
+    node_id = await a_node(client, name="counted", address="192.0.2.91")
+    assert (await add_user(client, "ann")).status_code == 201
+    assert (
+        await enable_pool(client, node_id, pool_transport, pool_size=1)
+    ).status_code == 201
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+
+    one = await client.get("/panel/friends/new", headers=HTMX)
+
+    assert one.status_code == 200
+    assert "one of those pools is full:" in _text_of(one), _text_of(one)
+    # The hue, on the block that carries the whole answer.
+    assert 'class="dialog-refusal" id="add-user-no-room"' in one.text, one.text
+    assert 'class="dialog-body" id="add-user-no-room"' not in one.text, one.text
+
+    # A second row with no room, on the same node: one sentence, two pools under it. Its
+    # own port AND its own tunnel range, which two rows on one node may never share.
+    assert (
+        await enable_pool(
+            client,
+            node_id,
+            pool_transport,
+            pool_size=1,
+            tunnel="10.91.0.1/24",
+            peer="10.91.0.2/24",
+            port=51821,
+        )
+    ).status_code == 201
+
+    two = await client.get("/panel/friends/new", headers=HTMX)
+
+    assert two.status_code == 200
+    said = _text_of(two)
+    assert "2 of those pools are full:" in said, said
+    assert "one of those pools" not in said, said
+    assert said.count("is sized for 1 and would need 2") == 2, said
 
 
 async def test_the_transports_screen_reads_the_registry_about_addresses(

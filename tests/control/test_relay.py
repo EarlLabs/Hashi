@@ -464,6 +464,52 @@ async def test_a_refused_hop_end_carries_none_of_the_material_it_minted(
     assert relay.WITHHELD in refused.value.message
 
 
+class _QuotesWhatItRefused(pydantic.BaseModel):
+    """A field validator that puts the value back in its complaint — the ordinary shape.
+
+    Every shipped transport's validator does this, and it is why printing a transport's
+    own words is worth doing at all: *"'10.0.0.1' is not an address with a prefix"* tells
+    the operator which of twenty-five boxes is wrong. It is also how a paste reaches a
+    screen, which is what the bound below is for.
+    """
+
+    value: str
+
+    @pydantic.field_validator("value")
+    @classmethod
+    def _refuse(cls, given: str) -> str:
+        raise ValueError(f"{given!r} is not a value this takes")
+
+
+def test_a_refusal_does_not_repeat_a_value_too_long_to_read() -> None:
+    """M16's acceptance found this on the resolver box, M17's on an address box.
+
+    A thousand characters pasted into a box came back as a thousand characters of
+    complaint — in the dialog, where it pushed every control below it off the screen, and
+    in the API envelope. Struck out here, where every refusal about a parameter is already
+    composed, by the same mechanism that strikes a held value and with its own marker:
+    the reasons differ and an operator who reads "[withheld]" about their own paste has
+    been told something untrue.
+    """
+    huge = "9" * 1000
+    with pytest.raises(pydantic.ValidationError) as long:
+        _QuotesWhatItRefused(value=huge)
+
+    said = relay.refused_fields(long.value, withholding=[])["value"]
+
+    assert huge not in said
+    assert relay.OVER_LONG in said
+    # The transport's own words survive: what is bounded is the echo, not the sentence.
+    assert "is not a value this takes" in said
+
+    # …and a value short enough to read is still quoted, which is the whole reason a
+    # validator's sentence is printed rather than replaced by a generic one.
+    readable = "9" * relay.TOO_LONG_TO_REPEAT
+    with pytest.raises(pydantic.ValidationError) as short:
+        _QuotesWhatItRefused(value=readable)
+    assert readable in relay.refused_fields(short.value, withholding=[])["value"]
+
+
 # --- rotating one end of a hop (M9 acceptance) --------------------------------
 
 def _symmetric_names() -> set[str]:

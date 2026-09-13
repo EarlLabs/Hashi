@@ -669,6 +669,26 @@ async def sized_pool(
         )
 
 
+# What an operator is told when they ask to OFFER a row whose pool cannot hold the fleet
+# — M17.2's acceptance, and the one granting path that had no refusal of its own.
+#
+# THE CONSOLE ALREADY WITHHOLDS THE BUTTON and that is unchanged and still right
+# (``docs/decisions.md``, 2026-09-13): the reason a control is not drawn is that its only
+# outcome would be a refusal. What withholding cannot do is HOLD. Whether to draw the
+# button is decided when the dialog is rendered, and this dialog stays open — an operator
+# who adds a user in another tab is looking at a page whose offer button is still there
+# and still posts. So the withholding is the courtesy and this is the rule.
+#
+# THE SENTENCE IS BUILT AROUND ``addresses.named`` rather than written out beside it, so
+# the phrase under the withheld button and the refusal a stale page gets name the same
+# pool the same way: a pool IS SIZED FOR n, a person HOLDS an address.
+POOL_SHORT_TO_OFFER = (
+    "{pool}. Offering it gives every active friend an address on it the moment this node "
+    "serves, so as it stands nobody can be. Nothing has been changed — make the pool "
+    "bigger on that transport first, or take somebody off the fleet."
+)
+
+
 async def set_transport_enabled(
     session: AsyncSession, *, node_transport_id: str, enabled: bool
 ) -> NodeTransport:
@@ -687,6 +707,11 @@ async def set_transport_enabled(
 
     Idempotent: setting the value it already has does nothing and does not re-grant.
     A retried click is not an event.
+
+    A pool that cannot hold the fleet is refused here, before the flag moves — M17.2's
+    acceptance. The console withholds the button over the same measurement, but a dialog
+    left open while a user is added elsewhere is a page whose button is still drawn, and
+    a control plane that only hides an action has not refused it.
 
     **What this does NOT do, and must not be reported as doing:** disabling changes
     what `control` DELIVERS, not what a node is running. A friend who already holds a
@@ -713,6 +738,23 @@ async def set_transport_enabled(
 
     if node_transport.enabled == enabled:
         return node_transport
+
+    if enabled:
+        # REFUSED BEFORE ANYTHING IS WRITTEN — above the flag, above the audit entry and
+        # above the fan-out — so the "nothing has been changed" in the sentence is true at
+        # the raise rather than true because something rolled back.
+        #
+        # ``shortfalls_among`` and not the fan-out's own ``PoolFull``, because the two ask
+        # different questions and only this one holds on every node. ``grant_everywhere``
+        # grants on SERVING rows, so on a draft or degraded node the loop below allocates
+        # nothing and therefore refuses nothing; and it skips a friend who already holds a
+        # credential here, which is the serving node's own version of the same gap. Either
+        # way the row ends up offered at a size that cannot hold the fleet, which is the
+        # state M17's done-when says may not be committed. ``PoolFull`` stays underneath
+        # as the backstop for a pool that is big enough on paper and full in fact.
+        short = await addresses.shortfalls_among(session, [node_transport])
+        if short:
+            raise Conflict(POOL_SHORT_TO_OFFER.format(pool=addresses.named(short[0])))
 
     node_transport.enabled = enabled
     # Fetched rather than reached through ``node_transport.node``. The relationship is

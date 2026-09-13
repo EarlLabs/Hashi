@@ -476,15 +476,15 @@ OFFER_HOP_END = (
 # row they offered believing it would carry the fleet, because by then they have already
 # told thirty people the protocol is coming.
 #
-# WHAT THE SENTENCE MAY CLAIM. The withholding is deliberately wider than the service's
-# refusal (``docs/decisions.md``, 2026-09-13): the button is withheld on the ROW's pool
-# whatever the node's state, because a pool below the fleet is a row nobody can be served
-# on either way. The press itself is refused only where somebody would actually be
-# granted — on a node already serving. On one that is not, offering commits and grants
-# nobody, and it is the next move, into service, that is refused. So the sentence states
-# the CEILING, which is true in both, rather than a refusal that would not arrive in one
-# of them: a withheld control explained by something that will not happen teaches the
-# operator to distrust the next one.
+# WHAT THE SENTENCE MAY CLAIM. This used to be careful to say only what was true on both
+# kinds of node, because the press was refused on a serving one and COMMITTED on one that
+# was not: the withholding was wider than the service's refusal, and the sentence had to
+# state the ceiling rather than a refusal that would not arrive. That gap was the blocking
+# finding of M17.2's acceptance and it is closed — ``nodes.POOL_SHORT_TO_OFFER`` refuses
+# the press on every node, before anything is written — so the sentence can now say the
+# plain thing. The withholding itself is unchanged and its decision is not reopened
+# (``docs/decisions.md``, 2026-09-13); what changed is that the button's absence is now a
+# courtesy in front of a rule rather than the only thing in the way.
 #
 # The pool is NAMED — node, transport and both counts, in ``addresses.named``'s words, so
 # the sentence here and the refusal the API returns describe the same pool the same way.
@@ -493,9 +493,8 @@ OFFER_HOP_END = (
 # that has nowhere to go from here.
 POOL_SHORT_TO_OFFER = (
     "not offered — {pools}. Every active user is given an address here the moment this "
-    "row serves, so as it stands nobody can be: on a node already serving, offering it "
-    "is refused outright; on one that is not, it leaves a node that cannot then be put "
-    "into service. Make the pool bigger first: Keys & configs, replace params."
+    "row serves, so as it stands nobody can be, and offering it is refused whatever "
+    "state the node is in. Make the pool bigger first: Keys & configs, replace params."
 )
 
 # The same row, answering the other action — M15.2. Its own sentence rather than the one
@@ -1206,6 +1205,42 @@ def withheld_note(names: list[str]) -> str:
     """
     return KEY_MATERIAL_WITHHELD.format(
         names=", ".join(sorted(name or KEY_UNNAMED_REFUSAL for name in names))
+    )
+
+
+def refused_under_boxes(names: list[str]) -> str:
+    """What the TOP of a dialog says when the refusal itself is under a box below it.
+
+    M17.2's acceptance. The enable dialog is taller than a laptop's window — a list of
+    what the node already runs, then a group of boxes per transport — and a 422 re-renders
+    it scrolled back to the top, because the swap replaces the scrolling element. The pool
+    box is the LAST field, so its refusal arrived correctly styled, correctly worded and
+    entirely off screen: the operator read an unchanged dialog and pressed again. This
+    project has been bitten by a refusal nobody sees before (M9, the banner slot cleared
+    on htmx:afterRequest), which is why an awkwardness is being treated as a failure.
+
+    ``app.js`` also moves focus to the refused control, which scrolls it into view. This
+    is the half that does not depend on that: a line in the operator's eyeline saying the
+    submission was refused and where the reason is.
+
+    IT NAMES THE BOXES AND REPEATS NO MESSAGE. A second copy of the sentence would be two
+    places to change it and two places for it to drift; what the top of a dialog owes the
+    operator is that something was refused and where to look. Names arrive with their
+    group prefix stripped — that prefix is markup, not a parameter — and sorted, so two
+    refusals about the same boxes read identically.
+
+    Singular and plural, for the same reason ``no_room_for_another_user`` counts its own
+    list: this sentence is read directly above the thing it is describing.
+    """
+    boxes = sorted({name.rsplit("-", 1)[-1] for name in names})
+    if len(boxes) == 1:
+        return (
+            f"Nothing was enabled. The reason is under {boxes[0]}, further down this "
+            "dialog."
+        )
+    return (
+        "Nothing was enabled. The reasons are under these boxes, further down this "
+        f"dialog: {', '.join(boxes)}."
     )
 
 
@@ -1962,10 +1997,23 @@ def pool_takers(people: int) -> str:
 #
 # It names the fix rather than only the problem, and the fix is a screen: the pool is
 # sized where parameters are replaced, and nothing else in this console can change it.
-NO_ROOM_FOR_ANOTHER_USER = (
-    "There is no room for another user yet. A user is given an address on every "
-    "transport that serves them, and one of those pools is full:"
-)
+def no_room_for_another_user(pools: int) -> str:
+    """The sentence above the list, agreeing with the list — M17.2's acceptance.
+
+    It was a constant reading "one of those pools is full:" whatever followed it, and two
+    serving rows with no room printed two pools under it. A count is the one thing this
+    sentence can get wrong and the operator can check: the fleet in this product is one
+    person's, and a sentence that miscounts the thing directly beneath it is the kind of
+    seam that makes them doubt the numbers in it — which are the whole content of the
+    lines that follow.
+    """
+    which = "one of those pools is" if pools == 1 else f"{pools} of those pools are"
+    return (
+        "There is no room for another user yet. A user is given an address on every "
+        f"transport that serves them, and {which} full:"
+    )
+
+
 NO_ROOM_WHAT_TO_DO = (
     "Make the pool bigger on Keys & configs, under replace params — then add them. "
     "Nothing about this user has been stored."

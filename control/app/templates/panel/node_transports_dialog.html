@@ -64,6 +64,30 @@
        aria-labelledby="node-transports-title">
     <div class="dialog-title" id="node-transports-title">Transports on {{ node.name }}</div>
 
+    {% if failure or refused %}
+    {#
+      WHAT WAS REFUSED, DIRECTLY UNDER THE TITLE. `failure` is a complaint about the
+      request rather than about one box — a protocol this image cannot hand over, a
+      listening port this node is already using, a complaint with no box to land on.
+      `refused` is the other kind: the message is under the box it belongs to, and this
+      says so, because that box may be a screenful below.
+
+      IT SITS ABOVE THE LIST AND NOT BELOW IT — M17.2's acceptance. This dialog is taller
+      than a laptop's window and a 422 re-renders it scrolled to its own top, so a refusal
+      printed after the node's transports was off screen on any node running more than a
+      couple. The operator read an unchanged dialog and pressed again. `app.js` moves
+      focus to the refused box as well; this is the half that is in view before it does.
+
+      Outside the form on purpose: it is still the answer when there is nothing left to
+      offer and therefore no form to put it in. Same treatment as a field error because
+      it is the same thing: a request that was refused.
+    #}
+    <div class="field-error" role="alert">
+      {% if failure %}<div>{{ failure }}</div>{% endif %}
+      {% if refused %}<div>{{ refused }}</div>{% endif %}
+    </div>
+    {% endif %}
+
     {% if offers %}
     {#
       What this node already runs. Each line's standing sentence is composed in
@@ -145,18 +169,6 @@
       Nothing is enabled on {{ node.name }} yet, so it reaches nobody: a node in a
       user's link is a node with a protocol on it, applied to the host and in service.
     </div>
-    {% endif %}
-
-    {% if failure %}
-    {#
-      A refusal about the request rather than about one box — a protocol this image
-      cannot hand over, a listening port this node is already using, a complaint with no
-      box to land on.
-      Outside the form on purpose: it is still the answer when there is nothing left to
-      offer and therefore no form to put it in. Same treatment as a field error because
-      it is the same thing: a request that was refused.
-    #}
-    <div class="field-error" role="alert">{{ failure }}</div>
     {% endif %}
 
     {% if transports %}

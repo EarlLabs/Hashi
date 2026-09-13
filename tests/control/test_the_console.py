@@ -5860,6 +5860,15 @@ async def test_a_status_word_never_breaks_mid_word(client, reality_params) -> No
         # the box — it takes the box's width away, and that width is what the value
         # being replaced is read in.
         ".param-field label",
+        # The add-user dialog's no-room refusal (M17.2's acceptance), which replaced the
+        # .dialog-body it used to be drawn in and would otherwise have lost that class's
+        # own breaking. Agreed to for .dialog-body's reason rather than inherited by
+        # accident: these three lines name a NODE and a TRANSPORT, and a node's name is
+        # the operator's own text at up to 64 characters with no spaces in it — a
+        # dialog's box is a definite width, so a name that cannot break prints past its
+        # right edge over the dimmed page. Not a table column, so the min-content
+        # collapse this rule exists to prevent cannot happen here.
+        ".dialog-refusal",
     }
     # And a status tag is a single word we wrote, wherever it is put.
     assert "nowrap" in rules[".tag"]
