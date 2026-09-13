@@ -1,14 +1,18 @@
 """One tunnel, one address each — M17.1a.
 
-WHAT: the arithmetic in ``edge/addressing.py``, and the rule both WireGuard-family
-      packages gained with it: a resolver written into a friend's config may not be an
-      address inside the tunnel itself.
+WHAT: the arithmetic in ``edge/addressing.py``, the rule both WireGuard-family
+      packages gained with it — a resolver written into a friend's config may not be an
+      address inside the tunnel itself — and the refusal underneath all of it: two peers
+      holding one address are refused at render, in each package.
 WHY:  a WireGuard-family transport used to hold ONE ``peer_tunnel_address``, so it
       served one friend and the second was refused at render (``AmbiguousPeerRoute``,
-      found in the field). The refusal is right and is untouched here; what these tests
-      pin is where the second address comes from, and that the first one is still
-      byte-for-byte the address the renderers already fall back to — a transport
-      enabled before M17 must render the same bytes afterwards.
+      found in the field). The refusal is right and is unchanged by this milestone —
+      and it is pinned here, in each package, because it is the one property with a
+      victim: what it prevents is one friend's return traffic arriving at another
+      friend's device. What these tests add around it is where the second address comes
+      from, and that the first one is still byte-for-byte the address the renderers
+      already fall back to — a transport enabled before M17 must render the same bytes
+      afterwards.
 HOW:  pure calls, no Docker and no database. Tunnel addresses are RFC 1918, matching
       the fixtures in ``conftest.py`` and what both packages' own validators require.
 """
@@ -16,6 +20,7 @@ HOW:  pure calls, no Docker and no database. Tunnel addresses are RFC 1918, matc
 import ipaddress
 import sys
 from collections.abc import Iterator
+from dataclasses import replace
 from itertools import islice
 
 import pytest
@@ -28,6 +33,7 @@ from edge.addressing import (
     pool,
     pool_problem,
 )
+from edge.node import Credential
 from edge.registry import ConfigFormat, discover, profile
 
 # The formats a wg-quick-style tool runs. Derived from the config-format vocabulary
@@ -58,6 +64,114 @@ def test_every_kernel_tunnel_says_each_user_needs_an_address_of_their_own() -> N
         fields = profile(name).params_model.model_fields
         assert declared.name in fields and declared.within in fields
 
+
+# --- two peers on one address: the refusal this whole milestone stands on ------
+#
+# ``AllowedIPs`` is WireGuard's authorisation list AND its routing table, so two peers
+# holding one address is not a duplicate the daemon merges — the later peer silently
+# takes over the earlier one's route. Rendered, that is one friend's return traffic
+# arriving at another friend's device, with nothing anywhere saying so and both devices
+# still looking configured. Each package refuses it at render (``AmbiguousPeerRoute``),
+# and the pool this milestone adds exists so that it never has to fire. These are the tests that
+# keep it firing: they are asked of every kernel tunnel, so a package cannot lose the
+# refusal and be caught only by `control`.
+
+
+def _holding(credential: Credential, name: str, address: str | None) -> Credential:
+    """The same credential, holding ``address`` — or holding none of its own at all.
+
+    ``None`` is the pre-M17 shape rather than a broken credential: before this milestone
+    nothing minted a per-peer address, so every credential on a row fell back to the
+    single address in ``params``. That is the state the refusal was found in, in the
+    field, on the second friend.
+    """
+    secrets = {key: value for key, value in credential.secrets.items() if key != name}
+    if address is not None:
+        secrets[name] = address
+    return replace(credential, secrets=secrets)
+
+
+@pytest.mark.parametrize("name", KERNEL_TUNNELS)
+def test_two_peers_holding_one_address_are_refused_rather_than_rendered(
+    name: str, node, request
+) -> None:
+    """The allocator's own bug, were it ever to hand one address out twice."""
+    transport = profile(name)
+    declared = transport.meta.peer_address
+    validated = transport.validate(request.getfixturevalue(f"{name}_params"))
+    first, second = request.getfixturevalue(f"{name}_credentials")[:2]
+    shared = next(iter(pool(validated[declared.name], 1)))
+
+    with pytest.raises(transport.profile.AmbiguousPeerRoute) as refused:
+        transport.profile.render_server(
+            node,
+            validated,
+            [
+                _holding(first, declared.name, shared),
+                _holding(second, declared.name, shared),
+            ],
+        )
+
+    assert shared in str(refused.value), refused.value
+    assert "own tunnel address" in str(refused.value), refused.value
+
+
+@pytest.mark.parametrize("name", KERNEL_TUNNELS)
+def test_two_peers_with_no_address_of_their_own_collide_on_the_one_in_params(
+    name: str, node, request
+) -> None:
+    """The field failure verbatim: a pre-pool row, a second friend, no allocation.
+
+    Nothing here is malformed — this is what every credential on a row enabled before
+    M17 looks like — which is exactly why the renderer has to be the one to refuse it.
+    """
+    transport = profile(name)
+    declared = transport.meta.peer_address
+    validated = transport.validate(request.getfixturevalue(f"{name}_params"))
+    first, second = request.getfixturevalue(f"{name}_credentials")[:2]
+
+    with pytest.raises(transport.profile.AmbiguousPeerRoute) as refused:
+        transport.profile.render_server(
+            node,
+            validated,
+            [
+                _holding(first, declared.name, None),
+                _holding(second, declared.name, None),
+            ],
+        )
+
+    assert str(validated[declared.name]) in str(refused.value), refused.value
+
+
+@pytest.mark.parametrize("name", KERNEL_TUNNELS)
+def test_two_peers_from_one_pool_render_two_routes_of_their_own(
+    name: str, node, request
+) -> None:
+    """The other half, without which a package could pass by refusing everything.
+
+    A refusal that fires on two peers whatever their addresses would be a transport
+    serving one friend — the state M17 exists to leave behind — and the test above
+    could not tell the difference.
+    """
+    transport = profile(name)
+    declared = transport.meta.peer_address
+    validated = transport.validate(request.getfixturevalue(f"{name}_params"))
+    first, second = request.getfixturevalue(f"{name}_credentials")[:2]
+    allocated = list(pool(validated[declared.name], 2))
+
+    config = transport.profile.render_server(
+        node,
+        validated,
+        [
+            _holding(first, declared.name, allocated[0]),
+            _holding(second, declared.name, allocated[1]),
+        ],
+    )
+
+    routes = [f"AllowedIPs = {host_of(address)}/32" for address in allocated]
+    assert len(set(routes)) == 2, routes
+    for route in routes:
+        assert route in config, config
 
 # --- the pool -----------------------------------------------------------------
 
