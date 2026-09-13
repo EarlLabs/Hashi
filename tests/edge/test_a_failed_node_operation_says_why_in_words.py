@@ -183,3 +183,67 @@ async def test_a_failed_command_is_reported_by_its_last_words_not_its_first() ->
     # and both are read as a sentence.
     assert "\n" not in said, said
     assert len(said) < 500, f"a reason this long is a report, not a reason: {len(said)}"
+
+
+# The other shape a failed `docker compose up` arrives in, taken from the field: no pull,
+# two lines, and the second one — the daemon's own error — longer on its own than the
+# whole ceiling. Round 1 of M18's acceptance was given the layer wall; round 2 was given
+# this, cut off on `daemon/i` with nothing to say it had been cut.
+A_PROGRESS_LINE = "Container hashi-node-wireguard-1  Creating"
+THE_DAEMONS_ERROR = (
+    "Container hashi-node-wireguard-1  Error response from daemon: failed to mount "
+    "/tmp/containerd-mount3552140296: mount source: \"overlay\", target: "
+    "/var/lib/docker/overlay2/" + "d" * 64 + "/merged, data: \"workdir=/var/lib/docker/"
+    "containerd/daemon/io.containerd.runtime.v2.task/moby/" + "e" * 64 + "/work\""
+)
+
+
+async def test_output_too_long_to_show_is_cut_where_the_reason_is_not() -> None:
+    """The ceiling is spent on the diagnosis, and the cut says that it is one.
+
+    Two failures in one answer, both filed: the progress line was served first and the
+    daemon's error got what was left of the budget, and what the operator was handed ended
+    mid-word as though the command had stopped talking there. A reason that is a fragment
+    must not be readable as a reason that is a sentence — a person deciding whether to
+    paste this somewhere has no other way to tell.
+
+    Nothing here is about docker. What is asserted is that a LATER line outranks an
+    earlier one for the room available, which is true of the same stderr whatever wrote it.
+    """
+    connection = NodeConnection(NodeTarget(host=LOOPBACK, port=22, username="node"))
+    connection._connection = _Answering(f"{A_PROGRESS_LINE}\n{THE_DAEMONS_ERROR}\n")
+
+    with pytest.raises(NodeUnreachable) as caught:
+        await connection.run("docker compose up -d --remove-orphans")
+
+    said = str(caught.value)
+    # The diagnosis, from its start: a command writes what went wrong before the detail
+    # it went wrong on, so the head of the line is the part worth the room.
+    assert "Error response from daemon: failed to mount" in said, (
+        f"the daemon's own error lost the budget to a progress line: {said}"
+    )
+    # And the progress line did not take it.
+    assert "Creating" not in said, f"a progress line was shown instead: {said}"
+    # Both cuts are marked: one where the dropped line was, one where the kept line ends.
+    assert said.endswith("…"), f"the reason stops mid-word with nothing to say so: {said}"
+    assert "… Container" in said, (
+        f"a line was dropped from the front with nothing to say so: {said}"
+    )
+    assert "\n" not in said, said
+
+
+async def test_output_that_fits_is_not_marked_as_cut() -> None:
+    """The other side of the mark, without which it means nothing.
+
+    A mark on every answer is a mark that says nothing about this one, and the operator
+    who learns to ignore it is the operator the marked answer was for.
+    """
+    connection = NodeConnection(NodeTarget(host=LOOPBACK, port=22, username="node"))
+    connection._connection = _Answering("services must be a mapping\n")
+
+    with pytest.raises(NodeUnreachable) as caught:
+        await connection.run("docker compose up -d")
+
+    said = str(caught.value)
+    assert said.endswith("services must be a mapping"), said
+    assert "…" not in said, f"nothing was dropped and the answer says something was: {said}"

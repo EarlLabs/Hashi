@@ -87,8 +87,35 @@ _NO_SESSION_UNKNOWN = "could not establish an SSH session ({name})"
 # id, no knowledge of what docker prints: this module is the SSH channel and knows only
 # that it ran a command and the command failed. A filter written against one tool's
 # progress format is a filter that silently eats the next tool's error.
+#
+# AND THE CEILING IS SPENT FROM THE END, WITH THE CUT MARKED — M18's acceptance, round 2.
+# Taking the last three lines and then the first 300 characters OF THEM is two rules
+# pulling opposite ways, and the second won: a mount failure arrived as
+# ``Container hashi-node-wireguard-1 Creating; Container hashi-node-wireguard-1 Error
+# response from daemon: failed to mount ...`` ending on ``daemon/i``. The progress line
+# got the budget, the diagnosis got what was left, and the operator was given a sentence
+# that stops mid-word with nothing to say it had been cut.
+#
+# So the LAST line is served first and earlier ones only with what is left over, which is
+# the same reasoning that takes the tail in the first place — a tool prints its diagnosis
+# last — applied one level down. Within a single line the HEAD is kept instead, because
+# that is where a tool writes what went wrong before the detail it went wrong on; a line
+# too long for the ceiling is cut at the end, not at the front.
+#
+# Still nothing about docker, and still nothing about progress displays: "later lines
+# matter more, and the start of a line matters more than its end" is a fact about how
+# programs write to stderr, not about which program wrote it.
 _STDERR_LINES = 3
 _STDERR_MAX = 300
+
+# Where output was dropped, said rather than left to look like the end of the sentence.
+# One character, because this text is read inside a banner and inside ``state_detail``,
+# and a parenthetical explaining itself would cost more of the ceiling than it buys.
+#
+# It sits OUTSIDE ``_STDERR_MAX``, which bounds how much of the command's own output the
+# operator is shown: the mark is this module's word about that output, not part of it, so
+# a marked reason is the ceiling plus two characters rather than the ceiling minus two.
+_ELIDED = "…"
 
 
 class NodeUnreachable(Exception):
@@ -115,9 +142,35 @@ def _what_it_said(stderr: str) -> str:
     with carriage returns, and each rewrite becomes its own line here — so the final
     state of it survives and the states it passed through drop off the front with
     everything else that is not among the last few.
+
+    Built from the END backwards, so the ceiling is spent on the diagnosis rather than on
+    whatever the command was printing before it. Anything dropped — an earlier line, or
+    the tail of a line longer than the whole budget — leaves ``_ELIDED`` where it was, so
+    a reason that is a fragment cannot be read as a reason that is a sentence.
     """
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
-    return "; ".join(lines[-_STDERR_LINES:])[:_STDERR_MAX]
+    if not lines:
+        return ""
+
+    kept: list[str] = []
+    room = _STDERR_MAX
+    for line in reversed(lines[-_STDERR_LINES:]):
+        room -= len(line) + (2 if kept else 0)
+        if room < 0:
+            if not kept:
+                # The diagnosis alone is longer than the ceiling: keep its head, which is
+                # where the command says what went wrong, and mark the cut.
+                kept.append(line[: _STDERR_MAX - len(_ELIDED)] + _ELIDED)
+            break
+        kept.insert(0, line)
+
+    # One entry in ``kept`` per line of the original that reached the operator — the
+    # head-truncated one included, since it is still that line — so a shorter list is
+    # exactly "an earlier line is missing", and the mark goes where it went missing.
+    said = "; ".join(kept)
+    if len(kept) < len(lines):
+        said = f"{_ELIDED} {said}"
+    return said
 
 
 @dataclass(frozen=True)
