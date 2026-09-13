@@ -134,3 +134,15 @@ async def test_the_console_says_it_where_the_operator_pressed(
     # on a row that was enabled and then withdrawn; a node with nothing on it has no such
     # row, and every surface it does have says `enable`.
     assert "Enable a transport" in pressed.text, pressed.text
+    # AND WHAT THIS BUTTON CANNOT DO — the blocking finding of M18's acceptance, which
+    # walked the other way into this same sentence: a node with nothing enabled is one
+    # whose last transport may have been REMOVED, and removing it took the row off every
+    # screen without touching the daemon. With nothing to push, no apply is ever going to.
+    # An operator who removed it to cut people off and reads "nothing on the node was
+    # changed" concludes access is gone, which is the one reading this refusal must not
+    # allow.
+    assert "Whatever this host was last given it keeps running" in pressed.text, pressed.text
+    assert (
+        "Nothing else in this panel stops a node serving what it was last given"
+        in pressed.text
+    ), pressed.text
