@@ -242,11 +242,18 @@ DATA_PLANES = {
         # bare ``up <config>`` that was here before M2: this image declares no
         # entrypoint, so that was an argv beginning with a binary called ``up``.
         command=_wg_quick_command("wg-quick"),
-        # ``iptables`` is not in the command line — it is in the config's ``PostUp``,
-        # which this tool runs (M14, ``edge/egress.py``). Declared here because the
-        # consequence of the image not having it is the M2 failure exactly: the hook
-        # fails, wg-quick removes the interface it just made, and the container dies.
-        executables=("wg-quick", "iptables"),
+        # ``iptables`` and ``ip`` are not in the command line — they are in the config's
+        # ``PostUp``, which this tool runs (M14 and M3, ``edge/egress.py``). Declared
+        # here because the consequence of the image not having one of them is the M2
+        # failure exactly: the hook fails, wg-quick removes the interface it just made,
+        # and the container dies.
+        #
+        # ``ip`` was left undeclared from M3 until M19 — ``ip rule`` and ``ip route``
+        # have been in the hop's hooks since M3, and the check that reads this tuple
+        # would not have caught a future pin without ``iproute2``. It was left because
+        # the failure is LOUD rather than silent, and it is declared now because
+        # "loud" is a property of the day it happens, not a reason not to say so.
+        executables=("wg-quick", "iptables", "ip"),
         # ``wg-quick up /opt/hashi/conf/wireguard.conf`` brings up an interface named
         # ``wireguard`` — the config's own stem. So the transport's name reaches the
         # node's network namespace and has to be legal there.
@@ -263,10 +270,11 @@ DATA_PLANES = {
         # entrypoint script at all, so unlike its plain cousin it has never had anything
         # that could have worked.
         command=_wg_quick_command("awg-quick"),
-        # Same reason as its plain cousin above: the egress hooks M14 renders into the
-        # config are run by this tool, out of the file, and nothing about ``command``
-        # would ever reveal them.
-        executables=("awg-quick", "iptables"),
+        # Same reason as its plain cousin above: the egress hooks M14 and M3 render into
+        # the config are run by this tool, out of the file, and nothing about ``command``
+        # would ever reveal them. ``ip`` is the one the hop needs — ``ip rule`` and
+        # ``ip route`` under ``Egress.HOP`` — and this is the family that carries a hop.
+        executables=("awg-quick", "iptables", "ip"),
         # Same rule, same tool lineage — see the note on the format above.
         interface_from_config_filename=True,
         # A tunnel device cannot be created without these two, and nothing else is

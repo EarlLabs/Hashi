@@ -1841,7 +1841,7 @@ operator never believed it would.
 
 ---
 
-## → M18 — A node that cannot work says so before it fails · found in the field 2026-09-09
+## ✅ M18 — A node that cannot work says so before it fails · found in the field 2026-09-09 · done 2026-09-13 (acceptance: partial — one finding referred to the owner as M22)
 
 Three first-run experiences found during the field run, all the same shape: the
 product knows something the operator does not, and waits until apply to say it.
@@ -1892,7 +1892,7 @@ and ask whether it tells you which account to name.
 
 ---
 
-## → M19 — What a node needs that nothing checks · found in the field 2026-09-09
+## ✅ M19 — What a node needs that nothing checks · found in the field 2026-09-09 · done 2026-09-13 (acceptance: good)
 
 A node has kernel-level prerequisites that neither `scripts/node-bootstrap.sh`
 nor `edge/bootstrap/node_stack.py` asserts, because neither can: `/proc/sys` is
@@ -1949,12 +1949,44 @@ say `ready`. If no such host is available, say so rather than passing it.
 
 ---
 
-## → M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09
+## → M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09 · REOPENED AND QUEUED BY THE OWNER 2026-09-13
 
-**The owner has already decided not to fix this** (`docs/decisions.md`,
-2026-09-09: the image pin stays, the limitation is recorded). This milestone
-exists so the work is written down if that decision is ever revisited — it is
-**not** queued.
+**The owner reopened this on 2026-09-13 and chose the third option: retire the
+transport from the panel.** The earlier decision (`docs/decisions.md`,
+2026-09-09) was to keep the image pin and record the limitation, taken when the
+failure was a packaging *inference*. It has since been **measured twice on the
+live leaf** — once during the field run, and again on 2026-09-13 while designing
+M23 — so it stopped being a prediction.
+
+**What the owner asked for, in their own words (2026-09-13):**
+
+> *"just stop suggest the wireguard for users now"* … *"the admin panel do not
+> even should show this protocol, for me in suggestions"*
+
+So the requirement is **stronger than "not granted to friends"**: the operator
+must not be **offered** it when choosing a transport to enable. It should not
+appear in the suggestions on the enable dialog, nor anywhere the panel proposes
+a transport to add.
+
+**What must NOT change, and why each matters:**
+
+- **The package stays in the tree.** It is the second member of the
+  WireGuard family, and having two is what proves the charter's rule that
+  *transports are data — no `if transport ==`*. `AmbiguousPeerRoute` is tested
+  over both packages, and the contract tests iterate all four. Deleting it would
+  silently turn those into single-case tests and lose the guard against a
+  hardcoded protocol name. **The code is correct; the defect is one pinned
+  image.**
+- **The management tunnel is untouched.** `scripts/management-tunnel.sh` is
+  separate code, already uses the **obfuscated** wire format rather than plain
+  WireGuard (decided 2026-09-09, because *"this is the one tunnel that has to
+  work when everything else is being blocked"*), and has **no forwarding and no
+  NAT** — it carries traffic *to* the host, not *through* it — so this
+  milestone's failure mode structurally cannot reach it. The owner's admin
+  access is not affected by anything here.
+- **A row already enabled on a node keeps rendering.** Retiring it from the
+  suggestions must not break an existing row or an existing friend's config —
+  the leaf has one such row today. What stops is *offering it anew*.
 
 `masipcat/wireguard-go:0.0.20230223` ships `iptables` on the **legacy** backend;
 `amneziavpn/amneziawg-go:3.0.3` ships **nft**. Every node this project
@@ -1982,17 +2014,255 @@ So `amneziawg` is proven end to end and `wireguard` is proven broken as a
 friend-facing exit. **Note M17 independently makes it unusable for a fleet
 anyway**, for a reason that has nothing to do with netfilter.
 
-### M20.1 — Either pin a plain-WireGuard image on the nft backend, or render backend-aware rules, or retire the transport
+### M20.1 — Retire it from the panel's suggestions, by declaration and not by name
 
-The third is worth weighing seriously given M17: a transport that serves one
-friend and cannot forward is configurable and useful for nothing.
+**The owner chose the third option on 2026-09-13.** The first two — pinning an
+nft-backend image, or rendering backend-aware rules — remain written down above
+if the decision is ever revisited again.
+
+The transport must **declare** that it is not offered, and the panel must read
+that declaration. **No `if transport == "wireguard"` anywhere** — that is the
+charter's hard rule, and the whole point of the registry. A future transport
+found to be unusable should be retired by setting the same field, with no panel
+change at all.
+
+The declaration needs a reason attached, because a reader who finds a package in
+the tree that the panel never offers deserves to know why without going to
+`git log`.
 
 **Done when**
-- [ ] A friend on a plain `wireguard` transport reaches the internet on a `ufw`
-      host, or the transport no longer offers itself as a friend-facing exit.
+- [ ] Plain `wireguard` **does not appear in the panel's suggestions** when the
+      operator chooses a transport to enable, anywhere it could be proposed.
+- [ ] It is retired **by a declaration the registry carries**, not by a name
+      compared in the panel.
+- [ ] A `wireguard` row **already enabled on a node still renders** and an
+      existing friend's config is unchanged.
+- [ ] `AmbiguousPeerRoute` and the transport-contract tests **still run over both
+      WireGuard-family packages** — retiring it must not quietly reduce them to
+      one case.
+- [ ] `scripts/management-tunnel.sh` is untouched and still works.
 
 acceptance: yes
-The same measurement as above, on a ufw host, with the answer changed.
+Open the panel as the operator and go to enable a transport on a node. Plain
+WireGuard must not be among the choices. Then confirm the node that already has
+a `wireguard` row still renders it, and that nothing about the management tunnel
+changed.
+
+---
+
+## → M23 — Walk the whole platform on the real hosts, and loop until nothing blocks · asked for by the owner 2026-09-13
+
+**Approved by the owner in conversation on 2026-09-13**, in these words: *"create
+another one milestone that would verify all features of the platform on real
+hosts… U also can create a checker container on current machine that will try to
+connect via tunnel to the leaf amsterdam node… If the agent would find a bug it
+should text it into a separate block on the milestone and after finish testing
+immediately fix all findings and do an acceptance review one more time… do it on
+a loop while the blocker/high bugs would not be fixed."*
+
+**Why it exists.** Six milestones in this plan closed with acceptance **partial**,
+every one of them for the same reason: *the stand has no data plane, no tunnel and
+no second host.* `make verify` cannot prove a tunnel carries a packet, and this
+project's most expensive defects have all been of one shape — **every signal
+green, nothing carried.** M14 found it in the field. The probe (M22) has it now.
+The charter names it as the failure that hurts most, because it is the one where
+the operator stops looking.
+
+This milestone is the answer: **stop inferring, and go and look.**
+
+### What is reachable, and what is not — settled before any work starts
+
+| | reachable | how |
+|---|---|---|
+| **Leaf, Amsterdam** | **yes, fully** | root SSH works from this machine |
+| **Entry, Russia** | **no** | refuses this machine's key; takes keys from cloud metadata. Observable only *from the leaf* — the hop's handshake age and byte counters |
+| **Pushing new configs** | **no** | applying needs the nodes' secrets, which live only in the owner's production control plane. A fresh control plane mints **new** keys; applying that would rewrite `amneziawg.conf` with a key the entry does not know and **cut the live hop out of Russia**, with no second route back |
+
+**So the checker dials what is already deployed.** It does not apply, and it does
+not replace a config.
+
+### The one rule that governs every step
+
+**`amneziawg.conf` on the leaf is the live entry→leaf hop and it carries the
+owner's real traffic.** Nothing in this milestone touches it. Every check is
+either read-only, or confined to the **friend-facing `wireguard` row** — which is
+idle (last handshake days old, ~1 KiB moved) and is the safe subject.
+
+A test peer is added with **`wg set` at runtime**, never by editing a file: it is
+additive, it disturbs no existing peer, and it is gone on the next restart even if
+cleanup fails. **Every step that writes anything must be undone in a `finally`.**
+
+And the charter's hard record still holds, on the hosts as in the tree: **look, do
+not keep.** No capture is written to disk on either host, and nothing that names a
+destination is recorded anywhere.
+
+### M23.0 — The transport to test is `amneziawg`, and `wireguard` is not a fair subject
+
+**Measured on the leaf, 2026-09-13, before the walk was designed** — and it
+changes what M23 can honestly test:
+
+```
+ufw:          active
+iptables:     v1.8.7 (nf_tables)
+
+legacy table: -P FORWARD ACCEPT
+              -A FORWARD -i wireguard -j ACCEPT      <- plain WireGuard's rules
+nft table:    -P FORWARD DROP                        <- ufw's policy
+              -A FORWARD -i amneziawg -j ACCEPT      <- amneziawg's rules
+```
+
+Both backends register hooks at the same kernel point and a packet traverses
+**both**. `amneziawg`'s ACCEPT is in the same table as ufw's `DROP` and front-runs
+it. **`wireguard`'s ACCEPT is in the legacy table and cannot**, so a friend's
+traffic on that row is dropped — handshake completes, nothing moves, nothing
+logged.
+
+**This is M20, observed rather than predicted**, and the owner decided on
+2026-09-09 to record it rather than fix it. So:
+
+- **A failure to carry traffic on the `wireguard` row is NOT a finding.** It is
+  the known limitation, and reporting it as a bug would be noise. The walk records
+  it as *confirmed on real hardware* and moves on.
+- **`amneziawg` is the subject**, because it is the transport the runbook mandates
+  for the hop, recommends for Shape A, and is proven on this host right now.
+
+### M23.1 — Stand up a checker that is a real client, not a simulation
+
+A container on this machine holding a **real AmneziaWG client**, a keypair minted
+for the test, and nothing else.
+
+**It does not join the existing hop interface.** That interface is
+`10.90.0.2/30` — a `/30` holds two usable addresses and both are taken — and it
+carries the owner's real traffic. Instead the walk brings up a **second,
+throwaway `amneziawg` interface on the leaf**, on a spare port and its own
+network, existing only for the test and torn down in a `finally`.
+
+That also makes the walk prove something no stand could: **two AmneziaWG
+instances on one node, binding two ports, side by side** — which is M15's
+uniqueness decision, and field-checklist item 3.
+
+It must be a client the way a friend's device is a client: it completes a real
+handshake with the real daemon on the real host, over the real internet.
+
+### M23.2 — Walk every feature that only a real tunnel can answer
+
+Each of these is a line some milestone had to record as *"could not — needs the
+field"*. They are now answerable:
+
+- **A packet goes through.** Handshake completes, and traffic moves in **both**
+  directions — `wg show` transfer counters non-zero each way, not just a handshake.
+- **The exit is the leaf.** From inside the tunnel, the public address seen by the
+  outside world is the leaf's, not this machine's.
+- **Two friends at once, at two addresses** (M17's whole subject, and its
+  outstanding field item). Two peers, two distinct `/32`s, **both carrying
+  traffic, neither seeing the other's return traffic.**
+- **A revoked friend actually stops.** Remove one peer; that tunnel dies and the
+  other keeps working.
+- **DNS goes where M16 says it goes** — and, on the entry side, that a friend's
+  lookup does not leave the entry's own interface. *(Bounded by the entry being
+  unreachable: what can be established from the leaf is recorded, and what cannot
+  is named.)*
+- **The hop is still healthy afterwards.** The entry↔leaf handshake age and byte
+  counters must be moving at the end of the walk exactly as they were at the
+  start. **This is the safety check, and it runs first and last.**
+- **Orphaned key material** (field-checklist item 1) — already confirmed once by
+  M18's acceptance; confirm it on the real leaf.
+- **The Xray log stays silent about names**, and nothing anywhere records a
+  connection, a destination or a friend.
+
+### M23.3 — The loop
+
+**This is the part the owner asked for explicitly.**
+
+1. Walk everything in M23.2 on the real hosts.
+2. **Write every finding into the findings block below**, in the milestone itself —
+   severity, what was observed, and the exact command that observed it.
+3. When the walk is finished, **immediately fix every finding** that is not out of
+   scope.
+4. **Run the acceptance walk again**, on the real hosts.
+5. **Repeat from 1 while any BLOCKING or HIGH finding is open.**
+
+Stop the loop only when a full walk produces **no blocking and no high finding**,
+or when a finding cannot be fixed without work this milestone does not name — in
+which case it is written up as its own proposed milestone, the way M22 was, and
+the loop continues on the rest.
+
+**Done when**
+- [ ] A real client completes a real handshake with the real leaf and carries
+      traffic both ways.
+- [ ] Two friends hold two addresses on one transport and both work, with neither
+      seeing the other's return traffic.
+- [ ] Revoking one stops that one and leaves the other untouched.
+- [ ] The entry↔leaf hop is provably unharmed — handshake and counters moving at
+      the end as at the start.
+- [ ] Every finding is recorded in the block below, and no BLOCKING or HIGH
+      finding is open.
+- [ ] Nothing on either host was left changed: no test peer, no file, no capture.
+
+acceptance: yes
+On the real hosts, with a real client: a friend connects, carries traffic, exits
+at the leaf, and a second friend does the same at their own address. Then one is
+revoked and stops while the other does not. The hop that carries all of it is
+untouched throughout.
+
+### Findings — written here as they are found
+
+*(empty until the first walk)*
+
+---
+
+## → M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · APPROVED BY THE OWNER 2026-09-13
+
+**Proposed by the autopilot run on 2026-09-13 and approved by the owner the same
+day** ("m22 yes"). Written down separately because the run declined to build it
+inside M18: the owner's own rule is that a milestone needing work the plan does
+not mention is a new milestone to approve, not a bigger one to finish.
+
+**Ordered before M23**, because M23 walks the real hosts and will use the probe
+to ask whether a node is actually serving. A walk carrying a lying instrument
+measures nothing.
+
+**What was measured.** On a real applied host, `vless-ws-tls` was crash-looping —
+exiting 23 every second on a missing certificate file — with nothing listening on
+its port. The panel answered **"realhost is serving amneziawg, vless-ws-tls" on
+six consecutive probes.** With the same container **fully stopped**, the probe is
+correct. So `Restarting` counts as serving: the probe measures that a container
+*exists*, not that it works.
+
+**Why it matters more than it sounds.** The probe is the operator's **only**
+oracle for *is this node actually working*. A certificate path that is not there
+yet is an ordinary first-run mistake — exactly the moment the operator most needs
+a true answer. And it is the same shape as **M14**: handshake completes, nothing
+moves; every signal green, nothing carried. The charter treats that shape as the
+one that hurts most, because it is the one where the operator stops looking.
+
+**Why it is not a patch.** The work is a decision before it is code:
+
+### M22.1 — Decide what "serving" means
+Four candidate answers, each with a different cost and a different failure mode:
+the container **exists**; the container is **running** (not restarting); something
+is **listening on the port**; a peer has **handshaked**. The last is the only one
+that answers the operator's real question, and the only one that cannot be
+answered without touching the data plane — which `edge` may not do.
+
+### M22.2 — Whatever is chosen, say it where the operator reads it
+A probe that answers "running" must not be read as "working". If the honest
+answer is narrower than the question, the wording carries that, the way M18's
+refusals now carry what they cannot know.
+
+### M22.3 — A successful probe must be visible
+Acceptance clicked probe four times, waiting 2, 3, 4 and 8 seconds, and **no
+success banner ever appeared** — while every *failing* probe's banner appeared at
+the same waits. An oracle nobody can read is not an oracle.
+
+**Done when**
+- [ ] A transport that is restarting, or listening on nothing, is not reported as serving.
+- [ ] What the probe actually checked is written where the operator reads the answer.
+- [ ] A successful probe is as visible as a failing one.
+
+acceptance: yes
+Break a transport's config so its container crash-loops, then press probe. The
+answer must not say the node is serving it.
 
 ---
 

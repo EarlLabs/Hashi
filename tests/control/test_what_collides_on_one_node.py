@@ -986,8 +986,17 @@ async def test_removing_from_the_console_says_what_the_node_is_still_running(
     confirmation = await client.get(f"/panel/transports/{row['id']}/remove")
     assert confirmation.status_code == 200
     assert f'hx-post="/panel/transports/{row["id"]}/remove"' in confirmation.text
-    # It states the reach before the press: what goes, and what stays running.
-    assert "apply the node" in confirmation.text
+    # It states the reach before the press: what goes, and what stays running. This node
+    # has one transport, so it is the arm that says no apply will stop the host — M18's
+    # acceptance; both arms are pinned in tests/control/test_the_console.py.
+    assert "is refused" in confirmation.text
+    # What stays running, said for a node nothing was ever pushed to — which is what this
+    # suite can build, there being no host in it. The applied form of the same sentence is
+    # pinned in tests/control/test_the_console.py. Flattened, because the dialog's prose is
+    # wrapped at the template's own width and where it wraps is allowed to move.
+    assert "whatever it was last given it keeps running" in " ".join(
+        confirmation.text.split()
+    )
     assert "withdraw it instead" in confirmation.text
 
     removed = await client.post(f"/panel/transports/{row['id']}/remove")

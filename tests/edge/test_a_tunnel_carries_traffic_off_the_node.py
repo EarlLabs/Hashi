@@ -296,3 +296,77 @@ def test_a_local_exit_over_ipv6_is_refused_rather_than_half_rendered() -> None:
 def test_no_exit_over_ipv6_is_not_refused() -> None:
     """The refusal is about the RULE, not about the address family in general."""
     assert wg_quick_hooks(Egress.NONE, "fd00:44::1/64") is None
+
+
+# --- M19.3: a hook that runs a program the image may not have ----------------------
+
+# The data planes whose tool runs these hooks, derived the same way ``WG_FAMILY`` is: a
+# hook line only ever reaches a tool that reads a wg-quick-style config, and that tool is
+# identified by the rule M2 wrote down rather than by a list of names here.
+WG_QUICK_DATA_PLANES = sorted(
+    {
+        config_format: plane
+        for config_format, plane in DATA_PLANES.items()
+        if plane.interface_from_config_filename
+    }.items()
+)
+
+# A tunnel address and the way out that runs through it, for the two policies that render
+# a hook. Documentation ranges, like every fixture in this zone; neither value reaches an
+# assertion, they are only what the rules are built from.
+A_TUNNEL = "10.44.0.1/24"
+ITS_OWN_ADDRESS = "10.44.0.1"
+
+
+def programs_a_hook_runs(hooks) -> set[str]:
+    """Every program one hook pair invokes, up and down, as bare command names.
+
+    ``argv[0]`` of each statement in the line — the same reading ``/bin/sh`` does when
+    wg-quick hands it the hook. ``|| true`` is stripped first, so a teardown's tolerance
+    is not mistaken for a second command.
+    """
+    found = set()
+    for line in (hooks.up, hooks.down):
+        for command in commands(line):
+            found.add(command.split("||", 1)[0].split()[0])
+    return found
+
+
+@pytest.mark.parametrize("egress", list(Egress))
+@pytest.mark.parametrize("config_format, data_plane", WG_QUICK_DATA_PLANES)
+def test_every_program_a_hook_runs_is_declared_on_the_data_plane(
+    egress: Egress, config_format, data_plane
+) -> None:
+    """The hooks run programs, and only ``DataPlane.executables`` says which — M19.3.
+
+    Nothing about ``command`` reveals them: the tool reads the hook out of the config
+    file and hands it to a shell, so an image without the program fails a container at a
+    time, inside a script, with an error that reads as a config problem. The declaration
+    is what ``tests/edge/test_every_data_plane_command_is_executable.py`` holds against
+    the real image, and it is only as good as its completeness.
+
+    ``ip`` is why this exists. M3 put ``ip rule`` and ``ip route`` into the hop's hooks
+    and left the declaration alone, so for sixteen milestones the offline check would
+    have passed a pinned image with no ``iproute2`` in it. Derived from the rendered
+    rules rather than listed, so the next policy that reaches for a new program is
+    covered by arriving — which is the half M3 could not have got right by remembering.
+
+    Parametrised over the whole of ``Egress`` for the same reason: it is a closed
+    vocabulary, and a fourth value is a fourth set of hooks.
+    """
+    hooks = wg_quick_hooks(
+        egress, A_TUNNEL, exit_via=ITS_OWN_ADDRESS if egress is Egress.HOP else None
+    )
+    if hooks is None:
+        # The policy renders no hook at all, so it invokes nothing. Asserted rather than
+        # skipped: "no hooks" is the fail-closed answer and a test that skipped here
+        # would stop noticing if it changed.
+        assert egress is Egress.NONE, f"{egress} renders no hook and is not the no-exit policy"
+        return
+
+    for program in programs_a_hook_runs(hooks):
+        assert program in data_plane.executables, (
+            f"the {egress} hooks run {program!r} and the data plane for {config_format} "
+            f"does not declare it, so nothing holds it against the image that would run "
+            f"it: {data_plane.executables}"
+        )

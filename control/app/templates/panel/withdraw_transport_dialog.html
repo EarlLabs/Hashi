@@ -14,8 +14,31 @@
   radii; revocation destroys that person's material everywhere, and it is on the Users
   screen. Naming it here is what keeps an operator from reaching for this one.
 
+  THE HALF THAT TURNED OUT TO BE FALSE — M18's acceptance. "until the node is applied
+  without them" is a promise about an apply that, on the node's LAST enabled row, never
+  comes: rendering nothing is refused (apply.NOTHING_LEFT_TO_APPLY), so the operator who
+  withdraws to cut somebody off, presses apply and reads "nothing on the node was changed"
+  has every reason to believe access is gone. It is not. The second arm below says so
+  before the press, in the same place the plain one does, and it names the only way out
+  the product has along with what that costs.
+
+  It says WHATEVER THIS NODE IS ALREADY SERVING rather than "it keeps serving this
+  transport", which is the same fact on an applied node and not a claim at all on one
+  nothing was ever pushed to. The row's own standing sentence and the toast still make
+  the stronger claim; that is the same defect one surface over and is recorded rather
+  than widened here.
+
+  AND IT IS NOT SAID AT ALL ON A NODE NOTHING HAS EVER REACHED — M18's acceptance, round
+  2, which read that sentence unchanged on a node whose address does not resolve while
+  the apply refusal one press away opened "No transport on this node has ever been
+  applied". ``never_applied_here`` is the column that refusal reads, so the two agree by
+  construction, and the arm it selects claims only what the ROWS can support: that
+  nothing this panel holds has ever been pushed. Not that the host is serving nobody —
+  a removed row takes its stamp away with it, and what is on the host is not visible
+  from here.
+
   No key material is named and none could be: this dialog's whole context is one OfferRow,
-  which carries a name, a standing and an id.
+  which carries a name, a standing, a flag and an id.
 #}
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
@@ -26,6 +49,25 @@
       re-imports anything. You can offer it again from the same place, and their link
       does not move either way.
     </div>
+    {% if offer.nothing_else_enabled %}
+    <div class="dialog-body text-muted">
+      This is the last transport enabled on {{ offer.node }}, so the apply that would
+      stop the host serving it is refused: with nothing left to push, an apply changes
+      nothing on the node.
+      {%- if offer.never_applied_here %}
+      No transport on {{ offer.node }} has ever been applied, so what its host is running
+      is not something this panel can tell you — whatever it was last given it keeps
+      running, and an apply cannot change that while there is nothing to push.
+      {%- else %}
+      Whatever {{ offer.node }} is already serving it keeps serving, and a configuration
+      somebody has already fetched keeps working while it does.
+      {%- endif %}
+      The way out is to offer this transport again — which puts it back in every user's
+      link — and apply; nothing else in this panel stops a node serving what it was last
+      given. To take one person's access away instead, revoke them on the Users screen —
+      that is a different action with a different reach.
+    </div>
+    {% else %}
     <div class="dialog-body text-muted">
       The node keeps serving it until you apply the node: this changes what this panel
       hands out, not what the host is running, so anyone already holding a fetched
@@ -33,6 +75,7 @@
       instead, revoke them on the Users screen — that is a different action with a
       different reach.
     </div>
+    {% endif %}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"

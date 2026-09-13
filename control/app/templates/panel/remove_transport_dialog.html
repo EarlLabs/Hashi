@@ -20,10 +20,43 @@
   the only action that gives them back to the node. An operator who followed the runbook
   into a collision is reading this dialog to get out of it.
 
+  AND ON THE NODE'S LAST ENABLED ROW THE SECOND OF THOSE WAS FALSE — M18's acceptance.
+  "until it is applied" is a promise about an apply that never comes: a node rendering
+  nothing is refused (apply.NOTHING_TO_APPLY_YET), so the operator who removes the last
+  transport to cut everybody off, presses apply and reads "nothing on the node was
+  changed" concludes access is gone while the container is still up and still
+  authorising everyone who held a credential on it. Measured on a real applied host.
+
+  The second arm below says so before the press, and its way out is NOT the withdrawal
+  dialog's: a removed row cannot be offered back, so what is owed here is enabling a
+  transport on this node and applying that — which is what takes the removed one's
+  service away with it, since the apply brings the node's compose file down to what is
+  enabled now.
+
+  It says WHATEVER THIS NODE IS ALREADY SERVING rather than "it keeps serving this
+  transport": the same fact on an applied node, and not a claim at all on one nothing was
+  ever pushed to. The row's own standing sentence and the toast still make the stronger
+  claim; that is the same defect one surface over and is recorded rather than widened.
+
+  AND IT IS NOT SAID AT ALL ON A NODE NOTHING HAS EVER REACHED — M18's acceptance, round
+  2. "Whatever this node is already serving it keeps serving, and a configuration somebody
+  has already fetched keeps working while it does" was byte-for-byte identical on a node
+  really serving the transport and on one whose address does not even resolve, while the
+  apply refusal one press away opened "No transport on this node has ever been applied".
+  Two surfaces, same node, different stories — and the operator deciding whether to press
+  is reading this one.
+
+  ``never_applied_here`` is the same column that refusal reads, so the two agree by
+  construction. What the arm it selects says is deliberately weaker than "the host is
+  serving nobody": a removed row takes its stamp with it, so all this panel can honestly
+  claim is that nothing IT holds has ever been pushed, and what is on the host is not
+  something it can see from here.
+
   The title is offer.transport, which is services/console.py's placed_as: on a node
   running two instances of one protocol it reads `amneziawg (amneziawg-2)`, so the
   confirmation cannot name the wrong one of two. No key material is named and none could
-  be — the whole context is one OfferRow, which carries a name, a standing and an id.
+  be — the whole context is one OfferRow, which carries a name, a standing, a flag and
+  an id.
 #}
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
@@ -41,11 +74,30 @@
       To take it out of every user's link but keep the row, its material and its place on
       the node, withdraw it instead — that one is reversible.
     </div>
+    {% if offer.nothing_else_enabled %}
+    <div class="dialog-body text-muted">
+      This is the last transport enabled on {{ offer.node }}, so the apply that would
+      stop the host serving it is refused: with nothing left to push, an apply changes
+      nothing on the node.
+      {%- if offer.never_applied_here %}
+      No transport on {{ offer.node }} has ever been applied, so what its host is running
+      is not something this panel can tell you — whatever it was last given it keeps
+      running, and an apply cannot change that while there is nothing to push.
+      {%- else %}
+      Whatever {{ offer.node }} is already serving it keeps serving, and a configuration
+      somebody has already fetched keeps working while it does.
+      {%- endif %}
+      A removed row cannot be offered back, so the way out is to enable a transport on
+      {{ offer.node }} and apply that — nothing else in this panel stops a node serving
+      what it was last given.
+    </div>
+    {% else %}
     <div class="dialog-body text-muted">
       The node keeps serving it until you apply the node: this changes what this panel
       holds and hands out, not what the host is running, so anyone already holding a
       fetched configuration keeps connecting on it until then.
     </div>
+    {% endif %}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"

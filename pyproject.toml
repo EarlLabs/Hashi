@@ -118,4 +118,10 @@ testpaths = ["tests"]
 # Without importlib mode, two test modules with the same basename in different
 # directories (tests/control/test_scaffold.py and tests/edge/test_scaffold.py, or
 # two zones' e2e scenarios) collide with "import file mismatch".
-addopts = "--import-mode=importlib"
+#
+# `-rs` because this project's zone rulebook asks a test that cannot run to skip LOUDLY,
+# and every target here runs pytest with `-q`, under which a skip is one dot and a number
+# in a summary line nobody reads. A scenario that quietly stops running is the failure
+# `make verify` was created to end — the e2e suite had one for eleven milestones — and it
+# now costs one printed reason per skip to see it.
+addopts = "--import-mode=importlib -rs"

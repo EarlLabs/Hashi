@@ -172,14 +172,21 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
     rewording a `say` line therefore turns this red, which is the point — the wording is a
     contract between the two files, not a description of one by the other.
 
-    The script's lines are compared with its two shell variables expanded the way the run
+    The script's lines are compared with its shell variables expanded the way the run
     expands them, because M13 gave the closing lines a path and an account name that are
-    values rather than words. The substitution is the runbook's own convention for a
-    transcript of output — angle brackets — and nothing else here is normalised: a
-    reworded sentence is still a reworded sentence.
+    values rather than words, and M19 gave one of them the key file. The substitution is
+    the runbook's own convention for a transcript of output — angle brackets — and nothing
+    else here is normalised: a reworded sentence is still a reworded sentence.
+
+    Every variable a quoted line carries has to be in that list, and the one missed cost
+    exactly what this test exists to prevent: M19's new line was the only sentence in the
+    sample transcript nothing held, because ``${KEYS_FILE}`` was not normalised and so the
+    line could not be quoted below.
     """
-    as_the_operator_sees_it = script.replace("${NODE_ROOT}", "/opt/hashi").replace(
-        "${TARGET_USER}", "<user>"
+    as_the_operator_sees_it = (
+        script.replace("${NODE_ROOT}", "/opt/hashi")
+        .replace("${TARGET_USER}", "<user>")
+        .replace("${KEYS_FILE}", "<the account's ~/.ssh/authorized_keys>")
     )
     for quoted in (
         # success, and what to do next
@@ -208,6 +215,12 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
         "/opt/hashi was already here before this run — whatever an earlier apply left in "
         "it, this run neither read, changed nor removed it; it now belongs to <user> "
         "along with the directory, so an apply as that account can replace it",
+        # M19: the one line the run prints about the check that replaced reading the key
+        # file back. It names the file, so the operator can see WHICH file sshd said it
+        # reads — which is the whole content of the check, and a paraphrase of it on this
+        # page would leave them comparing two different sentences.
+        "sshd reads <the account's ~/.ssh/authorized_keys>, so a key installed there is "
+        "one it will consult",
         # the boundary the run ends on
         "the provider's own firewall sits in front of this host and outside this script's "
         "reach",

@@ -48,12 +48,14 @@ than a class name or a traceback (``assert_plain_reason``), and the reason store
 logged and answered are the same one.
 """
 
+import datetime
 import logging
 
 import pytest
 
 from control.app.errors import Conflict, NodeOperationFailed, NothingToApply
 from control.app.models import NodeState
+from control.app.panel import wording
 from control.app.services import apply, nodes
 from edge.bootstrap import NodeUnreachable
 
@@ -347,6 +349,28 @@ async def an_empty_node(client, ssh) -> str:
     )).json()["id"]
 
 
+async def as_though_it_had_been_applied(session, node_transport_id: str) -> None:
+    """Stamp a row the way a SUCCESSFUL push does — M18's acceptance.
+
+    ``applied_at`` is the only record this product keeps of a config having reached a
+    host, and nothing in this zone's suite can produce one honestly: a real push needs a
+    node, and the whole point of the fixtures here is that there is not one. So it is
+    written directly, which is exactly what ``apply_node`` does at the end of its happy
+    path (``node_transport.applied_at = now``) and nothing else in the codebase does.
+
+    The digest goes with it because the pair is meaningless apart — the drift cell reads
+    the digest and the refusal reads the stamp, and a row carrying one without the other
+    is a state no apply can leave behind.
+
+    Committed, because the assertions that follow go through ``client``, which holds its
+    own session.
+    """
+    row = await nodes.get_node_transport(session, node_transport_id)
+    row.applied_at = datetime.datetime.now(datetime.UTC)
+    row.applied_digest = "0" * 64
+    await session.commit()
+
+
 async def test_applying_a_node_with_nothing_enabled_is_refused_not_failed(
     client, session, refusing_ssh
 ) -> None:
@@ -362,8 +386,14 @@ async def test_applying_a_node_with_nothing_enabled_is_refused_not_failed(
     # The sentence names what is missing and what to do about it. Asserted on the two
     # things it must contain rather than on the whole string, so it can be reworded.
     assert "no transports enabled" in raised.value.message
-    assert apply.WHERE_TO_RETRY in raised.value.message, (
-        "the refusal does not say where to go and offer the node a transport"
+    # Where to go is the console's own words and is added at the panel boundary — M18's
+    # acceptance, round 2: this same sentence is answered to an API caller, who has no
+    # screen. What the SERVICE owes is the action.
+    assert apply.ENABLE_ONE_HERE in raised.value.message, (
+        "the refusal does not say to enable a transport on the node"
+    )
+    assert apply.WHERE_TO_RETRY in wording.for_the_page(raised.value.message), (
+        "the console's version of the refusal does not say where to go and do it"
     )
     # And it is not the old answer: nothing about YAML, the compose file, or the daemon.
     for leaked in ("mapping", "compose", "docker", "yml"):
@@ -379,22 +409,16 @@ async def test_applying_a_node_with_nothing_enabled_is_refused_not_failed(
     assert node.state_detail is None, node.state_detail
 
 
-async def test_a_serving_node_whose_last_transport_was_withdrawn_keeps_serving(
-    client, session, reality_params, refusing_ssh
-) -> None:
-    """The case that decides where the refusal is raised, rather than merely that it is.
+async def a_node_with_one_transport(client, refusing_ssh, reality_params, name: str):
+    """A node, one friend-facing transport on it, and the node set serving.
 
-    An ``active`` node that is applied after its only transport is withdrawn renders
-    nothing. Marking it degraded would take it out of ``nodes.serving_transports`` and so
-    out of every subscription — for a mistake at the console, on a host that is still up
-    and still serving the config it was last given. The refusal therefore lives where a
-    render failure already did, outside ``apply_node``'s try blocks, and the property
-    worth pinning is that the node's recorded state does not move.
+    Shared by the three tests below, which differ only in what they do to that row and
+    in what the refusal is then allowed to claim.
     """
     node_id = (await client.post(
         "/api/nodes",
         json={
-            "name": "withdrawn-everything",
+            "name": name,
             "address": ADVERTISED_ADDRESS,
             "location_label": "Testland",
             "ssh_host": refusing_ssh.host,
@@ -409,8 +433,32 @@ async def test_a_serving_node_whose_last_transport_was_withdrawn_keeps_serving(
     assert (await client.post(
         f"/api/nodes/{node_id}/state", json={"state": "active"}
     )).status_code == 200
+    return node_id, enabled.json()["id"]
+
+
+async def test_a_serving_node_whose_last_transport_was_withdrawn_keeps_serving(
+    client, session, reality_params, refusing_ssh
+) -> None:
+    """The case that decides where the refusal is raised, rather than merely that it is.
+
+    An ``active`` node that is applied after its only transport is withdrawn renders
+    nothing. Marking it degraded would take it out of ``nodes.serving_transports`` and so
+    out of every subscription — for a mistake at the console, on a host that is still up
+    and still serving the config it was last given. The refusal therefore lives where a
+    render failure already did, outside ``apply_node``'s try blocks, and the property
+    worth pinning is that the node's recorded state does not move.
+
+    THE ROW IS STAMPED APPLIED — M18's acceptance. It was not, and the sentence this test
+    asserts claims the host is still serving everyone who holds a credential: true of a
+    node a config actually reached, false of one nothing was ever pushed to, and this
+    test was pinning it on the second. The node the field walks is the first.
+    """
+    node_id, row_id = await a_node_with_one_transport(
+        client, refusing_ssh, reality_params, "withdrawn-everything"
+    )
+    await as_though_it_had_been_applied(session, row_id)
     withdrawn = await client.post(
-        f"/api/transports/{enabled.json()['id']}/state", json={"enabled": False}
+        f"/api/transports/{row_id}/state", json={"enabled": False}
     )
     assert withdrawn.status_code == 200, withdrawn.text
 
@@ -438,6 +486,103 @@ async def test_a_serving_node_whose_last_transport_was_withdrawn_keeps_serving(
     )
 
 
+async def test_a_withdrawn_row_nothing_was_ever_pushed_to_is_not_said_to_be_serving(
+    client, reality_params, refusing_ssh
+) -> None:
+    """The twin of the test above, on the node the sentence was false about — M18.
+
+    Same shape, one difference: no config ever reached this host. The Users screen calls
+    such a fleet "No node is serving yet" and the node's own drift cell says `never
+    applied`, and the refusal was telling the operator, in the same breath, that the host
+    is "still serving everyone who holds a credential on it". Both cannot be true, and it
+    is the refusal that is wrong: an unapplied host is running nothing of ours.
+
+    What replaces it claims nothing about who is authorised — it says what is true of
+    both kinds of node, that an apply with nothing to push changes nothing on the host —
+    because ``applied_at`` on the rows that are STILL HERE is the only evidence available
+    and its absence is not evidence of the opposite (a removed row takes its stamp with
+    it).
+    """
+    node_id, row_id = await a_node_with_one_transport(
+        client, refusing_ssh, reality_params, "never-pushed-to"
+    )
+    withdrawn = await client.post(
+        f"/api/transports/{row_id}/state", json={"enabled": False}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
+    for claim in (
+        "still serving everyone who holds a credential on it",
+        "still running the config it was last given",
+    ):
+        assert claim not in said, (
+            f"a node nothing was ever pushed to is told {claim!r}, which contradicts its "
+            f"own drift cell and the Users screen: {said}"
+        )
+    assert "No transport on this node has ever been applied" in said, said
+    # The way out is still the withdrawn one — the row is there to be offered back — and
+    # it still carries what that costs.
+    assert "back in every user's link" in said, said
+    # And the judgement that holds on every one of these three sentences: an apply is not
+    # what stops a node serving, and nothing else here is either. In the API's words,
+    # because this is the API's answer — the console reads the same fact as "this panel".
+    assert apply.NOTHING_STOPS_A_SERVING_HOST in said, said
+    assert (await client.get(f"/api/nodes/{node_id}")).json()["state"] == "active"
+
+
+async def test_removing_the_last_transport_does_not_promise_an_apply_that_stops_it(
+    client, session, reality_params, refusing_ssh
+) -> None:
+    """The BLOCKING finding of M18's acceptance, at the surface it was measured on.
+
+    Removing a node's last transport leaves it with no rows at all, so the apply that
+    follows is answered by the never-enabled sentence — which said only that nothing on
+    the node was changed and sent the operator off to enable something. On a real applied
+    host, acceptance then watched ``docker ps`` show the container still up, the config
+    still on disk, and the panel's own probe answer that the node is serving the
+    transport whose row had just been deleted. An operator who removed it to cut everyone
+    off, pressed apply and read "nothing on the node was changed" has been told the
+    opposite of what happened.
+
+    The row is stamped applied first so the scenario is the field's rather than a draft's
+    — although the sentence deliberately does not depend on that, because the stamp is
+    deleted with the row and this refusal can never know.
+    """
+    node_id, row_id = await a_node_with_one_transport(
+        client, refusing_ssh, reality_params, "removed-everything"
+    )
+    await as_though_it_had_been_applied(session, row_id)
+    removed = await client.delete(f"/api/transports/{row_id}")
+    assert removed.status_code == 200, removed.text
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
+    # It is the empty-node sentence, because the row is gone — and it now carries what
+    # its withdrawn sibling carries: what an apply will and will not do to the host.
+    assert "no transports enabled" in said, said
+    assert "removed here to cut people off, removing it did not stop the host" in said, said
+    assert apply.NOTHING_STOPS_A_SERVING_HOST in said, said
+    # AND IT DOES NOT DESCRIBE A PUSH IT CANNOT KNOW HAPPENED — M18's acceptance, round 2.
+    # This same sentence is the answer on a node nothing ever reached, where "whatever
+    # this host was last given it keeps running" reads as a report about a config that was
+    # delivered; the walk read it on a host whose address does not resolve. The evidence
+    # is the ``applied_at`` on the row this action deleted, so the honest answer is that
+    # it cannot be answered from here — and it says which record went missing, because an
+    # operator who is not told why will assume the panel knows and is being coy.
+    assert "cannot be answered from here" in said, said
+    assert "a removed transport takes the record of its own apply away with it" in said, said
+    # Unchanged: this is still not a failure and the node is still not degraded.
+    shown = (await client.get(f"/api/nodes/{node_id}")).json()
+    assert shown["state"] == "active", shown
+    assert shown["state_detail"] is None, shown
+
+
 async def test_the_api_says_nothing_to_apply_rather_than_a_bad_gateway(
     client, refusing_ssh
 ) -> None:
@@ -453,6 +598,44 @@ async def test_the_api_says_nothing_to_apply_rather_than_a_bad_gateway(
 
     assert refused.status_code == 409, refused.text
     assert refused.json()["error"]["code"] == "nothing_to_apply", refused.text
+
+
+async def test_the_api_and_the_console_are_told_where_to_go_in_their_own_words(
+    client, refusing_ssh
+) -> None:
+    """One refusal, two readers, and only the directions differ — M18's acceptance.
+
+    The JSON body said "Enable a transport on it from the Nodes screen, then apply it"
+    and "Nothing else in this panel stops a node serving what it was last given" to a
+    caller who has no panel open and may have no browser at all. Both halves are asserted
+    at the ROUTE, not on the constants, because what acceptance read was a response body:
+    the seam only counts if the surfaces really carry different words.
+    """
+    node_id = await an_empty_node(client, refusing_ssh)
+
+    to_a_script = (await client.post(f"/api/nodes/{node_id}/apply")).json()["error"][
+        "message"
+    ]
+    to_the_operator = (
+        await client.post(
+            f"/panel/nodes/{node_id}/apply", headers={"HX-Request": "true"}
+        )
+    ).text
+
+    assert "panel" not in to_a_script.lower(), to_a_script
+    assert "screen" not in to_a_script.lower(), to_a_script
+    assert apply.ENABLE_ONE_HERE in to_a_script, to_a_script
+    # The console loses nothing by it: this is the first-run refusal, and an operator who
+    # is not told where transports are enabled is an operator standing still.
+    assert "Enable a transport on it from the Nodes screen" in to_the_operator, (
+        to_the_operator
+    )
+    assert "Nothing else in this panel stops a node serving" in to_the_operator, (
+        to_the_operator
+    )
+    # And the substance is one sentence written once, not two that can drift apart.
+    assert "nothing on the node was changed" in to_a_script, to_a_script
+    assert "nothing on the node was changed" in to_the_operator, to_the_operator
 
 
 async def test_the_console_shows_the_refusal_and_leaves_the_row_undegraded(

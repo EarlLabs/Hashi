@@ -607,6 +607,31 @@ class OfferRow:
     # Which of the three sentences above this row is in, composed here so no template
     # chooses between them and no route writes one.
     standing: str
+    # Whether this is the only row still enabled on its node — M18's acceptance, and the
+    # question BOTH confirmation dialogs turn on. It is asked about the OTHER rows on
+    # purpose: what each dialog has to say is whether an apply will still have something
+    # to push AFTER the action, and withdrawing or removing this row takes it out of that
+    # count either way. True means the apply the confirmation would otherwise send the
+    # operator to is refused, so it will never be the thing that stops the host.
+    #
+    # A flag rather than a composed sentence, unlike ``standing`` beside it: the two
+    # dialogs say DIFFERENT things about the same fact — a withdrawn row can be offered
+    # back and a removed one cannot — and their prose is where the rest of each dialog's
+    # prose already lives.
+    nothing_else_enabled: bool
+    # Whether ANY row on this node has ever been pushed to its host — M18's acceptance,
+    # round 2, and the other half of what both confirmation dialogs say. Their sentence
+    # about what the host keeps serving was byte-for-byte the same on a node really
+    # serving the transport and on one whose address does not resolve; the product knows
+    # the difference, because ``applied_at`` is set by a successful push and by nothing
+    # else, and said it on one surface and not on this one.
+    #
+    # TRUE IS THE ABSENCE OF EVIDENCE, NOT EVIDENCE OF ABSENCE, and the dialogs' prose is
+    # written to that: a removed row takes its stamp with it, so a node whose only applied
+    # transport was removed reads as never-applied here. What TRUE licenses is therefore
+    # "nothing this panel holds has ever been pushed" — a fact about the rows — and never
+    # "the host is running nothing", which this control plane cannot know from here.
+    never_applied_here: bool
     # Why the offer button is not drawn at all — M17.2, and ``None`` on nearly every row.
     # An action the service would refuse is withheld rather than offered, with the pool
     # it is about named: see ``POOL_SHORT_TO_OFFER``.
@@ -818,6 +843,11 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
     # from the rows already in hand, once for the whole dialog, and true only when the
     # node has no enabled row of any purpose left.
     nothing_left_enabled = not any(row.enabled for row in rows)
+    # And whether anything on this node has ever reached its host, measured once for the
+    # whole dialog off the rows already in hand. ``applied_at`` is written by a successful
+    # push and by nothing else, and a withdrawal leaves it alone — so a row that carries
+    # one is proof, and no row carrying one is only the absence of proof.
+    never_applied_here = not any(row.applied_at is not None for row in rows)
     return [
         OfferRow(
             id=row.id,
@@ -829,6 +859,19 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             standing=_standing(
                 row.purpose, row.enabled, nothing_left_enabled=nothing_left_enabled
             ),
+            # Measured per row rather than reusing the whole-dialog reading above,
+            # because it is a different question: that one is "is anything enabled
+            # here now", this one is "would anything be enabled here without this
+            # row". They agree on every row of a node with nothing enabled and differ
+            # on the last enabled one, which is the row both dialogs are wrong about.
+            nothing_else_enabled=not any(
+                other.enabled for other in rows if other.id != row.id
+            ),
+            # About the NODE and not about this row, unlike the flag above it: what the
+            # dialog is deciding is whether this panel may describe what the host is
+            # serving, and one applied transport makes the host a machine we have pushed
+            # to whichever row is being withdrawn or removed.
+            never_applied_here=never_applied_here,
             # Only on a row that is WITHDRAWN, because offering is the action being
             # withheld: a row already in every link is one this pool has already been
             # measured for, and its button is the withdraw the operator may always press.
@@ -1402,14 +1445,25 @@ async def overview(session: AsyncSession) -> Overview:
     """The Overview screen's whole content, in one call.
 
     The four stat cards are decision 6's replacements, in the design's own order:
-    nodes online, active users, hops established, transports enabled. Each is a fact
+    nodes active, active users, hops established, transports enabled. Each is a fact
     about the FLEET. How many friends exist is not a record of what any of them did.
+
+    THE FIRST KICKER WAS "nodes online" AND COUNTED NEITHER — M18's acceptance. The value
+    is the number of nodes in the ACTIVE state, which is an operator-settable column: a
+    node moved there by hand, never applied and serving nobody, counted towards "online",
+    and acceptance watched the figure go 1 → 2 by flipping a state. Online additionally
+    claims something this screen is built not to ask — it renders with every host
+    unreachable and touches no network, which is the whole reason it paints instantly
+    (see ``drift_of``). So the label now names what it counts, and the state it names is
+    the one the Nodes screen's own column shows and the one ``NodeState.serving()``
+    admits to a subscription. What each node is actually running stays where it already
+    is and is a different question: the drift cell, per node, on that screen.
     """
     rows = await node_rows(session)
     people = await friend_rows(session)
     hops = await relay.list_hops(session)
 
-    online = [row for row in rows if row.state == NodeState.ACTIVE]
+    in_state = [row for row in rows if row.state == NodeState.ACTIVE]
     active = [row for row in people if row.is_active]
     # A hop is established once both ends exist AND both have had a config applied.
     # A pair that exists only in the database is still pending — the tunnel does not
@@ -1430,8 +1484,8 @@ async def overview(session: AsyncSession) -> Overview:
     return Overview(
         stats=[
             Stat(
-                kicker="nodes online",
-                value=len(online),
+                kicker="nodes active",
+                value=len(in_state),
                 meta=_plural(len(rows), "node", "in the fleet"),
             ),
             Stat(
