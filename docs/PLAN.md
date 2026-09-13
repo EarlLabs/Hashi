@@ -2042,11 +2042,50 @@ And the charter's hard record still holds, on the hosts as in the tree: **look, 
 not keep.** No capture is written to disk on either host, and nothing that names a
 destination is recorded anywhere.
 
+### M23.0 — The transport to test is `amneziawg`, and `wireguard` is not a fair subject
+
+**Measured on the leaf, 2026-09-13, before the walk was designed** — and it
+changes what M23 can honestly test:
+
+```
+ufw:          active
+iptables:     v1.8.7 (nf_tables)
+
+legacy table: -P FORWARD ACCEPT
+              -A FORWARD -i wireguard -j ACCEPT      <- plain WireGuard's rules
+nft table:    -P FORWARD DROP                        <- ufw's policy
+              -A FORWARD -i amneziawg -j ACCEPT      <- amneziawg's rules
+```
+
+Both backends register hooks at the same kernel point and a packet traverses
+**both**. `amneziawg`'s ACCEPT is in the same table as ufw's `DROP` and front-runs
+it. **`wireguard`'s ACCEPT is in the legacy table and cannot**, so a friend's
+traffic on that row is dropped — handshake completes, nothing moves, nothing
+logged.
+
+**This is M20, observed rather than predicted**, and the owner decided on
+2026-09-09 to record it rather than fix it. So:
+
+- **A failure to carry traffic on the `wireguard` row is NOT a finding.** It is
+  the known limitation, and reporting it as a bug would be noise. The walk records
+  it as *confirmed on real hardware* and moves on.
+- **`amneziawg` is the subject**, because it is the transport the runbook mandates
+  for the hop, recommends for Shape A, and is proven on this host right now.
+
 ### M23.1 — Stand up a checker that is a real client, not a simulation
 
-A container on this machine holding a **real WireGuard client**, a keypair minted
-for the test, and nothing else. Its peer entry is added to the leaf's live
-`wireguard` interface at runtime and removed afterwards.
+A container on this machine holding a **real AmneziaWG client**, a keypair minted
+for the test, and nothing else.
+
+**It does not join the existing hop interface.** That interface is
+`10.90.0.2/30` — a `/30` holds two usable addresses and both are taken — and it
+carries the owner's real traffic. Instead the walk brings up a **second,
+throwaway `amneziawg` interface on the leaf**, on a spare port and its own
+network, existing only for the test and torn down in a `finally`.
+
+That also makes the walk prove something no stand could: **two AmneziaWG
+instances on one node, binding two ports, side by side** — which is M15's
+uniqueness decision, and field-checklist item 3.
 
 It must be a client the way a friend's device is a client: it completes a real
 handshake with the real daemon on the real host, over the real internet.
