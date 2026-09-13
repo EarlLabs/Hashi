@@ -1119,7 +1119,11 @@ async def test_the_transports_dialog_says_what_each_one_is_doing_for_a_user(
     assert withdrawn.status_code == 200, withdrawn.text
 
     again = await client.get(f"/panel/nodes/{node_id}/transports")
-    assert console_service.OFFER_WITHDRAWN in _reading(again.text)
+    # The LAST-ROW form of the withdrawn sentence, because this node has one transport and
+    # it was just switched off: with nothing enabled there, the apply the plain sentence
+    # sends the operator to is refused. Both forms are pinned together in
+    # ``test_a_withdrawn_row_says_whether_an_apply_can_still_stop_it``.
+    assert console_service.OFFER_WITHDRAWN_LAST_ON_THE_NODE in _reading(again.text)
     assert f'hx-post="/panel/transports/{node_transport_id}/offer"' in again.text
 
 
@@ -1150,8 +1154,14 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     )
 
     assert answer.status_code == 200
-    assert "withdrawn on offer-1" in _reading(answer.text)
-    assert "apply it to stop that" in _reading(answer.text)
+    reading = _reading(answer.text)
+    assert "withdrawn on offer-1" in reading
+    # This node had one transport, so the toast is the form that does NOT end on an apply:
+    # applying a node with nothing enabled is refused, and telling the operator to press it
+    # would send them to the one button that cannot help — on the flow where the people
+    # holding a credential on this row are still being authorised by the host.
+    assert "an apply now has nothing to push and is refused" in reading
+    assert "apply it to stop that" not in reading
     # BOTH collections, and the second is the one that was missing until M9.6: the Users
     # table's own columns are derived from ``serving_transports``, which counts enabled
     # rows only, so a withdrawal moves them. ``keys-changed`` is correctly absent — a
@@ -1161,6 +1171,90 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     # and it is the same query the Users table's two columns are built from.
     session.expunge_all()
     assert await nodes_service.serving_transports(session) == []
+
+
+async def test_a_withdrawn_row_says_whether_an_apply_can_still_stop_it(
+    client, reality_params, ws_params
+) -> None:
+    """The pair that makes the sentence falsifiable — M18.1's review.
+
+    "The node is still configured to serve it: apply it to stop that" was said over both
+    of these and is only true of one. Withdrawing a row while another is still enabled
+    leaves the apply something to push, and the push is what stops the host serving the
+    withdrawn one. Withdrawing the LAST enabled row leaves ``render_for_node`` with
+    nothing, and that apply is refused — so the node keeps serving the row, and everyone
+    who already holds a credential on it, with the panel's only remedy being to offer a
+    transport there again.
+
+    Both halves in one test on purpose: a single-branch assertion here would pass on an
+    implementation that always said the same thing, which is exactly what was wrong.
+    """
+    node_id, first = await a_node_with_an_offer(client, reality_params)
+    second = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-ws-tls", "params": ws_params},
+    )
+    assert second.status_code == 201, second.text
+
+    # One of two: the other is still enabled, so the apply this sentence names will run.
+    one_left = await client.post(
+        f"/panel/transports/{first}/withdraw", headers={"HX-Request": "true"}
+    )
+    assert one_left.status_code == 200, one_left.text
+    assert "apply it to stop that" in _reading(one_left.text)
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+    assert console_service.OFFER_WITHDRAWN in _reading(dialog.text)
+
+    # And the last one, which is the flow the sentence was wrong on.
+    none_left = await client.post(
+        f"/panel/transports/{second.json()['id']}/withdraw",
+        headers={"HX-Request": "true"},
+    )
+    assert none_left.status_code == 200, none_left.text
+    said = _reading(none_left.text)
+    assert "apply it to stop that" not in said, (
+        "the operator is sent to an apply that is refused, on the flow where the host is "
+        "still authorising everyone who holds a credential on the row they just withdrew"
+    )
+    assert "an apply now has nothing to push and is refused" in said
+    # The cost of the only remedy the product has, stated where the remedy is named.
+    assert "offered again" in said and "every user's link" in said
+    emptied = await client.get(f"/panel/nodes/{node_id}/transports")
+    assert console_service.OFFER_WITHDRAWN_LAST_ON_THE_NODE in _reading(emptied.text)
+    assert console_service.OFFER_WITHDRAWN not in _reading(emptied.text)
+
+
+async def test_a_removed_row_says_whether_an_apply_can_still_stop_it(
+    client, reality_params, ws_params
+) -> None:
+    """The removal twin of the pair above, with the verb the removed row leaves behind.
+
+    A withdrawn row is still on the screen to be offered again; a removed one is gone, so
+    what is owed on a node with nothing left is ENABLING a transport, not offering one
+    back. Both branches here for the same reason as above: one of them is the sentence
+    that used to be said over both.
+    """
+    node_id, first = await a_node_with_an_offer(client, reality_params)
+    second = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-ws-tls", "params": ws_params},
+    )
+    assert second.status_code == 201, second.text
+
+    one_left = await client.post(f"/panel/transports/{first}/remove")
+    assert one_left.status_code == 200, one_left.text
+    assert "apply it to stop that" in _reading(one_left.text)
+
+    none_left = await client.post(f"/panel/transports/{second.json()['id']}/remove")
+    assert none_left.status_code == 200, none_left.text
+    said = _reading(none_left.text)
+    assert "apply it to stop that" not in said, (
+        "the operator is sent to an apply that is refused on a node with nothing left"
+    )
+    assert "the node keeps serving it until a transport on" in said
+    assert "is enabled and applied" in said, (
+        "a removed row cannot be offered again, so the sentence must ask for an enable"
+    )
 
 
 async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
@@ -5515,6 +5609,12 @@ async def test_every_console_answer_owns_the_banner_slot(client, reality_params)
     assert failed.status_code == 200
     assert failed.text.count('hx-swap-oob="innerHTML:#banner-slot"') == 1
     assert "banner-failure" in failed.text
+    # This node HAS a transport, so the apply was really attempted and really failed —
+    # which is the half of M18.1's review that keeps the other half honest. The refusal on
+    # an empty node says `refused` (tests/control/test_first_apply_failure.py); a failure
+    # still says `failed`, and a label that said one word for both would pass one of these
+    # two tests and not the other.
+    assert '<span class="banner-label">failed</span>' in failed.text
 
 
 def test_nothing_in_the_script_empties_the_banner_slot_after_a_request() -> None:
@@ -6162,6 +6262,36 @@ def test_the_banner_scan_is_not_blind_to_a_banner_written_in_an_awkward_shape() 
         faults, found = _banner_faults("shape.html", markup)
         assert not faults, f"a sound banner {shape} was reported: {faults}"
         assert found == 1, f"a sound banner {shape} was not read as a banner at all"
+
+
+def test_the_banner_is_scrolled_into_view_when_it_is_filled() -> None:
+    """An answer written above the operator's scroll position is not an answer.
+
+    ``#banner-slot`` sits under the console header inside a ``#main`` that does not stick,
+    so an apply pressed from a row below the fold answered off-screen: no toast, no dialog,
+    and a table that re-fetched to an identical render. The operator sees nothing happen
+    and presses again. M17's acceptance found the same shape inside the transports dialog;
+    M18.1 newly routes the most ordinary first-run answer there is through this slot.
+
+    Asserted in the script because this suite has no browser — the acceptance walk is what
+    proves it on screen. Narrow on purpose, like its neighbour: it holds the registration
+    and the call, and would not see the same mistake made from a listener with another
+    name.
+    """
+    js = _served("app.js")
+
+    scrolling = re.search(r'watch\("banner-slot",(?:.*\n)*?\s*\}\);', js)
+    assert scrolling, (
+        "nothing brings the banner slot into view when it is filled, so a refusal answered "
+        "from a row below the fold is drawn where the operator is not looking"
+    )
+    assert "scrollIntoView" in scrolling.group(0)
+    # The least movement that makes it readable, so a banner already on screen does not
+    # make the page jump under an operator who is reading it.
+    assert 'block: "nearest"' in scrolling.group(0)
+    # And not while a dialog is in front of it: showFailure already states a failure inside
+    # the open dialog, and scrolling what is behind a modal moves nothing anybody can see.
+    assert 'slot("dialog-slot")' in scrolling.group(0)
 
 
 def test_a_failure_inside_a_dialog_is_stated_inside_that_dialog() -> None:

@@ -322,10 +322,18 @@ async def test_a_second_failure_replaces_the_first_ones_reason(
 async def an_empty_node(client, ssh) -> str:
     """A node exactly as registration leaves it: a record, and nothing enabled on it.
 
-    Deliberately given a reachable-looking ``ssh_host`` — the ``refusing_ssh`` socket the
-    rest of this file uses — so that a regression cannot pass by failing for the other
-    reason. If the refusal below is ever removed, this node gets as far as a real connect
-    and the assertions see a degraded node, which is the field's own outcome.
+    ``ssh`` IS NOT WHAT MAKES THESE TESTS FALSIFIABLE, and this docstring used to claim it
+    was — "so that a regression cannot pass by failing for the other reason". Measured
+    instead of asserted: delete ``raise NothingToApply`` in ``apply.apply_node`` AND the
+    two ``ssh_`` lines below, and all three tests that use this helper still go red. The
+    node still carries ``ADVERTISED_ADDRESS`` and no stored key, so the apply dies inside
+    ``apply_node``, the node is degraded, and every assertion here is about exactly that.
+
+    What the socket does buy is SPEED and a failure that matches the field's: one refused
+    connection instead of a connect timeout — the same three tests take 2s with it and 5s
+    without. Keep it; do not keep the reason it used to give. In a file whose whole
+    subject is that a verification must be able to fail, a false claim about falsifiability
+    is the one a later reader will act on.
     """
     return (await client.post(
         "/api/nodes",
@@ -414,6 +422,20 @@ async def test_a_serving_node_whose_last_transport_was_withdrawn_keeps_serving(
         "a node still serving its last config was degraded by an apply that pushed nothing"
     )
     assert shown["state_detail"] is None, shown
+    # AND IT IS TOLD THE TRUTH ABOUT THIS CASE, which is not the truth about a node that
+    # never had a transport — M18.1's review. Here the host is up and still running the
+    # config that authorises everyone who held a credential on the withdrawn row, and the
+    # only way out the product has is to offer a transport again, which puts it back in
+    # every user's link. A sentence that merely said "enable one, then apply" would be
+    # sending the operator to a remedy without its cost, on the one path where there is a
+    # person who should already be cut off.
+    said = refused.json()["error"]["message"]
+    assert "still running the config it was last given" in said, said
+    assert "still serving everyone who holds a credential on it" in said, said
+    assert "back in every user's link" in said, said
+    assert said != apply.NOTHING_TO_APPLY_YET, (
+        "a node with every row withdrawn is answered as though it had never had one"
+    )
 
 
 async def test_the_api_says_nothing_to_apply_rather_than_a_bad_gateway(
@@ -451,5 +473,15 @@ async def test_the_console_shows_the_refusal_and_leaves_the_row_undegraded(
     assert "no transports enabled" in pressed.text, pressed.text
     assert "config applied" not in pressed.text, (
         "the console reported an apply that never happened"
+    )
+    # AND THE WORD ABOVE IT IS NOT "FAILED" — M18.1's review. The banner carries both a
+    # failed apply and this refusal, and on this button `failed` has a meaning the rest of
+    # the codebase relies on: the node has been degraded. A healthy draft that has never
+    # been dialled, headed FAILED in red, reasserts the exact reading the sentence
+    # underneath it spends two clauses denying. The failure's own word is still `failed`
+    # — pinned in tests/control/test_the_console.py, on an apply that really did fail.
+    assert '<span class="banner-label">refused</span>' in pressed.text, pressed.text
+    assert ">failed<" not in pressed.text, (
+        "a node that was never dialled is drawn as a failed operation"
     )
     assert "degraded" not in (await client.get("/panel/nodes/table")).text

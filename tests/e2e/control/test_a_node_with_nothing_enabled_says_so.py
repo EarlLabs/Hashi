@@ -118,6 +118,19 @@ async def test_the_console_says_it_where_the_operator_pressed(
     assert pressed.status_code == 200, pressed.text
     assert "no transports enabled" in pressed.text, pressed.text
     assert "the Nodes screen" in pressed.text, (
-        "the refusal does not tell the operator where to offer the node a transport"
+        "the refusal does not tell the operator where to enable a transport on the node"
     )
     assert "config applied" not in pressed.text
+    # AND IT IS NOT HEADED "FAILED". The console draws this in the same element a failed
+    # apply gets, and on that button `failed` also means the node has been degraded — the
+    # one thing this refusal exists to stop a first-time operator believing about a host
+    # that was never dialled. The word is the only part of the element that can say which
+    # of the two it is, so the word is asserted.
+    assert '<span class="banner-label">refused</span>' in pressed.text, pressed.text
+    assert ">failed<" not in pressed.text, (
+        "a just-registered node is drawn to the operator as a failed operation"
+    )
+    # And the verb is the console's own. `offer` is a narrower control that appears only
+    # on a row that was enabled and then withdrawn; a node with nothing on it has no such
+    # row, and every surface it does have says `enable`.
+    assert "Enable a transport" in pressed.text, pressed.text

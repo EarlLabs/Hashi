@@ -2,8 +2,8 @@
 //
 // WHAT: the toast timer, dialog dismissal, the copy button, showing the field group
 //       a select chose, and the failure a request raises when it does not come back —
-//       stated under the header, and inside the dialog as well when one is open in
-//       front of it.
+//       stated under the header, scrolled into view there, and inside the dialog as
+//       well when one is open in front of it.
 // WHY:  design/README.md asks for a toast that auto-dismisses and shows one at a
 //       time, dialogs that close on the backdrop, and a copy button that works. None
 //       of those is expressible in HTML alone, and the stack rule (CLAUDE.md) is
@@ -195,6 +195,26 @@
   }
 
   watch("toast-slot", armToast);
+  // A BANNER THE OPERATOR CANNOT SEE IS NOT AN ANSWER — M18.1's review. The slot sits
+  // under the console header, inside a #main that does not scroll with the page, so an
+  // apply pressed from a row below the fold answered above the operator's scroll
+  // position: no toast, no dialog, and a table that re-fetched to an identical render.
+  // They press again. It is the same shape M17's acceptance found inside the transports
+  // dialog, where the fix was to put the message where the eye already was; here the
+  // message cannot move, so the view does.
+  //
+  // `block: "nearest"` scrolls the least that makes it visible and does nothing at all
+  // when it already is — so a banner answered from the top of the screen does not jump.
+  // Not while a dialog is open: the banner is behind it, showFailure already states the
+  // failure inside it, and scrolling what is behind a modal moves nothing the operator
+  // is looking at.
+  watch("banner-slot", (host) => {
+    const shown = host.firstElementChild;
+    if (!shown) return;
+    const dialog = slot("dialog-slot");
+    if (dialog && dialog.firstElementChild) return;
+    shown.scrollIntoView({ block: "nearest" });
+  });
   watch("dialog-slot", (host) => {
     const dialog = host.querySelector(".dialog");
     if (!dialog) return;

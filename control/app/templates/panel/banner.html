@@ -1,5 +1,6 @@
 {#
-  A FAILED action, stated persistently and swapped out-of-band under the header.
+  A FAILED — or REFUSED — action, stated persistently and swapped out-of-band under the
+  header.
 
   Used where a toast would be wrong because the operator must not miss it — a
   revocation that could not reach every node is the case this exists for. It stays on
@@ -25,10 +26,22 @@
   steel. The reasoning is in docs/decisions.md (2026-09-10), which is the override the
   handoff file is deliberately not updated to reflect. Weight alone left the operator
   reading the colour of the primary button on a message that meant the opposite.
+
+  THE WORD IS THE CALLER'S — M18.1's review, and the hue deliberately is not. A refusal
+  and a failure are the two things app.css licenses this red for, and §4's rule is that
+  the WORD carries the severity — so the one token that has to differ between them is the
+  label. It said `failed` for both, and the message it said it over most often was a
+  just-registered node with nothing enabled: a healthy draft, nothing dialled, nothing
+  wrong, headed FAILED. On this button `failed` also has a meaning the rest of the
+  codebase relies on — a failed apply marks the node degraded — so the label was
+  asserting the exact state the sentence underneath it denies.
+
+  `failed` stays the default, so every caller that does not think about this gets the
+  louder of the two words rather than the quieter one.
 #}
 <div hx-swap-oob="innerHTML:#banner-slot">
   <div class="banner banner-failure" role="alert">
-    <span class="banner-label">failed</span>
+    <span class="banner-label">{{ banner_label|default("failed", true) }}</span>
     <span>{{ banner }}</span>
   </div>
 </div>

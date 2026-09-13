@@ -88,16 +88,46 @@ WHERE_TO_RETRY = "the Nodes screen"
 # that authorises that person. A no-op would report such a node as updated. It is
 # reported as not updated instead, and ``why_not_updated`` calls it REFUSED.
 #
-# It names ``WHERE_TO_RETRY`` like every other service sentence that sends an operator
+# They name ``WHERE_TO_RETRY`` like every other service sentence that sends an operator
 # somewhere, so a screen that moves moves in one place.
 #
-# Named for the ACT rather than for the state, because ``console.NOTHING_ENABLED`` is the
-# drift cell's two words for the same node and the two must not be mistaken for one
-# another: that one is a table cell, this one is a refusal.
-NOTHING_TO_APPLY = (
+# Both named for the ACT rather than for the state, because ``console.NOTHING_ENABLED`` is
+# the drift cell's two words for the same node and the two must not be mistaken for one
+# another: that one is a table cell, these are refusals. What separates the pair is YET
+# against LEFT — a node on its way to serving something, and a node that served something
+# and was switched off.
+#
+# TWO SENTENCES, NOT ONE — M18.1's review. There was one, written for the deciding case
+# above and delivered almost always in the other, and each half was wrong in the other's
+# case:
+#
+#   * it said OFFER, which on the Nodes screen is a narrower control than it sounds: it
+#     appears only on a row that was enabled and then withdrawn. A node with nothing on it
+#     has no such row, and the console's word there is ENABLE — the select in the
+#     transports dialog, the primary button beside it, and the Nodes empty state all say
+#     so. A first-run operator sent to look for "offer" finds nothing named that.
+#   * and on the withdrawn-row path it named the remedy without its cost. Offering the
+#     row again grants every active user material on it and puts it back in every
+#     subscription — a change to everyone's link, made to cut one person off — and it is
+#     the only in-product way out: removing the row does not push, a state change does
+#     not reach the host, and this apply refuses again.
+#
+# Which one an operator gets is decided by whether the node has any transport row at all,
+# not by how many are enabled — an empty node and a node with every row withdrawn are two
+# different situations with two different next actions.
+NOTHING_TO_APPLY_YET = (
     "this node has no transports enabled, so there is nothing to apply — nothing was "
-    "pushed and nothing on the node was changed. Offer it a transport from "
+    "pushed and nothing on the node was changed. Enable a transport on it from "
     f"{WHERE_TO_RETRY}, then apply it."
+)
+NOTHING_LEFT_TO_APPLY = (
+    "every transport on this node is withdrawn, so there is nothing to apply — nothing "
+    "was pushed and nothing on the node was changed. The node is still running the "
+    "config it was last given and still serving everyone who holds a credential on it: "
+    "an apply cannot stop that, because there is nothing to push. Offer one of its "
+    f"transports again from {WHERE_TO_RETRY} — which puts that transport back in every "
+    "user's link — and apply. Nothing else in this panel stops a node serving what it "
+    "was last given."
 )
 
 # The boundary between "this node failed" and "stop the whole operation".
@@ -369,6 +399,26 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
     )
 
 
+async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
+    """Which refusal this node gets — the never-enabled one or the all-withdrawn one.
+
+    One query, on the refusal path only, and it asks whether the node has any transport
+    row AT ALL: ``render_for_node`` already filtered to the enabled ones and came back
+    empty, so the only thing left to learn is whether there is something here to offer
+    again or nothing here at all. The two answers send the operator to two different
+    controls — ``offer`` exists only on a row that was enabled once — and the withdrawn
+    one has a cost the other does not.
+
+    Queried rather than read off ``node.transports`` for the reason ``render_for_node``
+    gives: this can be reached straight after a revocation deleted rows in the same
+    session, where touching the collection is lazy IO on an async session.
+    """
+    any_row = await session.execute(
+        select(NodeTransport.id).where(NodeTransport.node_id == node.id).limit(1)
+    )
+    return NOTHING_TO_APPLY_YET if any_row.first() is None else NOTHING_LEFT_TO_APPLY
+
+
 async def _record_failure(session: AsyncSession, node: Node, reason: str) -> None:
     """Log why an apply failed, then mark the node degraded. In that order.
 
@@ -425,7 +475,7 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     # the old answer came from: zero services renders an empty ``services:`` mapping,
     # which the daemon rejects, and the operator was handed that rejection.
     if not configs:
-        raise NothingToApply(NOTHING_TO_APPLY)
+        raise NothingToApply(await _nothing_to_apply(session, node))
 
     # Which transport is behind each placed config. Needed from here down wherever the
     # answer is the TRANSPORT's rather than the file's — the checker, the extension, the

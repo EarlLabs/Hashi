@@ -220,8 +220,11 @@ async def test_the_panel_returns_a_fragment_not_a_page(
     assert response.status_code == 200, response.text
     assert "<html" not in response.text.lower()
     # The operator is told what a withdrawal does NOT do. Silence here would let them
-    # read it as a revocation, and the node is still serving what it was given.
-    assert "apply it to stop that" in response.text
+    # read it as a revocation, and the node is still serving what it was given. This node
+    # has one transport, so it is the form that does not end on an apply: since M18.1 an
+    # apply with nothing enabled is refused, and the two forms are pinned against each
+    # other in tests/control/test_the_console.py.
+    assert "the node keeps serving it" in response.text
 
 
 # --- the panel's node-state route ---------------------------------------------

@@ -50,7 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.api import schemas
 from control.app.dependencies import session_dependency
-from control.app.errors import DomainError, HopEndRefused, ParamsRefused
+from control.app.errors import DomainError, HopEndRefused, NothingToApply, ParamsRefused
 from control.app.models import NodeState, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
@@ -557,17 +557,26 @@ async def _set_offered(
         # Offering again runs the same grant fan-out ``enable_transport`` does, so the
         # material a user holds moves and the Keys screen's "users on it" count with it.
         events = "nodes-changed, keys-changed, friends-changed"
-        summary = console.offer_summary
+        toast = console.offer_summary(offer.node, offer.transport)
     else:
         # Withdrawing fires two as well. What it does NOT take away is a MINTED
         # CREDENTIAL — that stays minted, which is why the Keys screen is left alone —
         # but the Users table's own columns are derived from ``serving_transports``,
         # which counts only ENABLED rows, so both of them move the moment this commits.
         events = "nodes-changed, friends-changed"
-        summary = console.withdrawal_summary
+        # Asked AFTER the flag moved, because the sentence is about what is true now:
+        # withdrawing the node's last enabled row leaves the apply it would otherwise
+        # send the operator to with nothing to push — M18.1's review.
+        toast = console.withdrawal_summary(
+            offer.node,
+            offer.transport,
+            nothing_left_enabled=await console.nothing_left_enabled_on(
+                session, offer.node_id
+            ),
+        )
     return _mutation(
         request,
-        toast=summary(offer.node, offer.transport),
+        toast=toast,
         keeping=offer.node,
         events=events,
     )
@@ -632,7 +641,15 @@ async def remove_transport(
         )
     return _mutation(
         request,
-        toast=console.removal_summary(offer.node, offer.transport),
+        # Asked after the delete, on the node the deleted row was on — which is why
+        # ``offer`` carries a node id and not only the operator's name for it.
+        toast=console.removal_summary(
+            offer.node,
+            offer.transport,
+            nothing_left_enabled=await console.nothing_left_enabled_on(
+                session, offer.node_id
+            ),
+        ),
         keeping=offer.node,
         # Three, because a row leaving takes three collections with it: the node's chips,
         # the Keys screen's row for it, and the Users table's counts, which are derived
@@ -1969,17 +1986,33 @@ async def apply_node(
     THE BANNER NOW ALSO CARRIES A REFUSAL — M18.1 — and it is deliberately the same
     element. A node with nothing enabled is refused before anything is dialled and is
     NOT degraded, so that one message is not about a broken node; it still has to stay
-    on the screen while the operator goes and offers the node a transport, which is the
+    on the screen while the operator goes and enables a transport on it, which is the
     one thing a toast could not do for it.
+
+    The same element, but NOT the same word above it — M18.1's review. The banner said
+    `failed` over both, and the first-run answer it says it over is a healthy draft that
+    has never been dialled; on this button `failed` additionally means "the node is now
+    degraded", which is the one thing the refusal exists to stop the operator believing.
     """
     node = await nodes.get_node(session, node_id)
     try:
         applied = await apply.apply_node(session, node_id=node_id)
+    except NothingToApply as exc:
+        # A REFUSAL, and the label says so. Caught ahead of its own base class rather
+        # than branching inside one handler, because the two differ in what happened to
+        # the node as well as in the word: nothing was dialled, nothing was pushed and
+        # the node's state has not moved.
+        return _mutation(
+            request,
+            banner=exc.message,
+            banner_label="refused",
+            keeping=node.name,
+            events="nodes-changed",
+        )
     except DomainError as exc:
         # Shown, not raised: a failed apply has already recorded its reason and marked
-        # the node degraded, a refused one has changed nothing at all, and in both cases
-        # what the operator needs is the sentence on the screen they are on rather than
-        # an error envelope.
+        # the node degraded, and what the operator needs is the sentence on the screen
+        # they are on rather than an error envelope.
         return _mutation(
             request,
             banner=exc.message,
@@ -2293,6 +2326,7 @@ def _mutation(
     dialog: str | None = None,
     toast: str | None = None,
     banner: str | None = None,
+    banner_label: str | None = None,
     events: str | None = None,
     context: dict | None = None,
     keeping: str | None = None,
@@ -2310,6 +2344,12 @@ def _mutation(
     ``services/``, which speaks the code's vocabulary, and decision 9 says that word
     stops before the rendered page. ``keeping`` is the operator's own text inside the
     sentence — a nickname — which is handed back exactly as they typed it.
+
+    ``banner_label`` is the word above the banner and defaults to ``failed`` — the only
+    other value this console has a use for is ``refused``, for an answer where nothing
+    was attempted and nothing changed. It is a caller's choice rather than something the
+    template works out because only the caller knows which of the two it is holding: the
+    same element carries a node whose apply failed and a node that was never dialled.
     """
     response = TEMPLATES.TemplateResponse(
         request,
@@ -2318,6 +2358,7 @@ def _mutation(
             "dialog": dialog,
             "toast": wording.for_the_page(toast, keeping=keeping) if toast else None,
             "banner": wording.for_the_page(banner, keeping=keeping) if banner else None,
+            "banner_label": banner_label,
             **(context or {}),
         },
         status_code=status_code,

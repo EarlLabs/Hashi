@@ -994,7 +994,12 @@ async def test_removing_from_the_console_says_what_the_node_is_still_running(
 
     assert removed.status_code == 200, removed.text
     assert "<html" not in removed.text.lower()
-    assert "apply it to stop that" in removed.text
+    # The last transport on this node, so the toast says the apply it would otherwise send
+    # the operator to has nothing to push — M18.1's review. The other form, where the node
+    # still has something enabled and "apply it to stop that" is true, is pinned in
+    # tests/control/test_the_console.py.
+    assert "the node keeps serving it" in removed.text
+    assert "apply it to stop that" not in removed.text
     # Three collections move when a row leaves, and the tables refresh themselves.
     assert removed.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
     assert await console.offers_on(session, node_id) == []

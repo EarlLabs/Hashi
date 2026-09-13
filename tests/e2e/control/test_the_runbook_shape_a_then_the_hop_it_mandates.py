@@ -391,9 +391,13 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
     toast = await remove_from_the_panel(operator, node_id, RUNBOOK_TRANSPORT)
 
     # What the operator is told, and the half of it they are most likely to get wrong:
-    # the row is gone from this panel and the HOST is still serving it until they apply.
+    # the row is gone from this panel and the HOST is still serving it. This node's only
+    # transport has just gone, so the sentence is the one that does NOT end on an apply —
+    # since M18.1 an apply with nothing enabled is refused, and sending the operator to it
+    # here would be sending them to the one button that cannot help.
     assert "removed from" in toast, toast
-    assert "apply it to stop that" in toast, toast
+    assert "the node keeps serving it" in toast, toast
+    assert "apply it to stop that" not in toast, toast
 
     after = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
     assert after.status_code == 200, after.text

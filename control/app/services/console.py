@@ -458,10 +458,24 @@ class KeyRow:
 # and that a panel is most likely to blur: switching a transport off changes what the
 # control plane DELIVERS, not what the host is running. An operator who reads
 # "withdrawn" as "stopped" has been told the opposite of what happened.
+#
+# THERE ARE TWO WITHDRAWN SENTENCES because "apply it" stops being true — M18.1's review.
+# Applying a node with nothing enabled renders no config and is REFUSED
+# (``apply.NOTHING_TO_APPLY_YET`` and ``apply.NOTHING_LEFT_TO_APPLY``), so on a node
+# whose last enabled row this is, "until you re-apply it" sent the operator to a button
+# that answers "nothing to push". The distinction is the node's, not the row's: one enabled row
+# anywhere on it — a hop end counts, it renders too — and the apply goes through without
+# the withdrawn one, which is exactly what stops the container serving it.
 OFFER_IN_EVERY_LINK = "offered — in every user's link at their next refresh"
 OFFER_WITHDRAWN = (
     "withdrawn — out of every user's link. The node is still configured to serve it "
-    "until you re-apply it."
+    "until you apply the node without it."
+)
+OFFER_WITHDRAWN_LAST_ON_THE_NODE = (
+    "withdrawn — out of every user's link. The node is still configured to serve it, and "
+    "this was the last transport enabled here: an apply now has nothing to push and is "
+    "refused, so it keeps serving this one until a transport on this node is offered "
+    "again and applied."
 )
 OFFER_HOP_END = (
     "one end of a hop — not something a user is offered. Tear the hop down from the "
@@ -582,6 +596,10 @@ class OfferRow:
     """
 
     id: str
+    # The node the row is on, carried because a route that has just DELETED the row still
+    # has to ask the node a question afterwards — whether anything is left enabled on it
+    # — and ``node`` is the operator's name for it, not a key.
+    node_id: str
     node: str
     transport: str
     offered: bool
@@ -796,14 +814,21 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
     short = {
         row.row: row for row in await addresses.shortfalls_among(session, rows)
     }
+    # Whether an apply on this node would have anything to push — M18.1's review. Read
+    # from the rows already in hand, once for the whole dialog, and true only when the
+    # node has no enabled row of any purpose left.
+    nothing_left_enabled = not any(row.enabled for row in rows)
     return [
         OfferRow(
             id=row.id,
+            node_id=node.id,
             node=node.name,
             transport=placed_as(row.transport_name, row.config_name),
             offered=row.enabled,
             for_friends=row.purpose == TransportPurpose.FRIENDS,
-            standing=_standing(row.purpose, row.enabled),
+            standing=_standing(
+                row.purpose, row.enabled, nothing_left_enabled=nothing_left_enabled
+            ),
             # Only on a row that is WITHDRAWN, because offering is the action being
             # withheld: a row already in every link is one this pool has already been
             # measured for, and its button is the withdraw the operator may always press.
@@ -854,16 +879,26 @@ async def offer_row(session: AsyncSession, node_transport_id: str) -> OfferRow:
     raise NotFound("no such transport on any node")
 
 
-def _standing(purpose: TransportPurpose, enabled: bool) -> str:
-    """Which of the three sentences this row is in.
+def _standing(
+    purpose: TransportPurpose, enabled: bool, *, nothing_left_enabled: bool
+) -> str:
+    """Which of the four sentences this row is in.
 
     A branch on our own topology and on the operator's own flag — never on a protocol.
     A hop end is answered first because ``enabled`` means something different there: it
     says the tunnel should be running, not that anybody is being offered anything.
+
+    ``nothing_left_enabled`` is a fact about the NODE, passed in rather than measured
+    here because it is the same measurement for every row in the dialog and the caller
+    has already read them all. It only ever changes the withdrawn sentence: an apply that
+    has something to push is what stops the host serving a withdrawn row, and on a node
+    with nothing enabled at all there is no such apply.
     """
     if purpose != TransportPurpose.FRIENDS:
         return OFFER_HOP_END
-    return OFFER_IN_EVERY_LINK if enabled else OFFER_WITHDRAWN
+    if enabled:
+        return OFFER_IN_EVERY_LINK
+    return OFFER_WITHDRAWN_LAST_ON_THE_NODE if nothing_left_enabled else OFFER_WITHDRAWN
 
 
 async def state_choices(session: AsyncSession, node: Node) -> tuple[StateChoice, ...]:
@@ -1244,7 +1279,29 @@ def refused_under_boxes(names: list[str]) -> str:
     )
 
 
-def withdrawal_summary(node: str, transport: str) -> str:
+async def nothing_left_enabled_on(session: AsyncSession, node_id: str) -> bool:
+    """Whether an apply on this node would have anything at all to push — M18.1's review.
+
+    The question the two summaries below and ``_standing`` all turn on, asked of the
+    database rather than of a collection because both callers ask it AFTER their own
+    mutation committed: the withdraw route has just flipped a flag and the remove route
+    has just deleted the row, and an in-memory list taken before either is a list of what
+    used to be true.
+
+    Enabled rows of EVERY purpose count, hop ends included: ``apply.render_for_node``
+    renders both, so one live hop end is enough to give the apply something to push and
+    the sentences below stay as they were.
+    """
+    remaining = await session.execute(
+        select(NodeTransport.id)
+        .where(NodeTransport.node_id == node_id)
+        .where(NodeTransport.enabled.is_(True))
+        .limit(1)
+    )
+    return remaining.first() is None
+
+
+def withdrawal_summary(node: str, transport: str, *, nothing_left_enabled: bool) -> str:
     """What withdrawing a transport does, and — as loudly — what it does not do.
 
     Here rather than in the route for the reason ``tear_down_summary`` is: this is a
@@ -1254,14 +1311,30 @@ def withdrawal_summary(node: str, transport: str) -> str:
     host is running. A person who already holds a fetched configuration keeps
     connecting until the node is applied without them, and an operator who reads
     "withdrawn" as "stopped" has been told the opposite of what happened.
+
+    THE SECOND SENTENCE USED TO END ON AN APPLY THAT IS REFUSED — M18.1's review, and it
+    was the worst place in the console for it to be wrong. Withdrawing the node's last
+    enabled row leaves ``render_for_node`` with nothing, so the apply this sentence sent
+    the operator to answers "nothing to push" and the host keeps serving the row — which
+    still authorises every friend who holds a credential on it, since a withdrawal mints
+    nothing away. The only way out is to offer a transport there again, so the sentence
+    says that, and says what it costs: the offered row goes back into every user's link.
     """
+    if not nothing_left_enabled:
+        return (
+            f"{transport} withdrawn on {node} — out of every user's link at their next "
+            "refresh. The node is still configured to serve it: apply it to stop that."
+        )
     return (
         f"{transport} withdrawn on {node} — out of every user's link at their next "
-        "refresh. The node is still configured to serve it: apply it to stop that."
+        f"refresh. It was the last transport enabled on {node}, so an apply now has "
+        "nothing to push and is refused: the node keeps serving it, and everyone holding "
+        f"a credential on it, until a transport on {node} is offered again — back into "
+        "every user's link — and applied."
     )
 
 
-def removal_summary(node: str, transport: str) -> str:
+def removal_summary(node: str, transport: str, *, nothing_left_enabled: bool) -> str:
     """What removing a transport took with it, and what it did not — M15.2.
 
     Beside ``withdrawal_summary`` and deliberately not a louder version of it: the two
@@ -1274,12 +1347,25 @@ def removal_summary(node: str, transport: str) -> str:
     still running it. The row is gone from every screen in this panel and the daemon on
     the node is not, until the node is applied — which is why the sentence ends on the
     one action that is still owed.
+
+    AND ON A NODE WITH NOTHING LEFT ENABLED that action is refused, exactly as it is for
+    a withdrawal — M18.1's review. The verb differs from the withdrawn twin's because the
+    row differs: a withdrawn row is still there to be offered again, a removed one is
+    gone, so what is owed here is enabling a transport rather than offering one back.
     """
+    if not nothing_left_enabled:
+        return (
+            f"{transport} removed from {node} — out of every user's link at their next "
+            "refresh, and the material minted for it is gone with it. Its listening port "
+            "and its config name on this node are free again. The node is still "
+            "configured to serve it: apply it to stop that."
+        )
     return (
         f"{transport} removed from {node} — out of every user's link at their next "
         "refresh, and the material minted for it is gone with it. Its listening port "
-        "and its config name on this node are free again. The node is still configured "
-        "to serve it: apply it to stop that."
+        f"and its config name on this node are free again. It was the last transport "
+        f"enabled on {node}, so an apply now has nothing to push and is refused: the "
+        f"node keeps serving it until a transport on {node} is enabled and applied."
     )
 
 
