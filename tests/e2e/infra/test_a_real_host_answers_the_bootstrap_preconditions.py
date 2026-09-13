@@ -28,7 +28,8 @@ Boundary, stated plainly:
   * **This does not run the whole script.** Everything after the cut installs a
     container runtime, edits a firewall and rewrites ``authorized_keys`` — on the
     machine running the suite. So it proves the two checks, not a bootstrap.
-  * **Nobody logs in.** ``sshd -T`` is the daemon's statement of what it will consult;
+  * **Nobody logs in.** ``sshd -T -C user=<account>`` is the daemon's statement of what it
+    will consult for that account;
     an actual authentication would need the private half of a key, and the private half
     never comes to a node (the script's property 4). What is proven is that the run
     cannot say ``ready`` for a key sshd will not read, or will read and then decline —
@@ -128,7 +129,9 @@ def run_the_key_check(config: pathlib.Path, tmp_path: pathlib.Path) -> subproces
         script[: script.index(WHERE_THE_HOST_IS_FIRST_TOUCHED)]
         + function_in(script, "sshd_effective_config")
         + 'SSHD_CONFIG="$(sshd_effective_config)"\n'
-        + 'printf "SSHD SAID: %s\\n" "${SSHD_CONFIG}"\n'
+        + function_in(script, "sshd_config_for_this_account")
+        + 'SSHD_ACCOUNT_CONFIG="$(sshd_config_for_this_account)"\n'
+        + 'printf "SSHD SAID: %s\\n" "${SSHD_ACCOUNT_CONFIG}"\n'
         + function_in(script, "refuse_if_sshd_cannot_be_asked")
         + function_in(script, "refuse_if_this_account_cannot_use_a_key")
         + function_in(script, "refuse_if_sshd_ignores_the_key_file")
@@ -237,14 +240,76 @@ def test_a_host_that_will_not_take_a_key_from_this_account_is_never_called_ready
         assert THE_KEY_FILE in said, said
 
 
+def test_a_host_that_admits_this_account_alone_is_not_refused(tmp_path: pathlib.Path) -> None:
+    """M19's acceptance, against the real daemon that made the finding.
+
+    The walk built this host — keys off at the top of the file, on again inside a ``Match
+    User`` covering the account being prepared — and then LOGGED IN with the key to prove
+    it works. The script refused it, because ``sshd -T`` with no connection to describe
+    prints the configuration before any ``Match``, and there was no override: the host
+    could never produce the line the panel registers from, which is a defect of the same
+    size as passing a broken one.
+
+    Real rather than stubbed for the reason this whole file exists: whether OpenSSH
+    evaluates a ``Match User`` block when it is handed an account and no address is a fact
+    about OpenSSH, and a stub asserting it would be this repository agreeing with itself.
+    """
+    config = a_host_running(
+        "AuthorizedKeysFile .ssh/authorized_keys\n"
+        "PubkeyAuthentication no\n"
+        f"Match User {THE_ACCOUNT}\n"
+        "    PubkeyAuthentication yes",
+        tmp_path,
+    )
+
+    accepted = run_the_key_check(config, tmp_path)
+
+    assert accepted.returncode == 0, (
+        "a real sshd that admits this account with a key was refused, which leaves the "
+        f"host unregisterable:\n{accepted.stdout}{accepted.stderr}"
+    )
+    assert "==> ready" in accepted.stdout, accepted.stdout
+
+
+def test_a_host_that_refuses_this_account_alone_is_never_called_ready(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The same blind spot in the direction that used to report ``ready`` for a dead key.
+
+    Keys on at the top of the file and off inside a ``Match`` covering this account. The
+    pre-``Match`` answer is ``yes``, nothing else on the host is wrong, and no key logs
+    this account in. Both directions come out of one fix, and a scenario for only the
+    first would be satisfied by a script that stopped asking sshd anything at all.
+    """
+    config = a_host_running(
+        "AuthorizedKeysFile .ssh/authorized_keys\n"
+        "PubkeyAuthentication yes\n"
+        f"Match User {THE_ACCOUNT}\n"
+        "    PubkeyAuthentication no",
+        tmp_path,
+    )
+
+    refused = run_the_key_check(config, tmp_path)
+
+    assert refused.returncode != 0, (
+        f"a real sshd that takes no key from this account was accepted:\n{refused.stdout}"
+    )
+    assert "==> ready" not in refused.stdout, refused.stdout
+    assert refused.stderr.strip(), f"refused in silence: stdout {refused.stdout!r}"
+    said = " ".join(refused.stderr.split())
+    assert "PubkeyAuthentication" in said, said
+    assert THE_KEY_FILE in said, said
+
+
 def test_the_daemon_still_answers_in_the_words_the_check_reads(tmp_path: pathlib.Path) -> None:
     """The directive names, read off a real ``sshd -T`` rather than assumed.
 
-    The check greps five lines out of that output. If OpenSSH renames any of them, or
-    stops printing ``none`` for a command it does not have, the checks above would still
-    pass on their own configurations while the script silently stopped being able to
-    answer the question on a real host. Asserted separately so the failure names the
-    drift — and it is not a theoretical one: the value a person writes as
+    The check greps five lines out of that output — the account-scoped one, which is what
+    the three questions read. If OpenSSH renames any of them, stops printing ``none`` for a
+    command it does not have, or stops answering ``-C user=`` without an address beside it,
+    the checks above would still pass on their own configurations while the script silently
+    stopped being able to answer the question on a real host. Asserted separately so the
+    failure names the drift — and it is not a theoretical one: the value a person writes as
     ``prohibit-password`` is printed here under its older spelling, ``without-password``,
     and a check accepting only what the manual calls it would refuse a stock host.
     """

@@ -193,7 +193,12 @@ def test_logging_is_turned_off_before_the_firewall_can_come_up(script: str) -> N
     immediately. Doing ``logging off`` afterwards still creates the record — so the order
     is the property, not the presence (docs/decisions.md, decision 5).
     """
-    logging_off = re.search(r"^\s*as_root ufw logging off$", script, re.M)
+    # The redirection is optional and the command is not: ufw's own sentence about the
+    # change is discarded (M19's acceptance — a run whose lines all start ``==> `` should
+    # not have another program's wording in the middle of it), and what the script did is
+    # said afterwards in its own words. Anchored so a ``logging off`` piped into something
+    # that could swallow its failure still does not satisfy this.
+    logging_off = re.search(r"^\s*as_root ufw logging off(?: >/dev/null)?$", script, re.M)
     assert logging_off, "the script does not turn ufw logging off"
     enable = re.search(r"^\s*as_root ufw --force enable", script, re.M)
     assert enable, "the script never enables the firewall"
@@ -834,6 +839,221 @@ def test_no_lookup_in_it_can_end_the_run_without_saying_why(script: str) -> None
             )
 
 
+# --- M19's acceptance: what the run refuses, and what it has already done ------
+#
+# The walk handed ``--authorized-key`` a TWO-LINE value. The script installed both lines
+# into the account's ``authorized_keys`` — the second belonging to somebody else entirely
+# — printed that it had authorised the control plane's key, and only then refused, at the
+# very end, on a check that compares the first key's body and never mentioned the other
+# one. The operator was stopped and never told that a key they did not choose was now
+# authorised for that account; nothing removed it; and the non-zero exit invited a retry
+# that would leave it behind. It is reached by accident as easily as by malice — a .pub
+# file with a stray second line is an ordinary mistake.
+#
+# Every test below runs the script's checking half rather than reading it, for the reason
+# the section above gives, and the cut is what makes each of them evidence: a refusal that
+# fires before ``# --- 2. the container runtime`` is a refusal that fired before the host
+# was touched, because that is the first line in the file that changes anything.
+
+
+def test_a_value_carrying_a_second_key_is_refused_before_anything_is_written(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The acceptance finding, and the position of the check is half of the fix.
+
+    ``authorized_keys`` holds one key per line, so a value with a newline in it is several
+    keys and appending it authorises all of them. Refusing here — before section 3 writes
+    anything — is what makes "nothing on this host was changed" true; a check on the far
+    side of the write could only repair, and a repair has a window in which the stranger's
+    key is live and a failure mode of its own.
+    """
+    smuggled = "AAAAsmuggled"
+
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        f"{A_PUBLIC_KEY}\nssh-ed25519 {smuggled} intruder@elsewhere",
+        "--user",
+        "root",
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert refused.stderr.strip(), f"refused in silence: stdout {refused.stdout!r}"
+    # And nothing was announced before it. The refusal the walk got arrived after `==>
+    # authorised the control plane's key for root`, which is the sentence that made the
+    # operator believe they knew what had happened; a check in this position has no
+    # progress line in front of it to contradict.
+    assert refused.stdout.strip() == "", refused.stdout
+    said = " ".join(refused.stderr.split())
+    assert "more than one key" in said, said
+    # It says the host is untouched, which is the claim only a check in this position can
+    # make — and the one an operator needs before they retry.
+    assert "nothing on this host was changed" in said, said
+    # And neither key is put on a terminal, here or anywhere else.
+    assert smuggled not in refused.stdout + refused.stderr
+    assert A_PUBLIC_KEY.split()[1] not in refused.stdout + refused.stderr
+
+
+def test_one_key_on_one_line_is_still_installed(script: str, tmp_path: pathlib.Path) -> None:
+    """The accept-case the refusal above is worthless without.
+
+    A public key carries an optional comment, so it has spaces in it and its own shape —
+    a check that refused anything with whitespace would refuse every key ever generated.
+    """
+    accepted = run_the_checks(
+        script, tmp_path, "--authorized-key", A_PUBLIC_KEY, "--user", "root"
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_a_key_file_holding_two_keys_is_refused_rather_than_narrowed_to_the_first(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The same rule through the other flag, which used to read the file with ``head -1``.
+
+    That silently installed the first of however many keys the file held, so a file whose
+    SECOND line is the fleet's key installed somebody else's and reported that it had
+    authorised the control plane's. One invocation, one key, whichever flag carries it.
+    """
+    two_keys = tmp_path / "two.pub"
+    two_keys.write_text(f"{A_PUBLIC_KEY}\nssh-ed25519 AAAAsomebodyelse other@host\n")
+
+    refused = run_the_checks(
+        script, tmp_path, "--authorized-key-file", str(two_keys), "--user", "root"
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    said = " ".join(refused.stderr.split())
+    assert "more than one key" in said, said
+    assert "nothing on this host was changed" in said, said
+
+
+def test_a_key_file_holding_one_key_is_read_whole(script: str, tmp_path: pathlib.Path) -> None:
+    """The accept-case, and the reason the whole file can be read rather than its head.
+
+    Every ``.pub`` ends in a newline and command substitution strips it, so a well-formed
+    file is one line by the time the check sees it. A trailing blank line is stripped the
+    same way and is not an operator error.
+    """
+    one_key = tmp_path / "one.pub"
+    one_key.write_text(f"{A_PUBLIC_KEY}\n\n")
+
+    accepted = run_the_checks(
+        script, tmp_path, "--authorized-key-file", str(one_key), "--user", "root"
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_an_option_with_nothing_after_it_is_refused_in_this_script_s_words(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """``--authorized-key`` as the last token died with ``$2: unbound variable``.
+
+    That is ``set -u`` speaking, not this script: it names a line number in a file the
+    operator is piping in and never names the flag they typed. ``shift 2`` past the end is
+    the same hazard one token later and worse — it returns non-zero and ``set -e`` ends the
+    run in silence, which is the defect M18's acceptance found in ``getent``.
+    """
+    for option in ("--authorized-key", "--authorized-key-file", "--user", "--port", "--ssh-port"):
+        refused = run_the_checks(script, tmp_path, option)
+
+        assert refused.returncode != 0, f"{option} with no value was accepted: {refused.stdout}"
+        assert refused.stderr.strip(), f"{option} refused in silence: {refused.stdout!r}"
+        said = " ".join(refused.stderr.split())
+        assert said.startswith("node-bootstrap:"), (
+            f"{option} was answered by the shell rather than by this script: {said}"
+        )
+        assert option in said, said
+        assert "unbound variable" not in said, said
+
+
+def test_an_argument_that_is_not_a_port_is_refused_before_the_host_is_touched(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M19's acceptance: the port checks used to run four host-changing steps too late.
+
+    ``--port 0/udp`` was refused only after the key had been installed, /opt/hashi created
+    and the firewall reconfigured. ``--ssh-port 0`` was not checked at all — it reached a
+    firewall rule, where ufw answered with its own bare ``ERROR: Bad port`` and ``set -e``
+    ended the run. Both are knowable from the command line alone, so both are answered
+    there: this runs the checking half, which stops before the first line that touches the
+    host, and every case below must already be refused by then.
+    """
+    for arguments in (
+        ("--ssh-port", "0"),
+        ("--port", "0/udp"),
+        ("--ssh-port", "99999999999999999999"),
+        ("--port", "99999999999999999999/udp"),
+        ("--ssh-port", "not-a-number"),
+        ("--port", "1/sctp"),
+    ):
+        refused = run_the_checks(
+            script, tmp_path, "--authorized-key", A_PUBLIC_KEY, "--user", "root", *arguments
+        )
+
+        assert refused.returncode != 0, f"{arguments} was accepted: {refused.stdout}"
+        said = " ".join(refused.stderr.split())
+        assert said.startswith("node-bootstrap:"), (
+            f"{arguments} was answered by a program the operator did not invoke: {said}"
+        )
+        # The value the operator typed, whole — not the piece of it the check looked at.
+        assert arguments[1] in said, said
+        # Not ufw's sentence, and not bash's arithmetic complaint.
+        assert "Bad port" not in said, said
+        assert "integer expression" not in said, said
+
+
+def test_the_ports_an_operator_really_passes_are_not_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The accept-case, without which every check above could be unconditional.
+
+    Both forms the usage documents — a bare number and a number with a protocol — and both
+    flags, because they are validated by different functions.
+    """
+    accepted = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        "--port",
+        "9999/udp",
+        "--port",
+        "9998",
+        "--ssh-port",
+        "2222",
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_every_refusal_after_the_key_is_installed_says_the_key_is_installed(
+    script: str,
+) -> None:
+    """A refusal that hides a change it made is the class M19's acceptance was closing.
+
+    Past the line that appends the key, the host carries an authorisation it did not carry
+    before. The sshd questions in section 6 named it already; the firewall, the daemon and
+    the kernel refusals did not, so an operator stopped by one of those had no way to know
+    whether anything had been authorised, and no reason to go and look. Read rather than
+    run, because the point is that EVERY one of them says it — a test that ran them would
+    only cover the ones somebody thought of.
+    """
+    installed = re.search(r'^  say "authorised the control plane\'s key for', script, re.M)
+    assert installed, "the script no longer announces that it installed the key"
+    for message in re.finditer(r'fail \\?\n?\s*"((?:[^"\\]|\\.)*)"', script[installed.end() :]):
+        said = " ".join(message.group(1).split())
+        assert "${KEYS_FILE}" in said, (
+            "a refusal after the key is installed does not say that it is installed or "
+            f"which file it is in: {said[:120]}"
+        )
+
+
 # --- M19.2: a verification that can fail --------------------------------------
 #
 # The script wrote ``authorized_keys`` and then verified its own work by reading back the
@@ -853,10 +1073,16 @@ def the_sshd_key_check(script: str) -> str:
     questions are halves of one answer — which file would sshd read a key from, and would
     reading it end in a login. Assembling only one of them here would let a test pass a
     host the script refuses.
+
+    BOTH lookups, for the same reason: the global one is what the guard reads and what the
+    account-scoped one falls back to, and the three checks read the account-scoped one. A
+    harness that assembled only the first would be testing a script that no longer exists.
     """
     return (
         function_in(script, "sshd_effective_config")
         + 'SSHD_CONFIG="$(sshd_effective_config)"\n'
+        + function_in(script, "sshd_config_for_this_account")
+        + 'SSHD_ACCOUNT_CONFIG="$(sshd_config_for_this_account)"\n'
         + function_in(script, "refuse_if_sshd_cannot_be_asked")
         + function_in(script, "refuse_if_this_account_cannot_use_a_key")
         + function_in(script, "refuse_if_sshd_ignores_the_key_file")
@@ -1234,6 +1460,270 @@ def test_root_only_rules_are_not_applied_to_an_account_that_is_not_root(
     assert accepted.returncode == 0, (
         f"a run preparing '{account}' was refused for a rule that only governs uid 0:"
         f"\n{accepted.stdout}{accepted.stderr}"
+    )
+    assert "the run would have gone on to report ready" in accepted.stdout
+
+
+# --- M19's acceptance: the question is about THIS account ---------------------
+#
+# The walk built a host carrying ``PubkeyAuthentication no`` with a ``Match User root``
+# block three lines below that switches keys back on, and then LOGGED IN with the key to
+# prove it works. The script refused it, honestly — ``sshd -T`` with no connection to
+# describe prints the configuration before any ``Match`` — and there was no way past the
+# refusal, so that host could never produce the line the panel registers from. It was
+# unregisterable. A check that turns away a working host is the same defect as one that
+# passes a broken one, which is the convention this milestone established.
+#
+# The answer is ``sshd -T -C user=<the account>``, and the reason it is available at all is
+# that the account is the ONE part of a connection this script legitimately knows: the
+# operator passed it. An address would be a hard-rule violation in this file.
+
+
+def an_sshd_that_answers(*, globally: tuple[str, ...], for_root: tuple[str, ...]) -> dict[str, str]:
+    """A stub sshd whose ``-T`` answer depends on whether it was asked about an account.
+
+    Two configurations behind one binary, which is what a ``Match User`` block IS from the
+    outside: the daemon has one answer with no connection to describe and another for a
+    named account. The scenario under ``tests/e2e/infra/`` puts the same question to a REAL
+    sshd running a real ``Match`` block, because a stub can only repeat what its author
+    believed; this one isolates WHICH of the two answers the script reads.
+    """
+
+    def printed(directives: tuple[str, ...]) -> str:
+        return "  printf '%s\\n' " + " ".join(f"'{line}'" for line in directives) + "\n"
+
+    return {
+        "sshd": (
+            "#!/bin/sh\n"
+            "scoped=no\n"
+            'for argument in "$@"; do\n'
+            '  if [ "$argument" = "user=root" ]; then scoped=yes; fi\n'
+            "done\n"
+            'if [ "$scoped" = yes ]; then\n'
+            + printed(for_root)
+            + "else\n"
+            + printed(globally)
+            + "fi\n"
+        )
+    }
+
+
+def test_a_host_that_switches_keys_on_for_this_account_alone_is_not_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The acceptance finding: a host the walk logged into, and the script turned away.
+
+    The value at the top of the file governs everybody except the account in question, so
+    reading it is reading the wrong answer — and the wrong answer here costs the operator
+    a host they cannot register at all, not merely an evening.
+    """
+    accepted = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=an_sshd_that_answers(
+            globally=(*A_FILE_SSHD_REALLY_READS, "pubkeyauthentication no"),
+            for_root=(*A_FILE_SSHD_REALLY_READS, "pubkeyauthentication yes"),
+        ),
+    )
+
+    assert accepted.returncode == 0, (
+        "a host whose Match block admits this account with a key was refused, which makes "
+        f"it unregisterable:\n{accepted.stdout}{accepted.stderr}"
+    )
+    assert "the run would have gone on to report ready" in accepted.stdout
+
+
+def test_a_host_that_switches_keys_off_for_this_account_alone_is_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The same blind spot in the direction that used to pass a broken host.
+
+    Keys on at the top of the file and off inside a ``Match`` covering this account: the
+    pre-``Match`` answer says yes, no key logs this account in, and the run would have
+    reported ``ready``. Both halves come from the same fix, and a test for only the first
+    would be satisfied by a script that stopped asking sshd anything.
+    """
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=an_sshd_that_answers(
+            globally=(*A_FILE_SSHD_REALLY_READS, "pubkeyauthentication yes"),
+            for_root=(*A_FILE_SSHD_REALLY_READS, "pubkeyauthentication no"),
+        ),
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "the run would have gone on to report ready" not in refused.stdout
+    said = " ".join(refused.stderr.split())
+    assert "PubkeyAuthentication" in said, said
+    # And it does not send the operator looking for a Match block that is already read.
+    assert "this run cannot see it" not in said, said
+
+
+def test_which_file_sshd_reads_is_asked_about_this_account_too(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """``AuthorizedKeysFile`` is allowed inside a ``Match`` block, so it needs the same scope.
+
+    Both directions of the same wiring: a host that moves every OTHER account's keys
+    elsewhere and leaves this one's where it is works and must not be turned away, and a
+    host that moves THIS account's keys elsewhere does not work and must not be passed. The
+    pre-``Match`` answer gets both of them backwards, and the refusal has to name the file
+    sshd really reads for this account rather than the one at the top of the config.
+    """
+    somewhere_else = "/etc/ssh/keys_for/%u"
+
+    accepted = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=an_sshd_that_answers(
+            globally=("authorizedkeyscommand none", f"authorizedkeysfile {somewhere_else}"),
+            for_root=A_FILE_SSHD_REALLY_READS,
+        ),
+    )
+
+    assert accepted.returncode == 0, (
+        "a host that reads this account's own key file was refused for where it keeps "
+        f"everybody else's:\n{accepted.stdout}{accepted.stderr}"
+    )
+
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=an_sshd_that_answers(
+            globally=A_FILE_SSHD_REALLY_READS,
+            for_root=("authorizedkeyscommand none", f"authorizedkeysfile {somewhere_else}"),
+        ),
+    )
+
+    assert refused.returncode != 0, (
+        f"a host that reads this account's keys from somewhere else was accepted:\n"
+        f"{refused.stdout}"
+    )
+    said = " ".join(refused.stderr.split())
+    assert "/etc/ssh/keys_for" in said, said
+    assert "/root/.ssh/authorized_keys" in said, said
+
+
+def test_the_daemon_is_asked_about_an_account_and_never_about_an_address(
+    script: str,
+) -> None:
+    """The hard rule, at the one place in this file where breaking it would be tempting.
+
+    ``-C`` also takes an address, a hostname, a local address and a local port, and any of
+    them would answer more of the question. A country, a provider, an address or a port in
+    this script is a node the fleet cannot rotate away from, so the specification carries
+    the account and nothing else — and what that costs is written into section G of the
+    header rather than papered over.
+    """
+    code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+    given = re.findall(r'-C\s+"?([^"\s]+)"?', code)
+    assert given == ['user=${TARGET_USER}'], (
+        f"the connection specification handed to sshd is not the account alone: {given}"
+    )
+    for criterion in ("addr=", "host=", "laddr=", "lport=", "rdomain="):
+        assert criterion not in code, (
+            f"'{criterion}' is handed to sshd, which puts a piece of node topology in this "
+            "file — the one thing it may never hold"
+        )
+
+
+def test_every_directive_about_the_account_is_read_from_the_account_scoped_answer(
+    script: str,
+) -> None:
+    """All five of them, and not the two a behavioural test happens to reach.
+
+    Each question in section 6 is answered by grepping one directive out of one variable,
+    and there are now two variables that look alike: the pre-``Match`` answer, which the
+    port detection in section 5 wants, and the one sshd gave about this account, which
+    every key question wants. Reading the wrong one compiles, runs, passes its own tests on
+    a host with no ``Match`` block at all, and silently restores the defect M19's
+    acceptance found — on the one host shape where it matters.
+
+    Read rather than run for that reason: a behavioural case per directive would be five
+    stubs proving the same wiring, and the one that was forgotten is the one that breaks.
+    """
+    for directive in (
+        "pubkeyauthentication",
+        "authenticationmethods",
+        "permitrootlogin",
+        "authorizedkeysfile",
+        "authorizedkeyscommand",
+    ):
+        at = script.index(f"/^{directive} ")
+        read_from = re.findall(r"\$\{(SSHD_\w*CONFIG)\}", script[:at])
+        assert read_from and read_from[-1] == "SSHD_ACCOUNT_CONFIG", (
+            f"{directive} is read from {read_from[-1:] or 'nothing'} rather than from the "
+            "answer sshd gave about this account, so a Match block covering it is invisible"
+        )
+    # And the one question that is NOT about an account keeps the answer it needs: a Port
+    # cannot appear inside a Match block, and section 5 asks before the account-scoped
+    # lookup could have been made to fail on an odd account name.
+    at = script.index("/^port ")
+    read_from = re.findall(r"\$\{(SSHD_\w*CONFIG)\}", script[:at])
+    assert read_from and read_from[-1] == "SSHD_CONFIG", (
+        f"the management port is read from {read_from[-1:] or 'nothing'} rather than from "
+        "the daemon's own global answer"
+    )
+
+
+def test_a_daemon_that_will_not_take_the_account_spec_still_gets_an_answer(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The fallback, and it has to be the old answer rather than silence.
+
+    A daemon that refuses the specification — an unparsable one exits 1, and an account
+    name containing a comma makes one — leaves the account-scoped lookup empty, and empty
+    would send the guard into refusing a host with nothing wrong with it. Falling back to
+    the pre-``Match`` answer restores exactly the blind spot this script had before and
+    nothing worse.
+    """
+    accepted = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs={
+            "sshd": (
+                "#!/bin/sh\n"
+                'for argument in "$@"; do\n'
+                '  if [ "$argument" = "-C" ]; then\n'
+                '    echo "Invalid test mode specification" >&2\n'
+                "    exit 1\n"
+                "  fi\n"
+                "done\n"
+                "printf '%s\\n' 'authorizedkeyscommand none' "
+                "'authorizedkeysfile .ssh/authorized_keys' 'pubkeyauthentication yes'\n"
+            )
+        },
+    )
+
+    assert accepted.returncode == 0, (
+        "a daemon that will not take the account specification was treated as a daemon "
+        f"that could not be asked at all:\n{accepted.stdout}{accepted.stderr}"
     )
     assert "the run would have gone on to report ready" in accepted.stdout
 

@@ -120,7 +120,7 @@
 #      questions; it never sends a packet anywhere. Whether a friend inside Russia can
 #      reach this node is a field observation on a real network, and no run of this script
 #      is evidence for it.
-#   G. THE KEY CHECK ASKS SSHD'S GLOBAL CONFIGURATION, NOT THIS ACCOUNT'S `Match` BLOCK.
+#   G. THE KEY CHECK ASKS SSHD ABOUT THIS ACCOUNT, AND STILL NOT ABOUT THIS CONNECTION.
 #      Section 6 puts four questions to sshd itself, because a key in a file sshd never
 #      opens — or one offered to a daemon that will not take a key from this account — is
 #      not an authorisation. See there for why that replaced reading back the file this
@@ -131,13 +131,29 @@
 #      uid 0, which is the panel's own default for `ssh_user` — whether root may log in
 #      with one (`PermitRootLogin`).
 #
-#      What `sshd -T` prints with no connection to describe is the configuration BEFORE
-#      any `Match`, so a host that moves THIS account's keys somewhere else inside a
-#      `Match User` block is not seen and would be told its key is fine — and, the other
-#      way round, a host that switches keys back ON for this one account inside a `Match`
-#      is refused although it works. Asking about the account specifically would mean
-#      handing sshd an address to match on, and an address is node-record data rather than
-#      anything this file may hold.
+#      All four are asked with `sshd -T -C user=<the account this run prepares>`, so what
+#      comes back is the value IN FORCE FOR THAT ACCOUNT and a `Match User` or `Match
+#      Group` block covering it is part of the answer. It did not used to be, and the cost
+#      was M19's acceptance finding: `sshd -T` alone prints the configuration BEFORE any
+#      `Match`, so a host carrying `PubkeyAuthentication no` with a `Match User` block
+#      three lines below that switches keys back on — a host somebody really did log into
+#      with the key — was refused for a value that governs everyone except the account in
+#      question. There was no way past that refusal, so the host could never produce the
+#      line the panel registers from. Turning away a working host is the same defect as
+#      passing a broken one, and this script now treats both as one.
+#
+#      NO ADDRESS IS HANDED TO SSHD, and that is where this answer stops. `-C` also takes
+#      an address, a hostname, a local address and a local port; not one of those may be
+#      written into this file, because a country, a provider, an address or a port in here
+#      is a node the fleet cannot rotate away from. So a `Match Address`, `Match Host`,
+#      `Match LocalAddress` or `Match LocalPort` block is not seen — measured on OpenSSH
+#      9.6p1 and 10.0p2 rather than read off the manual page: a criterion the test
+#      specification carries no data for is treated as NOT matching, exit 0, nothing on
+#      stderr. `sshd -T` on its own saw none of them either, so nothing was given up for
+#      this; what remains unanswered is a host that admits or refuses this key BY WHERE
+#      THE CONTROL PLANE DIALS FROM, which nothing runnable here can know. On a daemon
+#      that will not take the specification at all, section 5 falls back to the pre-`Match`
+#      answer — the older, wider version of this same blind spot, and never silence.
 #
 #      WHAT IS STILL NOT ASKED, listed so that this is the claim rather than a sample:
 #      the account lists (`AllowUsers`, `DenyUsers`, `AllowGroups`, `DenyGroups`), what a
@@ -176,22 +192,94 @@ USAGE
 say() { printf '==> %s\n' "$1"; }
 fail() { printf 'node-bootstrap: %s\n' "$1" >&2; exit 1; }
 
+# A SENTENCE RATHER THAN THE SHELL'S OWN ERROR when an option is the last token on the
+# line — M19's acceptance. `--authorized-key` with nothing after it ended the run on
+# `line 181: $2: unbound variable`, which is `set -u` speaking and not this script: it
+# names a line number in a file the operator is piping in and never names the flag they
+# typed. `shift 2` past the end is the same hazard one token later — it returns non-zero
+# and `set -e` ends the run in silence — so this guard runs before either can.
+value_after() {
+  [ $# -ge 2 ] || fail "$1 expects a value and was the last thing on the command line.
+  Nothing on this host was changed. Run with --help for what each option takes."
+}
+
+# EVERY ARGUMENT IS ANSWERED WHERE IT IS READ, and the position is the whole point —
+# M19's acceptance. The spec check below used to sit in section 5, four host-changing steps
+# later: `--port 0/udp` was refused only after the key had been installed, /opt/hashi
+# created and the firewall reconfigured, so a typo cost a host that had already been
+# altered. `--ssh-port` had no check of its own at all — a zero passed the `^[0-9]+$`
+# filter there and went straight into a firewall rule, where ufw refused it with its own
+# bare `ERROR: Bad port` and `set -e` ended the run: the operator was answered by a program
+# they did not invoke, about a value this script could have read itself. Both are knowable
+# from the command line alone, so both are answered on the command line.
+#
+# `$2` IS WHAT THE OPERATOR TYPED and `$1` the number inside it, so a bad protocol and a
+# bad number in the same argument both quote the whole argument rather than a piece of it.
+#
+# SIX CHARACTERS OR MORE IS OUT OF RANGE, TESTED AS TEXT, because the comparison below
+# cannot do it: `[ 99999999999999999999 -ge 1 ]` is not false, it is bash printing
+# "integer expression expected" and `set -e` ending the run on a message this script did
+# not write — the same defect as ufw's, one layer closer in.
+refuse_unless_it_is_a_port_number() {
+  case "$1" in
+    ""|*[!0-9]*) fail "not a port: '${2:-$1}' (expected a number from 1 to 65535)" ;;
+    ??????*) fail "port out of range: '${2:-$1}' (expected a number from 1 to 65535)" ;;
+  esac
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ] \
+    || fail "port out of range: '${2:-$1}' (expected a number from 1 to 65535)"
+}
+
+# And the data plane's form of it, which carries an optional protocol. The number inside
+# is handed to the check above, so one argument cannot be a port in one flag and not in
+# the other.
+refuse_unless_it_is_a_port_spec() {
+  case "$1" in
+    *[!0-9/tcpud]*|"") fail "not a port: '$1' (expected N or N/tcp or N/udp)" ;;
+  esac
+  number="${1%%/*}"
+  proto="${1#*/}"
+  refuse_unless_it_is_a_port_number "${number}" "$1"
+  if [ "${proto}" != "$1" ]; then
+    case "${proto}" in
+      tcp|udp) : ;;
+      *) fail "unknown protocol in '$1' (expected tcp or udp)" ;;
+    esac
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --authorized-key) AUTHORIZED_KEY="$2"; shift 2 ;;
+    --authorized-key) value_after "$@"; AUTHORIZED_KEY="$2"; shift 2 ;;
     --authorized-key=*) AUTHORIZED_KEY="${1#*=}"; shift ;;
+    # THE WHOLE FILE, never its first line — M19's acceptance, and the same rule as the
+    # flag above: one invocation, one key. `head -1` silently took the first of however
+    # many keys the file held, so a file whose second line was the fleet's key installed
+    # somebody else's instead and said it had authorised the control plane's. What the
+    # file holds is now checked in section 1, where a value that is not one key is refused
+    # before anything is written.
     --authorized-key-file)
+      value_after "$@"
       [ -f "$2" ] || fail "no such file: $2"
-      AUTHORIZED_KEY="$(head -1 "$2")"; shift 2 ;;
+      AUTHORIZED_KEY="$(cat "$2")"; shift 2 ;;
     --authorized-key-file=*)
       [ -f "${1#*=}" ] || fail "no such file: ${1#*=}"
-      AUTHORIZED_KEY="$(head -1 "${1#*=}")"; shift ;;
-    --user) TARGET_USER="$2"; shift 2 ;;
+      AUTHORIZED_KEY="$(cat "${1#*=}")"; shift ;;
+    --user) value_after "$@"; TARGET_USER="$2"; shift 2 ;;
     --user=*) TARGET_USER="${1#*=}"; shift ;;
-    --port) OPEN_PORTS+=("$2"); shift 2 ;;
-    --port=*) OPEN_PORTS+=("${1#*=}"); shift ;;
-    --ssh-port) SSH_PORTS="${SSH_PORTS} $2"; shift 2 ;;
-    --ssh-port=*) SSH_PORTS="${SSH_PORTS} ${1#*=}"; shift ;;
+    --port)
+      value_after "$@"
+      refuse_unless_it_is_a_port_spec "$2"
+      OPEN_PORTS+=("$2"); shift 2 ;;
+    --port=*)
+      refuse_unless_it_is_a_port_spec "${1#*=}"
+      OPEN_PORTS+=("${1#*=}"); shift ;;
+    --ssh-port)
+      value_after "$@"
+      refuse_unless_it_is_a_port_number "$2"
+      SSH_PORTS="${SSH_PORTS} $2"; shift 2 ;;
+    --ssh-port=*)
+      refuse_unless_it_is_a_port_number "${1#*=}"
+      SSH_PORTS="${SSH_PORTS} ${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       printf 'unknown argument: %s\n' "$1" >&2
@@ -250,6 +338,45 @@ case "${AUTHORIZED_KEY}" in
   authenticates nothing, it only recognises the public half. Pass the .pub file's
   contents instead. If this key has already been on this host, treat it as compromised
   and issue a new pair on the control plane." ;;
+esac
+
+# ONE KEY, AND THE CHECK IS HERE BECAUSE SECTION 3 HAS NOT WRITTEN ANYTHING YET —
+# M19's acceptance, and the one finding in it that is a security defect rather than an
+# awkwardness. `authorized_keys` is one key per line, so a value carrying a newline is
+# several keys and appending it authorises every one of them. The walk passed a two-line
+# value whose second line was a stranger's key: the run wrote both into the account's
+# authorized_keys, printed that it had authorised the control plane's key, and only then
+# refused — at the very end, on a check that compares the FIRST key's body and never
+# mentioned the other one. The operator was stopped and never told that a key they did
+# not choose was now authorised for that account, nothing removed it, and the non-zero
+# exit invited a retry that would leave it behind.
+#
+# BEFORE, NOT AFTER, and that is a choice rather than tidiness. A check on the far side of
+# the write could only repair: the stranger's key is live between the append and the
+# removal, a removal that fails leaves the run announcing a cleanup it did not do, and the
+# file being repaired is one the operator may have hand-edited. Refusing here has no
+# window and no second failure mode — nothing on this host has been touched at this point
+# in the run, which is why this refusal can say so and be believed.
+#
+# AFTER the private-key check above, deliberately: an OpenSSH private key is also several
+# lines, and "that is a PRIVATE key, treat it as compromised" is the message that case
+# needs. Reordering these two swaps it for a lesser one.
+#
+# It is reached by accident at least as often as by malice — a .pub file with a stray
+# second line, or a paste that took two entries out of an existing authorized_keys.
+case "${AUTHORIZED_KEY}" in
+  *$'\n'*)
+    # Counted through a pipe, which is the only thing this script ever does with the
+    # value: how many lines there are is the operator's answer, and no part of any of
+    # them goes on a terminal.
+    LINES_GIVEN="$(printf '%s\n' "${AUTHORIZED_KEY}" | wc -l | tr -d ' ')"
+    fail "that is more than one key — the value spans ${LINES_GIVEN} lines, and
+  authorized_keys holds one key per line, so installing it would authorise every one of
+  them for this account. Nothing was installed and nothing on this host was changed. Pass
+  the ONE public key the control plane authenticates with — on the control plane,
+  --authorized-key \"\$(cat ~/.ssh/hashi-node.pub)\" names exactly that file. If what you
+  copied from holds several keys, this run cannot tell which of them is the fleet's:
+  choose it there, not here." ;;
 esac
 
 # Shape only: type, base64 body, optional comment. Not a cryptographic check — sshd is
@@ -397,6 +524,13 @@ else
   say "authorised the control plane's key for ${TARGET_USER}"
 fi
 
+# EVERY REFUSAL FROM HERE ON SAYS THE KEY IS INSTALLED — M19's acceptance. Past this line
+# the host carries an authorisation it did not carry before, and a refusal that does not
+# mention it is a refusal hiding a change it made. Section 6's sshd questions named it
+# already; the firewall, the daemon and the kernel ones did not, so an operator stopped by
+# one of those had no way to know whether anything had been authorised and no reason to go
+# and look. Anything added below this line that can refuse says the same sentence.
+
 # --- 4. the directory the control plane writes into ---------------------------
 #
 # THE PRODUCT'S PRIVILEGE BOUNDARY, and the decision M13 was opened to take. `/opt` is
@@ -493,7 +627,8 @@ fi
 if ! command -v ufw >/dev/null 2>&1; then
   command -v apt-get >/dev/null 2>&1 || fail \
     "no ufw on this host and no apt-get to install it with. Install ufw and run this
-  again — this script will not leave a node without a host firewall."
+  again — this script will not leave a node without a host firewall. The control plane's
+  key is already authorised in ${KEYS_FILE} and this refusal does not remove it."
   say "installing ufw"
   # Both flags are property 2: apt asks about configuration files and about restarting
   # services unless told not to, and either question hangs a piped run for ever.
@@ -516,7 +651,12 @@ UFW_LOGLEVEL="$(as_root grep -m1 '^LOGLEVEL=' /etc/ufw/ufw.conf 2>/dev/null | cu
 if [ "${UFW_LOGLEVEL}" = "off" ]; then
   say "ufw logging was already off"
 else
-  as_root ufw logging off
+  # Discarded like every other ufw call in this file — M19's acceptance. This was the one
+  # that still put ufw's own sentence into the middle of a run whose lines all start
+  # `==> `, and the operator cannot tell which program is talking. What happened is said
+  # below, in this script's own words. A genuine failure still ends the run: ufw writes
+  # that to stderr, which is not redirected here.
+  as_root ufw logging off >/dev/null
 fi
 # And any file a previous life of this host left behind. It holds exactly the record we
 # refuse to keep, so leaving it in place while switching logging off would be keeping the
@@ -551,12 +691,55 @@ SESSION_PORT="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
 # case, sitting one line below the thing that made it unreachable.
 sshd_effective_config() {
   if command -v sshd >/dev/null 2>&1; then
-    as_root sshd -T 2>/dev/null || true
+    as_root sshd -T "$@" 2>/dev/null || true
   elif [ -x /usr/sbin/sshd ]; then
-    as_root /usr/sbin/sshd -T 2>/dev/null || true
+    as_root /usr/sbin/sshd -T "$@" 2>/dev/null || true
   fi
 }
 SSHD_CONFIG="$(sshd_effective_config)"
+
+# AND THE SAME QUESTION ASKED ABOUT THE ACCOUNT THIS RUN PREPARES — M19's acceptance, and
+# the difference between a check that turns away a working host and one that does not.
+# `sshd -T` on its own prints the configuration BEFORE any `Match`, so a host carrying
+#
+#     PubkeyAuthentication no
+#     Match User <the account>
+#         PubkeyAuthentication yes
+#
+# lets the control plane in with a key — measured, by really logging in — and section 6
+# refused it for a `no` that is not the value in force for this account. There was no way
+# past that refusal, so such a host could never produce the line the panel registers from:
+# it was unregisterable, which is the same defect as passing a broken host and this
+# milestone treats it as one.
+#
+# `-C user=<account>` AND NOTHING ELSE. `-C` also takes an address, a hostname, a local
+# address and a local port, and not one of those may be written here — a country, a
+# provider, an address or a port in this file is a node the fleet cannot rotate away from,
+# and it is the hard rule this script has been keeping since M11. The account is the only
+# part of a connection this script legitimately knows, because the operator passed it.
+#
+# WHAT THAT COSTS, measured on OpenSSH 9.6p1 and 10.0p2 rather than read off the manual
+# page: a criterion the test specification carries no data for is treated as NOT matching,
+# with exit 0 and nothing on stderr. So `Match User` and `Match Group` are answered — the
+# second one really does resolve the account's groups — while `Match Address`, `Match
+# Host`, `Match LocalAddress` and `Match LocalPort` are not seen. They are not seen by
+# `sshd -T` either, so this is strictly more of the host's real configuration than before
+# and never less. Section G of the header carries the residue.
+#
+# THE FALLBACK IS THE PRE-`Match` ANSWER RATHER THAN SILENCE. A daemon that will not take
+# this specification answers nothing — an unparsable one exits 1 with `Invalid test mode
+# specification`, and an account name containing a comma makes one — and empty here would
+# send the guard below into refusing a host with nothing wrong with it. Falling back
+# restores exactly the blind spot this script had before and nothing worse.
+sshd_config_for_this_account() {
+  scoped="$(sshd_effective_config -C "user=${TARGET_USER}")"
+  if [ -n "${scoped}" ]; then
+    printf '%s\n' "${scoped}"
+  else
+    printf '%s\n' "${SSHD_CONFIG}"
+  fi
+}
+SSHD_ACCOUNT_CONFIG="$(sshd_config_for_this_account)"
 
 detect_ssh_ports() {
   printf '%s\n' "${SESSION_PORT}"
@@ -566,7 +749,9 @@ SSH_PORTS="$(printf '%s\n%s\n' "${SSH_PORTS// /$'\n'}" "$(detect_ssh_ports)" \
   | grep -E '^[0-9]+$' | sort -un || true)"
 [ -n "${SSH_PORTS}" ] || fail \
   "could not work out which port sshd listens on, and this script will not enable a
-  firewall it cannot prove leaves you a way back in. Pass --ssh-port N."
+  firewall it cannot prove leaves you a way back in. Pass --ssh-port N. The firewall was
+  not touched; the control plane's key is already authorised in ${KEYS_FILE} and this
+  refusal does not remove it."
 
 # Management first, and before `enable` below. The order is the whole safety property:
 # a firewall that comes up before its own admission rule is a locked door with the key
@@ -585,22 +770,10 @@ say "management access allowed on tcp: $(printf '%s' "${SSH_PORTS}" | tr '\n' ' 
 # a node listens on is a property of the transport enabled on it, held in the node record,
 # and the operator passes the same number they entered there. A transport moved to a new
 # port is one more --port on the next run.
+#
+# Each spec was answered as it was READ, at the top of this file, so nothing in this loop
+# can refuse an argument on a host it has already changed.
 for spec in ${OPEN_PORTS[@]+"${OPEN_PORTS[@]}"}; do
-  case "${spec}" in
-    *[!0-9/tcpud]*|"") fail "not a port: '${spec}' (expected N or N/tcp or N/udp)" ;;
-  esac
-  number="${spec%%/*}"
-  proto="${spec#*/}"
-  case "${number}" in
-    ""|*[!0-9]*) fail "not a port: '${spec}' (expected N or N/tcp or N/udp)" ;;
-  esac
-  [ "${number}" -ge 1 ] && [ "${number}" -le 65535 ] || fail "port out of range: '${spec}'"
-  if [ "${proto}" != "${spec}" ]; then
-    case "${proto}" in
-      tcp|udp) : ;;
-      *) fail "unknown protocol in '${spec}' (expected tcp or udp)" ;;
-    esac
-  fi
   # ufw refuses to add a rule it already holds and says so, and that answer is the whole
   # difference between "opened" and "was already open" — a second run that claims it opened
   # a port it did not touch is the script lying about its own effect. Captured rather than
@@ -610,7 +783,9 @@ for spec in ${OPEN_PORTS[@]+"${OPEN_PORTS[@]}"}; do
   # is one wrong word in the output and nothing else, because ufw deduplicates the rule
   # either way. A genuine refusal still stops the run — it is not swallowed.
   if ! opened="$(as_root env LC_ALL=C ufw allow "${spec}" 2>&1)"; then
-    fail "ufw refused to open ${spec}: ${opened}"
+    fail "ufw refused to open ${spec}: ${opened}
+  The control plane's key is already authorised in ${KEYS_FILE} and this refusal does not
+  remove it."
   fi
   case "${opened}" in
     *"Skipping adding existing rule"*) say "${spec} was already open" ;;
@@ -668,7 +843,8 @@ fi
 # reason to put one on a terminal.
 as_root docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || fail \
   "the docker daemon does not answer, so the control plane could reach this host and
-  still be unable to start anything on it."
+  still be unable to start anything on it. The control plane's key is already authorised
+  in ${KEYS_FILE} and this refusal does not remove it."
 
 # WOULD THIS KEY ACTUALLY LET THE CONTROL PLANE IN? — M19.2, and until M19 nothing asked.
 # The only key check in this script read back the file it had just written, which is true
@@ -704,28 +880,31 @@ refuse_if_sshd_cannot_be_asked() {
 # sshd reads the file the key went into, and then reported `ready` for a key that logs
 # nobody in. Same defect class as the read-back it replaced, one question further along.
 #
-# Three directives, taken out of the `sshd -T` answer already in hand, so nothing new is
-# asked of the host. Each is refused ONLY where it really means "not with a key, not for
-# this account", because the trap here is the opposite error: a check that turns away a
-# working host costs the operator the same evening as one that passes a broken one. The
-# two values that look like refusals and are not are named in the comments below.
+# Three directives, taken out of the answer sshd gave ABOUT THIS ACCOUNT — section 5's
+# `-C user=` lookup — so nothing new is asked of the host and a `Match User` or `Match
+# Group` block covering this account is the value that is read. Each is refused ONLY where
+# it really means "not with a key, not for this account", because the trap here is the
+# opposite error: a check that turns away a working host costs the operator the same
+# evening as one that passes a broken one, and M19's acceptance found this half doing
+# exactly that. The two values that look like refusals and are not are named in the
+# comments below.
 refuse_if_this_account_cannot_use_a_key() {
   # Printed as `yes` or `no`, so only `no` refuses. A daemon that stopped printing the
   # directive at all would leave this empty and silent, which is drift rather than a host
   # fault — and it is held where drift can be seen: the scenario under tests/e2e/infra/
   # reads these names off a REAL sshd instead of a stub repeating what we expect.
-  pubkeys="$(printf '%s\n' "${SSHD_CONFIG}" \
+  pubkeys="$(printf '%s\n' "${SSHD_ACCOUNT_CONFIG}" \
     | awk '/^pubkeyauthentication /{print $2; exit}')"
   if [ "${pubkeys}" = "no" ]; then
-    fail "sshd on this host is configured with 'PubkeyAuthentication no', so it lets nobody
-  in with a key — including the one this run installed for ${TARGET_USER} in ${KEYS_FILE},
-  which sshd would open and then turn down. The control plane has a key and nothing else: no
+    fail "sshd on this host answers 'PubkeyAuthentication no' for ${TARGET_USER}, so no key
+  logs that account in — including the one this run installed for it in ${KEYS_FILE}, which
+  sshd would open and then turn down. The control plane has a key and nothing else: no
   password to offer, and no terminal to be prompted on. Set 'PubkeyAuthentication yes' in
-  /etc/ssh/sshd_config, reload sshd, and run this again. If keys are switched back on for
-  this one account inside a 'Match' block, this run cannot see it — 'sshd -T' with no
-  connection to describe prints the configuration before any Match — so check that by hand
-  before you decide this refusal is wrong. Everything else on this host is prepared; do not
-  register it until one of those is done."
+  /etc/ssh/sshd_config, reload sshd, and run this again. That is the value IN FORCE FOR
+  ${TARGET_USER} rather than the one at the top of the file, so a 'Match User' or 'Match
+  Group' block switching keys back on for this account is already accounted for; a 'Match'
+  on the address the control plane will connect FROM is not, and cannot be asked about from
+  here. Everything else on this host is prepared; do not register it until that is done."
   fi
 
   # A LIST OF ALTERNATIVES separated by spaces, each of them a comma-separated list of
@@ -736,7 +915,7 @@ refuse_if_this_account_cannot_use_a_key() {
   # the first apply instead of here. No `set -f` as in the loop below, because a method
   # name is not a path and a word that somehow globbed would match nothing and refuse,
   # which is the safe direction.
-  methods="$(printf '%s\n' "${SSHD_CONFIG}" \
+  methods="$(printf '%s\n' "${SSHD_ACCOUNT_CONFIG}" \
     | awk '/^authenticationmethods /{sub(/^[^ ]+ /, ""); print; exit}')"
   key_on_its_own=""
   for alternative in ${methods}; do
@@ -764,7 +943,7 @@ refuse_if_this_account_cannot_use_a_key() {
   # would be refused. The panel's node form defaults ssh_user to root, which is what makes
   # this the likely combination rather than the exotic one.
   if [ "${TARGET_UID}" = "0" ]; then
-    root_login="$(printf '%s\n' "${SSHD_CONFIG}" \
+    root_login="$(printf '%s\n' "${SSHD_ACCOUNT_CONFIG}" \
       | awk '/^permitrootlogin /{print $2; exit}')"
     case "${root_login}" in
       no)
@@ -788,14 +967,17 @@ refuse_if_this_account_cannot_use_a_key() {
   fi
 }
 
-# WHICH FILE WOULD IT READ THAT KEY FROM? — M19.2, and until M19 nothing asked.
+# WHICH FILE WOULD IT READ THAT KEY FROM? — M19.2, and until M19 nothing asked. Out of
+# the same account-scoped answer as the check above, because `AuthorizedKeysFile` and
+# `AuthorizedKeysCommand` are both allowed inside a `Match` block: a host that moves this
+# one account's keys elsewhere is exactly the shape that would otherwise be missed.
 refuse_if_sshd_ignores_the_key_file() {
   # `authorizedkeysfile` is a LIST of paths and `authorizedkeyscommand` is the string
   # `none` when there is not one. The directive name is dropped and the rest kept whole,
   # because the value of the first is several words.
-  keys_files="$(printf '%s\n' "${SSHD_CONFIG}" \
+  keys_files="$(printf '%s\n' "${SSHD_ACCOUNT_CONFIG}" \
     | awk '/^authorizedkeysfile /{sub(/^[^ ]+ /, ""); print; exit}')"
-  keys_command="$(printf '%s\n' "${SSHD_CONFIG}" \
+  keys_command="$(printf '%s\n' "${SSHD_ACCOUNT_CONFIG}" \
     | awk '/^authorizedkeyscommand /{sub(/^[^ ]+ /, ""); print; exit}')"
 
   # Globbing off while the list is split into paths: a path is a path, and an unquoted
@@ -861,12 +1043,14 @@ key_is_authorised || fail \
 
 as_root ufw status verbose | grep -q 'Status: active' || fail \
   "ufw did not come up. The host is otherwise prepared, but it is exposed; fix the
-  firewall before this node carries anyone's traffic."
+  firewall before this node carries anyone's traffic. The control plane's key is already
+  authorised in ${KEYS_FILE} and this refusal does not remove it."
 
 as_root ufw status verbose | grep -qi 'Logging: off' || fail \
   "ufw is logging. That is a connection log — source addresses, written to disk — and the
   charter forbids it at any level. Run 'ufw logging off' and this script again before
-  this host is used."
+  this host is used. The control plane's key is already authorised in ${KEYS_FILE} and
+  this refusal does not remove it."
 
 # --- still section 6: the kernel this node's traffic depends on ---------------
 #
@@ -908,7 +1092,8 @@ kernel_preconditions() {
   whether a tunnel here would carry anything off the node. It has to be 1. Check it by
   hand before you register this host — 'sysctl -n net.ipv4.ip_forward' asks it, and the
   same value is under /proc/sys — because a 0 there is the failure where every signal is
-  green and nothing moves." ;;
+  green and nothing moves. The control plane's key is already authorised in ${KEYS_FILE}
+  and this refusal does not remove it." ;;
     *)
       fail "net.ipv4.ip_forward is '${forwarding}' on this host and it has to be 1, or the
   kernel will not move one packet from a tunnel out to the internet. Everything else would
@@ -918,7 +1103,8 @@ kernel_preconditions() {
   at every start, which is not something to rely on. Set it with
   'sysctl -w net.ipv4.ip_forward=1' and write it into a file under /etc/sysctl.d/ so it
   survives a reboot, then run this again. This script reads that setting and never
-  writes one: which sysctls a host carries belongs to whoever owns the host." ;;
+  writes one: which sysctls a host carries belongs to whoever owns the host. The control
+  plane's key is already authorised in ${KEYS_FILE} and this refusal does not remove it." ;;
   esac
 
   # REVERSE-PATH FILTERING BREAKS ONLY AN ENTRY NODE, and nothing tells this script which
