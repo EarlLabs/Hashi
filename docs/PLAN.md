@@ -1708,7 +1708,7 @@ decision was, the observed behaviour must match it.
 
 ---
 
-## → M17 — A WireGuard-family transport can serve exactly one friend · found in the field 2026-09-09
+## ✅ M17 — A WireGuard-family transport can serve exactly one friend · found in the field 2026-09-09 · done 2026-09-13 (acceptance: partial — 3 items need the field)
 
 **Found while discharging the run's one-hop instruction against the leaf.** With
 two active friends on a node, enabling a friend-facing `wireguard` transport and
