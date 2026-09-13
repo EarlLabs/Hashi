@@ -1949,12 +1949,44 @@ say `ready`. If no such host is available, say so rather than passing it.
 
 ---
 
-## → M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09
+## → M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09 · REOPENED AND QUEUED BY THE OWNER 2026-09-13
 
-**The owner has already decided not to fix this** (`docs/decisions.md`,
-2026-09-09: the image pin stays, the limitation is recorded). This milestone
-exists so the work is written down if that decision is ever revisited — it is
-**not** queued.
+**The owner reopened this on 2026-09-13 and chose the third option: retire the
+transport from the panel.** The earlier decision (`docs/decisions.md`,
+2026-09-09) was to keep the image pin and record the limitation, taken when the
+failure was a packaging *inference*. It has since been **measured twice on the
+live leaf** — once during the field run, and again on 2026-09-13 while designing
+M23 — so it stopped being a prediction.
+
+**What the owner asked for, in their own words (2026-09-13):**
+
+> *"just stop suggest the wireguard for users now"* … *"the admin panel do not
+> even should show this protocol, for me in suggestions"*
+
+So the requirement is **stronger than "not granted to friends"**: the operator
+must not be **offered** it when choosing a transport to enable. It should not
+appear in the suggestions on the enable dialog, nor anywhere the panel proposes
+a transport to add.
+
+**What must NOT change, and why each matters:**
+
+- **The package stays in the tree.** It is the second member of the
+  WireGuard family, and having two is what proves the charter's rule that
+  *transports are data — no `if transport ==`*. `AmbiguousPeerRoute` is tested
+  over both packages, and the contract tests iterate all four. Deleting it would
+  silently turn those into single-case tests and lose the guard against a
+  hardcoded protocol name. **The code is correct; the defect is one pinned
+  image.**
+- **The management tunnel is untouched.** `scripts/management-tunnel.sh` is
+  separate code, already uses the **obfuscated** wire format rather than plain
+  WireGuard (decided 2026-09-09, because *"this is the one tunnel that has to
+  work when everything else is being blocked"*), and has **no forwarding and no
+  NAT** — it carries traffic *to* the host, not *through* it — so this
+  milestone's failure mode structurally cannot reach it. The owner's admin
+  access is not affected by anything here.
+- **A row already enabled on a node keeps rendering.** Retiring it from the
+  suggestions must not break an existing row or an existing friend's config —
+  the leaf has one such row today. What stops is *offering it anew*.
 
 `masipcat/wireguard-go:0.0.20230223` ships `iptables` on the **legacy** backend;
 `amneziavpn/amneziawg-go:3.0.3` ships **nft**. Every node this project
@@ -1982,17 +2014,39 @@ So `amneziawg` is proven end to end and `wireguard` is proven broken as a
 friend-facing exit. **Note M17 independently makes it unusable for a fleet
 anyway**, for a reason that has nothing to do with netfilter.
 
-### M20.1 — Either pin a plain-WireGuard image on the nft backend, or render backend-aware rules, or retire the transport
+### M20.1 — Retire it from the panel's suggestions, by declaration and not by name
 
-The third is worth weighing seriously given M17: a transport that serves one
-friend and cannot forward is configurable and useful for nothing.
+**The owner chose the third option on 2026-09-13.** The first two — pinning an
+nft-backend image, or rendering backend-aware rules — remain written down above
+if the decision is ever revisited again.
+
+The transport must **declare** that it is not offered, and the panel must read
+that declaration. **No `if transport == "wireguard"` anywhere** — that is the
+charter's hard rule, and the whole point of the registry. A future transport
+found to be unusable should be retired by setting the same field, with no panel
+change at all.
+
+The declaration needs a reason attached, because a reader who finds a package in
+the tree that the panel never offers deserves to know why without going to
+`git log`.
 
 **Done when**
-- [ ] A friend on a plain `wireguard` transport reaches the internet on a `ufw`
-      host, or the transport no longer offers itself as a friend-facing exit.
+- [ ] Plain `wireguard` **does not appear in the panel's suggestions** when the
+      operator chooses a transport to enable, anywhere it could be proposed.
+- [ ] It is retired **by a declaration the registry carries**, not by a name
+      compared in the panel.
+- [ ] A `wireguard` row **already enabled on a node still renders** and an
+      existing friend's config is unchanged.
+- [ ] `AmbiguousPeerRoute` and the transport-contract tests **still run over both
+      WireGuard-family packages** — retiring it must not quietly reduce them to
+      one case.
+- [ ] `scripts/management-tunnel.sh` is untouched and still works.
 
 acceptance: yes
-The same measurement as above, on a ufw host, with the answer changed.
+Open the panel as the operator and go to enable a transport on a node. Plain
+WireGuard must not be among the choices. Then confirm the node that already has
+a `wireguard` row still renders it, and that nothing about the management tunnel
+changed.
 
 ---
 
