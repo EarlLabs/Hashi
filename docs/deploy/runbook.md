@@ -322,7 +322,8 @@ sitting on the host, run `./scripts/node-bootstrap.sh` with the same arguments.
 
 Progress lines start `==> `. A refusal exits **1** and starts `node-bootstrap: `; an
 argument it does not recognise exits **2** and prints the usage. It refuses rather than
-guessing in three places, and each one is a mistake you want stopped here:
+guessing, and these are the refusals worth knowing about before you start — each one is a
+mistake you want stopped here rather than found on a node that says it is ready:
 
 - **No key, or a key that is not a public key.** The private half belongs in the node
   record, encrypted, and never on a node — a key generated or pasted on the host would sit
@@ -333,6 +334,29 @@ guessing in three places, and each one is a mistake you want stopped here:
   firewall it cannot prove leaves you a way back in. Pass `--ssh-port`.
 - **The account is not root and sudo wants a password.** The run is piped over SSH and must
   never prompt, so give the account passwordless sudo or run as root.
+- **The account does not exist yet.** It authorises a key *for* an account and puts that
+  account in the `docker` group; it does not create one. Make it first, name another with
+  `--user`, or leave the flag off.
+- **sshd on this host will not read the file the key was installed in.** The run asks
+  `sshd -T` which files the daemon really consults, because a key in a file sshd never
+  opens is not an authorisation. The shape that does this is a host taking its keys from
+  an `AuthorizedKeysCommand` — instance metadata, on most cloud providers — with no
+  `AuthorizedKeysFile` beside it. Add the key to whatever feeds that command, or set
+  `AuthorizedKeysFile` in `/etc/ssh/sshd_config`, reload sshd, and run this again.
+- **`net.ipv4.ip_forward` is not 1.** Then the kernel moves no packet from a tunnel out to
+  the internet, and every other signal stays green while nothing arrives anywhere. It is 1
+  on most hosts only because the docker daemon sets it at every start. Set it, put it in a
+  file under `/etc/sysctl.d/` so it survives a reboot, and run this again — the script
+  reads that setting and never writes one.
+
+**One thing it names and does not refuse:** strict reverse-path filtering
+(`net.ipv4.conf.all.rp_filter` and `net.ipv4.conf.default.rp_filter`, where `1` is strict
+and `2` is loose). It is correct on a leaf and it breaks an **entry** node — the replies
+coming back over the hop arrive on the hop's interface, the kernel decides they should not
+have, and drops them before anything on the host sees them, so the hop handshakes and
+carries nothing. The script is not told which role you will register the host in, so it
+prints what it found and leaves the decision with you. If this box is going to be the
+entry, set both to loose, or off, before you register it.
 
 ### Which accounts work
 
@@ -375,6 +399,7 @@ that is serving.
 
 ```
 ==> created /opt/hashi, empty and owned by <user>
+==> sshd reads <the account's ~/.ssh/authorized_keys>, so a key installed there is one it will consult
 ==> ready: docker <version>, key authorised, firewall up, logging off
 ==> register it in the panel with ssh_user <user> and ssh_port <port>
 ==> no hashi code and no hashi state was installed here — /opt/hashi is an empty directory owned by <user>, and the control plane fills it on your first apply
