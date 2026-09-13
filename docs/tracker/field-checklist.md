@@ -666,3 +666,39 @@ somebody leaves.
 
 **Nothing here needs key material read or echoed.** `wg show` prints public keys only,
 and none of these five items requires more than that.
+
+### 20. The upgrade must not rewrite a file that was already right
+
+**Acceptance could not reach this one and said so rather than passing it.** It
+needs a row in the state migration `0006` leaves behind — `pool_size` NULL, one
+user, no stored address — and the only way to build that on a stand is to write
+the database by hand before the migration, which proves nothing about the real
+upgrade.
+
+**Your leaf is that row.** `wireguard.conf` there was written 2026-09-09 and has
+one peer at `10.66.0.2/32`. So:
+
+**Before you apply anything after the upgrade**, take a copy of the file as it
+stands — on the host, not through the panel:
+
+```sh
+ssh root@45.151.69.107 'sha256sum /opt/hashi/conf/wireguard.conf /opt/hashi/conf/amneziawg.conf'
+```
+
+Write those two hashes down. Then upgrade, then apply, then run the same command.
+
+- **`wireguard.conf`'s hash must be unchanged.** That is the milestone's promise
+  that a row enabled before M17, with one user, renders byte-identical after the
+  upgrade — the promise that keeps your existing friend's device working without
+  anyone re-importing anything.
+- **`amneziawg.conf`'s hash must also be unchanged**, for the separate reason in
+  item 17: it is the **live hop**, and hop ends are promised untouched.
+
+**If either changes, stop and look before applying to the entry.** A changed
+`amneziawg.conf` means the hop's key or address moved, and the entry is the node
+you cannot currently log in to (item 0b) — so a broken hop there is not something
+you can go and fix.
+
+*Why a hash and not a diff: the file holds private key material. A hash tells you
+whether it changed without putting any of it on your screen or in your
+scrollback.*
