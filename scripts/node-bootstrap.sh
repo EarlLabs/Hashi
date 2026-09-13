@@ -121,14 +121,30 @@
 #      reach this node is a field observation on a real network, and no run of this script
 #      is evidence for it.
 #   G. THE KEY CHECK ASKS SSHD'S GLOBAL CONFIGURATION, NOT THIS ACCOUNT'S `Match` BLOCK.
-#      Section 6 asks sshd itself which files it will read a key from, because a key in a
-#      file sshd never opens is not an authorisation — see there for why that replaced
-#      reading back the file this script had just written. What `sshd -T` prints with no
-#      connection to describe is the configuration BEFORE any `Match`, so a host that
-#      moves THIS account's keys somewhere else inside a `Match User` block is not seen,
-#      and would be told its key is fine. Asking about the account specifically would mean
+#      Section 6 puts four questions to sshd itself, because a key in a file sshd never
+#      opens — or one offered to a daemon that will not take a key from this account — is
+#      not an authorisation. See there for why that replaced reading back the file this
+#      script had just written. The four: which files it reads a key from
+#      (`AuthorizedKeysFile`, `AuthorizedKeysCommand`), whether public-key authentication
+#      is on at all (`PubkeyAuthentication`), whether a key ON ITS OWN is accepted rather
+#      than as half of a pair (`AuthenticationMethods`), and — only when the account is
+#      uid 0, which is the panel's own default for `ssh_user` — whether root may log in
+#      with one (`PermitRootLogin`).
+#
+#      What `sshd -T` prints with no connection to describe is the configuration BEFORE
+#      any `Match`, so a host that moves THIS account's keys somewhere else inside a
+#      `Match User` block is not seen and would be told its key is fine — and, the other
+#      way round, a host that switches keys back ON for this one account inside a `Match`
+#      is refused although it works. Asking about the account specifically would mean
 #      handing sshd an address to match on, and an address is node-record data rather than
-#      anything this file may hold. Everything outside a `Match` block is checked.
+#      anything this file may hold.
+#
+#      WHAT IS STILL NOT ASKED, listed so that this is the claim rather than a sample:
+#      the account lists (`AllowUsers`, `DenyUsers`, `AllowGroups`, `DenyGroups`), what a
+#      PAM stack does with the account, whether the account is locked or expired, and
+#      whether the key's own algorithm is one this daemon still accepts
+#      (`PubkeyAcceptedAlgorithms`). Each of those can keep a key out of a host every
+#      check here passes, and none of them is answered by the run saying `ready`.
 set -euo pipefail
 
 # Upstream docker's own installer. Named in a variable and overridable because it is the
@@ -274,6 +290,11 @@ TARGET_HOME="$(printf '%s' "${TARGET_PASSWD}" | cut -d: -f6)"
   exists, or leave --user off to prepare '${SUDO_USER:-$(id -un)}', which is the account
   this session is running as."
 TARGET_GROUP="$(id -gn "${TARGET_USER}")"
+# The numeric id, out of the lookup already done rather than a second one, because section
+# 6 needs it twice: sshd expands `%U` in AuthorizedKeysFile to it, and `PermitRootLogin` is
+# a rule about uid 0 rather than about the NAME root — which is what sshd itself tests, so
+# an account called something else with uid 0 is subject to it too.
+TARGET_UID="$(printf '%s' "${TARGET_PASSWD}" | cut -d: -f3)"
 
 # WHERE the key goes, derived here because it is a fact about the account rather than a
 # step: section 3 installs it and section 6 asks sshd whether it will ever read it, and
@@ -649,7 +670,7 @@ as_root docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || fail \
   "the docker daemon does not answer, so the control plane could reach this host and
   still be unable to start anything on it."
 
-# WILL SSHD EVEN OPEN THE FILE THIS RUN WROTE? — M19.2, and until M19 nothing asked.
+# WOULD THIS KEY ACTUALLY LET THE CONTROL PLANE IN? — M19.2, and until M19 nothing asked.
 # The only key check in this script read back the file it had just written, which is true
 # whether or not sshd consults that file at all. One of this project's own field hosts
 # takes its keys from cloud metadata through an `AuthorizedKeysCommand` and works only
@@ -661,14 +682,114 @@ as_root docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || fail \
 # not become available: this script installs the PUBLIC half and the private half never
 # comes to a node (property 4). So the question goes to sshd, which is the authority on
 # what it will read, and the limit of that answer is section G of the header.
-refuse_if_sshd_ignores_the_key_file() {
-  [ -n "${SSHD_CONFIG}" ] || fail \
-    "sshd on this host could not be asked which files it reads keys from — 'sshd -T'
-  answered nothing — so this run cannot tell you that the key it installed will let the
-  control plane in. Reading ${KEYS_FILE} back would say yes on a host where sshd never
-  opens that file, which is not an answer to the question. Everything else here is
-  prepared; satisfy yourself that the key works before you register this host."
 
+# THE GUARD FOR EVERY QUESTION BELOW, on its own because all of them are worthless without
+# it and because a host whose daemon cannot be asked should hear that once rather than
+# three times. "Could not check" must not read as "checked" — the rule the rest of this
+# section exists to keep.
+refuse_if_sshd_cannot_be_asked() {
+  [ -n "${SSHD_CONFIG}" ] || fail \
+    "sshd on this host could not be asked what it does with a key — 'sshd -T' answered
+  nothing — so this run cannot tell you that the key it installed will let the control
+  plane in. Reading ${KEYS_FILE} back would say yes on a host where sshd never opens that
+  file, or takes no key from this account at all, which is not an answer to the question.
+  Everything else here is prepared; satisfy yourself that the key works before you register
+  this host."
+}
+
+# WILL SSHD LET THIS ACCOUNT IN WITH A KEY AT ALL? — the half M19 first shipped without,
+# and worth writing down because the mistake is so easy to repeat: the check below answers
+# WHICH FILE sshd reads a key from, and that was being treated as "this key authenticates".
+# On a host whose sshd carries `PubkeyAuthentication no`, the run said — truthfully — that
+# sshd reads the file the key went into, and then reported `ready` for a key that logs
+# nobody in. Same defect class as the read-back it replaced, one question further along.
+#
+# Three directives, taken out of the `sshd -T` answer already in hand, so nothing new is
+# asked of the host. Each is refused ONLY where it really means "not with a key, not for
+# this account", because the trap here is the opposite error: a check that turns away a
+# working host costs the operator the same evening as one that passes a broken one. The
+# two values that look like refusals and are not are named in the comments below.
+refuse_if_this_account_cannot_use_a_key() {
+  # Printed as `yes` or `no`, so only `no` refuses. A daemon that stopped printing the
+  # directive at all would leave this empty and silent, which is drift rather than a host
+  # fault — and it is held where drift can be seen: the scenario under tests/e2e/infra/
+  # reads these names off a REAL sshd instead of a stub repeating what we expect.
+  pubkeys="$(printf '%s\n' "${SSHD_CONFIG}" \
+    | awk '/^pubkeyauthentication /{print $2; exit}')"
+  if [ "${pubkeys}" = "no" ]; then
+    fail "sshd on this host is configured with 'PubkeyAuthentication no', so it lets nobody
+  in with a key — including the one this run installed for ${TARGET_USER} in ${KEYS_FILE},
+  which sshd would open and then turn down. The control plane has a key and nothing else: no
+  password to offer, and no terminal to be prompted on. Set 'PubkeyAuthentication yes' in
+  /etc/ssh/sshd_config, reload sshd, and run this again. If keys are switched back on for
+  this one account inside a 'Match' block, this run cannot see it — 'sshd -T' with no
+  connection to describe prints the configuration before any Match — so check that by hand
+  before you decide this refusal is wrong. Everything else on this host is prepared; do not
+  register it until one of those is done."
+  fi
+
+  # A LIST OF ALTERNATIVES separated by spaces, each of them a comma-separated list of
+  # methods that must ALL succeed. `any` is the default and means the old behaviour. The
+  # control plane offers one key and nothing else, so it gets in only where some
+  # alternative is a key BY ITSELF — which makes `publickey,password` as much a refusal as
+  # `password` is: there the key is necessary and not sufficient, and the run would fail at
+  # the first apply instead of here. No `set -f` as in the loop below, because a method
+  # name is not a path and a word that somehow globbed would match nothing and refuse,
+  # which is the safe direction.
+  methods="$(printf '%s\n' "${SSHD_CONFIG}" \
+    | awk '/^authenticationmethods /{sub(/^[^ ]+ /, ""); print; exit}')"
+  key_on_its_own=""
+  for alternative in ${methods}; do
+    case "${alternative}" in
+      any|publickey) key_on_its_own="yes" ;;
+    esac
+  done
+  if [ -n "${methods}" ] && [ -z "${key_on_its_own}" ]; then
+    fail "sshd on this host requires '${methods}' to authenticate, and no alternative in
+  that list is a key on its own — so the key this run installed in ${KEYS_FILE} cannot get
+  the control plane in, either because a key is not accepted at all or because it is only
+  ever half of what is demanded. The control plane has a key and nothing else: no password
+  to offer, and no terminal to be prompted on. Offer 'publickey' as an alternative of its
+  own — in AuthenticationMethods a SPACE separates alternatives and a comma joins things
+  that must all succeed — reload sshd, and run this again. Everything else on this host is
+  prepared; do not register it until that is done."
+  fi
+
+  # BY uid AND NOT BY NAME, because that is what sshd tests. Only two of the four values
+  # refuse: `prohibit-password` PERMITS a key — and `sshd -T` prints it under its older
+  # spelling, `without-password`, which is also the compiled default, so refusing on either
+  # would turn away most distributions' stock configuration. `forced-commands-only` admits
+  # root only with a key that carries its own forced `command=`; this script installs a
+  # bare key and the control plane runs ordinary commands over that session, so that key
+  # would be refused. The panel's node form defaults ssh_user to root, which is what makes
+  # this the likely combination rather than the exotic one.
+  if [ "${TARGET_UID}" = "0" ]; then
+    root_login="$(printf '%s\n' "${SSHD_CONFIG}" \
+      | awk '/^permitrootlogin /{print $2; exit}')"
+    case "${root_login}" in
+      no)
+        fail "sshd on this host has 'PermitRootLogin no' and ${TARGET_USER} is uid 0, so no
+  key logs this account in — including the one this run installed in ${KEYS_FILE}. The
+  panel's node form offers root by default, which is why this pairing is the common one.
+  Either prepare a different account, with '--user NAME', and register THAT name in the
+  panel; or set 'PermitRootLogin prohibit-password' in /etc/ssh/sshd_config, which admits a
+  key and still refuses a password, and reload sshd. Everything else on this host is
+  prepared; do not register it until one of those is done." ;;
+      forced-commands-only)
+        fail "sshd on this host has 'PermitRootLogin forced-commands-only' and
+  ${TARGET_USER} is uid 0, so it admits this account only with a key that carries its own
+  forced 'command=' — and then only for that one command. This run installed a bare key in
+  ${KEYS_FILE}, and the control plane runs ordinary commands over the session it opens, so
+  that key would be refused. Either prepare a different account, with '--user NAME', and
+  register THAT name in the panel; or set 'PermitRootLogin prohibit-password' in
+  /etc/ssh/sshd_config and reload sshd. Everything else on this host is prepared; do not
+  register it until one of those is done." ;;
+    esac
+  fi
+}
+
+# WHICH FILE WOULD IT READ THAT KEY FROM? — M19.2, and until M19 nothing asked.
+refuse_if_sshd_ignores_the_key_file() {
   # `authorizedkeysfile` is a LIST of paths and `authorizedkeyscommand` is the string
   # `none` when there is not one. The directive name is dropped and the rest kept whole,
   # because the value of the first is several words.
@@ -684,14 +805,17 @@ refuse_if_sshd_ignores_the_key_file() {
   found=""
   set -f
   for candidate in ${keys_files}; do
-    # sshd's own tokens, expanded the way sshd expands them, and a path with no leading
-    # slash is relative to the account's home. `%%` is deliberately NOT expanded, and
-    # `none` — how sshd says it reads no file at all — gets no special case: an
-    # unrecognised token and a word that is not a path both leave the comparison
-    # unequal, which refuses rather than passes, and that is the direction this check
-    # has to fail in.
+    # The three tokens sshd_config(5) documents for AuthorizedKeysFile — `%h`, `%u` and
+    # `%U` — and a path with no leading slash is relative to the account's home. The
+    # fourth, `%%`, is deliberately NOT expanded, and `none` — how sshd says it reads no
+    # file at all — gets no special case: an unexpanded token and a word that is not a
+    # path both leave the comparison unequal, which refuses rather than passes, and that
+    # is the direction this check has to fail in. `%U` was missed when this was written
+    # and the cost was that direction's price: a host keying off the numeric id was
+    # refused for a configuration that works.
     expanded="$(printf '%s' "${candidate}" \
-      | sed -e "s|%h|${TARGET_HOME}|g" -e "s|%u|${TARGET_USER}|g")"
+      | sed -e "s|%h|${TARGET_HOME}|g" -e "s|%u|${TARGET_USER}|g" \
+            -e "s|%U|${TARGET_UID}|g")"
     case "${expanded}" in
       /*) : ;;
       *) expanded="${TARGET_HOME}/${expanded}" ;;
@@ -727,6 +851,8 @@ refuse_if_sshd_ignores_the_key_file() {
   host is prepared; do not register it until one of those is done." ;;
   esac
 }
+refuse_if_sshd_cannot_be_asked
+refuse_if_this_account_cannot_use_a_key
 refuse_if_sshd_ignores_the_key_file
 
 key_is_authorised || fail \

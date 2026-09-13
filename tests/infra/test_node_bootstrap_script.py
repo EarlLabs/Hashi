@@ -40,6 +40,7 @@ HOW:  the script is read, not run — with one growing exception at the bottom o
 
 import os
 import pathlib
+import pwd
 import re
 import stat
 import subprocess
@@ -845,11 +846,22 @@ def test_no_lookup_in_it_can_end_the_run_without_saying_why(script: str) -> None
 
 
 def the_sshd_key_check(script: str) -> str:
-    """The script's own sshd lookup and key check, with the call the run makes."""
+    """The script's own sshd lookup and all three key checks, with the calls the run makes.
+
+    All three, in the run's own order, because they constrain each other: the guard is what
+    keeps an unaskable daemon from passing both of the questions under it, and the two
+    questions are halves of one answer — which file would sshd read a key from, and would
+    reading it end in a login. Assembling only one of them here would let a test pass a
+    host the script refuses.
+    """
     return (
         function_in(script, "sshd_effective_config")
         + 'SSHD_CONFIG="$(sshd_effective_config)"\n'
+        + function_in(script, "refuse_if_sshd_cannot_be_asked")
+        + function_in(script, "refuse_if_this_account_cannot_use_a_key")
         + function_in(script, "refuse_if_sshd_ignores_the_key_file")
+        + "refuse_if_sshd_cannot_be_asked\n"
+        + "refuse_if_this_account_cannot_use_a_key\n"
         + "refuse_if_sshd_ignores_the_key_file\n"
         + 'say "the run would have gone on to report ready"\n'
     )
@@ -859,21 +871,28 @@ def an_sshd_that_says(*lines: str) -> dict[str, str]:
     """A stub sshd whose ``-T`` prints exactly these directives.
 
     The shape is real OpenSSH's: one directive per line, name lowercased, the value in
-    force. ``tests/e2e/infra/test_sshd_says_which_keys_it_will_read.py`` puts the same
-    check in front of a REAL sshd, because a stub can only ever repeat what its author
-    believed the output looks like.
+    force. ``tests/e2e/infra/test_a_real_host_answers_the_bootstrap_preconditions.py``
+    puts the same checks in front of a REAL sshd, because a stub can only ever repeat what
+    its author believed the output looks like.
     """
     printed = "\n".join(lines)
     return {"sshd": f"#!/bin/sh\ncat <<'CONFIG'\n{printed}\nCONFIG\n"}
 
 
-# What sshd prints when nothing has been configured: the account's own file, and no
-# command. The path is relative, which is how sshd writes it and is the case the check
-# has to expand rather than compare literally.
+# What sshd prints when nothing has been configured, read off a real OpenSSH 9.6p1: the
+# account's own file, no command, keys on, no method requirement, and root admitted with a
+# key. The path is relative, which is how sshd writes it and is the case the check has to
+# expand rather than compare literally. ``permitrootlogin without-password`` is here for
+# the same reason: it is what ``sshd -T`` prints for the value written as
+# ``prohibit-password``, it is the compiled default, and it PERMITS a key — so a check that
+# refused on it would refuse most of the hosts this project will ever meet.
 A_DEFAULT_SSHD = an_sshd_that_says(
     "authorizedkeyscommand none",
     "authorizedkeyscommanduser none",
     "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+    "pubkeyauthentication yes",
+    "authenticationmethods any",
+    "permitrootlogin without-password",
 )
 
 # The field condition this whole section exists for, and the one no host in the fleet has
@@ -1002,6 +1021,242 @@ def test_an_sshd_that_cannot_be_asked_is_not_taken_as_a_yes(
     assert "/root/.ssh/authorized_keys" in said, said
 
 
+# --- M19.2, second half: a file sshd reads is not yet a login -----------------
+#
+# The first half of this check answered WHICH FILE sshd reads a key from and the run
+# treated that as "this key authenticates". It is not the same sentence, and the
+# difference is three directives ``sshd -T`` was already printing: a host with
+# ``PubkeyAuthentication no`` was told, truthfully, that the file its key went into is one
+# sshd consults — and then reported ``ready`` for a key that logs nobody in.
+#
+# Every case below is run rather than read, for the reason the rest of this section gives,
+# and every one of them is paired with the configuration it must NOT refuse. A check that
+# turns away a working host costs the operator the evening this script exists to save.
+
+
+def an_account_that_is_not_root() -> str:
+    """A real account with a non-zero uid, or a skip that names what is missing.
+
+    ``PermitRootLogin`` is a rule about uid 0, and the script reads that uid out of the
+    passwd entry — so the case where the directive must NOT apply needs an account that
+    really exists on the machine running the suite. ``getent`` is not stubbed here and must
+    not be: which uid an account has is the input under test.
+    """
+    try:
+        entry = pwd.getpwnam("nobody")
+    except KeyError:  # pragma: no cover - every Unix in this project's path has one
+        pytest.skip(
+            "no 'nobody' account on this machine, so the case that PermitRootLogin must "
+            "not be applied to a non-root account did not run"
+        )
+    assert entry.pw_uid != 0, "the 'nobody' account on this machine is uid 0"
+    return "nobody"
+
+
+def run_the_key_check_against(
+    script: str, tmp_path: pathlib.Path, *directives: str, account: str = "root"
+) -> subprocess.CompletedProcess:
+    """The three sshd checks, against a daemon that prints ``directives`` and nothing else.
+
+    The default account is ``root`` for the reason the tests above give: it is the account
+    every host has and the ``ssh_user`` the panel's node form offers first.
+    """
+    return run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        account,
+        then=the_sshd_key_check(script),
+        stubs=an_sshd_that_says(*directives),
+    )
+
+
+# The file half answered perfectly: the account's own file, no command, nothing moved. The
+# ONLY thing wrong with each of these hosts is that the key could not authenticate anyway.
+A_FILE_SSHD_REALLY_READS = (
+    "authorizedkeyscommand none",
+    "authorizedkeysfile .ssh/authorized_keys",
+)
+
+
+def test_a_host_that_authenticates_nobody_with_a_key_never_reaches_ready(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M19's second "done when", for the plainest way a key fails to authenticate.
+
+    ``PubkeyAuthentication no`` and everything else stock: sshd really does read
+    ``/root/.ssh/authorized_keys``, so the file half of this check says yes and is right to
+    — and no key in it logs anyone in. This is the shape the first round of M19 shipped a
+    ``ready`` for.
+    """
+    refused = run_the_key_check_against(
+        script, tmp_path, *A_FILE_SSHD_REALLY_READS, "pubkeyauthentication no"
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "the run would have gone on to report ready" not in refused.stdout
+    assert refused.stderr.strip(), (
+        f"the run ended non-zero with nothing on stderr: stdout {refused.stdout!r}"
+    )
+    said = " ".join(refused.stderr.split())
+    # By name, because "the key will not work" sends an operator to the wrong file.
+    assert "PubkeyAuthentication" in said, said
+    assert "/root/.ssh/authorized_keys" in said, said
+    assert A_PUBLIC_KEY.split()[1] not in refused.stdout + refused.stderr
+
+
+def test_a_host_that_wants_a_second_factor_beside_the_key_never_reaches_ready(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """``AuthenticationMethods``, in both of the shapes that keep the control plane out.
+
+    ``password`` refuses a key outright. ``publickey,password`` is the subtler one and the
+    reason this is not a membership test: a comma means BOTH must succeed, so the key is
+    necessary and not sufficient, and the control plane — which has a key, no password to
+    offer and no terminal to be prompted on — gets no further with it than without it. That
+    failure would otherwise land at the first apply, a screen away from anything naming it.
+    """
+    for methods in ("password", "publickey,password"):
+        refused = run_the_key_check_against(
+            script,
+            tmp_path,
+            *A_FILE_SSHD_REALLY_READS,
+            f"authenticationmethods {methods}",
+        )
+
+        assert refused.returncode != 0, f"'{methods}' was accepted: {refused.stdout}"
+        assert "the run would have gone on to report ready" not in refused.stdout
+        assert refused.stderr.strip(), f"refused in silence: stdout {refused.stdout!r}"
+        said = " ".join(refused.stderr.split())
+        assert methods in said, said
+        assert "AuthenticationMethods" in said, said
+
+
+def test_a_key_on_its_own_among_other_alternatives_is_not_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The false refusal the test above is one comma away from.
+
+    A SPACE separates alternatives and a comma joins requirements, so
+    ``publickey password`` is "a key, or a password" — a host the control plane logs into
+    with the key alone. ``any`` is the default and the value almost every host prints. A
+    check that read the directive as a word list would refuse both, and would then refuse
+    every stock host on earth for the default value.
+    """
+    for methods in ("any", "publickey password", "publickey keyboard-interactive"):
+        accepted = run_the_key_check_against(
+            script,
+            tmp_path,
+            *A_FILE_SSHD_REALLY_READS,
+            f"authenticationmethods {methods}",
+        )
+
+        assert accepted.returncode == 0, (
+            f"'{methods}' lets a key alone in and was refused:"
+            f"\n{accepted.stdout}{accepted.stderr}"
+        )
+        assert "the run would have gone on to report ready" in accepted.stdout
+
+
+def test_an_account_root_may_not_log_into_never_reaches_ready(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """``PermitRootLogin``, in the two values that keep the installed key out.
+
+    The panel's node form defaults ``ssh_user`` to root, so this is the likely combination
+    rather than the exotic one — the operator takes the default, the host ships with root
+    logins off, and every other signal in the run is green.
+    ``forced-commands-only`` is the one that reads like a yes: it admits root with a key,
+    but only a key carrying its own forced ``command=``, and this script installs a bare
+    one while the control plane runs ordinary commands over that session.
+    """
+    for value in ("no", "forced-commands-only"):
+        refused = run_the_key_check_against(
+            script, tmp_path, *A_FILE_SSHD_REALLY_READS, f"permitrootlogin {value}"
+        )
+
+        assert refused.returncode != 0, f"'{value}' was accepted: {refused.stdout}"
+        assert "the run would have gone on to report ready" not in refused.stdout
+        assert refused.stderr.strip(), f"refused in silence: stdout {refused.stdout!r}"
+        said = " ".join(refused.stderr.split())
+        assert "PermitRootLogin" in said, said
+        assert value in said, said
+        # And the way out, which is not only "change sshd": the account is an argument.
+        assert "--user" in said, said
+
+
+def test_the_root_value_that_permits_a_key_is_not_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The false refusal that would have turned away most of the hosts in existence.
+
+    ``prohibit-password`` PERMITS public-key authentication and forbids only the password —
+    it is what a hardened host sets, and ``sshd -T`` prints it under its older spelling,
+    ``without-password``, which is also OpenSSH's compiled default. A check that refused on
+    the string it saw would refuse a stock Debian, and a check that accepted only the
+    modern spelling would refuse every daemon that prints the old one.
+    """
+    for value in ("yes", "prohibit-password", "without-password"):
+        accepted = run_the_key_check_against(
+            script, tmp_path, *A_FILE_SSHD_REALLY_READS, f"permitrootlogin {value}"
+        )
+
+        assert accepted.returncode == 0, (
+            f"'{value}' admits a key and the run refused it:"
+            f"\n{accepted.stdout}{accepted.stderr}"
+        )
+        assert "the run would have gone on to report ready" in accepted.stdout
+
+
+def test_root_only_rules_are_not_applied_to_an_account_that_is_not_root(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """``PermitRootLogin no`` is the normal, correct configuration of a host with a
+    non-root deploy account — and this script's whole non-root shape (M13) is that account.
+
+    So reading the directive without asking who the run is preparing for would refuse the
+    most sensible host in the fleet. The account is tested by uid rather than by name,
+    which is also what sshd does: it is a rule about uid 0, not about the word ``root``.
+    """
+    account = an_account_that_is_not_root()
+
+    accepted = run_the_key_check_against(
+        script,
+        tmp_path,
+        "authorizedkeyscommand none",
+        "authorizedkeysfile .ssh/authorized_keys",
+        "permitrootlogin no",
+        account=account,
+    )
+
+    assert accepted.returncode == 0, (
+        f"a run preparing '{account}' was refused for a rule that only governs uid 0:"
+        f"\n{accepted.stdout}{accepted.stderr}"
+    )
+    assert "the run would have gone on to report ready" in accepted.stdout
+
+
+def test_every_token_sshd_expands_in_the_keys_file_is_expanded(script: str) -> None:
+    """``%h``, ``%u`` and ``%U`` — the three sshd_config(5) lists for AuthorizedKeysFile.
+
+    Read rather than run, and this is the one place in this section where that is the
+    honest option: an unexpanded token leaves the comparison unequal, which REFUSES, so
+    the cost of missing one is a working host turned away — and the only host on which
+    expanding ``%U`` changes the answer is one whose home directory path contains its own
+    numeric uid, which no account on a machine running this suite does. ``%%`` is the
+    fourth token and is deliberately not here: it can only make the comparison unequal,
+    which is the direction this check fails in.
+    """
+    body = function_in(script, "refuse_if_sshd_ignores_the_key_file")
+    for token, value in (("%h", "TARGET_HOME"), ("%u", "TARGET_USER"), ("%U", "TARGET_UID")):
+        assert re.search(rf"s\|{token}\|\$\{{{value}\}}\|g", body), (
+            f"{token} is never expanded, so a host whose AuthorizedKeysFile uses it is "
+            "refused for a configuration that works"
+        )
+
+
 def test_the_final_key_check_asks_sshd_before_it_reads_the_file(script: str) -> None:
     """Both questions, in the order that makes the second one mean anything.
 
@@ -1014,6 +1269,26 @@ def test_the_final_key_check_asks_sshd_before_it_reads_the_file(script: str) -> 
     assert asks_sshd, (
         "nothing in the run asks sshd which files it reads keys from, so the final "
         "verification is once again the file reading back what the run wrote into it"
+    )
+    # And all three of them are CALLED, in the order that makes each one worth asking: the
+    # guard first, or an unaskable daemon passes the two under it; then whether a key can
+    # authenticate this account at all, because "sshd reads that file" printed above a
+    # refusal is a line an operator would otherwise act on.
+    called = [
+        re.search(rf"^{name}$", script, re.M)
+        for name in (
+            "refuse_if_sshd_cannot_be_asked",
+            "refuse_if_this_account_cannot_use_a_key",
+            "refuse_if_sshd_ignores_the_key_file",
+        )
+    ]
+    assert all(called), (
+        "one of the three sshd checks is defined and never called, which is the shape of "
+        f"a refusal that cannot fire: {[bool(found) for found in called]}"
+    )
+    assert [found.start() for found in called] == sorted(found.start() for found in called), (
+        "the three sshd checks are called out of order — the guard has to run first and "
+        "the file question last, or one of them reports on a host the next one refuses"
     )
     assert reads_file, "the run no longer checks that the key is in the file at all"
     assert asks_sshd.start() < reads_file.start(), (
@@ -1036,6 +1311,13 @@ def test_the_header_states_the_limit_of_what_sshd_was_asked(script: str) -> None
     key is fine. That residual hole is exactly the kind of thing the header's second half
     exists for: an operator who reads "the key check asks sshd" would otherwise assume it
     asked about their account.
+
+    And the residual hole must be NAMED rather than covered by a sentence that sounds
+    total. The header used to close with "everything outside a `Match` block is checked",
+    which was false in a way it did not say: four directives outside any ``Match`` can keep
+    this key out of this host and none of them is asked. The list of what is not asked is
+    therefore part of the claim, and this asserts one member of it — an overclaim standing
+    next to a hole is worse than either.
     """
     section = re.search(
         r"^# WHAT THIS SCRIPT DOES NOT DO(?:.*\n)*?^set -euo pipefail$", script, re.M
@@ -1044,6 +1326,15 @@ def test_the_header_states_the_limit_of_what_sshd_was_asked(script: str) -> None
     assert "Match" in section.group(0), (
         "the header does not say that the key check reads the GLOBAL sshd configuration, "
         "so a per-account override reads as covered"
+    )
+    assert "AllowUsers" in section.group(0), (
+        "the header does not name the account lists it never asks about, so a reader is "
+        "left to infer that a green run means this key logs in — which it does not"
+    )
+    assert "Everything outside a `Match` block is checked" not in section.group(0), (
+        "the header claims it checks everything outside a Match block. It checks four "
+        "directives; AllowUsers, PAM, a locked account and the key's own algorithm all "
+        "sit outside one and are not asked"
     )
 
 
@@ -1177,6 +1468,52 @@ def test_a_setting_that_cannot_be_read_is_not_taken_as_a_pass(
     assert refused.returncode != 0, refused.stdout
     said = " ".join(refused.stderr.split())
     assert "net.ipv4.ip_forward" in said, said
+
+
+def test_reverse_path_filtering_that_cannot_be_read_is_said_so_and_still_passes(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The other unreadable case, and the one branch of this theme nothing was holding.
+
+    Its sibling — an ``ip_forward`` that cannot be read — refuses, and is pinned above.
+    This one cannot refuse, for the same reason strict filtering does not: the setting is
+    only wrong for an ENTRY node and nothing tells this script which role the host will be
+    registered in. So the branch has to do the awkward thing — SAY that it could not look,
+    and let the run finish — and a branch that both prints and returns zero is exactly the
+    one a deletion leaves looking fine. Under ``set -euo pipefail`` a ``case`` with no
+    matching branch is a no-op with status 0, so the whole of this case is one silent line.
+
+    The stub answers ``ip_forward`` and fails both ``rp_filter`` reads, which is a host
+    whose procps is present and whose kernel does not carry the setting — a container, in
+    practice, and the shape an operator most easily mistakes for "checked".
+    """
+    unreadable = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs={
+            "sysctl": (
+                '#!/bin/sh\n[ "$1" = "-n" ] && shift\ncase "$1" in\n'
+                "  net.ipv4.ip_forward) echo 1 ;;\n  *) exit 1 ;;\nesac\n"
+            )
+        },
+    )
+
+    assert unreadable.returncode == 0, (
+        "a host whose reverse-path filtering could not be read was refused. It is a "
+        f"working leaf, and the setting is only wrong for an entry:\n{unreadable.stderr}"
+    )
+    assert "the run would have gone on to report ready" in unreadable.stdout
+    said = " ".join(unreadable.stdout.split())
+    # Both names, because an operator has to go and read them by hand — and the role the
+    # unknown value would matter for, which is the whole reason this is not silence.
+    assert "net.ipv4.conf.all.rp_filter" in said, said
+    assert "net.ipv4.conf.default.rp_filter" in said, said
+    assert "ENTRY" in said, said
 
 
 def test_strict_reverse_path_filtering_is_named_rather_than_refused(
