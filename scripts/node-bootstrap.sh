@@ -367,19 +367,48 @@ as_root install -d -m 700 -o "${TARGET_USER}" -g "${TARGET_GROUP}" "${NODE_ROOT}
 # why this is done here rather than written into a warning: the alternative is an
 # operator typing `chown -R` on a live node from memory.
 #
-# It is safe in the way that matters and the reasoning is worth stating, because a
-# recursive chown usually is not: the account already OWNS this directory at mode 700, so
-# it can already unlink and replace every file in it. This grants nothing it did not
-# have; it removes the case where it can replace a file but not rewrite one. And the
-# contents are the control plane's own — configs and a compose file, all regenerable —
-# never an operator's data.
+# It is safe in the way that matters, and the reasoning is worth stating BECAUSE THE
+# FIRST VERSION OF IT WAS WRONG. That version argued the account already OWNS this
+# directory at mode 700 and can therefore already unlink and replace every file in it, so
+# the chown grants nothing it did not have. Owning a directory grants unlink and replace;
+# it does not grant READ of a 0600 file owned by somebody else — and the configs an apply
+# writes here are 0600 precisely because they carry the node's private keys. This line
+# does hand those bytes to the account it names. Do not re-derive the old argument: it is
+# the kind of step ("owning a directory means owning its files") that is wrong somewhere
+# it matters.
 #
-# `-h` is explicit rather than redundant. GNU coreutils defaults `-R` to `-P` and so
-# already changes a symlink itself rather than what it points at — measured, not assumed
-# — but POSIX leaves that default UNSPECIFIED, and the version where it is the other way
-# round is one where a link planted under this directory chowns an arbitrary path on the
-# host, as root. Stating it costs one character.
-as_root chown -Rh "${TARGET_USER}:${TARGET_GROUP}" "${NODE_ROOT}"
+# It is right anyway, for the reason the wrong argument was standing in front of: this
+# account IS the node's account from here on. It is the one the control plane logs in as,
+# the one every later apply writes those same 0600 configs as, and — section 2, the container
+# runtime — the one this run put in the `docker` group, which is root on this host by any route it
+# cares to take. The keys are its own material one apply later whatever this line does,
+# and an operator who names the wrong account in `--user` gave the host away at the
+# docker group, not here. What the chown widens is the window between this run and the
+# next apply. The contents themselves are the control plane's own — configs and a compose
+# file, all regenerable — never an operator's data.
+#
+# `-P` AS WELL AS `-h`, because they are not the same flag and only one of them is the
+# guard this line needs. `-h` decides whether a symlink LEAF or its referent is changed;
+# whether the walk DESCENDS through a symlink to a directory is decided by `-H`/`-L`/`-P`,
+# which `-h` does not touch. `-h` alone was written here as what stops a link planted
+# under this directory from chowning an arbitrary path on the host as root, and it does
+# not: measured on coreutils 9.4, `chgrp -RhL` over a tree holding a link to an outside
+# directory changed the files inside that directory, and `-RhLP` changed nothing outside
+# the tree. GNU already defaults `-R` to `-P`, which is why no supported host was ever
+# exposed, but POSIX leaves that default UNSPECIFIED and an implementation defaulting to
+# `-L` is conforming. `-P` is what makes the claim true, so the claim has it.
+#
+# `${NODE_ROOT}/.` RATHER THAN `${NODE_ROOT}`, and the trailing dot is load-bearing. `-P`
+# refuses to traverse the symlink it is GIVEN as well as the ones it meets, so on a host
+# where /opt/hashi is a link to a data volume — an ordinary thing to do with a small root
+# partition — this changed the link and nothing else, left every file an earlier apply
+# wrote owned by the old account, and exited 0 while the line below announced the
+# handover. The next apply then died exactly where the paragraph above says it used to.
+# `/.` is resolved to the directory itself before chown is given anything to walk, so
+# `install -d` — which has always followed the link — and this line finally mean the same
+# thing by NODE_ROOT, while every symlink INSIDE it is still left where it is. Measured,
+# not assumed, on the same coreutils.
+as_root chown -RhP "${TARGET_USER}:${TARGET_GROUP}" "${NODE_ROOT}/."
 if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
   say "${NODE_ROOT} was already here — ${TARGET_USER} now owns it and everything an earlier apply left inside it; nothing in it was read, changed or removed"
 else

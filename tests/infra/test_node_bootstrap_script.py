@@ -488,7 +488,8 @@ def test_it_hands_an_existing_node_directorys_contents_to_the_prepared_account(
     other.
     """
     handover = re.search(
-        r'^as_root chown -R\S* "\$\{TARGET_USER\}:\$\{TARGET_GROUP\}" "\$\{NODE_ROOT\}"$',
+        r'^as_root chown -R\S* "\$\{TARGET_USER\}:\$\{TARGET_GROUP\}" '
+        r'"\$\{NODE_ROOT\}(/\.)?"$',
         script,
         re.M,
     )
@@ -500,16 +501,35 @@ def test_it_hands_an_existing_node_directorys_contents_to_the_prepared_account(
     assert created and created.start() < handover.start(), (
         "the contents are chowned before the directory is known to exist"
     )
-    # It must not follow a symlink out of the directory it is recursing through. GNU's
-    # `-R` already implies `-P` and so changes the link rather than its target, but POSIX
-    # leaves that default unspecified — and the implementation where it goes the other way
-    # is one where a link planted under the node directory chowns an arbitrary path on the
-    # host, as root. Pinned because it is invisible in a passing run on this developer's
-    # own coreutils.
-    assert "-Rh" in handover.group(0), (
-        "the recursive chown does not state that it leaves symlinks alone, so on a chown "
-        "that dereferences by default a link planted under the node directory redirects "
-        "it at an arbitrary path on the host"
+    # It must not follow a symlink out of the directory it is recursing through, and the
+    # flag that decides that is `-P` — not `-h`, which this asserted until M18.1's review.
+    # `-h` decides whether a symlink leaf or its referent is changed; `-H`/`-L`/`-P` decide
+    # whether the walk DESCENDS through a link to a directory, and only `-P` refuses.
+    # Measured on coreutils 9.4: `chgrp -RhL` over a tree holding a link to an outside
+    # directory changed the files inside that directory, `-RhLP` changed nothing outside
+    # the tree. GNU already defaults `-R` to `-P`, so this is invisible in a passing run
+    # here — which is exactly why the wrong flag stayed pinned as though it were the
+    # guard, and why this is asserted on the flag that closes the hole rather than on the
+    # one the comment happened to name.
+    flags = handover.group(0).split()[2]
+    assert "P" in flags, (
+        "the recursive chown does not state that it refuses to descend through a symlink, "
+        "so on a chown that traverses by default a link planted under the node directory "
+        f"redirects it at an arbitrary path on the host — `-h` does not close this ({flags}"
+        "), it only decides whether a link or its referent is changed"
+    )
+    assert "h" in flags, (
+        f"the recursive chown ({flags}) no longer says it changes a symlink itself rather "
+        "than what it points at"
+    )
+    # And it names the DIRECTORY rather than a link to it. `-P` refuses to traverse the
+    # argument as well, so on a host where the node directory is a symlink to a data
+    # volume the chown changed the link, left every file inside owned by the old account
+    # and exited 0 — while the run announced the handover. `install -d` above has always
+    # followed the link; `/.` is what makes the two mean the same thing.
+    assert handover.group(0).endswith('"${NODE_ROOT}/."'), (
+        "the handover chowns ${NODE_ROOT} itself, so a symlinked node directory flips the "
+        "link's owner, leaves its contents with the old account, and says it is done"
     )
 
 

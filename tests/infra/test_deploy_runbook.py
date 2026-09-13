@@ -878,3 +878,52 @@ def test_the_runbook_quotes_the_refusal_two_overlapping_tunnels_get(runbook: str
         "the runbook's quotation of the overlapping-tunnels refusal is not what control "
         "says any more"
     )
+
+
+def test_the_account_change_section_does_not_instruct_a_step_with_no_surface(
+    runbook: str,
+) -> None:
+    """M18.3's review: the section ended on "change ``ssh_user`` on the node record".
+
+    There is no way to do that and there was none when the sentence was written.
+    ``ssh_user`` is assigned once, in ``create_node``; the node POST routes are
+    ``/state``, ``/resolver`` and ``/apply``; the panel's only box for it is the
+    registration dialog; ``NodeResponse`` does not expose it, so the operator cannot even
+    READ the value to discover the disagreement; and there is no node DELETE. An operator
+    following it handed the host to a new account, left the control plane dialling the old
+    one for ever, and had no repair short of editing Postgres.
+
+    So the section has to say what cannot be done and give the repairs that exist. Pinned
+    here because prose is what this diff changed and nothing else guards it — the two
+    ``==>`` quotations above are the only other thing in this file that reads it.
+    """
+    section = re.search(
+        r"^### Changing the account a node is driven as\n(?:.*\n)*?(?=^### )",
+        runbook,
+        re.M,
+    )
+    assert section, (
+        "the runbook no longer has a section on changing a node's account, which is the "
+        "one operation M18.3 is about"
+    )
+    account = section.group(0)
+    assert "cannot be changed today" in account, (
+        "the section does not say that `ssh_user` cannot be changed after registration, so "
+        "the operator is left to discover it on a node that no longer applies"
+    )
+    for repair in ("register the host a second time", "`retired`"):
+        assert repair in account, (
+            f"the section does not give the repair that exists ({repair}) for a host whose "
+            "account was changed, so the only remedy left is editing the database by hand"
+        )
+    assert "new node in every user's subscription" in account, (
+        "the second repair is given without its cost, which is the whole fleet's links "
+        "moving to cut over one host"
+    )
+    # And the superseded procedure fifty lines above it, which told the operator to type a
+    # recursive chown on a live node, is not standing beside it saying the opposite.
+    assert "chown -R" not in runbook, (
+        "the runbook still tells the operator to chown the node directory by hand — the "
+        "exact act the bootstrap script now performs, and the one its own comment says it "
+        "exists to remove"
+    )
