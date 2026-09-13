@@ -115,10 +115,34 @@ WHERE_TO_RETRY = "the Nodes screen"
 # Which one an operator gets is decided by whether the node has any transport row at all,
 # not by how many are enabled — an empty node and a node with every row withdrawn are two
 # different situations with two different next actions.
+#
+# THREE SENTENCES, NOT TWO — M18's acceptance, and the second axis is whether a config
+# this panel holds has ever actually REACHED the host (``NodeTransport.applied_at``, which
+# a withdrawal leaves alone). Two of the three claims above turned out to be said in
+# places they are not true:
+#
+#   * the withdrawn one asserts the host is still serving everyone who holds a credential
+#     — read on a node whose own drift cell says `never applied`, which contradicts the
+#     Users screen's "No node is serving yet" and is simply false. A node nothing was ever
+#     pushed to is serving nobody.
+#   * and the empty one said nothing about the host at all, which is the same defect from
+#     the other side: REMOVING a node's last transport leaves it with no rows, so the
+#     operator who removed it to cut everybody off lands here and reads "nothing on the
+#     node was changed" as "there was nothing there". The row is gone from this panel and
+#     the daemon on the host is not — and because the apply is refused, no apply is ever
+#     going to stop it.
+#
+# So the two that cannot know say what is true either way — WHATEVER this host was last
+# given, it keeps running — and only the one that does know (a surviving row carries an
+# ``applied_at``) makes the stronger claim. A removed row takes its ``applied_at`` with
+# it, which is why the empty case can never be certain and must not pretend to be.
 NOTHING_TO_APPLY_YET = (
     "this node has no transports enabled, so there is nothing to apply — nothing was "
     "pushed and nothing on the node was changed. Enable a transport on it from "
-    f"{WHERE_TO_RETRY}, then apply it."
+    f"{WHERE_TO_RETRY}, then apply it. Whatever this host was last given it keeps "
+    "running, and an apply cannot change that while there is nothing to push: if a "
+    "transport was removed here to cut people off, removing it did not stop the host "
+    "serving it. Nothing else in this panel stops a node serving what it was last given."
 )
 NOTHING_LEFT_TO_APPLY = (
     "every transport on this node is withdrawn, so there is nothing to apply — nothing "
@@ -128,6 +152,14 @@ NOTHING_LEFT_TO_APPLY = (
     f"transports again from {WHERE_TO_RETRY} — which puts that transport back in every "
     "user's link — and apply. Nothing else in this panel stops a node serving what it "
     "was last given."
+)
+NOTHING_LEFT_TO_APPLY_UNPUSHED = (
+    "every transport on this node is withdrawn, so there is nothing to apply — nothing "
+    "was pushed and nothing on the node was changed. No transport on this node has ever "
+    "been applied: whatever this host was last given it keeps running, and an apply "
+    "cannot change that while there is nothing to push. Offer one of its transports "
+    f"again from {WHERE_TO_RETRY} — which puts that transport back in every user's link "
+    "— and apply. Nothing else in this panel stops a node serving what it was last given."
 )
 
 # The boundary between "this node failed" and "stop the whole operation".
@@ -400,23 +432,36 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
 
 
 async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
-    """Which refusal this node gets — the never-enabled one or the all-withdrawn one.
+    """Which of the three refusals this node gets.
 
-    One query, on the refusal path only, and it asks whether the node has any transport
-    row AT ALL: ``render_for_node`` already filtered to the enabled ones and came back
-    empty, so the only thing left to learn is whether there is something here to offer
-    again or nothing here at all. The two answers send the operator to two different
-    controls — ``offer`` exists only on a row that was enabled once — and the withdrawn
-    one has a cost the other does not.
+    One query, on the refusal path only, and it reads both axes off one column.
+    ``render_for_node`` already filtered to the enabled rows and came back empty, so
+    what is left to learn is:
+
+    * whether the node has any transport row AT ALL — which decides whether there is
+      something here to OFFER again or nothing here to do but ENABLE one. The two
+      answers send the operator to two different controls, and ``offer`` exists only on
+      a row that was enabled once;
+    * and whether any row that is still here has ever been APPLIED, which decides
+      whether this panel may say what the host is still serving. ``applied_at`` survives
+      a withdrawal (``nodes.set_transport_enabled`` touches only the flag) and is
+      deleted with the row, so a TRUE here is knowledge and a FALSE is only the absence
+      of it — which is exactly why the two sentences a FALSE leads to claim nothing
+      about who the host is authorising.
 
     Queried rather than read off ``node.transports`` for the reason ``render_for_node``
     gives: this can be reached straight after a revocation deleted rows in the same
     session, where touching the collection is lazy IO on an async session.
     """
-    any_row = await session.execute(
-        select(NodeTransport.id).where(NodeTransport.node_id == node.id).limit(1)
+    applied_at = await session.execute(
+        select(NodeTransport.applied_at).where(NodeTransport.node_id == node.id)
     )
-    return NOTHING_TO_APPLY_YET if any_row.first() is None else NOTHING_LEFT_TO_APPLY
+    stamps = applied_at.scalars().all()
+    if not stamps:
+        return NOTHING_TO_APPLY_YET
+    if any(stamp is not None for stamp in stamps):
+        return NOTHING_LEFT_TO_APPLY
+    return NOTHING_LEFT_TO_APPLY_UNPUSHED
 
 
 async def _record_failure(session: AsyncSession, node: Node, reason: str) -> None:

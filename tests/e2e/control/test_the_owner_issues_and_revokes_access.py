@@ -116,7 +116,7 @@ async def test_the_whole_path_from_an_empty_fleet_to_a_revoked_friend(
     # own row is asserted above, on the screen that owns it.
     console = await operator.get("/panel/")
     assert console.status_code == 200, console.text
-    assert "nodes online" in console.text
+    assert "nodes active" in console.text
 
     # --- a friend, and the one artefact they ever hold ------------------------
     friend = await operator.post("/api/friends", json={"nickname": f"kolya-{unique}"})

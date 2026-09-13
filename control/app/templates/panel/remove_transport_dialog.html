@@ -20,10 +20,29 @@
   the only action that gives them back to the node. An operator who followed the runbook
   into a collision is reading this dialog to get out of it.
 
+  AND ON THE NODE'S LAST ENABLED ROW THE SECOND OF THOSE WAS FALSE — M18's acceptance.
+  "until it is applied" is a promise about an apply that never comes: a node rendering
+  nothing is refused (apply.NOTHING_TO_APPLY_YET), so the operator who removes the last
+  transport to cut everybody off, presses apply and reads "nothing on the node was
+  changed" concludes access is gone while the container is still up and still
+  authorising everyone who held a credential on it. Measured on a real applied host.
+
+  The second arm below says so before the press, and its way out is NOT the withdrawal
+  dialog's: a removed row cannot be offered back, so what is owed here is enabling a
+  transport on this node and applying that — which is what takes the removed one's
+  service away with it, since the apply brings the node's compose file down to what is
+  enabled now.
+
+  It says WHATEVER THIS NODE IS ALREADY SERVING rather than "it keeps serving this
+  transport": the same fact on an applied node, and not a claim at all on one nothing was
+  ever pushed to. The row's own standing sentence and the toast still make the stronger
+  claim; that is the same defect one surface over and is recorded rather than widened.
+
   The title is offer.transport, which is services/console.py's placed_as: on a node
   running two instances of one protocol it reads `amneziawg (amneziawg-2)`, so the
   confirmation cannot name the wrong one of two. No key material is named and none could
-  be — the whole context is one OfferRow, which carries a name, a standing and an id.
+  be — the whole context is one OfferRow, which carries a name, a standing, a flag and
+  an id.
 #}
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
@@ -41,11 +60,23 @@
       To take it out of every user's link but keep the row, its material and its place on
       the node, withdraw it instead — that one is reversible.
     </div>
+    {% if offer.nothing_else_enabled %}
+    <div class="dialog-body text-muted">
+      This is the last transport enabled on {{ offer.node }}, so the apply that would
+      stop the host serving it is refused: with nothing left to push, an apply changes
+      nothing on the node. Whatever {{ offer.node }} is already serving it keeps serving,
+      and a configuration somebody has already fetched keeps working while it does. A
+      removed row cannot be offered back, so the way out is to enable a transport on
+      {{ offer.node }} and apply that — nothing else in this panel stops a node serving
+      what it was last given.
+    </div>
+    {% else %}
     <div class="dialog-body text-muted">
       The node keeps serving it until you apply the node: this changes what this panel
       holds and hands out, not what the host is running, so anyone already holding a
       fetched configuration keeps connecting on it until then.
     </div>
+    {% endif %}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"

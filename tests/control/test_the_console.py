@@ -159,12 +159,48 @@ async def test_the_overview_carries_only_facts_about_the_fleet(
 
     body = (await client.get("/panel/")).text
 
-    for kicker in ("nodes online", "active users", "hops established", "transports enabled"):
+    for kicker in ("nodes active", "active users", "hops established", "transports enabled"):
         assert kicker in body, f"the Overview lost the {kicker!r} card"
     for cell in FORBIDDEN_CELLS:
         assert cell not in body.lower(), (
             f"the Overview shows {cell!r}, which the charter says must not exist"
         )
+
+
+async def test_the_first_stat_card_names_the_state_it_counts(client) -> None:
+    """It counted ``active`` and called it "online" — M18's acceptance.
+
+    The value is a count of a column an operator sets by hand. Acceptance flipped a
+    second, untouched node into ``active`` and watched the figure go 1 → 2 without a
+    byte reaching a host, which is the whole of the complaint: nothing on this screen
+    asks a node anything, by design — it renders with every host unreachable and touches
+    no network. So the count is right and the word over it was not.
+
+    Both halves asserted, because a card that merely stopped saying "online" while
+    counting something else would pass on one of them.
+    """
+    for name, address in (("state-1", "192.0.2.71"), ("state-2", "192.0.2.72")):
+        created = await client.post(
+            "/api/nodes",
+            json={"name": name, "address": address, "location_label": "Testland"},
+        )
+        assert created.status_code == 201, created.text
+
+    before = _as_one_line((await client.get("/panel/overview/body")).text)
+    assert "nodes active 0 2 nodes in the fleet" in before, before
+    assert "nodes online" not in before, (
+        "the card claims a reachability this screen never measures"
+    )
+
+    node_id = (await client.get("/api/nodes")).json()[0]["id"]
+    assert (await client.post(
+        f"/api/nodes/{node_id}/state", json={"state": "active"}
+    )).status_code == 200
+
+    after = _as_one_line((await client.get("/panel/overview/body")).text)
+    assert "nodes active 1 2 nodes in the fleet" in after, (
+        f"the card does not count the state it names: {after}"
+    )
 
 
 async def test_the_node_preview_reports_drift_rather_than_load(
@@ -1142,9 +1178,14 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     dialog = await client.get(f"/panel/transports/{node_transport_id}/withdraw")
 
     assert dialog.status_code == 200
-    reading = _reading(dialog.text)
+    reading = _as_one_line(dialog.text)
     assert "Withdraw vless-reality?" in reading
-    assert "not what the host is running" in reading
+    # This node has one transport, so the paragraph is the arm that says no apply will
+    # stop the host — M18's acceptance. Both arms, including the "not what the host is
+    # running" one this used to read, are pinned together in
+    # ``test_the_withdraw_confirmation_says_when_no_apply_will_stop_the_host``.
+    assert "an apply changes nothing on the node" in reading
+    assert "keeps serving" in reading
     # And what this action is NOT: revocation is a different reach, on another screen.
     assert "revoke them on the Users screen" in reading
 
@@ -1255,6 +1296,108 @@ async def test_a_removed_row_says_whether_an_apply_can_still_stop_it(
     assert "is enabled and applied" in said, (
         "a removed row cannot be offered again, so the sentence must ask for an enable"
     )
+
+
+def _as_one_line(markup: str) -> str:
+    """``_reading`` with every run of whitespace flattened to one space.
+
+    A dialog's prose is wrapped in the template at the file's own width, so a sentence
+    an operator reads as one line arrives here with newlines and indentation inside it.
+    Asserting on a phrase that crosses a wrap would be asserting on where the wrap is,
+    which is the one thing about these paragraphs that is allowed to move.
+    """
+    return " ".join(_reading(markup).split())
+
+
+async def test_the_withdraw_confirmation_says_when_no_apply_will_stop_the_host(
+    client, reality_params, ws_params
+) -> None:
+    """The BLOCKING finding of M18's acceptance, on the surface it was measured on.
+
+    The toast after the action already tells an operator that an apply on a node with
+    nothing left enabled is refused. The CONFIRMATION — the thing they read before they
+    press, and the only one that can change their mind — still promised "The node keeps
+    serving it until you apply the node" on exactly the row where that apply never comes.
+    An operator withdrawing the last transport to cut everybody off, pressing the apply
+    the dialog named and reading "nothing on the node was changed" concludes access is
+    gone. It is not.
+
+    Both arms in one test for the same reason the toast's pair is: a single-branch
+    assertion passes on a dialog that says the same thing about every row, which is the
+    defect.
+    """
+    node_id, first = await a_node_with_an_offer(client, reality_params)
+    second = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-ws-tls", "params": ws_params},
+    )
+    assert second.status_code == 201, second.text
+
+    # One of two enabled: the apply this dialog names will run, and is what stops the
+    # host serving the row.
+    plain = await client.get(f"/panel/transports/{first}/withdraw")
+    assert plain.status_code == 200, plain.text
+    said = _as_one_line(plain.text)
+    assert "The node keeps serving it until you apply the node" in said
+    assert "is refused" not in said, said
+
+    await client.post(
+        f"/panel/transports/{first}/withdraw", headers={"HX-Request": "true"}
+    )
+
+    # And the last one, where the apply the sentence above names cannot help.
+    last = await client.get(f"/panel/transports/{second.json()['id']}/withdraw")
+    assert last.status_code == 200, last.text
+    said = _as_one_line(last.text)
+    assert "The node keeps serving it until you apply the node" not in said, (
+        "the confirmation still sends the operator to an apply that is refused, on the "
+        "one row where pressing it stops nothing"
+    )
+    assert "the apply that would stop the host serving it is refused" in said, said
+    # The only way out the product has, with its cost, named before the press.
+    assert "offer this transport again" in said and "every user's link" in said, said
+    # The judgement the whole finding turns on.
+    assert "nothing else in this panel stops a node serving what it was last given" in said
+    # Unchanged by the branch: the other action with the other reach is still named.
+    assert "revoke them on the Users screen" in said
+
+
+async def test_the_remove_confirmation_says_when_no_apply_will_stop_the_host(
+    client, reality_params, ws_params
+) -> None:
+    """The removal twin, whose way out is not the withdrawal's.
+
+    A withdrawn row is still on the screen to be offered back; a removed one is gone, so
+    the only thing that reaches the host again is enabling a transport here and applying
+    THAT — which drops the removed one's service with the compose file it is no longer
+    in. Saying "offer it again" here would name a control this dialog has just destroyed.
+    """
+    node_id, first = await a_node_with_an_offer(client, reality_params)
+    second = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-ws-tls", "params": ws_params},
+    )
+    assert second.status_code == 201, second.text
+
+    plain = await client.get(f"/panel/transports/{first}/remove")
+    assert plain.status_code == 200, plain.text
+    said = _as_one_line(plain.text)
+    assert "The node keeps serving it until you apply the node" in said
+    assert "is refused" not in said, said
+
+    await client.post(f"/panel/transports/{first}/remove")
+
+    last = await client.get(f"/panel/transports/{second.json()['id']}/remove")
+    assert last.status_code == 200, last.text
+    said = _as_one_line(last.text)
+    assert "The node keeps serving it until you apply the node" not in said, (
+        "the confirmation still promises an apply that is refused on a node this "
+        "removal leaves with nothing enabled"
+    )
+    assert "the apply that would stop the host serving it is refused" in said, said
+    assert "A removed row cannot be offered back" in said, said
+    assert "enable a transport on offer-1 and apply that" in said, said
+    assert "nothing else in this panel stops a node serving what it was last given" in said
 
 
 async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
