@@ -614,9 +614,11 @@ runbook used to produce exactly that: `amneziawg` for box E's friends, because S
 names it, and `amneziawg` for the hop E dials, because the hop requires it.
 
 The panel now takes both rows. Two instances of one transport on one node are ordinary —
-they collide only on a **listening port** and on a **config name**, and two `amneziawg`
-rows on two ports share neither. What refuses is the **apply**, on the entry, with this
-in a banner on the Nodes screen:
+they collide on a **listening port**, on a **config name** and, for the WireGuard family,
+on their **tunnel ranges**, which may not overlap (*Rules that are not optional*, below).
+Give the hop a range of its own and two `amneziawg` rows on two ports share none of the
+three. What refuses is the **apply**, on the entry, with this in a banner on the Nodes
+screen:
 
 > `amneziawg could not be rendered for this node — EgressNotRenderable:` … *A tunnel whose
 > packets this node's kernel routes cannot send them out through a different interface, so
@@ -684,19 +686,19 @@ entries again once that node's friends are on a VLESS transport.
 
 The way out is in the panel, and it is **removal** rather than withdrawal. Withdrawing the
 friend-facing `amneziawg` does stop the apply failing — a withdrawn row is not rendered at
-all — but it leaves the row on the node still holding its listening port and its config
-name, its users' material still minted for a transport that node can no longer render, and
-a trap for whoever offers it again: the same apply fails the same way. Removing it takes
-the row, the material, the port and the name.
+all — but it leaves the row on the node still holding its listening port, its config name
+and its tunnel range, its users' material still minted for a transport that node can no
+longer render, and a trap for whoever offers it again: the same apply fails the same way.
+Removing it takes the row, the material, the port, the name and the range.
 
 1. **Nodes → transports** on the entry box. Both `amneziawg` rows are listed, and the
    second one created carries a config name of its own — it reads `amneziawg
    (amneziawg-2)` — so the two cannot be confused. The hop end is the row whose standing
    begins *one end of a hop*, and it is drawn with no buttons at all.
 2. **remove** the friend-facing one, and read the dialog before you confirm: removal
-   destroys the material every user holds on that row and frees its port and its config
-   name, and it is the only action that does either. `withdraw` beside it is the
-   reversible one, and it is not what gets you out of this.
+   destroys the material every user holds on that row and frees its port, its config name
+   and its tunnel range, and it is the only action that does any of the three. `withdraw`
+   beside it is the reversible one, and it is not what gets you out of this.
 3. **Enable a VLESS transport** for friends on that node, on a port nothing else there
    listens on.
 4. **Apply the node.** Removal does not push: until you apply, the host is still running
@@ -798,12 +800,28 @@ place, and its configuration does not change.
   there must never be one — if every node borrows the same handshake, the fleet becomes
   enumerable by that fact alone.
 - **A node may run one transport twice. What it may not do is run it twice on one
-  port.** Two rows on one node collide on the **listening port** — with its protocol,
-  so a TCP transport and a UDP one on the same number are two sockets and no conflict —
-  and on the **config name**, which for the wg-quick family is also the interface name.
-  Nothing else collides. A **disabled** row still holds both, because freeing them would
-  move the collision to the moment somebody switches it back on; removing the row is the
-  only thing that gives them back.
+  port, under one config name, or over one tunnel range.** Two rows on one node collide
+  on three things. The **listening port** — with its protocol, so a TCP transport and a
+  UDP one on the same number are two sockets and no conflict. The **config name**, which
+  for the wg-quick family is also the interface name. And, for the WireGuard family, the
+  **tunnel range**: two such rows on one node may not have overlapping tunnel networks,
+  hop ends and disabled rows included. That third one is refused in the panel, under the
+  box you typed it in, before anything is saved:
+
+  > node `E` already carries `amneziawg` on a tunnel at … and … *is in the same range.
+  > Two tunnels on one node cannot share one: their data planes write into that host's
+  > single routing table, so a reply meant for one person's device would be sent to
+  > whoever holds the same address on the other — and neither config file shows it,
+  > because each is correct on its own. Give this tunnel a range of its own.*
+
+  Overlapping is not only the same range typed twice: a range you widen on one row
+  swallows the narrower one beside it, and that is the pair written by accident. This
+  is the rule that meets you when you follow Shape A and then the hop it mandates on
+  the same box — friends and hop are two `amneziawg` rows on that node, and they need
+  two ranges as much as they need two ports. Nothing else collides. A **disabled** row
+  still holds all three, because freeing them would move the collision to the moment
+  somebody switches it back on; removing the row is the only thing that gives them
+  back.
 - **A friend-facing kernel tunnel and a hop still cannot share a node**, which is a
   different rule and the one that bites — *The one combination that will not render*,
   above.

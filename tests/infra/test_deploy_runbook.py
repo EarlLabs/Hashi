@@ -22,6 +22,7 @@ import re
 import pytest
 
 from control.app.api.routes import router as api_router
+from control.app.services.placement import TUNNEL_TAKEN, claim
 from control.app.services.transports import hop_transports
 from edge.bootstrap.node_stack import EXTENSION
 from edge.egress import NO_RESOLVER, ResolverMissing
@@ -784,3 +785,91 @@ def test_the_migration_that_empties_the_field_points_at_this_section() -> None:
     """The thing that creates the stranded state names the page that says what to do."""
     migration = next(MIGRATIONS.glob("*_a_nodes_resolver.py")).read_text()
     assert RESOLVER_SECTION in _flat(migration)
+
+
+# --- M17.1c: the third thing two rows on one node collide on --------------------------
+#
+# The page said, twice, that a listening port and a config name were the whole list —
+# "Nothing else collides". Since M17.1c ``placement.claim`` refuses a third: two
+# WireGuard-family rows on one node whose tunnel networks overlap, hop ends and withdrawn
+# rows included. It fires on exactly the pair this runbook mandates — Shape A's
+# friend-facing `amneziawg` and the hop the same box dials — so the operator met a
+# refusal the page said could not exist. Read out of ``placement`` rather than described,
+# for this file's usual reason: the answer compared against the prose has to be the one
+# the panel really gives.
+
+
+def _claim_refusals() -> set[str]:
+    """The collision checks ``placement.claim`` puts in front of a new row, by name.
+
+    By ``ast`` over ``claim``'s own source rather than by calling it: the question is
+    which refusals exist, which is a property of the code, and answering it with a
+    database and three rows would make this an integration test of the thing it is only
+    supposed to be counting.
+    """
+    calls = ast.walk(ast.parse(inspect.getsource(claim)))
+    return {
+        node.func.id
+        for node in calls
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id.endswith("_is_free")
+    }
+
+
+def test_a_new_collision_check_cannot_be_added_without_the_page_gaining_a_sentence() -> None:
+    """The list the runbook commits to is closed, so the code's list has to be pinned.
+
+    ``claim`` refuses on a port, on a tunnel range and — by having no name left — on the
+    config name, which is the one it answers with rather than the one it checks. Three,
+    and the page says "Nothing else collides". A fourth check added here is a fourth
+    thing an operator has to be told about, and this is what says so.
+    """
+    assert _claim_refusals() == {"port_is_free", "tunnel_network_is_free"}, (
+        "placement.claim's collision checks have changed. The runbook's *Rules that are "
+        "not optional* lists them for the operator and closes the list — update the "
+        "bullet, then this test"
+    )
+
+
+def test_no_paragraph_lists_what_two_rows_collide_on_and_leaves_the_range_out(
+    runbook: str,
+) -> None:
+    """Both places that name the first two collisions, and any third place later.
+
+    Per paragraph rather than per section: the claim was made twice, in two sections,
+    and the one that was corrected in M17.2's docs commit was not the one an operator
+    following Shape A reads first.
+    """
+    claims = [
+        paragraph
+        for paragraph in re.split(r"\n[ \t]*\n", runbook)
+        if "collide" in paragraph and "listening port" in _flat(paragraph)
+    ]
+    assert claims, (
+        "no paragraph of the runbook says what two rows on one node collide on, so the "
+        "operator following Shape A and then its hop has nothing to read"
+    )
+    for paragraph in claims:
+        flat = _flat(paragraph)
+        assert "config name" in flat, f"a collision paragraph omits the config name: {flat}"
+        assert "range" in flat, (
+            "a collision paragraph names the port and the config name and not the tunnel "
+            f"range, which placement.tunnel_network_is_free also refuses: {flat}"
+        )
+
+
+def test_the_runbook_quotes_the_refusal_two_overlapping_tunnels_get(runbook: str) -> None:
+    """Quoted from ``control``, and checked against it.
+
+    The placeholder-free tail of the refusal — everything after the last value it names,
+    so the quotation carries no node, no transport and no range of its own. An operator
+    searching the page for the words in the dialog in front of them has to find them.
+    """
+    prose = _flat(TUNNEL_TAKEN[TUNNEL_TAKEN.rindex("}") + 1 :].strip())
+    quoted = _flat(re.sub(r"^[ \t]*> ?", "", runbook, flags=re.M))
+
+    assert prose in quoted, (
+        "the runbook's quotation of the overlapping-tunnels refusal is not what control "
+        "says any more"
+    )
