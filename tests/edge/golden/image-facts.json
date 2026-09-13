@@ -9,6 +9,7 @@
       "resolves": {
         "/bin/sh": true,
         "awg-quick": true,
+        "ip": true,
         "iptables": true
       }
     },
@@ -20,6 +21,7 @@
       "resolves": {
         "/bin/sh": true,
         "/entrypoint.sh": true,
+        "ip": true,
         "iptables": true,
         "wg-quick": true
       }
