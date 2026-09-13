@@ -14,6 +14,7 @@ HOW:  the in-process client from conftest, already holding an operator session. 
 """
 
 import ast
+import datetime
 import hashlib
 import html.parser
 import json
@@ -1185,7 +1186,11 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     # running" one this used to read, are pinned together in
     # ``test_the_withdraw_confirmation_says_when_no_apply_will_stop_the_host``.
     assert "an apply changes nothing on the node" in reading
-    assert "keeps serving" in reading
+    # And it still says the host is untouched by the press. In the words for a node
+    # nothing was ever pushed to, which is what this fixture builds: there is no host in
+    # this suite, so no row here can carry an ``applied_at`` honestly. Both forms are
+    # pinned in ``test_a_confirmation_does_not_describe_a_host_nothing_ever_reached``.
+    assert "whatever it was last given it keeps running" in reading
     # And what this action is NOT: revocation is a different reach, on another screen.
     assert "revoke them on the Users screen" in reading
 
@@ -1398,6 +1403,70 @@ async def test_the_remove_confirmation_says_when_no_apply_will_stop_the_host(
     assert "A removed row cannot be offered back" in said, said
     assert "enable a transport on offer-1 and apply that" in said, said
     assert "nothing else in this panel stops a node serving what it was last given" in said
+
+
+async def as_though_it_had_been_applied(session, node_transport_id: str) -> None:
+    """Stamp a row the way a SUCCESSFUL push does — the twin of the one in
+    ``tests/control/test_first_apply_failure.py``.
+
+    ``applied_at`` is the only record this product keeps of a config having reached a
+    host, and nothing in this zone's suite can produce one honestly: a real push needs a
+    node and there is not one. Written directly, which is exactly what ``apply_node``
+    does on its happy path and what nothing else in the codebase does. The digest goes
+    with it because the pair is meaningless apart.
+    """
+    row = await session.get(NodeTransport, node_transport_id)
+    row.applied_at = datetime.datetime.now(datetime.UTC)
+    row.applied_digest = "0" * 64
+    await session.commit()
+
+
+@pytest.mark.parametrize("action", ["withdraw", "remove"])
+async def test_a_confirmation_does_not_describe_a_host_nothing_ever_reached(
+    client, session, reality_params, action: str
+) -> None:
+    """The same node, the same row, before and after a config reaches its host — M18.
+
+    Acceptance read "Whatever <node> is already serving it keeps serving, and a
+    configuration somebody has already fetched keeps working while it does" on a node
+    whose address does not resolve and which nothing had ever been pushed to, BYTE FOR
+    BYTE what it says on a node really serving the transport. The apply refusal one press
+    away already knew the difference and opened "No transport on this node has ever been
+    applied": two surfaces, same node, different stories, and this is the one the operator
+    reads while deciding whether to press.
+
+    Both dialogs and both states in one test, because either half alone passes on a dialog
+    that says the same thing about every node — which is the defect.
+
+    What the never-applied arm may claim is deliberately narrower than "the host is
+    serving nobody": a removed row takes its stamp with it, so the panel can only speak
+    for the rows it holds.
+    """
+    node_id, row_id = await a_node_with_an_offer(client, reality_params)
+
+    never_applied = await client.get(f"/panel/transports/{row_id}/{action}")
+    assert never_applied.status_code == 200, never_applied.text
+    said = _as_one_line(never_applied.text)
+    assert "No transport on offer-1 has ever been applied" in said, said
+    assert "is already serving it keeps serving" not in said, (
+        "a node nothing was ever pushed to is described as serving the transport, in the "
+        f"same words as one that is: {said}"
+    )
+    # And it does not overreach in the other direction either: what is on the host is
+    # unknown from here, not known to be nothing.
+    assert "whatever it was last given it keeps running" in said, said
+
+    await as_though_it_had_been_applied(session, row_id)
+
+    applied = await client.get(f"/panel/transports/{row_id}/{action}")
+    assert applied.status_code == 200, applied.text
+    said = _as_one_line(applied.text)
+    assert "Whatever offer-1 is already serving it keeps serving" in said, (
+        "a node a config really reached is no longer told what it keeps serving: " + said
+    )
+    assert "has ever been applied" not in said, said
+    # Unchanged by either arm: the refusal and the way out are what the dialog is for.
+    assert "the apply that would stop the host serving it is refused" in said, said
 
 
 async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
@@ -6098,6 +6167,84 @@ def test_the_boundary_leaves_the_operator_s_own_text_alone() -> None:
         == "a user called 'friend' already exists"
     )
     assert wording.for_the_page("friend added", keeping="friend") == "friend added"
+
+
+# Every refusal ``apply`` composes, as the list the test below sweeps. Written out rather
+# than discovered from the module so that a fourth one has to be added here by somebody
+# who has read what the sweep requires of it.
+THE_APPLY_REFUSALS = (
+    "NOTHING_TO_APPLY_YET",
+    "NOTHING_LEFT_TO_APPLY",
+    "NOTHING_LEFT_TO_APPLY_UNPUSHED",
+)
+
+
+@pytest.mark.parametrize("refusal", THE_APPLY_REFUSALS)
+def test_a_refusal_hands_an_api_caller_no_panel_directions(refusal: str) -> None:
+    """The same sentence is read by an operator and by a script — M18's acceptance.
+
+    ``POST /api/nodes/{id}/apply`` was answering a caller with "Enable a transport on it
+    from the Nodes screen, then apply it" and "Nothing else in this panel stops a node
+    serving what it was last given": correct prose for a banner, and directions to a place
+    the caller of an API is not in and cannot reach.
+
+    The seam is the one decision 9 already draws, not a second one: the service says what
+    is true of this control plane however it is driven, and the console says it the
+    console's way at ``wording.for_the_page``. So the assertion runs in both directions —
+    no screen in what the service composed, and the screen back in what the panel renders
+    — because a sentence that never names a screen on either side has lost the operator
+    their next action, which is the defect the previous round fixed.
+    """
+    written = getattr(apply_service, refusal)
+
+    assert "panel" not in written.lower(), (
+        f"{refusal} tells an API caller about a panel: {written}"
+    )
+    assert "screen" not in written.lower(), (
+        f"{refusal} sends an API caller to a screen: {written}"
+    )
+
+    on_the_console = wording.for_the_page(written)
+
+    assert on_the_console != written, (
+        f"{refusal} crosses to the console unchanged, so the operator is reading the "
+        f"words written for a caller with no screen: {written}"
+    )
+    assert apply_service.WHERE_TO_RETRY in on_the_console, (
+        f"the console's version of {refusal} names no screen to act on: {on_the_console}"
+    )
+    # And what is NOT translated: the substance of a refusal is the same fact for both
+    # readers, so only the directions move.
+    for held in ("nothing was pushed and nothing on the node was changed",):
+        assert held in written and held in on_the_console, on_the_console
+
+
+def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
+    """The mapping is keyed BY the constant, and this is what keeps that true.
+
+    A clause a service composes and this boundary does not know about is one that reaches
+    the operator in the words written for a script — silently, since both are English
+    sentences and neither surface raises. So every direction ``apply`` exports is required
+    to be in the mapping, and every entry of the mapping to be a direction it still
+    exports.
+    """
+    exported = {
+        apply_service.ENABLE_ONE_HERE,
+        apply_service.OFFER_ONE_AGAIN,
+        apply_service.NOTHING_STOPS_A_SERVING_HOST,
+    }
+
+    assert set(wording._THE_CONSOLES_DIRECTIONS) == exported, (
+        "a clause written for any caller has no console version, or the mapping still "
+        "holds one that no longer exists"
+    )
+    for clause, on_the_console in wording._THE_CONSOLES_DIRECTIONS.items():
+        assert clause in (
+            apply_service.NOTHING_TO_APPLY_YET
+            + apply_service.NOTHING_LEFT_TO_APPLY
+            + apply_service.NOTHING_LEFT_TO_APPLY_UNPUSHED
+        ), f"nothing composes this clause any more, so it is translating nothing: {clause}"
+        assert on_the_console != clause, clause
 
 
 async def test_a_status_word_never_breaks_mid_word(client, reality_params) -> None:

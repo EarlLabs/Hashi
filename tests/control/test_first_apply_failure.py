@@ -55,6 +55,7 @@ import pytest
 
 from control.app.errors import Conflict, NodeOperationFailed, NothingToApply
 from control.app.models import NodeState
+from control.app.panel import wording
 from control.app.services import apply, nodes
 from edge.bootstrap import NodeUnreachable
 
@@ -385,8 +386,14 @@ async def test_applying_a_node_with_nothing_enabled_is_refused_not_failed(
     # The sentence names what is missing and what to do about it. Asserted on the two
     # things it must contain rather than on the whole string, so it can be reworded.
     assert "no transports enabled" in raised.value.message
-    assert apply.WHERE_TO_RETRY in raised.value.message, (
-        "the refusal does not say where to go and offer the node a transport"
+    # Where to go is the console's own words and is added at the panel boundary — M18's
+    # acceptance, round 2: this same sentence is answered to an API caller, who has no
+    # screen. What the SERVICE owes is the action.
+    assert apply.ENABLE_ONE_HERE in raised.value.message, (
+        "the refusal does not say to enable a transport on the node"
+    )
+    assert apply.WHERE_TO_RETRY in wording.for_the_page(raised.value.message), (
+        "the console's version of the refusal does not say where to go and do it"
     )
     # And it is not the old answer: nothing about YAML, the compose file, or the daemon.
     for leaked in ("mapping", "compose", "docker", "yml"):
@@ -521,8 +528,9 @@ async def test_a_withdrawn_row_nothing_was_ever_pushed_to_is_not_said_to_be_serv
     # it still carries what that costs.
     assert "back in every user's link" in said, said
     # And the judgement that holds on every one of these three sentences: an apply is not
-    # what stops a node serving, and nothing else here is either.
-    assert "Nothing else in this panel stops a node serving what it was last given" in said
+    # what stops a node serving, and nothing else here is either. In the API's words,
+    # because this is the API's answer — the console reads the same fact as "this panel".
+    assert apply.NOTHING_STOPS_A_SERVING_HOST in said, said
     assert (await client.get(f"/api/nodes/{node_id}")).json()["state"] == "active"
 
 
@@ -558,9 +566,17 @@ async def test_removing_the_last_transport_does_not_promise_an_apply_that_stops_
     # It is the empty-node sentence, because the row is gone — and it now carries what
     # its withdrawn sibling carries: what an apply will and will not do to the host.
     assert "no transports enabled" in said, said
-    assert "Whatever this host was last given it keeps running" in said, said
     assert "removed here to cut people off, removing it did not stop the host" in said, said
-    assert "Nothing else in this panel stops a node serving what it was last given" in said
+    assert apply.NOTHING_STOPS_A_SERVING_HOST in said, said
+    # AND IT DOES NOT DESCRIBE A PUSH IT CANNOT KNOW HAPPENED — M18's acceptance, round 2.
+    # This same sentence is the answer on a node nothing ever reached, where "whatever
+    # this host was last given it keeps running" reads as a report about a config that was
+    # delivered; the walk read it on a host whose address does not resolve. The evidence
+    # is the ``applied_at`` on the row this action deleted, so the honest answer is that
+    # it cannot be answered from here — and it says which record went missing, because an
+    # operator who is not told why will assume the panel knows and is being coy.
+    assert "cannot be answered from here" in said, said
+    assert "a removed transport takes the record of its own apply away with it" in said, said
     # Unchanged: this is still not a failure and the node is still not degraded.
     shown = (await client.get(f"/api/nodes/{node_id}")).json()
     assert shown["state"] == "active", shown
@@ -582,6 +598,44 @@ async def test_the_api_says_nothing_to_apply_rather_than_a_bad_gateway(
 
     assert refused.status_code == 409, refused.text
     assert refused.json()["error"]["code"] == "nothing_to_apply", refused.text
+
+
+async def test_the_api_and_the_console_are_told_where_to_go_in_their_own_words(
+    client, refusing_ssh
+) -> None:
+    """One refusal, two readers, and only the directions differ — M18's acceptance.
+
+    The JSON body said "Enable a transport on it from the Nodes screen, then apply it"
+    and "Nothing else in this panel stops a node serving what it was last given" to a
+    caller who has no panel open and may have no browser at all. Both halves are asserted
+    at the ROUTE, not on the constants, because what acceptance read was a response body:
+    the seam only counts if the surfaces really carry different words.
+    """
+    node_id = await an_empty_node(client, refusing_ssh)
+
+    to_a_script = (await client.post(f"/api/nodes/{node_id}/apply")).json()["error"][
+        "message"
+    ]
+    to_the_operator = (
+        await client.post(
+            f"/panel/nodes/{node_id}/apply", headers={"HX-Request": "true"}
+        )
+    ).text
+
+    assert "panel" not in to_a_script.lower(), to_a_script
+    assert "screen" not in to_a_script.lower(), to_a_script
+    assert apply.ENABLE_ONE_HERE in to_a_script, to_a_script
+    # The console loses nothing by it: this is the first-run refusal, and an operator who
+    # is not told where transports are enabled is an operator standing still.
+    assert "Enable a transport on it from the Nodes screen" in to_the_operator, (
+        to_the_operator
+    )
+    assert "Nothing else in this panel stops a node serving" in to_the_operator, (
+        to_the_operator
+    )
+    # And the substance is one sentence written once, not two that can drift apart.
+    assert "nothing on the node was changed" in to_a_script, to_a_script
+    assert "nothing on the node was changed" in to_the_operator, to_the_operator
 
 
 async def test_the_console_shows_the_refusal_and_leaves_the_row_undegraded(

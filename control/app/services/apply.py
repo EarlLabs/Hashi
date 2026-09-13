@@ -69,7 +69,41 @@ logger = logging.getLogger(__name__)
 #
 # Every service sentence that tells an operator where to go uses this. A screen that
 # moves moves here, and nothing composed in ``services/`` may name a page again.
+#
+# EXCEPT THE THREE REFUSALS BELOW, since M18's acceptance: they are answered to an API
+# consumer as well as to the console, and naming a screen is the one thing an API message
+# must not do. Their directions are written in the clauses under this and become the
+# console's own words at ``panel/wording.for_the_page`` — the same seam decision 9 sends
+# ``friend`` across, for the same reason. This constant stays because the sentences that
+# are ONLY ever read on the console still use it (``services/console.py``, the incomplete
+# revocation and rotation reports).
 WHERE_TO_RETRY = "the Nodes screen"
+
+# THE ONE CLAUSE PER REFUSAL THAT IS WRITTEN FOR A SCREEN — M18's acceptance, round 2.
+#
+# ``POST /api/nodes/{id}/apply`` was answering a script with "Enable a transport on it
+# from the Nodes screen, then apply it" and "Nothing else in this panel stops a node
+# serving what it was last given": right for the operator reading a banner, wrong in a
+# JSON error body, where there is no panel and the caller is not looking at one.
+#
+# So the service says what is true of this control plane however it is driven, and the
+# panel says it in its own words. Full sentences rather than fragments, because the
+# translation is keyed on the whole of one: a clause that has to be spliced into another
+# sentence is a mapping that goes stale silently the first time the sentence around it is
+# rewritten, and these are keyed BY THE CONSTANT — the page's version is looked up with
+# the value below, not with a copy of it (``panel/wording.py``).
+#
+# Nothing else in a refusal changes across the boundary. The substance — what was pushed,
+# what the host is still running, what an apply can and cannot do — is the same fact for
+# both readers and is written once.
+ENABLE_ONE_HERE = "Enable a transport on this node, then apply it."
+OFFER_ONE_AGAIN = (
+    "Offer one of its transports again — which puts that transport back in every user's "
+    "link — and apply."
+)
+NOTHING_STOPS_A_SERVING_HOST = (
+    "Nothing else in this control plane stops a node serving what it was last given."
+)
 
 # What an operator is told when they press apply on a node that offers nothing — M18.1.
 #
@@ -88,8 +122,9 @@ WHERE_TO_RETRY = "the Nodes screen"
 # that authorises that person. A no-op would report such a node as updated. It is
 # reported as not updated instead, and ``why_not_updated`` calls it REFUSED.
 #
-# They name ``WHERE_TO_RETRY`` like every other service sentence that sends an operator
-# somewhere, so a screen that moves moves in one place.
+# Where they send an operator is the clause above, translated into the console's own
+# words at the panel boundary, so a screen that moves moves in one place and a caller
+# that has no screen is not sent to one.
 #
 # Both named for the ACT rather than for the state, because ``console.NOTHING_ENABLED`` is
 # the drift cell's two words for the same node and the two must not be mistaken for one
@@ -136,30 +171,38 @@ WHERE_TO_RETRY = "the Nodes screen"
 # given, it keeps running — and only the one that does know (a surviving row carries an
 # ``applied_at``) makes the stronger claim. A removed row takes its ``applied_at`` with
 # it, which is why the empty case can never be certain and must not pretend to be.
+#
+# AND THE EMPTY ONE STOPS SAYING WHAT IT CANNOT KNOW — M18's acceptance, round 2. It
+# opened "Whatever this host was last given it keeps running" on a node nothing had ever
+# been pushed to, which reads as a report about a config that was delivered; the walk
+# read it on a host whose address does not even resolve. The evidence that would settle
+# it is ``applied_at`` and it is on the row that was removed — so this sentence says that
+# it cannot tell, and why, rather than picking the half that is wrong on the node the
+# operator is looking at. Both halves of what it is FOR survive that: an operator with
+# nothing enabled is still told to enable something, and an operator who removed a
+# transport to cut people off is still told that removing it did not stop the host.
 NOTHING_TO_APPLY_YET = (
     "this node has no transports enabled, so there is nothing to apply — nothing was "
-    "pushed and nothing on the node was changed. Enable a transport on it from "
-    f"{WHERE_TO_RETRY}, then apply it. Whatever this host was last given it keeps "
-    "running, and an apply cannot change that while there is nothing to push: if a "
-    "transport was removed here to cut people off, removing it did not stop the host "
-    "serving it. Nothing else in this panel stops a node serving what it was last given."
+    f"pushed and nothing on the node was changed. {ENABLE_ONE_HERE} Whether anything was "
+    "ever pushed to this host cannot be answered from here: a removed transport takes "
+    "the record of its own apply away with it. What holds either way is that an apply "
+    "with nothing to push cannot change what the host is running — so if a transport was "
+    "removed here to cut people off, removing it did not stop the host serving it. "
+    f"{NOTHING_STOPS_A_SERVING_HOST}"
 )
 NOTHING_LEFT_TO_APPLY = (
     "every transport on this node is withdrawn, so there is nothing to apply — nothing "
     "was pushed and nothing on the node was changed. The node is still running the "
     "config it was last given and still serving everyone who holds a credential on it: "
-    "an apply cannot stop that, because there is nothing to push. Offer one of its "
-    f"transports again from {WHERE_TO_RETRY} — which puts that transport back in every "
-    "user's link — and apply. Nothing else in this panel stops a node serving what it "
-    "was last given."
+    "an apply cannot stop that, because there is nothing to push. "
+    f"{OFFER_ONE_AGAIN} {NOTHING_STOPS_A_SERVING_HOST}"
 )
 NOTHING_LEFT_TO_APPLY_UNPUSHED = (
     "every transport on this node is withdrawn, so there is nothing to apply — nothing "
     "was pushed and nothing on the node was changed. No transport on this node has ever "
     "been applied: whatever this host was last given it keeps running, and an apply "
-    "cannot change that while there is nothing to push. Offer one of its transports "
-    f"again from {WHERE_TO_RETRY} — which puts that transport back in every user's link "
-    "— and apply. Nothing else in this panel stops a node serving what it was last given."
+    "cannot change that while there is nothing to push. "
+    f"{OFFER_ONE_AGAIN} {NOTHING_STOPS_A_SERVING_HOST}"
 )
 
 # The boundary between "this node failed" and "stop the whole operation".

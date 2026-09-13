@@ -28,6 +28,15 @@
   the stronger claim; that is the same defect one surface over and is recorded rather
   than widened here.
 
+  AND IT IS NOT SAID AT ALL ON A NODE NOTHING HAS EVER REACHED — M18's acceptance, round
+  2, which read that sentence unchanged on a node whose address does not resolve while
+  the apply refusal one press away opened "No transport on this node has ever been
+  applied". ``never_applied_here`` is the column that refusal reads, so the two agree by
+  construction, and the arm it selects claims only what the ROWS can support: that
+  nothing this panel holds has ever been pushed. Not that the host is serving nobody —
+  a removed row takes its stamp away with it, and what is on the host is not visible
+  from here.
+
   No key material is named and none could be: this dialog's whole context is one OfferRow,
   which carries a name, a standing, a flag and an id.
 #}
@@ -44,10 +53,17 @@
     <div class="dialog-body text-muted">
       This is the last transport enabled on {{ offer.node }}, so the apply that would
       stop the host serving it is refused: with nothing left to push, an apply changes
-      nothing on the node. Whatever {{ offer.node }} is already serving it keeps serving,
-      and a configuration somebody has already fetched keeps working while it does. The
-      way out is to offer this transport again — which puts it back in every user's link
-      — and apply; nothing else in this panel stops a node serving what it was last
+      nothing on the node.
+      {%- if offer.never_applied_here %}
+      No transport on {{ offer.node }} has ever been applied, so what its host is running
+      is not something this panel can tell you — whatever it was last given it keeps
+      running, and an apply cannot change that while there is nothing to push.
+      {%- else %}
+      Whatever {{ offer.node }} is already serving it keeps serving, and a configuration
+      somebody has already fetched keeps working while it does.
+      {%- endif %}
+      The way out is to offer this transport again — which puts it back in every user's
+      link — and apply; nothing else in this panel stops a node serving what it was last
       given. To take one person's access away instead, revoke them on the Users screen —
       that is a different action with a different reach.
     </div>

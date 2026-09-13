@@ -1,8 +1,10 @@
 """The boundary where the code's word becomes the panel's word.
 
 WHAT: rewrites a sentence composed under this codebase's vocabulary — ``friend`` —
-      into the word an operator reads on the console: ``user``; and composes the one
-      sentence per recorded change that the audit screen puts in front of the operator.
+      into the word an operator reads on the console: ``user``; puts a refusal's
+      directions into the console's own words, where a service wrote them for any
+      caller; and composes the one sentence per recorded change that the audit screen
+      puts in front of the operator.
 WHY:  ``docs/decisions.md`` decision 9 draws one line and it has two sides. Nothing
       may rename ``friend`` in a route, a schema field, a service name or a test —
       and, equally, nothing the code calls a friend may arrive on the rendered page
@@ -28,6 +30,12 @@ HOW:  every server-composed sentence a CONSOLE template renders passes through
       being true. What replaces it is the list above and the audit of it in
       ``tests/control/test_the_console.py``.
 
+The two translations are the same boundary seen from two sides. ``friend`` is a word of
+ours a page must not show; "the Nodes screen" is a word of the PAGE's that a service must
+not compose, because the same sentence is answered to ``POST /api/nodes/{id}/apply``,
+where there is no screen and the caller is not looking at one. Both are fixed at the
+moment a sentence becomes page copy, and nowhere else.
+
 Two things are never translated, because they are not ours to rewrite:
 
 * anything in QUOTES. Services quote operator data with ``{value!r}``, so a person
@@ -45,7 +53,7 @@ import re
 from collections.abc import Sequence
 
 from control.app.models import AuditAction
-from control.app.services import console
+from control.app.services import apply, console
 
 # ``friend``/``friends``/``friend's``/``friends'`` — the shapes a sentence in this
 # codebase actually uses. Word-bounded on purpose: a nickname like ``friendly`` is
@@ -57,13 +65,49 @@ _THE_CODES_WORD = re.compile(r"\b(friend)(s'|'s|s)?\b", re.IGNORECASE)
 # apostrophe follows a letter, so it opens nothing, and the sentence still translates.
 _QUOTED_DATA = r'''(?<![A-Za-z])'[^']*'(?![A-Za-z])|"[^"]*"'''
 
+# Where an operator is sent, in the console's own words — M18's acceptance, round 2.
+#
+# The second thing this boundary translates, and it crosses it for the same reason
+# ``friend`` does. ``POST /api/nodes/{id}/apply`` was answering a script with "Enable a
+# transport on it from the Nodes screen, then apply it" and "Nothing else in this panel
+# stops a node serving what it was last given": correct prose for a banner, and directions
+# to a place the caller of an API is not in. A service composing panel copy is the exact
+# direction this module exists to stop, so the service states what is true of this control
+# plane however it is driven and the console says it the console's way.
+#
+# KEYED BY THE CONSTANT, never by a copy of its text: ``services/apply.py`` owns the
+# sentence, and a mapping keyed on a literal here would stop matching — silently, with the
+# API's wording appearing on the console — the first time that sentence is edited.
+#
+# The values are the console's existing words, unchanged from what M18's acceptance walked
+# and approved. What moves between the two versions is only where the operator is sent;
+# every other clause of a refusal is the same fact for both readers and is written once.
+_THE_CONSOLES_DIRECTIONS: dict[str, str] = {
+    apply.ENABLE_ONE_HERE: (
+        f"Enable a transport on it from {apply.WHERE_TO_RETRY}, then apply it."
+    ),
+    apply.OFFER_ONE_AGAIN: (
+        f"Offer one of its transports again from {apply.WHERE_TO_RETRY} — which puts "
+        "that transport back in every user's link — and apply."
+    ),
+    apply.NOTHING_STOPS_A_SERVING_HOST: (
+        "Nothing else in this panel stops a node serving what it was last given."
+    ),
+}
+
 
 def for_the_page(sentence: str, *, keeping: str | None = None) -> str:
     """One sentence in the words the panel uses, leaving operator text alone.
 
     ``keeping`` is an unquoted value the panel itself interpolated — a nickname in a
     toast. Quoted values need no naming: they are recognised by their quotes.
+
+    The directions are replaced before anything else runs, on the whole sentence: they are
+    this codebase's own clauses, containing nothing an operator typed, so there is nothing
+    in them for the quote protection below to be protecting.
     """
+    for written_for_any_caller, on_the_console in _THE_CONSOLES_DIRECTIONS.items():
+        sentence = sentence.replace(written_for_any_caller, on_the_console)
     protected = re.compile(
         f"{_QUOTED_DATA}|{re.escape(keeping)}" if keeping else _QUOTED_DATA
     )

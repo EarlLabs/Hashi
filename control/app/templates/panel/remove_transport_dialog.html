@@ -38,6 +38,20 @@
   ever pushed to. The row's own standing sentence and the toast still make the stronger
   claim; that is the same defect one surface over and is recorded rather than widened.
 
+  AND IT IS NOT SAID AT ALL ON A NODE NOTHING HAS EVER REACHED — M18's acceptance, round
+  2. "Whatever this node is already serving it keeps serving, and a configuration somebody
+  has already fetched keeps working while it does" was byte-for-byte identical on a node
+  really serving the transport and on one whose address does not even resolve, while the
+  apply refusal one press away opened "No transport on this node has ever been applied".
+  Two surfaces, same node, different stories — and the operator deciding whether to press
+  is reading this one.
+
+  ``never_applied_here`` is the same column that refusal reads, so the two agree by
+  construction. What the arm it selects says is deliberately weaker than "the host is
+  serving nobody": a removed row takes its stamp with it, so all this panel can honestly
+  claim is that nothing IT holds has ever been pushed, and what is on the host is not
+  something it can see from here.
+
   The title is offer.transport, which is services/console.py's placed_as: on a node
   running two instances of one protocol it reads `amneziawg (amneziawg-2)`, so the
   confirmation cannot name the wrong one of two. No key material is named and none could
@@ -64,9 +78,16 @@
     <div class="dialog-body text-muted">
       This is the last transport enabled on {{ offer.node }}, so the apply that would
       stop the host serving it is refused: with nothing left to push, an apply changes
-      nothing on the node. Whatever {{ offer.node }} is already serving it keeps serving,
-      and a configuration somebody has already fetched keeps working while it does. A
-      removed row cannot be offered back, so the way out is to enable a transport on
+      nothing on the node.
+      {%- if offer.never_applied_here %}
+      No transport on {{ offer.node }} has ever been applied, so what its host is running
+      is not something this panel can tell you — whatever it was last given it keeps
+      running, and an apply cannot change that while there is nothing to push.
+      {%- else %}
+      Whatever {{ offer.node }} is already serving it keeps serving, and a configuration
+      somebody has already fetched keeps working while it does.
+      {%- endif %}
+      A removed row cannot be offered back, so the way out is to enable a transport on
       {{ offer.node }} and apply that — nothing else in this panel stops a node serving
       what it was last given.
     </div>

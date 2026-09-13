@@ -81,6 +81,16 @@ async def test_applying_a_node_with_nothing_enabled_is_not_a_parser_error(
         )
     # And it IS about the thing the operator has to do next.
     assert "no transports enabled" in message, message
+    # IN THE WORDS OF AN API — M18's acceptance, round 2. This body was sending a script
+    # to the Nodes screen and telling it what "this panel" does and does not stop. The
+    # console gets that sentence too, in its own words, at the panel boundary; over here
+    # there is no screen, and a caller is left looking for one that is not on their side
+    # of the request.
+    for the_operators_word in ("panel", "screen"):
+        assert the_operators_word not in message.lower(), (
+            f"the API refusal hands its caller panel directions ({the_operators_word!r}): "
+            f"{message}"
+        )
 
 
 async def test_the_node_is_not_degraded_by_an_apply_that_pushed_nothing(
@@ -141,8 +151,17 @@ async def test_the_console_says_it_where_the_operator_pressed(
     # An operator who removed it to cut people off and reads "nothing on the node was
     # changed" concludes access is gone, which is the one reading this refusal must not
     # allow.
-    assert "Whatever this host was last given it keeps running" in pressed.text, pressed.text
+    assert "removing it did not stop the host serving it" in pressed.text, pressed.text
     assert (
         "Nothing else in this panel stops a node serving what it was last given"
         in pressed.text
     ), pressed.text
+    # AND IT CLAIMS NO MORE THAN IT CAN KNOW — M18's acceptance, round 2. This refusal
+    # used to open "Whatever this host was last given it keeps running", which reads as a
+    # report about a config that was delivered, on a node registered thirty seconds ago
+    # and never dialled. The record that would settle it is the removed row's
+    # ``applied_at``; with no row there is no record, and the sentence says so.
+    assert "Whatever this host was last given it keeps running" not in pressed.text, (
+        "a node nothing was ever pushed to is described as running what it was given"
+    )
+    assert "cannot be answered from here" in pressed.text, pressed.text
