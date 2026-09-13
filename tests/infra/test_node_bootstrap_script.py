@@ -7,8 +7,12 @@ WHY:  the only honest proof of this script is a host that has never run hashi, a
       tree is that the script cannot quietly do the dangerous version of each step —
       prompt on a pipe, guess a port, generate a private key on the machine most likely
       to be seized, or leave the host writing down who connected to it.
-HOW:  the script is read, not run. Same division as ``test_panel_bootstrap_script.py``
-      and ``test_backup_script.py``.
+HOW:  the script is read, not run — with one exception at the bottom of this file, added
+      by M18's acceptance: the three tests that RUN its checking half, cut at the section
+      where it first touches the host. Reading cannot catch a refusal that is written
+      correctly and can never fire, which is what a `getent` that ends the run by itself
+      under ``set -e`` produced. Everything else keeps the division
+      ``test_panel_bootstrap_script.py`` and ``test_backup_script.py`` use.
 
       Stated plainly: nothing here proves a host becomes a node. It proves the script
       cannot do the harmful version of becoming one.
