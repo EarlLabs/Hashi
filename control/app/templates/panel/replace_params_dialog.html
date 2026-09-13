@@ -1,0 +1,133 @@
+{#
+  "Replace parameters" — item 24's form, in the console.
+
+  The case it exists for is a decoy that has been blocked, and this file names neither
+  that field nor that protocol: `boxes` arrives from services/transports.py, which reads
+  every box out of the transport's own model. A new package therefore gets a working
+  replacement form with no edit here, which is charter criterion 4 in one file.
+
+  NO BOX CAN EXIST FOR KEY MATERIAL, and that is structural rather than checked: the box
+  list is `operator_params`, which subtracts everything the transport declares as
+  material AND the public counterpart of it. So the form cannot ask for a key, cannot
+  show one as a placeholder, and cannot carry one back on a refusal. UI-PATTERNS §9's
+  rule is stated in the body anyway — a form that silently does the right thing teaches
+  the operator nothing about why they are never asked for a key here.
+
+  EMPTY MEANS KEEP, which is the opposite of the establish-hop dialog's empty box, and
+  the reason this uses its own `ParamBox` rather than that dialog's `TuningField`: there
+  is no "required" on this form. Each placeholder is the value in place now, written the
+  way the form takes it back, so "leave it alone" is something the operator can see
+  rather than something they have to trust.
+#}
+{% macro box(parameter, values, errors) %}
+{#
+  One box: label, input, and the aria wiring that ties its hint and error together. A
+  macro rather than a copy per field — the wiring is what silently rots when a
+  transport gains a parameter, and there is exactly one copy of it here.
+
+  `.param-field` and NOT the hop dialog's `.tuning-field`, which caps its input at 136px
+  and gives the label the rest. That is right for twenty-four short numeric knobs and
+  wrong here, because on this form the INPUT is the thing being read: its placeholder is
+  the value being replaced, and "leave one empty to keep it" is only an affordance if
+  the operator can see what they would be keeping. A hostname or a comma-joined list
+  shows about seventeen characters in 136px. Same tokens, same breakpoint, columns the
+  other way round — see app.css.
+
+  Not marked `required` in the markup: an empty box is a valid answer on this form.
+#}
+<div class="param-field">
+  <label class="mono" for="param-{{ parameter.name }}">{{ parameter.name }}</label>
+  <input class="input" id="param-{{ parameter.name }}" name="{{ parameter.name }}"
+         type="text" value="{{ values.get(parameter.name, "") }}"
+         placeholder="{{ parameter.placeholder }}"
+         autocomplete="off" spellcheck="false"
+         {% if parameter.hint or errors.get(parameter.name) %}aria-describedby="{% if parameter.hint %}param-{{ parameter.name }}-hint{% endif %}{% if parameter.hint and errors.get(parameter.name) %} {% endif %}{% if errors.get(parameter.name) %}param-{{ parameter.name }}-error{% endif %}"{% endif %}
+         {% if errors.get(parameter.name) %}aria-invalid="true"{% endif %}>
+  {% if parameter.hint %}
+  <div class="field-hint" id="param-{{ parameter.name }}-hint">{{ parameter.hint }}</div>
+  {% endif %}
+  {% if errors.get(parameter.name) %}
+  <div class="field-error" id="param-{{ parameter.name }}-error" role="alert">{{ errors[parameter.name] }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+<div class="dialog-backdrop">
+  <div class="dialog dialog-wide blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="replace-params-title">
+    <div class="dialog-title" id="replace-params-title">Replace parameters</div>
+    <form class="dialog-form" hx-post="/panel/keys/{{ key.id }}/params"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+
+      {% if failure %}
+      {#
+        A refusal about the request rather than about one box — nothing typed, nothing
+        changed, or a complaint the form has no box to land on. Same treatment as a
+        field error because it is the same thing: a request that was refused.
+      #}
+      <div class="field-error" role="alert">{{ failure }}</div>
+      {% endif %}
+
+      {% if boxes %}
+      <div class="dialog-body">
+        {{ key.node }} — {{ key.transport }}. Each box holds the value in place now;
+        leave one empty to keep it. Key material is not on this form and never can be:
+        it is minted here, stored encrypted and never displayed, so replacing a value
+        does not touch it.
+      </div>
+
+      {% for parameter in boxes %}
+      {{ box(parameter, values, errors) }}
+      {% endfor %}
+
+      {#
+        WHO HOLDS THIS ROW, branched the way rotate_keys_dialog.html branches — and the
+        contradiction that made it necessary is worth naming, because the halves were
+        swapped for a while: this dialog stated "users keep the same link" for a hop end
+        UNCONDITIONALLY, and the answer it produces (console.replacement_summary) says
+        "no user holds anything on it". The operator confirmed one sentence and was told
+        the opposite. A hop end's only consumer is the far NODE.
+
+        IT HAPPENED A SECOND TIME on the same paragraph and is worth naming twice: the
+        hop branch said "the far end is not changed with it", which was true until
+        `replace_params` began pushing the pair — the far end's own configuration is
+        rendered from this one, so a value typed here can change its file. The answer
+        says "the far end has been applied with it so the two still match". Whichever of
+        a dialog and its answer is wrong, a pair that states opposites is one defect, and
+        `test_a_hop_dialog_and_the_answer_it_will_get_agree` now holds them together.
+      #}
+      {% if key.for_friends %}
+      <div class="dialog-body text-muted">
+        The node is re-rendered and pushed as soon as you submit. Users keep the same
+        link and pick this up the next time their client refreshes it.
+      </div>
+      {% else %}
+      <div class="dialog-body text-muted">
+        Both ends of the hop are re-rendered as soon as you submit: the far end's own
+        configuration is built from this one. No user holds anything on it: this is one
+        end of a hop, a tunnel between two of our own nodes.
+        {{ hop_push_outcome }}
+      </div>
+      {% endif %}
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">replace</button>
+      </div>
+      {% else %}
+      {#
+        Nothing to offer: a transport this image no longer ships, or one that declares
+        no parameter an operator may supply. The reason is in `failure` above. No submit
+        button, because there is nothing it could send — a form whose only outcome is a
+        refusal is a worse answer than saying so.
+      #}
+      <div class="dialog-body">
+        {{ key.node }} — {{ key.transport }}. There is nothing on this transport for you
+        to replace here.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+      </div>
+      {% endif %}
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

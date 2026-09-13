@@ -10,6 +10,7 @@ from edge.registry import (
     KeyKind,
     KeyScope,
     KeySpec,
+    Layer4,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -20,6 +21,10 @@ META = TransportMeta(
     # Real TLS with a real certificate, unlike Reality's borrowed handshake. The
     # node stack supplies the certificate; this transport only points at it.
     needs_tls=True,
+    # The socket it binds, which is a different question from ``family`` above —
+    # `control` reads this one to decide whether two transports on one node may
+    # hold the same port number, and reads ``family`` for nothing at all.
+    listens_on=frozenset({Layer4.TCP}),
     port_range=(443, 65535),
     # Declared explicitly rather than left to the default: a transport validated
     # by the wrong checker passes for the wrong reason.

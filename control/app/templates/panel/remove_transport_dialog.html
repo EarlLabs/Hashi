@@ -1,0 +1,57 @@
+{#
+  Confirming a removal — M15.2.
+
+  UI-PATTERNS §3: a destructive action confirms in a dialog, and the sentence spells out
+  the blast radius rather than asking "are you sure". This is the most destructive thing
+  the Nodes screen can do to a row, and it is one dialog away from an action that sounds
+  like it and is not — so the two halves an operator can get wrong are both stated:
+
+  * what removing takes that withdrawing does not — the row itself and every user's
+    material on it, minted again from scratch if the transport is ever enabled here
+    again. Withdrawing keeps both and puts the protocol back with nobody re-importing
+    anything; that is the door out of this dialog, and it is named.
+  * what removing DOES NOT take — the daemon on the host. The row leaves this panel
+    immediately and the node keeps serving what it was last given until it is applied,
+    which is the same thing services/nodes.py insists on for withdrawing and is sharper
+    here, because the operator has just watched the row disappear.
+
+  The other half of why this exists is the one nothing else in the panel says: the
+  listening port and the config name are held by the row, switched off or not, so this is
+  the only action that gives them back to the node. An operator who followed the runbook
+  into a collision is reading this dialog to get out of it.
+
+  The title is offer.transport, which is services/console.py's placed_as: on a node
+  running two instances of one protocol it reads `amneziawg (amneziawg-2)`, so the
+  confirmation cannot name the wrong one of two. No key material is named and none could
+  be — the whole context is one OfferRow, which carries a name, a standing and an id.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="remove-transport-title">
+    <div class="dialog-title" id="remove-transport-title">Remove {{ offer.transport }}?</div>
+    <div class="dialog-body">
+      It goes from {{ offer.node }} altogether, and the material every user holds on it
+      goes with it — there is no undo, and enabling it here again mints new material.
+      Their links keep working and nobody re-imports anything; they simply have one
+      fewer way in.
+    </div>
+    <div class="dialog-body text-muted">
+      This is the only action that frees the listening port and the config name this row
+      holds on {{ offer.node }}, which is what lets something else on this node use them.
+      To take it out of every user's link but keep the row, its material and its place on
+      the node, withdraw it instead — that one is reversible.
+    </div>
+    <div class="dialog-body text-muted">
+      The node keeps serving it until you apply the node: this changes what this panel
+      holds and hands out, not what the host is running, so anyone already holding a
+      fetched configuration keeps connecting on it until then.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+      <button class="btn btn-primary" type="button"
+              hx-post="/panel/transports/{{ offer.id }}/remove"
+              hx-target="#dialog-slot" hx-swap="innerHTML">remove</button>
+    </div>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

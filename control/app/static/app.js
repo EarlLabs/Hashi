@@ -1,8 +1,9 @@
-// The console's four behaviours, in plain JavaScript against HTMX.
+// The console's five behaviours, in plain JavaScript against HTMX.
 //
-// WHAT: the toast timer, dialog dismissal, the copy button, and the failure a
-//       request raises when it does not come back — stated under the header, and
-//       inside the dialog as well when one is open in front of it.
+// WHAT: the toast timer, dialog dismissal, the copy button, showing the field group
+//       a select chose, and the failure a request raises when it does not come back —
+//       stated under the header, scrolled into view there, and inside the dialog as
+//       well when one is open in front of it.
 // WHY:  design/README.md asks for a toast that auto-dismisses and shows one at a
 //       time, dialogs that close on the backdrop, and a copy button that works. None
 //       of those is expressible in HTML alone, and the stack rule (CLAUDE.md) is
@@ -194,11 +195,64 @@
   }
 
   watch("toast-slot", armToast);
+  // A BANNER THE OPERATOR CANNOT SEE IS NOT AN ANSWER — M18.1's review. The slot sits
+  // under the console header, inside a #main that does not scroll with the page, so an
+  // apply pressed from a row below the fold answered above the operator's scroll
+  // position: no toast, no dialog, and a table that re-fetched to an identical render.
+  // They press again. It is the same shape M17's acceptance found inside the transports
+  // dialog, where the fix was to put the message where the eye already was; here the
+  // message cannot move, so the view does.
+  //
+  // `block: "nearest"` scrolls the least that makes it visible and does nothing at all
+  // when it already is — so a banner answered from the top of the screen does not jump.
+  // Not while a dialog is open: the banner is behind it, showFailure already states the
+  // failure inside it, and scrolling what is behind a modal moves nothing the operator
+  // is looking at.
+  watch("banner-slot", (host) => {
+    const shown = host.firstElementChild;
+    if (!shown) return;
+    const dialog = slot("dialog-slot");
+    if (dialog && dialog.firstElementChild) return;
+    shown.scrollIntoView({ block: "nearest" });
+  });
   watch("dialog-slot", (host) => {
     const dialog = host.querySelector(".dialog");
     if (!dialog) return;
-    const first = dialog.querySelector("input, textarea, select, button");
+    // A REFUSED CONTROL FIRST, and only then the first one. A dialog taller than the
+    // window comes back from a 422 scrolled to the top, because the swap replaced the
+    // scroll container itself — so on the enable form, whose refusal lands under the
+    // LAST box, the operator saw a dialog that had not visibly moved, pressed again and
+    // got the same nothing. Focusing the control that was refused scrolls it into view
+    // and, for a screen reader, announces the sentence its aria-describedby points at.
+    //
+    // Not specific to that form: every dialog in this console marks a refused control
+    // with aria-invalid, so the hop dialog's twenty-four boxes and the replace-params
+    // dialog get it too. The selector names the three element types on purpose — an
+    // attribute selector alone would match a div that carried it and could not be
+    // focused, and a comma list returns the first match in DOCUMENT order rather than
+    // the first selector's, which is why this is two queries and not one.
+    const refused = dialog.querySelector(
+      'input[aria-invalid="true"], select[aria-invalid="true"], ' +
+      'textarea[aria-invalid="true"]'
+    );
+    const first = refused || dialog.querySelector("input, textarea, select, button");
     if (first) first.focus();
+  });
+
+  // A form that renders one group of fields per choice, and shows the chosen one.
+  // Generic on purpose: the select says which group it drives with
+  // `data-transport-select`, each group names the value it belongs to with
+  // `data-transport-group`, and nothing here knows what the values are. Presentation
+  // ONLY — the server filters the submitted fields to the chosen transport's own
+  // list, so a browser with this script dead still establishes the right hop.
+  document.body.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-transport-select]");
+    if (!select) return;
+    const form = select.closest("form");
+    if (!form) return;
+    for (const group of form.querySelectorAll("[data-transport-group]")) {
+      group.hidden = group.dataset.transportGroup !== select.value;
+    }
   });
 
   // A refused form. htmx does not swap a non-2xx response by default, which would
@@ -228,16 +282,25 @@
     "the control plane did not answer in time. It may still be finishing the " +
     "action — reload before trying it again."
   ));
+  // What this one may NOT say is "Nothing was changed", which it said until an
+  // acceptance walk caught it: a 5xx means the control plane started answering and
+  // stopped, and from out here there is no way to know how far it got. It was drawn
+  // over a rotation that had already re-keyed a node — the operator was told the
+  // opposite of what happened and had no reason to look. The send-error handler above
+  // may say it, and does: a request that never left the browser changed nothing by
+  // construction, and the timeout between them says the honest version of this one.
   document.body.addEventListener("htmx:responseError", (event) => {
     const code = event.detail.xhr.status;
     showFailure(
-      `the control plane refused that request (${code}). Nothing was changed. ` +
-      "Reload the page; if it happens again, the container's log has the reason.",
+      `the control plane could not complete that request (${code}). It may have got ` +
+      "part way, so reload the page and check before trying it again; the container's " +
+      "log has the reason.",
       event.detail.elt
     );
   });
-  // Any successful exchange clears a banner left over from an earlier failure.
-  document.body.addEventListener("htmx:afterRequest", (event) => {
-    if (event.detail.successful) clearBanner();
-  });
+  // A banner is cleared by the answer that replaces it, not from here. Every console
+  // mutation answers the banner slot — with a failure, or with nothing (see
+  // panel/mutation_result.html) — and this file used to empty the same slot on any
+  // successful exchange, which fires after the swap: the banner the server had just
+  // written was wiped by the request that delivered it.
 })();

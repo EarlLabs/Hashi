@@ -12,6 +12,8 @@ from edge.registry import (
     KeyKind,
     KeyScope,
     KeySpec,
+    Layer4,
+    PeerAddress,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -25,6 +27,10 @@ META = TransportMeta(
     # No TLS at all — it is obfuscated UDP, not a TLS impersonation. So it must not be
     # given a certificate and must not sit behind our Caddy.
     needs_tls=False,
+    # The socket it binds, which is a different question from ``family`` above —
+    # `control` reads this one to decide whether two transports on one node may
+    # hold the same port number, and reads ``family`` for nothing at all.
+    listens_on=frozenset({Layer4.UDP}),
     # WireGuard's conventional port is 51820; the range stays wide so an operator can
     # place the hop wherever it is least conspicuous on a given host.
     port_range=(1024, 65535),
@@ -79,4 +85,12 @@ META = TransportMeta(
     # existing is not the same as the endpoint handing it over, and this declaration
     # does not pretend otherwise.
     subscription_formats=frozenset({SubscriptionFormat.CLIENT_CONFIG_FILE}),
+    # Each consumer holds an address of its own, and the interface's own address says
+    # how much room there is for them. A kernel tunnel authorises and routes by address
+    # — AllowedIPs is both lists at once — so two consumers on one address is a silent
+    # hijack of the first one's return path, which ``render_server`` refuses outright.
+    # On a hop the consumer is a single far node and the pool is one address long; when
+    # the transport is offered to friends instead, it is as long as the operator sizes
+    # it. The renderer cannot tell the two apart and does not need to.
+    peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
 )

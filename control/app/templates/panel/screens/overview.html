@@ -13,8 +13,13 @@
       which M1 proved is the question that matters and which nothing in the product
       could answer at all before this run.
 
-  The design's "Recent activity" table is not here: there is no audit log to fill it
-  from, and a table of nothing is worse than no table. It arrives with M10.
+  The design's "Recent activity" table is deliberately not here, and since M10.3 that
+  is a choice rather than an absence: there IS an audit trail to fill it from now, and
+  no M10 step asks for this card. The omission is not an oversight — it is recorded as
+  one in docs/tracker/M10/step-notes.md, precisely so nobody adds the card back on the
+  assumption it was only ever waiting for the trail. If it is ever built, it shows
+  those entries under the rules decision 8 (docs/decisions.md, 2026-09-11) sets for
+  them: what the operator changed, never who dialled what.
 #}
 {% include "panel/console_header.html" %}
 <div class="panel">

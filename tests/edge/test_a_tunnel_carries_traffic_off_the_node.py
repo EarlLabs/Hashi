@@ -265,6 +265,7 @@ def test_only_the_leaf_end_of_a_hop_exits_locally(name: str, node, request) -> N
             address="192.0.2.30",
             location_label="leaf",
             display_name="leaf-2",
+            resolver=None,
         ),
         params=transport.validate(
             {**base, "tunnel_address": "10.44.0.2/24", "peer_tunnel_address": "10.44.0.1/24"}

@@ -13,7 +13,9 @@ WHY:  M2. ``command=("up", "{config}")`` on an image with no entrypoint made ``u
       Those are properties of our shell line rather than of any image, which is why they
       can be — and here are — checked without docker: the script is run under the test
       host's ``/bin/sh`` against a stub tool, and asked the three questions a node would
-      ask it.
+      ask it. The one thing in the script that is NOT ours — the ``sleep`` its idle
+      needs — the test supplies itself, at the strictest reading of the standard, so the
+      answers do not depend on whose coreutils the developer has (M21.3).
 HOW:  ``make test-edge``. Nothing here needs a network, a docker engine or a node.
 
 Boundary: this proves the command's SHAPE and the script's behaviour. Whether the image
@@ -23,6 +25,7 @@ tunnel comes up and carries traffic is a field observation on real hardware.
 
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import time
@@ -130,28 +133,95 @@ def stub_tool(tmp_path: pathlib.Path) -> pathlib.Path:
     return tool
 
 
-def run_supervisor(stub_tool: pathlib.Path, config: str) -> subprocess.Popen:
-    """Start the real command line under the host's shell, with the stub as its tool."""
-    return subprocess.Popen(
-        ["/bin/sh", "-c", node_stack._WG_QUICK_SUPERVISOR, str(stub_tool), config],
-        start_new_session=True,
+@pytest.fixture
+def posix_sleep(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A directory whose ``sleep`` accepts only what the standard promises every host.
+
+    The supervisor idles in ``sleep``, and which operands a ``sleep`` takes is a property
+    of the HOST rather than of our script: GNU coreutils accepts ``infinity``, fractions
+    and suffixes, and says so itself — "portable POSIX scripts must give ``sleep`` a
+    single non-negative integer argument without a suffix". BSD's takes the integer and
+    nothing else. Running these scenarios under whichever one the developer happens to
+    have is how ``sleep infinity`` sat in the shipped script until it turned the owner's
+    ``make verify`` red on macOS while staying green in CI (M21.3).
+
+    So the test opens the thing it depends on. This shim is the strictest reading — one
+    operand, decimal digits only — which makes the scenarios below hold for the same
+    reason on every host, and makes a non-portable idle red everywhere rather than red
+    only on the machine that cannot afford to discover it.
+
+    Refusals are recorded so a failure can name the operand instead of leaving the reader
+    with a process that is merely gone.
+    """
+    real_sleep = shutil.which("sleep")
+    assert real_sleep, "no sleep on PATH, so the supervisor's idle cannot be exercised"
+
+    binaries = tmp_path / "posix-bin"
+    binaries.mkdir()
+    shim = binaries / "sleep"
+    shim.write_text(
+        "#!/bin/sh\n"
+        # One argument, and every character of it a digit: anything else falls through
+        # to the refusal below. `1:` on its own catches an empty operand.
+        'case "$#:$1" in\n'
+        "  1:*[!0-9]*|1:) ;;\n"
+        f'  1:*) exec {real_sleep} "$1" ;;\n'
+        "esac\n"
+        f'echo "sleep: invalid time interval $*" >> {tmp_path / "refused"}\n'
+        'echo "sleep: invalid time interval $*" >&2\n'
+        "exit 1\n"
+    )
+    shim.chmod(0o755)
+    return binaries
+
+
+def refused_sleep(tmp_path: pathlib.Path) -> str:
+    """What ``posix_sleep`` turned down, if anything — for appending to a failure.
+
+    The symptom of a non-portable idle is only that the process is no longer there, which
+    reads like any other crash. This puts the cause in front of the reader who is looking
+    at a red gate on a host the author never used.
+    """
+    refused = tmp_path / "refused"
+    if not refused.exists():
+        return ""
+    return (
+        " — and the idle asked for a sleep operand POSIX does not promise, which a BSD "
+        f"sleep refuses: {refused.read_text().strip()}"
     )
 
 
-def test_the_container_stays_up_after_the_tunnel_is_configured(stub_tool, tmp_path) -> None:
+def run_supervisor(
+    stub_tool: pathlib.Path, config: str, posix_sleep: pathlib.Path
+) -> subprocess.Popen:
+    """Start the real command line under the host's shell, with the stub as its tool.
+
+    ``PATH`` leads with ``posix_sleep``, so the idle at the end of the script is held to
+    the standard rather than to whatever this host's own ``sleep`` is willing to allow.
+    """
+    return subprocess.Popen(
+        ["/bin/sh", "-c", node_stack._WG_QUICK_SUPERVISOR, str(stub_tool), config],
+        start_new_session=True,
+        env={**os.environ, "PATH": f"{posix_sleep}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+
+def test_the_container_stays_up_after_the_tunnel_is_configured(
+    stub_tool, posix_sleep, tmp_path
+) -> None:
     """``wg-quick up`` returns; the container must not.
 
     A command that exits when the tool returns turns ``restart: unless-stopped`` into a
     restart loop — a data plane that is never ``Up`` for two seconds together, which
     reads on the node as "it starts and something kills it".
     """
-    process = run_supervisor(stub_tool, str(tmp_path / "amneziawg.conf"))
+    process = run_supervisor(stub_tool, str(tmp_path / "amneziawg.conf"), posix_sleep)
     try:
         time.sleep(1)
 
         assert process.poll() is None, (
             f"the command exited (status {process.returncode}) once the tool returned, "
-            "so the container would restart forever"
+            f"so the container would restart forever{refused_sleep(tmp_path)}"
         )
         assert "up" in (tmp_path / "calls").read_text()
     finally:
@@ -159,25 +229,30 @@ def test_the_container_stays_up_after_the_tunnel_is_configured(stub_tool, tmp_pa
         process.wait(timeout=10)
 
 
-def test_stopping_the_container_takes_the_tunnel_down(stub_tool, tmp_path) -> None:
+def test_stopping_the_container_takes_the_tunnel_down(stub_tool, posix_sleep, tmp_path) -> None:
     """SIGTERM — what ``docker stop`` sends — tears the interface down and exits 0.
 
     The interface is in the NODE's network namespace, so one that is not taken down
     survives the container: a rotation then leaves a configured tunnel on a node that is
     no longer serving it, and the replacement container cannot create its own.
     """
-    process = run_supervisor(stub_tool, str(tmp_path / "amneziawg.conf"))
+    process = run_supervisor(stub_tool, str(tmp_path / "amneziawg.conf"), posix_sleep)
     time.sleep(1)
 
     process.send_signal(signal.SIGTERM)
     status = process.wait(timeout=10)
 
-    assert status == 0, "the container would be reported as having crashed on a normal stop"
+    assert status == 0, (
+        "the container would be reported as having crashed on a normal stop"
+        f"{refused_sleep(tmp_path)}"
+    )
     calls = (tmp_path / "calls").read_text().split("\n")
     assert calls[-2].startswith("down"), f"the tunnel was not taken down on stop: {calls}"
 
 
-def test_a_tunnel_left_behind_by_an_unclean_stop_is_recovered(stub_tool, tmp_path) -> None:
+def test_a_tunnel_left_behind_by_an_unclean_stop_is_recovered(
+    stub_tool, posix_sleep, tmp_path
+) -> None:
     """The tunnel is taken down BEFORE it is brought up, and a failing down is tolerated.
 
     M1 is what makes this necessary: a changed config now recreates the container, and a
@@ -186,7 +261,7 @@ def test_a_tunnel_left_behind_by_an_unclean_stop_is_recovered(stub_tool, tmp_pat
     with ``wg-quick: `amneziawg' already exists`` and crash-loops, which is measurably
     what happens: verified against the real image before this test was written.
     """
-    process = run_supervisor(stub_tool, str(tmp_path / "amneziawg.conf"))
+    process = run_supervisor(stub_tool, str(tmp_path / "amneziawg.conf"), posix_sleep)
     try:
         time.sleep(1)
         calls = [line for line in (tmp_path / "calls").read_text().split("\n") if line]
@@ -218,6 +293,9 @@ def test_the_script_needs_no_shell_this_project_does_not_have() -> None:
 
     A guard against the obvious future edit — reaching for a bashism because the tool
     itself is a bash script. The tool having bash does not mean PID 1 does.
+
+    It is a check on SYNTAX and can see nothing else: ``sleep infinity`` parses perfectly
+    under every shell there is, and was wrong anyway. That half is ``posix_sleep``'s.
     """
     check = subprocess.run(
         ["/bin/sh", "-n", "-c", node_stack._WG_QUICK_SUPERVISOR],

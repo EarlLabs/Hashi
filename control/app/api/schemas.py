@@ -23,11 +23,25 @@ class NodeCreate(BaseModel):
     address: str = Field(min_length=1, max_length=255)
     location_label: str = Field(min_length=1, max_length=64)
 
+    # Where this node's users' destination names are looked up once it dials a hop — M16.
+    # Optional because a node with no hop never uses it. WHETHER IT CAN CARRY A LOOKUP is
+    # checked in services/nodes.py, by the rule ``edge`` renders with, rather than here:
+    # that is what lets the panel place the sentence under its own box, as it does for the
+    # key below, instead of a type error's generic "not a value this field can take".
+    resolver: str | None = Field(default=None, max_length=255)
+
     ssh_host: str | None = Field(default=None, max_length=255)
     ssh_port: int = Field(default=22, ge=1, le=65535)
     ssh_user: str = Field(default="root", max_length=32)
 
     # Supplied once, encrypted immediately, and never returned by any endpoint.
+    #
+    # WHETHER IT IS A KEY AT ALL IS CHECKED IN services/nodes.py, NOT HERE, and that is
+    # not an oversight to tidy up. FastAPI answers a model validator's refusal with
+    # ``input`` in the body — the value it rejected — so a ``field_validator`` on this
+    # field would make ``POST /api/nodes`` echo the pasted private key back in a 422.
+    # That is the one thing docs/decisions.md (2026-09-10) says a refusal may never
+    # carry. ``nodes.create_node`` refuses it instead, with a sentence and no value.
     ssh_private_key: str | None = Field(default=None, repr=False)
 
 
@@ -40,6 +54,7 @@ class NodeResponse(BaseModel):
     name: str
     address: str
     location_label: str
+    resolver: str | None
     state: str
     state_detail: str | None
     created_at: datetime.datetime
@@ -58,6 +73,23 @@ class TransportEnable(BaseModel):
     transport_name: str = Field(min_length=1, max_length=64)
     params: dict = Field(default_factory=dict)
 
+    # How many people this transport may hand an address of their own to — M17.
+    # A FIELD OF ITS OWN AND NOT A MEMBER OF ``params``, because it is not a parameter of
+    # the transport: it is a column on the node-transport record, and a transport's model
+    # forbids what it does not declare, so it could not travel inside ``params`` at all.
+    #
+    # Optional here and required by the SERVICE for exactly the transports that declare
+    # each consumer needs an address (``TransportMeta.peer_address``) — refused for the
+    # rest. Optional rather than required because this schema must not learn which
+    # transports those are: the answer is the transport's own declaration, and a required
+    # field here would make every VLESS enable send a number that means nothing.
+    #
+    # A BREAKING CHANGE for one caller only: a script enabling a WireGuard-family
+    # transport on a node now gets a 400 naming the box until it sends this. That is the
+    # intended answer — before it, the same call produced a transport that served exactly
+    # one person and refused to render for the second.
+    pool_size: int | None = None
+
 
 class TransportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -65,12 +97,23 @@ class TransportResponse(BaseModel):
     id: str
     node_id: str
     transport_name: str
+    # The name this row is placed under on the node: its config file's stem and, for the
+    # wg-quick family, its network interface. Equal to ``transport_name`` for a node
+    # running one of this transport, and the only thing telling two instances apart on a
+    # node running two — which M15 permits. Not secret and not inventable: it is already
+    # the filename on the host.
+    config_name: str
     enabled: bool
     applied_at: datetime.datetime | None
 
     # Non-secret parameters only. The ``secrets`` column is deliberately not a field
     # here, and adding one would be how a node's private key reaches an API response.
     params: dict
+
+    # How many addresses this row may hand out, or null on a transport that hands out
+    # none — and on a row enabled before M17, whose pool is the single address already in
+    # ``params``. A count, never a list: no address a person holds is in any response.
+    pool_size: int | None
 
 
 class TransportMetaResponse(BaseModel):
@@ -174,7 +217,22 @@ class ParamsReplace(BaseModel):
 
     # Open mapping for the same reason as TransportEnable.params: the shape belongs to
     # the transport, which validates it with its own model.
-    params: dict = Field(min_length=1)
+    #
+    # NO LONGER ``min_length=1`` — M17.1c. Since the pool size travels beside this mapping,
+    # a request carrying only a new size is a real request, and refusing it here would
+    # refuse the one operation migration 0006 promises: sizing a row that has served since
+    # before M17. A request that changes nothing at all is still refused, by the service,
+    # which is the only place that can tell — it compares what arrived against what the
+    # row already holds, and "these values are already in place" is a better answer than
+    # "params is too short".
+    params: dict = Field(default_factory=dict)
+
+    # How many people this transport may hand an address to, from here on. Not a member of
+    # ``params`` for ``TransportEnable``'s reason: it is a column on the node-transport
+    # record rather than a parameter of the transport, whose model forbids what it did not
+    # declare. ``None`` leaves the size exactly as it is, which is what a request replacing
+    # a blocked decoy sends.
+    pool_size: int | None = None
 
 
 class RotationResponse(BaseModel):
@@ -213,6 +271,10 @@ class HopEndResponse(BaseModel):
     id: str
     node_id: str
     transport_name: str
+    # Same field, same reason as ``TransportResponse``: on a node that offers this
+    # transport to friends AND carries a hop over it, this is what says which file on
+    # the host is this end.
+    config_name: str
     purpose: str
     # Never ``secrets``: this end's private key lives in the same row.
     params: dict
@@ -240,6 +302,19 @@ class NodeStateChange(BaseModel):
     # Only meaningful when moving to `degraded`; the service clears it otherwise, so a
     # node cannot sit in `active` carrying a stale complaint.
     detail: str | None = Field(default=None, max_length=500)
+
+
+class ResolverChange(BaseModel):
+    """Setting a node's resolver after it was registered — M16's one edit on a node record.
+
+    Required and non-empty: this is the path that gives a node the resolver it needs, not
+    one that takes it away. Whether the value can carry a lookup is the service's check,
+    for the reason ``NodeCreate.resolver`` gives.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resolver: str = Field(min_length=1, max_length=255)
 
 
 class TransportEnabledChange(BaseModel):

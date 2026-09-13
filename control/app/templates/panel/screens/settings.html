@@ -1,0 +1,110 @@
+{#
+  Settings — what this control plane is running with, stated rather than offered.
+
+  design/README.md §9 draws two-up: an Admins table (user / role / last login) and a
+  Panel form (mesh name, subscription base URL, log retention days) with a primary
+  "save". Both halves are departures, both recorded in docs/decisions.md (2026-09-11)
+  rather than quietly made:
+
+  * THE FORM IS GONE, not drawn-and-refused. Every value this process has comes from
+    the environment and is read once, at boot. A save button over one of them would
+    write somewhere nothing reads, and the operator would leave believing they had
+    changed the running service — which is the lie M10's own prose is written about.
+    Drawing the boxes and refusing the save is the same lie with a worse message, so
+    the boxes go. There is no <form>, no <input> and no POST anywhere on this screen.
+    `mesh name` is absent for a second reason on top: nothing in this process reads
+    one, so the field's only reader would have been itself.
+  * `last login` is gone from the Admins row, dropped rather than blanked. It is a
+    per-person temporal record — the person being the owner — and a cell that exists
+    to say "we do not keep this" is where somebody later keeps it, which is the same
+    reasoning decision 6 dropped the Traffic screen with.
+
+  One value from that form did survive: how long the audit log keeps an entry. It is
+  here because M10.3 built the trail it bounds and the hourly sweep that enforces it —
+  a retention figure on a control plane with no trail, or with no sweep behind it,
+  would have been this screen's own lie in a different field. It is a row like every
+  other row: stated, not offered, and changed in the environment.
+
+  Every string below arrives already composed in `configuration` and `admins` from
+  services/console.py, which reads each one off the live Settings object. Nothing here
+  reads the environment, and nothing here formats a value — so there is no branch in
+  this file that could decide to print more of a secret than the word it is given.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  <div class="stack-8">
+    <section class="card blueprint stack-6">
+      <div class="card-head">
+        <h4>This control plane</h4>
+      </div>
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>setting</th>
+              <th>value</th>
+              <th>where it is changed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in configuration %}
+            <tr>
+              <td>
+                {{ row.label }}
+                {% if row.note %}
+                {# What the value does, or what changing it costs. A second line rather
+                   than a fourth column, the way a transport's delivery note is: these
+                   are sentences and the cells beside them are short. #}
+                <div class="text-muted">{{ row.note }}</div>
+                {% endif %}
+              </td>
+              {#
+                THE ONE CELL THIS SCREEN IS ABOUT. A secret arrives here as the single
+                word its row was given and there is nothing to render but that word —
+                no length, no prefix, no digest, and no branch here that could compose
+                one. It is muted rather than monospace because it is the panel's word
+                and not a value read off the process.
+              #}
+              <td class="{{ 'text-muted' if row.secret else 'mono wraps' }}">{{ row.value }}</td>
+              {# UI-PATTERNS §7: a variable name is a machine value, so monospace. #}
+              <td class="mono nowrap">{{ row.variables | join(' · ') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-muted section-note">{{ read_at_boot }}</p>
+      <p class="text-muted section-note">{{ secrets_withheld }}</p>
+      {% include "panel/corners.html" %}
+    </section>
+
+    <section class="card blueprint stack-6">
+      <div class="card-head">
+        <h4>Admins</h4>
+      </div>
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>user</th>
+              <th>role</th>
+              <th>where it is configured</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for admin in admins %}
+            <tr>
+              {# `.wraps` — the one cell in the row holding a value somebody chose. #}
+              <td class="mono wraps">{{ admin.username }}</td>
+              <td class="text-muted">{{ admin.role }}</td>
+              <td class="mono nowrap">{{ admin.variables | join(' · ') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-muted section-note">{{ one_operator }}</p>
+      {% include "panel/corners.html" %}
+    </section>
+  </div>
+</div>

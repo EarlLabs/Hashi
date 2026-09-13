@@ -54,6 +54,13 @@
 #      write one, and deleting it still costs a node nothing but an apply. Why it is
 #      created here rather than by the control plane is section 4 below, and it is the
 #      decision M13 exists for.
+#
+#      On a host an apply has already filled, it also HANDS THAT DIRECTORY'S CONTENTS to
+#      the account this run prepares for — M18.3. It reads none of them, writes none and
+#      removes none; it changes who owns them, which is the whole of what "prepared for
+#      this account" means. Ownership is the one thing this script has always changed
+#      about an existing directory, and stopping at the directory itself is what made
+#      "re-run the script" look sufficient for an account change when it was not.
 #   5. THE HOST NEVER STARTS RECORDING WHO CONNECTED. `ufw enable` turns logging ON by
 #      default and immediately begins writing source addresses — the one record the
 #      charter forbids at any level. `ufw logging off` therefore runs BEFORE the firewall
@@ -348,8 +355,62 @@ fi
 NODE_ROOT="/opt/hashi"
 if [ -d "${NODE_ROOT}" ]; then NODE_ROOT_EXISTED=1; else NODE_ROOT_EXISTED=0; fi
 as_root install -d -m 700 -o "${TARGET_USER}" -g "${TARGET_GROUP}" "${NODE_ROOT}"
+# AND EVERYTHING INSIDE IT — M18.3, and without this line the handover is a half-measure
+# that looks complete. `install -d` re-asserts the DIRECTORY's owner and nothing else, so
+# a host applied to as one account and re-prepared for another ended up with a directory
+# the new account owns full of files belonging to the old one. The next apply then died
+# in `node_stack.prepare`, on `chmod 700` of a config directory the account does not own
+# — a permission error naming a path, three layers away from the account that caused it,
+# on a host whose bootstrap had just said `ready`.
+#
+# "Re-run the script" is the obvious repair and it is exactly what did not work, which is
+# why this is done here rather than written into a warning: the alternative is an
+# operator typing `chown -R` on a live node from memory.
+#
+# It is safe in the way that matters, and the reasoning is worth stating BECAUSE THE
+# FIRST VERSION OF IT WAS WRONG. That version argued the account already OWNS this
+# directory at mode 700 and can therefore already unlink and replace every file in it, so
+# the chown grants nothing it did not have. Owning a directory grants unlink and replace;
+# it does not grant READ of a 0600 file owned by somebody else — and the configs an apply
+# writes here are 0600 precisely because they carry the node's private keys. This line
+# does hand those bytes to the account it names. Do not re-derive the old argument: it is
+# the kind of step ("owning a directory means owning its files") that is wrong somewhere
+# it matters.
+#
+# It is right anyway, for the reason the wrong argument was standing in front of: this
+# account IS the node's account from here on. It is the one the control plane logs in as,
+# the one every later apply writes those same 0600 configs as, and — section 2, the container
+# runtime — the one this run put in the `docker` group, which is root on this host by any route it
+# cares to take. The keys are its own material one apply later whatever this line does,
+# and an operator who names the wrong account in `--user` gave the host away at the
+# docker group, not here. What the chown widens is the window between this run and the
+# next apply. The contents themselves are the control plane's own — configs and a compose
+# file, all regenerable — never an operator's data.
+#
+# `-P` AS WELL AS `-h`, because they are not the same flag and only one of them is the
+# guard this line needs. `-h` decides whether a symlink LEAF or its referent is changed;
+# whether the walk DESCENDS through a symlink to a directory is decided by `-H`/`-L`/`-P`,
+# which `-h` does not touch. `-h` alone was written here as what stops a link planted
+# under this directory from chowning an arbitrary path on the host as root, and it does
+# not: measured on coreutils 9.4, `chgrp -RhL` over a tree holding a link to an outside
+# directory changed the files inside that directory, and `-RhLP` changed nothing outside
+# the tree. GNU already defaults `-R` to `-P`, which is why no supported host was ever
+# exposed, but POSIX leaves that default UNSPECIFIED and an implementation defaulting to
+# `-L` is conforming. `-P` is what makes the claim true, so the claim has it.
+#
+# `${NODE_ROOT}/.` RATHER THAN `${NODE_ROOT}`, and the trailing dot is load-bearing. `-P`
+# refuses to traverse the symlink it is GIVEN as well as the ones it meets, so on a host
+# where /opt/hashi is a link to a data volume — an ordinary thing to do with a small root
+# partition — this changed the link and nothing else, left every file an earlier apply
+# wrote owned by the old account, and exited 0 while the line below announced the
+# handover. The next apply then died exactly where the paragraph above says it used to.
+# `/.` is resolved to the directory itself before chown is given anything to walk, so
+# `install -d` — which has always followed the link — and this line finally mean the same
+# thing by NODE_ROOT, while every symlink INSIDE it is still left where it is. Measured,
+# not assumed, on the same coreutils.
+as_root chown -RhP "${TARGET_USER}:${TARGET_GROUP}" "${NODE_ROOT}/."
 if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
-  say "${NODE_ROOT} was already here — its contents were left alone, and ${TARGET_USER} owns the directory"
+  say "${NODE_ROOT} was already here — ${TARGET_USER} now owns it and everything an earlier apply left inside it; nothing in it was read, changed or removed"
 else
   say "created ${NODE_ROOT}, empty and owned by ${TARGET_USER}"
 fi
@@ -540,9 +601,11 @@ say "no hashi code and no hashi state was installed here — ${NODE_ROOT} is an 
 # On a re-run of a host the control plane has already applied to, the line above reads as
 # "there is nothing of hashi's on this host", which would be false — the directory is
 # there and it is not empty. What is true either way is that THIS SCRIPT wrote nothing
-# into it and removed nothing from it.
+# into it and removed nothing from it. Since M18.3 it does change one thing about what is
+# in there — who owns it — and the line says so, because an operator told their files were
+# "left alone" would go and chown them again by hand.
 if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
-  say "${NODE_ROOT} was already here before this run — whatever an earlier apply left in it, this run neither changed nor removed it, only re-asserted that ${TARGET_USER} owns the directory"
+  say "${NODE_ROOT} was already here before this run — whatever an earlier apply left in it, this run neither read, changed nor removed it; it now belongs to ${TARGET_USER} along with the directory, so an apply as that account can replace it"
 fi
 # Said last because it is the operator's next move, and the moment they are most likely to
 # blame the wrong layer. See section A of the header: this is the boundary that costs an

@@ -30,6 +30,12 @@ import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 
+# Every action below is the console's, and the console asks with htmx. Sent explicitly
+# rather than left off: until M9.6 two of these routes answered a header-less POST with
+# a 303 back to the pre-redesign page, and the walk below drove that branch instead of
+# the one an operator's browser actually takes.
+HTMX = {"HX-Request": "true"}
+
 # Distinct ports per scenario: the stack is shared by the whole run, and two nodes
 # listening on one port is a state the transport's own validator has no reason to
 # refuse but which would make two scenarios' fleets indistinguishable.
@@ -51,27 +57,73 @@ async def operator(client):
     return client
 
 
-async def node_from_the_panel(operator, *, name: str, address: str, country: str) -> str:
-    """Register a node the way the owner does — the form, not the JSON API."""
-    created = await operator.post(
-        "/panel/nodes",
-        data={"name": name, "address": address, "location_label": country},
-    )
-    assert created.status_code == 303, created.text
+async def form_action(operator, dialog_url: str, *, opened_by: str) -> str:
+    """Where the form inside one console dialog actually posts.
 
-    # The panel's create form redirects to the fleet page rather than returning the id,
-    # so it is read back from the list. Deliberately not created over /api to get the
-    # id more cheaply: "from the panel" is the part of the criterion under test.
+    Read off the rendered dialog rather than written down here, which is the standard
+    ``withdraw_button`` below already held and which M9.6 brought to the rest of this
+    file: the operator's route to every one of these actions is a button that opens a
+    dialog, and a scenario that posted to a remembered URL would keep passing while the
+    button opened a form that submitted nowhere.
+    """
+    dialog = await operator.get(dialog_url)
+    assert dialog.status_code == 200, dialog.text
+    found = re.search(r'<form[^>]*\shx-post="([^"]+)"', dialog.text)
+    assert found, f"the dialog behind {opened_by!r} carries no form"
+    return found.group(1)
+
+
+async def node_from_the_panel(operator, *, name: str, address: str, country: str) -> str:
+    """Register a node the way the owner does — the "add node" dialog, not the JSON API."""
+    created = await operator.post(
+        await form_action(operator, "/panel/nodes/new", opened_by="add node"),
+        data={"name": name, "address": address, "location_label": country},
+        headers=HTMX,
+    )
+    # 200 IS the success assertion: the console refuses this form at 422 with the dialog
+    # re-rendered, so the two cannot be confused. Until M9.6 a header-less POST got a 303
+    # to the pre-redesign page instead, which is the branch this used to assert.
+    assert created.status_code == 200, created.text
+    assert "<html" not in created.text.lower()
+
+    # The console's answer is a toast and a table refresh, not the id, so it is read back
+    # from the list. Deliberately not created over /api to get the id more cheaply:
+    # "from the panel" is the part of the criterion under test.
     listed = (await operator.get("/api/nodes")).json()
     matching = [node for node in listed if node["name"] == name]
     assert len(matching) == 1, matching
     return matching[0]["id"]
 
 
-async def reality_from_the_panel(operator, node_id: str, *, port: int) -> None:
+async def enabled_from_the_panel(operator, node_id: str, transport: dict) -> None:
+    """Switch one protocol on, from the dialog the row's "transports" button opens.
+
+    The console renders a GROUP of boxes per transport and hides all but the chosen one,
+    so every box is named ``<transport>-<field>`` — a hidden input is still submitted,
+    and without the prefix a second transport's ``port`` would arrive under the same
+    name. M9.6 deleted the bare-name fallback along with the page that sent bare names,
+    so a bare one is now refused rather than quietly read as an empty box.
+    """
+    chosen = transport["transport_name"]
     enabled = await operator.post(
-        f"/panel/nodes/{node_id}/transports",
+        await form_action(
+            operator, f"/panel/nodes/{node_id}/transports", opened_by="transports"
+        ),
         data={
+            key if key == "transport_name" else f"{chosen}-{key}": value
+            for key, value in transport.items()
+        },
+        headers=HTMX,
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert "<html" not in enabled.text.lower()
+
+
+async def reality_from_the_panel(operator, node_id: str, *, port: int) -> None:
+    await enabled_from_the_panel(
+        operator,
+        node_id,
+        {
             "transport_name": "vless-reality",
             "port": str(port),
             "decoy_host": "www.example.com",
@@ -79,34 +131,62 @@ async def reality_from_the_panel(operator, node_id: str, *, port: int) -> None:
             "server_names": "www.example.com",
         },
     )
-    assert enabled.status_code == 303, enabled.text
 
 
 async def state_from_the_panel(operator, node_id: str, state: str) -> str:
-    """Move a node's state on the screen the criteria are written about."""
-    response = await operator.post(f"/panel/nodes/{node_id}/state", data={"state": state})
+    """Move a node's state on the screen the criteria are written about.
+
+    Through the dialog the row's "set state" button opens, which is the operator's only
+    route to it since M9.5 homed the action there and M9.6 deleted the page that used to
+    carry it. A state this node may not move into is refused at 422 with the dialog back,
+    so 200 still means the move happened — and the fragment assertion is unchanged.
+    """
+    response = await operator.post(
+        await form_action(
+            operator, f"/panel/nodes/{node_id}/state", opened_by="set state"
+        ),
+        data={"state": state},
+        headers=HTMX,
+    )
     assert response.status_code == 200, response.text
     # A fragment, never a document — the control rulebook's HTMX trap.
     assert "<html" not in response.text.lower()
     return response.text
 
 
-async def offered_id(operator, node_id: str, transport_name: str) -> str:
-    """The node-transport id the panel's own withdraw button posts to.
+async def withdraw_button(operator, node_id: str, transport_name: str) -> str:
+    """The URL the panel's own withdraw button leads to, for one protocol on one node.
 
-    Read off the page rather than out of a JSON API on purpose: the operator's route to
-    this action is the button, and a scenario that discovered the id some other way
-    could pass while the button pointed nowhere.
+    Read off the panel rather than out of a JSON API on purpose: the operator's route to
+    this action is the button, and a scenario that discovered the id some other way could
+    pass while the button pointed nowhere.
+
+    REPOINTED BY M9.5, which moved this action off the pre-redesign node page and onto
+    the Nodes screen — the button now lives in the dialog that row's "transports" action
+    opens. The property is the same one and it is asserted harder: the button still
+    carries the transport's name as DATA rather than only as text beside it, and what
+    comes back is the URL the button itself carries, so a button pointing nowhere fails
+    here rather than being routed around. What follows it is the confirmation dialog,
+    which is where the POST that actually withdraws is.
     """
-    page = await operator.get(f"/panel/nodes/{node_id}")
-    assert page.status_code == 200, page.text
+    dialog = await operator.get(f"/panel/nodes/{node_id}/transports")
+    assert dialog.status_code == 200, dialog.text
     found = re.search(
         rf'data-transport="{re.escape(transport_name)}"\s+'
-        r'hx-post="/panel/transports/([^/"]+)/state"',
-        page.text,
+        r'hx-get="(/panel/transports/[^"]+/withdraw)"',
+        dialog.text,
     )
-    assert found, f"no withdraw button for {transport_name} on the node page"
-    return found.group(1)
+    assert found, f"no withdraw button for {transport_name} on the Nodes screen"
+
+    # The confirmation the operator reads before they press it, and the POST behind it —
+    # taken from the dialog rather than assumed, for the same reason as the button.
+    confirmation = await operator.get(found.group(1))
+    assert confirmation.status_code == 200, confirmation.text
+    posts_to = re.search(
+        r'hx-post="(/panel/transports/[^"]+/withdraw)"', confirmation.text
+    )
+    assert posts_to, "the withdraw confirmation confirms nothing"
+    return posts_to.group(1)
 
 
 async def friend_token(operator, nickname: str) -> str:
@@ -209,9 +289,10 @@ async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves
 
     # A SECOND protocol on the same node, enabled from the panel. No redeploy, no
     # code change, and nothing asked of any friend.
-    enabled = await operator.post(
-        f"/panel/nodes/{node_id}/transports",
-        data={
+    await enabled_from_the_panel(
+        operator,
+        node_id,
+        {
             "transport_name": "vless-ws-tls",
             "port": str(WS_PORT),
             "server_name": f"front-{unique}.example.com",
@@ -219,7 +300,6 @@ async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves
             "certificate_key_path": "/etc/hashi/certs/privkey.pem",
         },
     )
-    assert enabled.status_code == 303, enabled.text
 
     for token in tokens:
         lines = await mine(client, token, country)
@@ -230,8 +310,7 @@ async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves
     # as an edit: the assertion below is the same one that would have caught a
     # withdrawal that only changed a row.
     withdrawn = await operator.post(
-        f"/panel/transports/{await offered_id(operator, node_id, 'vless-ws-tls')}/state",
-        data={"enabled": "false"},
+        await withdraw_button(operator, node_id, "vless-ws-tls"), headers=HTMX
     )
     assert withdrawn.status_code == 200, withdrawn.text
     assert "<html" not in withdrawn.text.lower()
@@ -301,9 +380,10 @@ async def test_offering_a_protocol_does_not_reach_a_friend_who_was_not_given_the
     )
 
     # Now switch a second protocol on, on ONE of the two nodes.
-    enabled = await operator.post(
-        f"/panel/nodes/{node_id}/transports",
-        data={
+    await enabled_from_the_panel(
+        operator,
+        node_id,
+        {
             "transport_name": "vless-ws-tls",
             "port": "8466",
             "server_name": f"edge-{unique}.example.com",
@@ -311,7 +391,6 @@ async def test_offering_a_protocol_does_not_reach_a_friend_who_was_not_given_the
             "certificate_key_path": "/etc/hashi/certs/privkey.pem",
         },
     )
-    assert enabled.status_code == 303, enabled.text
 
     after = await mine(client, staying, country)
     added = [line for line in after if line not in before]

@@ -1,0 +1,290 @@
+{#
+  "Transports on <node>" — what this node offers a user, and the form that adds one.
+
+  The one dialog in this console that holds both a list and a creation form, and it is
+  one subject rather than two: which protocols this node hands to a person. Every
+  transport already on the node gets its own line, its own standing and its own button;
+  the form under them adds another. Splitting the two would put one node's answer behind
+  two buttons in a single row's actions cell — see panel/routes.py, where the reasoning
+  for putting this here rather than beside the chips in the table is written down.
+
+  NOTHING HERE NAMES A PROTOCOL, A PORT OR A HOST, and it cannot: `transports` is what
+  this image ships that a client could receive, `tuning` is every box each of them
+  declares it needs, and both arrive from services/transports.py, which reads them out
+  of the transport's own model. A new package under edge/transports/ therefore gets a
+  working enable form with no edit here — charter criterion 4 in one file.
+
+  NO BOX CAN ASK FOR KEY MATERIAL. The box list subtracts everything the transport
+  declares as material and every public counterpart of one, so this form cannot ask for
+  a key, cannot show one as a placeholder and cannot hand one back on a refusal. That
+  matters more here than anywhere else in the panel: enabling is the MOMENT material is
+  minted. The body says so, because a form that silently does the right thing teaches
+  the operator nothing about why they are never asked.
+
+  A GROUP OF BOXES PER TRANSPORT is rendered and all but the chosen one is hidden. The
+  hiding is presentation only (static/app.js); the server filters the submitted fields
+  to the chosen transport's own list, so the form works with the script dead. Each box
+  is named for its own group — a hidden input is still submitted, and two transports
+  that both declare a `port` would otherwise send two boxes under one name.
+#}
+{% macro box(group, parameter, values, errors) %}
+{#
+  One box: label, input, and the aria wiring that ties its placeholder, hint and error
+  together. A macro rather than a copy per field — the wiring is what silently rots when
+  a transport gains a parameter, and there is exactly one copy of it here.
+
+  `.param-field` and not the hop dialog's `.tuning-field`: that one caps its input at
+  136px, which is right for twenty-four short numeric knobs and wrong for a form whose
+  boxes hold a hostname or a filesystem path.
+
+  Deliberately NOT marked `required` in the markup, although every one of these is
+  required by the transport. A browser refuses to submit a form with an empty required
+  field it cannot focus, and a field inside a HIDDEN group is exactly that — choosing
+  one transport would make the form silently unsubmittable because another group's boxes
+  are empty. The server refuses per box at 422 instead.
+#}
+{% set field = group ~ "-" ~ parameter.name %}
+<div class="param-field">
+  <label class="mono" for="enable-{{ field }}">{{ parameter.name }}</label>
+  <input class="input" id="enable-{{ field }}" name="{{ field }}" type="text"
+         value="{{ values.get(field, "") }}" placeholder="{{ parameter.placeholder }}"
+         autocomplete="off" spellcheck="false"
+         {% if parameter.hint or errors.get(field) %}aria-describedby="{% if parameter.hint %}enable-{{ field }}-hint{% endif %}{% if parameter.hint and errors.get(field) %} {% endif %}{% if errors.get(field) %}enable-{{ field }}-error{% endif %}"{% endif %}
+         {% if errors.get(field) %}aria-invalid="true"{% endif %}>
+  {% if parameter.hint %}
+  <div class="field-hint" id="enable-{{ field }}-hint">{{ parameter.hint }}</div>
+  {% endif %}
+  {% if errors.get(field) %}
+  <div class="field-error" id="enable-{{ field }}-error" role="alert">{{ errors[field] }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+<div class="dialog-backdrop">
+  <div class="dialog dialog-wide blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="node-transports-title">
+    <div class="dialog-title" id="node-transports-title">Transports on {{ node.name }}</div>
+
+    {% if failure or refused %}
+    {#
+      WHAT WAS REFUSED, DIRECTLY UNDER THE TITLE. `failure` is a complaint about the
+      request rather than about one box — a protocol this image cannot hand over, a
+      listening port this node is already using, a complaint with no box to land on.
+      `refused` is the other kind: the message is under the box it belongs to, and this
+      says so, because that box may be a screenful below.
+
+      IT SITS ABOVE THE LIST AND NOT BELOW IT — M17.2's acceptance. This dialog is taller
+      than a laptop's window and a 422 re-renders it scrolled to its own top, so a refusal
+      printed after the node's transports was off screen on any node running more than a
+      couple. The operator read an unchanged dialog and pressed again. `app.js` moves
+      focus to the refused box as well; this is the half that is in view before it does.
+
+      Outside the form on purpose: it is still the answer when there is nothing left to
+      offer and therefore no form to put it in. Same treatment as a field error because
+      it is the same thing: a request that was refused.
+    #}
+    <div class="field-error" role="alert">
+      {% if failure %}<div>{{ failure }}</div>{% endif %}
+      {% if refused %}<div>{{ refused }}</div>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if offers %}
+    {#
+      What this node already runs. Each line's standing sentence is composed in
+      services/console.py from the row's purpose and the operator's own flag, so this
+      file chooses no words and knows one protocol from another only as data.
+
+      `.section-head` is the existing "explainer on the left, action on the right" row —
+      the same shape a screen's own creation button sits in, reused rather than reinvented.
+    #}
+    <div class="stack-6">
+      {% for offer in offers %}
+      <div class="section-head">
+        <p class="text-muted section-note">
+          <span class="mono">{{ offer.transport }}</span> — {{ offer.standing }}
+          {% if offer.withheld %}
+          {#
+            Why this row has no offer button — M17.2. Beside the standing sentence rather
+            than in the actions group, because it is a fact about the row and not a
+            control: the pool this transport hands addresses out of is smaller than the
+            fleet, so offering it would be refused. Composed in services/console.py, with
+            the pool named and the screen that resizes it.
+
+            Muted, not in the danger hue. Nothing has been refused here, because nothing
+            has been submitted — the console's one accent belongs to a request that failed
+            (docs/decisions.md, 2026-09-10) and this is a standing fact the operator is
+            reading before they act.
+          #}
+          <span>{{ offer.withheld }}</span>
+          {% endif %}
+        </p>
+        {% if offer.for_friends %}
+        {#
+          The transport's name is on the button as DATA, not only as text beside it.
+          That is what lets a scenario say "withdraw THIS protocol" without parsing the
+          dialog's shape — and a scenario has to drive the panel, because "from the
+          panel" is part of criterion 3.
+
+          UI-PATTERNS §3: a destructive action is a plain secondary button that confirms
+          in a dialog. Not drawn in red — the danger hue belongs to a request that was
+          refused or failed (docs/decisions.md, 2026-09-10), and this is an action the
+          operator meant to take. Offering again takes nothing away, so it does not
+          confirm; what it gives is on the line beside it.
+
+          TWO buttons since M15.2, in `.row-actions` — the console's existing inline
+          group (UI-PATTERNS §3), not a new class. Removing is beside withdrawing rather
+          than instead of it because they are different changes: one is reversible and
+          keeps the row's port and material, the other frees the port and destroys the
+          material. Each confirms with its own reach, and a row nobody can act on — one
+          end of a hop — still gets neither.
+        #}
+        <div class="row-actions">
+          {% if offer.offered %}
+          <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
+                  hx-get="/panel/transports/{{ offer.id }}/withdraw"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">withdraw</button>
+          {% elif offer.withheld %}
+          {#
+            NO BUTTON AT ALL — M17.2. Offering this row hands every active user an address
+            on it in the same transaction, and its pool cannot hold them, so this control's
+            only outcome would be a refusal. The reason is on the line to the left, where
+            the row's own prose already is: `.row-actions` is an inline flex group of
+            buttons and a sentence dropped into it wraps under the ones beside it.
+          #}
+          {% else %}
+          <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
+                  hx-post="/panel/transports/{{ offer.id }}/offer"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">offer</button>
+          {% endif %}
+          <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
+                  hx-get="/panel/transports/{{ offer.id }}/remove"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">remove</button>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="dialog-body">
+      Nothing is enabled on {{ node.name }} yet, so it reaches nobody: a node in a
+      user's link is a node with a protocol on it, applied to the host and in service.
+    </div>
+    {% endif %}
+
+    {% if transports %}
+    <form class="dialog-form" hx-post="/panel/nodes/{{ node.id }}/transports"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="enable-transport_name">enable a transport</label>
+        {# `data-transport-select` is what static/app.js watches to show the matching
+           group of boxes. The list is what this image ships that a client can receive —
+           services/transports.py; nothing here knows one protocol from another.
+           NOTHING IS SUBTRACTED from it, and that changed with M15: a node may run a
+           second instance of a protocol it already has, which is what the runbook asks
+           for on a box that both serves users and carries a hop. Whether this particular
+           second one is legal is services/placement.py's single answer, and it arrives
+           as a refusal that names the clash. #}
+        <select class="input" id="enable-transport_name" name="transport_name"
+                data-transport-select
+                aria-describedby="enable-transport_name-hint{% if errors.get('transport_name') %} enable-transport_name-error{% endif %}"
+                {% if errors.get('transport_name') %}aria-invalid="true"{% endif %}>
+          <option value="">choose…</option>
+          {% for name in transports %}
+          <option value="{{ name }}"{% if values.get('transport_name') == name %} selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+        <div class="field-hint" id="enable-transport_name-hint">Only what this image
+          ships and can hand to a user's client. Something already on this node can be
+          added again — it is refused only if it wants a listening port the node is
+          already using.</div>
+        {% if errors.get('transport_name') %}
+        <div class="field-error" id="enable-transport_name-error" role="alert">{{ errors['transport_name'] }}</div>
+        {% endif %}
+      </div>
+
+      {#
+        Which transport's boxes are on screen. The chosen one, falling back to the first
+        only when nothing is chosen yet — and NEVER two: static/app.js re-hides on a
+        `change` event, which an htmx swap does not fire, so the server decides this. The
+        same rule the establish-hop dialog states at more length, for the same reason.
+
+        `hidden` ONLY WORKS BECAUSE app.css SAYS SO. The browser's own rule for the
+        attribute loses to any author rule setting `display`, and `.dialog-form` on the
+        line below is `display: flex` — so this markup was correct and every group was
+        on screen anyway, with the select changing nothing because app.js sets the same
+        attribute. See `[hidden]` in app.css before you give a group a new class.
+      #}
+      {% set shown = values.get('transport_name')
+                     if values.get('transport_name') in transports
+                     else (transports[0] if transports else none) %}
+      {% for name in transports %}
+      {# `.dialog-form` on the group as well as on the form: it is the console's
+         "flex column at --space-3" and it is what keeps these rows in the same rhythm
+         as every other dialog's fields. #}
+      <div class="dialog-form" data-transport-group="{{ name }}"
+           {% if name != shown %}hidden{% endif %}>
+        {#
+          THE GROUP SAYS WHOSE BOXES THESE ARE. On first paint nothing is chosen yet and
+          the select above reads "choose…", while `shown` falls back to the first
+          transport — so without this line the operator is looking at boxes labelled
+          `port` and `decoy_host` with nothing on screen saying which protocol wants
+          them, and could fill in a group the chooser never named. It is `name` from
+          `transports`, which is data: this file still names no protocol.
+
+          Deliberately NOT fixed by pre-selecting `shown` in the select instead. That
+          would make "submit without choosing" enable a transport rather than be
+          refused on the control, and an accidental enable mints key material.
+        #}
+        <p class="text-muted section-note">what
+          <span class="mono">{{ name }}</span> needs on this node</p>
+        {% for parameter in tuning[name] %}
+        {{ box(name, parameter, values, errors) }}
+        {% endfor %}
+        {#
+          ONE MORE BOX, for a protocol that gives every user their own address inside the
+          tunnel — and for no other. `pools` holds an entry only for those, from the
+          transport's own declaration (services/console.py), so this file still names no
+          protocol and cannot tell one from another.
+
+          It is rendered through the same macro and named for the same group, so it
+          submits, refuses and comes back exactly as every box above it does. What it is
+          NOT is one of them: the boxes above are the transport's own parameters, read
+          back into its model, and this one is a column on the node-transport record that
+          the transport never sees.
+
+          The number in its placeholder and every word of its hint are composed on the
+          server. Nothing numeric is written here — a count typed into markup is a count
+          that goes stale the moment a user is added.
+        #}
+        {% if name in pools %}
+        {{ box(name, pools[name], values, errors) }}
+        {% endif %}
+      </div>
+      {% endfor %}
+
+      <div class="dialog-body">
+        Key material is minted here and stored encrypted — never type a key into this
+        panel, and none of these boxes will ever ask you for one. Enabling puts this
+        protocol into every active user's link at their next refresh and asks nothing of
+        anybody; the host itself serves nothing new until you apply the node.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">enable</button>
+      </div>
+    </form>
+    {% else %}
+    {#
+      Nothing left to offer. No form, because there is nothing it could send — a form
+      whose only outcome is a refusal is a worse answer than saying so.
+    #}
+    <div class="dialog-body">
+      Every protocol this image can hand to a user is already enabled on {{ node.name }}.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+    </div>
+    {% endif %}
+    {% include "panel/corners.html" %}
+  </div>
+</div>

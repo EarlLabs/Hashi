@@ -14,6 +14,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from control.app.crypto import is_well_formed_hash
 
+# The audit trail's window, in days, and the two ends of it. Named rather than written
+# into the Field below, because the Settings screen states them to the operator
+# ("anything from 1 to 365 days") and a screen that repeats a bound instead of reading
+# it is a screen that goes false the day the bound moves. One definition, two readers —
+# the validator and the sentence.
+AUDIT_RETENTION_MIN_DAYS = 1
+AUDIT_RETENTION_MAX_DAYS = 365
+AUDIT_RETENTION_DEFAULT_DAYS = 30
+
 
 class OperatorHashMalformed(RuntimeError):
     """The configured operator hash is not a hash, so nobody could ever log in.
@@ -85,6 +94,23 @@ class Settings(BaseSettings):
     # that five seconds is not enough is still a node worth reaching — and because the
     # test suite lowers it, which is how it stays honest that the value is used.
     node_connect_timeout: int = 5
+
+    # How long the audit trail keeps an entry, in days. Thirty rather than ninety or
+    # forever: what the trail answers — did I do this, what did I change before it
+    # broke — decays in days, while the risk it carries grows with every day it is
+    # kept, on the one machine the charter calls most worth seizing.
+    #
+    # Bounded 1–365 with NO value meaning "forever", and that is the part to leave
+    # alone. A record with no end is precisely what the charter objects to, so the
+    # absence of an off switch is the decision (docs/decisions.md, 2026-09-11) rather
+    # than a missing feature. A floor of one day rather than zero because zero would be
+    # a trail that exists in the schema and holds nothing — if it should not exist, the
+    # honest change is to stop writing it.
+    audit_retention_days: int = Field(
+        default=AUDIT_RETENTION_DEFAULT_DAYS,
+        ge=AUDIT_RETENTION_MIN_DAYS,
+        le=AUDIT_RETENTION_MAX_DAYS,
+    )
 
     @field_validator("operator_password_hash")
     @classmethod

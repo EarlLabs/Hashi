@@ -25,7 +25,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened five times since, each deliberately, each recorded
+      **It has been widened six times since, each deliberately, each recorded
       where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
       own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
       now declares the SET of subscription shapes it serialises into rather than a
@@ -43,7 +43,16 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       and an address is the largest thing that can be said about a hop without saying
       what it is. Same shape — a keyword, defaulting to the answer every node had before.
 
-      None of the five was a branch on a protocol; each replaced one with a
+      ``PeerAddress`` came with M17, found in the field: a transport whose data plane
+      identifies each consumer BY ADDRESS needs one address per user, and had one
+      parameter for all of them — so it served exactly one friend against a charter
+      scale of ~30-50. A transport now declares that each consumer needs an address of
+      its own, and where the room for them comes from; `control` allocates, and
+      ``edge/addressing.py`` does the arithmetic. Optional, defaulting to ``None``, so
+      not one existing ``META`` changes: a transport that identifies its consumers by
+      key material or by a UUID says nothing and is asked for nothing.
+
+      None of the six was a branch on a protocol; each replaced one with a
       vocabulary or a property. None was free either, and a reader deserves to know
       the contract has moved and why rather than to discover it from a diff.
 """
@@ -178,6 +187,29 @@ class SubscriptionFormat(StrEnum):
     CLIENT_CONFIG_FILE = "client-config-file"
 
 
+class Layer4(StrEnum):
+    """A transport-layer protocol a transport's listening socket binds.
+
+    Declared because `control` has to answer one question the node's kernel would
+    otherwise answer for it at three in the morning: may these two transports sit on
+    one node's one port? Two sockets on one number are a collision only when they are
+    the same protocol — a TCP proxy on 8443 and an obfuscated UDP tunnel on 8443 are
+    two sockets and no conflict, and the data planes run with ``network_mode: host``,
+    so this is a real question about a real bind.
+
+    NOT ``TransportMeta.family``, which is the answer to a different question and says
+    so: its contract check states that `control` reads it *"to decide nothing at all —
+    an operator reads it to tell UDP from TCP"*. It is free text (``"tcp-tls" | "udp" |
+    …``), so a transport declaring ``"quic"`` or ``"udp-obfuscated"`` would be sorted
+    into a bucket of its own and would collide with nothing. A rule keyed on it would
+    be a rule expressed in terms of the wrong concept, which is the exact defect M15
+    exists to close, pointed the other way.
+    """
+
+    TCP = "tcp"
+    UDP = "udp"
+
+
 class KeyScope(StrEnum):
     """Whether a piece of material belongs to a node or to one friend."""
 
@@ -238,12 +270,53 @@ class KeySpec:
 
 
 @dataclass(frozen=True)
+class PeerAddress:
+    """A transport declaring that each of its consumers needs an address of its own.
+
+    Two field names and nothing else, which is the whole of what `control` needs in
+    order to give thirty people thirty addresses without learning a protocol:
+
+    * ``name`` is the parameter a consumer's own address is read from — the same name
+      the renderers already look for in ``Credential.secrets`` and fall back to in
+      ``params``. In ``params`` it is the pool's FIRST address, which is what makes a
+      transport enabled before M17 render the same bytes afterwards.
+    * ``within`` is the parameter whose network bounds the pool. It is declared rather
+      than derived because "the range these addresses come out of" is the transport's
+      own fact: a kernel tunnel's interface address carries it, and another data plane
+      might carry it somewhere else entirely.
+
+    The address is ALLOCATED, never minted, and that is the difference from ``KeySpec``:
+    `control` generates key material from a kind, and hands out an address by taking the
+    lowest one nobody holds. So ``name`` may not also be a ``KeySpec`` name — a
+    generator would overwrite an allocation — and ``_check_declaration`` refuses a
+    package that says both.
+
+    Declaring this is what makes the scale expressible. Without it, a data plane that
+    routes by address has one address for everybody, and its own renderer refuses the
+    second friend rather than hijacking the first's return path.
+    """
+
+    name: str
+    within: str
+
+
+@dataclass(frozen=True)
 class TransportMeta:
     """What the control plane may know about a transport without knowing which."""
 
     name: str
     family: str          # "tcp-tls" | "udp" | ...
     needs_tls: bool
+
+    # Which transport-layer protocols this transport's listener actually binds, on the
+    # port below. A SET because a transport may legitimately bind both, and because the
+    # question asked of it is "do these two overlap" rather than "are these two equal".
+    #
+    # Read by `control` to decide whether two transports on one node may hold the same
+    # port number (``control/app/services/placement.py``). It is the one thing in this
+    # declaration that is about the SOCKET rather than about the protocol's shape, which
+    # is why it is not ``family``: see ``Layer4``.
+    listens_on: frozenset[Layer4]
 
     # The ports this transport may legitimately listen on, inclusive. A range
     # rather than a single number because the operator picks within it per node —
@@ -298,6 +371,16 @@ class TransportMeta:
     # working exit. Shipping it anyway is deliberate — the charter names it first-class
     # in phase 1, because it is the right choice on a network that is not filtering.
     blocked_by_inspection: bool = False
+
+    # Whether each consumer of this transport needs a tunnel address of its own, and
+    # where that address is read from — see ``PeerAddress``.
+    #
+    # Optional, and defaulting to "no", because most transports do not: a VLESS client
+    # is identified by a UUID and two of them on one node share everything but that.
+    # A default of None is therefore the right answer rather than a silent wrong one,
+    # which is the opposite of ``listens_on``'s case for being required — and it means
+    # no shipped ``META`` had to change when this field arrived.
+    peer_address: PeerAddress | None = None
 
     @property
     def subscription_expressible(self) -> bool:
@@ -580,6 +663,18 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
             "an empty one is a blank column on the fleet page."
         )
 
+    if not meta.listens_on or not all(
+        isinstance(layer, Layer4) for layer in meta.listens_on
+    ):
+        raise ContractViolation(
+            f"transport {meta.name!r} does not declare which transport-layer protocols "
+            "its listener binds. `control` reads it to decide whether two transports may "
+            "share one node's port number, and a transport that declares none would be "
+            "treated as colliding with nothing — so the first pair on one port would be "
+            "found by a container that cannot bind. Declare `listens_on`, as a frozenset "
+            "of Layer4."
+        )
+
     low, high = meta.port_range
     if not 1 <= low <= high <= 65535:
         raise ContractViolation(
@@ -607,6 +702,31 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
             f"{sorted(str(u) for u in unknown)} that delivery has no serialiser for."
         )
 
+    if meta.peer_address is not None:
+        pooled = meta.peer_address
+        if not pooled.name or not pooled.within:
+            raise ContractViolation(
+                f"transport {meta.name!r} declares that each consumer needs an address of "
+                "its own, and leaves one half of that declaration empty. Both are needed: "
+                "the parameter a consumer's own address is read from, and the parameter "
+                "whose network says how much room there is for them."
+            )
+
+        # An address is ALLOCATED, never minted — so the name it is filed under must not
+        # also be a name `control` generates a value for. A package that declared both
+        # would have every user's address overwritten by a fresh key at the moment their
+        # credential was minted, which reads as "everyone got the same address" and is
+        # refused by the renderer one step later, for the wrong reason.
+        minted = {spec.name for spec in meta.key_material}
+        minted |= {spec.public_name for spec in meta.key_material if spec.public_name}
+        if pooled.name in minted:
+            raise ContractViolation(
+                f"transport {meta.name!r} declares that each consumer's own address is "
+                f"read from {pooled.name!r}, and also declares key material under that "
+                "name. An address is allocated from a pool, never generated: `control` "
+                "would mint a value over the address it had just handed out."
+            )
+
     # The one implication between the two declarations item 28 added. A package with both
     # True compiles and reads plausibly and hands the fleet a hop that cannot come up.
     if meta.blocked_by_inspection and meta.hop_capable:
@@ -620,14 +740,35 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
     return meta
 
 
-def _check_contract(meta: TransportMeta, render: ModuleType) -> None:
+def _check_contract(meta: TransportMeta, render: ModuleType, params_model: type) -> None:
     """Refuse a package whose declaration its own code does not keep.
 
     Load time rather than render time, and that is the whole value: the failure this
     prevents is a transport that looks deliverable in the panel and raises deep inside
     one friend's subscription render at refresh time — visible to the operator as
     "hashi is broken for Masha", days later.
+
+    ``params_model`` is here for the same reason ``render`` is: ``PeerAddress`` names two
+    PARAMETERS, and a declaration naming a parameter the model does not have is a pool
+    `control` can neither size nor read the first address of. That cannot be checked from
+    ``meta.py`` alone, so it belongs on this side of the split rather than in
+    ``_check_declaration``.
     """
+    pooled = meta.peer_address
+    if pooled is not None:
+        fields = params_model.model_fields
+        for named, what_it_is in (
+            (pooled.name, "the parameter each consumer's own address is read from"),
+            (pooled.within, "the parameter whose network the pool is drawn from"),
+        ):
+            if named not in fields:
+                raise ContractViolation(
+                    f"transport {meta.name!r} declares {named!r} as {what_it_is}, and its "
+                    f"params.py has no such field. Nothing would validate the operator's "
+                    "range, and every user would be allocated an address out of a pool "
+                    "whose bounds cannot be read."
+                )
+
     for declared in sorted(meta.subscription_formats):
         function = SERIALISERS[declared]
         if not callable(getattr(render, function, None)):
@@ -682,10 +823,7 @@ def profile(name: str) -> Transport:
         if meta.name != name:
             continue
         render = importlib.import_module(f"edge.transports.{package}.render")
-        _check_contract(meta, render)
-        return Transport(
-            meta=meta,
-            profile=render,
-            params_model=importlib.import_module(f"edge.transports.{package}.params").Params,
-        )
+        params_model = importlib.import_module(f"edge.transports.{package}.params").Params
+        _check_contract(meta, render, params_model)
+        return Transport(meta=meta, profile=render, params_model=params_model)
     raise KeyError(f"no transport named {name!r} is installed")

@@ -1,0 +1,89 @@
+{#
+  Confirming a key rotation.
+
+  UI-PATTERNS §3: a destructive action confirms in a dialog, and the sentence spells out
+  the blast radius rather than asking "are you sure". Here the radius has three parts and
+  the operator needs all three BEFORE they press it, because two of them are invisible
+  afterwards:
+
+  * what is re-minted — this node's own material and every user credential riding on it,
+    which is why the count is in the sentence;
+  * what a user has to do — nothing. Their link does not move, so this is safe during a
+    block. What they will see is their client failing until it next refreshes;
+  * what happens if the push does not land — which is not one outcome but two, and they
+    differ by row. A friend-facing node keeps running the old material until it is
+    applied. A HOP END is rotated at both ends in one transaction and pushed to two
+    nodes, so a push that reaches one of them leaves the two ends holding different
+    material and the tunnel down until the other is applied. Both are stated here rather
+    than only in the banner afterwards, because it is the difference between "rotate and
+    walk away" and "rotate and watch" — and because a dialog promising the one-node
+    version over a hop end is the false reassurance this screen exists to stop giving.
+    The sentences must stay in step with ``console._unpushed``, which is what answers
+    them; ``test_a_hop_dialog_and_the_answer_it_will_get_agree`` holds the pair.
+
+  No key material is named and none could be: this dialog's whole context is one KeyRow,
+  which carries a fingerprint and never a value.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="rotate-keys-title">
+    <div class="dialog-title" id="rotate-keys-title">Rotate these keys?</div>
+    {% if key.for_friends %}
+    <div class="dialog-body">
+      Fresh material is minted for {{ key.node }} — {{ key.transport }}, together with
+      {{ key.holders }} user credential{{ "" if key.holders == 1 else "s" }} on it.
+      Nobody re-imports anything: users keep the same link and pick the new material up
+      the next time their client refreshes it, and until it does, that client is still
+      holding the old one.
+    </div>
+    {% else %}
+    {#
+      A hop end. Its consumer is the far NODE rather than a person, so none of the
+      sentence above is true here — nobody's link is involved, and what is at stake is
+      a tunnel between two of our own machines.
+    #}
+    <div class="dialog-body">
+      Fresh material is minted for {{ key.node }} — {{ key.transport }}, at this end of
+      the hop. No user holds anything on it: this is a tunnel between two of our own
+      nodes, and what it carries is whatever arrives at the entry.
+    </div>
+    {% endif %}
+    {% if key.shared_with_peer %}
+    {#
+      One end of a hop, on a transport that declares some of its material SYMMETRIC.
+      The sentence is composed in services/console.py from that declaration — this file
+      knows only that a row may carry one, never which protocol declares it. It is
+      stated before the button rather than used to hide it, the same way the tear-down
+      dialog states decision 3: the operator can be right to want this, and cannot be
+      right about it without knowing what it does to the far end.
+    #}
+    <div class="dialog-body">{{ shared_with_peer }}</div>
+    {% endif %}
+    {% if key.for_friends %}
+    <div class="dialog-body text-muted">
+      The new material is written here first and then pushed. If the push cannot reach
+      the host, the node keeps running what it has and this screen says so — apply the
+      node once it can be reached.
+    </div>
+    {% else %}
+    {#
+      What is at stake, and NOT in this file's words. `hop_push_outcome` is
+      services/console.py's one sentence about a hop-end push, and the answer the
+      operator gets afterwards is composed from the same two clauses — so the
+      confirmation and its answer cannot say opposite things about the far end, which
+      they have now done three times. Do not paraphrase it here; change the constant.
+    #}
+    <div class="dialog-body text-muted">
+      Both ends are written in one step.
+      {{ hop_push_outcome }}
+    </div>
+    {% endif %}
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+      <button class="btn btn-primary" type="button"
+              hx-post="/panel/keys/{{ key.id }}/rotate"
+              hx-target="#dialog-slot" hx-swap="innerHTML">rotate keys</button>
+    </div>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

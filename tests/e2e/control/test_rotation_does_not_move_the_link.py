@@ -17,11 +17,17 @@ running is worse off than one told nothing.
 """
 
 import base64
+import re
 import uuid
 
 import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
+
+# The console asks with htmx. Both operations moved onto the Keys & configs screen in
+# M9.4 and became its only home in M9.6, when the pre-redesign node page they used to
+# hang off was deleted along with its two routes.
+HTMX = {"HX-Request": "true"}
 
 
 @pytest.fixture
@@ -67,6 +73,21 @@ async def fleet(operator, unique: str, port: int):
     return node_id, enabled.json()["id"], token
 
 
+async def button_in(operator, dialog_url: str, *, opened_by: str) -> str:
+    """Where the control inside one Keys & configs dialog posts.
+
+    Read off the rendered dialog rather than written down here: the operator's route to
+    both of these is a button on the Keys & configs row, and a scenario posting to a
+    remembered URL would keep passing while the dialog behind that button submitted
+    nowhere. The same standard the withdraw walk holds in the criteria scenario.
+    """
+    dialog = await operator.get(dialog_url)
+    assert dialog.status_code == 200, dialog.text
+    found = re.search(r'hx-post="([^"]+)"', dialog.text)
+    assert found, f"the dialog behind {opened_by!r} confirms nothing"
+    return found.group(1)
+
+
 async def mine(client, token: str, unique: str) -> list[str]:
     """This run's own entries in a subscription.
 
@@ -85,7 +106,12 @@ async def test_a_key_rotation_changes_the_config_behind_the_same_link(
     before = await mine(client, token, unique)
     assert len(before) == 1, before
 
-    rotated = await operator.post(f"/panel/transports/{node_transport_id}/rotate-keys")
+    rotated = await operator.post(
+        await button_in(
+            operator, f"/panel/keys/{node_transport_id}/rotate", opened_by="rotate keys"
+        ),
+        headers=HTMX,
+    )
     assert rotated.status_code == 200, rotated.text
     # A fragment, not a document: a full page here nests <html> inside the panel.
     assert "<html" not in rotated.text.lower()
@@ -111,9 +137,16 @@ async def test_replacing_a_blocked_decoy_reaches_the_friends_entry(
     node_id, node_transport_id, token = await fleet(operator, unique, 8448)
 
     replaced = await operator.post(
-        f"/panel/transports/{node_transport_id}/params",
+        await button_in(
+            operator,
+            f"/panel/keys/{node_transport_id}/params",
+            opened_by="replace params",
+        ),
         data={"decoy_host": "www.wikipedia.org", "server_names": "www.wikipedia.org"},
+        headers=HTMX,
     )
+    # 200 and not 422: this console refuses a replacement with the dialog re-rendered, so
+    # the two cannot be confused for one another.
     assert replaced.status_code == 200, replaced.text
 
     # Same as above: the unreachable node was marked degraded by the failed push, so it
@@ -137,8 +170,16 @@ async def test_a_rotation_that_could_not_reach_the_node_says_so(
     """
     _, node_transport_id, _ = await fleet(operator, unique, 8449)
 
-    outcome = await operator.post(f"/panel/transports/{node_transport_id}/rotate-keys")
+    outcome = await operator.post(
+        await button_in(
+            operator, f"/panel/keys/{node_transport_id}/rotate", opened_by="rotate keys"
+        ),
+        headers=HTMX,
+    )
 
     assert outcome.status_code == 200
-    assert "bad" in outcome.text, outcome.text
-    assert "NOT" in outcome.text or "could not" in outcome.text
+    # A BANNER, drawn in the danger hue, and not a toast: it has to survive the next
+    # click, because until the node is applied the old material is what it is running.
+    assert "banner-failure" in outcome.text, outcome.text
+    assert "the node could not be updated" in outcome.text, outcome.text
+    assert "still running the old material" in outcome.text, outcome.text

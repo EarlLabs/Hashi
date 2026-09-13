@@ -23,7 +23,6 @@ HOW:  the arithmetic that proves the contract: adding a transport adds ZERO line
 
 import base64
 import io
-import json
 import logging
 import secrets as secrets_module
 import zipfile
@@ -34,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.models import Credential, Friend, Subscription
-from control.app.services import nodes
+from control.app.services import addresses, nodes
 from edge.node import Credential as EdgeCredential
 from edge.registry import ClientConfig, ClientEntry, SubscriptionFormat, profile
 
@@ -198,9 +197,13 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
                 SubscriptionFormat.CLIENT_CONFIG_FILE,
                 nodes.node_view(node_transport.node),
                 nodes.render_params(node_transport),
-                EdgeCredential(
-                    subject=credential.subject,
-                    secrets=json.loads(credential.secrets),
+                # THE SAME BUILDER the node's own config is rendered from — M17. This
+                # file's ``Address`` line and that config's ``AllowedIPs`` are two
+                # renders of one allocation, and a second builder here is exactly how a
+                # person ends up authorised for an address their device does not use:
+                # a tunnel that comes up and carries nothing, with every screen green.
+                addresses.edge_credential(
+                    credential, addresses.spec_for(node_transport.transport_name)
                 ),
             )
         )

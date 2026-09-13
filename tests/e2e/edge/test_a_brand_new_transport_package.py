@@ -62,6 +62,7 @@ def _package_files() -> dict[str, str]:
                 KeyKind,
                 KeyScope,
                 KeySpec,
+                Layer4,
                 SubscriptionFormat,
                 TransportMeta,
             )
@@ -69,6 +70,7 @@ def _package_files() -> dict[str, str]:
             META = TransportMeta(
                 name="acme-tunnel",
                 family="tcp-tls",
+                listens_on=frozenset({Layer4.TCP}),
                 needs_tls=True,
                 port_range=(443, 65535),
                 config_format=ConfigFormat.XRAY_JSON,
@@ -197,6 +199,7 @@ PROBE = textwrap.dedent(
         address="192.0.2.99",
         location_label="Testland",
         display_name="leaf-brand-new",
+        resolver=None,
     )
 
     found = discover()
@@ -382,11 +385,12 @@ BROKEN_DECLARATIONS = {
     "no client-scoped identity": (
         textwrap.dedent(
             '''
-            from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+            from edge.registry import KeyKind, KeyScope, KeySpec, Layer4, TransportMeta
 
             META = TransportMeta(
                 name="acme-tunnel",
                 family="tcp-tls",
+                listens_on=frozenset({Layer4.TCP}),
                 needs_tls=True,
                 port_range=(443, 65535),
                 key_material=(
@@ -405,11 +409,12 @@ BROKEN_DECLARATIONS = {
     "a nonsensical port range": (
         textwrap.dedent(
             '''
-            from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
+            from edge.registry import KeyKind, KeyScope, KeySpec, Layer4, TransportMeta
 
             META = TransportMeta(
                 name="acme-tunnel",
                 family="tcp-tls",
+                listens_on=frozenset({Layer4.TCP}),
                 needs_tls=True,
                 port_range=(65535, 443),
                 key_material=(
@@ -420,7 +425,7 @@ BROKEN_DECLARATIONS = {
         ).lstrip(),
         "port range",
     ),
-    "identified on the wire AND allowed on a hop": (
+    "declares no listening protocol": (
         textwrap.dedent(
             '''
             from edge.registry import KeyKind, KeyScope, KeySpec, TransportMeta
@@ -428,6 +433,99 @@ BROKEN_DECLARATIONS = {
             META = TransportMeta(
                 name="acme-tunnel",
                 family="udp",
+                # EMPTY rather than omitted, and the difference is why this case exists
+                # at all: a field left out dies as a TypeError at import, before
+                # `_check_declaration` is ever reached, so only the empty form can
+                # exercise the check. A transport declaring nothing here would be read as
+                # colliding with nothing, and the first pair on one port would be found
+                # by a container that cannot bind (M15).
+                listens_on=frozenset(),
+                needs_tls=False,
+                port_range=(1024, 65535),
+                key_material=(
+                    KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
+                ),
+            )
+            '''
+        ).lstrip(),
+        "which transport-layer protocols its listener binds",
+    ),
+    "a pool declared with one half missing": (
+        textwrap.dedent(
+            '''
+            from edge.registry import (
+                KeyKind,
+                KeyScope,
+                KeySpec,
+                Layer4,
+                PeerAddress,
+                TransportMeta,
+            )
+
+            META = TransportMeta(
+                name="acme-tunnel",
+                family="udp",
+                listens_on=frozenset({Layer4.UDP}),
+                needs_tls=False,
+                port_range=(1024, 65535),
+                key_material=(
+                    KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
+                ),
+                # EMPTY rather than omitted, for the reason the listens_on case above
+                # gives: a field left out of PeerAddress dies as a TypeError at import,
+                # before `_check_declaration` is reached, so only the empty form can
+                # exercise the check. Half a declaration is a pool `control` can read
+                # the first address of and cannot size — or the reverse (M17).
+                peer_address=PeerAddress(name="peer_address", within=""),
+            )
+            '''
+        ).lstrip(),
+        "one half of that declaration empty",
+    ),
+    "a pool whose address `control` would also mint": (
+        textwrap.dedent(
+            '''
+            from edge.registry import (
+                KeyKind,
+                KeyScope,
+                KeySpec,
+                Layer4,
+                PeerAddress,
+                TransportMeta,
+            )
+
+            META = TransportMeta(
+                name="acme-tunnel",
+                family="udp",
+                listens_on=frozenset({Layer4.UDP}),
+                needs_tls=False,
+                port_range=(1024, 65535),
+                key_material=(
+                    KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
+                    KeySpec(
+                        name="peer_address",
+                        kind=KeyKind.TOKEN_32,
+                        scope=KeyScope.CLIENT,
+                    ),
+                ),
+                # An address is ALLOCATED from a pool and key material is GENERATED, so
+                # a package declaring both under one name would have every user's
+                # address overwritten the moment their credential was minted (M17).
+                peer_address=PeerAddress(name="peer_address", within="tunnel_address"),
+            )
+            '''
+        ).lstrip(),
+        "allocated from a pool, never generated",
+    ),
+    "identified on the wire AND allowed on a hop": (
+        textwrap.dedent(
+            '''
+            from edge.registry import KeyKind, KeyScope, KeySpec, Layer4, TransportMeta
+
+            META = TransportMeta(
+                name="acme-tunnel",
+                family="udp",
+                listens_on=frozenset({Layer4.UDP}),
                 needs_tls=False,
                 port_range=(1024, 65535),
                 key_material=(

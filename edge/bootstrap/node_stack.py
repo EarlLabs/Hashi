@@ -55,15 +55,21 @@ EXTENSION = {
 
 
 def config_path(
-    transport_name: str, config_format: ConfigFormat = ConfigFormat.XRAY_JSON
+    config_name: str, config_format: ConfigFormat = ConfigFormat.XRAY_JSON
 ) -> str:
-    """Where one transport's rendered config lives on the node.
+    """Where one rendered config lives on the node, by the name it is placed under.
 
-    Named by the transport, so two transports on one node cannot overwrite each
+    The name is the file's STEM, so two configs on one node cannot overwrite each
     other, and so the file on disk is identifiable by an operator reading it. The
     extension follows the transport's DECLARED format — see ``EXTENSION``.
+
+    Usually the transport's own name, which is what ``config_path_for`` passes and
+    what every node in the field already has on disk. It is a name in its own right
+    because M15 lets one node run two instances of one transport — a friend-facing
+    AmneziaWG and the entry end of a hop — and those are two files, two compose
+    services and, for this family, two network interfaces.
     """
-    return f"{CONFIG_DIR}/{transport_name}.{EXTENSION[config_format]}"
+    return f"{CONFIG_DIR}/{config_name}.{EXTENSION[config_format]}"
 
 
 # The pinned upstream data plane for each config FORMAT. Exact patch versions, never
@@ -192,14 +198,27 @@ INTERFACE_NAME = re.compile(r"^[a-zA-Z0-9_=+.-]{1,15}$")
 #   replacement then fails with ``wg-quick: `<name>' already exists`` and crash-loops.
 #   Measured, not imagined. Its output is discarded because on the normal path there is
 #   nothing to take down and the tool says so on stderr.
-# * ``sleep infinity & wait`` rather than a bare ``sleep`` — a shell blocked in ``sleep``
+# * ``sleep ... & wait $!`` rather than a bare ``sleep`` — a shell blocked in ``sleep``
 #   does not run traps until it returns. Backgrounding it and waiting is what makes the
-#   trap fire at once; both images' shells are busybox and support ``infinity``.
+#   trap fire at once, and it is why an unexpected death of the idle child still ends
+#   the container: ``wait`` returns non-zero and ``set -e`` takes it from there.
+# * the LOOP, and the integer operand, are M21.3. This line used to read ``sleep
+#   infinity``, which busybox and GNU coreutils both accept and POSIX does not: the
+#   operand is specified as one non-negative decimal integer, so ``infinity`` is an
+#   extension. No node ever cared — both images ship busybox — but the test beside this
+#   file runs this exact string under the TEST HOST's ``/bin/sh``, and a BSD ``sleep``
+#   refuses the operand, so ``make verify`` was red on the owner's own laptop for a
+#   reason that had nothing to do with the change under test. Re-sleeping in a loop
+#   rather than naming one enormous number keeps any implementation's upper bound on the
+#   operand out of it as well; the number only decides how often the shell wakes, and a
+#   ``fork`` a day inside a container that lives for months is nothing. Behaviour on a
+#   node is unchanged in every respect: it still idles forever, still tears the tunnel
+#   down the instant a signal arrives, still dies if the idle dies.
 _WG_QUICK_SUPERVISOR = (
     """set -e; trap '"$0" down "$1" || true; exit 0' INT TERM; """
     '"$0" down "$1" >/dev/null 2>&1 || true; '
     '"$0" up "$1"; '
-    "sleep infinity & wait $!"
+    "while :; do sleep 86400 & wait $!; done"
 )
 
 
@@ -265,8 +284,46 @@ DATA_PLANES = {
 
 
 def config_path_for(transport_name: str) -> str:
-    """Where this transport's config goes, per the format the transport declared."""
-    return config_path(transport_name, profile(transport_name).meta.config_format)
+    """Where this transport's config goes, per the format the transport declared.
+
+    The single-instance answer: a node running one of a transport places it under the
+    transport's own name. ``config_path_of`` is the same question for a node running
+    two of one transport, which M15 permits.
+    """
+    return config_path_of(transport_name, transport_name)
+
+
+def config_path_of(config_name: str, transport_name: str) -> str:
+    """Where the config placed under ``config_name`` goes, for the transport it renders.
+
+    Two arguments because the two answers come from different places: the FILE's name is
+    the control plane's — it is what has to be unique on a node, and for the wg-quick
+    family it is also the interface name — while the EXTENSION is the transport's, and
+    getting that wrong is a valid file the daemon will not load (see ``EXTENSION``).
+    """
+    return config_path(config_name, profile(transport_name).meta.config_format)
+
+
+def config_name_is_usable(transport_name: str, config_name: str) -> bool:
+    """Whether this transport could be placed on a node under this name.
+
+    Asked by `control` BEFORE it writes a second instance of one transport onto a node.
+    The wg-quick family takes its network interface name from the config file's stem
+    (``interface_from_config_filename``), so the name is part of what the node can
+    actually run rather than a label we are free to choose — and a name the kernel
+    refuses is a container that dies at ``up``.
+
+    ``True`` for a transport whose tool does not care, which is most of them: this
+    answers for every transport so that `control` never has to ask which family it is
+    looking at. ``_check_interface_name`` remains the render-time backstop for the name
+    a transport arrives with; this is the question about a name we are about to choose.
+    """
+    data_plane = DATA_PLANES[profile(transport_name).meta.config_format]
+    if not data_plane.interface_from_config_filename:
+        return True
+    # The stem of ``config_path(config_name, …)`` IS ``config_name``, so the rule is
+    # applied to exactly the string the tool would see.
+    return bool(INTERFACE_NAME.match(config_name))
 
 
 # The label each transport's container carries the digest of its own config in.
@@ -345,8 +402,10 @@ def _check_interface_name(transport_name: str, path: str, data_plane: DataPlane)
         )
 
 
-def services_for(configs: Mapping[str, str]) -> list[dict]:
-    """One compose service per transport, each with the daemon its format needs.
+def services_for(
+    configs: Mapping[str, str], *, transports: Mapping[str, str] | None = None
+) -> list[dict]:
+    """One compose service per placed config, each with the daemon its format needs.
 
     The one place a rendered config's PATH and the command that loads it are decided
     together — split across two callers, they drift, and the symptom is a daemon
@@ -358,12 +417,21 @@ def services_for(configs: Mapping[str, str]) -> list[dict]:
     Takes the rendered configs rather than the transport names because of that — a name
     alone cannot produce a digest. Still pure: ``digest_of`` is a hash, and nothing here
     touches a node.
+
+    ``configs`` is keyed by the name each config is PLACED under, which is also the
+    compose service's name and, for the wg-quick family, the node's interface name.
+    ``transports`` says which transport each of those came from, and defaults to the
+    name itself — the single-instance case, which is every node in the field and every
+    caller that existed before M15. A node running two instances of one transport
+    (a friend-facing AmneziaWG and a hop end) passes the mapping, because the name on
+    the file and the transport that rendered it are then two different strings.
     """
     services = []
     for name, config in configs.items():
-        data_plane = DATA_PLANES[profile(name).meta.config_format]
-        path = config_path_for(name)
-        _check_interface_name(name, path, data_plane)
+        transport_name = (transports or {}).get(name, name)
+        data_plane = DATA_PLANES[profile(transport_name).meta.config_format]
+        path = config_path_of(name, transport_name)
+        _check_interface_name(transport_name, path, data_plane)
         services.append(
             {
                 "name": name,

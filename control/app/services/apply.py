@@ -24,29 +24,111 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 """
 
 import datetime
-import json
+import enum
 import logging
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.crypto import SecretUnreadable
-from control.app.errors import Conflict, DomainError, NodeOperationFailed
+from control.app.errors import (
+    ConfigRefused,
+    Conflict,
+    DomainError,
+    NodeOperationFailed,
+    NothingToApply,
+)
 from control.app.models import (
+    AuditAction,
     Credential,
     Node,
     NodeState,
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import nodes, relay
+from control.app.services import addresses, audit, nodes, relay
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
-from edge.node import Credential as EdgeCredential
+from edge.egress import ResolverMissing
 from edge.registry import profile
 
 logger = logging.getLogger(__name__)
+
+# Where an operator finishes a push that did not land. A SCREEN, named in words, and
+# never a page or a URL — that is the whole point of this constant existing rather than
+# the sentence being written three times.
+#
+# It exists because the sentence it replaced outlived the surface it named. "Retry from
+# the node's page" was true until M9.6 deleted that page, and it was still being drawn
+# on the console afterwards: on an INCOMPLETE REVOCATION, which is the moment somebody
+# who should be cut off is still connected, the operator was sent to a URL that 404s.
+# A docstring naming a dead template is a nuisance; a live sentence naming one is the
+# operator standing still at the only moment that matters.
+#
+# Every service sentence that tells an operator where to go uses this. A screen that
+# moves moves here, and nothing composed in ``services/`` may name a page again.
+WHERE_TO_RETRY = "the Nodes screen"
+
+# What an operator is told when they press apply on a node that offers nothing — M18.1.
+#
+# This is the first button a new node's row invites, and until this sentence existed the
+# answer to pressing it was a 502 quoting `services must be a mapping` from the node's
+# own docker compose, with the node left degraded. Every part of that was working as
+# designed: no enabled transport renders no config, no config makes an empty `services:`
+# block, and M4 surfaces a node's real stderr verbatim rather than swallowing it. The
+# situation is simply not a failure — a node with nothing enabled has nothing to serve —
+# and the operator needed a sentence about transports, not about YAML.
+#
+# Refusal rather than a silent no-op, and the deciding case is not the console: the
+# revocation fan-out re-pushes every node a withdrawn friend held a credential on, and a
+# withdrawn row KEEPS its minted credentials, so a node whose last row was withdrawn
+# arrives here with nothing to render while its container is still running the config
+# that authorises that person. A no-op would report such a node as updated. It is
+# reported as not updated instead, and ``why_not_updated`` calls it REFUSED.
+#
+# They name ``WHERE_TO_RETRY`` like every other service sentence that sends an operator
+# somewhere, so a screen that moves moves in one place.
+#
+# Both named for the ACT rather than for the state, because ``console.NOTHING_ENABLED`` is
+# the drift cell's two words for the same node and the two must not be mistaken for one
+# another: that one is a table cell, these are refusals. What separates the pair is YET
+# against LEFT — a node on its way to serving something, and a node that served something
+# and was switched off.
+#
+# TWO SENTENCES, NOT ONE — M18.1's review. There was one, written for the deciding case
+# above and delivered almost always in the other, and each half was wrong in the other's
+# case:
+#
+#   * it said OFFER, which on the Nodes screen is a narrower control than it sounds: it
+#     appears only on a row that was enabled and then withdrawn. A node with nothing on it
+#     has no such row, and the console's word there is ENABLE — the select in the
+#     transports dialog, the primary button beside it, and the Nodes empty state all say
+#     so. A first-run operator sent to look for "offer" finds nothing named that.
+#   * and on the withdrawn-row path it named the remedy without its cost. Offering the
+#     row again grants every active user material on it and puts it back in every
+#     subscription — a change to everyone's link, made to cut one person off — and it is
+#     the only in-product way out: removing the row does not push, a state change does
+#     not reach the host, and this apply refuses again.
+#
+# Which one an operator gets is decided by whether the node has any transport row at all,
+# not by how many are enabled — an empty node and a node with every row withdrawn are two
+# different situations with two different next actions.
+NOTHING_TO_APPLY_YET = (
+    "this node has no transports enabled, so there is nothing to apply — nothing was "
+    "pushed and nothing on the node was changed. Enable a transport on it from "
+    f"{WHERE_TO_RETRY}, then apply it."
+)
+NOTHING_LEFT_TO_APPLY = (
+    "every transport on this node is withdrawn, so there is nothing to apply — nothing "
+    "was pushed and nothing on the node was changed. The node is still running the "
+    "config it was last given and still serving everyone who holds a credential on it: "
+    "an apply cannot stop that, because there is nothing to push. Offer one of its "
+    f"transports again from {WHERE_TO_RETRY} — which puts that transport back in every "
+    "user's link — and apply. Nothing else in this panel stops a node serving what it "
+    "was last given."
+)
 
 # The boundary between "this node failed" and "stop the whole operation".
 #
@@ -79,11 +161,19 @@ _NOT_PER_NODE: tuple[type[BaseException], ...] = (SecretUnreadable,)
 # ``edge/bootstrap/node_stack.py`` (``DATA_PLANES``), keyed by config FORMAT — naming a
 # daemon is naming a protocol, and `control` is not allowed to do either.
 async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
-    """Every enabled transport's config for one node, keyed by transport name.
+    """Every enabled transport's config for one node, keyed by the name it is placed under.
 
     Pure with respect to the node: it reads the database, then renders. Each
     transport gets exactly the friends who hold a live credential on it, which is
     what makes the rendered file the authoritative answer to "who can use this node".
+
+    THE KEY IS ``config_name``, not the transport's name, and since M15 those can
+    differ: a node may run a friend-facing AmneziaWG and the entry end of a hop over the
+    same transport, and they are two files, two compose services and two interfaces. For
+    every row written before M15 — and for every first instance since — the two strings
+    are equal, which is why every caller indexing this by a transport's name still finds
+    what it is looking for. A caller that needs the TRANSPORT behind a key (to resolve a
+    config format, or to name it in a message) asks ``placed_transports``.
     """
     rendered: dict[str, str] = {}
     view = nodes.node_view(node)
@@ -112,7 +202,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         # is topology, never on the transport's name.
         if node_transport.purpose in TransportPurpose.relays():
             peer = await relay.peer_of(session, node_transport)
-            rendered[node_transport.transport_name] = relay.render_end(
+            rendered[node_transport.config_name] = relay.render_end(
                 node_transport, peer
             )
             continue
@@ -120,6 +210,9 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         result = await session.execute(
             select(Credential).where(Credential.node_transport_id == node_transport.id)
         )
+        # What this transport says about giving each consumer an address of its own,
+        # resolved once per row rather than per credential — M17.
+        spec = addresses.spec_for(node_transport.transport_name)
         credentials = [
             # The friend's own client-scoped material travels with the subject, and it
             # has to. A VLESS server config needs only the subject, so this looked
@@ -134,7 +227,12 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             # picking them here would mean `control` recognising field names. That a
             # friend's PRIVATE half never reaches a server config is asserted instead —
             # see tests/control/test_second_subscription_format.py.
-            EdgeCredential(subject=row.subject, secrets=json.loads(row.secrets))
+            #
+            # Built through ``addresses.edge_credential``, which is also what the user's
+            # own config file is built through: this config's ``AllowedIPs`` and that
+            # file's ``Address`` are two renders of one allocation, and a second builder
+            # here is how they would come to disagree.
+            addresses.edge_credential(row, spec)
             for row in result.scalars().unique()
             # A revoked friend's rows are deleted rather than flagged, so this is a
             # belt-and-braces filter rather than the mechanism — see
@@ -147,7 +245,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
 
         transport = profile(node_transport.transport_name)
         try:
-            rendered[node_transport.transport_name] = transport.profile.render_server(
+            rendered[node_transport.config_name] = transport.profile.render_server(
                 view,
                 nodes.render_params(node_transport),
                 credentials,
@@ -186,8 +284,10 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
                 "rendering %s for node %s failed", node_transport.transport_name, node.id
             )
             # The message is the transport's own; nothing here interprets it. Note the
-            # rendered text is NOT included: it holds key material.
-            raise NodeOperationFailed(
+            # rendered text is NOT included: it holds key material. ``ConfigRefused``
+            # rather than its parent, so a fan-out can tell "nothing was pushed and a
+            # retry changes nothing" from "unreachable" by type (``why_not_updated``).
+            raise ConfigRefused(
                 f"{node_transport.transport_name} could not be rendered for this node "
                 f"— {type(exc).__name__}: {exc}"
             ) from exc
@@ -195,11 +295,53 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     return rendered
 
 
+async def placed_transports(session: AsyncSession, node: Node) -> dict[str, str]:
+    """Which transport each of this node's placed configs came from, by config name.
+
+    The other half of ``render_for_node``'s key, and it exists because two of the three
+    things done with a rendered config are the TRANSPORT's business rather than the
+    file's: which upstream checker validates it, and which extension and data plane it
+    gets (``edge.bootstrap.node_stack``). Before M15 the key was the transport's name and
+    both were free.
+
+    Its own query rather than a second return value, so no caller that indexes a config
+    by name had to change. It is the same filter ``render_for_node`` runs, in the same
+    transaction, against a database only the operator writes to — and the two are used
+    together within one request.
+    """
+    listed = await session.execute(
+        select(NodeTransport.config_name, NodeTransport.transport_name)
+        .where(NodeTransport.node_id == node.id)
+        .where(NodeTransport.enabled.is_(True))
+    )
+    return {config_name: transport_name for config_name, transport_name in listed.all()}
+
+
 def target_for(node: Node, node_settings: Settings) -> NodeTarget:
-    """How to reach a node over SSH, from its record."""
+    """How to reach a node over SSH, from its record.
+
+    The two ways a node's record cannot produce a session at all are refused here, in
+    the one function both the push and the probe build their target with, so neither has
+    to recognise them separately.
+
+    The key is the second of them and it was an internal error until this line existed:
+    the SSH layer loads it OUTSIDE the block that turns a connection failure into
+    ``NodeUnreachable``, so an unusable one escaped as an exception class — a 500 on the
+    probe, and on the push a sentence saying "what reached the node is unknown", which
+    is untrue when nothing was ever dialled. Refused before the connection is attempted,
+    so both surfaces can say what is actually true: no session, nothing sent.
+
+    Nodes registered before the panel started refusing such a key still hold one, which
+    is why this is a check on the record and not only on the form.
+    """
     if not node.ssh_host:
         raise NodeOperationFailed(
             "this node has no SSH address, so its configuration cannot be pushed"
+        )
+    if node.ssh_private_key and not nodes.ssh_key_is_usable(node.ssh_private_key):
+        raise NodeOperationFailed(
+            "the SSH private key stored for this node cannot be read, so no connection "
+            "was attempted and nothing on the node was changed"
         )
     return NodeTarget(
         host=node.ssh_host,
@@ -248,10 +390,33 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
         )
         return
 
-    raise NodeOperationFailed(
+    # ``ConfigRefused``: nothing was pushed and a retry changes nothing — and this is the
+    # message known to be able to carry key material, which is why a fan-out learns the
+    # kind from the type rather than from these words (``NotUpdated``).
+    raise ConfigRefused(
         f"the rendered configuration for {transport_name!r} was rejected by the "
         f"upstream checker, so it was NOT pushed: {result.output[:300]}"
     )
+
+
+async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
+    """Which refusal this node gets — the never-enabled one or the all-withdrawn one.
+
+    One query, on the refusal path only, and it asks whether the node has any transport
+    row AT ALL: ``render_for_node`` already filtered to the enabled ones and came back
+    empty, so the only thing left to learn is whether there is something here to offer
+    again or nothing here at all. The two answers send the operator to two different
+    controls — ``offer`` exists only on a row that was enabled once — and the withdrawn
+    one has a cost the other does not.
+
+    Queried rather than read off ``node.transports`` for the reason ``render_for_node``
+    gives: this can be reached straight after a revocation deleted rows in the same
+    session, where touching the collection is lazy IO on an async session.
+    """
+    any_row = await session.execute(
+        select(NodeTransport.id).where(NodeTransport.node_id == node.id).limit(1)
+    )
+    return NOTHING_TO_APPLY_YET if any_row.first() is None else NOTHING_LEFT_TO_APPLY
 
 
 async def _record_failure(session: AsyncSession, node: Node, reason: str) -> None:
@@ -299,9 +464,27 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     node_settings = settings()
 
     configs = await render_for_node(session, node)
-    for transport_name, config in configs.items():
+    # NOTHING ENABLED IS NOT A FAILURE — M18.1, and the position of this check is the
+    # whole of it. It sits where ``render_for_node`` returned, OUTSIDE both try blocks
+    # below, so the node's recorded state is not touched: a draft stays a draft and an
+    # already-active node keeps serving its last config, which is the same asymmetry a
+    # render failure has always had. Inside either block it would degrade the node,
+    # which is exactly the outcome this step exists to remove.
+    #
+    # Before validation and before the compose file, because the compose file is where
+    # the old answer came from: zero services renders an empty ``services:`` mapping,
+    # which the daemon rejects, and the operator was handed that rejection.
+    if not configs:
+        raise NothingToApply(await _nothing_to_apply(session, node))
+
+    # Which transport is behind each placed config. Needed from here down wherever the
+    # answer is the TRANSPORT's rather than the file's — the checker, the extension, the
+    # data plane — because since M15 a config's name and its transport's name can differ.
+    placed = await placed_transports(session, node)
+    for config_name, config in configs.items():
         # The FORMAT comes from the transport's own declaration, so the right checker
         # runs without this module knowing which protocol it is looking at.
+        transport_name = placed[config_name]
         validate_before_push(
             transport_name, config, profile(transport_name).meta.config_format
         )
@@ -312,23 +495,37 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     # regardless of the order the transports were read in — an unstable one would
     # recreate every container on every apply.
     compose = node_stack.render_compose(
-        transports=node_stack.services_for({name: configs[name] for name in sorted(configs)})
+        transports=node_stack.services_for(
+            {name: configs[name] for name in sorted(configs)}, transports=placed
+        )
     )
 
+    # Built before the connection, and its refusal RECORDED. A record that cannot
+    # produce a session at all — no address, or a stored key the SSH layer will not load
+    # — is not the half-configured window below: nothing has been written to the host.
+    # But the node is still one the operator cannot reach, and the reason on its row has
+    # to be the current one rather than whatever the previous attempt left there (M4.5).
+    # Re-raised unchanged, so what is recorded and what is answered are one sentence.
     try:
-        async with NodeConnection(target_for(node, node_settings)) as connection:
+        target = target_for(node, node_settings)
+    except NodeOperationFailed as exc:
+        await _record_failure(session, node, exc.message)
+        raise
+
+    try:
+        async with NodeConnection(target) as connection:
             # Persist a learned host key on the FIRST successful connection, so every
             # later connection is pinned and an interception fails loudly.
             if connection.learned_host_key and not node.ssh_host_key:
                 node.ssh_host_key = connection.learned_host_key
 
             await node_stack.prepare(connection)
-            for transport_name, config in configs.items():
+            for config_name, config in configs.items():
                 await node_stack.place_config(
                     connection,
-                    transport_name=transport_name,
+                    transport_name=placed[config_name],
                     config=config,
-                    path=node_stack.config_path_for(transport_name),
+                    path=node_stack.config_path_of(config_name, placed[config_name]),
                 )
             await node_stack.place_compose(connection, compose=compose)
             await node_stack.restart(connection)
@@ -432,32 +629,89 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     applied = await session.execute(
         select(NodeTransport)
         .where(NodeTransport.node_id == node.id)
-        .where(NodeTransport.transport_name.in_(sorted(configs)))
+        .where(NodeTransport.config_name.in_(sorted(configs)))
     )
     for node_transport in applied.scalars().unique():
         node_transport.applied_at = now
         node_transport.applied_digest = node_stack.digest_of(
-            configs[node_transport.transport_name]
+            configs[node_transport.config_name]
         )
 
     node.state = NodeState.ACTIVE
     node.state_detail = None
+    # Success only, and only here — past every failure arm above, which record nothing.
+    # A push that failed is not a change that committed, and its reason is a sentence
+    # that can come from a remote host; the node's own row carries it for the operator.
+    # The node's name is the whole entry: not which transports, not their digests, not
+    # how long it took.
+    audit.record(session, AuditAction.NODE_APPLIED, first_label=node.name)
     await session.commit()
     logger.info("node applied: %s (%d transports)", node.id, len(configs))
     return configs
 
 
+class NotUpdated(enum.StrEnum):
+    """Why one node in a fan-out was not updated — a closed set, not a sentence.
+
+    A caller that has to tell the operator what to DO about a node needs to know which of
+    these it was, and it must not find out by reading the message: a refusal's message can
+    carry an upstream checker's output, which is known to quote the node's private key
+    (``validate_before_push``; docs/tracker/M9/carry-over.md). So the kind travels beside
+    the message as a value, and a surface with nowhere safe for the message — the
+    revocation banner — is composed from this and the node's name alone.
+    """
+
+    # The node dials a hop and its record names no resolver (M16): it cannot be rendered,
+    # and nothing but setting the resolver changes that.
+    NO_RESOLVER = "no-resolver"
+
+    # Its configuration could not be produced, or the upstream checker refused it. Nothing
+    # was pushed, and retrying changes nothing on its own.
+    REFUSED = "refused"
+
+    # Everything else: the host could not be reached, the push or its verification failed,
+    # or something unexpected happened. The one kind a retry can fix.
+    UNREACHED = "unreached"
+
+
+@dataclass(frozen=True)
+class NodeNotUpdated:
+    """One node a fan-out did not update: the operator's sentence, and which kind it was."""
+
+    # The DomainError's own message — what the API returns and rotation prints, as before.
+    # Never composed into the revocation banner; see ``NotUpdated``.
+    reason: str
+    why: NotUpdated
+
+
+def why_not_updated(exc: BaseException) -> NotUpdated:
+    """Which kind of failure ``exc`` was, read off its TYPE and never off its text."""
+    if isinstance(exc.__cause__, ResolverMissing):
+        return NotUpdated.NO_RESOLVER
+    # ``NothingToApply`` joins ``ConfigRefused`` here rather than falling through to
+    # UNREACHED, and the case is real rather than defensive: a withdrawn row keeps its
+    # minted credentials, so revoking the last friend on a node whose only transport was
+    # withdrawn re-pushes a node with nothing to render. "Could not be reached — apply it
+    # again once it can be" would send the operator to retry a button that will refuse
+    # for the same reason for ever. Nothing was pushed and retrying changes nothing,
+    # which is precisely what REFUSED means.
+    if isinstance(exc, ConfigRefused | NothingToApply):
+        return NotUpdated.REFUSED
+    return NotUpdated.UNREACHED
+
+
 async def apply_many(
     session: AsyncSession, node_transports: list[NodeTransport]
-) -> dict[str, str | None]:
+) -> dict[str, NodeNotUpdated | None]:
     """Apply every node named by a set of node-transports. Returns per-node outcome.
 
     Used by revocation, where several nodes must be re-pushed at once. Every node is
     attempted even if an earlier one failed — stopping at the first failure would
     leave a revoked friend live on nodes that were perfectly reachable, which is the
-    exact failure criterion 6 forbids. Failures are collected and reported.
+    exact failure criterion 6 forbids. Failures are collected and reported, each as its
+    message and its kind (``NodeNotUpdated``).
     """
-    outcomes: dict[str, str | None] = {}
+    outcomes: dict[str, NodeNotUpdated | None] = {}
     for node_id in dict.fromkeys(nt.node_id for nt in node_transports):
         try:
             await apply_node(session, node_id=node_id)
@@ -472,7 +726,7 @@ async def apply_many(
             # revocation's query and its turn in the fan-out — used to end the fan-out
             # in a 500 for that reason alone.
             logger.error("apply failed for node %s during fan-out", node_id)
-            outcomes[node_id] = exc.message
+            outcomes[node_id] = NodeNotUpdated(reason=exc.message, why=why_not_updated(exc))
         except _NOT_PER_NODE:
             raise
         except Exception as exc:
@@ -491,10 +745,13 @@ async def apply_many(
             #
             # Type only, no ``str(exc)``, for the reason given in ``apply_node``.
             logger.exception("unexpected failure applying node %s during fan-out", node_id)
-            outcomes[node_id] = (
-                f"this node was not updated because of an unexpected internal error "
-                f"({type(exc).__name__}); its state is unchanged and the traceback is "
-                f"in the control plane's log"
+            outcomes[node_id] = NodeNotUpdated(
+                reason=(
+                    f"this node was not updated because of an unexpected internal error "
+                    f"({type(exc).__name__}); its state is unchanged and the traceback "
+                    f"is in the control plane's log"
+                ),
+                why=NotUpdated.UNREACHED,
             )
             # Last, deliberately: the same ordering ``_record_failure`` uses. The
             # session is the only thing carried from one node to the next, and an

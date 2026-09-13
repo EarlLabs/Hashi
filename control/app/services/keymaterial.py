@@ -16,12 +16,18 @@ HOW:  ``mint(specs, scope)`` returns a ``Minted`` split into ``params`` (storabl
       in clear, and needed by the client renderer) and ``secrets`` (encrypted at
       rest). Which is which is declared by the transport via ``KeySpec.secret``
       and ``KeySpec.public_name`` — not decided here.
+
+``fingerprint`` is the other direction and belongs beside ``mint`` for the same reason:
+it is the only function in this codebase that turns key material into something a
+person reads, so it lives next to the one that makes it. What it will and will not
+accept as input is the whole of it — see its own docstring.
 """
 
 import base64
+import hashlib
 import secrets as secrets_module
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from cryptography.hazmat.primitives import serialization
@@ -159,3 +165,60 @@ def rotate(specs: Iterable[KeySpec], scope: KeyScope) -> Minted:
     ``control/app/services/rotation.py``.
     """
     return mint(specs, scope)
+
+
+# How much of a digest a fingerprint shows at each end — ``9f3c…a17d``, the shape
+# UI-PATTERNS §9 draws. Four and four rather than the whole hash because the job is
+# to tell two pieces of material apart at a glance and to survive being read out loud,
+# not to be a checksum: thirty-two bits is far more than a fleet of a handful of nodes
+# needs to distinguish, and a 64-character run in a table cell is unreadable.
+FINGERPRINT_ENDS = 4
+
+
+def fingerprint(specs: Iterable[KeySpec], params: Mapping[str, object]) -> str | None:
+    """A short, one-way name for the node material a transport currently holds.
+
+    WHAT GOES IN, and nothing else: the values stored under the ``public_name`` a
+    transport declared for its node-scoped asymmetric material. ``None`` when a
+    transport declares no public half at all — a real answer, and the caller states
+    the rule rather than inventing something to show.
+
+    Three things this deliberately does NOT take, each for its own reason:
+
+    * **the secret half.** It is not reachable from here: this function is handed the
+      row's ``params`` column, which is the CLEAR one, and never ``secrets``. That is
+      structural rather than careful — there is no decryption anywhere on this path,
+      so no edit to this function alone could start showing a private value.
+    * **a minted value that is merely non-secret** — a short random identifier a
+      transport marks ``secret=False``. Those are low entropy by design (a few bytes),
+      and a hash of a few bytes is recoverable by hashing every candidate. Feeding one
+      in would turn a fingerprint into a way to READ something back, which is the one
+      property this function exists to not have.
+    * **anything a friend holds.** Client-scoped material is per person, so a value
+      derived from it would be a per-person figure on a screen whatever it was called.
+
+    Why hashing the public half is safe, and why showing that hash is: the value is
+    already published — it travels to every user's device inside their own
+    configuration, and to the far end of a hop — so the digest reveals strictly less
+    than what is already handed out. It cannot be turned back into the private half
+    either: that direction is the discrete logarithm the key exchange is built on, and
+    what is displayed is eight hex characters of a SHA-256 digest rather than the value.
+
+    Deterministic and sorted, because the operator compares this cell against itself
+    after a rotation: a fingerprint that moved because a mapping iterated differently
+    would read as material that changed.
+    """
+    published = sorted(
+        spec.public_name
+        for spec in specs
+        if spec.scope is KeyScope.NODE and spec.public_name
+    )
+    named = [
+        f"{name}={params[name]}"
+        for name in published
+        if params.get(name) not in (None, "")
+    ]
+    if not named:
+        return None
+    digest = hashlib.sha256("\n".join(named).encode()).hexdigest()
+    return f"{digest[:FINGERPRINT_ENDS]}\u2026{digest[-FINGERPRINT_ENDS:]}"

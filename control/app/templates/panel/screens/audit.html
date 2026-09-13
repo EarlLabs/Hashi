@@ -1,0 +1,81 @@
+{#
+  Audit log — what the operator changed, and nothing about anyone using the service.
+
+  design/README.md §8 draws four columns: time, actor, source, event. Three of them are
+  here and `source` is not, and it is dropped whole rather than drawn empty
+  (docs/decisions.md, 2026-09-11): an address of a person against a time is the record
+  the charter says is absent by construction, and a column that exists to say "we do not
+  keep this" is where somebody later keeps it — the same reasoning decision 6 dropped
+  the Traffic screen with.
+
+  THE TWO THINGS THIS FILE MUST NEVER GROW. A cell that moves when somebody CONNECTS,
+  and any part of a link. Neither is available to it: the rows arrive already composed
+  as a time and a sentence, the sentence is built from a machine key and two labels read
+  off inventory rows, and the delivery endpoint writes no row at all — so there is
+  nothing in this template's reach to render that would be either of those things, which
+  is the point of it being handed lines rather than the table.
+
+  `actor` is rendered and not stored. There is one operator, configured from the
+  environment, so the column is the shell's own `operator` — the same value the sidebar
+  footer shows. A stored actor would be a per-person record on the machine the charter
+  calls most worth seizing, for a value that cannot vary.
+
+  No self-swapping fragment and no `-changed` trigger, for the Settings and Transports
+  screens' reason: nothing an operator can do from here changes what is on it.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  <div class="stack-6">
+    {% if entries %}
+    <p class="text-muted section-note">{{ records }}</p>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>time</th>
+            <th>actor</th>
+            <th>event</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for line in entries %}
+          <tr>
+            {# Normalised to UTC before it got here, which is what makes the footnote's
+               claim true of every cell. Date and time both: a trail exists to answer
+               "what did I change before it broke", and a date alone loses the order of
+               a busy afternoon. #}
+            <td class="text-muted nowrap">{{ line.at.strftime("%d %b %Y %H:%M") }}</td>
+            {# UI-PATTERNS §7: a configured username is a machine value, so monospace —
+               the same way the Settings screen draws it. #}
+            <td class="mono nowrap">{{ operator }}</td>
+            {# `.wraps`: the one cell in the row holding names the operator chose, which
+               may be two 64-character runs in one sentence. #}
+            <td class="wraps">{{ line.event }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted section-note">{{ window }}</p>
+    {% else %}
+    {#
+      The empty state a first-time operator meets, and the one the stand starts in. It
+      says what would appear here rather than reporting that a table is empty — and it
+      says what will never appear here, because an audit log a reader assumes is a
+      connection log is worse than no audit log at all.
+    #}
+    <div class="empty">
+      <div class="empty-title">Nothing changed yet</div>
+      <p class="empty-body text-muted">
+        {{ nothing_yet }}
+      </p>
+    </div>
+    {# The window belongs under the empty state as much as under the table — more, in
+       fact: "older than the window this trail keeps" is the sentence above, and this is
+       the only place on the screen that says how long that is. Without it the first
+       question a new operator has is answerable only on another screen. It is the same
+       composed sentence the table carries, so nothing is stated twice in two ways. #}
+    <p class="text-muted section-note">{{ window }}</p>
+    {% endif %}
+  </div>
+</div>

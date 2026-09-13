@@ -169,3 +169,113 @@ async def test_upgrade_is_idempotent(empty_database) -> None:
     assert second.returncode == 0, (
         f"a second `upgrade head` failed, so the container cannot restart:\n{second.stderr}"
     )
+
+
+async def test_the_downgrade_refuses_while_a_pool_is_in_use(empty_database) -> None:
+    """0006 stops rather than dropping addresses somebody's device is configured with.
+
+    The pre-flight 0004 established, applied to a column whose loss is silent: pre-M17
+    code reads no address off a credential, so every user on a sized transport would fall
+    back to the one address in its parameters — which is either a render refused for two
+    peers on one address, with every push to that node blocked including a revocation's,
+    or, for a single holder further up the pool, a config that looks right and carries
+    nothing.
+
+    Seeded through raw SQL rather than the ORM on purpose: the encrypted columns need a
+    bound secret box, and nothing here reads a value back. What is under test is the
+    QUERY the downgrade makes and the sentence it refuses with.
+    """
+    assert run_alembic("upgrade", "head").returncode == 0
+
+    engine = create_async_engine(DATABASE_URL)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO nodes (id, name, address, location_label, state) "
+                "VALUES ('node-1', 'the-field', '192.0.2.1', 'Testland', 'active')"
+            )
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO node_transports "
+                "(id, node_id, transport_name, config_name, params, secrets, purpose, "
+                " enabled, pool_size) "
+                "VALUES ('row-1', 'node-1', 'a-transport', 'a-transport', '{}', '{}', "
+                "'friends', true, 4)"
+            )
+        )
+        await connection.execute(
+            text("INSERT INTO friends (id, nickname) VALUES ('friend-1', 'zoya')")
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO credentials "
+                "(id, friend_id, node_transport_id, subject, secrets, tunnel_address, "
+                " tunnel_address_digest) "
+                "VALUES ('cred-1', 'friend-1', 'row-1', 'x', '{}', 'x', 'a-digest')"
+            )
+        )
+    await engine.dispose()
+
+    refused = run_alembic("downgrade", "0005")
+
+    assert refused.returncode != 0, (
+        "the downgrade dropped a column holding addresses that are in use:\n"
+        f"{refused.stdout}\n{refused.stderr}"
+    )
+    # The node, which is what the operator can act on — and nothing about the person or
+    # the address, which is the record this project does not keep.
+    assert "node-1" in refused.stderr, refused.stderr
+    # And nothing about the person or their address, which is the record this project
+    # does not keep — not even in a boot log nobody is reading at the time.
+    assert "a-digest" not in refused.stderr, refused.stderr
+    assert "zoya" not in refused.stderr, refused.stderr
+
+    # And nothing was changed: the columns are still there, so a re-run of the upgrade
+    # is a no-op rather than a repair.
+    engine = create_async_engine(DATABASE_URL)
+    async with engine.connect() as connection:
+        columns = (
+            await connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'credentials'"
+                )
+            )
+        ).scalars().all()
+    await engine.dispose()
+    assert "tunnel_address" in columns and "tunnel_address_digest" in columns
+
+
+async def test_the_downgrade_still_works_where_no_pool_is_in_use(empty_database) -> None:
+    """The other half: a row nobody holds an address on backs out cleanly.
+
+    Without this the refusal above would be indistinguishable from a downgrade that
+    cannot run at all — which is the failure ``test_the_migration_can_be_reversed``
+    exists to catch and would then be catching for the wrong reason.
+    """
+    assert run_alembic("upgrade", "head").returncode == 0
+
+    engine = create_async_engine(DATABASE_URL)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO nodes (id, name, address, location_label, state) "
+                "VALUES ('node-2', 'untouched', '192.0.2.2', 'Testland', 'active')"
+            )
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO node_transports "
+                "(id, node_id, transport_name, config_name, params, secrets, purpose, "
+                " enabled, pool_size) "
+                "VALUES ('row-2', 'node-2', 'a-transport', 'a-transport', '{}', '{}', "
+                "'friends', true, 4)"
+            )
+        )
+    await engine.dispose()
+
+    reversed_cleanly = run_alembic("downgrade", "0005")
+    assert reversed_cleanly.returncode == 0, (
+        f"stdout:\n{reversed_cleanly.stdout}\nstderr:\n{reversed_cleanly.stderr}"
+    )

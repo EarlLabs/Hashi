@@ -101,18 +101,19 @@ async def enable_transport(
     Then grant it to every active friend, so enabling a protocol appears in every
     subscriber's config at their next refresh with no further action — which is
     criterion 3 stated as an operation.
+
+    Both halves are ONE transaction since M17, which is why this route no longer runs
+    the fan-out itself: granting now allocates an address per person on a transport that
+    gives each of them one, and a pool too small must refuse with nothing written rather
+    than leave a committed row nobody can be granted on. See ``nodes.enable_and_grant``.
     """
-    node_transport = await nodes.enable_transport(
+    return await nodes.enable_and_grant(
         session,
         node_id=node_id,
         transport_name=payload.transport_name,
         params=payload.params,
+        pool_size=payload.pool_size,
     )
-    for friend in await friends.list_friends(session):
-        if friend.is_active:
-            await friends.grant_everywhere(session, friend)
-    await session.commit()
-    return node_transport
 
 
 @router.post("/nodes/{node_id}/state", response_model=schemas.NodeResponse)
@@ -137,9 +138,30 @@ async def set_node_state(
     )
 
 
+@router.post("/nodes/{node_id}/resolver", response_model=schemas.NodeResponse)
+async def set_node_resolver(
+    node_id: str,
+    payload: schemas.ResolverChange,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Set the resolver a node's lookups are sent to through its hop — M16.
+
+    The one field on a node record that can change after registration: the upgrade that
+    added it gave every existing node none, and a node that dials a hop does not render
+    without one. A value ``edge`` would refuse is a 400 with its sentence, exactly as at
+    registration. It changes the record, not the host — apply the node afterwards.
+    """
+    return await nodes.set_resolver(session, node_id=node_id, resolver=payload.resolver)
+
+
 @router.post("/nodes/{node_id}/apply", response_model=schemas.ApplyResponse)
 async def apply_node(node_id: str, session: AsyncSession = Depends(session_dependency)):
-    """Render, validate, push and verify. Marks the node degraded on any failure."""
+    """Render, validate, push and verify. Marks the node degraded on any failure.
+
+    A node with no transports enabled is answered 409 ``nothing_to_apply`` instead —
+    M18.1. Nothing is dialled, nothing is pushed and the node's state is untouched: it
+    is not a failure, it is a node that has nothing to serve yet.
+    """
     applied = await apply.apply_node(session, node_id=node_id)
     return schemas.ApplyResponse(node_id=node_id, transports_applied=sorted(applied))
 
@@ -305,6 +327,24 @@ async def set_transport_enabled(
     )
 
 
+@router.delete("/transports/{node_transport_id}", status_code=status.HTTP_200_OK)
+async def remove_transport(
+    node_transport_id: str, session: AsyncSession = Depends(session_dependency)
+):
+    """Remove one friend-facing transport, with every credential minted under it — M15.2.
+
+    Answers in ``dissolve_hop``'s shape, because it is the same kind of answer: what is
+    left for the caller is to re-apply, and the node may be unreachable right now. A
+    delete that pushed would report failure for a host that is down — which is exactly
+    when an operator needs to free a port on a machine that no longer exists.
+
+    ``DELETE`` here and ``DELETE /hops/{id}`` there, addressed by the same kind of id:
+    one end of a hop is refused on this path (409) and names the other.
+    """
+    node_id = await nodes.remove_transport(session, node_transport_id=node_transport_id)
+    return {"needs_apply": [node_id]}
+
+
 @router.post(
     "/transports/{node_transport_id}/params", response_model=schemas.RotationResponse
 )
@@ -317,9 +357,17 @@ async def replace_params(
 
     Not named after any protocol's field, deliberately: a ``/rotate-decoy`` route would
     be this control plane knowing what a decoy is.
+
+    AND THE POOL SIZE, since M17.1c, on this route rather than one of its own: resizing is
+    replacing a parameter of the row, it is audited as the same action, and it re-renders
+    and pushes the node exactly as any other replacement does. A ``/resize`` endpoint
+    would be a second way to change the same row with its own refusals to keep in step.
     """
     outcome = await rotation.replace_params(
-        session, node_transport_id=node_transport_id, params=payload.params
+        session,
+        node_transport_id=node_transport_id,
+        params=payload.params,
+        pool_size=payload.pool_size,
     )
     return schemas.RotationResponse(
         node_transport_id=outcome.node_transport_id,

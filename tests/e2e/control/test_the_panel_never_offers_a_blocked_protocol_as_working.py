@@ -8,7 +8,8 @@ WHY:  the charter ships plain WireGuard first-class AND says it is protocol-bloc
       transports with no distinction is a panel that will hand a friend in Russia a
       protocol that cannot come up — and the friend reports it as "hashi is broken",
       which is the most expensive bug report this project can generate.
-HOW:  read the fleet page and /api/transports as the operator, against the booted stack.
+HOW:  read the Transports screen, the establish-hop dialog and /api/transports as the
+      operator, against the booted stack.
       The declaration itself lives in `edge` and is asserted there; this is about whether
       the screen tells the truth.
 
@@ -51,7 +52,7 @@ async def test_the_api_reports_which_transports_a_filtering_network_identifies(
             assert not entry["hop_capable"], entry
 
 
-async def test_the_fleet_page_marks_a_blocked_protocol_and_does_not_offer_it_for_a_hop(
+async def test_the_transports_screen_marks_a_blocked_protocol_and_says_why(
     operator,
 ) -> None:
     """The screen the owner is looking at when they choose.
@@ -70,24 +71,56 @@ async def test_the_fleet_page_marks_a_blocked_protocol_and_does_not_offer_it_for
             "so the panel has nothing to warn about and this scenario proves nothing"
         )
 
-    # /panel/fleet, not /panel/. The transports table and the hop form are still on
-    # the pre-redesign page — M9 ports them into the console's own screens, and this
-    # assertion moves again with them. Relaxing it to "somewhere in the panel" would
-    # be how a rewrite loses the cover this scenario provides.
-    page = await operator.get("/panel/fleet")
+    # /panel/transports, not /panel/fleet. M9.3 moved the capability table off the
+    # pre-redesign page and onto the console's own screen while both were still live,
+    # which is exactly why this assertion had to move rather than stay green where it
+    # was; M9.6 then deleted that page. Relaxing it to "somewhere in the panel" would be
+    # how a rewrite loses the cover this scenario provides.
+    page = await operator.get("/panel/transports")
     assert page.status_code == 200, page.text
     body = page.text
 
     for name in blocked:
-        assert name in body, f"{name} is not listed on the fleet page at all"
+        assert name in body, f"{name} is not listed on the transports screen at all"
     # The warning is present, and it is about not offering it as a working exit rather
     # than a decorative label.
     assert "identified and blocked" in body
     assert "do not offer this as a working exit" in body
+    # And the reason is there in words, which is what M9's acceptance line asks for: a
+    # label an operator cannot act on is the state this screen was redesigned out of.
+    assert "why:" in body
+    assert "no camouflage" in body
 
-    # And the hop form does not offer it. Asserted on the form's own <option> values,
-    # not on the page containing the word: the form is where the mistake would be made.
-    hop_options = _options_of(body, "hop-transport")
+
+async def test_the_hop_dialog_does_not_offer_a_blocked_protocol(operator) -> None:
+    """The other half, on the form where the mistake would actually be made.
+
+    Split from the assertion above when M9.3 moved the table, because the two facts no
+    longer live on one page: the capability table is a console screen and the hop form
+    is the establish-hop dialog. Asserted on the form's own <option> values rather than
+    on a page containing the word — a screen that merely mentions the protocol proves
+    nothing about what the form will accept.
+    """
+    entries = await listed(operator)
+    blocked = sorted(
+        name for name, entry in entries.items() if entry["blocked_by_inspection"]
+    )
+    if not blocked:
+        pytest.skip(
+            "this image ships no transport that declares itself identified on the wire, "
+            "so there is nothing the hop form could wrongly offer"
+        )
+
+    dialog = await operator.get("/panel/hops/new")
+    assert dialog.status_code == 200, dialog.text
+
+    hop_options = _options_of(dialog.text, "hop-transport_name")
+    # Before the loop, because ``_options_of`` answers "no such select" with an empty
+    # list — a legitimate answer on a page with no hop form, and a vacuous pass here.
+    # Since the split this assertion no longer shares a page with anything proving the
+    # form rendered at all, so a rename of the select's id would turn the scenario
+    # green while proving nothing.
+    assert hop_options, "the hop dialog rendered no transport select"
     for name in blocked:
         assert name not in hop_options, (
             f"the hop form offers {name}, which the renderer refuses — the operator "

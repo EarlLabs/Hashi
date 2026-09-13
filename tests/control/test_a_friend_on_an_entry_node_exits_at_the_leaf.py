@@ -5,7 +5,9 @@ WHAT: that a friend-facing transport on a node with a hop is rendered to leave t
 WHY:  this is the charter's core claim and the failure it hides is invisible. Before M3
       the entry's config had one hardcoded outbound and the node dialled the internet
       itself: the friend connects, pages load, the panel shows two active nodes and a
-      live hop, and the exit is in Russia. Nothing logs it, and nothing may.
+      live hop, and the exit is in Russia. Nothing logs it, and nothing may. Since M16
+      the same holds for where a friend's destination NAMES are looked up, which
+      ``sendThrough`` alone never reached.
 
       The edge zone proves a renderer given the policy obeys it. This file proves the
       other half, which is where M14's own bug lived: that the policy and the address
@@ -25,6 +27,7 @@ import json
 
 import pytest
 
+from control.app.errors import NodeOperationFailed
 from control.app.models import NodeState
 from control.app.services import apply, nodes, relay
 from edge.egress import Egress
@@ -35,6 +38,9 @@ FRIEND_TRANSPORT = "vless-reality"
 ENTRY_TUNNEL = "10.44.0.1/24"
 ENTRY_EXIT_ADDRESS = "10.44.0.1"
 LEAF_TUNNEL = "10.44.0.2/24"
+
+# The resolver an entry node's record names — M16. RFC 5737 documentation address.
+RESOLVER = "192.0.2.53"
 
 
 @pytest.fixture
@@ -53,11 +59,23 @@ def hop_params() -> dict[str, object]:
     }
 
 
-async def entry_node_serving_friends(client, session, reality_params) -> str:
-    """A Russian entry node with a friend-facing transport and no hop yet."""
+async def entry_node_serving_friends(
+    client, session, reality_params, *, resolver: str | None = RESOLVER
+) -> str:
+    """A Russian entry node with a friend-facing transport and no hop yet.
+
+    Given a resolver unless a test says otherwise — M16: a node that dials a hop does not
+    render without one, and every test here but the one about that refusal is about a
+    node registered the way the product asks.
+    """
     created = await client.post(
         "/api/nodes",
-        json={"name": "entry-ru", "address": "192.0.2.20", "location_label": "Russia"},
+        json={
+            "name": "entry-ru",
+            "address": "192.0.2.20",
+            "location_label": "Russia",
+            "resolver": resolver,
+        },
     )
     node_id = created.json()["id"]
     enabled = await client.post(
@@ -128,14 +146,22 @@ async def test_a_friend_on_an_entry_node_leaves_through_the_hop(
 async def test_a_node_with_no_hop_still_exits_directly(
     client, session, reality_params
 ) -> None:
-    """M3's second "done when". Every leaf, and every single-box deployment, is this."""
-    entry_id = await entry_node_serving_friends(client, session, reality_params)
+    """M3's second "done when". Every leaf, and every single-box deployment, is this.
+
+    Registered with no resolver on purpose: a node without a hop needs none (M16), because
+    its lookups and its exit already leave by the same route — so it carries no ``dns``
+    object at all, and is not refused for the missing value.
+    """
+    entry_id = await entry_node_serving_friends(
+        client, session, reality_params, resolver=None
+    )
 
     config = await friend_config(session, entry_id)
 
     assert [outbound["protocol"] for outbound in config["outbounds"]] == ["freedom"]
     assert "sendThrough" not in config["outbounds"][0]
     assert "routing" not in config
+    assert "dns" not in config
 
 
 async def test_a_hop_end_that_is_switched_off_is_still_the_way_out(
@@ -183,6 +209,97 @@ async def test_the_entry_learns_an_address_and_never_what_carries_the_hop(
     rendered = await apply.render_for_node(session, node)
 
     assert HOP_TRANSPORT not in rendered[FRIEND_TRANSPORT]
+
+
+# --- M16: the lookup takes the same way out -------------------------------------
+
+async def test_a_friends_lookups_go_through_the_hop_to_the_nodes_own_resolver(
+    client, session, reality_params, hop_params
+) -> None:
+    """The resolver on the node's record reaches the pushed config, and the lookup is
+    routed out of the same address as the traffic.
+
+    The edge zone proves a renderer given a resolver uses it. This proves the value gets
+    there from the database — M14's bug had exactly this shape: a correct renderer whose
+    argument never arrived.
+    """
+    entry_id = await entry_node_serving_friends(client, session, reality_params)
+    await hop_to_a_leaf(client, hop_params, entry_id)
+
+    config = await friend_config(session, entry_id)
+
+    assert config["dns"]["servers"] == [RESOLVER]
+    outbounds = {outbound["tag"]: outbound for outbound in config["outbounds"]}
+    carriers = [
+        rule["outboundTag"]
+        for rule in config["routing"]["rules"]
+        if config["dns"]["tag"] in rule["inboundTag"]
+    ]
+    assert carriers, "the resolver's own queries are routed by default, not into the hop"
+    for carrier in carriers:
+        assert outbounds[carrier]["sendThrough"] == ENTRY_EXIT_ADDRESS
+        assert outbounds[carrier]["settings"]["domainStrategy"] == "UseIPv4"
+
+
+async def test_an_entry_with_a_hop_and_no_resolver_is_refused_rather_than_resolved_at_home(
+    client, session, reality_params, hop_params
+) -> None:
+    """Decision 3, applied to the lookup, through the path an apply takes.
+
+    The alternative is the M16 bug itself: a config the daemon accepts, an exit abroad,
+    and every name a friend visits resolved on the near side of the hop. Refused as a
+    node operation, with the sentence the operator reads.
+    """
+    entry_id = await entry_node_serving_friends(
+        client, session, reality_params, resolver=None
+    )
+    await hop_to_a_leaf(client, hop_params, entry_id)
+    node = await nodes.get_node(session, entry_id)
+
+    with pytest.raises(NodeOperationFailed) as refusal:
+        await apply.render_for_node(session, node)
+
+    assert "names no resolver" in str(refusal.value), refusal.value
+
+
+async def test_the_resolver_is_kept_on_the_record_it_was_given_to(client) -> None:
+    """Node-record data, like every other address, and handed back by the API as such."""
+    created = await client.post(
+        "/api/nodes",
+        json={
+            "name": "entry-ru",
+            "address": "192.0.2.20",
+            "location_label": "Russia",
+            "resolver": RESOLVER,
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["resolver"] == RESOLVER
+    fetched = await client.get(f"/api/nodes/{created.json()['id']}")
+    assert fetched.json()["resolver"] == RESOLVER
+
+
+@pytest.mark.parametrize("resolver", ["localhost", "dns.example.com", "127.0.0.53"])
+async def test_a_resolver_that_could_never_carry_a_lookup_is_refused_at_registration(
+    client, resolver: str
+) -> None:
+    """Refused while the operator is still at the form: a value ``edge`` would refuse
+    surfaces otherwise at the first apply after a hop — on another screen, maybe weeks
+    later, after friends have been given the node."""
+    refused = await client.post(
+        "/api/nodes",
+        json={
+            "name": "entry-ru",
+            "address": "192.0.2.20",
+            "location_label": "Russia",
+            "resolver": resolver,
+        },
+    )
+
+    assert refused.status_code == 400, refused.text
+    assert "resolver" in refused.text
+    assert (await client.get("/api/nodes")).json() == []
 
 
 # --- the policy the rendering comes from --------------------------------------

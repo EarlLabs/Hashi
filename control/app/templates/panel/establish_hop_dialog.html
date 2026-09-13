@@ -1,0 +1,207 @@
+{#
+  "Establish a hop" — the biggest usability claim in the design handoff.
+
+  The pre-redesign form this replaced asked twenty-five things at once, flat, in one
+  column. This one asks THREE — entry node, leaf node, transport — and puts every remaining
+  parameter behind a `<details>` disclosure labelled with its own cost
+  (UI-PATTERNS §6). That is not decoration: this is the form the runbook has you open
+  during a rotation, which is the worst possible moment to read twenty-five labels.
+
+  The three questions are the three decisions. Everything inside the disclosure is a
+  knob, and every one of those boxes carries what the transport itself says about it —
+  the default it declares, or the shape it will accept when it declares none. Not one
+  of those strings is written here: they arrive in `tuning` from
+  services/transports.py, which reads them out of the transport's own model. That is
+  M9's "no template names a transport, a country, an address or a port" made
+  structural rather than merely checked — there is nothing in this file for a scan to
+  find, because there is nothing in this file to write.
+
+  NO KEY MATERIAL IS ASKED FOR, and none can be. `tuning` is the transport's required
+  fields MINUS everything it declares as key material, so a hop's private and
+  pre-shared values are absent by construction rather than by omission. The value the
+  two ends must share is minted once for both — services/relay.py, and the transport's
+  own `KeySpec.shared_between_peers` is what says which value that is.
+
+  A GROUP PER HOP-CAPABLE TRANSPORT is rendered and all but the chosen one is hidden.
+  The hiding is presentation only (static/app.js); the server filters the submitted
+  fields to the chosen transport's own list, so the form works with the script dead.
+#}
+{% macro tuning_box(prefix, parameter, values, errors) %}
+{#
+  One tuning box: label, input, and the aria wiring that ties its placeholder, hint
+  and error together. A macro rather than twenty-two copies — the wiring is what
+  silently rots when a parameter is added, and there is one copy of it here.
+
+  Deliberately NOT marked `required` in the markup, even though most of these are.
+  A browser refuses to submit a form with an empty required field it cannot focus, and
+  a field inside a closed `<details>` is exactly that: the operator would get a
+  submission that does nothing and no message anywhere. The server answers per field
+  at 422 instead, and the disclosure comes back open.
+#}
+{% set field = prefix ~ "-" ~ parameter.name %}
+<div class="tuning-field">
+  <label class="mono" for="hop-{{ field }}">{{ parameter.name }}</label>
+  <input class="input" id="hop-{{ field }}" name="{{ field }}" type="text"
+         value="{{ values.get(field, "") }}" placeholder="{{ parameter.placeholder }}"
+         autocomplete="off" spellcheck="false"
+         {% if parameter.hint or errors.get(field) %}aria-describedby="{% if parameter.hint %}hop-{{ field }}-hint{% endif %}{% if parameter.hint and errors.get(field) %} {% endif %}{% if errors.get(field) %}hop-{{ field }}-error{% endif %}"{% endif %}
+         {% if errors.get(field) %}aria-invalid="true"{% endif %}>
+  {% if parameter.hint %}
+  <div class="field-hint" id="hop-{{ field }}-hint">{{ parameter.hint }}</div>
+  {% endif %}
+  {% if errors.get(field) %}
+  <div class="field-error" id="hop-{{ field }}-error" role="alert">{{ errors[field] }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+<div class="dialog-backdrop">
+  <div class="dialog dialog-hop blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="establish-hop-title">
+    <div class="dialog-title" id="establish-hop-title">Establish a hop</div>
+    <form class="dialog-form" hx-post="/panel/hops"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+
+      {% if failure %}
+      {#
+        A refusal about the PAIR rather than about one box — two ends on different
+        tunnel networks, a node that is its own exit, a transport that declares it
+        cannot cross the border. It gets the same treatment as a field error because it
+        is the same thing: a request that was refused.
+      #}
+      <div class="field-error" role="alert">{{ failure }}</div>
+      {% endif %}
+
+      {# The three questions. UI-PATTERNS §6: the first block holds the DECISIONS. #}
+      <div class="grid-3">
+        <div class="field">
+          <label for="hop-entry_node_id">entry node</label>
+          <select class="input" id="hop-entry_node_id" name="entry_node_id"
+                  aria-describedby="hop-entry_node_id-hint{% if errors.get('entry_node_id') %} hop-entry_node_id-error{% endif %}"
+                  {% if errors.get('entry_node_id') %}aria-invalid="true"{% endif %}>
+            <option value="">choose…</option>
+            {% for node in nodes %}
+            <option value="{{ node.id }}"{% if values.get('entry_node_id') == node.id %} selected{% endif %}>{{ node.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="field-hint" id="hop-entry_node_id-hint">The node users dial. It
+            dials out, because a node behind a carrier NAT cannot be dialled.</div>
+          {% if errors.get('entry_node_id') %}
+          <div class="field-error" id="hop-entry_node_id-error" role="alert">{{ errors['entry_node_id'] }}</div>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <label for="hop-leaf_node_id">leaf node</label>
+          <select class="input" id="hop-leaf_node_id" name="leaf_node_id"
+                  aria-describedby="hop-leaf_node_id-hint{% if errors.get('leaf_node_id') %} hop-leaf_node_id-error{% endif %}"
+                  {% if errors.get('leaf_node_id') %}aria-invalid="true"{% endif %}>
+            <option value="">choose…</option>
+            {% for node in nodes %}
+            <option value="{{ node.id }}"{% if values.get('leaf_node_id') == node.id %} selected{% endif %}>{{ node.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="field-hint" id="hop-leaf_node_id-hint">The node traffic leaves
+            from. It listens.</div>
+          {% if errors.get('leaf_node_id') %}
+          <div class="field-error" id="hop-leaf_node_id-error" role="alert">{{ errors['leaf_node_id'] }}</div>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <label for="hop-transport_name">transport</label>
+          {# `data-transport-select` is what static/app.js watches to show the matching
+             tuning group. The list is whatever this image ships that may carry a hop —
+             see services/transports.py; nothing here knows one protocol from another. #}
+          <select class="input" id="hop-transport_name" name="transport_name"
+                  data-transport-select
+                  aria-describedby="hop-transport_name-hint{% if errors.get('transport_name') %} hop-transport_name-error{% endif %}"
+                  {% if errors.get('transport_name') %}aria-invalid="true"{% endif %}>
+            <option value="">choose…</option>
+            {% for name in transports %}
+            <option value="{{ name }}"{% if values.get('transport_name') == name %} selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+          <div class="field-hint" id="hop-transport_name-hint">Only what this image
+            ships that can carry a hop across a filtering network.</div>
+          {% if errors.get('transport_name') %}
+          <div class="field-error" id="hop-transport_name-error" role="alert">{{ errors['transport_name'] }}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      {#
+        Which transport's boxes are on screen. The chosen one, falling back to the
+        first only when nothing is chosen yet — and NEVER two: with a second carrier
+        installed, a rule that always showed the first left two disclosures visible
+        with contradicting counts, and the body's "the summary above says how many"
+        named neither of them. static/app.js only re-hides on a `change` event, which
+        an htmx swap does not fire, so this has to be right on the server.
+      #}
+      {% set shown = values.get('transport_name')
+                     if values.get('transport_name') in transports
+                     else (transports[0] if transports else none) %}
+      {% for name in transports %}
+      {#
+        One disclosure per transport, every one but `shown` hidden.
+
+        BOTH numbers in the summary are `tuning`'s own — how many boxes this transport
+        has, and how many of them it declares no default for. Derived and not written,
+        because the whole failure this line exists to prevent is a count that has gone
+        stale: an operator who does what the design tells them to do — answer three
+        questions and leave the tuning alone — must find out that this transport
+        defaults almost nothing BEFORE they submit, not from eleven refusals during a
+        rotation. The summary is what is visible while the disclosure is shut, so it is
+        where that has to be said.
+      #}
+      {% set must_fill = tuning[name] | selectattr("required") | list %}
+      <details class="disclosure" data-transport-group="{{ name }}"
+               {% if name != shown %}hidden{% endif %}
+               {% if open_tuning and values.get('transport_name') == name %}open{% endif %}>
+        <summary>advanced tuning — {{ tuning[name] | length }} parameters per end,
+          {{ must_fill | length }} of them required by this transport</summary>
+        <p class="text-muted section-note">
+          Each box shows what this transport declares for it — the value it uses when
+          the box is left empty, or the range it will accept when it declares no
+          default. A box with no default behind it is refused when it is left empty,
+          not filled in. Key material is generated for both ends and the value the two
+          must share is minted once for both. Never type a key here.
+        </p>
+        <div class="grid-2">
+          {% for side in sides %}
+          <div class="tuning-side">
+            <h4>{{ side.label }}</h4>
+            <div class="text-muted field-hint">{{ side.note }}</div>
+            {% for parameter in tuning[name] %}
+            {{ tuning_box(side.prefix, parameter, values, errors) }}
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+
+      <div class="dialog-body">
+        {% if nodes | length < 2 %}
+        A hop needs two nodes. Register a second one on the Nodes screen first — a node
+        cannot be its own exit.
+        {% elif not transports %}
+        This image ships nothing that can carry a hop. A hop crosses a filtering
+        network by definition, so a protocol that is identified there is refused rather
+        than offered.
+        {% else %}
+        Open advanced tuning before you submit. A parameter the chosen transport
+        declares no default for is refused when its box is left empty, rather than
+        filled in — the summary above says how many of them there are. Both ends are
+        then written together, and the hop exists only in the database until you apply
+        both nodes. Nothing reaches a user through it before that, and no user has to
+        do anything when it does.
+        {% endif %}
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">establish hop</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

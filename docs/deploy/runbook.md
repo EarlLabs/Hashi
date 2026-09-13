@@ -364,11 +364,12 @@ two ways out: run this script against the host, or create the directory once, as
 install -d -m 700 -o THE_SSH_USER /opt/hashi
 ```
 
-**Changing the account of a node that has already been applied to** takes one more step:
-the files an earlier apply left in `/opt/hashi` still belong to whoever placed them. Re-run
-this script with the new `--user` — it hands the directory over — and then either `chown -R`
-its contents to the new account or delete them. A node holds nothing that cannot be
-regenerated, so the next apply puts them all back.
+**Changing the account of a node that has already been applied to** has its own section
+below — *Changing the account a node is driven as*. Re-running this script with the new
+`--user` is now enough for the **host** half, and no recursive chown typed by hand is
+needed or wanted. The half it cannot do is change which account the control plane dials,
+and that is where the cost is — read that section before you change the account of a node
+that is serving.
 
 ### What a finished run says
 
@@ -399,13 +400,49 @@ or a first run on a host with a past, reports rather than changes:
 ==> <port>/<proto> was already open
 ==> incoming was already denied by default
 ==> the firewall was already up — its existing rules were kept
-==> /opt/hashi was already here — its contents were left alone, and <user> owns the directory
-==> /opt/hashi was already here before this run — whatever an earlier apply left in it, this run neither changed nor removed it, only re-asserted that <user> owns the directory
+==> /opt/hashi was already here — <user> now owns it and everything an earlier apply left inside it; nothing in it was read, changed or removed
+==> /opt/hashi was already here before this run — whatever an earlier apply left in it, this run neither read, changed nor removed it; it now belongs to <user> along with the directory, so an apply as that account can replace it
 ```
 
 Nothing there is a warning. What the script never does is **close** anything: the rule set
 is the union of every run, because a script that withdrew a rule could withdraw the one
 carrying the session running it. Narrowing a rule set is an operator's job, done knowingly.
+
+### Changing the account a node is driven as
+
+The last two lines above are the whole of it, and they are there because the obvious
+reading of this section used to be wrong. A node applied as one account and then handed
+to another kept the **files** of the first: `/opt/hashi` belonged to the new account, and
+everything an apply had written inside it still belonged to the old one. The next apply
+failed on a permission error naming a path — three layers away from the account that
+caused it, on a host whose bootstrap had just said `ready`.
+
+So re-running the script with `--user <new account>` now **is** sufficient — **for the
+host**. It takes ownership of the directory's contents along with the directory, reading
+none of them and removing none of them; the account it prepares can then replace every
+file an earlier apply left.
+
+**The control plane's half cannot be changed today, and it is the expensive half.** A
+node's `ssh_user` is written once, at registration: nothing in the panel or the API
+updates it, no screen displays it, and there is no way to delete a node record either. So
+a host handed to a new account and a record still naming the old one disagree for ever —
+the record is what decides which account is dialled, and every apply fails on an account
+that no longer owns `/opt/hashi`. There are two repairs and neither is the one the last
+paragraph of this section used to promise:
+
+- **Prepare the host for the account the record already names.** Run this script again
+  with that `--user`. Cheapest by far, and the right answer whenever the new account was
+  a convenience rather than the point.
+- **Or register the host a second time**, as a new node with the new `ssh_user`, enable
+  the same transports on it, apply *it*, and then set the old record to `retired`. Two
+  records may point at one host — the node table allows a repeated address precisely for
+  a migration like this — but only one of them may ever be applied, because both push
+  into the same `/opt/hashi` and the later apply overwrites the earlier one. The cost is
+  that this is a **new node in every user's subscription**: everyone picks it up at their
+  next refresh, and loses the retired one at the same refresh.
+
+If you no longer know which account a record names, nothing in the product will tell you —
+take the second repair.
 
 ### The layer the script cannot see, and the evening it costs
 
@@ -507,9 +544,18 @@ public hostname (*Reaching the panel*):
    container dials out and back, which works; `172.17.0.1` is the fallback if the public
    address is awkward. `ssh_user root`, port 22, private key = the contents of
    `~/.ssh/hashi-node`.
-2. **Enable a transport: `amneziawg` (or `wireguard`) on UDP 51820.**
+2. **Enable a transport: `amneziawg` (or `wireguard`) on UDP 51820.** Right here it
+   is the right choice, because this box dials no hop. Read *The one combination that
+   will not render* before you make it the entry end of one. The form asks one more
+   thing for this family — **how many users this row may hand an address to**, counted
+   up from `peer_tunnel_address`. Size it for the fleet you expect rather than for
+   today's: the number is a ceiling, raising it later is a resize, and the box says how
+   many people it is being measured against.
 3. **Apply.**
-4. **Add a friend**, open their subscription link, load it into a stock client.
+4. **Add a friend**, open their subscription link, load it into a stock client. The
+   WireGuard family is a config *file* rather than a URI, so it is the
+   `?format=client-config-file` form of that link that carries it — the plain link is
+   empty on a box that offers only `amneziawg`, and empty is not an error.
 
 **Not Reality on this box.** Caddy holds 443/TCP for the panel, and Reality's whole
 camouflage is *being* on 443. Its declared range is `(443, 65535)`, so 8443 validates —
@@ -538,8 +584,12 @@ Everything from Shape A applies to box E, plus:
 1. Bootstrap the control plane on **E** exactly as in Shape A.
 2. Prepare **L** with *Preparing a leaf* above, then register **E** as a node
    (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
-   from E).
-3. Enable a **friend-facing** transport on E.
+   from E). Give **E** a `resolver` as you register it: E dials a hop, and such a node does
+   not render without one (*A node that dials a hop needs a resolver*, below).
+3. Enable a **friend-facing** transport on E — `vless-reality` unless you have a reason
+   for the other one. E dials a hop, so it must be a transport the table in *The one
+   combination that will not render* (below) marks yes for a node with a hop; a kernel
+   tunnel here is accepted by the panel and refused at apply.
 4. Build the hop from the panel's hop form: entry = E, leaf = L, transport =
    `amneziawg`. The entry dials the leaf, always — E sits behind a Russian carrier NAT
    and cannot be dialled — so L listens and E reaches out.
@@ -573,9 +623,12 @@ node. Nothing is contested and nothing is co-located.
 1. Bootstrap the control plane on **C** (the Shape A control-plane block, unchanged).
 2. Prepare **E** and **L** with *Preparing a leaf* above — one script run each — and
    register both as nodes. Both `ssh_host` values are real remote addresses this time; the
-   control container needs outbound SSH to each.
-3. Enable **`vless_reality` on E, port 443** — free here, because the panel is on another
-   box. Give it a `decoy_host` of your own choosing.
+   control container needs outbound SSH to each. Give **E** a `resolver` as you register
+   it (*A node that dials a hop needs a resolver*).
+3. Enable **`vless-reality` on E, port 443** — free here, because the panel is on another
+   box. Give it a `decoy_host` of your own choosing. A VLESS transport is not merely
+   convenient here: E dials a hop, and that is the only kind of friend-facing transport
+   such a node can render at all (*The one combination that will not render*).
 4. Build the hop: entry = E, leaf = L, transport = `amneziawg`.
 5. Apply both nodes. Add friends. Their subscription contains E and never L: a hop is
    never granted to a friend and never appears in a subscription, because a friend
@@ -591,27 +644,249 @@ both.
 
 ---
 
+## The one combination that will not render
+
+**On a node that dials a hop, friends may not be on a kernel tunnel.** Following this
+runbook used to produce exactly that: `amneziawg` for box E's friends, because Shape A
+names it, and `amneziawg` for the hop E dials, because the hop requires it.
+
+The panel now takes both rows. Two instances of one transport on one node are ordinary —
+they collide on a **listening port**, on a **config name** and, for the WireGuard family,
+on their **tunnel ranges**, which may not overlap (*Rules that are not optional*, below).
+Give the hop a range of its own and two `amneziawg` rows on two ports share none of the
+three. What refuses is the **apply**, on the entry, with this in a banner on the Nodes
+screen:
+
+> `amneziawg could not be rendered for this node — EgressNotRenderable:` … *A tunnel whose
+> packets this node's kernel routes cannot send them out through a different interface, so
+> they would leave by the node's own route instead — which is the silent failure the hop
+> exists to prevent. Give this node's friends a transport that terminates their connection
+> and re-originates it, or take the hop away.*
+
+**That banner is the only signal you get, and the node does not go `degraded`.** The
+refusal happens while the configuration is being rendered, before anything is written to
+the host, so there is no half-configured node to mark and the node's state is left exactly
+as it was. An entry that was already `active` therefore **stays active and stays in every
+user's link**, serving whatever its last successful apply left on the host — an operator
+scanning the Nodes screen for something red finds nothing. Read the banner, and treat a
+node whose apply you cannot complete as one that is serving a configuration you did not
+choose.
+
+**That is a refusal, not a defect.** A wg-quick-family tunnel hands a friend's decrypted
+packets to the entry's own routing table, and the only route this project renders for a
+hop is source-based, from the hop interface's own address. A friend's packets never match
+it, so they would leave by the entry's own route — an exit in the country the hop exists
+to leave, with every screen green. Refusing beats that (`docs/decisions.md`, decision 3).
+The **leaf** end of the same hop renders fine; it is the friend-facing side on the entry
+that cannot.
+
+**What to give an entry node's friends instead.** A transport whose data plane
+*terminates* the connection and originates a new one, which is what the refusal asks for.
+In this image that is the VLESS pair, `vless-reality` and `vless-ws-tls`. Both are Xray,
+which forwards no packet in the kernel: it accepts the friend's connection and opens its
+own, and on a node with a hop that new connection is bound to the hop's near address. So
+it can only reach the internet through the hop, and while the hop is down it cannot be
+opened at all — fail closed, as a property of the rendered file rather than a rule someone
+has to remember.
+
+Between the two, `vless-reality` needs nothing placed on the host: it borrows a decoy's
+handshake, so give it a `decoy_host` of your own choosing and never a shared one.
+`vless-ws-tls` needs a real certificate and key **already on the node**, named by path —
+nothing in this project puts them there — so it is the right answer only on a host where
+you already terminate TLS for a name you own.
+
+`amneziawg` and `wireguard` stay exactly right for friends on a node with **no** hop:
+Shape A's single box, and a leaf. There the same row renders a local exit, which is the
+shape a real client was measured carrying traffic on. Every transport this image ships,
+and what each one may be asked to do:
+
+| transport | friends on a node with a hop | friends on a node with no hop | the entry→leaf hop |
+|---|---|---|---|
+| `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — its configuration is a link rather than a file, so the hop form does not offer it |
+| `vless-ws-tls` | yes, once a certificate and key are on the node | yes, on the same condition | no, for the same reason |
+| `amneziawg` | no — the panel accepts the row and the apply refuses it | yes | yes, and today it is the only one |
+| `wireguard` | no — the same refusal, for the same reason | yes, but never as a way out of a filtering network | no — it is protocol-blocked where this matters, and the form will not offer it |
+
+Every cell in it is checked against the code by `tests/infra/test_deploy_runbook.py` —
+against the renderers for the first column, the declared delivery formats for the second,
+and the panel's own hop form for the third. A fifth transport, or a change to what one of
+these can do, turns that suite red rather than leaving this table quietly wrong.
+
+**The two families are delivered differently, and you find that out before your friends
+do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
+is a config file: the same token, `?format=client-config-file`, an archive. A friend whose
+node offers only AmneziaWG and whose client opens the plain link gets an empty document
+rather than an error — so hand them the `?format=` URL, and expect the plain link to carry
+entries again once that node's friends are on a VLESS transport.
+
+### If you already built it the other way
+
+The way out is in the panel, and it is **removal** rather than withdrawal. Withdrawing the
+friend-facing `amneziawg` does stop the apply failing — a withdrawn row is not rendered at
+all — but it leaves the row on the node still holding its listening port, its config name
+and its tunnel range, its users' material still minted for a transport that node can no
+longer render, and a trap for whoever offers it again: the same apply fails the same way.
+Removing it takes the row, the material, the port, the name and the range.
+
+1. **Nodes → transports** on the entry box. Both `amneziawg` rows are listed, and the
+   second one created carries a config name of its own — it reads `amneziawg
+   (amneziawg-2)` — so the two cannot be confused. The hop end is the row whose standing
+   begins *one end of a hop*, and it is drawn with no buttons at all.
+2. **remove** the friend-facing one, and read the dialog before you confirm: removal
+   destroys the material every user holds on that row and frees its port, its config name
+   and its tunnel range, and it is the only action that does any of the three. `withdraw`
+   beside it is the reversible one, and it is not what gets you out of this.
+3. **Enable a VLESS transport** for friends on that node, on a port nothing else there
+   listens on.
+4. **Apply the node.** Removal does not push: until you apply, the host is still running
+   the container the panel has stopped showing.
+
+Two things removal deliberately does not do. It does not revoke anybody — those users lose
+that one entry at their next refresh and keep everything else. And it does not unlink the
+config the last apply wrote under `/opt/hashi/conf/`: that file still holds the node's
+private key and every credential that transport carried, and nothing in this project ever
+unlinks a rendered config — the same is true after a withdrawal and after a dissolved hop.
+Once you have applied, nothing on the node serves that file and no copy of what is in it
+remains in this panel; what is left is key material at rest on a host that can be seized.
+
+**So delete it, and it is the one exception to *never edit anything under `/opt/hashi`*.**
+After the apply that removed the service:
+
+```bash
+ls /opt/hashi/conf/                              # every rendered config on this node
+rm /opt/hashi/conf/THE_CONFIG_NAME.THE_EXTENSION # the name the panel showed on that row
+```
+
+**The extension is the transport's, not a fixed one** — the WireGuard family is written
+`.conf`, because wg-quick takes the interface name from the file name and loads nothing
+else; the VLESS pair is written `.json`, because Xray reads JSON. So the file this
+section's own advice leaves behind — the `amneziawg` you removed — is a `.conf`, and the
+next one you orphan, once that node's friends are on a VLESS transport, is a `.json`
+holding that transport's node key, its secret path and every user's id. Both are the same
+kind of residue and both are covered by this exception. `ls` first, and go by the config
+name the row carried.
+
+**Only for a transport that is no longer enabled on that node.** The standing rule holds
+for every other file there, and for the reason it gives — the control plane generates them
+and overwrites them on every apply. An orphan is the exception precisely because nothing
+regenerates it, which is what puts it outside that reason. `docs/tracker/field-checklist.md`
+carries the same carve-out; if the two ever disagree, they are describing the same file and
+one of them is stale.
+
+To take the hop away instead, use the **Hops** screen. Removing or withdrawing one end of
+a hop is refused wherever you ask for it, because it would leave the other end holding a
+tunnel to an exit that is no longer configured.
+
+## A node that dials a hop needs a resolver
+
+**On a node that dials a hop, a friend's destination names are looked up through the hop,
+at a resolver named on the node's record — never by the host's own.** Before this, the exit
+had moved abroad and the lookups had not: the proxy asked the entry host's resolver, inside
+the network the hop exists to leave, one query per site a friend visited
+(`docs/decisions.md`, 2026-09-09). Whichever resolver you name still sees the names — from
+the far end of the hop rather than from the entry's network, which is the exposure that
+decision accepts knowingly.
+
+A node that dials a hop and has no resolver is refused at **apply**, on the entry, with this
+in a banner on the Nodes screen:
+
+> `vless-reality could not be rendered for this node — ResolverMissing:` *this node's
+> traffic leaves through a hop, and its record names no resolver for the destinations its
+> friends ask for. Without one they would be looked up by this host's own resolver — on
+> the near side of the hop, inside the network the hop exists to leave — while the traffic
+> itself exits at the far end. Nothing is rendered until the node has one: an IPv4 address
+> the far end of the hop can reach.*
+
+Like the refusal above, it happens while the configuration is being rendered, so the node
+does not go `degraded`: an entry that was already `active` **stays active on whatever its
+last successful apply left** — its friends' lookups still going to the host's resolver — and
+a user you revoke **keeps working there**, because a revocation's re-push is a render too.
+The revocation's banner says so, naming the node.
+
+**Do it right after the upgrade that brings this refusal — before the next apply, and before
+you revoke anybody: give every node that dials a hop its resolver.** The upgrade adds the
+field empty on every existing node, because any value it wrote would be a resolver this
+project chose for you; from that moment each existing entry is in the state described above.
+
+1. **Nodes → resolver** on each node that is the entry end of a hop — the Hops screen lists
+   them. Give an IPv4 address the far end of the hop can reach: a public resolver of your
+   choosing, or one inside the leaf's own network. A name is refused, and so is a loopback
+   address — a stub resolver on the entry would answer from the entry. **An address the
+   entry itself holds on one of its own interfaces is the case nothing here can catch:**
+   the host answers it locally, on the near side of the hop, and neither the panel nor
+   `edge` can see which addresses a host holds. Avoiding that one is yours. The same call
+   without the panel is `POST /api/nodes/<id>/resolver` with `{"resolver": "<address>"}`.
+2. **Apply the node.** Setting the resolver changes the record, not the host.
+
+A new node takes its resolver in **Add a node**, in the box of the same name. A node that
+never dials a hop leaves it empty: its lookups and its exit already leave from the same
+place, and its configuration does not change.
+
+---
+
 ## Rules that are not optional
 
 - **Never plain WireGuard on the entry→leaf hop.** That hop crosses the border by
   definition, and a protocol-blocked transport there defeats the topology even in phase
-  1. Use AmneziaWG or another obfuscated transport.
+  1. Use AmneziaWG or another obfuscated transport. This one is enforced rather than
+  advised: the hop form offers only the transports that can carry a hop at all, which
+  in this image is `amneziawg` and nothing else.
 - **Never present plain WireGuard to a friend as something that works from a Russian
   mobile network.** TSPU protocol-blocks it. It works everywhere else.
 - **A decoy host is chosen per node and never shared.** There is no project default and
   there must never be one — if every node borrows the same handshake, the fleet becomes
   enumerable by that fact alone.
-- **One transport per node, once.** Enabling a transport that a node already has is
-  refused, hop or not. So the hop transport and the friend-facing transport on the same
-  node must be *different transports* (backlog item 34 is the fix; until then, plan
-  around it).
-- **One friend per node on the WireGuard family.** AmneziaWG and plain WireGuard mint a
-  shared tunnel address today, so a second friend on the same node collides on
-  `AllowedIPs` and the node refuses, loudly, and goes `degraded` (backlog item 33). VLESS
-  transports have no such limit.
-- **Never edit anything under `/opt/hashi` on a node.** It is generated by the control
-  plane and overwritten on every apply. The control database is the source of truth, and
-  that is what makes replacing a node safe.
+- **A node may run one transport twice. What it may not do is run it twice on one
+  port, under one config name, or over one tunnel range.** Two rows on one node collide
+  on three things. The **listening port** — with its protocol, so a TCP transport and a
+  UDP one on the same number are two sockets and no conflict. The **config name**, which
+  for the wg-quick family is also the interface name. And, for the WireGuard family, the
+  **tunnel range**: two such rows on one node may not have overlapping tunnel networks,
+  hop ends and disabled rows included. That third one is refused in the panel, under the
+  box you typed it in, before anything is saved:
+
+  > node `E` already carries `amneziawg` on a tunnel at … and … *is in the same range.
+  > Two tunnels on one node cannot share one: their data planes write into that host's
+  > single routing table, so a reply meant for one person's device would be sent to
+  > whoever holds the same address on the other — and neither config file shows it,
+  > because each is correct on its own. Give this tunnel a range of its own.*
+
+  Overlapping is not only the same range typed twice: a range you widen on one row
+  swallows the narrower one beside it, and that is the pair written by accident. This
+  is the rule that meets you when you follow Shape A and then the hop it mandates on
+  the same box — friends and hop are two `amneziawg` rows on that node, and they need
+  two ranges as much as they need two ports. Nothing else collides. A **disabled** row
+  still holds all three, because freeing them would move the collision to the moment
+  somebody switches it back on; removing the row is the only thing that gives them
+  back.
+- **A friend-facing kernel tunnel and a hop still cannot share a node**, which is a
+  different rule and the one that bites — *The one combination that will not render*,
+  above.
+- **A WireGuard-family row is told how many users it may serve, and the number is a
+  ceiling.** AmneziaWG and plain WireGuard give every user their own address inside the
+  tunnel, drawn from a pool that starts at the row's `peer_tunnel_address` and is as long
+  as the `pool_size` you set when you enable it. One address is one user. A pool smaller
+  than the people you already have is **refused before anything is saved** — at enable,
+  when you add a user, when you offer the transport again, when you put the node into
+  service and when you resize it — and the panel says so on the screen rather than after
+  the press: Keys & configs shows `<users> of <pool>` per row, the add-user dialog names
+  a pool that is full and offers no button, and a node whose pool is short is not offered
+  the serving state. Resize on **Keys & configs → replace params**; there is no other
+  action for it. VLESS transports identify each user by their own material and have no
+  pool at all.
+  *Until M17 these rows minted one shared address, so the second friend on a node
+  collided on `AllowedIPs` and the render refused, loudly — backlog item 33. A row
+  enabled before that upgrade has no size, hands out exactly the one address it renders
+  today, and is repaired by replacing its parameters with a size: the address the working
+  device already holds is written down first and is never moved.*
+- **Never edit anything under `/opt/hashi` on a node — with one exception.** It is
+  generated by the control plane and overwritten on every apply. The control database is
+  the source of truth, and that is what makes replacing a node safe. The exception is a
+  **rendered config whose transport is no longer enabled** on that node — `.conf` for the
+  WireGuard family, `.json` for the VLESS pair, since the extension is the transport's:
+  nothing regenerates it, so the reason above does not reach it, and what it holds is the
+  node's private key and every user's credential for that transport. Delete those, after
+  the apply that removed the service — see *If you already built it the other way*, above.
 
 ## Known-unproven
 

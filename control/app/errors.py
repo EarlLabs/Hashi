@@ -55,11 +55,112 @@ class NotDeliverable(DomainError):
     code = "not_deliverable"
 
 
+class HopEndRefused(DomainError):
+    """One end of a hop was refused by the transport's own model, field by field.
+
+    A subclass rather than a new envelope, so every existing caller keeps the answer it
+    has always had: same status, same code, same ``message``. What it adds is
+    ``fields`` — the transport's own complaint, per parameter — for the one caller that
+    has somewhere to put it.
+
+    It exists because the console's establish-hop dialog has twenty-four boxes behind a
+    disclosure. Flattening a per-field complaint into one sentence at the top of that
+    form makes the operator scroll it hunting for the parameter the prose names, during
+    a rotation, which is the moment this form was designed for. Everything ELSE a hop
+    refuses is genuinely about the pair — two ends on different tunnel networks, a node
+    that is its own exit — and has no field to land on; those stay a plain
+    ``DomainError`` and are stated once, above the form.
+
+    ``purpose`` is the ``TransportPurpose`` of the end that was refused, as its string
+    value. Carried rather than folded into the field names because which end a
+    parameter belongs to is the caller's vocabulary, not this module's.
+
+    Status and code are deliberately INHERITED. A caller that has always seen a 400
+    with ``bad_request`` still does, envelope for envelope — this type adds a way to
+    read the same refusal, and changes nothing for anybody who does not.
+
+    Both ``fields`` and ``message`` are composed through ``relay.refused_fields`` and so
+    carry no held value; see ``ParamsRefused``, whose note explains why that is done
+    where the exception is raised and not where it is rendered.
+    """
+
+    def __init__(self, message: str, *, purpose: str, fields: dict[str, str]) -> None:
+        super().__init__(message)
+        self.purpose = purpose
+        self.fields = fields
+
+
+class ParamsRefused(DomainError):
+    """A transport refused the parameters on one node-transport, field by field.
+
+    ``HopEndRefused``'s sibling and built to the same pattern (see it for the full
+    reasoning): a subclass that INHERITS status and code, so ``POST /api/transports/
+    {id}/params`` answers exactly as it always did, and adds ``fields`` for the one
+    caller that has a box per parameter to put a message in.
+
+    Not the same type, and not merged with it, because ``purpose`` is hop vocabulary:
+    a hop has two ends and a refusal has to say which one it is about. A transport
+    enabled on a node has one, so there is nothing to disambiguate, and carrying an
+    end's name on a refusal that has no end would be the console's own confusion.
+
+    What ``fields`` and ``message`` may carry is narrower than what Pydantic reports,
+    and the narrowing happens where they are BUILT — ``relay.refused_fields``, which
+    strikes every held value out of every sentence while those values are still in
+    scope. A validator's message can quote the value it rejected, and the mapping being
+    validated contains this node's key material, so a surface that renders this
+    exception without choosing to — the API envelope, and the pre-redesign outcome
+    fragment until M9.6 deleted it — cannot be left to sort it out. The panel narrows
+    again on top of that, printing a
+    message only for a field it actually has a box for. See ``docs/decisions.md``
+    (2026-09-10).
+    """
+
+    def __init__(self, message: str, *, fields: dict[str, str]) -> None:
+        super().__init__(message)
+        self.fields = fields
+
+
+class NothingToApply(Conflict):
+    """An apply was asked for on a node that has no transports enabled.
+
+    Its own type because this is NOT a node operation that failed — M18.1. A node with
+    nothing enabled renders no configs, and the empty compose file that used to be built
+    from them was pushed and rejected by the daemon with ``services must be a mapping``:
+    a 502 about YAML, and a node left ``degraded``, for the most ordinary first-run
+    mistake there is — register a node, press the obvious next button. Nothing was wrong
+    with the node, nothing had been attempted on it, and nothing about that answer told
+    the operator to enable a transport.
+
+    ``Conflict`` rather than ``NodeOperationFailed``: the request was answerable and the
+    answer is about the RECORD, not the host. Nothing is dialled, nothing is pushed and
+    the node's state is left exactly as it was — which is what the raise being outside
+    ``apply_node``'s try blocks buys, and it is the half of M18.1 that a status code
+    alone would not give (an ``active`` node applied by mistake keeps serving).
+
+    Its own code as well as its own type, so a script can tell "you have not enabled
+    anything yet" from every other 409 this API answers with — all of which are the
+    node state machine refusing a transition.
+    """
+
+    code = "nothing_to_apply"
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 
     status_code = status.HTTP_502_BAD_GATEWAY
     code = "node_operation_failed"
+
+
+class ConfigRefused(NodeOperationFailed):
+    """A node's configuration could not be produced, or was refused before it was pushed.
+
+    Nothing reached the host, and trying again changes nothing until the node's record or
+    its topology does. That is a different fact from a node that could not be reached, and
+    a caller telling the operator what to do next has to be able to tell the two apart
+    without reading the message — which may quote an upstream checker's output. Same status
+    and code as its parent: to the API it is still a node operation that failed.
+    """
 
 
 class SecretsUnreadable(DomainError):

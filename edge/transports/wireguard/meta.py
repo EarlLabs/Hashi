@@ -12,6 +12,8 @@ from edge.registry import (
     KeyKind,
     KeyScope,
     KeySpec,
+    Layer4,
+    PeerAddress,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -25,6 +27,10 @@ META = TransportMeta(
     # No TLS at all, and no impersonation of anything. It must not be given a
     # certificate and must not sit behind our Caddy.
     needs_tls=False,
+    # The socket it binds, which is a different question from ``family`` above —
+    # `control` reads this one to decide whether two transports on one node may
+    # hold the same port number, and reads ``family`` for nothing at all.
+    listens_on=frozenset({Layer4.UDP}),
     # 51820 is WireGuard's conventional port and is inside the range, but there is no
     # default: a fleet where every node listens on 51820 is a fleet you can enumerate
     # with one scan, and this protocol is already identifiable by its handshake.
@@ -79,4 +85,11 @@ META = TransportMeta(
     # is what AmneziaWG exists for — so the panel must never present it to a friend as a
     # working exit from a filtering network.
     blocked_by_inspection=True,
+    # Every friend on this transport holds a tunnel address of their own, drawn from the
+    # room inside the interface's own address. AllowedIPs is this protocol's
+    # authorisation list AND its routing table, so two friends on one address is not a
+    # duplicate the daemon merges — it is the second silently taking over the first's
+    # return path, which ``render_server`` refuses rather than renders. This transport is
+    # never on a hop (``hop_capable`` is False), so its consumers are always people.
+    peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
 )

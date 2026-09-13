@@ -1,0 +1,126 @@
+{#
+  The hops table, on its own so a mutation can refresh it without a page load.
+
+  Swaps itself, exactly like panel/nodes_table.html and panel/friends_table.html: one
+  file is both the first paint and every refresh, so there is no second rendering that
+  could disagree with this one about what a row says. It listens for `hops-changed`,
+  which both hop mutations in panel/routes.py fire.
+
+  `hx-disinherit="hx-indicator"`: the skeleton belongs to THIS element's own refresh
+  and to nothing inside it. htmx inherits hx-indicator down the tree, so without this
+  a row's "tear down" button would take the whole table away and replace it with the
+  loading skeleton while it fetched a confirmation dialog that changes nothing about
+  the list.
+#}
+<div id="hops-table" class="stack-6"
+     hx-get="/panel/hops/table" hx-trigger="hops-changed from:body"
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this"
+     hx-disinherit="hx-indicator">
+
+  <div class="loading" aria-hidden="true">
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+  </div>
+
+  <div class="loaded stack-6">
+    {#
+      UI-PATTERNS §2 and §13: the screen's own creation action is SECONDARY and sits
+      on the explainer's row, and the explainer says what the thing does to the mesh
+      rather than what the button does.
+    #}
+    <div class="section-head">
+      <p class="text-muted section-note">
+        A hop sends traffic from the node users dial into a second node that carries
+        the exit. Users only ever hold the first one's address, so replacing the
+        second is one hop re-pointed and two nodes applied — with nobody touching
+        their device.
+      </p>
+      <button class="btn btn-secondary" type="button"
+              hx-get="/panel/hops/new"
+              hx-target="#dialog-slot" hx-swap="innerHTML">establish hop</button>
+    </div>
+
+    {% if hops %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>entry</th>
+            <th>leaf</th>
+            <th>transport</th>
+            <th>state</th>
+            <th>established</th>
+            <th class="right">actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for hop in hops %}
+          <tr>
+            {# `.wraps` on the two cells holding a name the OPERATOR typed: a node name
+               may be one unbroken run, and app.css says why every other cell refuses
+               to break. #}
+            <td class="wraps">{{ hop.entry_node }}</td>
+            <td class="wraps">
+              {% if hop.leaf_node %}{{ hop.leaf_node }}
+              {% else %}
+              {#
+                Half a hop, and it must be visible as one: the foreign key between the
+                two ends is SET NULL rather than CASCADE precisely so that removing one
+                end leaves the other on screen instead of vanishing with it. Stated in
+                words rather than coloured — UI-PATTERNS §4, and the danger hue is for
+                a request that was refused or failed, which this is not.
+              #}
+              <span class="text-muted">missing — this hop leads nowhere</span>
+              {% endif %}
+            </td>
+            {# The transport's own name, printed as data. This template names none. #}
+            <td class="mono wraps">{{ hop.transport }}</td>
+            <td>
+              {#
+                UI-PATTERNS §4: status is a tag, never coloured text. Established is
+                good and current; pending and incomplete both need attention, which is
+                the outline tag. There is no red on any of the three.
+              #}
+              <span class="tag {{ 'tag-accent' if hop.state == 'established' else 'tag-outline' }}">
+                {{ hop.state }}
+              </span>
+            </td>
+            <td class="text-muted nowrap">
+              {% if hop.since %}{{ hop.since.strftime("%d %b %Y") }}
+              {% else %}not yet — apply both nodes{% endif %}
+            </td>
+            <td class="right">
+              <span class="row-actions">
+                {#
+                  UI-PATTERNS §3: a destructive action is a plain secondary button and
+                  confirms in a dialog. It is not drawn in red — the danger hue is for
+                  a refusal, not for an action the operator meant to take.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/hops/{{ hop.id }}/dissolve"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">tear down</button>
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {#
+      The empty state. It names the next action and says what the absence MEANS, rather
+      than reporting that a table is empty: no hop is a working fleet, just one where
+      every node exits on its own route.
+    #}
+    <div class="empty">
+      <div class="empty-title">No hops yet</div>
+      <p class="empty-body text-muted">
+        Use "establish hop" above. Without one, every node is its own exit: traffic
+        that arrives at a node leaves from that same node, on the same network it
+        arrived on.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>

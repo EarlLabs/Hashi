@@ -1,7 +1,9 @@
-"""Fixtures for the control zone's tests.
+"""Fixtures for the control zone's tests, and the assertions they share.
 
 WHAT: a real Postgres schema, freshly created per test, an application built against
-      it, and an HTTP client already authenticated as the operator.
+      it, an HTTP client already authenticated as the operator, and — at the bottom —
+      ``assert_plain_reason``, imported with ``from .conftest import`` the way
+      ``test_migrations.py`` does.
 WHY:  the control rulebook requires a real Postgres rather than SQLite — async
       drivers, JSONB and constraints all behave differently, and a suite that passes
       on SQLite proves nothing about production. This schema has a JSONB column and
@@ -17,7 +19,11 @@ suite that silently passes without a database is a suite that proves nothing.
 """
 
 import os
+import socket
+from collections.abc import Iterator
+from typing import NamedTuple
 
+import asyncssh
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -40,6 +46,24 @@ TEST_SECRET_KEY = "test-secret-key-not-real-000000000000000000000000"
 
 OPERATOR_USERNAME = "owner"
 OPERATOR_PASSWORD = "test-operator-password"
+
+# An SSH private key a node record can really hold, for the fixtures whose node is
+# registered with one.
+#
+# It has to be a REAL key, and cannot go back to being the string "not-a-real-key" it
+# was in three files: since M9's acceptance fixes, a key that the SSH layer cannot load
+# is refused when the node is registered and again before any connection is attempted
+# (``nodes.ssh_key_is_usable``, ``apply.target_for``) — because a paste that will not
+# import used to reach the operator as an internal error naming an exception class.
+# A fixture holding a placeholder now stops at the registration it is not testing.
+#
+# Generated per run rather than committed: a private key in a repository is a private
+# key in a repository, even a useless one, and this costs microseconds. It authenticates
+# nothing here — every test that uses it replaces the connection or dials an address
+# nothing answers on.
+GENERATED_SSH_KEY = (
+    asyncssh.generate_private_key("ssh-ed25519").export_private_key("openssh").decode()
+)
 
 
 async def database_is_available() -> bool:
@@ -97,12 +121,22 @@ async def settings(clean_database, operator_password_hash: str) -> Settings:
         # The in-process client speaks http, so the session cookie must not be
         # https-only or no test could ever hold a session.
         public_https=False,
-        # No test in this zone reaches a real node: every fixture points at a reserved
-        # documentation address that never answers, so the connect ceiling is time the
-        # suite spends waiting for a certainty. One second, and the whole suite stops
-        # costing minutes — the default of five is a field value, chosen for a lossy
-        # link, and nothing here is on a link at all.
+        # No test in this zone reaches a real node: the two that dial one at all dial a
+        # loopback socket this file opened (see ``unanswering_ssh`` below), so the
+        # connect ceiling is time the suite spends waiting for a certainty. One second,
+        # and the whole suite stops costing minutes — the default of five is a field
+        # value, chosen for a lossy link, and nothing here is on a link at all.
         node_connect_timeout=1,
+        # Moved off its declared default (30) for a different reason than the ceiling
+        # above — that one is about the suite's cost, this one is what makes two claims
+        # provable. Two screens STATE this window, the Settings row and the audit log's
+        # footnote, and both compose it from the live object; with the fixture on the
+        # default, a screen that had hardcoded "30 days" would read correctly and every
+        # assertion about it would stay green.
+        # Nine: not the default, not either bound, and not a value any other test uses.
+        # The tests that rely on this assert the premise first, so moving it back shows
+        # up as a failure rather than as a test quietly proving nothing.
+        audit_retention_days=9,
     )
 
 
@@ -174,3 +208,148 @@ def ws_params() -> dict[str, object]:
         "certificate_path": "/etc/hashi/certs/fullchain.pem",
         "certificate_key_path": "/etc/hashi/certs/privkey.pem",
     }
+
+
+# --- an SSH endpoint whose behaviour this suite decides (M21.2) --------------
+#
+# Two tests here need a node the control plane cannot get a session from. They used
+# to get one by pointing at a reserved documentation address and trusting that
+# nothing routes to it — but what such an address DOES is a property of the host's
+# routing table, not of this code: silently dropped here, refused in a millisecond
+# on a machine that routes it over a tunnel. Both are the same fact and only one of
+# them was the fact the timing assertion needed, so the suite answered differently on
+# different machines.
+#
+# So the endpoint is opened here instead, on loopback, on a port the kernel picks.
+# The socket is held for the whole test: while it is bound, nothing else on the host
+# can take that port, which is what makes the answer the same every run. Loopback is
+# already a hard dependency of this zone — the database is reached over it — so this
+# adds no assumption the suite did not already make. It is not a "hardcoded IP" in
+# the sense CLAUDE.md forbids either: there is no node here to rotate away from, only
+# this machine talking to itself.
+
+# The interface, and the only address in this file that is not a node's.
+LOOPBACK = "127.0.0.1"
+
+
+class LoopbackSSH(NamedTuple):
+    """Where a test node's SSH endpoint is, and therefore what happens when it is dialled."""
+
+    host: str
+    port: int
+
+
+def _bound_loopback_socket() -> socket.socket:
+    """A TCP socket holding one ephemeral loopback port, not yet listening."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # No SO_REUSEADDR on purpose: the exclusivity of the bind is the point. A
+        # second process cannot take this port while the test runs, so nothing can
+        # answer where the test decided nothing answers.
+        sock.bind((LOOPBACK, 0))
+    except BaseException:
+        # The fixtures' ``finally`` only ever sees a socket this function returned, so
+        # a bind that raises has to close its own fd or the descriptor is lost for the
+        # rest of the session.
+        sock.close()
+        raise
+    return sock
+
+
+@pytest.fixture
+def unanswering_ssh() -> Iterator[LoopbackSSH]:
+    """A port that completes a TCP connection and then says nothing, ever.
+
+    This is what a blocked node looks like from outside, and it is the shape the
+    timeout path needs: a refusal would end the connect in a millisecond and the
+    ceiling would never be exercised. ``listen()`` without ``accept()`` is deliberate
+    — the kernel finishes the handshake into the accept queue by itself, so there is
+    no thread to start and none to join, and asyncssh sends its version banner and
+    waits for a reply that cannot come until ``connect_timeout`` ends the wait.
+    """
+    sock = _bound_loopback_socket()
+    try:
+        sock.listen()
+        yield LoopbackSSH(*sock.getsockname())
+    finally:
+        sock.close()
+
+
+@pytest.fixture
+def refusing_ssh() -> Iterator[LoopbackSSH]:
+    """A port that refuses instantly, because it is bound and never listening.
+
+    For the tests that only need "the node could not be reached" and say nothing about
+    how long that took: a connect here is one RST from the local kernel, so five
+    applies cost milliseconds instead of five seconds. Bound rather than closed-and-
+    released, for the port-exclusivity above and because a closed ephemeral port can
+    be handed back to the connecting socket as its own source port, at which point TCP
+    connects it to itself and the node answers.
+    """
+    sock = _bound_loopback_socket()
+    try:
+        yield LoopbackSSH(*sock.getsockname())
+    finally:
+        sock.close()
+
+
+# --- what the operator is told when a node cannot be reached (M21.1) ---------
+#
+# The two tests that assert on it used to pin the exact sentence
+# ``edge/bootstrap/ssh.py`` writes when a connect TIMES OUT. Which of its arms runs
+# is not a property of this code: at a reserved address nothing routes to, a loaded
+# machine (or one that routes TEST-NET-1 over a tunnel) gets a fast rejection and the
+# other arm's wording instead. Both outcomes are the same fact — the node could not
+# be reached — so the fact is asserted structurally by the caller (``reachable is
+# False``, or a ``NodeUnreachable`` cause) and the SHAPE of the sentence is asserted
+# here.
+
+# Enough of one to be recognisable in a single line of text: a reason is a sentence,
+# and any of these means an exception's rendering leaked into operator-facing text.
+_TRACEBACK_MARKERS = ("Traceback (most recent call last)", 'File "', ", line ")
+
+# Stripped off each token before it is judged, so ``session:`` counts as a word and
+# ``OSError(113,`` does not become one.
+_EDGES = "\"'`.,:;!?()[]{}<>—-"
+
+# A sentence has several ordinary words in it. Four is low enough that any reason
+# actually written for a person clears it, and high enough that a class name, a repr,
+# or an errno string does not — those are the three shapes this rejects.
+_WORDS_REQUIRED = 4
+
+
+def assert_plain_reason(reason: str | None, *addresses: str) -> None:
+    """The operator was told, in words, why an operation on a node failed.
+
+    Asserts the property M4.4 introduced rather than the sentence it introduced:
+    non-empty, one line, prose, no traceback, no bare exception class name, and no
+    node address travelling with it (core invariants §6 — a node's address in
+    operator-facing text is a step towards a connection record).
+
+    ``addresses`` is EVERY address that names the node under test, and at least one is
+    required: the check is worthless in exactly the tests that forget to pass it. There
+    is more than one because a node record carries more than one — the address a friend
+    dials and the address `control` dials over SSH are separate columns, and until
+    M21.2 they held the same string here, which is the only reason one argument ever
+    looked sufficient. A reason may leak either.
+    """
+    assert addresses, "assert_plain_reason needs the node's addresses to check for"
+    assert isinstance(reason, str), f"the operator was given no reason at all: {reason!r}"
+
+    text = reason.strip()
+    assert text, "the operator was given an empty reason"
+    assert "\n" not in text, f"a reason is one sentence, not a report: {text!r}"
+    for marker in _TRACEBACK_MARKERS:
+        assert marker not in text, f"a traceback reached the operator: {text!r}"
+
+    words = [token.strip(_EDGES) for token in text.split()]
+    prose = [word for word in words if len(word) > 1 and word.isalpha() and word.islower()]
+    assert len(prose) >= _WORDS_REQUIRED, (
+        f"{text!r} is not a reason a person can act on — it needs at least "
+        f"{_WORDS_REQUIRED} ordinary words, and has {len(prose)}"
+    )
+
+    for address in addresses:
+        assert address not in text, (
+            f"the node's address travelled with the reason: {text!r}"
+        )

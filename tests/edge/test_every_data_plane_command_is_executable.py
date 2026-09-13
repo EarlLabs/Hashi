@@ -214,8 +214,14 @@ def test_a_transport_whose_name_is_not_a_legal_interface_is_refused(monkeypatch)
         if DATA_PLANES[discover()[name].config_format].interface_from_config_filename
     )
     too_long = "a-transport-with-a-very-long-name"
+    # ``config_path_of`` since M15: ``services_for`` asks where a config PLACED under a
+    # given name goes, because a node may run two instances of one transport and the
+    # file's name is then not the transport's. The rule being forced is unchanged — what
+    # is measured is still the path's stem.
     monkeypatch.setattr(
-        node_stack, "config_path_for", lambda name: f"{node_stack.CONFIG_DIR}/{too_long}.conf"
+        node_stack,
+        "config_path_of",
+        lambda config_name, transport_name: f"{node_stack.CONFIG_DIR}/{too_long}.conf",
     )
 
     with pytest.raises(node_stack.UnrunnableTransport) as raised:

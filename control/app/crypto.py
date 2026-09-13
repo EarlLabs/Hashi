@@ -24,11 +24,14 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from edge.addressing import host_of
+
 # Distinct, stable labels so two derivations from one secret cannot collide. They
 # are domain separation, not secrets, which is why they are literals here.
 _DATA_KEY_INFO = b"hashi/data-encryption/v1"
 _SESSION_KEY_INFO = b"hashi/session-signing/v1"
 _TOKEN_DIGEST_INFO = b"hashi/subscription-token-digest/v1"
+_ADDRESS_DIGEST_INFO = b"hashi/tunnel-address-digest/v1"
 
 # Chosen to be expensive enough that a leaked hash is not a password list, and
 # cheap enough for one login on a small VPS. n=2**15 is roughly 100ms and ~32MB.
@@ -71,6 +74,11 @@ class SecretBox:
         # the encryption key so that a digest, which is by design reproducible and
         # indexed, can never be used to say anything about the encryption key.
         self._digest_key = _derive(secret_key, _TOKEN_DIGEST_INFO)
+        # A FOURTH, for the tunnel-address digests M17 stores beside each credential.
+        # Its own label rather than a reuse of the one above, per ``_derive``'s rule: two
+        # purposes never share a derived key, so a digest of an address can never be
+        # mistaken for — or tested against — a digest of a subscription token.
+        self._address_key = _derive(secret_key, _ADDRESS_DIGEST_INFO)
 
     def digest(self, value: str) -> str:
         """A deterministic, keyed digest of ``value`` — for indexed lookup.
@@ -90,6 +98,29 @@ class SecretBox:
         method is how callers get a digest without ever holding the key.
         """
         return hmac.new(self._digest_key, value.encode(), hashlib.sha256).hexdigest()
+
+    def address_digest(self, node_transport_id: str, address: str) -> str:
+        """A deterministic, keyed digest of one address inside one tunnel — M17.
+
+        The value the ``uq_credential_tunnel_address`` constraint is written over, and
+        the value the allocator compares, for ``digest``'s reason: the address itself is
+        stored encrypted, Fernet output is randomised, and a constraint over ciphertext
+        would hold nothing.
+
+        **Over the CANONICAL host**, which is the whole reason this takes an address
+        rather than a pre-computed string: ``10.0.0.2/24`` and ``10.0.0.2/32`` name one
+        host, one route and one hijack, so they must produce one digest. Canonicalising
+        here rather than at each call site is what stops a caller forgetting — and the
+        answer to "what is the host of this" is ``edge``'s, which owns what an address
+        means. It raises ``ValueError`` on something that is not an address, which is
+        correct: there is no digest of a value that cannot be an allocation.
+
+        **Scoped to the node-transport**, so the same address on two rows digests
+        differently. Two nodes handing out one private address is the ordinary case, and
+        without the scope a dump would show which rows share a range.
+        """
+        canonical = f"{node_transport_id}/{host_of(address)}"
+        return hmac.new(self._address_key, canonical.encode(), hashlib.sha256).hexdigest()
 
     def encrypt(self, plaintext: str) -> str:
         """Ciphertext as text, so it stores in a plain column."""

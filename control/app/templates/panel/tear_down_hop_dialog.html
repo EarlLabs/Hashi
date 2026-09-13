@@ -1,0 +1,36 @@
+{#
+  Confirming a tear-down.
+
+  UI-PATTERNS §3: a destructive action is a plain secondary button that confirms in a
+  dialog, and the sentence spells out the blast radius rather than asking "are you
+  sure". Here the radius is the thing decision 3 is about: when the hop is down an
+  entry node fails CLOSED, so a user on it gets no exit at all rather than a local one.
+  That is the right behaviour and it is also what the operator needs to have been told
+  BEFORE they press this, because it looks from the outside like the node has stopped
+  working.
+
+  Both ends go, always. Removing one would leave the other configured to expect a peer
+  that no longer exists — a node still holding a tunnel interface for an exit that has
+  been decommissioned.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="tear-down-title">
+    <div class="dialog-title" id="tear-down-title">Tear down this hop?</div>
+    <div class="dialog-body">
+      Both ends go — {{ hop.entry_node }}
+      {%- if hop.leaf_node %} and {{ hop.leaf_node }}{% endif %}. Until you re-apply
+      them, each still holds a tunnel to an exit that is no longer configured, and
+      traffic arriving at the first one gets no exit at all rather than leaving from
+      the network it arrived on. That is deliberate; it is also what a user sees as
+      the node having stopped working.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+      <button class="btn btn-primary" type="button"
+              hx-post="/panel/hops/{{ hop.id }}/dissolve"
+              hx-target="#dialog-slot" hx-swap="innerHTML">tear down</button>
+    </div>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

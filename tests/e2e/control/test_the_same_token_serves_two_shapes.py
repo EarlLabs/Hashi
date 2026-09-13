@@ -21,12 +21,18 @@ tests/edge/test_upstream_validation.py.
 
 import base64
 import io
+import re
 import uuid
 import zipfile
 
 import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
+
+# The console asks with htmx, and since M9.6 nothing here answers a header-less POST
+# with a redirect to a page: the pre-redesign panel those two branches existed for is
+# gone.
+HTMX = {"HX-Request": "true"}
 CONFIG_FILE_FORMAT = "client-config-file"
 
 # Distinct per scenario. NOT used to identify this run's own entries, though — see
@@ -35,6 +41,14 @@ CONFIG_FILE_FORMAT = "client-config-file"
 REALITY_PORT = 8471
 AWG_PORT_SHAPES = 51931
 AWG_PORT_UNTOUCHED = 51932
+
+# How many users a friend-facing row of this transport may hand an address to — M17. The
+# stand is WARM: every scenario in this directory adds users to one control plane and
+# none are removed, so a pool is measured against a fleet that only grows. Low thousands
+# against a /20 tunnel for that reason — the number is a ceiling on people, not a
+# resource, and a pool that only just fitted would turn this file red on the day an
+# unrelated scenario adds a user.
+POOL_SIZE = 2000
 
 
 @pytest.fixture
@@ -59,6 +73,11 @@ def awg_params(port: int, address: str, peer: str) -> dict[str, str]:
         "port": str(port),
         "tunnel_address": address,
         "peer_tunnel_address": peer,
+        # M17's box, which the enable form renders for exactly the transports that give
+        # every user their own address. It is named for its group like every other box on
+        # that form, so the caller's own ``f"{chosen}-{key}"`` mapping carries it without
+        # knowing it is not a parameter of the transport.
+        "pool_size": str(POOL_SIZE),
         "mtu": "1280",
         "junk_packet_count": "4",
         "junk_packet_min_size": "40",
@@ -71,20 +90,38 @@ def awg_params(port: int, address: str, peer: str) -> dict[str, str]:
 
 
 async def node_with(operator, *, name: str, address: str, country: str, transport: dict) -> str:
-    """A serving node running one transport, created and switched on from the panel."""
+    """A serving node running one transport, created and switched on from the panel.
+
+    200 is the success assertion on all three: every one of these refuses at 422 with its
+    dialog re-rendered, so a refusal cannot be read as a success. The enable form names
+    every box for its transport's GROUP — the dialog renders one group per transport and
+    hides all but the chosen one, and a hidden input is still submitted — so the prefix is
+    added here rather than written into each caller's parameter mapping.
+    """
     created = await operator.post(
         "/panel/nodes",
         data={"name": name, "address": address, "location_label": country},
+        headers=HTMX,
     )
-    assert created.status_code == 303, created.text
+    assert created.status_code == 200, created.text
     node_id = next(
         node["id"] for node in (await operator.get("/api/nodes")).json() if node["name"] == name
     )
 
-    enabled = await operator.post(f"/panel/nodes/{node_id}/transports", data=transport)
-    assert enabled.status_code == 303, enabled.text
+    chosen = transport["transport_name"]
+    enabled = await operator.post(
+        f"/panel/nodes/{node_id}/transports",
+        data={
+            key if key == "transport_name" else f"{chosen}-{key}": value
+            for key, value in transport.items()
+        },
+        headers=HTMX,
+    )
+    assert enabled.status_code == 200, enabled.text
 
-    state = await operator.post(f"/panel/nodes/{node_id}/state", data={"state": "active"})
+    state = await operator.post(
+        f"/panel/nodes/{node_id}/state", data={"state": "active"}, headers=HTMX
+    )
     assert state.status_code == 200, state.text
     return node_id
 
@@ -95,6 +132,17 @@ async def friend_token(operator, nickname: str) -> str:
     ).json()["id"]
     url = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
     return url.rsplit("/", 1)[-1]
+
+
+def address_in(config: str) -> str | None:
+    """The tunnel address a config file configures its interface with, or ``None``.
+
+    Whatever it says, rather than a pattern: the shape is one assertion and comparing two
+    friends' addresses is another, and a helper that matched only the expected shape would
+    make the second one green by returning ``None`` twice.
+    """
+    found = re.search(r"Address\s*=\s*(\S+)", config)
+    return found.group(1) if found else None
 
 
 def files_in(archive: bytes) -> dict[str, str]:
@@ -137,7 +185,7 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
         country=f"Shapeland-{unique}",
         transport={
             "transport_name": "amneziawg",
-            **awg_params(AWG_PORT_SHAPES, "10.81.0.1/24", "10.81.0.2/24"),
+            **awg_params(AWG_PORT_SHAPES, "10.81.0.1/20", "10.81.0.2/20"),
         },
     )
     token = await friend_token(operator, f"twoshapes-{unique}")
@@ -161,7 +209,26 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
     assert f":{AWG_PORT_SHAPES}" in next(iter(mine.values()))
     body = next(iter(mine.values()))
     assert "[Interface]" in body and "[Peer]" in body
-    assert "10.81.0.2/24" in body
+    # AN address out of this transport's pool, written with the prefix the operator typed
+    # — M17, where this used to name the one address every user shared.
+    ours = address_in(body)
+    assert ours and re.fullmatch(r"10\.81\.\d+\.\d+/20", ours), body
+
+    # AND NOT THE SAME ONE TWICE, which is the half the pattern above cannot see: the
+    # pre-M17 fallback put the row's single ``peer_tunnel_address`` into every user's
+    # file, and that value satisfies the pattern too. So a second friend is added on the
+    # same row and the two files are compared — remove the allocator and both read
+    # 10.81.0.2/20, which is this assertion and not the one above turning red.
+    also_theirs = await client.get(
+        f"/sub/{await friend_token(operator, f'twoshapes-{unique}-b')}",
+        params={"format": CONFIG_FILE_FORMAT},
+    )
+    assert also_theirs.status_code == 200, also_theirs.text
+    theirs = mine_in(also_theirs.content, unique)
+    assert len(theirs) == 1, theirs
+    assert address_in(next(iter(theirs.values()))) != ours, (
+        "two friends on one row were handed one address"
+    )
 
     # The credential-protecting headers are on BOTH shapes. A second shape that lost
     # no-store would be a bearer-credential body sitting in someone else's cache, and
@@ -228,7 +295,7 @@ async def test_a_friend_on_uri_transports_only_sees_no_change_at_all(
         country=country,
         transport={
             "transport_name": "amneziawg",
-            **awg_params(AWG_PORT_UNTOUCHED, "10.82.0.1/24", "10.82.0.2/24"),
+            **awg_params(AWG_PORT_UNTOUCHED, "10.82.0.1/20", "10.82.0.2/20"),
         },
     )
 

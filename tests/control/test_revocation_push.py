@@ -48,14 +48,18 @@ from sqlalchemy.exc import MissingGreenlet
 from control.app.models import NodeState
 from edge.bootstrap import NodeConnection, node_stack
 
+from .conftest import GENERATED_SSH_KEY
+
 # A reserved documentation address (RFC 5737), as everywhere else in this zone. It is
 # never dialled here — the connection is replaced — but the record has to name
 # something, and a routable address in a fixture is an accident waiting to happen.
 NODE_ADDRESS = "192.0.2.10"
 
-# Obviously not a key. It only has to be non-empty: ``target_for`` refuses a node with
-# no SSH address, and the connection that would parse this never runs.
-FAKE_PRIVATE_KEY = "not-a-real-key"
+# A real key, from the conftest. It used to be the string "not-a-real-key", which only
+# had to be non-empty because the connection that would parse it is replaced here — but
+# ``target_for`` now refuses a record whose key will not load, before any of that, so a
+# placeholder never reaches the double. It authenticates nothing.
+FAKE_PRIVATE_KEY = GENERATED_SSH_KEY
 
 # The SSH port on the fixture nodes' records. Written into the record rather than left
 # to the API's default so that the fake connection error below can quote the address and

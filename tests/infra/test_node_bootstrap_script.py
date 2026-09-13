@@ -15,6 +15,12 @@ HOW:  the script is read, not run. Same division as ``test_panel_bootstrap_scrip
 
       M11.2 added the second half: that a re-run changes nothing and claims nothing untrue,
       and that the script states the boundaries an operator would otherwise assume away.
+
+      M18.3 added the one thing a re-run now DOES change on a host that has already been
+      applied to: who owns what an earlier apply left under the node directory. That is
+      the only way an account change can be carried out without the operator typing a
+      recursive chown on a live node, and the assertions for it sit beside the ones that
+      keep the re-run's claims honest, because the two constrain each other.
 """
 
 import pathlib
@@ -449,12 +455,81 @@ def test_it_stays_honest_about_hashi_state_on_a_host_already_applied_to(script: 
         "is always yes — the correction then fires on every run, including the first, and "
         "the closing line is wrong in the other direction"
     )
-    assert re.search(r"neither changed nor removed it", script), (
+    assert re.search(r"neither read, changed nor removed it", script), (
         "the line does not say that this run left the existing contents alone"
     )
-    assert re.search(r"only re-asserted that \$\{TARGET_USER\} owns", script), (
-        "the run claims it changed nothing, while `install -d` does re-assert ownership — "
-        "which is the one thing it changes on a host prepared for a different account"
+    # M18.3 made the claim narrower again, in the other direction. The run now takes
+    # ownership of the CONTENTS as well, so a line ending "only re-asserted that the
+    # account owns the directory" would understate what it did — and understating a
+    # change of ownership is how an operator concludes their files were left as they
+    # were. The contents are still neither read nor written; what moved is who they
+    # belong to, and the line has to say so.
+    assert re.search(r"it now belongs to \$\{TARGET_USER\} along with the directory", script), (
+        "the run hands the existing contents to the prepared account without saying so — "
+        "which is the half-measure M18.3 forbids, in reverse"
+    )
+
+
+def test_it_hands_an_existing_node_directorys_contents_to_the_prepared_account(
+    script: str,
+) -> None:
+    """M18.3 — the step's whole subject, and the reason "re-run the script" was not enough.
+
+    A node applied as one account and later prepared for another kept root-owned files
+    inside a directory the new account owned. The next apply died three layers away, in
+    ``node_stack.prepare``, on a ``chmod`` of a directory the account cannot chmod — and
+    the bootstrap that caused it had just printed ``ready``.
+
+    The step allowed either carrying the files or saying plainly that it does not. This
+    is the carrying half, and the assertion is deliberately about the RECURSION: a
+    non-recursive chown, or the ``install -d`` alone, is precisely the half-measure that
+    looks like it carries them. Both the mode and the owner must still be asserted on the
+    directory itself, which is what ``install -d`` is for, so neither line replaces the
+    other.
+    """
+    handover = re.search(
+        r'^as_root chown -R\S* "\$\{TARGET_USER\}:\$\{TARGET_GROUP\}" '
+        r'"\$\{NODE_ROOT\}(/\.)?"$',
+        script,
+        re.M,
+    )
+    assert handover, (
+        "the node directory's contents are never handed to the account this run prepares "
+        "for, so a host applied to as another account is left with files it cannot replace"
+    )
+    created = re.search(r'^as_root install -d[^\n]*"\$\{NODE_ROOT\}"$', script, re.M)
+    assert created and created.start() < handover.start(), (
+        "the contents are chowned before the directory is known to exist"
+    )
+    # It must not follow a symlink out of the directory it is recursing through, and the
+    # flag that decides that is `-P` — not `-h`, which this asserted until M18.1's review.
+    # `-h` decides whether a symlink leaf or its referent is changed; `-H`/`-L`/`-P` decide
+    # whether the walk DESCENDS through a link to a directory, and only `-P` refuses.
+    # Measured on coreutils 9.4: `chgrp -RhL` over a tree holding a link to an outside
+    # directory changed the files inside that directory, `-RhLP` changed nothing outside
+    # the tree. GNU already defaults `-R` to `-P`, so this is invisible in a passing run
+    # here — which is exactly why the wrong flag stayed pinned as though it were the
+    # guard, and why this is asserted on the flag that closes the hole rather than on the
+    # one the comment happened to name.
+    flags = handover.group(0).split()[2]
+    assert "P" in flags, (
+        "the recursive chown does not state that it refuses to descend through a symlink, "
+        "so on a chown that traverses by default a link planted under the node directory "
+        f"redirects it at an arbitrary path on the host — `-h` does not close this ({flags}"
+        "), it only decides whether a link or its referent is changed"
+    )
+    assert "h" in flags, (
+        f"the recursive chown ({flags}) no longer says it changes a symlink itself rather "
+        "than what it points at"
+    )
+    # And it names the DIRECTORY rather than a link to it. `-P` refuses to traverse the
+    # argument as well, so on a host where the node directory is a symlink to a data
+    # volume the chown changed the link, left every file inside owned by the old account
+    # and exited 0 — while the run announced the handover. `install -d` above has always
+    # followed the link; `/.` is what makes the two mean the same thing.
+    assert handover.group(0).endswith('"${NODE_ROOT}/."'), (
+        "the handover chowns ${NODE_ROOT} itself, so a symlinked node directory flips the "
+        "link's owner, leaves its contents with the old account, and says it is done"
     )
 
 

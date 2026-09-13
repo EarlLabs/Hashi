@@ -206,17 +206,25 @@ async def test_an_unknown_node_transport_is_a_404(client) -> None:
 async def test_the_panel_returns_a_fragment_not_a_page(
     client, session, reality_params
 ) -> None:
-    """The rulebook's HTMX trap: a full document here nests <html> in the panel."""
+    """The rulebook's HTMX trap: a full document here nests <html> in the panel.
+
+    The route took this path back in M9.6 from the pre-redesign page's one toggle; it is
+    two routes now, the destructive one confirming first. Same claim, same subject.
+    """
     node_transport_id, _ = await one_node_one_friend(client, session, reality_params)
 
     response = await client.post(
-        f"/panel/transports/{node_transport_id}/state", data={"enabled": "false"}
+        f"/panel/transports/{node_transport_id}/withdraw",
+        headers={"HX-Request": "true"},
     )
     assert response.status_code == 200, response.text
     assert "<html" not in response.text.lower()
     # The operator is told what a withdrawal does NOT do. Silence here would let them
-    # read it as a revocation, and the node is still serving what it was given.
-    assert "re-apply" in response.text
+    # read it as a revocation, and the node is still serving what it was given. This node
+    # has one transport, so it is the form that does not end on an apply: since M18.1 an
+    # apply with nothing enabled is refused, and the two forms are pinned against each
+    # other in tests/control/test_the_console.py.
+    assert "the node keeps serving it" in response.text
 
 
 # --- the panel's node-state route ---------------------------------------------
@@ -235,7 +243,11 @@ async def test_the_panel_can_put_a_node_into_service(client, session, reality_pa
         json={"transport_name": "vless-reality", "params": reality_params},
     )
 
-    response = await client.post(f"/panel/nodes/{node_id}/state", data={"state": "active"})
+    response = await client.post(
+        f"/panel/nodes/{node_id}/state",
+        data={"state": "active"},
+        headers={"HX-Request": "true"},
+    )
     assert response.status_code == 200, response.text
     assert "<html" not in response.text.lower()
     assert "active" in response.text
@@ -254,23 +266,44 @@ async def test_an_illegal_transition_from_the_panel_says_what_is_allowed(client)
         client, name="leaf-1", address="192.0.2.10", country="Netherlands"
     )
     assert (
-        await client.post(f"/panel/nodes/{node_id}/state", data={"state": "retired"})
+        await client.post(
+            f"/panel/nodes/{node_id}/state",
+            data={"state": "retired"},
+            headers={"HX-Request": "true"},
+        )
     ).status_code == 200
 
-    response = await client.post(f"/panel/nodes/{node_id}/state", data={"state": "active"})
-    assert response.status_code == 200
-    assert "bad" in response.text
+    response = await client.post(
+        f"/panel/nodes/{node_id}/state",
+        data={"state": "active"},
+        headers={"HX-Request": "true"},
+    )
+    # 422 with the dialog back, the console's one swappable refusal status, and the
+    # sentence under the control it is about rather than in a banner.
+    assert response.status_code == 422, response.status_code
     assert "cannot go from" in response.text
 
 
-async def test_a_state_that_does_not_exist_names_the_vocabulary(client) -> None:
-    """A typed form value, so the answer must not be a traceback or a bare 422."""
+async def test_a_state_that_does_not_exist_is_refused_beside_the_ones_that_do(
+    client,
+) -> None:
+    """A typed form value, so the answer must not be a traceback or a bare 422 body.
+
+    The console does NOT echo the word that arrived and does not list the vocabulary in
+    the sentence — that changed with M9.5 deliberately, because the dialog this refusal
+    re-renders already carries the states this node may actually move to, each with what
+    it does to a user's link. So the claim is unchanged in substance and stronger in
+    shape: the operator is told which states exist FOR THIS NODE, not which exist.
+    """
     node_id = await create_node(
         client, name="leaf-1", address="192.0.2.10", country="Netherlands"
     )
     response = await client.post(
-        f"/panel/nodes/{node_id}/state", data={"state": "hibernating"}
+        f"/panel/nodes/{node_id}/state",
+        data={"state": "hibernating"},
+        headers={"HX-Request": "true"},
     )
-    assert response.status_code == 200
-    assert "bad" in response.text
-    assert "draft" in response.text and "retired" in response.text
+    assert response.status_code == 422, response.status_code
+    assert "hibernating" not in response.text, "the panel echoed a typed value back"
+    assert 'id="node-state-error"' in response.text
+    assert "active" in response.text and "retired" in response.text

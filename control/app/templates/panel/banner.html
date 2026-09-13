@@ -1,21 +1,47 @@
 {#
-  A FAILED action, stated persistently and swapped out-of-band under the header.
+  A FAILED — or REFUSED — action, stated persistently and swapped out-of-band under the
+  header.
 
   Used where a toast would be wrong because the operator must not miss it — a
   revocation that could not reach every node is the case this exists for. It stays on
-  screen until the next successful request or the next navigation, both of which
-  clear it (static/app.js).
+  screen until an ANSWER replaces it: every console mutation swaps this slot, with a
+  failure or with nothing (panel/mutation_result.html), so the operator's next action is
+  what clears it. Navigation clears it too, from static/app.js.
 
-  Not red: UI-PATTERNS §4 — the steel accent is the only colour. But it is not the
-  same neutral frame an informational notice gets either, and that was an acceptance
-  finding rather than a preference: the failure and the "no node is serving yet"
-  notice were drawn identically and stacked one above the other, so the thing that
-  went wrong did not read as wrong. The weight is the accent ground, the thick left
-  edge, and the word "failed" — severity carried by the word, exactly as §4 asks.
+  It did not used to be that way, and the difference is the reason this comment is
+  worth reading: app.js emptied the slot on `htmx:afterRequest` for any successful
+  exchange, which fires AFTER the swap — so a banner this template delivered was wiped
+  by the very request that delivered it, and an action whose only answer is a banner
+  reported nothing at all.
+
+  It is not the neutral frame an informational notice gets, and that was an acceptance
+  finding rather than a preference: the failure and the "no node is serving yet" notice
+  were drawn identically and stacked one above the other, so the thing that went wrong
+  did not read as wrong. The weight is the thick left edge and the word "failed" —
+  severity carried by the word, exactly as §4 asks.
+
+  It IS red, since M9: the danger hue declared at the top of static/app.css. That
+  supersedes UI-PATTERNS §4's "there is no red" for this one role — a request that was
+  REFUSED or FAILED — and for nothing else; a status tag and a destructive button stay
+  steel. The reasoning is in docs/decisions.md (2026-09-10), which is the override the
+  handoff file is deliberately not updated to reflect. Weight alone left the operator
+  reading the colour of the primary button on a message that meant the opposite.
+
+  THE WORD IS THE CALLER'S — M18.1's review, and the hue deliberately is not. A refusal
+  and a failure are the two things app.css licenses this red for, and §4's rule is that
+  the WORD carries the severity — so the one token that has to differ between them is the
+  label. It said `failed` for both, and the message it said it over most often was a
+  just-registered node with nothing enabled: a healthy draft, nothing dialled, nothing
+  wrong, headed FAILED. On this button `failed` also has a meaning the rest of the
+  codebase relies on — a failed apply marks the node degraded — so the label was
+  asserting the exact state the sentence underneath it denies.
+
+  `failed` stays the default, so every caller that does not think about this gets the
+  louder of the two words rather than the quieter one.
 #}
 <div hx-swap-oob="innerHTML:#banner-slot">
   <div class="banner banner-failure" role="alert">
-    <span class="banner-label">failed</span>
+    <span class="banner-label">{{ banner_label|default("failed", true) }}</span>
     <span>{{ banner }}</span>
   </div>
 </div>

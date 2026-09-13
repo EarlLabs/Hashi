@@ -42,7 +42,24 @@ PANEL_PAGES = (
     "/panel/login",
     "/panel/",
     "/panel/friends",
-    "/panel/fleet",
+    "/panel/nodes",
+    "/panel/hops",
+    # M9.3's, added in the change that added the screen. It has no fragment of its own:
+    # nothing this panel can do changes which protocols the image ships, so the whole
+    # screen is one document and there is no refresh URL to list.
+    "/panel/transports",
+    # M9.4's. Same rule, and this one has the strongest reason to be walked: it is the
+    # screen whose whole subject is material that may never be rendered.
+    "/panel/keys",
+    # M10.2's, added in the change that added the screen. Same rule again: it has no
+    # fragment and no dialog, because nothing this panel can do changes what the
+    # process was started with.
+    "/panel/settings",
+    # M10.4's, added in the change that added the screen. Same rule again: nothing an
+    # operator can do from it changes what is on it, so it is one document with no
+    # fragment and no dialog.
+    "/panel/audit",
+    # ``/panel/fleet`` was the eighth entry until M9.6 deleted the page.
 )
 
 # The FRAGMENTS the console swaps in — dialogs and self-refreshing tables. They are
@@ -60,6 +77,18 @@ PANEL_FRAGMENTS = (
     "/panel/friends/new",
     "/panel/friends/table",
     "/panel/overview/body",
+    # M9.1's two, added in the change that added the screen — which is the rule this
+    # list exists to enforce.
+    "/panel/nodes/new",
+    "/panel/nodes/table",
+    # M9.2's, same rule. The establish-hop dialog is the largest fragment in the
+    # console — three questions and twenty-two tuning boxes — and every one of those
+    # boxes carries text this panel did not write, which is exactly the kind of
+    # surface a third-party reference survives longest in.
+    "/panel/hops/new",
+    "/panel/hops/table",
+    # M9.4's, same rule.
+    "/panel/keys/table",
 )
 
 # Anything that is not a path on this host. A scheme-relative URL is included on
@@ -91,9 +120,12 @@ async def operator(client):
 async def surfaces(operator, unique: str) -> list[str]:
     """Every panel URL that renders markup, including the two that need a friend.
 
-    A real friend and a real node are created because the two most interesting
-    fragments do not exist without them: the subscription-link dialog and the node
-    page. The stand is disposable and this run's rows are suffixed, so they cannot
+    A real friend and a real node are created because the most interesting fragments do
+    not exist without them: the subscription-link dialog, which is the one surface in
+    the console that displays a live bearer credential, and the two node dialogs the
+    Nodes screen's rows open — the transports list and the state form. (It used to say
+    "the node page"; M9.6 deleted that page, and the node is now created for those
+    dialogs.) The stand is disposable and this run's rows are suffixed, so they cannot
     collide with another scenario's.
 
     NOTE what this fixture does NOT do: it never reads the friend's subscription URL.
@@ -120,9 +152,138 @@ async def surfaces(operator, unique: str) -> list[str]:
         # bearer credential, and therefore the one whose markup matters most.
         f"/panel/friends/{friend_id}/subscription",
         f"/panel/friends/{friend_id}/revoke",
-        # The pre-redesign node page. Still part of the panel until M9.5 retires it,
-        # and it carries an inline script of its own.
-        f"/panel/nodes/{node.json()['id']}",
+        # The pre-redesign node page was walked here too, because it carried an inline
+        # script of its own. M9.6 deleted it and ``pages/base.html`` with it, so this
+        # list is now the whole panel with nothing bolted on.
+        # M9.5's two node dialogs, added in the change that added them. The first is the
+        # largest fragment on the Nodes screen — a group of boxes per transport this
+        # image ships, every one of them carrying text this panel did not write.
+        f"/panel/nodes/{node.json()['id']}/transports",
+        f"/panel/nodes/{node.json()['id']}/state",
+        # M16's, added in the change that added it: the resolver dialog behind the same
+        # row, which renders the value it edits back into its box.
+        f"/panel/nodes/{node.json()['id']}/resolver",
+        # …and the confirmation behind one of its buttons, which needs a protocol
+        # actually enabled on that node before it exists.
+        *await _with_an_offer(operator, node.json()["id"]),
+        # The tear-down confirmation and M9.4's two rotation dialogs, all of which
+        # need a whole hop behind them.
+        *await _with_a_hop(operator, unique),
+    ]
+
+
+# One protocol's worth of operator input, for the fixture below. A literal block for the
+# same reason ``_with_a_hop`` has one: no API can invent a hostname or a port, so the
+# values are written here and the TRANSPORT is discovered — this file names none. A
+# transport whose required fields are not all in this block is skipped rather than
+# half-filled.
+AN_OFFER = {
+    "port": 8471,
+    "decoy_host": "www.example.com",
+    "server_names": ["www.example.com"],
+}
+
+
+async def _with_an_offer(operator, node_id: str) -> list[str]:
+    """The two confirmations on one offered transport, and the offer they need.
+
+    M9.5 moved withdrawing a transport onto the Nodes screen and M15.2 put removing it
+    beside that; each confirmation is a fragment like any other — so each goes on this
+    list in the change that added it, which is the rule this whole scenario exists to
+    enforce.
+    """
+    installed = (await operator.get("/api/transports")).json()
+    offerable = sorted(
+        transport["name"]
+        for transport in installed
+        if transport["subscription_expressible"]
+        and set(transport["operator_params"]) <= set(AN_OFFER)
+    )
+    if not offerable:  # pragma: no cover - an image with nothing this block can fill
+        return []
+
+    required = next(
+        transport["operator_params"]
+        for transport in installed
+        if transport["name"] == offerable[0]
+    )
+    enabled = await operator.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": offerable[0],
+            "params": {name: AN_OFFER[name] for name in required},
+        },
+    )
+    assert enabled.status_code == 201, enabled.text
+    node_transport_id = enabled.json()["id"]
+    return [
+        f"/panel/transports/{node_transport_id}/withdraw",
+        f"/panel/transports/{node_transport_id}/remove",
+    ]
+
+
+async def _with_a_hop(operator, unique: str) -> list[str]:
+    """The dialogs that need a node-transport, and the hop they do not exist without.
+
+    Its own helper because a hop is the most expensive surface on this list to reach —
+    two nodes and a validated parameter block for each end — and the alternative was to
+    leave it off, which is the omission this whole scenario was written about. M9.4's
+    two rotation dialogs are addressed by a node-transport id, and the hop's entry end
+    is one, so they come out of the same fixture rather than a second fleet.
+    """
+    transports = (await operator.get("/api/transports")).json()
+    carrier = sorted(
+        transport["name"]
+        for transport in transports
+        if transport["hop_capable"] and not transport["subscription_expressible"]
+    )
+    if not carrier:  # pragma: no cover - an image with no hop-capable transport
+        return []
+
+    ends = []
+    for role, address in (("hop-entry", "192.0.2.61"), ("hop-exit", "192.0.2.62")):
+        created = await operator.post(
+            "/api/nodes",
+            json={
+                "name": f"{role}-{unique}",
+                "address": address,
+                "location_label": f"Testland-{unique}-{role}",
+            },
+        )
+        assert created.status_code == 201, created.text
+        ends.append(created.json()["id"])
+
+    def side(address: str, peer: str) -> dict:
+        return {
+            "port": 51820,
+            "tunnel_address": address,
+            "peer_tunnel_address": peer,
+            "mtu": 1280,
+            "junk_packet_count": 4,
+            "junk_packet_min_size": 40,
+            "junk_packet_max_size": 80,
+            "init_packet_magic_header": 1020327352,
+            "response_packet_magic_header": 2060487442,
+            "underload_packet_magic_header": 3679305607,
+            "transport_packet_magic_header": 1436947798,
+        }
+
+    hop = await operator.post(
+        "/api/hops",
+        json={
+            "entry_node_id": ends[0],
+            "leaf_node_id": ends[1],
+            "transport_name": carrier[0],
+            "entry_params": side("10.77.0.1/24", "10.77.0.2/24"),
+            "leaf_params": side("10.77.0.2/24", "10.77.0.1/24"),
+        },
+    )
+    assert hop.status_code == 201, hop.text
+    entry_end = hop.json()["entry"]["id"]
+    return [
+        f"/panel/hops/{entry_end}/dissolve",
+        f"/panel/keys/{entry_end}/rotate",
+        f"/panel/keys/{entry_end}/params",
     ]
 
 

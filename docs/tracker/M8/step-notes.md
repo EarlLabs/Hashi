@@ -11,6 +11,14 @@ title=, subtitle=, context=)` in `control/app/panel/routes.py`. It renders
 out-of-band) when `HX-Request: true`. Add the entry to `NAV`; `boost: True` for a
 console screen.
 
+> **Superseded by M9.6, 2026-09-10 — there is no `boost` key any more.** `boost`
+> and `note` were removed from `NAV` and from `nav.html` when the Fleet entry —
+> the only unboosted, noted entry — was deleted along with the pre-redesign
+> pages. Every console entry is boosted now, so there is nothing to set. Passing
+> `boost: True` is harmless and does nothing; do not copy this line expecting it
+> to matter. The reasoning sits at `control/app/panel/routes.py:118-121` and
+> `nav.html:8-11`.
+
 **Screen template shape:** `{% include "panel/console_header.html" %}` then
 `<div class="panel">…</div>`. Put the collection in its own fragment that swaps
 itself (`hx-target="this" hx-swap="outerHTML" hx-indicator="this"`,
@@ -71,4 +79,8 @@ covering every serving node. Nothing else is stored about them."*
   screen when M9 lands.
 - `console.drift_of` is the local digest comparison; do not confuse it with the
   probe's `drifted`/`stale` (`docs/tracker/M1/step-notes.md`).
-- `pages/index.html` and `pages/node.html` are **not** deleted until M9.5.
+- `pages/index.html` and `pages/node.html` are **not** deleted until M9.6.
+  (Written as M9.5 when M8 closed; M9 gained a step on 2026-09-10 — enable,
+  withdraw and set state, which had no named step — and retirement moved down
+  one. The rule is unchanged: they go last, once every action they carry has a
+  new home.)

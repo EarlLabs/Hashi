@@ -49,6 +49,23 @@ class NodeView:
     # panel and used to compose a client-visible label.
     display_name: str
 
+    # Where this node's destination NAMES are looked up while its traffic leaves through a
+    # hop — M16, ``docs/decisions.md`` (2026-09-09). An IPv4 address from the node record,
+    # or ``None`` when the operator gave none.
+    #
+    # Required, with no default, like every field here: a default would be a resolver this
+    # project chose for every node — the hardcoded address ``CLAUDE.md`` forbids, and one no
+    # node could rotate away from. ``None`` is not a policy either. It means nobody said, and
+    # a node whose traffic leaves through a hop refuses to render on it
+    # (``egress.lookup_resolver``) rather than fall back to the host's own resolver, which
+    # on an entry node sits inside the network the hop exists to leave.
+    #
+    # On the node rather than in a transport's parameters because it belongs to the node's
+    # WAY OUT, and a node has one of those (``egress.HOP_ROUTE_TABLE``): two friend-facing
+    # transports on one entry must look names up in the same place, and a copy per
+    # transport is two places to disagree.
+    resolver: str | None
+
 
 @dataclass(frozen=True)
 class Credential:

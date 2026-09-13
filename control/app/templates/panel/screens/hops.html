@@ -1,0 +1,22 @@
+{#
+  Hops — the tunnel that carries a node's traffic out to a second node.
+
+  design/README.md §4: an explainer paragraph with "establish hop" right-aligned on
+  the same row, then a table of entry / leaf / transport / state / established /
+  "tear down". Both the explainer and the button live inside the table fragment, the
+  way the Nodes screen keeps its own "add node" there, so a refresh repaints the whole
+  section rather than leaving a stale row under a fresh heading.
+
+  What is NOT on this screen: anything that moves when a friend connects. A hop's
+  state moves when the operator establishes it, applies it or tears it down —
+  docs/decisions.md's test for whether a cell may be on a screen at all — and there is
+  no throughput cell here, now or ever.
+
+  The pre-redesign page kept its own hop form alongside this screen until M9.6 deleted
+  it — nothing was taken off it while both were live, because an operator mid-rotation
+  must not find the job half moved.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  {% include "panel/hops_table.html" %}
+</div>

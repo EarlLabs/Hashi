@@ -1,0 +1,165 @@
+{#
+  The nodes table, on its own so a mutation can refresh it without a page load.
+
+  Swaps itself, exactly like panel/friends_table.html and panel/overview_body.html:
+  one file is both the first paint and every refresh, so there is no second rendering
+  that could disagree with this one about what a row says. It listens for
+  `nodes-changed`, which every node mutation in panel/routes.py fires.
+
+  `hx-disinherit="hx-indicator"`: the skeleton belongs to THIS element's own refresh
+  and to nothing inside it. htmx inherits hx-indicator down the tree, so without this
+  a row's "probe" button would take the whole table away and replace it with the
+  loading skeleton — for an action that changes nothing about the list. Each button
+  keeps its own indicator, which is the button itself (.btn.htmx-request in app.css).
+
+  What is NOT in this table, and may never be: anything that moves when a friend
+  connects. `docs/decisions.md` replaced the design's "load" column with `config`,
+  which reads drift against the digest we last applied — a measurement of us rather
+  than of the people on the node.
+#}
+<div id="nodes-table" class="stack-6"
+     hx-get="/panel/nodes/table" hx-trigger="nodes-changed from:body"
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this"
+     hx-disinherit="hx-indicator">
+
+  <div class="loading" aria-hidden="true">
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+  </div>
+
+  <div class="loaded stack-6">
+    {#
+      UI-PATTERNS §2: the screen's own creation action is SECONDARY and sits right
+      above its own table. The header's "add user" is the panel's one primary, and two
+      solid accent buttons are never on screen at once.
+    #}
+    <div class="section-head">
+      <button class="btn btn-secondary" type="button"
+              hx-get="/panel/nodes/new"
+              hx-target="#dialog-slot" hx-swap="innerHTML">add node</button>
+    </div>
+
+    {% if nodes %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>exit</th>
+            <th>address</th>
+            <th>state</th>
+            <th>config</th>
+            <th>transports</th>
+            <th class="right">actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for node in nodes %}
+          <tr>
+            {# `.wraps` on the three cells holding text the OPERATOR typed — a name, a
+               label, an address may each be one unbroken run, and app.css says why
+               every other cell in the row must refuse to break. #}
+            <td class="wraps">{{ node.name }}</td>
+            <td class="text-muted wraps">{{ node.location_label }}</td>
+            {# UI-PATTERNS §7: an address is a machine value, so it is monospace. The
+               value is a node record's own column — this template names none. #}
+            <td class="mono wraps">{{ node.address }}</td>
+            <td>
+              {# UI-PATTERNS §4: status is a tag, never coloured text, and there is no
+                 red here — a degraded node needs attention, which is the outline tag,
+                 and draft or retired is inert. #}
+              <span class="tag {{ 'tag-accent' if node.state == 'active' else ('tag-outline' if node.state == 'degraded' else 'tag-neutral') }}">
+                {{ node.state }}
+              </span>
+            </td>
+            <td class="mono text-muted">{{ node.drift }}</td>
+            <td>
+              {% if node.transports %}
+              <span class="tag-row">
+                {% for transport in node.transports %}
+                {#
+                  The transport's own name, printed as data. Which tag it wears is
+                  decided by two facts about OUR configuration and never by which
+                  protocol it is: whether the operator is offering it, and whether it
+                  faces friends at all. A hop end says so, because a tunnel between
+                  two of our own nodes must not read as something a person is offered.
+                #}
+                {% if not transport.offered %}
+                <span class="tag tag-neutral">{{ transport.name }} (disabled)</span>
+                {% elif not transport.for_friends %}
+                <span class="tag tag-outline">{{ transport.name }} (hop)</span>
+                {% else %}
+                <span class="tag tag-accent">{{ transport.name }}</span>
+                {% endif %}
+                {% endfor %}
+              </span>
+              {% else %}
+              <span class="text-muted">none</span>
+              {% endif %}
+            </td>
+            <td class="right">
+              <span class="row-actions">
+                <button class="btn btn-secondary" type="button"
+                        hx-post="/panel/nodes/{{ node.id }}/probe"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">probe</button>
+                <button class="btn btn-secondary" type="button"
+                        hx-post="/panel/nodes/{{ node.id }}/apply"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">apply</button>
+                {#
+                  M9.5's two. What this node offers is a LIST inside this row, so its
+                  actions cannot live in this cell one per transport — the dialog behind
+                  this button holds a line per transport with its own button, and the
+                  form that enables another. Moving the node between states is its own
+                  dialog because it is about the node rather than about what it runs.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/transports"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">transports</button>
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/state"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">set state</button>
+                {#
+                  M16's. The one edit a node record admits after registration: where this
+                  node's lookups go through its hop. Its own dialog, like the state, because
+                  it is about the node rather than about anything it runs.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/resolver"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">resolver</button>
+              </span>
+            </td>
+          </tr>
+          {% if node.state_detail %}
+          {#
+            Why a node is degraded is the one thing that must not be hidden: an
+            unexplained degraded node is a node nobody fixes. Its own row rather than a
+            second line in the state cell — the text comes from a remote host, can be
+            long, and a status cell may never be allowed to break (app.css).
+          #}
+          <tr class="row-detail">
+            <td class="text-muted wraps" colspan="7">why: {{ node.state_detail }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {#
+      The empty state a first-time operator meets. It names the next action and the
+      order that actually works, rather than reporting that a table is empty — and it
+      says what a new node is NOT, because a node that exists is not yet a node that
+      serves.
+    #}
+    <div class="empty">
+      <div class="empty-title">No nodes yet</div>
+      <p class="empty-body text-muted">
+        Use "add node" above. A new node starts as a draft: it reaches nobody until you
+        enable a protocol on it, apply that configuration to the host, and put it into
+        service. Until one is serving, every user's link resolves to nothing.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>

@@ -1,0 +1,51 @@
+{#
+  "Set this node's resolver" — M16, and the one edit a node record admits after it is
+  registered.
+
+  WHY IT EXISTS AT ALL: a node that dials a hop does not render without a resolver
+  (edge/egress.py), and the upgrade that added the field gave every existing node none —
+  so without this dialog the field's own entry node could not be applied again, and no
+  revocation could reach it. Everything else on a node stays fixed; a new host is still a
+  new node.
+
+  The box holds what the record holds now, and what was typed when it comes back refused:
+  an address is not a secret, and retyping it is how a second mistake gets in. No
+  placeholder — a suggested value would be a resolver this panel chose for every node,
+  which is the hardcoded address CLAUDE.md forbids, arriving through markup.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="node-resolver-title">
+    <div class="dialog-title" id="node-resolver-title">Set this node's resolver</div>
+    <form class="dialog-form" hx-post="/panel/nodes/{{ node.id }}/resolver"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="node-resolver">resolver</label>
+        <input class="input" id="node-resolver" name="resolver" type="text"
+               value="{{ values.get('resolver', node.resolver or '') }}" autocomplete="off"
+               aria-describedby="node-resolver-hint{% if errors.get('resolver') %} node-resolver-error{% endif %}"
+               {% if errors.get('resolver') %}aria-invalid="true"{% endif %}>
+        <div class="field-hint" id="node-resolver-hint">
+          Where a user's destination names are looked up while {{ node.name }} dials a
+          hop — asked through the hop, so the lookup leaves from its far end. An address,
+          not a name. One this node itself answers on is the case this panel cannot check
+          for you: the host would answer it here, on the near side of the hop.
+        </div>
+        {% if errors.get('resolver') %}
+        <div class="field-error" id="node-resolver-error" role="alert">{{ errors['resolver'] }}</div>
+        {% endif %}
+      </div>
+
+      <div class="dialog-body">
+        This changes the record, not the host: apply {{ node.name }} afterwards. A node
+        that dials a hop cannot be applied without a resolver — and a revocation cannot
+        reach it either.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">set resolver</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

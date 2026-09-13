@@ -21,12 +21,15 @@ HOW:  no node is contacted. The nodes here have no SSH key, so the push half fai
 
 import base64
 import json
+import typing
 
+import pydantic
 import pytest
 from sqlalchemy import select
 
+from control.app.errors import DomainError
 from control.app.models import Credential, NodeState, NodeTransport
-from control.app.services import apply, nodes, rotation
+from control.app.services import apply, keymaterial, nodes, relay, rotation
 
 
 async def fleet(client, session, reality_params):
@@ -265,18 +268,25 @@ async def test_replacing_nothing_is_refused_rather_than_pushed(
 
 # --- the same two operations, from the panel (criteria 2 and 3 are "from the panel")
 
-async def test_the_node_page_offers_rotation_for_each_enabled_transport(
+async def test_the_keys_screen_offers_rotation_for_each_enabled_transport(
     client, session, reality_params
 ) -> None:
-    """The form is built from the transport's own declaration, so it names no protocol."""
-    node_id, node_transport_id, _, _ = await fleet(client, session, reality_params)
+    """The form is built from the transport's own declaration, so it names no protocol.
 
-    page = (await client.get(f"/panel/nodes/{node_id}")).text
+    On Keys & configs since M9.4, and its only home since M9.6 deleted the node page
+    both actions used to hang off. The claim did not move with the screen: each enabled
+    row offers both operations, and the replace form's boxes come from the registry.
+    """
+    _, node_transport_id, _, _ = await fleet(client, session, reality_params)
 
-    assert f"/panel/transports/{node_transport_id}/rotate-keys" in page
-    assert f"/panel/transports/{node_transport_id}/params" in page
+    screen = (await client.get("/panel/keys")).text
+
+    assert f"/panel/keys/{node_transport_id}/rotate" in screen
+    assert f"/panel/keys/{node_transport_id}/params" in screen
+
+    dialog = (await client.get(f"/panel/keys/{node_transport_id}/params")).text
     # A field the transport declared, offered without this template knowing it exists.
-    assert 'name="decoy_host"' in page
+    assert 'name="decoy_host"' in dialog
 
 
 async def test_the_panel_rotates_keys_and_returns_a_fragment(
@@ -286,7 +296,9 @@ async def test_the_panel_rotates_keys_and_returns_a_fragment(
     _, node_transport_id, _, token = await fleet(client, session, reality_params)
     before = base64.b64decode((await client.get(f"/sub/{token}")).text).decode()
 
-    response = await client.post(f"/panel/transports/{node_transport_id}/rotate-keys")
+    response = await client.post(
+        f"/panel/keys/{node_transport_id}/rotate", headers={"HX-Request": "true"}
+    )
 
     assert response.status_code == 200
     assert "<html" not in response.text.lower()
@@ -306,11 +318,12 @@ async def test_the_panel_leaves_blank_fields_alone(
     node_id, node_transport_id, _, _ = await fleet(client, session, reality_params)
 
     response = await client.post(
-        f"/panel/transports/{node_transport_id}/params",
+        f"/panel/keys/{node_transport_id}/params",
         data={"decoy_host": "www.wikipedia.org", "server_names": "www.wikipedia.org",
               "port": "", "decoy_port": ""},
+        headers={"HX-Request": "true"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     session.expire_all()
     config = json.dumps(await rendered_server_config(session, node_id))
@@ -321,20 +334,26 @@ async def test_the_panel_leaves_blank_fields_alone(
 async def test_the_panel_reports_a_rejected_rotation_as_a_failure_fragment(
     client, session, reality_params
 ) -> None:
-    """A refusal has to be readable on the page, not a 500 the operator never sees."""
+    """A refusal has to be readable on the page, not a 500 the operator never sees.
+
+    422 with the dialog re-rendered is how this console refuses — static/app.js allows
+    exactly that one status to swap — and the complaint lands under the box it is about.
+    """
     _, node_transport_id, _, _ = await fleet(client, session, reality_params)
 
     response = await client.post(
-        f"/panel/transports/{node_transport_id}/params", data={"port": "1"}
+        f"/panel/keys/{node_transport_id}/params",
+        data={"port": "1"},
+        headers={"HX-Request": "true"},
     )
 
-    assert response.status_code == 200
-    assert "bad" in response.text, response.text
+    assert response.status_code == 422, response.status_code
+    assert 'id="param-port-error"' in response.text, response.text
 
 
 @pytest.mark.parametrize(
     "path",
-    ["/panel/transports/whatever/rotate-keys", "/panel/transports/whatever/params"],
+    ["/panel/keys/whatever/rotate", "/panel/keys/whatever/params"],
 )
 async def test_rotation_from_the_panel_needs_an_operator_session(
     anonymous, path: str
@@ -357,3 +376,215 @@ async def test_rotation_service_refuses_a_transport_this_image_does_not_ship(
 
     with pytest.raises(DomainError):
         await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+
+
+# --- what a refusal may never carry -------------------------------------------
+#
+# Both paths above validate a mapping that HOLDS key material — ``replace_params``
+# merges in the row's decrypted secrets, ``rotate_keys`` merges in the ones it has just
+# minted — and a transport's own validator may quote what it was handed. No shipped
+# transport's does, which is exactly why this is guarded rather than watched: the day
+# one does there is no second chance to notice, and the surfaces that render a
+# ``ParamsRefused`` (the API envelope and the console's dialog — and the pre-redesign
+# page's outcome fragment until M9.6 deleted it) render it without choosing to.
+#
+# The models below refuse the way a real one could, at every location shape Pydantic
+# reports, and each quotes the material back. ``docs/decisions.md`` (2026-09-10).
+
+VALIDATOR_QUOTED = "QUOTED-BY-A-VALIDATOR"
+
+
+def _everything_it_was_given(values) -> str:
+    """A careless validator's sentence: its own words, then its whole input.
+
+    The marker is what the assertions look for, because it can only have come from the
+    MESSAGE — the values themselves include what the operator typed, which a refusal is
+    entitled to hand back.
+    """
+    return f"{VALIDATOR_QUOTED} " + " ".join(str(value) for value in values)
+
+
+class _QuotesTheWholeMapping(pydantic.BaseModel):
+    """A model-level validator: Pydantic locates this at ``()``, which joins to ``""``."""
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    @pydantic.model_validator(mode="after")
+    def _refuse(self):
+        raise ValueError(
+            f"these parameters disagree: {_everything_it_was_given(self.model_dump().values())}"
+        )
+
+
+def _quoting_its_siblings(value: str, info: pydantic.ValidationInfo) -> str:
+    raise ValueError(
+        f"is not a name this decoy can present: {_everything_it_was_given(info.data.values())}"
+    )
+
+
+class _QuotesFromInsideAList(pydantic.BaseModel):
+    """A per-item validator that reads what was validated before it: ``("server_names", 0)``."""
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    private_key: str
+    server_names: list[
+        typing.Annotated[str, pydantic.AfterValidator(_quoting_its_siblings)]
+    ]
+
+
+class _QuotesUnderABoxTheFormHas(pydantic.BaseModel):
+    """The shape a location allow-list cannot sort, and the reason redaction is here.
+
+    A ``field_validator`` on a field the replace form legitimately has a box for, reading
+    the fields validated before it through ``info.data``. Pydantic locates the complaint
+    at ``("decoy_host",)`` — a real box — so every guard keyed on WHERE a refusal is
+    located passes it through with the private key inside it. Field order is
+    load-bearing: ``private_key`` is declared first, so it is in ``info.data`` by the
+    time ``decoy_host`` is checked.
+    """
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    private_key: str
+    decoy_host: str
+
+    @pydantic.field_validator("decoy_host")
+    @classmethod
+    def _refuse(cls, value: str, info: pydantic.ValidationInfo) -> str:
+        raise ValueError(
+            f"does not match the key {_everything_it_was_given(info.data.values())}"
+        )
+
+
+class _RefusingProfile:
+    """Whatever ``profile()`` hands back, narrowed to the one call rotation makes."""
+
+    def __init__(self, model) -> None:
+        self._model = model
+
+    def validate(self, values: dict) -> dict:
+        self._model(**values)
+        raise AssertionError("this model was supposed to refuse and did not")
+
+
+async def _material_on(session, node_transport_id: str) -> dict[str, str]:
+    """The decrypted values this row holds, labelled.
+
+    The KEYS are safe to print in a failure message and the values never are — the same
+    shape ``stored_material`` uses in the console's sweep, and for the same reason.
+
+    ``expunge_all`` first: the rows were written through the client's own session, and
+    SQLAlchemy hands back the instance this one already has rather than re-reading it.
+    """
+    session.expunge_all()
+    row = await session.get(NodeTransport, node_transport_id)
+    return {
+        f"{row.transport_name}'s {name} on node-transport {row.id}": value
+        for name, value in json.loads(row.secrets).items()
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    (_QuotesUnderABoxTheFormHas, _QuotesTheWholeMapping, _QuotesFromInsideAList),
+    ids=("a box the form has", "no location at all", "a nested location"),
+)
+@pytest.mark.parametrize("path", ("enable", "replace", "rotate"))
+async def test_no_path_validating_a_transport_s_parameters_carries_key_material(
+    client, session, monkeypatch, reality_params, model, path: str
+) -> None:
+    """The guard, at the point the values are still in scope, on every path at once.
+
+    Every location shape and every caller, because the class being closed is the class
+    of MESSAGES: a complaint may be quoting material whichever field it names, so a rule
+    about WHERE it is filed can only ever be the second line of defence. What is asserted
+    is that no value the row holds — nor any minted in the same call — survives into
+    ``fields`` or into ``message``, while the transport's own words still do.
+
+    ENABLING is on this list because it was the path that was missed. It validates the
+    same shape of mapping and had its own hand-rolled flattening of ``exc.errors()``,
+    with a comment asserting the property rather than a call that holds it — and it
+    answers ``POST /api/nodes/{id}/transports`` and the panel's own form. Its refusal is
+    a plain ``DomainError`` with no ``fields`` on it, which is why the sentences under
+    test here are read off whatever the exception actually carries. The hop path is the
+    fourth and is proved in ``test_relay.py``, beside the code it belongs to.
+    """
+    _, node_transport_id, _, _ = await fleet(client, session, reality_params)
+    monkeypatch.setattr(rotation, "profile", lambda name: _RefusingProfile(model))
+    monkeypatch.setattr(nodes, "profile", lambda name: _RefusingProfile(model))
+
+    minted: list = []
+    freshly = keymaterial.mint
+
+    def recording(specs, scope):
+        # ``mint`` and not ``rotate``: ``rotate`` is ``mint`` under another name at the
+        # call site that means something different, so patching the one records both.
+        fresh = freshly(specs, scope)
+        minted.append(fresh)
+        return fresh
+
+    monkeypatch.setattr(keymaterial, "mint", recording)
+    held = await _material_on(session, node_transport_id)
+
+    with pytest.raises(DomainError) as refused:
+        if path == "enable":
+            fresh_node = await client.post(
+                "/api/nodes",
+                json={
+                    "name": "leaf-se",
+                    "address": "192.0.2.11",
+                    "location_label": "Sweden",
+                },
+            )
+            await nodes.enable_transport(
+                session,
+                node_id=fresh_node.json()["id"],
+                transport_name="vless-reality",
+                params=reality_params,
+            )
+        elif path == "replace":
+            await rotation.replace_params(
+                session,
+                node_transport_id=node_transport_id,
+                params={
+                    "decoy_host": "www.wikipedia.example",
+                    "server_names": ["www.wikipedia.example"],
+                },
+            )
+        else:
+            await rotation.rotate_keys(session, node_transport_id=node_transport_id)
+
+    if path == "replace":
+        assert not minted, "this path must preserve existing material, not mint any"
+    else:
+        # Nothing is written before the refusal, so the material this validator quoted
+        # is only ever in memory — and a sweep of the database alone would miss it.
+        assert minted, f"nothing was minted, so this run proves nothing about {path}"
+        held |= {
+            f"the {name} just minted": value
+            for fresh in minted
+            for name, value in fresh.secrets.items()
+        }
+    assert held
+
+    # Whatever this particular refusal carries: ``ParamsRefused`` has both halves, a
+    # plain ``DomainError`` has only the message, and BOTH are rendered by a caller that
+    # never chose to.
+    sentences = [
+        refused.value.message,
+        *getattr(refused.value, "fields", {}).values(),
+    ]
+    for label, value in held.items():
+        for sentence in sentences:
+            if value in sentence:
+                # ``pytest.fail`` and not ``assert``: a rewritten assertion prints both
+                # operands, which would put the key into the CI log.
+                pytest.fail(f"a refusal on the {path} path carried {label}")
+
+    # Non-vacuous, and the two halves of the claim: the transport's own sentence still
+    # travels (a guard that dropped it would pass the loop above), and something was
+    # actually struck out of it.
+    carried = " ".join(sentences)
+    assert VALIDATOR_QUOTED in carried
+    assert relay.WITHHELD in carried

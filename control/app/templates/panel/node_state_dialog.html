@@ -1,0 +1,105 @@
+{#
+  "Set this node's state" — charter criterion 2's own control, in the console.
+
+  Putting a replacement node into service is what makes every existing user's link
+  resolve to it, and the criterion is written about the panel: it has to be doable here
+  rather than with curl. Until this dialog existed the only console route to it was the
+  pre-redesign page.
+
+  ONLY THE TRANSITIONS THIS NODE MAY ACTUALLY MAKE are offered, and this file does not
+  restate the state machine — `choices` comes from services/console.py, which projects
+  `NodeState.allowed_from`. A button whose only outcome is a 409 is worse than no button,
+  and `retired` is terminal by design: bringing back a record whose host is gone would
+  put an address that may now belong to a stranger into every user's subscription.
+
+  Each choice carries what it does TO A USER'S LINK rather than a definition of the word,
+  because that is the thing the operator is actually choosing between. Those sentences
+  are composed in services/console.py from this project's own state enum, so a fifth
+  state is one line there rather than prose nobody remembers to edit here.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="node-state-title">
+    <div class="dialog-title" id="node-state-title">Set this node's state</div>
+
+    {% if errors.get('state') and not choices %}
+    {#
+      A refusal must never be silent, and this is the one shape of it that has no
+      control to land under: a node that was retired between this dialog being opened
+      and being submitted has nowhere left to go, so the branch below renders no form.
+      The two are mutually exclusive — with a form on screen the message goes under the
+      select, where it belongs and where its id ties it to that control.
+    #}
+    <div class="field-error" role="alert">{{ errors['state'] }}</div>
+    {% endif %}
+
+    {% if choices %}
+    <form class="dialog-form" hx-post="/panel/nodes/{{ node.id }}/state"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="node-state">state</label>
+        <select class="input" id="node-state" name="state"
+                aria-describedby="node-state-hint{% if errors.get('state') %} node-state-error{% endif %}"
+                {% if errors.get('state') %}aria-invalid="true"{% endif %}>
+          <option value="">choose…</option>
+          {% for choice in choices %}
+          {# A withheld state gets no option — M17.2. The state machine allows the move;
+             what is in the way is a pool on this node too small for the fleet, which
+             either refuses the move outright or — where everybody on that row already
+             holds a credential — lets it through onto a transport with no room for the
+             people it is meant to carry. Neither is a state to hand an operator behind a
+             control, which is the same rule that keeps `retired -> active` off this
+             list. It stays in the hint below, with the reason, because "where this node
+             may go" is what the operator came here to read. #}
+          {% if not choice.withheld %}
+          <option value="{{ choice.state }}"{% if values.get('state') == choice.state %} selected{% endif %}>{{ choice.state }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        <div class="field-hint" id="node-state-hint">
+          <div>{{ node.name }} is {{ node.state }} now. Where it may go from there:</div>
+          {% for choice in choices %}
+          {# The consequence, or — where the move is withheld — what is in the way of it.
+             Both are composed in services/console.py; this file chooses between them and
+             writes neither. #}
+          <div><span class="mono">{{ choice.state }}</span> —
+            {% if choice.withheld %}{{ choice.withheld }}{% else %}{{ choice.means }}{% endif %}</div>
+          {% endfor %}
+        </div>
+        {% if errors.get('state') %}
+        <div class="field-error" id="node-state-error" role="alert">{{ errors['state'] }}</div>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <label for="node-detail">why</label>
+        <input class="input" id="node-detail" name="detail" type="text"
+               value="{{ values.get('detail', "") }}" autocomplete="off"
+               aria-describedby="node-detail-hint">
+        <div class="field-hint" id="node-detail-hint">Optional, and kept only when you
+          mark it degraded — a degraded node with no reason on it is a node nobody
+          fixes. Ignored for every other state.</div>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">set state</button>
+      </div>
+    </form>
+    {% else %}
+    {#
+      A retired node, which is the one state with nowhere to go. No form, because there
+      is nothing it could send.
+    #}
+    <div class="dialog-body">
+      {{ node.name }} is {{ node.state }}, and that is final. The record is kept so its
+      address is not quietly reused; when you need the capacity back, register a
+      replacement node — no user has to do anything when you do.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+    </div>
+    {% endif %}
+    {% include "panel/corners.html" %}
+  </div>
+</div>

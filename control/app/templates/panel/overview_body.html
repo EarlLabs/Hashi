@@ -47,7 +47,15 @@
         enable a protocol on it and put it into service — then come back and add your
         first user from the header.
       </p>
-      <a class="btn btn-secondary" href="/panel/fleet">add a node</a>
+      {#
+        Repointed from the old fleet page to the Nodes screen in M9.1, the step that
+        created it: this is the first button a new operator ever presses, and it now
+        lands on the screen that owns the action rather than on the page being retired.
+        Boosted like every other console link, so it swaps #main instead of reloading.
+      #}
+      <a class="btn btn-secondary" href="/panel/nodes"
+         hx-get="/panel/nodes" hx-target="#main" hx-swap="innerHTML"
+         hx-push-url="true">add a node</a>
     </div>
     {% else %}
     <div class="grid-2">
@@ -100,7 +108,9 @@
       <section class="card blueprint">
         <div class="card-head">
           <h4>Nodes</h4>
-          <a class="all-link" href="/panel/fleet">all nodes</a>
+          <a class="all-link" href="/panel/nodes"
+             hx-get="/panel/nodes" hx-target="#main" hx-swap="innerHTML"
+             hx-push-url="true">all nodes</a>
         </div>
         {% if overview.nodes %}
         <div class="table-scroll">

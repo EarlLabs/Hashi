@@ -177,17 +177,37 @@ async def test_a_wrong_key_cannot_read_stored_secrets(client, reality_params) ->
         other.decrypt(ciphertext)
 
 
-async def test_enabling_the_same_transport_twice_is_refused(
+async def test_a_second_instance_of_one_transport_is_refused_only_over_the_port(
     client, reality_params
 ) -> None:
-    """Two instances of one transport on a node would mean two ports under one name."""
+    """What a node refuses is two transports on one port — not two of one transport.
+
+    M15. The rule used to be one row per ``(node, transport_name)``, and it made the
+    runbook's own advice impossible to follow: AmneziaWG is mandated for the entry→leaf
+    hop and recommended for friends on the same box. The refusal moved onto what
+    actually collides — the data planes run with ``network_mode: host``, so one port is
+    one bind — and the answer is still a 409, so no API caller's envelope moved.
+
+    Both halves are asserted here because either alone is satisfied by a mistake: the
+    refusal alone by the old rule, and the acceptance alone by no rule at all.
+    """
     node_id = await create_active_node(client)
     payload = {"transport_name": "vless-reality", "params": reality_params}
 
     assert (await client.post(f"/api/nodes/{node_id}/transports", json=payload)).status_code == 201
-    duplicate = await client.post(f"/api/nodes/{node_id}/transports", json=payload)
-    assert duplicate.status_code == 409
-    assert duplicate.json()["error"]["code"] == "conflict"
+
+    same_port = await client.post(f"/api/nodes/{node_id}/transports", json=payload)
+    assert same_port.status_code == 409
+    assert same_port.json()["error"]["code"] == "conflict"
+
+    elsewhere = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": "vless-reality",
+            "params": {**reality_params, "port": reality_params["port"] + 1},
+        },
+    )
+    assert elsewhere.status_code == 201, elsewhere.text
 
 
 async def test_an_unknown_transport_is_refused(client) -> None:

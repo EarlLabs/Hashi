@@ -1,0 +1,33 @@
+{#
+  Nodes — the machines that serve traffic and the machines that exit it.
+
+  The first of M9's fleet screens. The layout is design/README.md §3: the screen's own
+  "add node" secondary above a full-width table of name / exit / address / state /
+  transports / actions. Two departures, both deliberate:
+
+  * the design's node "load" is not here and never will be. It is one of the four cells
+    docs/decisions.md removed — a node's load is a measurement of the people on it. The
+    `config` column stands in its place, reading drift against the digest we last
+    applied, which answers "is this node running what I told it to". Same test as every
+    other cell on every other screen: does it move when a friend CONNECTS? This one
+    moves only when the operator acts.
+  * a degraded node's reason gets its own row under it. The design never drew one, and
+    an unexplained degraded node is a node nobody fixes.
+
+  Every action a node has is now reachable from this screen's own rows: probe and apply
+  from M9.1, and from M9.5 the dialog that lists what this node offers — with a button
+  per transport to withdraw or offer it again, and the form that enables another — plus
+  the one that moves the node between states. Hops moved to their own screen in M9.2 and
+  key rotation to Keys & configs in M9.4. M9.6 deleted the pre-redesign page once none
+  of it was the only way to do anything any more.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  {% include "panel/nodes_table.html" %}
+  <p class="text-muted section-note">
+    A node reaches nobody until a protocol is enabled on it, its configuration is
+    applied to the host, and it is put into service. Users hold one link covering
+    whichever nodes are serving at the moment they refresh, so adding or replacing one
+    asks nothing of them.
+  </p>
+</div>

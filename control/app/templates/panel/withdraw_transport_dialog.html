@@ -1,0 +1,44 @@
+{#
+  Confirming a withdrawal.
+
+  UI-PATTERNS §3: a destructive action confirms in a dialog, and the sentence spells out
+  the blast radius rather than asking "are you sure". Here the radius has a half that an
+  operator is very likely to get wrong, and it is the half services/nodes.py insists on:
+  withdrawing changes what the control plane DELIVERS, not what the host is running. A
+  person who already holds a fetched configuration keeps connecting on it until the node
+  is applied without them — so "withdrawn" read as "stopped" is the opposite of what
+  happened, and this is the last moment to say so.
+
+  The other half is what this action is NOT. Taking a protocol out of the fleet's offer
+  and taking a person's access away are two different operations with two different blast
+  radii; revocation destroys that person's material everywhere, and it is on the Users
+  screen. Naming it here is what keeps an operator from reaching for this one.
+
+  No key material is named and none could be: this dialog's whole context is one OfferRow,
+  which carries a name, a standing and an id.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="withdraw-transport-title">
+    <div class="dialog-title" id="withdraw-transport-title">Withdraw {{ offer.transport }}?</div>
+    <div class="dialog-body">
+      It leaves every user's link on {{ offer.node }} at their next refresh, and nobody
+      re-imports anything. You can offer it again from the same place, and their link
+      does not move either way.
+    </div>
+    <div class="dialog-body text-muted">
+      The node keeps serving it until you apply the node: this changes what this panel
+      hands out, not what the host is running, so anyone already holding a fetched
+      configuration keeps connecting on it until then. To take one person's access away
+      instead, revoke them on the Users screen — that is a different action with a
+      different reach.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+      <button class="btn btn-primary" type="button"
+              hx-post="/panel/transports/{{ offer.id }}/withdraw"
+              hx-target="#dialog-slot" hx-swap="innerHTML">withdraw</button>
+    </div>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

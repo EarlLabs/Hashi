@@ -13,15 +13,17 @@ HOW:  real Postgres, real encryption, real rendering. No node is contacted.
 import base64
 import io
 import json
+import re
 import zipfile
 from dataclasses import replace
 
 import pytest
 from sqlalchemy import select
 
-from control.app.errors import NodeOperationFailed, NotDeliverable
-from control.app.models import Credential, NodeState
+from control.app.errors import NotDeliverable
+from control.app.models import Credential, Friend, NodeState
 from control.app.services import apply, friends, nodes, subscriptions
+from edge.addressing import host_of
 from edge.registry import ClientConfig, SubscriptionFormat, discover
 
 AWG_PARAMS: dict[str, object] = {
@@ -60,8 +62,22 @@ def file_transport() -> str:
     return FILE_TRANSPORTS[0]
 
 
+# How many users a transport that gives each of them an address may hand out here — M17.
+# Far above anything this file creates: every test below is about which SHAPE a friend
+# receives, not about the pool's edges, and a size that only just fits would turn an
+# unrelated test red the day somebody adds a user to it. The /24s below hold it easily.
+POOL_SIZE = 200
+
+
 async def serving_node(
-    client, session, *, name: str, address: str, transport_name: str, params: dict
+    client,
+    session,
+    *,
+    name: str,
+    address: str,
+    transport_name: str,
+    params: dict,
+    pool_size: int = POOL_SIZE,
 ) -> str:
     created = await client.post(
         "/api/nodes",
@@ -70,10 +86,14 @@ async def serving_node(
     assert created.status_code == 201, created.text
     node_id = created.json()["id"]
 
-    enabled = await client.post(
-        f"/api/nodes/{node_id}/transports",
-        json={"transport_name": transport_name, "params": params},
-    )
+    # The size is sent for exactly the transports that declare each user needs an address
+    # of their own, and refused for the rest — so this helper asks the registry rather
+    # than being told, and every call site below is unchanged whichever kind it enables.
+    body: dict[str, object] = {"transport_name": transport_name, "params": params}
+    if discover()[transport_name].peer_address is not None:
+        body["pool_size"] = pool_size
+
+    enabled = await client.post(f"/api/nodes/{node_id}/transports", json=body)
     assert enabled.status_code == 201, enabled.text
 
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
@@ -310,23 +330,32 @@ async def test_a_friends_private_material_never_reaches_a_server_config(
         assert secret not in whole, "a friend's private key reached a node's config file"
 
 
-async def test_a_renderer_that_refuses_degrades_the_node_instead_of_raising_500(
-    client, session, file_transport: str
+@pytest.mark.parametrize("people", [2, 3])
+async def test_every_user_on_one_wireguard_row_renders_at_an_address_of_their_own(
+    client, session, file_transport: str, people: int
 ) -> None:
-    """A refusal an operator can read, on the page they are already on.
+    """THE PINNED REFUSAL, INVERTED — M17, and the whole reason the milestone exists.
 
-    The WireGuard family refuses to write two peers onto one tunnel address rather than
-    emit a file where the second silently takes over the first's route. That refusal is
-    correct — and until item 27 it could not happen, because such a transport could not
-    be given to friends at all. It reached the operator as "internal error", through the
-    worst possible path: revocation re-pushes every node the friend was on, so an
-    unrelated node's rendering problem made "remove this person's access" answer 500,
-    leaving nobody able to tell whether the removal had happened.
+    This test used to assert the opposite: two friends on one config-file transport
+    could not be rendered at all, and the value of the test was that the refusal reached
+    the operator as a NODE failure carrying the transport's own sentence rather than as
+    a 500. That refusal is still right and is still pinned — by
+    ``tests/control/test_every_user_holds_their_own_address.py``'s
+    ``test_a_row_from_before_this_milestone_with_two_users_still_refuses``, which drives
+    a row into the state the migration leaves one in and asserts both that it refuses and
+    that the sentence carries no key material. It is no longer what `control` produces
+    from any state a surface can create, because `control` no longer hands two people one
+    address.
 
-    Two friends on one config-file transport is exactly that state today, because no
-    per-friend tunnel address is allocated — backlog item 33. This asserts the failure
-    is a NODE failure with the transport's own sentence in it, which is the discipline
-    core invariants §4 asks for.
+    What it asserts now is the charter's scale: every user on the row holds their own
+    address, and the node's config routes each of them separately. A ``/32`` per peer is
+    the transport's own arithmetic; what is checked here is that there are as many
+    DISTINCT ones as there are people, because one repeated address is exactly the silent
+    hijack ``AmbiguousPeerRoute`` exists to refuse.
+
+    RED WITHOUT THE ALLOCATOR: remove the ``settle`` call from
+    ``friends.grant_everywhere`` and this fails at ``render_for_node`` with the old
+    refusal, for every value of ``people``.
     """
     node_id = await serving_node(
         client, session, name="two-friends", address="192.0.2.27",
@@ -334,20 +363,78 @@ async def test_a_renderer_that_refuses_degrades_the_node_instead_of_raising_500(
         params={**AWG_PARAMS, "port": 51824,
                 "tunnel_address": "10.27.0.1/24", "peer_tunnel_address": "10.27.0.2/24"},
     )
-    for nickname in ("first", "second"):
+    for nickname in ("first", "second", "third")[:people]:
         assert (
             await client.post("/api/friends", json={"nickname": nickname})
         ).status_code == 201
 
     node = await nodes.get_node(session, node_id)
-    with pytest.raises(NodeOperationFailed) as refused:
-        await apply.render_for_node(session, node)
+    config = (await apply.render_for_node(session, node))[file_transport]
 
-    message = str(refused.value)
-    assert file_transport in message
-    # The transport's own explanation survives, and no key material rides along.
-    assert "tunnel address" in message.lower()
-    assert "PrivateKey" not in message
+    routes = re.findall(r"AllowedIPs\s*=\s*(\S+)", config)
+    assert len(routes) == people, config
+    assert len(set(routes)) == people, (
+        f"{people} users share {len(set(routes))} routes — the second one silently takes "
+        "over the first's return path"
+    )
+    # Each of them is one host and not a range: AllowedIPs is the authorisation list as
+    # well as the routing table, so a wide entry lets that user source traffic as anybody.
+    for route in routes:
+        assert route.endswith("/32"), route
+
+
+async def test_each_users_own_file_names_the_address_the_node_authorises_for_them(
+    client, session, file_transport: str
+) -> None:
+    """The two renders of one allocation, compared — M17.
+
+    A node's config and a user's own file are produced by two different services, from
+    the same row, and they answer two halves of one question: which address may this
+    person send as, and which address is their device configured with. If those disagree
+    the tunnel comes up, the handshake completes, and nothing moves — with every screen
+    green, which is the failure M14 spent an evening on.
+
+    So this walks BOTH builders: ``apply.render_for_node`` for the node and
+    ``subscriptions.config_files_for`` for each person, and asserts the host in their
+    file's ``Address`` is the host the node routes to them and to nobody else.
+
+    RED WITH ONE BUILDER OVERLAID: overlay the allocation in ``render_for_node`` alone
+    and this fails — the second user's file still carries the first's address, which is
+    precisely the state that looks correct from every screen.
+    """
+    node_id = await serving_node(
+        client, session, name="both-ends", address="192.0.2.29",
+        transport_name=file_transport,
+        params={**AWG_PARAMS, "port": 51825,
+                "tunnel_address": "10.29.0.1/24", "peer_tunnel_address": "10.29.0.2/24"},
+    )
+    people = ["olya", "petya"]
+    for nickname in people:
+        assert (
+            await client.post("/api/friends", json={"nickname": nickname})
+        ).status_code == 201
+
+    node = await nodes.get_node(session, node_id)
+    server = (await apply.render_for_node(session, node))[file_transport]
+    authorised = {
+        host_of(route) for route in re.findall(r"AllowedIPs\s*=\s*(\S+)", server)
+    }
+
+    theirs = set()
+    for nickname in people:
+        handle = (
+            await session.execute(select(Friend).where(Friend.nickname == nickname))
+        ).scalars().one()
+        configs = await subscriptions.config_files_for(session, handle)
+        assert len(configs) == 1, configs
+        address = re.search(r"Address\s*=\s*(\S+)", configs[0].content).group(1)
+        theirs.add(host_of(address))
+
+    assert len(theirs) == len(people), "two users were handed one address"
+    assert theirs == authorised, (
+        "what the node authorises and what the devices are configured with are two "
+        f"different sets: {sorted(authorised)} against {sorted(theirs)}"
+    )
 
 
 # --- a database restored with the wrong key (item 32's control half) ----------

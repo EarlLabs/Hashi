@@ -5,22 +5,16 @@
   out-of-band on an HTMX navigation — the sidebar sits outside #main, so without the
   oob swap the highlight would stay on the screen the operator just left.
 
-  `nav` is the list from panel/routes.py:NAV. An entry with `boost` false is a real
-  navigation to a page that has not been redesigned yet; it says so in the item
-  rather than pretending, because until M9 lands a dead nav link would be worse.
+  `nav` is the list from panel/routes.py:NAV, and every entry is a boosted navigation
+  that swaps #main. Until M9.6 one entry was an ordinary browser navigation to the
+  pre-redesign fleet page, with a note under its label saying what was left there; that
+  page is gone, and with it the `boost` and `note` keys and the branch that read them.
 #}
 <nav id="console-nav" class="sidenav-list" role="navigation"
      {%- if oob %} hx-swap-oob="outerHTML:#console-nav"{% endif %}>
   {% for item in nav %}
-    {% if item.boost %}
     <a href="{{ item.url }}"
        hx-get="{{ item.url }}" hx-target="#main" hx-swap="innerHTML" hx-push-url="true"
        {% if item.key == current %}aria-current="page"{% endif %}>{{ item.label }}</a>
-    {% else %}
-    <a href="{{ item.url }}" {% if item.key == current %}aria-current="page"{% endif %}>
-      {{ item.label }}
-      <span class="nav-note">{{ item.note }}</span>
-    </a>
-    {% endif %}
   {% endfor %}
 </nav>

@@ -107,6 +107,35 @@ class Credential(Base, TimestampMixin):
     __tablename__ = "credentials"
     __table_args__ = (
         UniqueConstraint("friend_id", "node_transport_id", name="uq_friend_node_transport"),
+        # ONE ADDRESS PER PERSON INSIDE ONE TUNNEL — M17, and this is the rule the
+        # database holds rather than a service remembering it. On a WireGuard server
+        # ``AllowedIPs`` is simultaneously the authorisation list and the routing table,
+        # so two credentials on one row holding one address is not a duplicate: it is a
+        # silent hijack of the first person's return path by the second. ``edge`` refuses
+        # to render such a pair (``AmbiguousPeerRoute``) — correctly, and that refusal is
+        # untouched — but a refusal at render time arrives after the rows are committed,
+        # at which point every push to that node fails, including a revocation's.
+        #
+        # WHY A CONSTRAINT AND NOT ONLY THE ALLOCATOR. The allocator reads the addresses
+        # in use and takes the lowest free one; that is a READ, and nothing serialises
+        # two of them (the same reasoning ``services/placement.py`` sets out for ports).
+        # Here, unlike there, the losing write must not be allowed to land — so the
+        # database decides, one of the two flushes fails, and the service turns that into
+        # a refusal that changed nothing. No lock is taken anywhere.
+        #
+        # Over the DIGEST rather than the address, because the address itself is
+        # encrypted and Fernet output is randomised: the same address stored twice is two
+        # different strings, so a constraint over the ciphertext would hold nothing at
+        # all. Per node-transport rather than fleet-wide: two nodes handing out the same
+        # private address is the ordinary case, and only one tunnel's routing table is
+        # at stake. NULL digests do not collide in Postgres, which is what lets every row
+        # that pre-dates M17 — and every credential on a transport that hands out no
+        # addresses at all — sit in this table unaffected.
+        UniqueConstraint(
+            "node_transport_id",
+            "tunnel_address_digest",
+            name="uq_credential_tunnel_address",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -125,6 +154,45 @@ class Credential(Base, TimestampMixin):
     # Any further client-scoped material this transport declared, as a JSON object
     # in one encrypted string.
     secrets: Mapped[str] = mapped_column(EncryptedText(4096), nullable=False, default="{}")
+
+    # This person's own address inside this row's tunnel — M17. Written in the form the
+    # renderer wants (with the prefix the operator typed), and NULL for every credential
+    # on a transport that hands out no addresses, which is most of them.
+    #
+    # WHY NOT IN ``secrets`` ABOVE, which is where every other piece of per-person
+    # material lives. ``rotation.rotate_keys`` replaces that column WHOLESALE
+    # (``services/rotation.py``, the line that assigns ``credential.secrets``): it mints
+    # fresh client material and writes the new mapping over the old one, because which
+    # keys a transport's material has is the transport's business and merging would mean
+    # `control` deciding what survives. An address is not key material — rotating a key
+    # must not move the address a device is already configured with — so a value kept
+    # there would be destroyed by the next rotation, silently, and every rotated user
+    # would fall back to the pool's first address and collide.
+    #
+    # WHY ENCRYPTED, AND WHY A DIGEST BESIDE IT. The same pair as ``Subscription.token``
+    # and for the same two reasons: an encrypted column cannot be searched or constrained
+    # (Fernet output is randomised), so the digest is what the uniqueness rule above is
+    # written over and what the allocator compares. The encryption is what keeps a stolen
+    # dump from being a list of which address belongs to whom.
+    #
+    # WHAT THAT PROTECTION IS NOT, stated plainly rather than implied: it is PARTIAL. The
+    # allocator hands out the lowest free address in ``(created_at, id)`` order, and both
+    # of those columns are in clear — so somebody holding a dump and no key can replay
+    # the order and reconstruct most of the mapping anyway. What the encryption genuinely
+    # buys is that the file itself is not readable, that a row edited or revoked out of
+    # order is not reconstructible, and that no address is ever printed by an accident of
+    # logging or serialisation. It is not a claim that the mapping is secret.
+    tunnel_address: Mapped[str | None] = mapped_column(EncryptedText(512), nullable=True)
+
+    # The keyed digest of the address above, over this row and the address's CANONICAL
+    # bare host — ``SecretBox.address_digest``. Canonical so that ``10.0.0.2/24`` and
+    # ``10.0.0.2/32`` cannot both satisfy the constraint: they are one host, one route,
+    # and one hijack.
+    #
+    # Keyed (HMAC) rather than a plain hash, like the token digest: without
+    # ``HASHI_SECRET_KEY`` a dump's digests cannot even be tested against a guessed
+    # address, which is the small private range every one of them is in.
+    tunnel_address_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     friend: Mapped[Friend] = relationship(back_populates="credentials", lazy="joined")
     node_transport: Mapped[NodeTransport] = relationship(  # noqa: F821
