@@ -1,7 +1,8 @@
-"""What two transports on one node may and may not share — M15.
+"""What two transports on one node may and may not share — M15, and M17.1c.
 
 WHAT: the uniqueness rule after it moved off ``(node, transport_name)`` and onto the
-      listening port and the config file's name.
+      listening port, the config file's name — and, since M17.1c, the tunnel's own
+      range.
 WHY:  the old rule was enforced in terms of the wrong concept, at the worst moment, with
       no way to undo the state that triggered it. It made the runbook's own advice
       impossible: AmneziaWG is mandated for the entry→leaf hop and recommended for
@@ -11,6 +12,13 @@ HOW:  through the real services and a real database. The half that cannot be pro
       check, and nothing in this file claims it. What IS proven is that the control plane
       writes two rows, renders two configs, places them at two paths and asks for two
       interface names the kernel would accept.
+
+      THE RANGE RULE IS M17.1c AND LIVES HERE because it is the same question asked of
+      the same function: what may two transports on one node share. It is the one of the
+      three with a person on the other end of it — two tunnels whose ranges meet can hand
+      two friends the same address, and the host's single routing table then sends one
+      of them the other's traffic. No rendered file shows it, because each file is
+      correct on its own.
 """
 
 import pytest
@@ -353,6 +361,172 @@ async def test_retyping_a_port_onto_one_the_node_already_uses_is_refused(
         )
 
 
+# --- and the range the tunnel hands addresses out of (M17.1c) -----------------
+#
+# The third thing that collides, and the only one whose failure has a victim: the port
+# rule stops a container that will not start, the name rule stops two files at one path,
+# and this one stops one friend's return traffic arriving at another friend's device.
+# Everything here goes through the same ``placement`` call as the two above.
+
+async def test_two_tunnels_on_one_node_may_not_share_a_range(
+    client, session, wg_params
+) -> None:
+    """A second tunnel over the first one's addresses, refused before the row exists.
+
+    Its own port, so the older refusal is not what answers — this is the range and
+    nothing else. What the operator is told names both ranges and the transport already
+    holding one, all three of which are already on their own screens, and no address any
+    person holds.
+    """
+    node_id = await a_node(client, "range-1", "192.0.2.110")
+    await offered(client, node_id, wg_params)
+
+    collided = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": HOP_TRANSPORT,
+            "params": {**wg_params, "port": HOP_PORT},
+            "pool_size": POOL_SIZE,
+        },
+    )
+
+    assert collided.status_code == 409, collided.text
+    assert collided.json()["error"]["code"] == "conflict"
+    message = collided.json()["error"]["message"]
+    assert "range-1" in message and HOP_TRANSPORT in message, message
+    assert wg_params["tunnel_address"] in message, message
+
+    # And the row was not written: the refusal is before the placement, not after it.
+    session.expire_all()
+    rows = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == node_id)
+        )
+    ).scalars().unique().all()
+    assert len(rows) == 1, rows
+
+
+async def test_a_range_that_merely_contains_the_other_is_the_same_collision(
+    client, wg_params
+) -> None:
+    """The comparison is of NETWORKS, not of the two addresses.
+
+    ``10.70.0.1/24`` and ``10.70.9.1/16`` are two addresses that look nothing alike and
+    two ranges that overlap completely — the second's prefix swallows the first. This is
+    the case a string comparison, or a comparison of the two addresses, would let
+    through, and it is the one an operator writes by accident: a prefix typed wide.
+    """
+    node_id = await a_node(client, "range-2", "192.0.2.111")
+    await offered(client, node_id, wg_params)
+
+    collided = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": HOP_TRANSPORT,
+            "params": {
+                **wg_params,
+                "port": HOP_PORT,
+                "tunnel_address": "10.70.9.1/16",
+                "peer_tunnel_address": "10.70.9.2/16",
+            },
+            "pool_size": POOL_SIZE,
+        },
+    )
+
+    assert collided.status_code == 409, collided.text
+    assert "10.70.9.1/16" in collided.json()["error"]["message"]
+
+
+async def test_a_hop_end_may_not_be_laid_over_a_tunnel_the_node_already_carries(
+    client, session, wg_params
+) -> None:
+    """The same rule at the other creation path, so the two cannot disagree.
+
+    The runbook puts a friend-facing tunnel and a hop end on ONE entry box, which is the
+    shape M15 unlocked — and it is exactly the shape this rule matters in: both data
+    planes are on that host, writing into one routing table.
+    """
+    entry_id = await a_node(client, "range-3", "192.0.2.112")
+    leaf_id = await a_node(client, "far-3", "192.0.2.113")
+    await offered(client, entry_id, wg_params)
+
+    hop_side = {**wg_params, "port": HOP_PORT}
+    collided = await client.post(
+        "/api/hops",
+        json={
+            "entry_node_id": entry_id,
+            "leaf_node_id": leaf_id,
+            "transport_name": HOP_TRANSPORT,
+            "entry_params": hop_side,
+            "leaf_params": {
+                **hop_side,
+                "tunnel_address": "10.70.0.2/24",
+                "peer_tunnel_address": "10.70.0.1/24",
+            },
+        },
+    )
+
+    assert collided.status_code == 409, collided.text
+    assert "range-3" in collided.json()["error"]["message"]
+    session.expire_all()
+    on_the_entry = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.node_id == entry_id)
+        )
+    ).scalars().unique().all()
+    assert len(on_the_entry) == 1, "a refused hop wrote an end anyway"
+
+
+async def test_retyping_a_tunnel_onto_one_the_node_already_carries_is_refused(
+    client, session, wg_params
+) -> None:
+    """The third path that writes a range, held to the same rule — M17.1c.
+
+    A hop end moved onto the friend-facing tunnel's own range. It is the path that had
+    nothing at all: enabling and establishing both went through ``placement.claim``, and
+    replacing a parameter went through neither, so a range that could not be typed into
+    the form could still be typed into this one.
+    """
+    entry_id, friend_row, hop = await a_box_carrying_both(client, wg_params)
+
+    with pytest.raises(Conflict) as refused:
+        await rotation.replace_params(
+            session,
+            node_transport_id=hop["entry"]["id"],
+            params={"tunnel_address": "10.70.0.9/24"},
+        )
+    assert HOP_TRANSPORT in str(refused.value)
+
+    # And the row still holds what it held: a refusal here changes nothing.
+    session.expire_all()
+    moved = await session.get(NodeTransport, hop["entry"]["id"])
+    assert moved.params["tunnel_address"] == "10.71.0.1/24"
+
+
+async def test_a_switched_off_transport_still_holds_its_range(
+    client, session, wg_params
+) -> None:
+    """Disabled is not removed — its range is still spoken for, exactly as its port is.
+
+    Freeing it when a row is switched off would move the collision to the moment the row
+    is switched back on, which for this rule is the moment two people are holding one
+    address with nothing red anywhere.
+    """
+    node_id = await a_node(client, "range-off", "192.0.2.114")
+    row = await offered(client, node_id, wg_params)
+    await nodes.set_transport_enabled(session, node_transport_id=row["id"], enabled=False)
+    await session.commit()
+
+    with pytest.raises(Conflict):
+        await nodes.enable_transport(
+            session,
+            node_id=node_id,
+            transport_name=HOP_TRANSPORT,
+            params={**wg_params, "port": HOP_PORT},
+            pool_size=POOL_SIZE,
+        )
+
+
 # --- the schema holds the same rule -------------------------------------------
 
 async def test_the_database_holds_the_half_of_the_rule_it_can_hold(session) -> None:
@@ -483,7 +657,15 @@ async def test_the_second_instance_takes_a_name_the_kernel_would_accept(
         session,
         node=node,
         transport_name=HOP_TRANSPORT,
-        params={**wg_params, "port": HOP_PORT},
+        # ITS OWN RANGE as well as its own port, since M17.1c: a second tunnel on this
+        # node may not be laid over the first one's addresses, and the refusals below say
+        # why. Nothing about the NAME under test changes with it.
+        params={
+            **wg_params,
+            "port": HOP_PORT,
+            "tunnel_address": "10.78.0.1/24",
+            "peer_tunnel_address": "10.78.0.2/24",
+        },
     )
 
     assert chosen != HOP_TRANSPORT
@@ -769,7 +951,17 @@ async def test_the_removal_confirmation_names_which_of_two_instances_it_is(
     """
     node_id = await a_node(client, "twice-1", "192.0.2.103")
     first = await offered(client, node_id, wg_params)
-    second = await offered(client, node_id, {**wg_params, "port": HOP_PORT})
+    # A second instance takes its own port AND its own range — M17.1c.
+    second = await offered(
+        client,
+        node_id,
+        {
+            **wg_params,
+            "port": HOP_PORT,
+            "tunnel_address": "10.79.0.1/24",
+            "peer_tunnel_address": "10.79.0.2/24",
+        },
+    )
     assert second["config_name"] != first["config_name"]
 
     confirmation = await client.get(f"/panel/transports/{second['id']}/remove")

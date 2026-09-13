@@ -217,7 +217,22 @@ class ParamsReplace(BaseModel):
 
     # Open mapping for the same reason as TransportEnable.params: the shape belongs to
     # the transport, which validates it with its own model.
-    params: dict = Field(min_length=1)
+    #
+    # NO LONGER ``min_length=1`` — M17.1c. Since the pool size travels beside this mapping,
+    # a request carrying only a new size is a real request, and refusing it here would
+    # refuse the one operation migration 0006 promises: sizing a row that has served since
+    # before M17. A request that changes nothing at all is still refused, by the service,
+    # which is the only place that can tell — it compares what arrived against what the
+    # row already holds, and "these values are already in place" is a better answer than
+    # "params is too short".
+    params: dict = Field(default_factory=dict)
+
+    # How many people this transport may hand an address to, from here on. Not a member of
+    # ``params`` for ``TransportEnable``'s reason: it is a column on the node-transport
+    # record rather than a parameter of the transport, whose model forbids what it did not
+    # declare. ``None`` leaves the size exactly as it is, which is what a request replacing
+    # a blocked decoy sends.
+    pool_size: int | None = None
 
 
 class RotationResponse(BaseModel):

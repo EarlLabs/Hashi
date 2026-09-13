@@ -11,10 +11,19 @@ WHY:  the rule used to be one row per ``(node, transport_name)``, which is not w
       and arrived with M15.2). What actually collides on a host is the listening port,
       because the data planes run with ``network_mode: host``, and the config file's
       name, because ``edge`` derives the wg-quick family's network interface from it.
+
+      AND — M17.1c — THE TUNNEL'S OWN RANGE, which is the third thing and the one with
+      a victim. Two tunnels on one node whose ranges meet can hand two different people
+      the same address; their data planes share that host's single routing table, so a
+      reply meant for one person's device is sent to the other's. It is not a conflict
+      any file shows: each config is individually valid, and the renderers' own
+      ``AmbiguousPeerRoute`` reads ONE file and therefore cannot see the second
+      interface at all. It is caught here or nowhere.
 HOW:  one function, ``claim``, called just before a row is written, plus ``port_is_free``
-      for the path that retypes a port on a row that already exists. Both read the
-      node's existing rows and nothing else. The refusal is a ``Conflict`` — 409, the
-      status the old duplicate refusal answered with, so no caller's envelope changes.
+      and ``tunnel_network_is_free`` for the path that retypes those values on a row that
+      already exists. All of them read the node's existing rows and nothing else. The
+      refusal is a ``Conflict`` — 409, the status the old duplicate refusal answered with,
+      so no caller's envelope changes.
 
       A PORT NUMBER IS NOT A PORT. Two transports collide only when they bind the same
       number over the same transport-layer protocol: a TCP proxy on 8443 and an
@@ -35,8 +44,11 @@ HOW:  one function, ``claim``, called just before a row is written, plus ``port_
       the port rule lives here, in the one function every writing path goes through.
 
       WHICH MEANS THE PORT RULE IS A READ AND NOT A LOCK, and that is worth saying plainly
-      rather than leaving as an inference from the paragraph above. ``claim`` and
-      ``port_is_free`` look at the node's rows and decide; nothing serialises them, so two
+      rather than leaving as an inference from the paragraph above. The tunnel-range rule
+      is the same shape and has no constraint behind it either, for the same reason — a
+      range is a value of the transport's own JSONB and Postgres cannot be asked whether
+      two of them meet. ``claim``, ``port_is_free`` and ``tunnel_network_is_free`` look at
+      the node's rows and decide; nothing serialises them, so two
       enables submitted at the same instant could both find a port free and both take it.
       The config name cannot go that way — it loses at the flush, because the schema holds
       it. This is accepted rather than closed: the charter's product is one operator on one
@@ -48,8 +60,11 @@ HOW:  one function, ``claim``, called just before a row is written, plus ``port_
 
       Nothing here compares a transport name to a literal. ``PORT_FIELD`` is the hop
       contract's vocabulary rather than any protocol's (see ``services.transports``),
-      and both "would this name work as an interface" and "what does this bind" are
-      asked of ``edge``, which owns those facts.
+      and "would this name work as an interface", "what does this bind" and "do these two
+      ranges meet" are all asked of ``edge``, which owns those facts. WHICH parameter
+      holds a row's tunnel range is asked of the transport's own declaration
+      (``TransportMeta.peer_address``, through ``services.addresses``), so this module
+      names no address field either.
 """
 
 from collections.abc import Mapping
@@ -59,7 +74,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict
 from control.app.models import Node, NodeTransport
+from control.app.services import addresses
 from control.app.services.transports import PORT_FIELD
+from edge.addressing import networks_overlap
 from edge.bootstrap import node_stack
 from edge.registry import Layer4, discover, profile
 
@@ -86,6 +103,22 @@ NO_NAME_LEFT = (
     "node {node!r} cannot take another {transport!r}: this transport's tool takes its "
     "network interface name from its config file, and every name that would fit on this "
     "node is already used. Remove one of them from this node, or put this one on another."
+)
+
+# What an operator is told when the tunnel they typed shares a range with another of this
+# node's tunnels — M17.1c. It names both ranges as the operator typed them and the
+# transport already holding one: all three are that operator's own inventory, already on
+# the Keys & configs screen, and none of them is an address any person holds. The middle
+# sentence is the whole reason this refusal exists, and it is stated rather than implied,
+# because the failure it stands in front of looks like nothing at all — two valid files,
+# two interfaces that come up, and one friend's traffic arriving at another's device.
+TUNNEL_TAKEN = (
+    "node {node!r} already carries {holder!r} on a tunnel at {held}, and {wanted} is in "
+    "the same range. Two tunnels on one node cannot share one: their data planes write "
+    "into that host's single routing table, so a reply meant for one person's device "
+    "would be sent to whoever holds the same address on the other — and neither config "
+    "file shows it, because each is correct on its own. Give this tunnel a range of its "
+    "own."
 )
 
 # How many instances of one transport a node may be asked for before the names run out.
@@ -196,6 +229,66 @@ async def port_is_free(
             )
 
 
+def tunnel_of(transport_name: str, params: Mapping[str, object]) -> str | None:
+    """The address describing this row's tunnel range, or ``None`` for a row with none.
+
+    Read under the name the TRANSPORT declared (``PeerAddress.within`` — the parameter
+    whose network says how much room there is), so this module learns no field name and a
+    transport that calls its interface address something else is compared the same way.
+
+    ``None`` for a transport that hands its consumers no address of their own, and for one
+    this image does not ship: neither has a range this rule can be stated about, and the
+    second is skipped for ``port_is_free``'s reason — nothing can say what it holds, and
+    inventing an answer would either refuse a range that is free or allow one that is not.
+    """
+    spec = addresses.spec_for(transport_name)
+    if spec is None:
+        return None
+    value = params.get(spec.within)
+    return None if value is None else str(value)
+
+
+async def tunnel_network_is_free(
+    session: AsyncSession,
+    *,
+    node: Node,
+    transport_name: str,
+    params: Mapping[str, object],
+    excluding: str | None = None,
+) -> None:
+    """Refuse a tunnel range another of this node's tunnels already covers — M17.1c.
+
+    EVERY ROW ON THE NODE, hop ends and withdrawn rows included, which is ``_rows_on``'s
+    own rule and is load-bearing twice here. A hop end is a tunnel on that host exactly as
+    a friend-facing row is — the runbook puts both on the entry node — and its interface
+    is up whether or not anybody is offered it. A withdrawn row keeps its range for the
+    same reason it keeps its port: switching it back on must not be the moment the
+    collision appears.
+
+    ``excluding`` is the row being changed, on the path that retypes a range rather than
+    creating one — without it a row would overlap itself and no range could ever be
+    replaced by the one it already has.
+
+    Whether two ranges meet is ``edge.addressing.networks_overlap``'s answer, asked of the
+    whole network each address describes rather than of the two addresses: the question is
+    about what may be HANDED OUT. ``10.66.0.1/24`` and ``10.66.9.1/24`` are different
+    ranges; ``10.66.0.1/24`` and ``10.66.0.9/16`` are not, and the second pair is the one
+    an operator writes by accident.
+    """
+    wanted = tunnel_of(transport_name, params)
+    if wanted is None:
+        return
+    for row in await _rows_on(session, node.id, excluding=excluding):
+        held = tunnel_of(row.transport_name, row.params)
+        if held is None or not networks_overlap(wanted, held):
+            continue
+        raise Conflict(
+            TUNNEL_TAKEN.format(
+                node=node.name, holder=row.transport_name, held=held, wanted=wanted
+            )
+        )
+
+
 async def claim(
     session: AsyncSession, *, node: Node, transport_name: str, params: Mapping[str, object]
 ) -> str:
@@ -208,12 +301,20 @@ async def claim(
     Nothing is committed here and nothing is reserved: the caller adds its row in the
     same transaction, and the config name it answers with is held by a unique constraint
     in the schema too (``NodeTransport.__table_args__``), so a race loses at the flush
-    rather than silently producing a node with two configs at one path. THE PORT ANSWER
-    HAS NO SUCH BACKSTOP — it is a read, and this module's header says what that costs
-    and why it is accepted.
+    rather than silently producing a node with two configs at one path. THE PORT AND THE
+    TUNNEL RANGE HAVE NO SUCH BACKSTOP — both are reads, and this module's header says
+    what that costs and why it is accepted.
     """
     await port_is_free(
         session, node=node, transport_name=transport_name, port=port_of(params)
+    )
+    # AFTER the port and before the name, so a request that gets both wrong is answered
+    # about the port first — the older refusal, the one every existing caller asserts on.
+    # This is where establishing a hop meets the rule as well: ``relay.establish_hop``
+    # claims each end on its own node, so a hop laid over a node's friend-facing tunnel is
+    # refused with the form still in front of the operator.
+    await tunnel_network_is_free(
+        session, node=node, transport_name=transport_name, params=params
     )
 
     taken = {row.config_name for row in await _rows_on(session, node.id)}

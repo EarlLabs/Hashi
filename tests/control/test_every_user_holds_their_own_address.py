@@ -41,7 +41,7 @@ from control.app.models import (
 from control.app.models.base import secret_box
 from control.app.panel import routes as panel_routes
 from control.app.services import addresses, apply, friends, nodes, rotation, subscriptions
-from edge.addressing import host_of
+from edge.addressing import host_of, pool
 from edge.registry import ConfigFormat, discover, profile
 
 # Every transport in this image that declares each of its consumers needs an address of
@@ -801,6 +801,388 @@ async def test_a_node_with_two_users_on_one_tunnel_renders_through_a_revocation(
     assert len(routes) == 2 and len(set(routes)) == 2, config
 
 
+# --- resizing: a row is sized where its parameters are replaced (M17.1c) ------
+#
+# There is no resize action and no resize endpoint, on purpose and in writing: migration
+# 0006 promises an operator that a row serving since before M17 is sized by replacing
+# that row's parameters. These are that promise, and the two things it may not cost —
+# an address that moves, and a tunnel that walks out from under the people in it.
+
+async def resize(client, node_transport_id: str, **body):
+    """The one surface a pool is resized through: replacing the row's parameters."""
+    return await client.post(
+        f"/api/transports/{node_transport_id}/params", json={"params": {}, **body}
+    )
+
+
+async def test_a_row_from_before_pools_is_sized_without_moving_the_address_in_use(
+    client, session, pool_transport: str
+) -> None:
+    """The field's own broken row, repaired — and the working device never touched.
+
+    The setup is the upgrade exactly: a row with no pool size, one person who has been
+    connected for weeks whose address exists only as the row's own parameter, and a
+    second person who was granted a credential and has never had an address that works.
+    The node cannot render at all in that state.
+
+    After the resize: the first person's address is the one they already had — asserted
+    as the BYTES of their own file, which is the file this project cannot reissue without
+    them doing something — and the second person has an address of their own, so the node
+    renders two distinct routes.
+    """
+    node_id = await a_node(client, name="repaired", address="192.0.2.70")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    assert enabled.status_code == 201, enabled.text
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("early", "later"):
+        assert (await add_user(client, nickname)).status_code == 201
+
+    await as_it_was_before_m17(session, row_id)
+
+    async def their_file() -> str:
+        # Re-read rather than held across the call: a resize commits, and the assertion
+        # below expires every object in this session to make sure it is reading the
+        # database rather than what it had in hand.
+        early = (
+            await session.execute(select(Friend).where(Friend.nickname == "early"))
+        ).scalars().one()
+        return "\n".join(
+            config.content
+            for config in await subscriptions.config_files_for(session, early)
+        )
+
+    before = await their_file()
+
+    sized = await resize(client, row_id, pool_size=ROOMY)
+    assert sized.status_code == 200, sized.text
+    # The push that follows every replacement cannot land on a test node with no host
+    # behind it, and a failed push degrades the node — which takes it out of every
+    # subscription, so the file below would come back empty for a reason that has nothing
+    # to do with addresses. Put it back the way the operator does once the node is
+    # reachable again.
+    #
+    # EXPIRED FIRST, and it is not optional: that failure was written by the request's own
+    # session and this one still holds the node as it was before it. ``set_node_state``
+    # compares the state it is given against the object in hand, so a stale ``active``
+    # here makes the call a no-op and leaves the node degraded — which is how this
+    # assertion read "the file is empty" on one run and passed on the next.
+    session.expire_all()
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).pool_size == ROOMY
+    assert hashlib.sha256((await their_file()).encode()).hexdigest() == \
+        hashlib.sha256(before.encode()).hexdigest(), (
+            "the resize moved the address of a device that was already working"
+        )
+
+    routes = routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    assert len(routes) == 2 and len(set(routes)) == 2, routes
+    # And the person who was already on it is still authorised for the address their
+    # file carries — the two renders of one allocation, after a resize.
+    assert host_of(address_in(before)) in {host_of(route) for route in routes}
+
+
+async def test_moving_the_pool_under_an_unwritten_address_leaves_that_device_alone(
+    client, session, pool_transport: str
+) -> None:
+    """THE PIN, and the only shape that can tell whether it is there.
+
+    A row from before pools hands out one address and records it nowhere: it is the row's
+    own parameter, and the renderer falls back to it. So an operator who sizes that row
+    AND starts the pool somewhere else — reserving the low addresses for something, which
+    is an ordinary thing to want — would otherwise have the person who has been connected
+    all along allocated the pool's new first address. Their device is configured with the
+    old one. Nobody is going to reconfigure it, and nothing on any screen would say so.
+
+    ``pin_in_use`` writes the address down before a parameter moves, so the allocation
+    that follows sees it as taken. What proves it is that the address the device holds is
+    OUTSIDE the new pool afterwards — which no ordering of the allocator could produce by
+    accident, and which is harmless: an address nobody else can be given is a pool slot
+    spent, and the alternative is a person cut off.
+    """
+    node_id = await a_node(client, name="pinned", address="192.0.2.80")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    assert (await add_user(client, "connected")).status_code == 201
+    await as_it_was_before_m17(session, row_id)
+
+    spec = addresses.spec_for(pool_transport)
+    in_use = host_of(str((await session.get(NodeTransport, row_id)).params[spec.name]))
+
+    # Same tunnel, same range — only the pool's first address moves up, and it is sized.
+    sized = await resize(
+        client, row_id, params={spec.name: "10.90.0.20/24"}, pool_size=ROOMY
+    )
+    assert sized.status_code == 200, sized.text
+
+    session.expire_all()
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    session.expire_all()
+    held = {
+        host_of(route)
+        for route in routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    }
+    assert held == {in_use}, (
+        "the device that was already connected was moved to the pool's new first address"
+    )
+    assert host_of("10.90.0.20/24") not in held
+
+    # And the next person gets the pool's first address, which is now free of anybody.
+    assert (await add_user(client, "newcomer")).status_code == 201
+    after = {
+        host_of(route)
+        for route in routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    }
+    assert after == {in_use, host_of("10.90.0.20/24")}, after
+
+
+async def test_a_resize_is_audited_as_a_replacement_and_nothing_else(
+    client, session, pool_transport: str
+) -> None:
+    """One operator action, one entry, under the action item 24 already had.
+
+    A resize that invented an audit action of its own would be a second name for one
+    operation in the one record the operator reads back — and the entry carries the node
+    and the transport, never the size, because a count of people is not a thing this
+    trail keeps.
+    """
+    node_id = await a_node(client, name="audited", address="192.0.2.71")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    row_id = enabled.json()["id"]
+    before = await audit_rows(session)
+
+    assert (await resize(client, row_id, pool_size=ROOMY)).status_code == 200
+
+    session.expire_all()
+    added = [entry for entry in await audit_rows(session) if entry not in before]
+    # ONE entry about the transport. The other entry this leaves is the node going
+    # ``degraded``: the push that follows every replacement cannot land on a test node
+    # with no host behind it, and that is a fact about the fixture rather than about the
+    # resize — asserted here rather than filtered away, so a resize that started writing
+    # something else about the node turns this red.
+    assert added == [
+        ("params-replaced", "audited", pool_transport),
+        ("node-state-changed", "audited", "degraded"),
+    ], added
+
+
+async def test_a_resize_below_what_the_row_already_hands_out_is_refused(
+    client, session, pool_transport: str
+) -> None:
+    """A pool cannot be shrunk out from under the people already in it.
+
+    Two users hold the first two addresses; a pool of one would leave the second holding
+    an address the row no longer hands out. Refused with nothing written — the row keeps
+    its size and both devices keep their addresses.
+    """
+    node_id = await a_node(client, name="shrunk", address="192.0.2.72")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+    before = sorted(routes_in(await as_the_node_sees_it(session, node_id, pool_transport)))
+
+    refused = await resize(client, row_id, pool_size=1)
+
+    assert refused.status_code == 400, refused.text
+    assert addresses.POOL_BOX in refused.json()["error"]["message"]
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).pool_size == ROOMY
+    after = sorted(routes_in(await as_the_node_sees_it(session, node_id, pool_transport)))
+    assert after == before, "a refused resize moved somebody's address"
+
+
+async def test_moving_the_tunnel_out_from_under_a_held_address_is_refused(
+    client, session, pool_transport: str
+) -> None:
+    """The defect M17.1b left behind: a replaced parameter with no pool re-check.
+
+    ``tunnel_address`` is an ordinary replaceable parameter, so an operator could move
+    the row to a different range — or narrow its prefix — while people held addresses
+    inside the old one. Nothing moves their addresses, which is the promise; what would
+    happen instead is that their addresses stop being carried by the interface, with
+    every screen green.
+
+    Refused under the box the RANGE is typed in, not under the pool's size: the size did
+    not cause it and a complaint under a number the operator never touched sends them to
+    change the wrong thing.
+    """
+    node_id = await a_node(client, name="moved", address="192.0.2.73")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    assert (await add_user(client, "ann")).status_code == 201
+    before = routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+
+    spec = addresses.spec_for(pool_transport)
+    refused = await resize(
+        client,
+        row_id,
+        params={spec.within: "10.99.0.1/24", spec.name: "10.99.0.2/24"},
+    )
+
+    assert refused.status_code == 400, refused.text
+    message = refused.json()["error"]["message"]
+    assert spec.within in message, message
+    assert "10.99.0.1/24" in message, message
+    # A COUNT and not an address: what is refused is stated without saying who holds what.
+    for route in before:
+        assert host_of(route) not in message, "a refusal named an address somebody holds"
+
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).params[spec.within] != "10.99.0.1/24"
+    assert routes_in(await as_the_node_sees_it(session, node_id, pool_transport)) == before
+
+
+async def test_a_resize_a_transport_hands_out_no_address_for_is_refused(
+    client, session, reality_params
+) -> None:
+    """A number that would mean nothing is refused here exactly as it is at enable.
+
+    Same sentence, same box, from the same function — the two paths that can set a size
+    must not be able to disagree about what a size means.
+    """
+    if not PLAIN_TRANSPORTS:
+        pytest.skip("this image ships no transport that identifies its users by material")
+    node_id = await a_node(client, name="sizeless", address="192.0.2.74")
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": PLAIN_TRANSPORTS[0], "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+
+    refused = await resize(client, enabled.json()["id"], pool_size=10)
+
+    assert refused.status_code == 400, refused.text
+    assert addresses.POOL_BOX in refused.json()["error"]["message"]
+
+
+async def test_replacing_a_parameter_on_a_short_pool_is_not_refused_by_the_fleet(
+    client, session, pool_transport: str
+) -> None:
+    """Rotating away from a blocked value must not be blocked by an unrelated shortfall.
+
+    A row whose pool is already smaller than the fleet is a row with a problem — and
+    refusing every parameter replacement on it would take away the operator's first job
+    in the charter, which is rotating what gets blocked. The fleet question is asked when
+    somebody is SIZING a pool; it is not asked of somebody replacing a range.
+    """
+    node_id = await a_node(client, name="short-but-rotatable", address="192.0.2.75")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=1)
+    row_id = enabled.json()["id"]
+    for nickname in ("ann", "bob", "cara"):
+        assert (await add_user(client, nickname)).status_code == 201
+
+    spec = addresses.spec_for(pool_transport)
+    replaced = await resize(
+        client,
+        row_id,
+        params={spec.within: "10.95.0.1/24", spec.name: "10.95.0.2/24"},
+    )
+
+    assert replaced.status_code == 200, replaced.text
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).params[spec.within] == "10.95.0.1/24"
+
+
+async def test_a_resize_that_loses_a_race_for_an_address_is_a_refusal(
+    client, session, app, pool_transport: str, monkeypatch
+) -> None:
+    """The constraint closes this window too, and the operator gets a sentence for it.
+
+    A resize allocates: everybody on the row who has no address of their own is given one
+    inside the transaction that widens the pool. So it meets the same race adding a user
+    does — nothing serialises the read of who holds what against the write that follows —
+    and the same backstop, ``uq_credential_tunnel_address``, refuses the loser rather than
+    letting two people hold one address.
+
+    Made stale on purpose rather than raced, exactly as
+    ``test_two_changes_reaching_one_address_end_in_a_refusal`` does it and for the same
+    reason: a timing test proves nothing about a window. What this adds is that the loss
+    arrives as a REFUSAL — the same words the add-a-user path uses — rather than as the
+    database error underneath it, which would be a 500 the console never swaps.
+    """
+    node_id = await a_node(client, name="raced-resize", address="192.0.2.81")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("first", "second"):
+        assert (await add_user(client, nickname)).status_code == 201
+    await as_it_was_before_m17(session, row_id)
+
+    # The two addresses this resize will place: the first is the one the pin writes down
+    # for the person who has been on this row all along, and the second is the one the
+    # person beside them would be settled onto.
+    row = await session.get(NodeTransport, row_id)
+    box = secret_box()
+    spec = addresses.spec_for(pool_transport)
+    pinned, contested = list(pool(str(row.params[spec.name]), 2))
+
+    # Taken by somebody else first, committed from a session of its own — so the
+    # allocator's read is genuinely against data another transaction wrote.
+    async for other in app.state.database.session():
+        rival = Friend(nickname="rival")
+        other.add(rival)
+        await other.flush()
+        other.add(
+            Credential(
+                friend_id=rival.id,
+                node_transport_id=row_id,
+                subject="rival-subject",
+                secrets=json.dumps({}),
+                tunnel_address=contested,
+                tunnel_address_digest=box.address_digest(row_id, contested),
+            )
+        )
+        await other.commit()
+        break
+
+    # What the allocator would have read a moment earlier: the pinned address taken and
+    # nothing else. The PIN itself is told the truth — it runs first, and staling it would
+    # make this a test about the pin colliding with its own row rather than about two
+    # changes reaching one address.
+    truthfully = addresses.held_digests
+    asked = []
+
+    async def a_stale_answer(session_, node_transport):
+        asked.append(node_transport.id)
+        if len(asked) == 1:
+            return await truthfully(session_, node_transport)
+        monkeypatch.undo()
+        return {box.address_digest(row_id, pinned)}
+
+    monkeypatch.setattr(addresses, "held_digests", a_stale_answer)
+
+    refused = await resize(client, row_id, pool_size=ROOMY)
+
+    assert refused.status_code == 409, refused.text
+    assert "same moment" in refused.json()["error"]["message"]
+
+    # And nothing of the resize survived: not the size, not a second address.
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).pool_size is None
+    # NULLs included in the query and dropped here: the two people this resize would have
+    # placed are back to holding nothing, which is the rollback, and a NULL is not an
+    # allocation — Postgres lets any number of them sit under the unique constraint, which
+    # is what lets a row that pre-dates M17 exist at all.
+    digests = [
+        digest
+        for digest in (
+            await session.execute(
+                select(Credential.tunnel_address_digest).where(
+                    Credential.node_transport_id == row_id
+                )
+            )
+        ).scalars().all()
+        if digest is not None
+    ]
+    assert len(digests) == 1, "the resize placed somebody after all"
+
+
 # --- the box the operator types the size into ---------------------------------
 
 # The form the console submits, and the id its dialog wires an error to. The panel names
@@ -930,6 +1312,129 @@ async def test_the_size_typed_in_the_panel_is_the_size_the_row_is_given(
         assert (await add_user(client, nickname)).status_code == 201
     routes = routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
     assert len(set(routes)) == 2, "the panel's own row hands two users one address"
+
+
+# --- and the box it is resized in, on the dialog that replaces parameters ------
+
+# The replace-parameters dialog names its boxes bare, with no group prefix: one row is
+# being changed, so there is no second group to tell apart. Its error ids follow.
+PARAM_ERROR = re.compile(r'id="param-(.+?)-error"[^>]*>(.*?)</div>', re.S)
+
+
+def param_errors(response) -> dict[str, str]:
+    """Each complaint on the replace dialog, by the box it was wired to."""
+    return {
+        name: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text)).strip()
+        for name, text in PARAM_ERROR.findall(response.text)
+    }
+
+
+async def test_the_console_offers_a_pool_box_only_where_there_is_a_pool(
+    client, session, pool_transport: str, reality_params
+) -> None:
+    """The dialog an operator resizes from, and the one that must not offer to.
+
+    There is no resize action anywhere in this console — this box is the whole surface,
+    which is what "no new action and no new endpoint" means from the operator's side.
+    """
+    node_id = await a_node(client, name="dialog-pool", address="192.0.2.76")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    assert enabled.status_code == 201, enabled.text
+
+    dialog = await client.get(f"/panel/keys/{enabled.json()['id']}/params")
+    assert dialog.status_code == 200
+    assert f'name="{addresses.POOL_BOX}"' in dialog.text
+    # The size in place now, as its placeholder, exactly like every other box here: what
+    # this form means by an empty box is "keep what is there".
+    assert f'placeholder="{ROOMY}"' in dialog.text
+
+    if not PLAIN_TRANSPORTS:
+        return
+    plain = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": PLAIN_TRANSPORTS[0], "params": reality_params},
+    )
+    assert plain.status_code == 201, plain.text
+    without = await client.get(f"/panel/keys/{plain.json()['id']}/params")
+    assert without.status_code == 200
+    assert f'name="{addresses.POOL_BOX}"' not in without.text
+
+
+async def test_the_size_typed_in_the_replace_dialog_reaches_the_row(
+    client, session, pool_transport: str
+) -> None:
+    """The console's own path to sizing a row that has served since before pools.
+
+    The box travels beside the transport's mapping and never inside it — a transport's
+    model forbids what it did not declare, so a size that leaked into ``params`` would
+    come back as a refusal about an unknown parameter rather than as a resize.
+    """
+    node_id = await a_node(client, name="panel-resize", address="192.0.2.77")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+    row_id = enabled.json()["id"]
+    await as_it_was_before_m17(session, row_id)
+
+    resized = await client.post(
+        f"/panel/keys/{row_id}/params",
+        data={addresses.POOL_BOX: "9"},
+        headers=HTMX,
+    )
+
+    assert resized.status_code == 200, resized.text
+    session.expire_all()
+    assert (await session.get(NodeTransport, row_id)).pool_size == 9
+
+
+async def test_the_replace_dialog_refuses_a_pool_box_that_is_not_a_count(
+    client, session, pool_transport: str
+) -> None:
+    """Text where a count goes, refused under the box — the enable form's own rule.
+
+    The same sentence as the enable dialog's, because it is the same box answering the
+    same question, and a second wording for one refusal is how the two screens start
+    teaching different things.
+    """
+    node_id = await a_node(client, name="panel-resize-text", address="192.0.2.78")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=2)
+
+    refused = await client.post(
+        f"/panel/keys/{enabled.json()['id']}/params",
+        data={addresses.POOL_BOX: "plenty"},
+        headers=HTMX,
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert param_errors(refused).get(addresses.POOL_BOX) == panel_routes.POOL_NOT_A_NUMBER
+    session.expire_all()
+    assert (await session.get(NodeTransport, enabled.json()["id"])).pool_size == 2
+
+
+async def test_the_console_puts_a_refused_resize_under_the_box_it_is_about(
+    client, session, pool_transport: str
+) -> None:
+    """The service's own refusal, landing on the number the operator typed.
+
+    Without the pool box in this form's allow-list the sentence would be withheld as a
+    complaint with nowhere to go — which is the right default for a name this form does
+    not render, and wrong for the one it does. The dialog is re-rendered at 422, which is
+    the only status the console swaps.
+    """
+    node_id = await a_node(client, name="panel-too-small", address="192.0.2.79")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+
+    refused = await client.post(
+        f"/panel/keys/{enabled.json()['id']}/params",
+        data={addresses.POOL_BOX: "1"},
+        headers=HTMX,
+    )
+
+    assert refused.status_code == 422, refused.text
+    said = param_errors(refused).get(addresses.POOL_BOX, "")
+    assert "1" in said and said, said
+    # In the page's words, like every other sentence a service composes (decision 9).
+    assert "friend" not in said.lower(), said
 
 
 STATE_ERROR = re.compile(r'id="node-state-error"[^>]*>(.*?)</div>', re.S)

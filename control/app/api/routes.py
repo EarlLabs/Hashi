@@ -352,9 +352,17 @@ async def replace_params(
 
     Not named after any protocol's field, deliberately: a ``/rotate-decoy`` route would
     be this control plane knowing what a decoy is.
+
+    AND THE POOL SIZE, since M17.1c, on this route rather than one of its own: resizing is
+    replacing a parameter of the row, it is audited as the same action, and it re-renders
+    and pushes the node exactly as any other replacement does. A ``/resize`` endpoint
+    would be a second way to change the same row with its own refusals to keep in step.
     """
     outcome = await rotation.replace_params(
-        session, node_transport_id=node_transport_id, params=payload.params
+        session,
+        node_transport_id=node_transport_id,
+        params=payload.params,
+        pool_size=payload.pool_size,
     )
     return schemas.RotationResponse(
         node_transport_id=outcome.node_transport_id,

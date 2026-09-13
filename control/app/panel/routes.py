@@ -1398,7 +1398,7 @@ async def replace_params(
     request: Request,
     session: AsyncSession = Depends(session_dependency),
 ):
-    """Replace operator-supplied parameters — a blocked decoy being the case.
+    """Replace operator-supplied parameters, and resize the pool — a blocked decoy, or M17.
 
     Reads the form the way ``enable_transport`` does and for the same reason: this
     function must not know any protocol's field names. Two things it adds. The fields
@@ -1407,6 +1407,14 @@ async def replace_params(
     the operator typed, never a minted one, because ``replaceable_params`` subtracts key
     material before a box exists. And an empty box is dropped by ``parse_form``, which
     is what makes "leave it alone" expressible at all.
+
+    THE POOL BOX IS THE ONE BOX ON THIS FORM THE TRANSPORT KNOWS NOTHING ABOUT — M17.1c.
+    It is a column on the node-transport record, so it is filtered in with the rest and
+    then lifted out before the mapping reaches the transport's model, converted here
+    because a form gives text where the service takes a count. This is the console's only
+    way to size a row that has served since before pools existed, which is what migration
+    0006 promises an operator in writing; there is deliberately no second action and no
+    second endpoint for it.
     """
     key = await console.key_row(session, node_transport_id)
     if not key.installed:
@@ -1415,7 +1423,7 @@ async def replace_params(
         # what an uninstalled transport can be told.
         return await _refuse_params(request, session, node_transport_id, values={})
     node_transport = await rotation.get_node_transport(session, node_transport_id)
-    boxes = transports.replaceable_params(key.transport, node_transport.params)
+    boxes = _replaceable_boxes(node_transport)
     names = {box.name for box in boxes}
 
     form = await request.form()
@@ -1424,15 +1432,42 @@ async def replace_params(
         for name, value in form.multi_items()
         if name in names
     }
-    supplied = transports.parse_form(key.transport, typed.items())
-    if not supplied:
+    # The pool size is not a parameter of the transport and must not reach its model,
+    # which forbids what it did not declare — so it is lifted out here, exactly as the
+    # enable route keeps it out of ``parse_form``'s input. Left in ``typed`` all the same,
+    # because that is what re-fills the boxes on a refusal and this one has a box.
+    pool_typed = typed.get(addresses.POOL_BOX, "")
+    supplied = transports.parse_form(
+        key.transport,
+        ((name, value) for name, value in typed.items() if name != addresses.POOL_BOX),
+    )
+    if not supplied and not pool_typed:
         return await _refuse_params(
             request, session, node_transport_id, values=typed, failure=NOTHING_TYPED
         )
 
+    pool_size = None
+    if pool_typed:
+        try:
+            pool_size = int(pool_typed)
+        except ValueError:
+            # The panel's own refusal, for the enable form's reason: the service's
+            # parameter is a count and a form gives it text, so there is nothing to hand
+            # over. Under the box, quoting nothing back.
+            return await _refuse_params(
+                request,
+                session,
+                node_transport_id,
+                values=typed,
+                errors={addresses.POOL_BOX: POOL_NOT_A_NUMBER},
+            )
+
     try:
         outcome = await rotation.replace_params(
-            session, node_transport_id=node_transport_id, params=supplied
+            session,
+            node_transport_id=node_transport_id,
+            params=supplied,
+            pool_size=pool_size,
         )
     except ParamsRefused as exc:
         # Each complaint under the box it is about — the same treatment the hop dialog
@@ -1471,6 +1506,40 @@ async def replace_params(
     )
 
 
+def _replaceable_boxes(node_transport) -> tuple:
+    """Every box the replace-parameters dialog renders for one row.
+
+    The transport's own replaceable parameters, and — M17.1c — the pool size, for exactly
+    the transports that declare each of their consumers needs an address
+    (``TransportMeta.peer_address``, through ``addresses.spec_for``). One function because
+    the dialog and the route that reads its submission back must agree about which names
+    exist: the route filters the form to these names, and a box the route did not know
+    about is a value an operator typed into a control that silently does nothing.
+
+    The pool box is LAST, after the transport's own parameters, which is where it belongs
+    on a form whose pool starts at one of those parameters — the size is read counting
+    upwards from the address above it, and the hint says so.
+
+    ``placeholder`` is the size in place now, empty on a row enabled before pools existed,
+    exactly as every other box on this form shows what it is replacing. It is a
+    ``ParamBox`` and not the enable dialog's ``TuningField`` for that dialog's own reason:
+    here an empty box means KEEP.
+    """
+    boxes = transports.replaceable_params(
+        node_transport.transport_name, node_transport.params
+    )
+    if addresses.spec_for(node_transport.transport_name) is None:
+        return boxes
+    return (
+        *boxes,
+        transports.ParamBox(
+            name=addresses.POOL_BOX,
+            placeholder=str(node_transport.pool_size or ""),
+            hint=console.POOL_BOX_RESIZE_HINT,
+        ),
+    )
+
+
 async def _params_form(
     session: AsyncSession,
     node_transport_id: str,
@@ -1497,11 +1566,7 @@ async def _params_form(
         # swaps (static/app.js allows one status through, and it is 422). The operator
         # would get an open dialog with nothing in it and no message anywhere.
         "boxes": (
-            _in_the_pages_words(
-                transports.replaceable_params(
-                    node_transport.transport_name, node_transport.params
-                )
-            )
+            _in_the_pages_words(_replaceable_boxes(node_transport))
             if key.installed
             else ()
         ),

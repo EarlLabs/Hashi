@@ -3678,7 +3678,7 @@ async def test_a_refusal_prints_the_transport_s_words_only_under_a_box(
     node_transport_id = await a_node_holding_material(client, reality_params)
     assert "port" in transports_service.operator_params("vless-reality")
 
-    async def refuse(session, *, node_transport_id, params):
+    async def refuse(session, *, node_transport_id, params, **rest):
         raise ParamsRefused("transport rejected these parameters", fields=REFUSAL_SHAPES)
 
     monkeypatch.setattr(rotation_service, "replace_params", refuse)
@@ -3826,7 +3826,7 @@ async def test_a_refusal_is_never_silent(
     """
     node_transport_id = await a_node_holding_material(client, reality_params)
 
-    async def refuse(session, *, node_transport_id, params):
+    async def refuse(session, *, node_transport_id, params, **rest):
         raise ParamsRefused("transport rejected these parameters", fields=fields)
 
     monkeypatch.setattr(rotation_service, "replace_params", refuse)

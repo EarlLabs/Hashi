@@ -4,7 +4,11 @@ WHAT: the allocator. ``settle`` gives every credential on a row an address of it
       ``pool_of`` says what there is to give, ``edge_credential`` is the one place a
       stored credential becomes the value object ``edge`` renders from, and
       ``shortfalls`` answers "which pools cannot hold everybody" before anything is
-      written.
+      written. ``pin_in_use`` and ``stranded_by`` are M17.1c's pair, and they exist for
+      one promise: an address a device already holds never moves — not by rotation, not
+      by revocation, not by a resize and not by a replaced parameter. The first writes
+      down the address a pre-pool row is already handing out; the second counts how many
+      of the addresses in hand a proposed tunnel could no longer carry.
 WHY:  found in the field. A WireGuard-family transport had one ``peer_tunnel_address``
       for everybody, so it served exactly one friend against a charter scale of ~30-50 —
       and the second friend was refused at RENDER, after the row was committed, which
@@ -46,7 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict
 from control.app.models import Credential, Friend, Node, NodeTransport
-from edge.addressing import pool
+from edge.addressing import host_of, pool, pool_problem
 from edge.node import Credential as EdgeCredential
 from edge.registry import PeerAddress, discover
 
@@ -270,6 +274,126 @@ async def settle(session: AsyncSession, node_transport: NodeTransport) -> list[C
     return [credential for credential, _, _ in plan]
 
 
+async def pin_in_use(
+    session: AsyncSession, node_transport: NodeTransport
+) -> Credential | None:
+    """Write down the address this row is ALREADY handing out, before anything moves it.
+
+    A credential with no address of its own renders the row's own parameter — that is the
+    renderers' fallback, and ``pool[0]`` is written byte-identically to it (see
+    ``edge.addressing.pool``). So on a row that pre-dates M17 the address a device is
+    configured with is not recorded anywhere: it is implied by the parameter, and the
+    moment that parameter is replaced the device's address has silently moved. Pinning is
+    what makes the promise "nothing moves an address a device holds" checkable at all —
+    once it is written down, every rule in this module protects it.
+
+    Called by ``rotation.replace_params`` BEFORE it validates a new pool, which is the
+    order the whole repair depends on: the pinned address is then one of the held
+    addresses the new pool is measured against, so a resize that would strand the working
+    device is refused rather than performed.
+
+    EXACTLY ONE CREDENTIAL CAN BE PINNED, and that is a fact about the row rather than a
+    limit chosen here: there is one fallback address, so every address-less credential on
+    the row renders THE SAME one. That is the field's broken row — two people issued the
+    same address, which is why the node's own config refuses to render (``AmbiguousPeerRoute``).
+    The earliest in ``(created_at, id)`` order keeps it, which is ``settle``'s own
+    adoption rule and the one that leaves the first person on the row where they were;
+    whoever came after has no address that works today and is given a real one from the
+    new pool a moment later.
+
+    Nothing is pinned when that address is already somebody's — the row is past the
+    upgrade, and the address-less credentials on it are new arrivals ``settle`` will place.
+
+    No commit: the caller owns the transaction, and a refusal after this must leave the
+    row exactly as it was.
+    """
+    spec = spec_for(node_transport.transport_name)
+    if spec is None:
+        return None
+
+    from control.app.models.base import secret_box  # noqa: PLC0415
+
+    await session.flush()
+
+    with session.no_autoflush:
+        held = await held_digests(session, node_transport)
+        waiting = (
+            (
+                await session.execute(
+                    select(Credential)
+                    .where(Credential.node_transport_id == node_transport.id)
+                    .where(Credential.tunnel_address_digest.is_(None))
+                    .order_by(Credential.created_at, Credential.id)
+                )
+            )
+            .scalars()
+            .unique()
+            .first()
+        )
+
+    if waiting is None:
+        return None
+
+    in_use = next(pool_of(node_transport, spec))
+    digest = secret_box().address_digest(node_transport.id, in_use)
+    if digest in held:
+        return None
+
+    # Stored exactly as the pool writes it, prefix included — the form the renderer puts
+    # in the interface's ``Address`` line, so the file this person already has is the file
+    # they keep getting.
+    waiting.tunnel_address = in_use
+    waiting.tunnel_address_digest = digest
+    await session.flush()
+    return waiting
+
+
+async def stranded_by(
+    session: AsyncSession, node_transport: NodeTransport, *, within: str
+) -> int:
+    """How many addresses already handed out on this row a new tunnel could not carry.
+
+    The other half of "nothing moves an address a device holds": nothing here MOVES one,
+    so the danger is not the address changing but the tunnel changing under it. Narrow the
+    range, shift it, or move the node's own address onto somebody's, and that person's
+    address is still in the database, still in their config file, and no longer reachable
+    — or worse, now the node's own, which authorises them to send as the node.
+
+    Each held address is asked of ``edge`` as a pool of one inside the proposed tunnel:
+    the same ten refusals the operator met when they sized the pool, applied one person at
+    a time. That is deliberately not "is it inside the new pool's run" — an address below
+    or above the run is still carried by the interface and is never re-handed to anybody
+    else, because ``settle`` skips every digest already held, so it costs a slot and
+    nothing else. What is refused here is an address the tunnel could not carry at all.
+
+    A COUNT, and never an address: the answer travels into a refusal an operator reads, and
+    which person holds which address is the one record this project does not produce. It
+    is also why the addresses are decrypted here and compared here rather than handed out
+    — ``held_digests`` cannot answer this question, because a digest cannot be measured
+    against a range.
+    """
+    if spec_for(node_transport.transport_name) is None:
+        return 0
+    with session.no_autoflush:
+        held = (
+            (
+                await session.execute(
+                    select(Credential)
+                    .where(Credential.node_transport_id == node_transport.id)
+                    .where(Credential.tunnel_address.is_not(None))
+                )
+            )
+            .scalars()
+            .unique()
+            .all()
+        )
+    return sum(
+        1
+        for credential in held
+        if pool_problem(host_of(credential.tunnel_address), within, 1) is not None
+    )
+
+
 def edge_credential(
     credential: Credential, spec: PeerAddress | None
 ) -> EdgeCredential:
@@ -315,7 +439,7 @@ async def fleet_size(session: AsyncSession, *, extra: int = 0) -> int:
 
     A function of its own because three places ask it and they must not drift: the
     refusal when a friend is added (``shortfalls`` below), the refusal when a pool is
-    sized at enable (``nodes._sized_pool``), and the floor in the enable dialog's own
+    sized at enable (``nodes.sized_pool``), and the floor in the enable dialog's own
     placeholder (``console.pool_boxes``). Each had written the query out again. Change
     who counts as being in the fleet with three copies and the console offers a floor the
     service refuses, with nothing red anywhere.
@@ -339,7 +463,7 @@ async def shortfalls(session: AsyncSession, *, extra: int = 0) -> list[Shortfall
 
     Serving rows only, which is the whole population a friend is granted on. A row being
     enabled in this transaction is not one of them and is not asked about here: it is
-    measured by ``nodes._sized_pool`` while the operator is still looking at the box,
+    measured by ``nodes.sized_pool`` while the operator is still looking at the box,
     against the same count this uses.
     """
     from control.app.services import nodes  # noqa: PLC0415

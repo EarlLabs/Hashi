@@ -30,11 +30,26 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import DomainError, NotFound, ParamsRefused
-from control.app.models import AuditAction, Credential, NodeTransport, TransportPurpose
-from control.app.services import apply, audit, keymaterial, nodes, placement, relay
+from control.app.errors import Conflict, DomainError, NotFound, ParamsRefused
+from control.app.models import (
+    AuditAction,
+    Credential,
+    Node,
+    NodeTransport,
+    TransportPurpose,
+)
+from control.app.services import (
+    addresses,
+    apply,
+    audit,
+    keymaterial,
+    nodes,
+    placement,
+    relay,
+)
 from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
@@ -51,6 +66,19 @@ MATERIAL_NOT_REPEATED = (
     "The transport's own message for each is not repeated here: this check includes "
     "the material just minted for the node, and a refusal can quote the value it "
     "rejected."
+)
+
+# What an operator is told when the tunnel they typed would leave friends who are already
+# on this transport holding an address it cannot carry — M17.1c. A COUNT and never an
+# address: which person holds which address is the one record this project does not keep,
+# and this sentence reaches an operator through the API's envelope and the console's
+# dialog. It names the action that is refused rather than only the state, because the
+# operator's next move is a different range — or taking those people off first.
+POOL_WOULD_STRAND = (
+    "{held} already handed out on this transport would fall outside {within}. "
+    "Moving an address a device already holds is the one thing this cannot do — the "
+    "device is configured with it and nobody is going to reconfigure it. Nothing has "
+    "been changed — leave this tunnel where it is, or take them off this transport first."
 )
 
 # What a refusal with no field to its name is called, in the code's own vocabulary.
@@ -284,9 +312,13 @@ async def rotate_keys(
 
 
 async def replace_params(
-    session: AsyncSession, *, node_transport_id: str, params: dict
+    session: AsyncSession,
+    *,
+    node_transport_id: str,
+    params: dict,
+    pool_size: int | None = None,
 ) -> RotationOutcome:
-    """Replace operator-supplied parameters — item 24's mechanism.
+    """Replace operator-supplied parameters, and the size of the pool — item 24 and M17.1c.
 
     The decoy-rotation case (a Reality decoy that has been blocked or has changed its
     TLS fingerprint) is just this with ``decoy_host`` in ``params`` — which is why there
@@ -306,6 +338,32 @@ async def replace_params(
     but an unhandled failure over a change that has already been committed. Nothing is
     copied to the far end on this path: these are values the operator typed for THIS
     end, and a parameter one end holds is not one the other must.
+
+    RESIZING IS THIS, AND NOT AN ACTION OF ITS OWN — M17.1c. ``pool_size`` is how many
+    people this row may hand an address to, and it rides here rather than on a
+    ``/resize`` endpoint because it is the same operation: the operator is changing what
+    this transport is configured to do, it is audited as ``params-replaced``, and the
+    node is re-rendered and pushed afterwards exactly as a replaced decoy is. Migration
+    ``0006`` promises in writing that a row serving since before M17 is sized by
+    replacing that row's parameters; this is that promise. ``None`` leaves the size
+    alone, so replacing a blocked decoy on a sized row asks for no number.
+
+    THE ORDER OF THE THREE THINGS IT DOES TO ADDRESSES IS THE WHOLE CORRECTNESS ARGUMENT:
+
+    1. ``addresses.pin_in_use`` writes down the address the row is ALREADY handing out,
+       before a single parameter moves. On a pre-M17 row that address exists only as a
+       parameter and a fallback, so without this step replacing that parameter moves a
+       configured device's address with nothing to notice;
+    2. the proposed pool is measured — by ``edge``, through ``nodes.sized_pool``, and
+       against every address now in hand, through ``addresses.stranded_by``. The pin is
+       first precisely so that the working device's address is one of those measured;
+    3. only then is anything stored, and ``addresses.settle`` gives an address to
+       everybody still without one — which is what repairs the field's own row: the
+       person who arrived second, and has never had an address of their own, gets one.
+
+    Every refusal between the pin and the commit rolls the session back before it leaves,
+    because the pin and the store are writes in this transaction and "Nothing has been
+    changed" has to be true of the database rather than of the intent.
     """
     node_transport = await get_node_transport(session, node_transport_id)
 
@@ -361,8 +419,15 @@ async def replace_params(
             fields=fields,
         ) from exc
 
+    # The size is one of the things that can change, so it counts as one — otherwise a
+    # submission that only widened the pool would be refused as "nothing to change", and
+    # a row sized at the same number it already has would be pushed for nothing. Named
+    # with the box's own name, and sorted in with the rest so two identical replacements
+    # report identically.
+    resized = pool_size is not None and pool_size != node_transport.pool_size
     changed = sorted(
-        key for key in params if node_transport.params.get(key) != validated.get(key)
+        [key for key in params if node_transport.params.get(key) != validated.get(key)]
+        + ([addresses.POOL_BOX] if resized else [])
     )
     if not changed:
         raise DomainError("nothing to change — those values are already in place")
@@ -374,11 +439,26 @@ async def replace_params(
     # constraint behind the port rule, deliberately (``services.placement``'s header says
     # why), so a caller that skipped this would write a node that cannot start rather
     # than meet a refusal.
+    node = await nodes.get_node(session, node_transport.node_id)
     await placement.port_is_free(
         session,
-        node=await nodes.get_node(session, node_transport.node_id),
+        node=node,
         transport_name=node_transport.transport_name,
         port=placement.port_of(validated),
+        excluding=node_transport.id,
+    )
+    # And the tunnel's own range against every other tunnel on that node — M17.1c, the
+    # third path this rule is asked on (the other two are enabling a transport and
+    # establishing a hop, both through ``placement.claim``). Excluding this row for the
+    # port rule's reason: a form resubmitted with the range unchanged must not be refused
+    # by its own value. Before anything is stored, and before the addresses are touched:
+    # a range that collides with another interface on the host is refused whether or not
+    # anybody holds an address in it yet.
+    await placement.tunnel_network_is_free(
+        session,
+        node=node,
+        transport_name=node_transport.transport_name,
+        params=validated,
         excluding=node_transport.id,
     )
 
@@ -395,23 +475,141 @@ async def replace_params(
         # change because of a value typed at this one.
         ends.append(peer)
 
-    _store(node_transport, validated, secret_names=set(stored_secrets))
-    # The node and the transport, never the parameters: ``changed`` holds the names of
-    # the fields the operator retyped and their new values are in ``validated``, and
-    # neither a port nor a decoy host belongs in a record that outlives the change.
-    # Past the "nothing to change" refusal above, so a form submitted unaltered leaves
-    # no entry.
-    audit.record(
-        session,
-        AuditAction.PARAMS_REPLACED,
-        first_label=(await nodes.get_node(session, node_transport.node_id)).name,
-        second_label=node_transport.transport_name,
-    )
-    await session.commit()
+    # EVERYTHING FROM HERE WRITES, so every refusal below rolls back before it leaves.
+    # ``_resize`` pins an address and ``settle`` allocates them; both are writes in this
+    # transaction, and a caller told "nothing has been changed" over a session holding a
+    # pinned address would be told a lie the next commit makes true.
+    try:
+        await _resize(
+            session,
+            node_transport=node_transport,
+            node=node,
+            validated=validated,
+            pool_size=pool_size,
+        )
+
+        _store(node_transport, validated, secret_names=set(stored_secrets))
+        if pool_size is not None:
+            node_transport.pool_size = pool_size
+
+        # The node and the transport, never the parameters: ``changed`` holds the names of
+        # the fields the operator retyped and their new values are in ``validated``, and
+        # neither a port nor a decoy host belongs in a record that outlives the change.
+        # The pool size is no different — it is a count of people, which is why it is
+        # named in ``changed`` and not recorded here.
+        # Past the "nothing to change" refusal above, so a form submitted unaltered leaves
+        # no entry.
+        audit.record(
+            session,
+            AuditAction.PARAMS_REPLACED,
+            first_label=node.name,
+            second_label=node_transport.transport_name,
+        )
+
+        # AFTER the store, because the pool it draws from is the one just written. This is
+        # the half that repairs rather than merely permits: on a row sized for the first
+        # time, everybody who has been waiting without an address of their own is given
+        # one here, inside this transaction, so a pool that still cannot hold them refuses
+        # the whole replacement instead of committing half a repair.
+        await addresses.settle(session, node_transport)
+
+        await session.commit()
+    except DomainError:
+        await session.rollback()
+        raise
+    except IntegrityError as exc:
+        if "uq_credential_tunnel_address" not in str(exc.orig):
+            raise
+        # The race the constraint exists for, on this path too: ``settle`` read which
+        # addresses were free and somebody else took one before this flush. The loser is
+        # refused rather than given a shared address — and it is refused in the SAME words
+        # ``friends.grant_everywhere`` uses, because it is the same event and an operator
+        # meeting it twice must not have to learn two sentences. Without this it would
+        # leave as an ``IntegrityError``: a 500, which the console does not swap, so the
+        # operator sees a spinner stop and nothing else.
+        #
+        # Imported here rather than at the top for the reason this module's neighbours
+        # give: ``friends`` reaches back into these services, and a module-level import
+        # both ways is a cycle waiting for its first new call.
+        from control.app.services import friends  # noqa: PLC0415
+
+        await session.rollback()
+        raise Conflict(friends.ADDRESS_TAKEN_MEANWHILE) from exc
     logger.info("replaced parameters on node-transport %s", node_transport.id)
 
     outcome = RotationOutcome(node_transport_id=node_transport.id, rotated=changed)
     return await _push(session, ends, outcome)
+
+
+async def _resize(
+    session: AsyncSession,
+    *,
+    node_transport: NodeTransport,
+    node: Node,
+    validated: dict,
+    pool_size: int | None,
+) -> None:
+    """Pin what is already in use, then refuse a pool that could not carry it — M17.1c.
+
+    Split out of ``replace_params`` because it is a rule rather than a step: three
+    questions asked in one order, and the order is what the correctness rests on.
+
+    A transport that hands out no address at all is asked nothing and refuses a size, in
+    ``nodes.sized_pool``'s own words — the same answer the enable path gives, from the
+    same function, so the two surfaces cannot drift about what a pool size means.
+
+    THE SIZE MEASURED IS THE ONE THE ROW WILL HAVE: what the operator typed, or what the
+    row already holds when they typed nothing. Asking ``edge`` about it on EVERY
+    replacement is the defect M17.1b left behind — the tunnel's own address is an ordinary
+    replaceable parameter, so a row could be moved to a different range, or given a longer
+    prefix, with the pool never re-measured and the people in it left outside. ``None``
+    for a pre-pool row is one address, which is what such a row hands out.
+
+    The fleet question is asked only when the operator is actually sizing — see
+    ``nodes.sized_pool``.
+    """
+    spec = addresses.spec_for(node_transport.transport_name)
+    if spec is None:
+        if pool_size is not None:
+            await nodes.sized_pool(
+                session,
+                node=node,
+                transport_name=node_transport.transport_name,
+                params=validated,
+                pool_size=pool_size,
+            )
+        return
+
+    # First, and before a parameter moves: the address this row is already handing out.
+    await addresses.pin_in_use(session, node_transport)
+
+    await nodes.sized_pool(
+        session,
+        node=node,
+        transport_name=node_transport.transport_name,
+        params=validated,
+        pool_size=pool_size if pool_size is not None else node_transport.pool_size or 1,
+        against_the_fleet=pool_size is not None,
+    )
+
+    within = str(validated[spec.within])
+    stranded = await addresses.stranded_by(session, node_transport, within=within)
+    if stranded:
+        counted = f"{stranded} address" if stranded == 1 else f"{stranded} addresses"
+        refusal = POOL_WOULD_STRAND.format(held=counted, within=within)
+        # UNDER THE BOX THE RANGE IS TYPED IN, not under the pool's size: the size cannot
+        # cause this — it is the tunnel that moved out from under the addresses — and a
+        # complaint under a number the operator did not touch sends them to change the
+        # wrong thing. The name is the transport's own declaration (``PeerAddress.within``)
+        # rather than a literal, so a transport that calls it something else is answered
+        # at its own box; one that does not offer a box for it gets the sentence above the
+        # form instead, which is what the console does with every complaint it cannot
+        # place.
+        raise ParamsRefused(
+            f"transport {node_transport.transport_name!r} rejected these parameters — "
+            f"{spec.within}: {refusal}",
+            fields={spec.within: refusal},
+        )
 
 
 def _validated(

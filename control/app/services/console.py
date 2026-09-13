@@ -1686,6 +1686,25 @@ POOL_BOX_HINT = (
 )
 
 
+# What the SAME box says on the replace-parameters dialog, where the rules are the other
+# way round: the row already has a size (or, on a row older than pools, has none), and an
+# empty box keeps whatever that is. The enable dialog's hint says "it has to be told how
+# many", which is true there and false here, so the two are separate strings rather than
+# one stretched over both.
+#
+# It states the invariant rather than only the mechanism, because this is the one box in
+# the console whose whole danger is invisible: a number that looks like it only ADDS room
+# can also be a number that takes an address away from somebody who is using it. The
+# product refuses that, and the operator should know it will before they type.
+POOL_BOX_RESIZE_HINT = (
+    "How many users this protocol may hand an address to, counted upwards from the first "
+    "address above. Empty keeps what it has now; a row enabled before pools existed has "
+    "no size and hands out exactly the one address it renders today. No address a device "
+    "already holds is ever moved — a size or a range that would move one is refused and "
+    "nothing is saved."
+)
+
+
 async def pool_boxes(
     session: AsyncSession, offered: list[str]
 ) -> dict[str, transports.TuningField]:
@@ -1701,7 +1720,7 @@ async def pool_boxes(
     vocabulary ("N or more"), so no number is written into the markup. The floor is the
     number of people this control plane already has, because every one of them is granted
     a credential on this transport the moment the node serves — read from
-    ``addresses.fleet_size``, which is the same call ``nodes._sized_pool`` refuses below
+    ``addresses.fleet_size``, which is the same call ``nodes.sized_pool`` refuses below
     and the same one the add-a-friend refusal measures against, so the box and the two
     refusals cannot disagree about who is in the fleet.
 

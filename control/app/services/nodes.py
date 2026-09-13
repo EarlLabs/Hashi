@@ -511,7 +511,7 @@ async def _enable(
     # a request that gets both wrong is answered about the port first, which is the older
     # refusal, the one every existing caller asserts on, and the one that is about the
     # node rather than about a number the operator typed.
-    await _sized_pool(
+    await sized_pool(
         session,
         node=node,
         transport_name=transport_name,
@@ -531,7 +531,7 @@ async def _enable(
         secrets=json.dumps({k: v for k, v in validated.items() if k in secret_keys}),
         enabled=True,
         # NULL for every transport that hands out no address of its own, which is what
-        # ``_sized_pool`` has just insisted on — so "this row has a pool" and "this
+        # ``sized_pool`` has just insisted on — so "this row has a pool" and "this
         # transport declares one" cannot come apart in the database.
         pool_size=pool_size,
     )
@@ -573,15 +573,16 @@ POOL_SIZE_BELOW_THE_FLEET = (
 )
 
 
-async def _sized_pool(
+async def sized_pool(
     session: AsyncSession,
     *,
     node: Node,
     transport_name: str,
     params: dict,
     pool_size: int | None,
+    against_the_fleet: bool = True,
 ) -> None:
-    """Refuse a pool that cannot work, before the row exists — M17.
+    """Refuse a pool that cannot work, before anything is written — M17.
 
     Four questions, and the first two are about whether there is a pool at all: a
     transport that declares each consumer needs an address of their own MUST be told how
@@ -600,6 +601,20 @@ async def _sized_pool(
     Refused as ``ParamsRefused`` with the complaint under the pool's own box, which is
     what lets the console put the sentence where the number was typed. The box is not a
     parameter of the transport — nothing of this reaches the transport's model.
+
+    PUBLIC SINCE M17.1c, and asked by the second path that can change a pool:
+    ``rotation.replace_params``, which resizes a row that already exists. One definition
+    of what a workable pool is, for the same reason ``addresses.fleet_size`` is one
+    definition of who is in the fleet — the two paths that refuse a size must not be able
+    to disagree about which sizes they refuse.
+
+    ``against_the_fleet`` is the one question that does NOT apply on that second path when
+    the operator is not sizing anything. Replacing a blocked decoy on a row whose pool is
+    already smaller than the fleet has to go through: the pool is wrong either way, and
+    refusing the rotation leaves the operator unable to rotate away from a blocked value —
+    which is the charter's first job for them. The third question is still asked there,
+    against the size the row already has, because THAT is the check that was missing: a
+    replaced parameter could move the tunnel out from under the pool with nothing looking.
     """
     spec = addresses.spec_for(transport_name)
 
@@ -634,6 +649,9 @@ async def _sized_pool(
     # the add-a-friend refusal uses; written out here as well, a later change to who
     # counts as being in the fleet would land in one copy and the box would offer a size
     # this refuses.
+    if not against_the_fleet:
+        return
+
     people = await addresses.fleet_size(session)
     if pool_size < people:
         short = POOL_SIZE_BELOW_THE_FLEET.format(size=pool_size, people=people)
