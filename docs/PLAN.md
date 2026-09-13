@@ -1841,7 +1841,7 @@ operator never believed it would.
 
 ---
 
-## → M18 — A node that cannot work says so before it fails · found in the field 2026-09-09
+## ✅ M18 — A node that cannot work says so before it fails · found in the field 2026-09-09 · done 2026-09-13 (acceptance: partial — one finding referred to the owner as M22)
 
 Three first-run experiences found during the field run, all the same shape: the
 product knows something the operator does not, and waits until apply to say it.
@@ -1993,6 +1993,57 @@ friend and cannot forward is configurable and useful for nothing.
 
 acceptance: yes
 The same measurement as above, on a ufw host, with the answer changed.
+
+---
+
+## ⛔ M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · NEEDS THE OWNER'S APPROVAL, NOT STARTED
+
+**Proposed by the autopilot run, not approved.** Written down here because the
+run declined to build it inside M18 and the owner's own rule is that a milestone
+needing work the plan does not mention is a new milestone to approve, not a
+bigger one to finish.
+
+**What was measured.** On a real applied host, `vless-ws-tls` was crash-looping —
+exiting 23 every second on a missing certificate file — with nothing listening on
+its port. The panel answered **"realhost is serving amneziawg, vless-ws-tls" on
+six consecutive probes.** With the same container **fully stopped**, the probe is
+correct. So `Restarting` counts as serving: the probe measures that a container
+*exists*, not that it works.
+
+**Why it matters more than it sounds.** The probe is the operator's **only**
+oracle for *is this node actually working*. A certificate path that is not there
+yet is an ordinary first-run mistake — exactly the moment the operator most needs
+a true answer. And it is the same shape as **M14**: handshake completes, nothing
+moves; every signal green, nothing carried. The charter treats that shape as the
+one that hurts most, because it is the one where the operator stops looking.
+
+**Why it is not a patch.** The work is a decision before it is code:
+
+### M22.1 — Decide what "serving" means
+Four candidate answers, each with a different cost and a different failure mode:
+the container **exists**; the container is **running** (not restarting); something
+is **listening on the port**; a peer has **handshaked**. The last is the only one
+that answers the operator's real question, and the only one that cannot be
+answered without touching the data plane — which `edge` may not do.
+
+### M22.2 — Whatever is chosen, say it where the operator reads it
+A probe that answers "running" must not be read as "working". If the honest
+answer is narrower than the question, the wording carries that, the way M18's
+refusals now carry what they cannot know.
+
+### M22.3 — A successful probe must be visible
+Acceptance clicked probe four times, waiting 2, 3, 4 and 8 seconds, and **no
+success banner ever appeared** — while every *failing* probe's banner appeared at
+the same waits. An oracle nobody can read is not an oracle.
+
+**Done when**
+- [ ] A transport that is restarting, or listening on nothing, is not reported as serving.
+- [ ] What the probe actually checked is written where the operator reads the answer.
+- [ ] A successful probe is as visible as a failing one.
+
+acceptance: yes
+Break a transport's config so its container crash-loops, then press probe. The
+answer must not say the node is serving it.
 
 ---
 
