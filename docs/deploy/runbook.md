@@ -401,8 +401,13 @@ or a first run on a host with a past, reports rather than changes:
 ==> incoming was already denied by default
 ==> the firewall was already up — its existing rules were kept
 ==> /opt/hashi was already here — <user> now owns it and everything an earlier apply left inside it; nothing in it was read, changed or removed
+==> no hashi code and no hashi state was installed here — /opt/hashi was already here, and the control plane replaces what is in it on your next apply
 ==> /opt/hashi was already here before this run — whatever an earlier apply left in it, this run neither read, changed nor removed it; it now belongs to <user> along with the directory, so an apply as that account can replace it
 ```
+
+The closing line is the one from the first-run block above, in the form this run can
+honestly make: a host that already has the directory is not told it is empty. Both forms
+say the same thing about what the script installed, which is nothing.
 
 Nothing there is a warning. What the script never does is **close** anything: the rule set
 is the union of every run, because a script that withdrew a rule could withdraw the one
