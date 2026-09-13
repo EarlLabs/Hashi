@@ -99,15 +99,36 @@
 #      its rule. A script that withdrew rules could withdraw the one carrying the session
 #      running it — so the rule set is the union of every run so far, and only an operator
 #      narrows it.
-#   E. IT IS NOT HOST HARDENING. It does not disable password authentication, does not
-#      install unattended upgrades or a ban daemon, does not touch time synchronisation and
-#      does not tune the kernel. "Ready" here means ready to be driven by the control
-#      plane, and nothing wider: in particular, the account it authorises a key for may
-#      still accept a password, which belongs to whoever owns the host.
+#   E. IT IS NOT HOST HARDENING, AND IT STILL DOES NOT TUNE THE KERNEL. It does not
+#      disable password authentication, does not install unattended upgrades or a ban
+#      daemon and does not touch time synchronisation. "Ready" here means ready to be
+#      driven by the control plane, and nothing wider: in particular, the account it
+#      authorises a key for may still accept a password, which belongs to whoever owns
+#      the host.
+#
+#      IT DOES READ TWO KERNEL SETTINGS AND ANSWER FOR THEM — M19, and the distinction is
+#      the whole of that milestone: "does not tune" and "does not check" are different
+#      promises, and only the first one is defensible. `net.ipv4.ip_forward` must be 1 or
+#      no tunnel on this host carries a packet off it, and reverse-path filtering must not
+#      be strict on an ENTRY node or the kernel drops the hop's replies before anything
+#      here sees them. Both fail in the shape this project is most afraid of: the
+#      container is up, the interface is up, the handshake completes, bytes are counted,
+#      nothing arrives anywhere, and nothing is logged because nothing here may log.
+#      Section 6 reads them and neither is written; which sysctls a host carries stays
+#      with whoever owns the host.
 #   F. IT PROVES NOTHING ABOUT REACHABILITY. The verification at the end asks THIS HOST
 #      questions; it never sends a packet anywhere. Whether a friend inside Russia can
 #      reach this node is a field observation on a real network, and no run of this script
 #      is evidence for it.
+#   G. THE KEY CHECK ASKS SSHD'S GLOBAL CONFIGURATION, NOT THIS ACCOUNT'S `Match` BLOCK.
+#      Section 6 asks sshd itself which files it will read a key from, because a key in a
+#      file sshd never opens is not an authorisation — see there for why that replaced
+#      reading back the file this script had just written. What `sshd -T` prints with no
+#      connection to describe is the configuration BEFORE any `Match`, so a host that
+#      moves THIS account's keys somewhere else inside a `Match User` block is not seen,
+#      and would be told its key is fine. Asking about the account specifically would mean
+#      handing sshd an address to match on, and an address is node-record data rather than
+#      anything this file may hold. Everything outside a `Match` block is checked.
 set -euo pipefail
 
 # Upstream docker's own installer. Named in a variable and overridable because it is the
@@ -254,6 +275,12 @@ TARGET_HOME="$(printf '%s' "${TARGET_PASSWD}" | cut -d: -f6)"
   this session is running as."
 TARGET_GROUP="$(id -gn "${TARGET_USER}")"
 
+# WHERE the key goes, derived here because it is a fact about the account rather than a
+# step: section 3 installs it and section 6 asks sshd whether it will ever read it, and
+# both have to mean the same file.
+SSH_DIR="${TARGET_HOME}/.ssh"
+KEYS_FILE="${SSH_DIR}/authorized_keys"
+
 # --- 2. the container runtime -------------------------------------------------
 #
 # The one thing hashi genuinely needs from the host and deliberately will not do from the
@@ -303,9 +330,9 @@ if [ "${TARGET_USER}" != "root" ]; then
 fi
 
 # --- 3. the key, installed ----------------------------------------------------
-SSH_DIR="${TARGET_HOME}/.ssh"
-KEYS_FILE="${SSH_DIR}/authorized_keys"
-
+#
+# Where SSH_DIR and KEYS_FILE come from is section 1: they are derived from the account,
+# not from anything this section does.
 as_root install -d -m 700 -o "${TARGET_USER}" -g "${TARGET_GROUP}" "${SSH_DIR}"
 # `touch` only when there is nothing there. On an existing file touch(1) is a write, and
 # the second run is meant to change nothing at all — not even an mtime somebody is using to
@@ -490,13 +517,29 @@ say "ufw logging is off; the log file it may have had is gone (syslog and the jo
 # Two independent sources: the port THIS session came in on, and every port the daemon
 # itself reports. Their union, so a host mid-migration between two ports keeps both.
 SESSION_PORT="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
+
+# WHAT SSHD SAYS IT WILL ACTUALLY DO, asked once and read twice: here for the port it
+# listens on, and in section 6 for the files it will read a key from. `-T` prints the
+# EFFECTIVE configuration — one directive per line, the name lowercased, the value in
+# force — which is the daemon's own answer rather than our reading of its config file,
+# and it is the only thing in this script that can answer either question truthfully.
+#
+# Empty when sshd cannot be asked at all, and NEVER non-zero. An assignment whose command
+# substitution fails ends the whole run under `set -e` with nothing on either stream, and
+# that is the exact shape M18's acceptance found in `getent`: a refusal written for the
+# case, sitting one line below the thing that made it unreachable.
+sshd_effective_config() {
+  if command -v sshd >/dev/null 2>&1; then
+    as_root sshd -T 2>/dev/null || true
+  elif [ -x /usr/sbin/sshd ]; then
+    as_root /usr/sbin/sshd -T 2>/dev/null || true
+  fi
+}
+SSHD_CONFIG="$(sshd_effective_config)"
+
 detect_ssh_ports() {
   printf '%s\n' "${SESSION_PORT}"
-  if command -v sshd >/dev/null 2>&1; then
-    as_root sshd -T 2>/dev/null | awk '/^port /{print $2}' || true
-  elif [ -x /usr/sbin/sshd ]; then
-    as_root /usr/sbin/sshd -T 2>/dev/null | awk '/^port /{print $2}' || true
-  fi
+  printf '%s\n' "${SSHD_CONFIG}" | awk '/^port /{print $2}'
 }
 SSH_PORTS="$(printf '%s\n%s\n' "${SSH_PORTS// /$'\n'}" "$(detect_ssh_ports)" \
   | grep -E '^[0-9]+$' | sort -un || true)"
@@ -606,6 +649,86 @@ as_root docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || fail \
   "the docker daemon does not answer, so the control plane could reach this host and
   still be unable to start anything on it."
 
+# WILL SSHD EVEN OPEN THE FILE THIS RUN WROTE? — M19.2, and until M19 nothing asked.
+# The only key check in this script read back the file it had just written, which is true
+# whether or not sshd consults that file at all. One of this project's own field hosts
+# takes its keys from cloud metadata through an `AuthorizedKeysCommand` and works only
+# because its sshd ALSO sets `AuthorizedKeysFile`; on a host with the command and no
+# usable file, this script wrote a key, read it back, and would have said `ready` for an
+# account nobody can log in to. A verification that cannot fail is not a verification.
+#
+# The other way to answer it — authenticate with the key — is not available here and must
+# not become available: this script installs the PUBLIC half and the private half never
+# comes to a node (property 4). So the question goes to sshd, which is the authority on
+# what it will read, and the limit of that answer is section G of the header.
+refuse_if_sshd_ignores_the_key_file() {
+  [ -n "${SSHD_CONFIG}" ] || fail \
+    "sshd on this host could not be asked which files it reads keys from — 'sshd -T'
+  answered nothing — so this run cannot tell you that the key it installed will let the
+  control plane in. Reading ${KEYS_FILE} back would say yes on a host where sshd never
+  opens that file, which is not an answer to the question. Everything else here is
+  prepared; satisfy yourself that the key works before you register this host."
+
+  # `authorizedkeysfile` is a LIST of paths and `authorizedkeyscommand` is the string
+  # `none` when there is not one. The directive name is dropped and the rest kept whole,
+  # because the value of the first is several words.
+  keys_files="$(printf '%s\n' "${SSHD_CONFIG}" \
+    | awk '/^authorizedkeysfile /{sub(/^[^ ]+ /, ""); print; exit}')"
+  keys_command="$(printf '%s\n' "${SSHD_CONFIG}" \
+    | awk '/^authorizedkeyscommand /{sub(/^[^ ]+ /, ""); print; exit}')"
+
+  # Globbing off while the list is split into paths: a path is a path, and an unquoted
+  # expansion would otherwise let a `*` in one of them become whatever happens to be in
+  # the current directory. Restored immediately, and the loop has no early return so that
+  # it always is.
+  found=""
+  set -f
+  for candidate in ${keys_files}; do
+    # sshd's own tokens, expanded the way sshd expands them, and a path with no leading
+    # slash is relative to the account's home. `%%` is deliberately NOT expanded, and
+    # `none` — how sshd says it reads no file at all — gets no special case: an
+    # unrecognised token and a word that is not a path both leave the comparison
+    # unequal, which refuses rather than passes, and that is the direction this check
+    # has to fail in.
+    expanded="$(printf '%s' "${candidate}" \
+      | sed -e "s|%h|${TARGET_HOME}|g" -e "s|%u|${TARGET_USER}|g")"
+    case "${expanded}" in
+      /*) : ;;
+      *) expanded="${TARGET_HOME}/${expanded}" ;;
+    esac
+    if [ "${expanded}" = "${KEYS_FILE}" ]; then
+      found="yes"
+    fi
+  done
+  set +f
+
+  if [ -n "${found}" ]; then
+    say "sshd reads ${KEYS_FILE}, so a key installed there is one it will consult"
+    return 0
+  fi
+
+  case "${keys_command}" in
+    ""|none)
+      fail "sshd on this host reads its keys from '${keys_files}' and not from
+  ${KEYS_FILE}, so the key this run installed sits in a file sshd will never open and the
+  control plane could not log in with it. Nothing here can fix that — which files sshd
+  reads is sshd's configuration, not this script's. Either set AuthorizedKeysFile in
+  /etc/ssh/sshd_config so the account's own file is consulted and reload sshd, or install
+  this key wherever this host's sshd does read from, then run this again. Everything else
+  on this host is prepared; do not register it until one of those is done." ;;
+    *)
+      fail "sshd on this host takes its keys from a command — '${keys_command}' — and not
+  from ${KEYS_FILE}, so the key this run installed would never be offered to it and the
+  control plane could not log in. That is the shape of a cloud host whose keys come from
+  instance metadata, and it is the one case where writing authorized_keys and reading it
+  back says yes for a key that cannot authenticate. Either add this key to whatever feeds
+  that command, or set AuthorizedKeysFile in /etc/ssh/sshd_config so the account's own
+  file is consulted as well, reload sshd, and run this again. Everything else on this
+  host is prepared; do not register it until one of those is done." ;;
+  esac
+}
+refuse_if_sshd_ignores_the_key_file
+
 key_is_authorised || fail \
   "the control plane's key is not in ${KEYS_FILE} on a line sshd would honour — do not
   register this host until that is understood."
@@ -618,6 +741,101 @@ as_root ufw status verbose | grep -qi 'Logging: off' || fail \
   "ufw is logging. That is a connection log — source addresses, written to disk — and the
   charter forbids it at any level. Run 'ufw logging off' and this script again before
   this host is used."
+
+# --- still section 6: the kernel this node's traffic depends on ---------------
+#
+# READ, NEVER WRITTEN — section E of the header, which has always said this script does
+# not tune the kernel and still does not. "Does not tune" and "does not check" are
+# different promises, and a host missing one of these is a host that does everything
+# right and carries nothing: the container is up, the interface is up, the handshake
+# completes, bytes are counted, and no packet arrives anywhere. Nothing logs it and
+# nothing may.
+#
+# ASKED LAST, AND AFTER THE CONTAINER RUNTIME, which is not a tidiness choice. The docker
+# daemon sets `net.ipv4.ip_forward` to 1 every time it starts, so on a host that has never
+# had docker the setting is 0 until section 2 has run — asking before that would refuse
+# every fresh host for a fault it does not have. And the second answer below is about
+# which ROLE this host will be registered in, so it belongs beside the line that tells the
+# operator to go and register it.
+sysctl_value() {
+  # `sysctl -n` is the form an operator would type and the name every message here uses;
+  # /proc/sys is the same value under a path, and is the fallback for a host with no
+  # procps. Both are world-readable, so neither needs to be root. Empty when the setting
+  # cannot be read at all, which is answered rather than assumed away.
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n "$1" 2>/dev/null || true
+  else
+    cat "/proc/sys/$(printf '%s' "$1" | tr . /)" 2>/dev/null || true
+  fi
+}
+
+kernel_preconditions() {
+  # FORWARDING BREAKS ANY NODE AT ALL, so this one refuses. There is no role and no
+  # transport for which 0 is workable: a packet that arrives over a tunnel and is meant
+  # for the internet is dropped by the kernel before any rule this project renders is
+  # consulted.
+  forwarding="$(sysctl_value net.ipv4.ip_forward)"
+  case "${forwarding}" in
+    1) : ;;
+    "")
+      fail "net.ipv4.ip_forward could not be read on this host, so this run cannot tell you
+  whether a tunnel here would carry anything off the node. It has to be 1. Check it by
+  hand before you register this host — 'sysctl -n net.ipv4.ip_forward' asks it, and the
+  same value is under /proc/sys — because a 0 there is the failure where every signal is
+  green and nothing moves." ;;
+    *)
+      fail "net.ipv4.ip_forward is '${forwarding}' on this host and it has to be 1, or the
+  kernel will not move one packet from a tunnel out to the internet. Everything else would
+  still look right: the container comes up, the interface comes up, a client handshakes,
+  bytes are counted, and nothing arrives anywhere — with nothing logged, because nothing
+  here may log. It is 1 on most hosts only as a side effect of the docker daemon setting it
+  at every start, which is not something to rely on. Set it with
+  'sysctl -w net.ipv4.ip_forward=1' and write it into a file under /etc/sysctl.d/ so it
+  survives a reboot, then run this again. This script reads that setting and never
+  writes one: which sysctls a host carries belongs to whoever owns the host." ;;
+  esac
+
+  # REVERSE-PATH FILTERING BREAKS ONLY AN ENTRY NODE, and nothing tells this script which
+  # role a host will be registered in — so it is named with what it would do, rather than
+  # refused. Refusing would turn away every leaf on a setting that is correct for a leaf.
+  #
+  # TWO VALUES, because the interface that matters does not exist yet. The kernel applies
+  # the MAX of conf.all and the interface's own, and an interface created later starts
+  # from conf.default — so the pair is what decides, and a 2 anywhere in it wins. The
+  # numbers read backwards until you know them: 0 is off, 1 is STRICT, 2 is LOOSE.
+  all_filter="$(sysctl_value net.ipv4.conf.all.rp_filter)"
+  default_filter="$(sysctl_value net.ipv4.conf.default.rp_filter)"
+  if [ -z "${all_filter}" ] || [ -z "${default_filter}" ]; then
+    filtering=""
+  elif [ "${all_filter}" = "2" ] || [ "${default_filter}" = "2" ]; then
+    filtering="loose"
+  elif [ "${all_filter}" = "1" ] || [ "${default_filter}" = "1" ]; then
+    filtering="strict"
+  else
+    filtering="off"
+  fi
+
+  case "${filtering}" in
+    "")
+      say "net.ipv4.conf.all.rp_filter and net.ipv4.conf.default.rp_filter could not be read
+    here, so this run cannot tell you whether this host would work as an ENTRY node. Read
+    them by hand before you register it as one: strict reverse-path filtering there drops
+    the hop's replies inside the kernel, and a two-hop that handshakes and carries nothing
+    is the hardest failure in this project to see." ;;
+    strict)
+      say "net.ipv4.conf.all.rp_filter is ${all_filter} and net.ipv4.conf.default.rp_filter
+    is ${default_filter} — strict reverse-path filtering. That is fine for a LEAF and it
+    breaks an ENTRY node: the replies coming back over the hop arrive on the hop's own
+    interface, the kernel decides they should not have, and drops them before anything on
+    this host sees them. The tunnel still handshakes, both ends still look up, and a
+    friend carries nothing — logged nowhere, because nothing here may log it. This run
+    does not refuse it, because nothing tells this script which role you will register
+    this host in. If it is an entry, set both to 2 (loose), or to 0, before you do:
+    'sysctl -w net.ipv4.conf.all.rp_filter=2' and the same in a file under /etc/sysctl.d/
+    so it survives a reboot." ;;
+  esac
+}
+kernel_preconditions
 
 say "ready: docker $(docker --version | awk '{print $3}' | tr -d ,), key authorised, firewall up, logging off"
 # The port to name is the one this session actually arrived on, when there was one: a host

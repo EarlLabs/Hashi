@@ -695,20 +695,38 @@ A_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAthisisnotakey hashi-control"
 
 
 def run_the_checks(
-    script: str, tmp_path: pathlib.Path, *arguments: str
+    script: str,
+    tmp_path: pathlib.Path,
+    *arguments: str,
+    then: str = "",
+    stubs: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """The script's checking half, run with no TTY and nothing to answer a prompt with.
 
     ``sudo`` is stubbed with one that runs what it is given, because the only use of it
     before the cut is ``sudo -n true`` — the test for a password-less one. Nothing
     privileged is invoked before the cut, so the stub grants the run nothing.
+
+    ``then`` is shell text appended after the cut, and it is how M19's two checks are
+    reached: both of them have to run LATE — one because the container runtime is what
+    sets the kernel setting it reads, the other because it verifies what the run
+    installed — and everything between the cut and them changes the host. So the test
+    supplies the CALL and the script supplies the function, lifted out of the file by
+    ``function_in``: what runs is the script's own code, not a copy of it.
+
+    ``stubs`` are further programs to put on the run's PATH, by name — ``sshd`` and
+    ``sysctl``, whose answers are the whole input to those two checks. Stubbing them from
+    outside is what keeps the script free of a switch that exists for a test.
     """
     prefix = tmp_path / "node-bootstrap-checks.sh"
-    prefix.write_text(script[: script.index(WHERE_THE_HOST_IS_FIRST_TOUCHED)])
-    stubs = tmp_path / "bin"
-    stubs.mkdir(exist_ok=True)
-    (stubs / "sudo").write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec "$@"\n')
-    (stubs / "sudo").chmod(0o755)
+    prefix.write_text(script[: script.index(WHERE_THE_HOST_IS_FIRST_TOUCHED)] + then)
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir(exist_ok=True)
+    (stub_dir / "sudo").write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec "$@"\n')
+    (stub_dir / "sudo").chmod(0o755)
+    for name, text in (stubs or {}).items():
+        (stub_dir / name).write_text(text)
+        (stub_dir / name).chmod(0o755)
     return subprocess.run(
         ["bash", str(prefix), *arguments],
         capture_output=True,
@@ -716,10 +734,23 @@ def run_the_checks(
         timeout=60,
         stdin=subprocess.DEVNULL,
         env={
-            "PATH": f"{stubs}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
             "HOME": str(tmp_path),
         },
     )
+
+
+def function_in(script: str, name: str) -> str:
+    """One of the script's own shell functions, lifted out of the file by name.
+
+    The same extraction ``test_a_commented_out_key_does_not_count_as_authorised`` does to
+    read ``key_is_authorised``'s body — used here to RUN the function rather than to read
+    it. A function that stops being defined at column zero, or stops closing at column
+    zero, fails here rather than being silently skipped.
+    """
+    found = re.search(rf"^{re.escape(name)}\(\) \{{\n(?:.*\n)*?^\}}$", script, re.M)
+    assert found, f"the script no longer defines {name}() at the top level"
+    return found.group(0) + "\n"
 
 
 def test_an_account_that_does_not_exist_is_refused_by_name(
@@ -789,3 +820,475 @@ def test_no_lookup_in_it_can_end_the_run_without_saying_why(script: str) -> None
                 "a getent that fails ends the run with nothing on either stream, so the "
                 f"refusal written under it never fires: {line.strip()}"
             )
+
+
+# --- M19.2: a verification that can fail --------------------------------------
+#
+# The script wrote ``authorized_keys`` and then verified its own work by reading back the
+# file it had just written — which is true whether or not sshd consults that file at all.
+# One of this project's own field hosts takes its keys from cloud metadata through an
+# ``AuthorizedKeysCommand`` and works only because its sshd ALSO sets
+# ``AuthorizedKeysFile``; on a host with the command and no usable file, the run said
+# ``ready`` for a key that cannot authenticate. Same defect class as M4.6: a check whose
+# answer is fixed by construction.
+
+
+def the_sshd_key_check(script: str) -> str:
+    """The script's own sshd lookup and key check, with the call the run makes."""
+    return (
+        function_in(script, "sshd_effective_config")
+        + 'SSHD_CONFIG="$(sshd_effective_config)"\n'
+        + function_in(script, "refuse_if_sshd_ignores_the_key_file")
+        + "refuse_if_sshd_ignores_the_key_file\n"
+        + 'say "the run would have gone on to report ready"\n'
+    )
+
+
+def an_sshd_that_says(*lines: str) -> dict[str, str]:
+    """A stub sshd whose ``-T`` prints exactly these directives.
+
+    The shape is real OpenSSH's: one directive per line, name lowercased, the value in
+    force. ``tests/e2e/infra/test_sshd_says_which_keys_it_will_read.py`` puts the same
+    check in front of a REAL sshd, because a stub can only ever repeat what its author
+    believed the output looks like.
+    """
+    printed = "\n".join(lines)
+    return {"sshd": f"#!/bin/sh\ncat <<'CONFIG'\n{printed}\nCONFIG\n"}
+
+
+# What sshd prints when nothing has been configured: the account's own file, and no
+# command. The path is relative, which is how sshd writes it and is the case the check
+# has to expand rather than compare literally.
+A_DEFAULT_SSHD = an_sshd_that_says(
+    "authorizedkeyscommand none",
+    "authorizedkeyscommanduser none",
+    "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2",
+)
+
+# The field condition this whole section exists for, and the one no host in the fleet has
+# today: keys come from a command, and the file this script writes is read by nobody.
+A_METADATA_ONLY_SSHD = an_sshd_that_says(
+    "authorizedkeyscommand /usr/local/bin/keys-from-metadata %u",
+    "authorizedkeyscommanduser nobody",
+    "authorizedkeysfile none",
+)
+
+
+def test_a_host_whose_sshd_reads_the_file_is_not_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The other half, without which every refusal below could be unconditional.
+
+    ``root`` for the reason the account test above gives: it is the account every host
+    has and the one most first runs name. The path sshd reports is RELATIVE, so this also
+    asserts the expansion — a check that compared the two strings literally would refuse
+    every ordinary host on earth.
+    """
+    accepted = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=A_DEFAULT_SSHD,
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "the run would have gone on to report ready" in accepted.stdout
+
+
+def test_a_host_that_takes_keys_only_from_a_command_never_reaches_ready(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M19's second "done when", and the acceptance line, as an assertion.
+
+    The run must stop, must say which of the two sources sshd really uses, and must say
+    it in words — a non-zero exit with an empty stderr is the same defect as a wrong
+    answer (M18's acceptance), and this check runs late, where the operator has already
+    watched everything else succeed.
+    """
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=A_METADATA_ONLY_SSHD,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "the run would have gone on to report ready" not in refused.stdout
+    assert refused.stderr.strip(), (
+        f"the run ended non-zero with nothing on stderr: stdout {refused.stdout!r}"
+    )
+    said = " ".join(refused.stderr.split())
+    # By name, both of them: which command sshd asks, and the file it is not reading.
+    assert "/usr/local/bin/keys-from-metadata" in said, said
+    assert "/root/.ssh/authorized_keys" in said, said
+    # And what the operator can do about it, since this script cannot.
+    assert "AuthorizedKeysFile" in said, said
+    # The key itself is never on a terminal, here or anywhere else.
+    assert A_PUBLIC_KEY.split()[1] not in refused.stdout + refused.stderr
+
+
+def test_a_host_whose_sshd_reads_some_other_file_is_refused_too(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The same failure without a command anywhere in it.
+
+    ``AuthorizedKeysCommand`` is how the case was FOUND, not what makes it a case: any
+    configuration that moves the account's keys elsewhere leaves this script writing to a
+    file sshd will not open. Asserted separately so the check cannot degenerate into
+    "does this host have a keys command".
+    """
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs=an_sshd_that_says(
+            "authorizedkeyscommand none",
+            "authorizedkeysfile /etc/ssh/authorized_keys_for/%u",
+        ),
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    said = " ".join(refused.stderr.split())
+    assert "/etc/ssh/authorized_keys_for" in said, said
+    assert "/root/.ssh/authorized_keys" in said, said
+
+
+def test_an_sshd_that_cannot_be_asked_is_not_taken_as_a_yes(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """"Could not check" must not read as "checked" — that is the whole defect class.
+
+    A host where ``sshd -T`` answers nothing is a host where this run does not know
+    whether the key works, and the file it just wrote cannot tell it. Refusing is the
+    honest answer and it is a narrowing: before M19 such a host was told ``ready``.
+    """
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_sshd_key_check(script),
+        stubs={"sshd": "#!/bin/sh\nexit 1\n"},
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    said = " ".join(refused.stderr.split())
+    assert "sshd -T" in said, said
+    assert "/root/.ssh/authorized_keys" in said, said
+
+
+def test_the_final_key_check_asks_sshd_before_it_reads_the_file(script: str) -> None:
+    """Both questions, in the order that makes the second one mean anything.
+
+    "Is the key in the file" is only an answer once "will sshd open that file" is yes,
+    and it is still needed — sshd consulting the file says nothing about what is in it.
+    So neither check replaces the other, and the file check must not be reached first.
+    """
+    asks_sshd = re.search(r"^refuse_if_sshd_ignores_the_key_file$", script, re.M)
+    reads_file = re.search(r"^key_is_authorised \|\| fail", script, re.M)
+    assert asks_sshd, (
+        "nothing in the run asks sshd which files it reads keys from, so the final "
+        "verification is once again the file reading back what the run wrote into it"
+    )
+    assert reads_file, "the run no longer checks that the key is in the file at all"
+    assert asks_sshd.start() < reads_file.start(), (
+        "the file is read back before sshd is asked whether it will ever open it"
+    )
+    # And the answer comes from sshd itself rather than from our reading of its config.
+    assert re.search(r'^SSHD_CONFIG="\$\(sshd_effective_config\)"$', script, re.M), (
+        "the effective sshd configuration is never captured, so the check is guessing"
+    )
+    assert not re.search(r"(?:grep|awk|cat|sed)[^\n]*/etc/ssh/sshd_config", script), (
+        "the script parses sshd's config file instead of asking sshd — an Include, a "
+        "Match block or a distribution default would then be invisible to it"
+    )
+
+
+def test_the_header_states_the_limit_of_what_sshd_was_asked(script: str) -> None:
+    """``sshd -T`` with no connection to describe prints the pre-``Match`` configuration.
+
+    So a host that moves this one account's keys inside ``Match User`` is still told its
+    key is fine. That residual hole is exactly the kind of thing the header's second half
+    exists for: an operator who reads "the key check asks sshd" would otherwise assume it
+    asked about their account.
+    """
+    section = re.search(
+        r"^# WHAT THIS SCRIPT DOES NOT DO(?:.*\n)*?^set -euo pipefail$", script, re.M
+    )
+    assert section, "the script no longer states its boundaries"
+    assert "Match" in section.group(0), (
+        "the header does not say that the key check reads the GLOBAL sshd configuration, "
+        "so a per-account override reads as covered"
+    )
+
+
+# --- M19.1: the kernel settings a node's traffic depends on -------------------
+#
+# Neither is set by anything in this project and neither can be: ``/proc/sys`` is mounted
+# read-only inside the data-plane container, so the rules M14 and M3 render cannot reach
+# them. Both were fine on the two field hosts, which is why they are preconditions rather
+# than a regression — and why nothing had ever noticed.
+
+
+def the_kernel_check(script: str) -> str:
+    """The script's own kernel preconditions, with the call the run makes."""
+    return (
+        function_in(script, "sysctl_value")
+        + function_in(script, "kernel_preconditions")
+        + "kernel_preconditions\n"
+        + 'say "the run would have gone on to report ready"\n'
+    )
+
+
+# The settings as both field hosts really carry them: forwarding on (the docker daemon
+# sets it at every start) and loose reverse-path filtering.
+A_WORKING_KERNEL = {
+    "net.ipv4.ip_forward": "1",
+    "net.ipv4.conf.all.rp_filter": "2",
+    "net.ipv4.conf.default.rp_filter": "2",
+}
+
+
+def kernel_stub(**changed: str) -> dict[str, str]:
+    """A stub ``sysctl`` answering ``-n <name>`` for a working host, with changes.
+
+    Keyword names are the sysctl names with their dots written as underscores, because a
+    dot is not legal in a Python keyword — ``net_ipv4_ip_forward`` is
+    ``net.ipv4.ip_forward``, and the three settings this script reads have no underscore
+    of their own except ``ip_forward``, which is why the mapping is spelled out below
+    rather than guessed at by replacing characters.
+
+    Anything the stub is not given fails the way a real ``sysctl`` fails for a setting
+    that is not there, which is a case the check has to answer rather than assume.
+    """
+    named = {
+        "net_ipv4_ip_forward": "net.ipv4.ip_forward",
+        "net_ipv4_conf_all_rp_filter": "net.ipv4.conf.all.rp_filter",
+        "net_ipv4_conf_default_rp_filter": "net.ipv4.conf.default.rp_filter",
+    }
+    values = {**A_WORKING_KERNEL}
+    for keyword, value in changed.items():
+        values[named[keyword]] = value
+    branches = "\n".join(f'  {name}) echo "{value}" ;;' for name, value in values.items())
+    return {
+        "sysctl": (
+            '#!/bin/sh\n[ "$1" = "-n" ] && shift\ncase "$1" in\n'
+            f"{branches}\n  *) exit 1 ;;\nesac\n"
+        )
+    }
+
+
+def test_a_host_with_both_settings_right_is_not_stopped(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The green case, and it has to say nothing.
+
+    A precondition that is met is not news, and a line on every run is a line an operator
+    stops reading — which is the whole reason the one below can still be seen.
+    """
+    accepted = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs=kernel_stub(),
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "rp_filter" not in accepted.stdout, accepted.stdout
+
+
+def test_a_host_that_cannot_forward_is_refused_by_name(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M19's first "done when", for the setting that breaks ANY node.
+
+    ``net.ipv4.ip_forward`` is 1 on every hashi node today only because the docker daemon
+    sets it at every start. Nothing states it, nothing checks it, and a 0 there is M14's
+    exact shape: interface up, container up, handshake complete, bytes counted, nothing
+    arriving anywhere and nothing logged.
+    """
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs=kernel_stub(net_ipv4_ip_forward="0"),
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert refused.stderr.strip(), (
+        f"the run ended non-zero with nothing on stderr: stdout {refused.stdout!r}"
+    )
+    said = " ".join(refused.stderr.split())
+    assert "net.ipv4.ip_forward" in said, said
+    # The consequence, because "set this sysctl" without it is a chore rather than a
+    # reason, and this is the failure an operator would otherwise debug in the transport.
+    assert "1" in said and "/etc/sysctl.d" in said, said
+    assert "the run would have gone on to report ready" not in refused.stdout
+
+
+def test_a_setting_that_cannot_be_read_is_not_taken_as_a_pass(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """Unreadable is not 1. The same rule as the sshd check, for the same reason."""
+    refused = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs={"sysctl": "#!/bin/sh\nexit 1\n"},
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    said = " ".join(refused.stderr.split())
+    assert "net.ipv4.ip_forward" in said, said
+
+
+def test_strict_reverse_path_filtering_is_named_rather_than_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The owner's decision, and the reason the two settings are not treated alike.
+
+    Strict ``rp_filter`` breaks an ENTRY node — the replies arriving on the hop interface
+    are dropped in the kernel before anything sees them — and is entirely correct on a
+    leaf. Nothing tells this script which role a host will be registered in, so refusing
+    would turn away every leaf for a setting that is right for it. It is named, with what
+    it would do, beside the line that tells the operator to go and register the host.
+    """
+    warned = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs=kernel_stub(
+            net_ipv4_conf_all_rp_filter="1", net_ipv4_conf_default_rp_filter="1"
+        ),
+    )
+
+    assert warned.returncode == 0, (
+        "a host with strict reverse-path filtering was refused. It is a working leaf, and "
+        f"this script is not told which role it will have:\n{warned.stderr}"
+    )
+    assert "the run would have gone on to report ready" in warned.stdout
+    said = " ".join(warned.stdout.split())
+    assert "net.ipv4.conf.all.rp_filter" in said, said
+    # The role it breaks, and the shape of the breakage — without which an operator has
+    # no way to tell whether the line applies to the host in front of them.
+    assert "ENTRY" in said, said
+    assert "hop" in said, said
+
+
+def test_the_interfaces_that_do_not_exist_yet_are_accounted_for(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """``conf.all`` alone is not the answer, and the hop interface is not there yet.
+
+    The kernel applies the MAX of ``conf.all`` and the interface's own value, and an
+    interface created later starts from ``conf.default``. So a host with ``all`` off and
+    ``default`` strict still drops the hop's replies, and a host with either set to loose
+    does not — 2 beats 1, which reads backwards until you know that 2 is the loose mode.
+    """
+    strict_by_default = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs=kernel_stub(
+            net_ipv4_conf_all_rp_filter="0", net_ipv4_conf_default_rp_filter="1"
+        ),
+    )
+    assert "rp_filter" in strict_by_default.stdout, (
+        "a host whose conf.all is off and whose conf.default is strict was passed in "
+        "silence — the hop interface does not exist yet and will inherit the strict one"
+    )
+
+    loose_somewhere = run_the_checks(
+        script,
+        tmp_path,
+        "--authorized-key",
+        A_PUBLIC_KEY,
+        "--user",
+        "root",
+        then=the_kernel_check(script),
+        stubs=kernel_stub(
+            net_ipv4_conf_all_rp_filter="1", net_ipv4_conf_default_rp_filter="2"
+        ),
+    )
+    assert "rp_filter" not in loose_somewhere.stdout, (
+        "a host where the loose mode wins was warned about strict filtering: the kernel "
+        f"takes the MAX of the two and 2 is loose\n{loose_somewhere.stdout}"
+    )
+
+
+def test_the_kernel_is_read_after_the_daemon_that_sets_one_of_them(script: str) -> None:
+    """Ordering, and it is a correctness property rather than a preference.
+
+    ``net.ipv4.ip_forward`` is 0 on a host that has never run docker, and the daemon sets
+    it to 1 at every start. A check placed before section 2 would therefore refuse every
+    fresh host — the exact case this script exists for — for a fault it does not have.
+    """
+    call = re.search(r"^kernel_preconditions$", script, re.M)
+    assert call, "nothing in the run checks the kernel settings a node's traffic needs"
+    assert script.index(WHERE_THE_HOST_IS_FIRST_TOUCHED) < call.start(), (
+        "the kernel is read before the container runtime is installed, so a host that has "
+        "never had docker is refused for a setting docker itself would have set"
+    )
+    daemon = re.search(r"^as_root docker version --format", script, re.M)
+    assert daemon and daemon.start() < call.start(), (
+        "the kernel is read before the daemon is known to answer, so ip_forward is read "
+        "at a moment when nothing has set it"
+    )
+    ready = re.search(r'^say "ready: docker', script, re.M)
+    assert ready and call.start() < ready.start(), (
+        "the kernel is read after the run has already reported success"
+    )
+
+
+def test_it_reads_kernel_settings_and_writes_none(script: str) -> None:
+    """Section E of the header, still true: it does not tune the kernel.
+
+    The distinction M19 turns on is that "does not tune" and "does not check" are
+    different promises. So a write is forbidden and a read is not — and the refusal above
+    NAMES the write for the operator to run, which is why this is anchored on a command
+    at the start of a line rather than on the string appearing anywhere. Same shape, and
+    the same reason, as the ``ssh-keygen`` assertion further up this file.
+    """
+    for setter in (r"sysctl -w", r"sysctl -p", r"sysctl [^\n-]", r"tee[^\n]*/proc/sys"):
+        assert not re.search(rf"^\s*(?:as_root )?{setter}", script, re.M), (
+            f"the script writes a kernel setting ({setter!r}) — it reads them and refuses, "
+            "and tuning a host's kernel belongs to whoever owns the host"
+        )
+    assert re.search(r"^\s*sysctl -n ", script, re.M), "nothing reads a kernel setting"
+    assert re.search(r"not tune the kernel", script, re.I), (
+        "the header no longer states the boundary the reads above stay inside"
+    )
