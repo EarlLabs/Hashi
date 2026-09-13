@@ -78,6 +78,21 @@
       <div class="section-head">
         <p class="text-muted section-note">
           <span class="mono">{{ offer.transport }}</span> — {{ offer.standing }}
+          {% if offer.withheld %}
+          {#
+            Why this row has no offer button — M17.2. Beside the standing sentence rather
+            than in the actions group, because it is a fact about the row and not a
+            control: the pool this transport hands addresses out of is smaller than the
+            fleet, so offering it would be refused. Composed in services/console.py, with
+            the pool named and the screen that resizes it.
+
+            Muted, not in the danger hue. Nothing has been refused here, because nothing
+            has been submitted — the console's one accent belongs to a request that failed
+            (docs/decisions.md, 2026-09-10) and this is a standing fact the operator is
+            reading before they act.
+          #}
+          <span>{{ offer.withheld }}</span>
+          {% endif %}
         </p>
         {% if offer.for_friends %}
         {#
@@ -104,6 +119,14 @@
           <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
                   hx-get="/panel/transports/{{ offer.id }}/withdraw"
                   hx-target="#dialog-slot" hx-swap="innerHTML">withdraw</button>
+          {% elif offer.withheld %}
+          {#
+            NO BUTTON AT ALL — M17.2. Offering this row hands every active user an address
+            on it in the same transaction, and its pool cannot hold them, so this control's
+            only outcome would be a refusal. The reason is on the line to the left, where
+            the row's own prose already is: `.row-actions` is an inline flex group of
+            buttons and a sentence dropped into it wraps under the ones beside it.
+          #}
           {% else %}
           <button class="btn btn-secondary" type="button" data-transport="{{ offer.transport }}"
                   hx-post="/panel/transports/{{ offer.id }}/offer"

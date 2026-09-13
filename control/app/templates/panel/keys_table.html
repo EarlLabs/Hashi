@@ -40,6 +40,9 @@
             <th>scope</th>
             <th>fingerprint</th>
             <th>on the node</th>
+            {# Kept as it was. The cell under it reads "2 of 10" where there is a pool
+               and "2" where there is not, so a heading naming the pool would be wrong on
+               every row of a transport that hands out no address. #}
             <th>users on it</th>
             <th class="right">actions</th>
           </tr>
@@ -73,8 +76,14 @@
             </td>
             <td class="text-muted nowrap">
               {# A hop end's other holder is the far NODE, not a person: a rotation
-                 there takes a tunnel down rather than re-keying anybody's client. #}
-              {% if key.for_friends %}{{ key.holders }}{% else %}hop — none{% endif %}
+                 there takes a tunnel down rather than re-keying anybody's client.
+
+                 "2 of 10" where the transport gives every user their own address — how
+                 much of the pool is handed out, composed in services/console.py from the
+                 row's own column and the transport's own declaration. Two counts and
+                 never an address: which address is whose is the record this project does
+                 not produce, so there is nothing here to reveal and nothing behind it. #}
+              {% if key.for_friends %}{{ key.holders_of_pool }}{% else %}hop — none{% endif %}
             </td>
             <td class="right">
               <span class="row-actions">

@@ -20,11 +20,44 @@
   sentence through the same 422 path as a duplicate name. Both halves matter: the
   hint means the operator rarely meets the refusal, the refusal means they are never
   silently given something other than what they asked for.
+
+  NO FORM AT ALL WHEN A POOL IS FULL — M17.2. A user is given an address on every serving
+  transport that hands out one, so a pool with no room refuses every submission of this
+  form rather than some of them. The dialog asks the same question the service asks
+  (services/console.py's `full_pools`, which is `addresses.shortfalls(extra=1)`) and draws
+  no submit button when the answer is not empty — the same shape the transports dialog
+  uses when there is nothing left to enable, and the state dialog uses on a retired node.
+  Every full pool is NAMED, because "no room" without a pool to go and resize is a dead
+  end; nothing about any person is named, because a count is all this knows.
+
+  In that branch the service's own refusal sentence is NOT also printed. It is reachable
+  — an operator submitting this form the moment a pool fills gets it at 422 — and it says
+  the same three facts in the code's own vocabulary, under a field it is not about. What
+  they read instead is this dialog, which is the same answer composed for the screen.
 #}
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
        aria-labelledby="add-user-title">
     <div class="dialog-title" id="add-user-title">Add a user</div>
+    {% if full_pools %}
+    <div class="dialog-body">
+      <div>{{ no_room }}</div>
+      {% for pool in full_pools %}
+      {# Node, transport and both counts, in the same words the API's own refusal uses.
+         Never a person and never an address: how full a pool is, is a fact about
+         configuration, and who holds what is the record this project does not keep.
+
+         A line per pool, the way the state dialog lists what each state means — this
+         console has no list element anywhere and this is not the dialog to introduce
+         one to. #}
+      <div>{{ pool }}</div>
+      {% endfor %}
+      <div>{{ what_to_do }}</div>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+    </div>
+    {% else %}
     <form hx-post="/panel/friends" hx-target="#dialog-slot" hx-swap="innerHTML">
       <div class="field">
         <label for="friend-nickname">nickname</label>
@@ -47,6 +80,7 @@
         <button class="btn btn-primary" type="submit">add user</button>
       </div>
     </form>
+    {% endif %}
     {% include "panel/corners.html" %}
   </div>
 </div>

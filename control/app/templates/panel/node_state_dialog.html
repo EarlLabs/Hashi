@@ -43,13 +43,24 @@
                 {% if errors.get('state') %}aria-invalid="true"{% endif %}>
           <option value="">choose…</option>
           {% for choice in choices %}
+          {# A withheld state gets no option — M17.2. The state machine allows the move
+             and this control plane would refuse it, so offering it would be a control
+             whose only outcome is a 409, which is the same rule that keeps `retired ->
+             active` off this list. It stays in the hint below, with the reason, because
+             "where this node may go" is what the operator came here to read. #}
+          {% if not choice.withheld %}
           <option value="{{ choice.state }}"{% if values.get('state') == choice.state %} selected{% endif %}>{{ choice.state }}</option>
+          {% endif %}
           {% endfor %}
         </select>
         <div class="field-hint" id="node-state-hint">
           <div>{{ node.name }} is {{ node.state }} now. Where it may go from there:</div>
           {% for choice in choices %}
-          <div><span class="mono">{{ choice.state }}</span> — {{ choice.means }}</div>
+          {# The consequence, or — where the move is withheld — what is in the way of it.
+             Both are composed in services/console.py; this file chooses between them and
+             writes neither. #}
+          <div><span class="mono">{{ choice.state }}</span> —
+            {% if choice.withheld %}{{ choice.withheld }}{% else %}{{ choice.means }}{% endif %}</div>
           {% endfor %}
         </div>
         {% if errors.get('state') %}

@@ -50,7 +50,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict
-from control.app.models import Credential, Friend, Node, NodeTransport
+from control.app.models import (
+    Credential,
+    Friend,
+    Node,
+    NodeTransport,
+    TransportPurpose,
+)
 from edge.addressing import carriage_problem, host_of, pool
 from edge.node import Credential as EdgeCredential
 from edge.registry import PeerAddress, discover
@@ -76,12 +82,18 @@ class PoolFull(Conflict):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Shortfall:
-    """One serving transport whose pool cannot hold everybody it would have to.
+    """One transport whose pool cannot hold everybody it would have to.
 
     Carries names and counts and no address: this is what a refusal is composed from and
     what M17.2 puts on screen, and neither may say who holds what.
+
+    ``row`` is the node-transport's own id — the same opaque id every panel button
+    already addresses — so the console can put the sentence beside the row it is about
+    rather than working out which of a node's lines a shortfall belongs to. An id is not
+    a person and not an address; it is what the operator just clicked.
     """
 
+    row: str
     node: str
     transport: str
     size: int
@@ -466,6 +478,51 @@ async def fleet_size(session: AsyncSession, *, extra: int = 0) -> int:
     ).scalar_one() + extra
 
 
+async def shortfalls_among(
+    session: AsyncSession, rows: list[NodeTransport], *, extra: int = 0
+) -> list[Shortfall]:
+    """Which of THESE rows cannot hold everybody they would have to — M17.2.
+
+    ONE MEASUREMENT, THREE POPULATIONS. ``shortfalls`` below asks it of the serving
+    fleet, which is what somebody being added meets. The console asks it of one node's
+    own rows, because an action has to be withheld BEFORE the operator commits to it:
+    offering a withdrawn transport and moving a node to serving each grant every active
+    friend an address on rows that are not serving yet, so neither is visible to the
+    serving query and both used to be refused only after the press. Measuring that in
+    the console would have been a third copy of "what a pool has to hold", which is the
+    drift ``fleet_size`` and ``nodes.sized_pool`` already exist to prevent.
+
+    FRIEND-FACING ROWS ONLY, and only where the transport declares each consumer needs
+    an address. A hop end hands nothing to anybody and is refused a size outright
+    (``rotation._resize``), so measuring its absent pool against the fleet would report a
+    shortfall on the runbook's own entry box — an action withheld over a number that row
+    is not allowed to have. ``serving_transports`` already filters the same way, so this
+    is not a change to what ``shortfalls`` answers.
+    """
+    people = await fleet_size(session, extra=extra)
+
+    short: list[Shortfall] = []
+    for row in rows:
+        if row.purpose != TransportPurpose.FRIENDS:
+            continue
+        if spec_for(row.transport_name) is None:
+            continue
+        size = row.pool_size or 1
+        if size >= people:
+            continue
+        node = await session.get(Node, row.node_id)
+        short.append(
+            Shortfall(
+                row=row.id,
+                node=node.name if node else row.node_id,
+                transport=row.transport_name,
+                size=size,
+                needed=people,
+            )
+        )
+    return short
+
+
 async def shortfalls(session: AsyncSession, *, extra: int = 0) -> list[Shortfall]:
     """Every serving pool whose size is below the friends it would have to hold.
 
@@ -481,25 +538,27 @@ async def shortfalls(session: AsyncSession, *, extra: int = 0) -> list[Shortfall
     """
     from control.app.services import nodes  # noqa: PLC0415
 
-    people = await fleet_size(session, extra=extra)
+    return await shortfalls_among(
+        session, await nodes.serving_transports(session), extra=extra
+    )
 
-    short: list[Shortfall] = []
-    for row in await nodes.serving_transports(session):
-        if spec_for(row.transport_name) is None:
-            continue
-        size = row.pool_size or 1
-        if size >= people:
-            continue
-        node = await session.get(Node, row.node_id)
-        short.append(
-            Shortfall(
-                node=node.name if node else row.node_id,
-                transport=row.transport_name,
-                size=size,
-                needed=people,
-            )
-        )
-    return short
+
+def named(short: Shortfall) -> str:
+    """One pool, in the words every refusal about a pool already uses.
+
+    Its own function because three surfaces now name the same pool and they must not
+    drift: the refusal when somebody is added (``too_small`` below), the add-user dialog
+    listing what is full, and the two actions the console withholds over a short pool
+    (``services/console.py``). The operator meets this phrase in all three and should not
+    have to recognise it twice.
+
+    Names the node and the transport — both already on the screen it appears on — and the
+    two counts. Nothing about any person, and no address.
+    """
+    return (
+        f"{short.transport} on {short.node} holds {short.size} and would need "
+        f"{short.needed}"
+    )
 
 
 def too_small(short: list[Shortfall]) -> str:
@@ -509,10 +568,7 @@ def too_small(short: list[Shortfall]) -> str:
     same for each: make the pool bigger. Names the node and the transport — both values
     already on screen — and the two counts, and nothing about any person.
     """
-    listed = "; ".join(
-        f"{row.transport} on {row.node} holds {row.size} and would need {row.needed}"
-        for row in short
-    )
+    listed = "; ".join(named(row) for row in short)
     return (
         f"a transport that gives every friend an address of its own has too small a "
         f"pool: {listed}. Nothing has been changed — make the pool bigger on that "

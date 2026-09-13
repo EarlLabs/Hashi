@@ -97,6 +97,21 @@ TRANSPORT_NO_HOP = "never on an entry→leaf hop"
 TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
 TRANSPORT_UNDELIVERED = "not in a user's link yet — this panel cannot hand it over"
 
+# What it means, on the screen the operator learns the protocols from, that a transport
+# declares each of its consumers needs an address of their own — M17.2. Read from
+# ``TransportMeta.peer_address`` through ``addresses.spec_for``, the one place `control`
+# asks that question: this sentence appears on a protocol that declares it and on no
+# other, and a package added later gets it by declaring, never by being listed.
+#
+# It says "sized per node" because that is the fact an operator is missing when they meet
+# the pool box for the first time: the number is a column on the node-transport record
+# and not a property of the protocol, so two nodes running the same protocol can serve
+# different numbers of people.
+TRANSPORT_ADDRESS_PER_USER = (
+    "gives every user their own address inside the tunnel, from a pool sized on each "
+    "node that runs it"
+)
+
 # The sentence this milestone's acceptance line is about, and the whole reason the
 # screen exists: a protocol the panel refuses to offer as an exit, and WHY, in words an
 # operator can act on. Written from ``blocked_by_inspection`` alone, so it names no
@@ -365,6 +380,12 @@ class TransportRow:
     # no sentence about it, and a column that says "may carry a hop" on three rows out
     # of four teaches nothing.
     hop_note: str | None
+    # ``peer_address``, and only when it is declared — M17.2. Present on the transports
+    # that hand each user an address out of a pool, absent on the ones that identify a
+    # user by their material, for the same reason ``hop_note`` is one-sided: the row
+    # that needs a sentence is the one with a consequence for the operator, which here
+    # is a number they will be asked for on every node they enable it on.
+    address_note: str | None
     why: str | None
 
 
@@ -390,6 +411,14 @@ class KeyRow:
     rotating it, since every one of them is re-minted with the node's own material. It
     passes the test ``docs/decisions.md`` sets: it moves when the operator adds or
     revokes a user, and not when anybody connects.
+
+    ``holders_of_pool`` is that same count as the screen reads it — "2 of 10" where the
+    transport hands every user an address from a pool, and the bare count where it hands
+    out none. Two numbers and no address: how full a pool is, is the one thing about the
+    allocation an operator has to see, and WHO HOLDS WHAT is the record this project
+    does not produce. Composed here rather than in the template for the reason every
+    other sentence on this screen is — and because the pool's size is a column the
+    template has no business knowing about.
     """
 
     id: str
@@ -400,6 +429,7 @@ class KeyRow:
     held: str | None
     pushed: datetime.datetime | None
     holders: int
+    holders_of_pool: str
     for_friends: bool
     # Whether rotating THIS row also re-keys the far end of the hop, because the
     # transport declared material both ends must hold the same copy of. It used to mean
@@ -437,6 +467,24 @@ OFFER_HOP_END = (
     "one end of a hop — not something a user is offered. Tear the hop down from the "
     "Hops screen; switching one end off would leave a tunnel that no longer completes "
     "while both ends still look configured."
+)
+
+# Why a withdrawn row's offer button is not drawn at all — M17.2. Offering a transport
+# hands every active user a credential on it IN THE SAME TRANSACTION (M17 moved the
+# fan-out inside it), and on a transport that gives each of them an address of their own
+# a pool this small refuses the whole thing. That refusal is correct and arrives with
+# nothing committed; what it cannot be is the operator's first hint, because they have
+# already told thirty people the protocol is coming.
+#
+# The pool is NAMED — node, transport and both counts, in ``addresses.named``'s words, so
+# the sentence here and the refusal the API returns describe the same pool the same way.
+# It also names the one screen that can fix it: there is no resize action in this console,
+# the size is a box on the replace-parameters dialog, and an operator who does not know
+# that has nowhere to go from here.
+POOL_SHORT_TO_OFFER = (
+    "not offered — {pools}. Offering it gives every active user an address here in the "
+    "same change, so it would be refused. Make the pool bigger first: Keys & configs, "
+    "replace params."
 )
 
 # The same row, answering the other action — M15.2. Its own sentence rather than the one
@@ -481,6 +529,18 @@ NODE_STATE_MEANS = {
     ),
 }
 
+# Why the serving state is listed and not offered — M17.2, and the same event as
+# ``POOL_SHORT_TO_OFFER`` from the other side. A node that starts serving grants every
+# active user a credential on each transport it offers, inside the transaction that moves
+# it, so one short pool on the node refuses the move. The refusal itself is M17's and is
+# already tested; what this adds is that the operator reads it before pressing, with the
+# pool named rather than "this node cannot be granted".
+POOL_SHORT_TO_SERVE = (
+    "not offered — {pools}. A node that starts serving gives every active user an "
+    "address on each transport it offers, so this move would be refused. Make the pool "
+    "bigger first: Keys & configs, replace params."
+)
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class OfferRow:
@@ -510,14 +570,26 @@ class OfferRow:
     # Which of the three sentences above this row is in, composed here so no template
     # chooses between them and no route writes one.
     standing: str
+    # Why the offer button is not drawn at all — M17.2, and ``None`` on nearly every row.
+    # An action the service would refuse is withheld rather than offered, with the pool
+    # it is about named: see ``POOL_SHORT_TO_OFFER``.
+    withheld: str | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class StateChoice:
-    """One state this node may be moved into, and what that does to a user's link."""
+    """One state this node may be moved into, and what that does to a user's link.
+
+    ``withheld`` is why it is listed but not offered — M17.2. The state machine still
+    allows the move; this control plane would refuse it, and the dialog says so instead
+    of drawing a control whose only outcome is a refusal. It is kept in the list rather
+    than dropped so the operator still reads where their node could go and what is in
+    the way of it.
+    """
 
     state: str
     means: str
+    withheld: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -698,21 +770,13 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
     itself between reloads reads as the fleet changing.
     """
     node = await nodes.get_node(session, node_id)
-    # The rows are QUERIED rather than read off ``node.transports``, and that is not a
-    # style choice: this list is also reached from a route that already loaded the
-    # node-transport, whose own ``node`` relationship hands back the same Node instance
-    # out of the identity map — with its ``transports`` collection never loaded, so
-    # touching it is lazy IO on an async session and raises ``MissingGreenlet`` at
-    # runtime rather than in a query. One select, ordered in SQL, works from either
-    # direction. (``key_rows`` reads the relationship safely because it comes from
-    # ``list_nodes``, which issues the query that populates it.)
-    result = await session.execute(
-        select(NodeTransport)
-        .where(NodeTransport.node_id == node.id)
-        # Sorted for the reason every other collection here is: an unordered list
-        # reshuffles itself between reloads and reads as the fleet changing.
-        .order_by(NodeTransport.transport_name)
-    )
+    rows = await _transports_on(session, node)
+    # Which of them could not be offered right now, measured once for the whole dialog —
+    # M17.2. Keyed by the row's own id, which is what a ``Shortfall`` carries so that the
+    # sentence lands on the line the operator is looking at.
+    short = {
+        row.row: row for row in await addresses.shortfalls_among(session, rows)
+    }
     return [
         OfferRow(
             id=row.id,
@@ -721,9 +785,40 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             offered=row.enabled,
             for_friends=row.purpose == TransportPurpose.FRIENDS,
             standing=_standing(row.purpose, row.enabled),
+            # Only on a row that is WITHDRAWN, because offering is the action being
+            # withheld: a row already in every link is one this pool has already been
+            # measured for, and its button is the withdraw the operator may always press.
+            withheld=(
+                POOL_SHORT_TO_OFFER.format(pools=addresses.named(short[row.id]))
+                if not row.enabled and row.id in short
+                else None
+            ),
         )
-        for row in result.scalars().unique()
+        for row in rows
     ]
+
+
+async def _transports_on(session: AsyncSession, node: Node) -> list[NodeTransport]:
+    """Every transport row on one node, in a stable order.
+
+    QUERIED rather than read off ``node.transports``, and that is not a style choice:
+    the callers are reached from routes that already loaded a node-transport, whose own
+    ``node`` relationship hands back the same Node instance out of the identity map —
+    with its ``transports`` collection never loaded, so touching it is lazy IO on an
+    async session and raises ``MissingGreenlet`` at runtime rather than in a query. One
+    select, ordered in SQL, works from either direction. (``key_rows`` reads the
+    relationship safely because it comes from ``list_nodes``, which issues the query that
+    populates it.)
+
+    Sorted for the reason every other collection here is: an unordered list reshuffles
+    itself between reloads and reads as the fleet changing.
+    """
+    result = await session.execute(
+        select(NodeTransport)
+        .where(NodeTransport.node_id == node.id)
+        .order_by(NodeTransport.transport_name)
+    )
+    return list(result.scalars().unique())
 
 
 async def offer_row(session: AsyncSession, node_transport_id: str) -> OfferRow:
@@ -752,7 +847,7 @@ def _standing(purpose: TransportPurpose, enabled: bool) -> str:
     return OFFER_IN_EVERY_LINK if enabled else OFFER_WITHDRAWN
 
 
-def state_choices(node: Node) -> tuple[StateChoice, ...]:
+async def state_choices(session: AsyncSession, node: Node) -> tuple[StateChoice, ...]:
     """The states this node may move to, each with what it does to a user's link.
 
     ``NodeState.allowed_from`` is the machine and this does not restate it — a dialog
@@ -766,9 +861,30 @@ def state_choices(node: Node) -> tuple[StateChoice, ...]:
     is a dialog, and a missing line of prose must not be a 500 on the screen the
     operator uses to fix things. ``test_every_state_a_node_may_move_to_says_what_it
     _means`` is what keeps that branch unreachable.
+
+    ASYNC SINCE M17.2, and that is the whole reason the signature changed: a node
+    becoming serving hands every active user an address on each transport it offers, so
+    a short pool anywhere on this node refuses the move — inside the transaction, with
+    nothing committed, but only after the operator has pressed. The measurement is
+    ``addresses.shortfalls_among``, over this node's own ENABLED rows, which are exactly
+    the ones that become serving with it. A node that is already serving is asked
+    nothing: it grants nobody anything by staying where it is.
     """
+    withheld = None
+    if node.state not in NodeState.serving():
+        short = await addresses.shortfalls_among(
+            session, [row for row in await _transports_on(session, node) if row.enabled]
+        )
+        if short:
+            withheld = POOL_SHORT_TO_SERVE.format(
+                pools="; ".join(addresses.named(row) for row in short)
+            )
     return tuple(
-        StateChoice(state=str(state), means=NODE_STATE_MEANS.get(state, ""))
+        StateChoice(
+            state=str(state),
+            means=NODE_STATE_MEANS.get(state, ""),
+            withheld=withheld if state in NodeState.serving() else None,
+        )
         for state in NodeState.allowed_from(node.state)
     )
 
@@ -793,8 +909,8 @@ def transport_rows() -> list[TransportRow]:
 def _transport_row(meta: TransportMeta) -> TransportRow:
     """One transport's declaration, projected into the words the screen shows.
 
-    This is the whole of M9.3's hard rule. Three of the strings below are chosen by a
-    boolean the TRANSPORT declares about itself, and none of them is chosen by which
+    This is the whole of M9.3's hard rule. Four of the strings below are chosen by
+    something the TRANSPORT declares about itself, and none of them is chosen by which
     protocol it is — there is no name compared to anything here, in the template, or
     anywhere on the path between them. Ship a fifth protocol and its row writes itself;
     ship one that declares itself identified and the warning appears with no edit.
@@ -825,8 +941,31 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
         ),
         identified=meta.blocked_by_inspection,
         hop_note=None if meta.hop_capable else TRANSPORT_NO_HOP,
+        # THE REGISTRY'S OWN DECLARATION, asked through the one function in this zone
+        # that asks it — no name is compared here, in the template, or anywhere between
+        # them, which is the same rule the three strings above follow.
+        address_note=(
+            TRANSPORT_ADDRESS_PER_USER
+            if addresses.spec_for(meta.name) is not None
+            else None
+        ),
         why=TRANSPORT_WHY_IDENTIFIED if meta.blocked_by_inspection else None,
     )
+
+
+def _holders_of_pool(holders: int, pool: int | None) -> str:
+    """"2 of 10" where there is a pool, and the bare count where there is not — M17.2.
+
+    Two numbers, and neither of them is about a person: how many addresses this row has
+    handed out and how many it may. That is the whole of what the console may know about
+    an allocation — WHICH address is whose is the record the charter says is absent, so
+    it is not on this screen, not behind a hover, and not in the dialog this row opens.
+
+    The bare count for a transport that hands out no address at all, because "2 of None"
+    would invent a limit that does not exist there: a VLESS row identifies each user by
+    their own material and has no pool to be full.
+    """
+    return f"{holders} of {pool}" if pool is not None else str(holders)
 
 
 async def key_rows(session: AsyncSession) -> list[KeyRow]:
@@ -878,6 +1017,17 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                     ),
                     pushed=row.applied_at,
                     holders=counted.get(row.id, 0),
+                    # The pool from the row's own column, and whether there IS one from
+                    # the transport's own declaration — never from its name. A row
+                    # enabled before pools existed has no size and hands out exactly one
+                    # address, which is what ``pool_of`` renders from, so it reads
+                    # "1 of 1" rather than as though it had no pool at all.
+                    holders_of_pool=_holders_of_pool(
+                        counted.get(row.id, 0),
+                        (row.pool_size or 1)
+                        if addresses.spec_for(row.transport_name) is not None
+                        else None,
+                    ),
                     for_friends=for_friends,
                     shared_with_peer=bool(
                         meta
@@ -1731,13 +1881,79 @@ async def pool_boxes(
     boxed = [name for name in offered if addresses.spec_for(name) is not None]
     if not boxed:
         return {}
-    floor = max(await addresses.fleet_size(session), 1)
+    people = await addresses.fleet_size(session)
+    floor = max(people, 1)
     return {
         name: transports.TuningField(
             name=addresses.POOL_BOX,
             placeholder=f"{floor} or more",
-            hint=POOL_BOX_HINT,
+            # The rule, and then how many people it is about to be measured against —
+            # M17.2. The count is the same ``fleet_size`` the refusal below uses, said
+            # where the number is typed rather than after it is refused.
+            hint=f"{POOL_BOX_HINT} {pool_takers(people)}",
             default=None,
         )
         for name in boxed
     }
+
+
+def pool_takers(people: int) -> str:
+    """How many people this pool is about to be measured against — M17.2.
+
+    The half of the enable dialog that the hint above cannot carry, because it is a fact
+    about the fleet rather than about the box: every active user is granted a credential
+    on this transport the moment the node serves, so the number they must each be given
+    an address from is knowable before the operator types anything. Said here, the
+    refusal for a pool below it becomes something they were warned about rather than
+    something they discovered.
+
+    Singular at one, and its own sentence at zero: "0 active users each take an address"
+    is both ungrammatical and misleading on a first-run panel, where the honest thing to
+    say is that the size is a ceiling for the people who are not here yet.
+
+    It does not repeat that a smaller pool is refused — ``POOL_BOX_HINT``, which this is
+    appended to, has already said so.
+    """
+    if people == 0:
+        return (
+            "No user is active yet, so nothing takes an address from it today — the "
+            "size is the ceiling on how many this node can ever serve on this protocol."
+        )
+    if people == 1:
+        return "1 active user takes an address from it the moment this node serves."
+    return (
+        f"{people} active users each take an address from it the moment this node serves."
+    )
+
+
+# What the add-a-user dialog says when a pool that is already serving could not hold one
+# more person — M17.2. The dialog offers no submit button at all in that state: creating
+# a user grants them a credential on every serving row, so this is not a form that might
+# be refused, it is a form whose every submission is refused. A control whose only
+# outcome is a refusal is worse than a sentence saying why there is no control.
+#
+# It names the fix rather than only the problem, and the fix is a screen: the pool is
+# sized where parameters are replaced, and nothing else in this console can change it.
+NO_ROOM_FOR_ANOTHER_USER = (
+    "There is no room for another user yet. A user is given an address on every "
+    "transport that serves them, and one of those pools is full:"
+)
+NO_ROOM_WHAT_TO_DO = (
+    "Make the pool bigger on Keys & configs, under replace params — then add them. "
+    "Nothing about this user has been stored."
+)
+
+
+async def full_pools(session: AsyncSession) -> list[str]:
+    """Every serving pool that could not hold one more person, named — M17.2.
+
+    ``extra=1`` is the person the operator is about to add, which is exactly the question
+    ``friends.create_friend`` asks before it writes anything — the same call, so the
+    dialog cannot offer a button the service is certain to refuse, and cannot withhold
+    one the service would have accepted.
+
+    Names and counts only, in ``addresses.named``'s words: the operator reads the same
+    phrase here, in the API's refusal and beside the two actions this console withholds
+    over a short pool.
+    """
+    return [addresses.named(row) for row in await addresses.shortfalls(session, extra=1)]

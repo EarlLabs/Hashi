@@ -40,7 +40,15 @@ from control.app.models import (
 )
 from control.app.models.base import secret_box
 from control.app.panel import routes as panel_routes
-from control.app.services import addresses, apply, friends, nodes, rotation, subscriptions
+from control.app.services import (
+    addresses,
+    apply,
+    console,
+    friends,
+    nodes,
+    rotation,
+    subscriptions,
+)
 from edge.addressing import host_of, pool
 from edge.registry import ConfigFormat, discover, profile
 
@@ -1761,3 +1769,299 @@ def test_no_transport_declares_a_parameter_the_pool_box_would_shadow() -> None:
             f"{name} declares a parameter called {addresses.POOL_BOX!r}, which is the "
             "name the pool box already uses on the enable and replace forms"
         )
+
+
+# --- M17.2: the panel says it before the operator commits ---------------------
+
+def _text_of(response) -> str:
+    """One rendered fragment as the operator reads it: no markup, no Jinja comments.
+
+    The same stripping ``field_errors`` does above, over the whole document rather than
+    over one box — these assertions are about a sentence the console composed, and a
+    sentence that is right but split across three tags is still right.
+    """
+    without_comments = re.sub(r"\{#.*?#\}", " ", response.text, flags=re.S)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", without_comments)).strip()
+
+
+# Every panel URL that renders markup for a fleet with one node, one transport and some
+# users. The same list ``tests/e2e/control/test_the_panel_fetches_nothing_from_a_third_party.py``
+# keeps for its own sweep, minus what needs a hop — the point here is not that it is
+# exhaustive of the console but that it is exhaustive of the surfaces an ADDRESS could
+# reach: the screens that list transports and users, and every dialog opened from one.
+def panel_surfaces(node_id: str, row_id: str, friend_id: str) -> list[str]:
+    return [
+        "/panel/",
+        "/panel/overview/body",
+        "/panel/friends",
+        "/panel/friends/table",
+        "/panel/friends/new",
+        "/panel/nodes",
+        "/panel/nodes/table",
+        "/panel/hops",
+        "/panel/hops/table",
+        "/panel/hops/new",
+        "/panel/transports",
+        "/panel/keys",
+        "/panel/keys/table",
+        "/panel/audit",
+        "/panel/settings",
+        f"/panel/nodes/{node_id}/transports",
+        f"/panel/nodes/{node_id}/state",
+        f"/panel/nodes/{node_id}/resolver",
+        f"/panel/keys/{row_id}/rotate",
+        f"/panel/keys/{row_id}/params",
+        f"/panel/transports/{row_id}/withdraw",
+        f"/panel/transports/{row_id}/remove",
+        f"/panel/friends/{friend_id}/subscription",
+        f"/panel/friends/{friend_id}/revoke",
+    ]
+
+
+async def test_no_user_address_reaches_any_panel_surface(
+    client, session, pool_transport: str
+) -> None:
+    """THE LINE THAT GOVERNS THE WHOLE SCREEN. Counts, yes; an address, never.
+
+    An address against a person is exactly the record the charter says is absent — there
+    is to be nothing to seize or subpoena — and a console that prints one has created it
+    on every screenshot the operator takes. So this walks every surface that could hold
+    one and asserts the allocation is nowhere in the bytes.
+
+    THE FIRST ADDRESS IN THE POOL IS EXCLUDED, and that exclusion is the honest part of
+    this test rather than a hole in it. ``pool[0]`` is byte-identical to the row's own
+    ``peer_tunnel_address`` parameter (``edge.addressing.pool``, which is what lets a row
+    enabled before M17 keep rendering the same bytes), and that parameter is operator
+    configuration: it is on the replace-parameters dialog as the placeholder for the box
+    it is typed in, exactly like the port. What may never appear is an address that
+    exists ONLY as per-credential state — the second person's and the third's — because
+    that is the one that says something about a person.
+
+    The allocation is read back through the RENDER, like everything else in this file:
+    what the node is authorised to route is the ground truth, and printing who holds what
+    to build an assertion would be the record this test exists to keep out of existence.
+    """
+    node_id = await a_node(client, name="no-addresses", address="192.0.2.80")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    assert enabled.status_code == 201, enabled.text
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    friends_made = []
+    for nickname in ("ann", "bob", "cat"):
+        created = await add_user(client, nickname)
+        assert created.status_code == 201, created.text
+        friends_made.append(created.json()["id"])
+
+    held = [
+        host_of(route)
+        for route in routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    ]
+    assert len(set(held)) == 3, held
+    # Everything except the row's own parameter, which the pool's first element equals.
+    per_credential = sorted(set(held) - {host_of("10.90.0.2/24")})
+    assert len(per_credential) == 2, per_credential
+
+    for url in panel_surfaces(node_id, enabled.json()["id"], friends_made[0]):
+        rendered = await client.get(url, headers=HTMX)
+        assert rendered.status_code == 200, f"{url} -> {rendered.status_code}"
+        for address in per_credential:
+            assert address not in rendered.text, (
+                f"{url} put a user's own address on the screen: {address}"
+            )
+
+
+async def test_the_keys_screen_says_how_many_hold_an_address_out_of_how_many(
+    client, session, pool_transport: str
+) -> None:
+    """``<holders> of <pool>`` — the one thing about an allocation a screen may say.
+
+    Two counts and no address, and it is on the screen an operator already reads before
+    every rotation, so "is this pool nearly full" stops being a question only the refusal
+    can answer.
+
+    A transport that hands out no address has no pool and gets the bare count instead: a
+    row reading "2 of None" would invent a limit that does not exist on it.
+    """
+    node_id = await a_node(client, name="pool-counts", address="192.0.2.81")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    assert enabled.status_code == 201, enabled.text
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+
+    screen = await client.get("/panel/keys/table", headers=HTMX)
+
+    assert screen.status_code == 200
+    assert f"2 of {ROOMY}" in screen.text, screen.text
+    row = await console.key_row(session, enabled.json()["id"])
+    assert row.holders_of_pool == f"2 of {ROOMY}"
+
+
+async def test_the_enable_dialog_says_how_many_users_will_each_take_an_address(
+    client, session, pool_transport: str
+) -> None:
+    """The count the box is about to be measured against, where the number is typed.
+
+    The refusal for a pool below the fleet has existed since M17.1b and is right; what it
+    could not be is the first time the operator hears the number. The floor is already in
+    the placeholder ("N or more"); this is the sentence that says WHY it is that number.
+    """
+    node_id = await a_node(client, name="enable-count", address="192.0.2.82")
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports", headers=HTMX)
+
+    assert dialog.status_code == 200
+    assert console.pool_takers(2) in dialog.text, dialog.text
+    assert "2 active users each take an address" in dialog.text
+    # And the placeholder still offers the same floor, from the same count.
+    assert 'placeholder="2 or more"' in dialog.text
+
+
+async def test_a_transport_whose_pool_is_short_is_not_offered_at_all(
+    client, session, pool_transport: str
+) -> None:
+    """Offering a withdrawn row grants everybody on it, so a short pool withholds it.
+
+    The service's refusal is right and unchanged — it rolls back and nothing commits —
+    but it arrives after the press, and by then the operator has told people the protocol
+    is coming. The button is therefore not drawn, with the pool named and the screen that
+    resizes it named too: there is no resize action in this console, and an operator who
+    does not know that has nowhere to go from this sentence.
+    """
+    node_id = await a_node(client, name="short-offer", address="192.0.2.83")
+    assert (await add_user(client, "ann")).status_code == 201
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=1)
+    assert enabled.status_code == 201, enabled.text
+    row_id = enabled.json()["id"]
+    withdrawn = await client.post(
+        f"/api/transports/{row_id}/state", json={"enabled": False}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    # The fleet outgrows the pool, which is the only way a short row can exist: every
+    # path that SETS a size refuses one below the fleet of that moment.
+    assert (await add_user(client, "bob")).status_code == 201
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports", headers=HTMX)
+
+    assert dialog.status_code == 200
+    assert f"/panel/transports/{row_id}/offer" not in dialog.text, "the button is drawn"
+    said = _text_of(dialog)
+    assert f"{pool_transport} on short-offer holds 1 and would need 2" in said, said
+    assert "replace params" in said, said
+    # In the page's words, like every other sentence a service composes (decision 9).
+    assert "friend" not in said.lower(), said
+
+
+async def test_a_node_whose_pool_is_short_is_not_offered_the_serving_state(
+    client, session, pool_transport: str
+) -> None:
+    """The same event from the other side, on the dialog that moves a node into service.
+
+    ``test_a_node_that_cannot_be_granted_says_so_in_the_dialog_it_was_moved_from`` pins
+    that the refusal is renderable; this pins that the operator never reaches it, because
+    the option is not on the select. The state machine still allows the move — the list
+    still says where this node may go — so what is withheld is the control and not the
+    knowledge.
+    """
+    node_id = await a_node(client, name="short-state", address="192.0.2.84")
+    assert (await add_user(client, "ann")).status_code == 201
+    assert (
+        await enable_pool(client, node_id, pool_transport, pool_size=1)
+    ).status_code == 201
+    assert (await add_user(client, "bob")).status_code == 201
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/state", headers=HTMX)
+
+    assert dialog.status_code == 200
+    assert '<option value="active"' not in dialog.text, "the state is on offer"
+    said = _text_of(dialog)
+    assert f"{pool_transport} on short-state holds 1 and would need 2" in said, said
+    # Every other state this node may move to is still offered.
+    assert '<option value="retired"' in dialog.text, dialog.text
+
+
+async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
+    client, session, pool_transport: str
+) -> None:
+    """A form whose every submission is refused is worse than a sentence saying so.
+
+    Adding a user gives them an address on every serving transport that hands one out, so
+    a pool with no room refuses this form always rather than sometimes. The dialog asks
+    the same question the service asks — ``addresses.shortfalls(extra=1)`` — so it cannot
+    withhold a button the service would have accepted.
+
+    And the refusal still holds behind it: the button being absent is a courtesy, not the
+    enforcement.
+    """
+    node_id = await a_node(client, name="full-pool", address="192.0.2.85")
+    assert (await add_user(client, "ann")).status_code == 201
+    assert (
+        await enable_pool(client, node_id, pool_transport, pool_size=1)
+    ).status_code == 201
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+
+    dialog = await client.get("/panel/friends/new", headers=HTMX)
+
+    assert dialog.status_code == 200
+    assert "add user</button>" not in dialog.text, "a button whose every outcome is 409"
+    assert 'name="nickname"' not in dialog.text, "a field nothing can submit"
+    said = _text_of(dialog)
+    assert f"{pool_transport} on full-pool holds 1 and would need 2" in said, said
+    assert "friend" not in said.lower(), said
+
+    # The service has not been relaxed: the refusal is still what enforces this.
+    refused = await client.post("/panel/friends", data={"nickname": "bob"}, headers=HTMX)
+    assert refused.status_code == 422, refused.text
+    session.expire_all()
+    assert (
+        await session.execute(select(Friend).where(Friend.nickname == "bob"))
+    ).scalars().first() is None
+
+
+async def test_the_transports_screen_reads_the_registry_about_addresses(
+    client, pool_transport: str
+) -> None:
+    """One row per transport that DECLARES it, and no name compared anywhere.
+
+    The screen is a projection of the image, so the assertion is arithmetic on the
+    registry rather than a list of protocols: the sentence appears exactly as many times
+    as there are transports declaring ``peer_address``. A package added later gets the
+    row by declaring; one that stops declaring loses it, with nothing to edit.
+    """
+    screen = await client.get("/panel/transports", headers=HTMX)
+
+    assert screen.status_code == 200
+    assert screen.text.count(console.TRANSPORT_ADDRESS_PER_USER) == len(POOL_TRANSPORTS)
+    assert PLAIN_TRANSPORTS, "this image ships no transport that hands out no address"
+    # Read back through the projection as well, so the claim is about the row and not
+    # only about how many times a string occurs in a document.
+    rows = {row.name: row for row in console.transport_rows()}
+    assert rows[pool_transport].address_note == console.TRANSPORT_ADDRESS_PER_USER
+    for name in PLAIN_TRANSPORTS:
+        assert rows[name].address_note is None, name
+
+
+async def test_the_field_s_own_row_says_two_users_hold_one_address(
+    client, session, pool_transport: str
+) -> None:
+    """The screen this milestone exists for: a pool of one with two people on it.
+
+    This is the Amsterdam leaf after migration ``0006`` — a row enabled before pools,
+    serving two users, handing out one address. Every refusal about it is already right
+    and every one of them arrives at a different moment; what the operator had nowhere to
+    read was the state itself. "2 of 1" is that state in three characters, on the screen
+    they open before every rotation.
+    """
+    node_id = await a_node(client, name="as-in-the-field", address="192.0.2.86")
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    row_id = enabled.json()["id"]
+    await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    for nickname in ("ann", "bob"):
+        assert (await add_user(client, nickname)).status_code == 201
+    await as_it_was_before_m17(session, row_id)
+
+    assert (await console.key_row(session, row_id)).holders_of_pool == "2 of 1"
+    screen = await client.get("/panel/keys/table", headers=HTMX)
+    assert screen.status_code == 200
+    assert "2 of 1" in screen.text, screen.text

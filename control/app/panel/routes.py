@@ -254,11 +254,45 @@ async def _friends_context(session: AsyncSession) -> dict:
 
 
 @router.get("/friends/new", response_class=HTMLResponse)
-async def add_friend_dialog(request: Request) -> Response:
-    """The empty add-user dialog. No session work: it asks for one field."""
+async def add_friend_dialog(
+    request: Request, session: AsyncSession = Depends(session_dependency)
+) -> Response:
+    """The empty add-user dialog — and, since M17.2, whether there is room for one.
+
+    IT TAKES A SESSION NOW, which the "it asks for one field" version deliberately did
+    not. Creating a user grants them an address on every serving transport that hands out
+    one, so a full pool anywhere in the fleet refuses every submission of this form. The
+    dialog asks the same question the service asks (``console.full_pools``, which is
+    ``addresses.shortfalls(extra=1)``) and draws no submit button when the answer is not
+    empty: a control whose only outcome is a refusal is worse than the sentence that
+    explains why there is no control.
+    """
     return TEMPLATES.TemplateResponse(
-        request, "panel/add_friend_dialog.html", {"nickname": "", "error": None}
+        request, "panel/add_friend_dialog.html", await _add_friend_form(session)
     )
+
+
+async def _add_friend_form(
+    session: AsyncSession, *, nickname: str = "", error: str | None = None
+) -> dict:
+    """What the add-user dialog needs, in one place so first paint and refusal agree.
+
+    The same shape ``_enable_form`` and ``_params_form`` have, and for the same reason:
+    this dialog is rendered by two routes, and a context built twice is two dialogs that
+    drift. It became worth having when the dialog gained a second state — M17.2's, where
+    a full pool means there is no form at all.
+
+    Every sentence in it is composed in ``services/console.py``; the only thing decided
+    here is that a nickname refused by name gets its message under the field, while "the
+    fleet has no room" is not a complaint about anything the operator typed.
+    """
+    return {
+        "nickname": nickname,
+        "error": error,
+        "full_pools": await console.full_pools(session),
+        "no_room": console.NO_ROOM_FOR_ANOTHER_USER,
+        "what_to_do": console.NO_ROOM_WHAT_TO_DO,
+    }
 
 
 # --- Nodes (M9.1) ------------------------------------------------------------
@@ -783,11 +817,13 @@ async def node_state_dialog(
     return TEMPLATES.TemplateResponse(
         request,
         "panel/node_state_dialog.html",
-        _state_form(await nodes.get_node(session, node_id)),
+        await _state_form(session, await nodes.get_node(session, node_id)),
     )
 
 
-def _state_form(node, values: dict | None = None, errors: dict | None = None) -> dict:
+async def _state_form(
+    session: AsyncSession, node, values: dict | None = None, errors: dict | None = None
+) -> dict:
     """What the state dialog needs, in one place so first paint and refusal agree.
 
     ``choices`` is ``NodeState.allowed_from`` projected through ``services/console.py``,
@@ -795,10 +831,17 @@ def _state_form(node, values: dict | None = None, errors: dict | None = None) ->
     whose only outcome is a 409. ``retired`` is absent from a retired node's list for the
     reason the state machine gives — bringing back a record whose host is gone puts an
     address that may now belong to a stranger into every user's subscription.
+
+    ASYNC SINCE M17.2, because one more transition can now be refused for a reason the
+    state machine knows nothing about: a node that starts serving gives every active user
+    an address on each transport it offers, and a pool too small to hold them refuses the
+    move. ``state_choices`` measures that against the node's own enabled rows, which is a
+    query, and withholds the serving option with the pool named instead of offering a
+    control whose outcome is already known.
     """
     return {
         "node": node,
-        "choices": console.state_choices(node),
+        "choices": await console.state_choices(session, node),
         "values": values or {},
         "errors": errors or {},
     }
@@ -890,7 +933,12 @@ async def _refuse_state(
     return TEMPLATES.TemplateResponse(
         request,
         "panel/node_state_dialog.html",
-        _state_form(await nodes.get_node(session, node_id), values=values, errors=errors),
+        await _state_form(
+            session,
+            await nodes.get_node(session, node_id),
+            values=values,
+            errors=errors,
+        ),
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
@@ -2252,7 +2300,17 @@ async def create_friend(
             # is composed in the service, which says ``friend``, and the operator
             # reads ``user``. No ``keeping`` here — a service quotes the nickname
             # (``{value!r}``), and quoted text is data the boundary never rewrites.
-            {"nickname": nickname, "error": wording.for_the_page(exc.message)},
+            #
+            # THE POOLS ARE ASKED ABOUT AGAIN HERE, after the service — M17.2, and it is
+            # required rather than tidy. A refusal from ``grant_everywhere`` rolls the
+            # session back, so this dialog has to be composed from what the database says
+            # AFTERWARDS; ``_add_friend_form`` does that in fresh queries and reads no
+            # object this route was holding. It is also the one refusal whose honest
+            # answer is "there is no room at all", which renders the dialog with no form
+            # rather than with a message under the nickname.
+            await _add_friend_form(
+                session, nickname=nickname, error=wording.for_the_page(exc.message)
+            ),
             # 422 rather than 200, and htmx is configured in static/app.js to swap
             # this one status: an invalid form is not a success, and saying so is
             # what keeps the failure banner from firing on it as well.

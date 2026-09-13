@@ -62,6 +62,18 @@
                  merely undelivered does not read as one a user could never consume. #}
               <div class="text-muted">{{ transport.delivery_note }}</div>
               {% endif %}
+              {% if transport.address_note %}
+              {# What a user gets INSIDE the tunnel, on the transports that declare each
+                 of them needs an address of their own — M17.2. In this column because it
+                 is part of what a user receives, and on its own line because it is the
+                 one thing on this screen that costs the operator an extra answer: they
+                 will be asked to size a pool on every node they enable it on.
+
+                 The sentence is the registry's own declaration, projected in
+                 services/console.py. This file still names no protocol and still cannot
+                 tell one from another. #}
+              <div class="text-muted">{{ transport.address_note }}</div>
+              {% endif %}
             </td>
             {# The words are the transport's own declaration, composed in
                services/console.py. All this cell decides is how loud they are, and it
