@@ -573,3 +573,96 @@ which is the difference between a test and a test that agrees with reality.
 entry's handshake and the byte counters both keep moving) **before touching the
 entry.** If the hop drops, the entry becomes unreachable and there is no second
 route to it — the entry already refuses this key (item 0b).
+
+---
+
+## From M17 — one address per user, on a real interface
+
+**Items 15–19, promised by the section above and written here.** All five are on the
+**leaf** (`45.151.69.107`), which is the host that actually runs a friend-facing
+`wireguard` row — the entry still refuses this key (item 0b) and is not needed for any
+of them.
+
+**Do these only after applying from your own control plane**, in the order the section
+above gives: leaf first, hop confirmed, then the entry. Every item below measures the
+new behaviour, so running any of them against the fleet as it stands today measures the
+old one and will look like a failure of M17.
+
+The one thing none of these can be read as: the charter's first criterion. Two users on
+one interface is not "survives a mobile whitelist shutdown".
+
+### 15. The peer list must grow one entry per user — the milestone in one command
+
+```sh
+docker exec <wireguard-container> wg show
+```
+
+**Before M17 this host showed exactly one peer, `allowed ips 10.66.0.2/32`, out of a
+`/24`** (recorded above, read 2026-09-12). That is M17's whole problem statement on real
+hardware.
+
+**After: one peer entry per credential, each with its own `/32`**, and no two peers
+sharing an address. The peer count must equal the number of users this control plane has
+granted on that row — the Keys & configs screen now reads `<users> of <pool>` for it, so
+the two numbers are checkable against each other without opening a database.
+
+A peer with **no `latest handshake`** is a user who has not connected yet, not a defect.
+What would be a defect is two peers with the same `allowed ips`.
+
+### 16. The working device must not have moved — the promise the whole milestone rests on
+
+The friend already on `10.66.0.2/32` **must still be on it** after the upgrade, and must
+still connect **without reconfiguring anything**. Check in this order:
+
+1. `wg show` — is `10.66.0.2/32` still in the peer list?
+2. the same friend's client, unchanged, still comes up and passes traffic.
+
+The address that device holds exists only as a rendered parameter today; the upgrade
+writes it down and never moves it. If that friend has to re-import anything, M17 failed
+at the one thing it promised, and the finding is worth more than every item below.
+
+### 17. The hop's own file must be byte-identical
+
+```sh
+sha256sum /opt/hashi/conf/amneziawg.conf     # before the apply, and after
+```
+
+A hop end takes no address and no pool, so its rendered file must not change at all.
+`Address = 10.90.0.2/30`, one peer at `/32`, `PersistentKeepalive = 25` — this is the
+file recorded above, and it is the reference. **Take the checksum before you apply**;
+afterwards is too late to know.
+
+If it differs, stop and do not restart the interface: this is the tunnel carrying the
+owner's traffic out of Russia, and the entry cannot be reached by any other route.
+
+### 18. Two users, both carrying traffic — the half no stand can show
+
+Put a **second** user on the leaf's friend-facing row, connect both devices, and watch:
+
+```sh
+docker exec <wireguard-container> wg show   # transfer: per peer
+```
+
+**Both peers' `transfer:` counters must move**, in both directions, at the same time.
+This is the acceptance line — *"either both work, or the refusal arrived early enough
+that the operator never believed it would"* — and the only place the first half of it
+can be observed. The stand proves both are configured; only this proves both work.
+
+Do it on `amneziawg` on a node with **no hop** if you have one, since that is the
+combination the runbook recommends and the one the charter's users will actually be on.
+
+### 19. Revoke one of the two, and watch the other keep working
+
+Revoke the second user in the panel, apply the node, then:
+
+```sh
+docker exec <wireguard-container> wg show
+```
+
+The revoked peer entry is **gone**; the remaining peer keeps **the same `allowed ips`**
+and its session does not drop. Then add a third user and apply again: they are handed the
+address the revoked user gave back, which is what keeps a pool from shrinking every time
+somebody leaves.
+
+**Nothing here needs key material read or echoed.** `wg show` prints public keys only,
+and none of these five items requires more than that.
