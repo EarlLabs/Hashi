@@ -1892,7 +1892,7 @@ and ask whether it tells you which account to name.
 
 ---
 
-## → M19 — What a node needs that nothing checks · found in the field 2026-09-09
+## ✅ M19 — What a node needs that nothing checks · found in the field 2026-09-09 · done 2026-09-13 (acceptance: good)
 
 A node has kernel-level prerequisites that neither `scripts/node-bootstrap.sh`
 nor `edge/bootstrap/node_stack.py` asserts, because neither can: `/proc/sys` is
