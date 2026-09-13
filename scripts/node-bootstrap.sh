@@ -597,15 +597,23 @@ say "ready: docker $(docker --version | awk '{print $3}' | tr -d ,), key authori
 # The port to name is the one this session actually arrived on, when there was one: a host
 # that answers on two ports still has exactly one that is known to work from outside.
 say "register it in the panel with ssh_user ${TARGET_USER} and ssh_port ${SESSION_PORT:-$(printf '%s' "${SSH_PORTS}" | awk 'NR==1')}"
-say "no hashi code and no hashi state was installed here — ${NODE_ROOT} is an empty directory owned by ${TARGET_USER}, and the control plane fills it on your first apply"
-# On a re-run of a host the control plane has already applied to, the line above reads as
-# "there is nothing of hashi's on this host", which would be false — the directory is
-# there and it is not empty. What is true either way is that THIS SCRIPT wrote nothing
-# into it and removed nothing from it. Since M18.3 it does change one thing about what is
-# in there — who owns it — and the line says so, because an operator told their files were
-# "left alone" would go and chown them again by hand.
+# What is true either way is that THIS SCRIPT wrote nothing into the node directory and
+# removed nothing from it. Since M18.3 it does change one thing about what is in there —
+# who owns it — and the line says so, because an operator told their files were "left
+# alone" would go and chown them again by hand.
+#
+# TWO FORMS, AND THE CLAIM ABOUT THE DIRECTORY IS THE DIFFERENCE — M18's acceptance. One
+# line said "${NODE_ROOT} is an empty directory" and the next said "whatever an earlier
+# apply left in it", one after the other, on the same run. The first was written for a
+# first run and was delivered on every one, so on a re-run of a live node the closing
+# summary contradicted itself about the only thing it is a summary of. The correction
+# line below was already conditional; now the sentence it corrects is too, and there is
+# nothing left to correct.
 if [ "${NODE_ROOT_EXISTED}" -eq 1 ]; then
+  say "no hashi code and no hashi state was installed here — ${NODE_ROOT} was already here, and the control plane replaces what is in it on your next apply"
   say "${NODE_ROOT} was already here before this run — whatever an earlier apply left in it, this run neither read, changed nor removed it; it now belongs to ${TARGET_USER} along with the directory, so an apply as that account can replace it"
+else
+  say "no hashi code and no hashi state was installed here — ${NODE_ROOT} is an empty directory owned by ${TARGET_USER}, and the control plane fills it on your first apply"
 fi
 # Said last because it is the operator's next move, and the moment they are most likely to
 # blame the wrong layer. See section A of the header: this is the boundary that costs an

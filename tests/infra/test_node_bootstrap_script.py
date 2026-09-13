@@ -470,6 +470,52 @@ def test_it_stays_honest_about_hashi_state_on_a_host_already_applied_to(script: 
     )
 
 
+def test_the_closing_summary_does_not_contradict_itself_on_a_re_run(script: str) -> None:
+    """It said the directory was empty and, on the next line, what was left in it — M18.
+
+    Both lines were true of the run they were written for and only one of them was ever
+    conditional, so a re-run of a host the control plane has already applied to printed
+    a summary that denied itself: ``/opt/hashi is an empty directory owned by <user>``
+    immediately above ``whatever an earlier apply left in it``. An operator reading a
+    closing summary is deciding whether to trust the run; a summary that argues with
+    itself about the one directory it is a summary of does not survive that.
+
+    Asserted as the SHAPE rather than as a pair of strings, because the defect is which
+    branch each sentence is in and a substring check cannot see a branch: the empty claim
+    belongs to the run that created the directory, and the claim about what is already in
+    there belongs to the other one. Both must still say the run installed no hashi state,
+    which is the sentence this whole passage exists for.
+    """
+    closing = re.search(
+        r'^if \[ "\$\{NODE_ROOT_EXISTED\}" -eq 1 \]; then\n'
+        r"(?P<re_run>(?:  \S.*\n)+)"
+        r"^else\n"
+        r"(?P<first_run>(?:  \S.*\n)+)"
+        r"^fi$",
+        script[script.index("say \"ready: docker"):],
+        re.M,
+    )
+    assert closing, (
+        "the closing summary no longer chooses what to say about the node directory, so "
+        "one of its two claims about it is being made on the run it is false on"
+    )
+    re_run, first_run = closing.group("re_run"), closing.group("first_run")
+
+    assert "is an empty directory" in first_run, first_run
+    assert "is an empty directory" not in re_run, (
+        "a re-run of a host that already has the directory is still told it is empty, "
+        "one line above being told what an earlier apply left in it"
+    )
+    assert "whatever an earlier apply left in it" in re_run, re_run
+    assert "whatever an earlier apply left in it" not in first_run, (
+        "a host that never had the directory is told about contents that cannot exist"
+    )
+    for branch in (re_run, first_run):
+        assert "no hashi code and no hashi state was installed here" in branch, (
+            f"this run no longer states that it left no hashi state behind: {branch}"
+        )
+
+
 def test_it_hands_an_existing_node_directorys_contents_to_the_prepared_account(
     script: str,
 ) -> None:
