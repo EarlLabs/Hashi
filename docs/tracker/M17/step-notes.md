@@ -290,3 +290,76 @@ discovered transport in `test_no_transport_declares_a_parameter_the_pool_box_wou
 - **[21] a non-address `within`** raises `ValueError` out of `networks_overlap`.
   Unreachable for every shipped transport; the only cheap fix skips the row, which
   fails **open** on a safety rule. Left as a guard for the next transport package.
+
+---
+
+## From M17.2 and its fix round (2026-09-13) — the milestone as built
+
+**Gate: `make verify` green — control 664 / 2 skipped, edge 327 / 3 skipped,
+infra 177, e2e 168.**
+
+### The gap that nearly closed the milestone with its safety property untested
+
+`AmbiguousPeerRoute` — the refusal that stops two peers holding one address, and
+therefore the backstop against the silent return-path hijack this whole milestone
+is built around — **had never been asserted in any commit, in any zone.** A
+reviewer proved it: delete the raise from both renderers and `make test-edge`
+stayed green. The only occurrences in `tests/` were three docstrings.
+
+Now pinned in `edge`, for both packages, parameterised over `KERNEL_TUNNELS` so
+no protocol is named, using each package's own
+`transport.profile.AmbiguousPeerRoute`. **Three tests, and the third matters:**
+two peers handed one address; two peers with no address of their own colliding on
+the one in `params` (the field failure verbatim); and **the positive half — two
+peers from one pool render two distinct `/32` routes — so a package cannot pass
+by refusing everything.** Mutation-verified in both directions.
+
+### Sentence vocabulary — match it, do not re-word
+
+- A pool **is sized for** N. A person **holds** an address. The two screens used
+  to disagree about what "holds N" meant; they no longer do.
+- A withheld control **states the ceiling and the next thing that will be
+  refused** — never *"would be refused"*, which was false on a node that is not
+  serving and on the field's own row. The withholding behaviour is unchanged and
+  its decision is not reopened; only the claim was wrong.
+- `addresses.named`: *"{transport} on {node} is sized for {size} and would need
+  {needed}"*.
+
+### Cross-zone couplings created deliberately — know them before you edit
+
+- **`placement.TUNNEL_TAKEN` is quoted in the runbook and pinned by
+  `tests/infra/test_deploy_runbook.py`.** Rewording that `control` constant reds
+  an **infra** test. Intentional: the operator must be able to search the page
+  for the dialog in front of them.
+- **`addresses.named` imports `console.placed_as` inside the function** — a
+  service reaching into the console projection, the opposite of the usual
+  direction. Safe today (`console` imports `addresses` at module scope; `named`
+  is only called at request time), but **a future module imported by `console` at
+  import time that calls `named()` would cycle.** The alternative was a second
+  copy of `placed_as`'s rule, which its own docstring forbids.
+
+### Test harness
+
+`panel_surfaces(node_id, row_id)` and `friend_surfaces(friend_id)` are now two
+helpers — **walk the second for every friend**, not just one; the original sweep
+opened per-friend dialogs only for the user whose address it excluded.
+`enable_pool(..., tunnel=…, peer=…, port=…)` puts a second instance of one
+transport on one node — it needs **its own port and its own range**.
+`_text_of(response)` strips markup and Jinja comments. `"not offered —"` is the
+marker for a withheld control and appears in no standing sentence.
+
+### Known and written down rather than fixed
+
+- **pool[0] is byte-identical to the row's own `peer_tunnel_address`** — M17.1a
+  made it so, and that is what keeps a pre-M17 device working across the upgrade.
+  So the first holder's address is on screen **as the row's operator-set
+  parameter**, and combined with the Users ordering it is an inference about who
+  holds it. Recorded in the sweep's docstring. **It cannot be fixed without
+  breaking migration 0006's promise**, which is the stronger obligation.
+- `console.address_note` is not gated on deliverability, so a future package
+  could carry two contradictory notes. The real fix is a constraint in
+  `edge/registry._check_declaration` between `peer_address` and
+  `subscription_formats` — an `edge`-zone product decision, not this milestone's.
+- Open item **[19]** (the replace dialog's withheld reason), the **release/apply
+  window**, and the **range race** all remain open with their reasons recorded in
+  `docs/decisions.md`.
