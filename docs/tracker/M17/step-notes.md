@@ -189,3 +189,104 @@ helper for static route assertions. Paths resolve from `__file__`; no chdir.
 *render* failure leaves node state **unchanged** — an already-active node keeps
 serving its last config. A *push* failure is inside the try and does degrade the
 node. Do not generalise either one to the other.
+
+---
+
+## From M17.1c and its fix round (2026-09-13) — what M17.2 inherits
+
+**Gate: `make verify` green — control 642 / 2 skipped, edge 321 / 3 skipped,
+infra 174, e2e 163.** The second control skip is the hop-end test on `wireguard`,
+which declares it cannot carry a hop. The edge jump (299 → 321) is
+`carriage_problem`'s own tests.
+
+### Call these; do not re-derive them
+
+- **`edge.carriage_problem(address, within)`** — the "can this tunnel still carry
+  an address somebody already holds" question. Same rules as `pool_problem`, same
+  order, but it answers with the **cause as a clause that names nothing** —
+  neither the address nor the tunnel. **Use it for any such question and never put
+  `pool_problem(x, within, 1)` in a sentence an operator reads: `pool_problem`
+  quotes the address it was asked about**, which is why `control` could only ever
+  use its verdict and not its words.
+- **`rotation._causes(dict)`** composes *"N is/are &lt;clause&gt;"*. M17.2 can use the
+  same dict to show a shortfall **before** the operator commits, which is exactly
+  what M17.2 is for.
+- **`addresses.stranded_by` now returns `dict[cause, count]`, not `int`.** Falsy-
+  empty still means "nothing stranded", so `if stranded:` is safe — arithmetic on
+  it is not.
+- **`nodes.sized_pool`** is still the single definition of a workable pool.
+  Its refusal **messages** now name the node (`transport 'x' on node 'y' rejected
+  these parameters — …`); the **per-box sentences are unchanged**, because the
+  console opened the dialog from a row and the API caller has only an opaque id.
+  Anything matching the old message prefix breaks; nothing in the tree did.
+
+### Operator-facing wording acceptance will judge — match it, do not re-word it
+
+`POOL_WOULD_STRAND`:
+
+> a tunnel at {within} could not carry addresses already handed out on this
+> transport: {causes}. Moving an address a device already holds is the one thing
+> this cannot do — the device is configured with it and nobody is going to
+> reconfigure it. Nothing has been changed — leave this tunnel where it is, or
+> take them off this transport first.
+
+`rotation.POOL_SIZE_NOT_ON_A_HOP`:
+
+> this row is one end of a hop, and no user holds anything on it — the far end is
+> another of your own nodes, at the single address this row already names. There
+> is no pool to size here.
+
+### Behaviour M17.2 must not "fix"
+
+**A rotation on a short serving row now returns 200 with `complete: false`** — the
+node is reported as not updated, because the render legitimately refuses. Do not
+degrade the node and do not re-raise. **The summary is the operator's channel
+until M17.2 puts holders-of-pool on screen** — which is M17.2's whole job.
+
+### Divergences to know
+
+- **`_resize` returns early for a relay row**, so a hop end's parameters no longer
+  pass through `sized_pool` at all — including the `pool_problem(peer, within, 1)`
+  it incidentally performed. Deliberate: *hop ends are unchanged*. A hop end's two
+  addresses are now judged **only** by `relay.check_renders_as_a_pair`. A later
+  step wanting shape checks on hop addresses needs its own, not `sized_pool`.
+- **The range race is left open, deliberately, and the header now argues its own
+  risk instead of borrowing the port rule's.** See `docs/decisions.md`. The trade:
+  closing it needs a per-node lock taken by every writer of that node's rows, but
+  `relay.establish_hop` writes rows on **two** nodes in one transaction, so it
+  needs a fixed lock order or two hops laid in opposite directions deadlock — a
+  500 in exchange for a race one operator cannot have with themselves (decision 8).
+  A unique constraint cannot express overlap at all.
+
+### Test harness
+
+`resize(client, row_id, **body)` posts `/api/transports/{id}/params`.
+`as_it_was_before_m17(session, row_id)` produces the field's post-0006 state (pool
+NULL, addresses cleared) — **the only setup that reaches `settle`'s `PoolFull` on a
+serving row.** A hop end for panel work is built inline in
+`test_a_hop_end_is_offered_no_pool_box_and_refuses_a_size_typed_at_it` (10.93.0.x,
+skip when `not profile(name).meta.hop_capable`).
+
+**The trap that cost two runs:** after any successful resize the push fails and the
+node goes `degraded`, which empties `config_files_for`. Call
+`session.expire_all()` **then** `set_node_state(..., ACTIVE)` before you render, or
+the test session's stale `active` makes it a silent no-op.
+
+`pool_size` is a **reserved form-field name**, now asserted against every
+discovered transport in `test_no_transport_declares_a_parameter_the_pool_box_would_shadow`.
+
+### Left open, with reasons — do not silently absorb these
+
+- **[19] the withheld reason on the replace dialog.** Every real fix either widens
+  the printable allow-list from "boxes" to "boxes ∪ declared non-secret params" —
+  relitigating the 2026-09-10 redaction decision that `_refused_parameters` exists
+  to carry — or renders a box for optional parameters, **which is a new surface on
+  the dialog M17.2 owns.** Console-only, and reachable only for an API-created row.
+  **If M17.2 touches that dialog anyway, this is the moment to decide it.**
+- **[12] a pre-existing overlap is never detected** on read, render, apply or
+  migration. A detector at render or apply changes what `apply` does to live nodes,
+  outside M17.1c's written scope. Note the fix to the rotation deadlock changed its
+  character: such a node is **no longer sealed, only undetected.**
+- **[21] a non-address `within`** raises `ValueError` out of `networks_overlap`.
+  Unreachable for every shipped transport; the only cheap fix skips the row, which
+  fails **open** on a safety rule. Left as a guard for the next transport package.
