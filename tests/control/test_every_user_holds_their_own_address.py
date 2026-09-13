@@ -1789,7 +1789,13 @@ def _text_of(response) -> str:
 # keeps for its own sweep, minus what needs a hop — the point here is not that it is
 # exhaustive of the console but that it is exhaustive of the surfaces an ADDRESS could
 # reach: the screens that list transports and users, and every dialog opened from one.
-def panel_surfaces(node_id: str, row_id: str, friend_id: str) -> list[str]:
+#
+# SPLIT FROM THE PER-FRIEND ONES BELOW, because those have to be walked for EVERY friend
+# rather than for one. The sweep excludes the pool's first address (it is the row's own
+# typed parameter — see the test), and that address belongs to the first friend created;
+# walking only that friend's dialogs would leave the two surfaces most likely to grow a
+# per-person address checked against the one set of bytes they could print freely.
+def panel_surfaces(node_id: str, row_id: str) -> list[str]:
     return [
         "/panel/",
         "/panel/overview/body",
@@ -1813,6 +1819,12 @@ def panel_surfaces(node_id: str, row_id: str, friend_id: str) -> list[str]:
         f"/panel/keys/{row_id}/params",
         f"/panel/transports/{row_id}/withdraw",
         f"/panel/transports/{row_id}/remove",
+    ]
+
+
+def friend_surfaces(friend_id: str) -> list[str]:
+    """The surfaces opened for ONE person, walked once per person."""
+    return [
         f"/panel/friends/{friend_id}/subscription",
         f"/panel/friends/{friend_id}/revoke",
     ]
@@ -1828,6 +1840,12 @@ async def test_no_user_address_reaches_any_panel_surface(
     on every screenshot the operator takes. So this walks every surface that could hold
     one and asserts the allocation is nowhere in the bytes.
 
+    EVERY FRIEND'S OWN DIALOGS ARE WALKED, not only the first one's. ``settle`` hands
+    ``pool[0]`` to the earliest credential, and ``pool[0]`` is the one address excluded
+    below — so a sweep that opened the subscription and revoke dialogs for that friend
+    alone would be asking the two surfaces most likely to grow a per-person address about
+    the one value they are allowed to print.
+
     THE FIRST ADDRESS IN THE POOL IS EXCLUDED, and that exclusion is the honest part of
     this test rather than a hole in it. ``pool[0]`` is byte-identical to the row's own
     ``peer_tunnel_address`` parameter (``edge.addressing.pool``, which is what lets a row
@@ -1836,6 +1854,16 @@ async def test_no_user_address_reaches_any_panel_surface(
     it is typed in, exactly like the port. What may never appear is an address that
     exists ONLY as per-credential state — the second person's and the third's — because
     that is the one that says something about a person.
+
+    WHAT THAT EXCLUSION LEAVES, WRITTEN DOWN HERE RATHER THAN REDISCOVERED. ``settle``
+    adopts ``pool[0]`` to the earliest credential by ``(created_at, id)``, and the Users
+    screen orders by the same key — so an operator holding two screenshots, the replace-
+    parameters dialog showing that parameter and the Users table showing who is first,
+    can infer that the first person holds it. Nothing is stored that says so: the column
+    is encrypted, no log names it, and no screen puts the two together. It is unavoidable
+    while a row enabled before M17 must keep rendering the same bytes, and it is one
+    address — but "no user's address appears anywhere" is that much short of literal, and
+    a later reader should meet the qualification where the exclusion is made.
 
     The allocation is read back through the RENDER, like everything else in this file:
     what the node is authorised to route is the ground truth, and printing who holds what
@@ -1860,7 +1888,10 @@ async def test_no_user_address_reaches_any_panel_surface(
     per_credential = sorted(set(held) - {host_of("10.90.0.2/24")})
     assert len(per_credential) == 2, per_credential
 
-    for url in panel_surfaces(node_id, enabled.json()["id"], friends_made[0]):
+    walked = panel_surfaces(node_id, enabled.json()["id"])
+    for friend_id in friends_made:
+        walked += friend_surfaces(friend_id)
+    for url in walked:
         rendered = await client.get(url, headers=HTMX)
         assert rendered.status_code == 200, f"{url} -> {rendered.status_code}"
         for address in per_credential:
@@ -1923,11 +1954,13 @@ async def test_a_transport_whose_pool_is_short_is_not_offered_at_all(
 ) -> None:
     """Offering a withdrawn row grants everybody on it, so a short pool withholds it.
 
-    The service's refusal is right and unchanged — it rolls back and nothing commits —
-    but it arrives after the press, and by then the operator has told people the protocol
-    is coming. The button is therefore not drawn, with the pool named and the screen that
-    resizes it named too: there is no resize action in this console, and an operator who
-    does not know that has nowhere to go from this sentence.
+    The withholding is deliberately wider than the service's refusal
+    (``docs/decisions.md``, 2026-09-13), and this node shows why the sentence had to stop
+    claiming one: the node is still a draft, so ``grant_everywhere`` reaches nothing and
+    the press would COMMIT, granting nobody. What would then be refused is putting the
+    node into service. The button is not drawn either way, because a pool below the fleet
+    is a row nobody can be served on — with the pool named and the screen that resizes it
+    named too, there being no resize action in this console.
     """
     node_id = await a_node(client, name="short-offer", address="192.0.2.83")
     assert (await add_user(client, "ann")).status_code == 201
@@ -1947,7 +1980,7 @@ async def test_a_transport_whose_pool_is_short_is_not_offered_at_all(
     assert dialog.status_code == 200
     assert f"/panel/transports/{row_id}/offer" not in dialog.text, "the button is drawn"
     said = _text_of(dialog)
-    assert f"{pool_transport} on short-offer holds 1 and would need 2" in said, said
+    assert f"{pool_transport} on short-offer is sized for 1 and would need 2" in said, said
     assert "replace params" in said, said
     # In the page's words, like every other sentence a service composes (decision 9).
     assert "friend" not in said.lower(), said
@@ -1976,9 +2009,104 @@ async def test_a_node_whose_pool_is_short_is_not_offered_the_serving_state(
     assert dialog.status_code == 200
     assert '<option value="active"' not in dialog.text, "the state is on offer"
     said = _text_of(dialog)
-    assert f"{pool_transport} on short-state holds 1 and would need 2" in said, said
+    assert f"{pool_transport} on short-state is sized for 1 and would need 2" in said, said
     # Every other state this node may move to is still offered.
     assert '<option value="retired"' in dialog.text, dialog.text
+
+
+async def test_a_transport_whose_pool_covers_the_fleet_is_offered(
+    client, session, pool_transport: str
+) -> None:
+    """The other half of the pair, and the reason the negative above can fail at all.
+
+    An implementation that withheld the offer button from every withdrawn row would pass
+    that test and take away the console's only route to offering a transport — on the
+    milestone's own main path, and on the shape the runbook mandates. Same fixture, same
+    withdrawal, one number different.
+    """
+    node_id = await a_node(client, name="roomy-offer", address="192.0.2.87")
+    assert (await add_user(client, "ann")).status_code == 201
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    assert enabled.status_code == 201, enabled.text
+    row_id = enabled.json()["id"]
+    withdrawn = await client.post(
+        f"/api/transports/{row_id}/state", json={"enabled": False}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert (await add_user(client, "bob")).status_code == 201
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports", headers=HTMX)
+
+    assert dialog.status_code == 200
+    assert f"/panel/transports/{row_id}/offer" in dialog.text, "the button is not drawn"
+    said = _text_of(dialog)
+    assert "not offered —" not in said, said
+    assert "replace params" not in said, said
+
+
+async def test_a_node_whose_pool_covers_the_fleet_is_offered_the_serving_state(
+    client, session, pool_transport: str
+) -> None:
+    """The same pairing on the state dialog: withheld for a reason, not withheld always.
+
+    Without this, dropping the ``active`` option unconditionally passes the gate — and a
+    node carrying a WireGuard-family row could never be put into service from this
+    console again.
+    """
+    node_id = await a_node(client, name="roomy-state", address="192.0.2.88")
+    assert (await add_user(client, "ann")).status_code == 201
+    assert (
+        await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
+    ).status_code == 201
+    assert (await add_user(client, "bob")).status_code == 201
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/state", headers=HTMX)
+
+    assert dialog.status_code == 200
+    assert '<option value="active"' in dialog.text, "the state is withheld anyway"
+    said = _text_of(dialog)
+    assert "not offered —" not in said, said
+
+
+async def test_two_pools_of_one_transport_on_one_node_are_named_apart(
+    client, session, pool_transport: str
+) -> None:
+    """M15 lets a node run one transport twice, and this sentence is read without the row.
+
+    The state dialog and the add-user dialog both list pools from across the fleet, with
+    no line beside them saying which row is which. Named by the transport alone, two
+    instances on one node produce two byte-identical sentences: the operator resizes one,
+    reopens, sees the same line, and cannot tell whether anything changed. So the pool is
+    named the way every screen that lists a node's rows names them — ``placed_as``.
+    """
+    node_id = await a_node(client, name="two-rows", address="192.0.2.89")
+    assert (await add_user(client, "ann")).status_code == 201
+    first = await enable_pool(client, node_id, pool_transport, pool_size=1)
+    assert first.status_code == 201, first.text
+    # Its own port AND its own tunnel range: two rows on one node may share neither.
+    second = await enable_pool(
+        client,
+        node_id,
+        pool_transport,
+        pool_size=1,
+        tunnel="10.91.0.1/24",
+        peer="10.91.0.2/24",
+        port=51821,
+    )
+    assert second.status_code == 201, second.text
+    assert (await add_user(client, "bob")).status_code == 201
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/state", headers=HTMX)
+
+    assert dialog.status_code == 200
+    said = _text_of(dialog)
+    placed = {
+        console.placed_as(pool_transport, row.json()["config_name"])
+        for row in (first, second)
+    }
+    assert len(placed) == 2, placed
+    for name in placed:
+        assert f"{name} on two-rows is sized for 1 and would need 2" in said, said
 
 
 async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
@@ -1996,6 +2124,11 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     """
     node_id = await a_node(client, name="full-pool", address="192.0.2.85")
     assert (await add_user(client, "ann")).status_code == 201
+    # The ordinary branch first, while there is still room, so the two assertions below
+    # about the refusal branch are a pair rather than a description nothing can lose.
+    ordinary = await client.get("/panel/friends/new", headers=HTMX)
+    assert 'name="nickname"' in ordinary.text, ordinary.text
+    assert "add-user-no-room" not in ordinary.text, ordinary.text
     assert (
         await enable_pool(client, node_id, pool_transport, pool_size=1)
     ).status_code == 201
@@ -2006,8 +2139,13 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     assert dialog.status_code == 200
     assert "add user</button>" not in dialog.text, "a button whose every outcome is 409"
     assert 'name="nickname"' not in dialog.text, "a field nothing can submit"
+    # And the answer is ANNOUNCED: focus lands on `close`, the only control in this
+    # branch, so a dialog that did not describe itself would leave a screen-reader
+    # operator to navigate backwards for the reason there is no form.
+    assert 'aria-describedby="add-user-no-room"' in dialog.text, dialog.text
+    assert 'id="add-user-no-room"' in dialog.text, dialog.text
     said = _text_of(dialog)
-    assert f"{pool_transport} on full-pool holds 1 and would need 2" in said, said
+    assert f"{pool_transport} on full-pool is sized for 1 and would need 2" in said, said
     assert "friend" not in said.lower(), said
 
     # The service has not been relaxed: the refusal is still what enforces this.

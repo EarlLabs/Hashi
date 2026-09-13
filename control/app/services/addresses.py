@@ -91,11 +91,18 @@ class Shortfall:
     already addresses — so the console can put the sentence beside the row it is about
     rather than working out which of a node's lines a shortfall belongs to. An id is not
     a person and not an address; it is what the operator just clicked.
+
+    ``config_name`` is beside ``transport`` because M15 lets one node run two instances
+    of one transport, and the sentence composed below is read where there may be no row
+    to look at — the add-user dialog and the state dialog both list pools from across the
+    fleet. Without it, two instances on one node produce two identical sentences and the
+    operator cannot tell which of them they were sent to resize.
     """
 
     row: str
     node: str
     transport: str
+    config_name: str
     size: int
     needed: int
 
@@ -516,6 +523,7 @@ async def shortfalls_among(
                 row=row.id,
                 node=node.name if node else row.node_id,
                 transport=row.transport_name,
+                config_name=row.config_name,
                 size=size,
                 needed=people,
             )
@@ -554,10 +562,24 @@ def named(short: Shortfall) -> str:
 
     Names the node and the transport — both already on the screen it appears on — and the
     two counts. Nothing about any person, and no address.
+
+    "IS SIZED FOR", not "holds". The Keys & configs screen beside these says ``2 of 10``
+    for the same row, where the first number is the people HOLDING an address; a sentence
+    here saying "holds 10" would be the same verb for the other quantity, and the
+    operator following this sentence's own instruction lands on that screen. One word
+    each: a pool is sized, a person holds.
+
+    The transport is qualified the way every screen that lists a node's rows qualifies it
+    (``console.placed_as``), because two instances of one transport on one node are
+    ordinary since M15 and this sentence is read where the row itself may not be. Imported
+    where it is used rather than at the top: ``console`` imports this module, and the one
+    string both need to compose is not worth a third module or a second copy of the rule.
     """
+    from control.app.services.console import placed_as  # noqa: PLC0415
+
     return (
-        f"{short.transport} on {short.node} holds {short.size} and would need "
-        f"{short.needed}"
+        f"{placed_as(short.transport, short.config_name)} on {short.node} is sized for "
+        f"{short.size} and would need {short.needed}"
     )
 
 

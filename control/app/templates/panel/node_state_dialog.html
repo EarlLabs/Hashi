@@ -43,11 +43,14 @@
                 {% if errors.get('state') %}aria-invalid="true"{% endif %}>
           <option value="">choose…</option>
           {% for choice in choices %}
-          {# A withheld state gets no option — M17.2. The state machine allows the move
-             and this control plane would refuse it, so offering it would be a control
-             whose only outcome is a 409, which is the same rule that keeps `retired ->
-             active` off this list. It stays in the hint below, with the reason, because
-             "where this node may go" is what the operator came here to read. #}
+          {# A withheld state gets no option — M17.2. The state machine allows the move;
+             what is in the way is a pool on this node too small for the fleet, which
+             either refuses the move outright or — where everybody on that row already
+             holds a credential — lets it through onto a transport with no room for the
+             people it is meant to carry. Neither is a state to hand an operator behind a
+             control, which is the same rule that keeps `retired -> active` off this
+             list. It stays in the hint below, with the reason, because "where this node
+             may go" is what the operator came here to read. #}
           {% if not choice.withheld %}
           <option value="{{ choice.state }}"{% if values.get('state') == choice.state %} selected{% endif %}>{{ choice.state }}</option>
           {% endif %}

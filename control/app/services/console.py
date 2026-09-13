@@ -472,9 +472,19 @@ OFFER_HOP_END = (
 # Why a withdrawn row's offer button is not drawn at all — M17.2. Offering a transport
 # hands every active user a credential on it IN THE SAME TRANSACTION (M17 moved the
 # fan-out inside it), and on a transport that gives each of them an address of their own
-# a pool this small refuses the whole thing. That refusal is correct and arrives with
-# nothing committed; what it cannot be is the operator's first hint, because they have
-# already told thirty people the protocol is coming.
+# a pool this small has nowhere to put them. What the operator cannot be left with is a
+# row they offered believing it would carry the fleet, because by then they have already
+# told thirty people the protocol is coming.
+#
+# WHAT THE SENTENCE MAY CLAIM. The withholding is deliberately wider than the service's
+# refusal (``docs/decisions.md``, 2026-09-13): the button is withheld on the ROW's pool
+# whatever the node's state, because a pool below the fleet is a row nobody can be served
+# on either way. The press itself is refused only where somebody would actually be
+# granted — on a node already serving. On one that is not, offering commits and grants
+# nobody, and it is the next move, into service, that is refused. So the sentence states
+# the CEILING, which is true in both, rather than a refusal that would not arrive in one
+# of them: a withheld control explained by something that will not happen teaches the
+# operator to distrust the next one.
 #
 # The pool is NAMED — node, transport and both counts, in ``addresses.named``'s words, so
 # the sentence here and the refusal the API returns describe the same pool the same way.
@@ -482,9 +492,10 @@ OFFER_HOP_END = (
 # the size is a box on the replace-parameters dialog, and an operator who does not know
 # that has nowhere to go from here.
 POOL_SHORT_TO_OFFER = (
-    "not offered — {pools}. Offering it gives every active user an address here in the "
-    "same change, so it would be refused. Make the pool bigger first: Keys & configs, "
-    "replace params."
+    "not offered — {pools}. Every active user is given an address here the moment this "
+    "row serves, so as it stands nobody can be: on a node already serving, offering it "
+    "is refused outright; on one that is not, it leaves a node that cannot then be put "
+    "into service. Make the pool bigger first: Keys & configs, replace params."
 )
 
 # The same row, answering the other action — M15.2. Its own sentence rather than the one
@@ -532,13 +543,22 @@ NODE_STATE_MEANS = {
 # Why the serving state is listed and not offered — M17.2, and the same event as
 # ``POOL_SHORT_TO_OFFER`` from the other side. A node that starts serving grants every
 # active user a credential on each transport it offers, inside the transaction that moves
-# it, so one short pool on the node refuses the move. The refusal itself is M17's and is
-# already tested; what this adds is that the operator reads it before pressing, with the
-# pool named rather than "this node cannot be granted".
+# it, so a short pool on the node usually refuses the move.
+#
+# USUALLY, and the sentence is written for the case where it does not. ``grant_everywhere``
+# skips a row a friend already holds a credential on, so on the field's own row — a
+# pre-pool row counted as one address with two people already on it — nothing is minted,
+# nothing is refused, and the node would go into service carrying a transport with no room
+# for the fleet. Withholding is still right there, and is the only reason that row gets
+# repaired before it is served; what must not be right is a sentence claiming a refusal
+# that would not arrive. So this states the ceiling and the next thing that WILL be
+# refused, both of which are true in every state it is shown in.
 POOL_SHORT_TO_SERVE = (
-    "not offered — {pools}. A node that starts serving gives every active user an "
-    "address on each transport it offers, so this move would be refused. Make the pool "
-    "bigger first: Keys & configs, replace params."
+    "not offered — {pools}. A node that serves gives every active user an address on "
+    "each transport it offers, and this pool cannot hold the fleet: serving it would "
+    "leave a transport with no room for the people it is meant to carry, and the next "
+    "user you add would be refused on it. Make the pool bigger first: Keys & configs, "
+    "replace params."
 )
 
 
@@ -864,11 +884,14 @@ async def state_choices(session: AsyncSession, node: Node) -> tuple[StateChoice,
 
     ASYNC SINCE M17.2, and that is the whole reason the signature changed: a node
     becoming serving hands every active user an address on each transport it offers, so
-    a short pool anywhere on this node refuses the move — inside the transaction, with
-    nothing committed, but only after the operator has pressed. The measurement is
-    ``addresses.shortfalls_among``, over this node's own ENABLED rows, which are exactly
-    the ones that become serving with it. A node that is already serving is asked
-    nothing: it grants nobody anything by staying where it is.
+    a short pool anywhere on this node is a node that cannot carry the fleet it is being
+    put in front of — usually refused outright, inside the transaction and with nothing
+    committed, but only after the operator has pressed. Where every active user already
+    holds a credential on that row nothing is minted and the move would commit, which is
+    why ``POOL_SHORT_TO_SERVE`` states the ceiling rather than the refusal. The
+    measurement is ``addresses.shortfalls_among``, over this node's own ENABLED rows,
+    which are exactly the ones that become serving with it. A node that is already
+    serving is asked nothing: it grants nobody anything by staying where it is.
     """
     withheld = None
     if node.state not in NodeState.serving():
@@ -1909,7 +1932,11 @@ def pool_takers(people: int) -> str:
 
     Singular at one, and its own sentence at zero: "0 active users each take an address"
     is both ungrammatical and misleading on a first-run panel, where the honest thing to
-    say is that the size is a ceiling for the people who are not here yet.
+    say is that the size is a ceiling for the people who are not here yet — a ceiling
+    this milestone also ships the means to raise, which is why that branch names where.
+    "Can ever serve" was the wrong word for it: the first-run operator is the one least
+    able to know the number is not permanent, and the likeliest to oversize wildly or put
+    the whole thing off because of it.
 
     It does not repeat that a smaller pool is refused — ``POOL_BOX_HINT``, which this is
     appended to, has already said so.
@@ -1917,7 +1944,8 @@ def pool_takers(people: int) -> str:
     if people == 0:
         return (
             "No user is active yet, so nothing takes an address from it today — the "
-            "size is the ceiling on how many this node can ever serve on this protocol."
+            "size is the ceiling on how many this node serves on this protocol, until "
+            "you raise it under replace params."
         )
     if people == 1:
         return "1 active user takes an address from it the moment this node serves."
