@@ -1996,6 +1996,128 @@ The same measurement as above, on a ufw host, with the answer changed.
 
 ---
 
+## → M23 — Walk the whole platform on the real hosts, and loop until nothing blocks · asked for by the owner 2026-09-13
+
+**Approved by the owner in conversation on 2026-09-13**, in these words: *"create
+another one milestone that would verify all features of the platform on real
+hosts… U also can create a checker container on current machine that will try to
+connect via tunnel to the leaf amsterdam node… If the agent would find a bug it
+should text it into a separate block on the milestone and after finish testing
+immediately fix all findings and do an acceptance review one more time… do it on
+a loop while the blocker/high bugs would not be fixed."*
+
+**Why it exists.** Six milestones in this plan closed with acceptance **partial**,
+every one of them for the same reason: *the stand has no data plane, no tunnel and
+no second host.* `make verify` cannot prove a tunnel carries a packet, and this
+project's most expensive defects have all been of one shape — **every signal
+green, nothing carried.** M14 found it in the field. The probe (M22) has it now.
+The charter names it as the failure that hurts most, because it is the one where
+the operator stops looking.
+
+This milestone is the answer: **stop inferring, and go and look.**
+
+### What is reachable, and what is not — settled before any work starts
+
+| | reachable | how |
+|---|---|---|
+| **Leaf, Amsterdam** | **yes, fully** | root SSH works from this machine |
+| **Entry, Russia** | **no** | refuses this machine's key; takes keys from cloud metadata. Observable only *from the leaf* — the hop's handshake age and byte counters |
+| **Pushing new configs** | **no** | applying needs the nodes' secrets, which live only in the owner's production control plane. A fresh control plane mints **new** keys; applying that would rewrite `amneziawg.conf` with a key the entry does not know and **cut the live hop out of Russia**, with no second route back |
+
+**So the checker dials what is already deployed.** It does not apply, and it does
+not replace a config.
+
+### The one rule that governs every step
+
+**`amneziawg.conf` on the leaf is the live entry→leaf hop and it carries the
+owner's real traffic.** Nothing in this milestone touches it. Every check is
+either read-only, or confined to the **friend-facing `wireguard` row** — which is
+idle (last handshake days old, ~1 KiB moved) and is the safe subject.
+
+A test peer is added with **`wg set` at runtime**, never by editing a file: it is
+additive, it disturbs no existing peer, and it is gone on the next restart even if
+cleanup fails. **Every step that writes anything must be undone in a `finally`.**
+
+And the charter's hard record still holds, on the hosts as in the tree: **look, do
+not keep.** No capture is written to disk on either host, and nothing that names a
+destination is recorded anywhere.
+
+### M23.1 — Stand up a checker that is a real client, not a simulation
+
+A container on this machine holding a **real WireGuard client**, a keypair minted
+for the test, and nothing else. Its peer entry is added to the leaf's live
+`wireguard` interface at runtime and removed afterwards.
+
+It must be a client the way a friend's device is a client: it completes a real
+handshake with the real daemon on the real host, over the real internet.
+
+### M23.2 — Walk every feature that only a real tunnel can answer
+
+Each of these is a line some milestone had to record as *"could not — needs the
+field"*. They are now answerable:
+
+- **A packet goes through.** Handshake completes, and traffic moves in **both**
+  directions — `wg show` transfer counters non-zero each way, not just a handshake.
+- **The exit is the leaf.** From inside the tunnel, the public address seen by the
+  outside world is the leaf's, not this machine's.
+- **Two friends at once, at two addresses** (M17's whole subject, and its
+  outstanding field item). Two peers, two distinct `/32`s, **both carrying
+  traffic, neither seeing the other's return traffic.**
+- **A revoked friend actually stops.** Remove one peer; that tunnel dies and the
+  other keeps working.
+- **DNS goes where M16 says it goes** — and, on the entry side, that a friend's
+  lookup does not leave the entry's own interface. *(Bounded by the entry being
+  unreachable: what can be established from the leaf is recorded, and what cannot
+  is named.)*
+- **The hop is still healthy afterwards.** The entry↔leaf handshake age and byte
+  counters must be moving at the end of the walk exactly as they were at the
+  start. **This is the safety check, and it runs first and last.**
+- **Orphaned key material** (field-checklist item 1) — already confirmed once by
+  M18's acceptance; confirm it on the real leaf.
+- **The Xray log stays silent about names**, and nothing anywhere records a
+  connection, a destination or a friend.
+
+### M23.3 — The loop
+
+**This is the part the owner asked for explicitly.**
+
+1. Walk everything in M23.2 on the real hosts.
+2. **Write every finding into the findings block below**, in the milestone itself —
+   severity, what was observed, and the exact command that observed it.
+3. When the walk is finished, **immediately fix every finding** that is not out of
+   scope.
+4. **Run the acceptance walk again**, on the real hosts.
+5. **Repeat from 1 while any BLOCKING or HIGH finding is open.**
+
+Stop the loop only when a full walk produces **no blocking and no high finding**,
+or when a finding cannot be fixed without work this milestone does not name — in
+which case it is written up as its own proposed milestone, the way M22 was, and
+the loop continues on the rest.
+
+**Done when**
+- [ ] A real client completes a real handshake with the real leaf and carries
+      traffic both ways.
+- [ ] Two friends hold two addresses on one transport and both work, with neither
+      seeing the other's return traffic.
+- [ ] Revoking one stops that one and leaves the other untouched.
+- [ ] The entry↔leaf hop is provably unharmed — handshake and counters moving at
+      the end as at the start.
+- [ ] Every finding is recorded in the block below, and no BLOCKING or HIGH
+      finding is open.
+- [ ] Nothing on either host was left changed: no test peer, no file, no capture.
+
+acceptance: yes
+On the real hosts, with a real client: a friend connects, carries traffic, exits
+at the leaf, and a second friend does the same at their own address. Then one is
+revoked and stops while the other does not. The hop that carries all of it is
+untouched throughout.
+
+### Findings — written here as they are found
+
+*(empty until the first walk)*
+
+---
+
 ## ⛔ M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · NEEDS THE OWNER'S APPROVAL, NOT STARTED
 
 **Proposed by the autopilot run, not approved.** Written down here because the
