@@ -26,11 +26,69 @@ over SFTP instead, to a file created 0600 before the bytes land in it.
 
 import asyncio
 import logging
+import socket
 from dataclasses import dataclass
 
 import asyncssh
 
 logger = logging.getLogger(__name__)
+
+# Why a session could not be opened, as a sentence rather than as the name of the class
+# Python raised — M18's acceptance, and M9's before it, which filed the same leak and had
+# it fixed in one place and not this one.
+#
+# ``could not establish an SSH session: gaierror`` is what an operator was reading on the
+# apply, probe, rotate-keys and replace-params banners. Everything before the last word is
+# plain English; the last word is ``socket.gaierror`` arriving through ``type(exc).__name__``
+# and what it means is "this node's address does not resolve" — which is exactly the
+# sentence the operator needed, and one they can act on without knowing what a gaierror is.
+#
+# ORDERED, AND SCANNED IN ORDER, because these are not disjoint: ``gaierror`` and
+# ``ConnectionRefusedError`` are both ``OSError``. The list is short on purpose — one entry
+# per cause an operator has a different next action for — and anything not on it falls
+# through to the sentence below, which still names the class in brackets because on an
+# unrecognised failure that is the only diagnostic there is.
+#
+# NOTHING HERE NAMES THE HOST, and nothing may: this text propagates into
+# ``Node.state_detail`` and into an API response, where core invariants §4 keeps node
+# addresses out. That is also why the exception's own message is never used — asyncssh's
+# routinely carries the address it was dialling.
+_WHY_NO_SESSION: tuple[tuple[type[BaseException], str], ...] = (
+    (socket.gaierror, "this node's address could not be resolved"),
+    (ConnectionRefusedError, "nothing accepted an SSH connection on that port"),
+    (
+        asyncssh.HostKeyNotVerifiable,
+        "the node answered with a different host key than the one pinned for it, so the "
+        "connection was abandoned rather than trusted",
+    ),
+    (
+        asyncssh.PermissionDenied,
+        "the node refused the key this control plane holds for it",
+    ),
+)
+
+# Every recognised cause reads as a whole sentence, so the fallback does too — with the
+# class in brackets at the end, since an unrecognised failure has nothing else to offer
+# and the alternative is an operator told only that something went wrong.
+_NO_SESSION_UNKNOWN = "could not establish an SSH session ({name})"
+
+# How much of a failed command's own output the operator is shown, and WHICH END of it —
+# M18's acceptance. This used to be ``stderr.strip()[:300]``, the FIRST 300 characters,
+# which on the one command this project runs most is the worst possible choice: a
+# `docker compose up` that has to pull first writes a progress line per image layer, so
+# the operator was handed a screenful of layer ids with the actual error — which the
+# daemon prints last, as every Unix tool does — cut off past the limit.
+#
+# The tail, then, and flattened to one line, which also makes the reason the single
+# sentence every surface downstream assumes it is: this text becomes ``Node.state_detail``
+# and an API message, and a multi-line one puts a report where a sentence belongs.
+#
+# THE RULE IS "THE LAST FEW MEANINGFUL LINES" AND NAMES NOTHING. No pattern for a layer
+# id, no knowledge of what docker prints: this module is the SSH channel and knows only
+# that it ran a command and the command failed. A filter written against one tool's
+# progress format is a filter that silently eats the next tool's error.
+_STDERR_LINES = 3
+_STDERR_MAX = 300
 
 
 class NodeUnreachable(Exception):
@@ -40,6 +98,26 @@ class NodeUnreachable(Exception):
     and "the command exited non-zero" identically — in either case the node's real
     state is unknown, which means degraded rather than active.
     """
+
+
+def _why_no_session(exc: BaseException) -> str:
+    """The reason a connect failed, in the words an operator can act on."""
+    for kind, reason in _WHY_NO_SESSION:
+        if isinstance(exc, kind):
+            return reason
+    return _NO_SESSION_UNKNOWN.format(name=type(exc).__name__)
+
+
+def _what_it_said(stderr: str) -> str:
+    """A failed command's own output, reduced to what an operator can read.
+
+    ``splitlines`` rather than a split on ``\n``: a progress display rewrites one line
+    with carriage returns, and each rewrite becomes its own line here — so the final
+    state of it survives and the states it passed through drop off the front with
+    everything else that is not among the last few.
+    """
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    return "; ".join(lines[-_STDERR_LINES:])[:_STDERR_MAX]
 
 
 @dataclass(frozen=True)
@@ -142,8 +220,7 @@ class NodeConnection:
             # The message deliberately does not include the host: it propagates
             # into operator-facing text, and core invariants §4 keeps host names out
             # of anything that crosses the API boundary.
-            raise NodeUnreachable(f"could not establish an SSH session: {type(exc).__name__}") \
-                from exc
+            raise NodeUnreachable(_why_no_session(exc)) from exc
 
         if not target.host_key:
             key = self._connection.get_server_host_key()
@@ -188,9 +265,11 @@ class NodeConnection:
         )
         if check and not result.ok:
             # stderr is included because this is an operator-facing diagnostic about
-            # OUR OWN command on OUR OWN node — not user data.
+            # OUR OWN command on OUR OWN node — not user data. Its TAIL, for the reason
+            # ``_what_it_said`` gives.
             raise NodeUnreachable(
-                f"command failed ({result.exit_status}): {command!r}: {result.stderr.strip()[:300]}"
+                f"command failed ({result.exit_status}): {command!r}: "
+                f"{_what_it_said(result.stderr)}"
             )
         return result
 
