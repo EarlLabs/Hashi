@@ -2118,12 +2118,16 @@ untouched throughout.
 
 ---
 
-## ⛔ M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · NEEDS THE OWNER'S APPROVAL, NOT STARTED
+## → M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · APPROVED BY THE OWNER 2026-09-13
 
-**Proposed by the autopilot run, not approved.** Written down here because the
-run declined to build it inside M18 and the owner's own rule is that a milestone
-needing work the plan does not mention is a new milestone to approve, not a
-bigger one to finish.
+**Proposed by the autopilot run on 2026-09-13 and approved by the owner the same
+day** ("m22 yes"). Written down separately because the run declined to build it
+inside M18: the owner's own rule is that a milestone needing work the plan does
+not mention is a new milestone to approve, not a bigger one to finish.
+
+**Ordered before M23**, because M23 walks the real hosts and will use the probe
+to ask whether a node is actually serving. A walk carrying a lying instrument
+measures nothing.
 
 **What was measured.** On a real applied host, `vless-ws-tls` was crash-looping —
 exiting 23 every second on a missing certificate file — with nothing listening on
