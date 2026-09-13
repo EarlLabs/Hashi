@@ -224,8 +224,34 @@ case "${AUTHORIZED_KEY}" in
 esac
 
 TARGET_USER="${TARGET_USER:-${SUDO_USER:-$(id -un)}}"
-TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
-[ -n "${TARGET_HOME}" ] || fail "no account '${TARGET_USER}' on this host"
+
+# THE LOOKUP IS GUARDED AND THE REFUSAL UNDER IT IS THE REASON — M18's acceptance. The
+# line below used to be `TARGET_HOME="$(getent passwd ... | cut -d: -f6)"`, and under
+# `set -e` with `pipefail` that ended the run BY ITSELF: getent reports "no such account"
+# by exiting 2 and printing nothing at all, so `--user` naming an account that does not
+# exist yet — which is the most natural first-run order, name the account you intend to
+# use and then create it — produced exit 2, zero bytes on stdout, zero bytes on stderr.
+# The refusal written for exactly that case sat on the next line and could never fire.
+#
+# A script whose header promises it refuses rather than letting an operator believe a
+# broken node is ready must not have a path that refuses by going quiet, so the failure
+# is caught here and answered below. Every other command in this file that can end the
+# run says why on its own — this is the one lookup in it that answers by exiting.
+TARGET_PASSWD="$(getent passwd "${TARGET_USER}" || true)"
+TARGET_HOME="$(printf '%s' "${TARGET_PASSWD}" | cut -d: -f6)"
+# BY NAME, and with every way forward this script actually supports. It does not create
+# the account: which shell, which home, which groups and whether it may sudo are the
+# host owner's decisions, and section E of the header is the same boundary. What it can
+# do is say which of the three the operator meant.
+[ -n "${TARGET_HOME}" ] || fail \
+  "there is no account '${TARGET_USER}' on this host, so nothing was prepared and nothing
+  on this host was changed. This script authorises the control plane's key FOR an account
+  and puts that account in the docker group; it does not create one, because a host's
+  accounts belong to whoever owns the host. Either create it first, with
+  'useradd -m ${TARGET_USER}' — the -m matters, since the key is installed under that
+  account's home directory — and run this again, or pass --user an account that already
+  exists, or leave --user off to prepare '${SUDO_USER:-$(id -un)}', which is the account
+  this session is running as."
 TARGET_GROUP="$(id -gn "${TARGET_USER}")"
 
 # --- 2. the container runtime -------------------------------------------------

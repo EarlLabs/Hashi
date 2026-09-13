@@ -23,9 +23,11 @@ HOW:  the script is read, not run. Same division as ``test_panel_bootstrap_scrip
       keep the re-run's claims honest, because the two constrain each other.
 """
 
+import os
 import pathlib
 import re
 import stat
+import subprocess
 
 import pytest
 
@@ -664,3 +666,122 @@ def test_the_owner_has_a_make_target_for_it() -> None:
     assert "<" in target and "scp" not in target, (
         "the Make target copies the script onto the node instead of piping it"
     )
+
+
+# --- the run itself, as far as the first line that changes the host -----------
+#
+# Everything above READS the script. The three below RUN part of it, because the defect
+# M18's acceptance found is one no reading catches: the refusal for `--user <an account
+# that does not exist>` was written, was correct, and could never fire. `getent` reports
+# "no such account" by exiting 2 and printing nothing, so under `set -euo pipefail` the
+# lookup on the line above ended the run by itself — exit 2, zero bytes on stdout, zero
+# bytes on stderr — and the operator who used the most natural first-run order, naming the
+# account they intend to use before creating it, was answered with total silence.
+#
+# CUT AT SECTION 2, and the cut is what makes running this safe. Everything before it is
+# checks — the arguments, the way to root, the key, the account — and none of it touches
+# the host; the first line that installs, adds or opens anything is the container runtime.
+# So these run the script's own lines, and a mutation that deletes the refusal cannot
+# install docker on whoever is running the suite.
+WHERE_THE_HOST_IS_FIRST_TOUCHED = "# --- 2. the container runtime"
+
+# Shape only — this is what the script's own check looks for, and no key material is
+# involved: the body is not a key and is never used as one.
+A_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAthisisnotakey hashi-control"
+
+
+def run_the_checks(
+    script: str, tmp_path: pathlib.Path, *arguments: str
+) -> subprocess.CompletedProcess:
+    """The script's checking half, run with no TTY and nothing to answer a prompt with.
+
+    ``sudo`` is stubbed with one that runs what it is given, because the only use of it
+    before the cut is ``sudo -n true`` — the test for a password-less one. Nothing
+    privileged is invoked before the cut, so the stub grants the run nothing.
+    """
+    prefix = tmp_path / "node-bootstrap-checks.sh"
+    prefix.write_text(script[: script.index(WHERE_THE_HOST_IS_FIRST_TOUCHED)])
+    stubs = tmp_path / "bin"
+    stubs.mkdir(exist_ok=True)
+    (stubs / "sudo").write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec "$@"\n')
+    (stubs / "sudo").chmod(0o755)
+    return subprocess.run(
+        ["bash", str(prefix), *arguments],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{stubs}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "HOME": str(tmp_path),
+        },
+    )
+
+
+def test_an_account_that_does_not_exist_is_refused_by_name(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The operator gets a sentence, not an exit code — M18's acceptance.
+
+    What was measured on the host: ``--user hashi`` before ``useradd hashi`` exited 2 with
+    nothing on either stream, and the same invocation after it printed the full summary.
+    Silence is the worst of the possible answers here, because the run that follows it
+    once the account exists looks identical, so the operator has no way to learn what the
+    first one was about.
+
+    The account is named because it is the one thing the operator can act on: which of
+    the three things they meant — create it, name another, or leave the flag off — depends
+    on which account this is, and a refusal that says "no such account" says none of it.
+    """
+    missing = "hashi-no-such-account"
+
+    refused = run_the_checks(script, tmp_path, "--authorized-key", A_PUBLIC_KEY, "--user", missing)
+
+    assert refused.returncode != 0, refused.stdout
+    assert refused.stderr.strip(), (
+        "the run ended non-zero with nothing on either stream, which is the finding: "
+        f"stdout {refused.stdout!r}"
+    )
+    # Flattened, because the message is wrapped at this file's width and a phrase that
+    # crosses a wrap would be an assertion about where the wrap is.
+    said = " ".join(refused.stderr.split())
+    assert missing in said, said
+    # Every way forward this script supports, because it will not create the account
+    # itself: make it, name a different one, or let the default stand.
+    assert "useradd -m" in said, said
+    assert "--user" in said, said
+    # And it says it changed nothing, which is what makes "run it again" safe to offer.
+    assert "nothing on this host was changed" in said, said
+
+
+def test_an_account_that_exists_is_prepared_rather_than_refused(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The other half, without which the refusal above could be unconditional.
+
+    ``root`` rather than the account running the suite: this asserts that the check
+    passes for an account that is really there, and root is the one every host has — it
+    is also the ``ssh_user`` default the panel offers, so it is the account most first
+    runs name.
+    """
+    accepted = run_the_checks(script, tmp_path, "--authorized-key", A_PUBLIC_KEY, "--user", "root")
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+
+def test_no_lookup_in_it_can_end_the_run_without_saying_why(script: str) -> None:
+    """The class the silent refusal belonged to, rather than the one instance.
+
+    Under ``set -euo pipefail`` any command that answers by exiting ends the whole run,
+    and a command that answers by exiting AND printing nothing ends it with nothing for
+    the operator to read. ``getent`` is the one lookup in this file that answers that way
+    — every other command here (``curl``, ``install``, ``apt-get``, ``ufw``, ``chown``,
+    ``id``) writes its own diagnostic to stderr before it fails — so every use of it has
+    to be caught and answered rather than left to kill the run.
+    """
+    for line in script.splitlines():
+        if "getent" in line and not line.lstrip().startswith("#"):
+            assert "|| true" in line, (
+                "a getent that fails ends the run with nothing on either stream, so the "
+                f"refusal written under it never fires: {line.strip()}"
+            )
