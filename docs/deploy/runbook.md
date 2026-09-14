@@ -601,8 +601,9 @@ public hostname (*Reaching the panel*):
    container dials out and back, which works; `172.17.0.1` is the fallback if the public
    address is awkward. `ssh_user root`, port 22, private key = the contents of
    `~/.ssh/hashi-node`.
-2. **Enable a transport: `amneziawg` (or `wireguard`) on UDP 51820.** Right here it
-   is the right choice, because this box dials no hop. Read *The one combination that
+2. **Enable a transport: `amneziawg` on UDP 51820.** Right here it is the right choice,
+   because this box dials no hop. Its plain cousin is not offered — see *What to give an
+   entry node's friends instead* for what was measured. Read *The one combination that
    will not render* before you make it the entry end of one. The form asks one more
    thing for this family — **how many users this row may hand an address to**, counted
    up from `peer_tunnel_address`. Size it for the fleet you expect rather than for
@@ -752,22 +753,31 @@ handshake, so give it a `decoy_host` of your own choosing and never a shared one
 nothing in this project puts them there — so it is the right answer only on a host where
 you already terminate TLS for a name you own.
 
-`amneziawg` and `wireguard` stay exactly right for friends on a node with **no** hop:
-Shape A's single box, and a leaf. There the same row renders a local exit, which is the
-shape a real client was measured carrying traffic on. Every transport this image ships,
-and what each one may be asked to do:
+`amneziawg` stays exactly right for friends on a node with **no** hop: Shape A's single
+box, and a leaf. There the same row renders a local exit, which is the shape a real client
+was measured carrying traffic on.
+
+**Its plain cousin does not, and the panel no longer offers it.** `wireguard` is still in
+the image and a node already running it still serves it — but the pinned data plane writes
+its forwarding rules on one netfilter backend while the firewall this runbook has you
+enable writes its default-deny policy on the other. Both are traversed, so the accept
+never front-runs the drop: a user's handshake completes, nothing is carried, and neither
+end says anything. Measured twice on a live node. The Transports screen states it on the
+row, with the reason; the enable dialog simply does not list it.
+
+Every transport this image ships, and what each one may be asked to do:
 
 | transport | friends on a node with a hop | friends on a node with no hop | the entry→leaf hop |
 |---|---|---|---|
 | `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — its configuration is a link rather than a file, so the hop form does not offer it |
 | `vless-ws-tls` | yes, once a certificate and key are on the node | yes, on the same condition | no, for the same reason |
 | `amneziawg` | no — the panel accepts the row and the apply refuses it | yes | yes, and today it is the only one |
-| `wireguard` | no — the same refusal, for the same reason | yes, but never as a way out of a filtering network | no — it is protocol-blocked where this matters, and the form will not offer it |
+| `wireguard` | no — the same refusal, for the same reason | no — retired: the panel does not offer it, and a row enabled before that carries no traffic on a host this runbook prepared | no — it is protocol-blocked where this matters, and the form will not offer it |
 
 Every cell in it is checked against the code by `tests/infra/test_deploy_runbook.py` —
-against the renderers for the first column, the declared delivery formats for the second,
-and the panel's own hop form for the third. A fifth transport, or a change to what one of
-these can do, turns that suite red rather than leaving this table quietly wrong.
+against the renderers for the first column, the panel's own enable dialog for the second,
+and its hop form for the third. A fifth transport, a retirement, or a change to what one
+of these can do turns that suite red rather than leaving this table quietly wrong.
 
 **The two families are delivered differently, and you find that out before your friends
 do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
