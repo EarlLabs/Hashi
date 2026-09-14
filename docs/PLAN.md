@@ -2274,9 +2274,198 @@ at the leaf, and a second friend does the same at their own address. Then one is
 revoked and stops while the other does not. The hop that carries all of it is
 untouched throughout.
 
-### Findings — written here as they are found
+### Findings — round 1, walked on the leaf 2026-09-14
 
-*(empty until the first walk)*
+**Verdict: PARTIAL.** The data plane works. The platform around it does not yet
+deliver a usable tunnel to a friend: **a friend who imports the product's own
+config gets a tunnel that carries packets and resolves no names, from a link that
+returns an empty page.** Six HIGH, none of them visible from any stand. Nothing
+blocking — nothing crashed, nothing lost data, the hop was never at risk.
+
+**What the walk substituted, disclosed:** the control plane never displays a
+node's private key and applying to the leaf was forbidden, so a throwaway server
+keypair was minted and **exactly one line** changed in each product-issued client
+config (`PublicKey`). Addresses, obfuscation headers, MTU, per-friend
+PresharedKeys, `AllowedIPs`, `Endpoint` and keepalive are the product's own
+output, unedited. The server-side firewall rules inserted are byte-identical to
+the `PostUp` the product renders.
+
+#### 1 · HIGH — a friend's config gives them no DNS at all, and the config tells them the opposite
+
+No `DNS` line, and `AllowedIPs = 0.0.0.0/0, ::/0`. **Every** address routes into
+the tunnel — **including the device's own resolver**, which on a home or corporate
+network is a private address unreachable from Amsterdam.
+
+```
+$ docker exec hashi-m23-friend-a nslookup example.com
+;; connection timed out; no servers could be reached
+
+$ docker exec hashi-m23-friend-a ip route get 10.129.0.2   # the device's own resolver
+10.129.0.2 dev awg0 table 51820 src 10.99.7.2
+```
+
+Both friends, identically. **Handshake green, exit correct, 5 MB downloaded — and
+not one name resolves.** This is the charter's named failure shape.
+
+The config states the opposite, as a deliberate reassurance:
+
+> `# No DNS line: this device keeps its own resolver, and its queries do not go`
+> `# through the tunnel. Said out loud rather than left as an absence…`
+
+`ip route get` shows the second half is false for **every** destination. And
+setting the node's **resolver** does not help — the client config is
+byte-identical afterwards. **There is no setting in the panel that gives a friend
+working DNS.**
+
+#### 2 · HIGH — every friend on a node shares one PresharedKey
+
+Two friends' configs differ **only** in private key and address. Confirmed in the
+product's own rendered node config:
+
+```
+$ grep -c '^PresharedKey' /opt/hashi/conf/amneziawg.conf           → 2
+$ grep '^PresharedKey' /opt/hashi/conf/amneziawg.conf | sort -u | wc -l → 1
+```
+
+**One friend's leaked config exposes the symmetric key protecting every other
+friend's handshake on that node, and revoking that friend does not rotate it.**
+
+#### 3 · HIGH — friends can reach each other's devices inside the tunnel
+
+```
+$ docker exec hashi-m23-friend-a ping -c 3 10.99.7.3
+3 packets transmitted, 3 packets received, 0% packet loss
+
+$ docker exec -d hashi-m23-friend-b nc -l -p 9999 -e /bin/echo HELLO-FROM-B
+$ docker exec hashi-m23-friend-a sh -c 'echo probe | nc -w 4 10.99.7.3 9999'
+HELLO-FROM-B
+```
+
+Cause is the product's own egress policy: `PostUp` renders
+`-i %i -j ACCEPT`, which permits `%i → %i`. With `pool_size` putting every friend
+on one routed `/24`, **30–50 people who need not know each other get full IP
+reachability to each other's laptops and phones.** A `-i %i -o %i -j DROP`
+inserted first would close it.
+
+**The crypto half is sound** — a friend cannot forge another's address
+(`ping -I 10.99.7.3` → 100% loss).
+
+#### 4 · HIGH — the subscription URL the panel hands the owner returns an empty page
+
+With an **active** node serving **only** amneziawg:
+
+```
+$ curl -i ".../sub/$TOKEN_A"                          → 200 OK, content-length: 0
+$ curl -w '%{http_code} %{size_download}' "...?format=client-config-file"  → 200 1297
+```
+
+200 OK, zero bytes, no message, while the dialog says *"One URL, every serving
+node."* **This is M24, now confirmed on real hardware.**
+
+#### 5 · HIGH — pressing "revoke" twice turns an honest failure into a false success
+
+```
+press 1 → failed — access withdrawn in the database and on 0 node(s), but 1 node(s)
+          could NOT be updated and the credential is still live on each until it is
+press 2 → kolya revoked — link is dead
+```
+
+Nothing changed on the node between the presses. **The first message is correct
+and the second is not.** An operator revoking someone urgently presses again after
+a failure — that is the natural gesture — and is told the link is dead.
+
+#### 6 · HIGH — a node registered without an SSH key can never be given one, edited or removed
+
+The add-node dialog invites it (*"Optional now…"*), but every route 404s:
+`edit|credentials|ssh|key|access`, `delete|remove|retire`, `DELETE`. **The node is
+permanently unappliable and permanently in the list.**
+
+#### 7 · MEDIUM — two failure messages name the wrong cause
+
+- On a node with **no** SSH key, apply and probe both say *"the node refused the
+  key this control plane holds for it."* **It holds none.** The operator is sent
+  to debug the host's `authorized_keys`.
+- Where the push **did** land but the daemon did not come up: *"could not be
+  reached — apply it again once it can be."* It was reached; the file was replaced
+  (peer count 2 → 1 on disk). **What failed was the restart.**
+
+#### 8 · MEDIUM — three orphans for the retired `wireguard` transport, not one
+
+`wireguard.conf` (live `PrivateKey`, plus material for `# peer-c50c0878`, a friend
+issued credentials on a transport the panel no longer offers), **the interface
+`wireguard 10.66.0.1/24` up**, `hashi-node-wireguard-1` running 5 days, `51840/udp`
+open in ufw, and legacy-backend FORWARD/NAT rules. *(Read-only; nothing deleted —
+it is the owner's.)*
+
+#### 9 · MEDIUM — the live hop's obfuscation headers are the upstream project's published example values
+
+```
+h1: 1431655765  h2: 1717986918  h3: 2004318071  h4: 2290649224
+```
+
+`0x55555555`, `0x66666666`, `0x77777777`, `0x88888888` — AmneziaWG's documented
+example set, **directly beneath the config's own comment**: *"Per-node values:
+shared ones would themselves be the fingerprint that identifies the fleet."*
+
+The product does **not** default them — the panel requires all four with no
+default — so these were typed. But nothing warns, while `vless-reality`'s
+`decoy_host` **does** carry *"per-node decoy site; never a project default"*.
+**Same hazard as the charter's Reality rule, one layer down.** Two actions: the
+owner rotates the live values; the product puts the same warning on these fields.
+
+#### 10 · LOW
+- `ufw` allows `51820/udp` with nothing bound to it.
+- A row shows `config: never applied` and `why: pushed, but still running an older
+  configuration` simultaneously.
+- The config zip names files from an 11-character truncation of the node name, so
+  two nodes sharing a prefix would collide inside one friend's zip. *(Observed,
+  not tested.)*
+
+### What passed, with the evidence
+
+| item | result |
+|---|---|
+| **1 · handshake + traffic both ways** | **PASS** — handshake 32 s; **5 MB downloaded by each friend simultaneously**; node-side `672 KiB in / 5.95 MiB out` (A), `188 KiB / 5.49 MiB` (B) |
+| **2 · the exit is the leaf** | **PASS** — in-tunnel trace `ip=45.151.69.107, loc=NL`; this machine outside the tunnel is `178.208.65.94` |
+| **3 · two friends, two addresses, both carrying** | **PASS** — `10.99.7.2/32` and `10.99.7.3/32`, independent counters, concurrent. **Source-spoofing refused.** *(But see finding 3.)* |
+| **4 · revoking one stops that one** | **PASS on the data plane** — A: 100% loss, B: unaffected; re-adding restored A in ~6 s. *(But see finding 5 for the panel path.)* |
+| **5 · the probe tells the truth** | **PASS, all four.** Crash-looping → *"is not serving — crash-looping"*. Nothing listening → *"nothing listening on the port for"*. Working → *"is listening for… not proof that anyone can connect."* Success and failure render into the same slot. **M22's fix holds on a real engine.** |
+| **7 · nothing logs a connection, destination or friend** | **PASS** — Xray `access: none`, `sniffing.enabled=false`, 4 log lines in 5 days; **zero `-j LOG` rules in either netfilter backend**; `LOGLEVEL=off`; no `/var/log/ufw.log`; `nf_conntrack_acct=0` |
+| **8 · the hop is unharmed** | **PASS** — handshake 1 m 18 s → **56 s**; received **+6 332 B**, sent **+4 564 B**. It carried the owner's traffic throughout. |
+
+**Proven for the first time, and no stand could:** **two AmneziaWG instances on
+one node, two ports side by side** (`51830` live hop + `51930` test) — M15's
+uniqueness decision, and field-checklist item 3.
+
+**The leaf is as it was found:** no `awgt0`, no `10.99.7.0/24` route, nothing in
+519xx, FORWARD holds only the two `amneziawg` ACCEPTs, all three conf files at
+their original timestamps and byte sizes, **no container restarted** (all Up 5
+days). `/opt/hashi/conf` is bind-mounted `:ro` into the only container that could
+have written to it.
+
+### Could not check — the exact observations a person must make
+
+**The Russian entry (`158.160.67.252`)** refuses this machine's key and is
+observable only through the hop's counters:
+- M16's *"a friend's DNS lookup does not leave the entry's own interface"* — run
+  `ip route get <resolver>` and `awg show` on the entry while a friend resolves.
+- Whether the entry's friend-facing transports serve anyone at all.
+- **The charter's first success criterion** — *"survives a mobile whitelist
+  shutdown"* — a field observation on a real Russian mobile network **during a
+  real shutdown. Nothing in this walk touches it.**
+
+**Apply to the real leaf** was never attempted, by design — so the product's
+revoke → apply → peer-removed path was proven on a throwaway node, and on the leaf
+the peer was removed with `awg set` instead.
+
+**The probe against the real leaf**: not run, because `apply` sits beside `probe`
+in the same row and one misclick rewrites the live hop's config. **A person with
+the leaf registered as a node closes this by pressing probe once and reading the
+banner.**
+
+**The deployed fleet still runs pre-M16 code** — `/opt/hashi/conf` dated
+2026-09-09, and `vless-reality.json` greps zero for `dns`, `domainStrategy`,
+`sendThrough`.
 
 ---
 
