@@ -1949,7 +1949,7 @@ say `ready`. If no such host is available, say so rather than passing it.
 
 ---
 
-## → M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09 · REOPENED AND QUEUED BY THE OWNER 2026-09-13
+## ✅ M20 — Plain WireGuard cannot exit on a ufw host · measured 2026-09-09 · reopened by the owner 2026-09-13 · done 2026-09-14 (acceptance: good, 2 rounds)
 
 **The owner reopened this on 2026-09-13 and chose the third option: retire the
 transport from the panel.** The earlier decision (`docs/decisions.md`,
