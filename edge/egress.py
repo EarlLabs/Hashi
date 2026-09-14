@@ -7,7 +7,9 @@ WHAT: ``Egress``, the closed vocabulary that says which way out traffic arriving
       connection and opens a new one. Beside the second, ``lookup_resolver``: the resolver
       such a proxy must ask, instead of its host's, when its way out is a hop — and
       ``client_resolvers``, the same question asked of a FRIEND's own config file, whose
-      device has no resolver left once the tunnel routes every address.
+      device has no resolver left once the tunnel routes every address. Beside that in
+      turn, ``CLIENT_ROUTES``: what "every address" is, and why it keeps naming a family
+      no node in this fleet can carry.
 WHY:  M14, measured on a real entry node with a real client. The handshake completed in
       both directions, the interface was up, the container was up — and nothing moved,
       because a decrypted packet was dropped by the host's FORWARD chain having never
@@ -507,6 +509,42 @@ def lookup_resolver(egress: Egress, resolver: str | None) -> str | None:
     return resolver
 
 
+# What a FRIEND's device is told to send into the tunnel, and the second-widest value in
+# this module. BOTH families, and the IPv6 half is the deliberate one — M23, measured on
+# the owner's real leaf.
+#
+# That leaf has no IPv6 at all: no global v6 address, no v6 default route, nothing
+# reachable. Nor could it have, from anything this project renders — ``wg_quick_egress``
+# refuses a v6 tunnel outright and ``_rules`` are ``iptables``. So every IPv6 packet a
+# friend's device sends in dies at the node. It dies BEFORE any rule of ours is
+# consulted, which is the fact every proposed remedy founders on: AllowedIPs is the
+# authorisation list as well as the routing table, and a friend's peer entry on the node
+# authorises one IPv4 host route, so WireGuard itself discards a decrypted packet whose
+# source is a v6 address.
+#
+# It stays wide anyway, because both alternatives are worse than what it costs:
+#
+# * NARROWING IT TO IPv4 does not stop the traffic, it re-routes it. IPv6 would leave by
+#   the friend's own connection, from their own address, to every destination that has an
+#   IPv6 one — fast, silent, and an exit in the country the whole topology exists to
+#   leave, with every screen green. A performance fix that produces the failure this
+#   project is most afraid of.
+# * A REJECTION AT THE NODE, so the device gives up on IPv6 at once instead of waiting,
+#   cannot be built at this layer at all. The packet never reaches a filter chain (see
+#   above), and an ICMPv6 answer could not get back: this node has no IPv6 route to the
+#   friend's address, and their peer entry does not authorise that address either, so its
+#   own WireGuard would drop the answer on the way out. ``-j REJECT`` here would be a rule
+#   that never matches — and a test asserting it was present would pass.
+#
+# What it costs a friend is real and is not fixable in this zone: a destination reachable
+# over both families is tried over IPv6 first and answers only once their device gives up
+# on it. What would fix it is a node that can CARRY IPv6 — a v6 address for every friend,
+# a v6 range on the tunnel, and rules in the other tool — and whether a node can do that
+# is a fact about a host. Nothing in this zone may look at one, so it would have to arrive
+# on the node's record, the way ``resolver`` did.
+CLIENT_ROUTES = ("0.0.0.0/0", "::/0")
+
+
 def client_resolvers(
     client_dns: Sequence[str], node_resolver: str | None, tunnel_address: str
 ) -> tuple[str, ...]:
@@ -541,12 +579,22 @@ def client_resolvers(
     the control-side half of this finding, and until it lands a refusal would turn "a
     friend with no names" into "a friend with no config".
 
-    One thing IS refused, because it would be worse than silence: a resolver inside this
-    tunnel's own network. Every address in that range is one a friend's device holds, so
-    a resolver there points every friend's lookups at whichever person was given it — the
-    one record this project must never create. The transport's own ``Params`` already
-    refuses that where it is TYPED; this is the same rule applied to the value arriving
-    from the node record, where nothing has yet checked it against this tunnel.
+    Two things ARE refused, because both would be worse than silence.
+
+    A resolver inside this tunnel's own network: every address in that range is one a
+    friend's device holds, so a resolver there points every friend's lookups at whichever
+    person was given it — the one record this project must never create. The transport's
+    own ``Params`` already refuses that where it is TYPED; this is the same rule applied
+    to the value arriving from the node record, where nothing has yet checked it against
+    this tunnel.
+
+    And an IPv6 resolver, which is the same sentence ``resolver_problem`` says about a
+    hop, said one consumer further out. A friend's config routes every IPv6 address into
+    the tunnel (``CLIENT_ROUTES``) and the node drops all of it, so a v6 resolver is one
+    the device can ask and never hear from: every name fails, exactly the M23 failure this
+    function was written for, with the box filled in. Refused here rather than in each
+    transport's ``Params`` on purpose — what makes it unreachable is the tunnel's egress,
+    which is this module's fact and not a property of either protocol.
     """
     resolvers = tuple(client_dns) or tuple(
         value for value in (node_resolver,) if value and value.strip()
@@ -564,6 +612,13 @@ def client_resolvers(
                 "DNS setting cannot be a name: looking that name up is the very thing "
                 "the setting is for."
             ) from exc
+        if address.version != 4:
+            raise EgressNotRenderable(
+                f"the resolver {resolver!r} is an IPv6 address, and this tunnel carries "
+                "IPv4 only — every IPv6 packet a friend's device sends into it is dropped "
+                "at the node. The device would ask this resolver and never hear back, so "
+                "no name would resolve at all. Give an IPv4 address."
+            )
         if address.version == network.version and address in network:
             raise EgressNotRenderable(
                 f"the resolver {resolver!r} is inside {network}, which is this tunnel's "
@@ -575,6 +630,7 @@ def client_resolvers(
 
 
 __all__ = [
+    "CLIENT_ROUTES",
     "EXIT_ROUTE",
     "HOP_ROUTE_TABLE",
     "NO_RESOLVER",

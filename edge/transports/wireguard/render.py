@@ -17,7 +17,7 @@ shared renderer would be one `if` away from rendering the wrong one of them.
 import ipaddress
 from collections.abc import Mapping, Sequence
 
-from edge.egress import Egress, client_resolvers, wg_quick_egress
+from edge.egress import CLIENT_ROUTES, Egress, client_resolvers, wg_quick_egress
 from edge.node import Credential, NodeView
 from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
@@ -234,6 +234,11 @@ def render_client_config(
                 node.resolver,
                 str(params["tunnel_address"]),
             ),
+            # Which addresses this device sends into the tunnel, decided in the same
+            # place as the resolver above and for the same reason — it is the node's own
+            # egress policy, read from the friend's end. See ``CLIENT_ROUTES``: the IPv6
+            # half names a family this node cannot carry, on purpose.
+            routes=CLIENT_ROUTES,
             endpoint=_endpoint(node.address, params["port"]),
         ),
         filename=f"{_interface_name(node.display_name)}.conf",
