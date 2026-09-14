@@ -757,13 +757,13 @@ you already terminate TLS for a name you own.
 box, and a leaf. There the same row renders a local exit, which is the shape a real client
 was measured carrying traffic on.
 
-**Its plain cousin does not, and the panel no longer offers it.** `wireguard` is still in
-the image and a node already running it still serves it — but the pinned data plane writes
-its forwarding rules on one netfilter backend while the firewall this runbook has you
-enable writes its default-deny policy on the other. Both are traversed, so the accept
-never front-runs the drop: a user's handshake completes, nothing is carried, and neither
-end says anything. Measured twice on a live node. The Transports screen states it on the
-row, with the reason; the enable dialog simply does not list it.
+**Its plain cousin does not, and is retired: the panel no longer offers it.** `wireguard`
+is still in the image and a node already running it still serves it — but the pinned data
+plane writes its forwarding rules on one netfilter backend while the firewall this runbook
+has you enable writes its default-deny policy on the other. Both are traversed, so the
+accept never front-runs the drop: a user's handshake completes, nothing is carried, and
+neither end says anything. Measured twice on a live node. The Transports screen states it
+on the row, with the reason; the enable dialog simply does not list it.
 
 Every transport this image ships, and what each one may be asked to do:
 
