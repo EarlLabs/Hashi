@@ -376,6 +376,28 @@ def test_the_socket_command_asks_only_for_listening_sockets() -> None:
     assert "-a" not in flags
 
 
+def test_the_socket_command_asks_for_ports_as_numbers() -> None:
+    """``-n``, and it is an operational rule rather than a stylistic one.
+
+    Without it ``ss`` resolves a port through ``/etc/services`` and prints the NAME:
+    ``0.0.0.0:https`` for 443, ``127.0.0.1:http-alt`` for 8080. ``parse_sockets`` reads
+    the last colon-separated field as a number, so such a line fails ``isdigit`` and is
+    skipped — silently, and in the one direction that hurts: the socket is held, the
+    parser does not see it, and the probe reports a working transport as holding nothing.
+
+    443 is the most operationally likely port this product ever checks — it is the point
+    of Reality — and it is named in ``/etc/services`` on every host. Pinned HERE because
+    ``test_the_real_tool_answers_in_the_shape_this_parser_reads`` cannot catch it: it
+    binds EPHEMERAL ports, and those have no service name to resolve to.
+    """
+    flags = listening.LISTENING_SOCKETS.split()
+
+    assert "-n" in flags, (
+        "the socket command no longer asks for numeric ports, so a listener on a port "
+        "named in /etc/services is invisible to this parser and reports as unbound"
+    )
+
+
 async def test_neither_probe_command_names_a_transport() -> None:
     """Core invariants §1, on the two commands most tempted to break it.
 

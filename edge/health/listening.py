@@ -12,16 +12,20 @@ WHY:  M22. A container that is up is not a transport that is serving, and the tw
       see that.
 
       WHY NOT A HANDSHAKE, which is the question the operator is really asking. Two
-      reasons, and the second is the one that settles it. It cannot be asked without
-      naming a protocol: one family answers "which peer completed a handshake and when",
-      another has no such concept and would have to be dialled — that is a command per
-      transport in shared code, which core invariants §1 forbids and which is the rule
-      keeping "a new protocol is one new package" true. And the answer itself is the one
-      record this project may not hold: a wg-family handshake table is a list of PEER
-      KEYS with timestamps, which is who connected and when. A probe that read it would
-      be a connection log, whatever it then did with the bytes. So the ceiling on what
-      this may know is deliberate rather than an implementation shortfall, and the
-      sentence the operator reads says so (``control.app.services.console``).
+      reasons, in the order of how far each reaches, and the SECOND is the one that
+      settles it. The first is the charter's and it is the sharper of the two where it
+      applies: a wg-family handshake table is a list of PEER KEYS with timestamps, which
+      is who connected and when, so a probe reading it would be a connection log whatever
+      it then did with the bytes. But it applies only to a family that HAS such a table —
+      an Xray transport keeps none to read, and asking whether a peer reached it means
+      dialling it. Which is the second reason, and the general one: the question cannot
+      be asked without naming a protocol — a different command and a different answer per
+      transport, in shared code, which core invariants §1 forbids and which is the rule
+      keeping "a new protocol is one new package" true. That one covers every transport
+      alike, which is why it and not the first is what closes the question. So the
+      ceiling on what this may know is deliberate rather than an implementation
+      shortfall, and the sentence the operator reads says so
+      (``control.app.services.console``).
 HOW:  ``ss``, restricted to LISTENING sockets. The restriction is not tidiness: a
       listening socket has no peer — ``ss`` prints ``0.0.0.0:*`` in that column for every
       line — so the output cannot contain an address belonging to a person even
@@ -37,10 +41,16 @@ HOW:  ``ss``, restricted to LISTENING sockets. The restriction is not tidiness: 
 
       WHICH protocols to ask about is ``TransportMeta.listens_on``, which already exists
       and is already read by ``control`` for the port-collision rule. It is a declaration
-      used to CHOOSE a measurement rather than used AS one — the difference M20 turned on:
-      if a transport declares wrongly, the socket it actually holds is not found and the
-      probe reports nothing listening, which is loud and in the safe direction. Nothing
-      here compares a transport's name to anything.
+      used to CHOOSE a measurement rather than used AS one — the difference M20 turned on.
+      A declaration that claims MORE than the container binds is loud and safe: the extra
+      protocol's socket is not found, ``is_answering``'s ``all()`` fails, and the probe
+      reports nothing listening. A declaration that claims LESS is not caught here at
+      all, and saying so is the honest half: this module then checks the protocols it was
+      given, finds them held, and reports listening while the undeclared half may be
+      dead. What limits that is not this module — it is that the same declaration is what
+      M15 reserves a port with, so a transport wrong about its own listener is wrong in a
+      place the codebase already reads. Nothing here compares a transport's name to
+      anything.
 """
 
 from collections.abc import Mapping
