@@ -126,10 +126,13 @@ def pool_transport(request) -> str:
 #
 # The API half above keeps the whole family, and that split is the milestone rather than
 # a compromise: retirement subtracted a suggestion, not a capability, so everything that
-# is about what the transport DOES stays parametrised over both members and only the
-# tests about what the PANEL SHOWS narrow. ``transports.offerable_transports`` is asked
-# rather than a name, so a transport retired later moves between these two lists on its
-# own.
+# is about what the transport DOES stays parametrised over both members, and the only
+# tests that narrow are the ones that SUBMIT THE ENABLE DIALOG. Not every panel test —
+# the replace-parameters dialog is a console screen too and stays on the whole family,
+# because it is about a row that already exists and ``_params_form`` gates its boxes on
+# ``key.installed`` rather than on what is offered. ``transports.offerable_transports``
+# is asked rather than a name, so a transport retired later moves between these two
+# lists on its own.
 OFFERED_POOL_TRANSPORTS = [
     name for name in POOL_TRANSPORTS if name in transports_service.offerable_transports()
 ]
@@ -1676,15 +1679,24 @@ def param_errors(response) -> dict[str, str]:
 
 
 async def test_the_console_offers_a_pool_box_only_where_there_is_a_pool(
-    client, session, offered_pool_transport: str, reality_params
+    client, session, pool_transport: str, reality_params
 ) -> None:
     """The dialog an operator resizes from, and the one that must not offer to.
 
     There is no resize action anywhere in this console — this box is the whole surface,
     which is what "no new action and no new endpoint" means from the operator's side.
+
+    OVER THE WHOLE FAMILY, unlike the enable-dialog tests below it, and that is M20's
+    own split rather than an oversight: the row here is made through the API and the
+    dialog asked about is the REPLACE-parameters one, which is about a row that already
+    exists. ``_params_form`` gates its boxes on ``key.installed`` and never on what the
+    panel offers, so a retired transport's row still opens it — which is the milestone's
+    "a row already enabled on a node still renders", on the one screen an operator would
+    reach for to change it. Narrowed to the offered transports, this test would stop
+    covering exactly the case the retirement had to not break.
     """
     node_id = await a_node(client, name="dialog-pool", address="192.0.2.76")
-    enabled = await enable_pool(client, node_id, offered_pool_transport, pool_size=ROOMY)
+    enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
     assert enabled.status_code == 201, enabled.text
 
     dialog = await client.get(f"/panel/keys/{enabled.json()['id']}/params")

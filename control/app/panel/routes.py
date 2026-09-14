@@ -1168,6 +1168,33 @@ async def establish_hop(
     typed = {key: str(value).strip() for key, value in form.multi_items()}
     transport_name = typed.get("transport_name", "")
 
+    # A hop over a transport this panel has stopped offering — M20, and the same answer
+    # the enable route gives, in the same words, because it is the same refusal about the
+    # same submission. UNREACHABLE TODAY: no transport this image ships is both
+    # hop-capable and retired. It is written now because ``hop_transports`` already
+    # subtracts one, so this dialog draws no group of boxes for it — and without this
+    # line the submission would fall through with an empty ``tuning``, reach the hop
+    # renderer with no parameters at all, and come back as ``_on_their_boxes``'s homeless
+    # fallback: a per-field complaint about boxes nobody drew, instead of the one fact
+    # the operator needs. A refusal that has to be REMEMBERED when the next transport is
+    # retired is one that will not be, which is what ``hop_transports`` says about its
+    # own filter.
+    #
+    # Before the required-field check below, and deliberately: the name is the reason
+    # this submission cannot proceed, so filling in the two node boxes first would be a
+    # round trip that ends in this sentence anyway. An empty ``transport_name`` is in no
+    # retirement and falls through to that check like any other missing answer.
+    retired = transports.retired_transports()
+    if transport_name in retired:
+        return await _refuse_hop(
+            request,
+            session,
+            values=typed,
+            failure=NO_LONGER_OFFERED.format(
+                name=transport_name, reason=retired[transport_name]
+            ),
+        )
+
     errors: dict[str, str] = {}
     for question in ("entry_node_id", "leaf_node_id", "transport_name"):
         if not typed.get(question):

@@ -1,8 +1,8 @@
 """What the panel stops doing with a retired transport, and what it must not stop — M20.
 
 WHAT: every surface that proposes a transport, asked whether it proposes a retired one:
-      the enable dialog, the establish-hop dialog, the submission handler behind the
-      enable dialog, the operator API's listing and the Transports screen. And the other
+      the enable dialog, the establish-hop dialog, the submission handler behind each of
+      those two, the operator API's listing and the Transports screen. And the other
       half, which is most of this file: a node already running one still renders, its
       users' configurations are unchanged, and the API still enables what an operator
       names outright.
@@ -13,10 +13,11 @@ WHY:  the owner asked for it in these words — *"just stop suggest the wireguar
       that stopped it being offered by breaking it would have cost them the node they
       were complaining about.
 HOW:  the in-process client from conftest, holding an operator session. Which transport
-      is retired is read from the registry, never written here, and the two tests that
+      is retired is read from the registry, never written here, and the three tests that
       prove the panel needs no edit for the NEXT one fabricate a fleet in which an
       offered transport is retired — the only way to assert "no panel change" rather than
-      to claim it.
+      to claim it. Two of those three are the hop surfaces, which no shipped transport
+      can reach: nothing here is both hop-capable and retired.
 
 Nothing here asserts that plain WireGuard is broken on a real network. That was measured
 in the field and is recorded in the plan; a test run cannot reach a node.
@@ -137,6 +138,32 @@ async def test_the_enable_dialog_does_not_propose_a_retired_transport(client) ->
     assert set(proposed) == set(transports_service.offerable_transports())
 
 
+async def test_the_enable_dialog_says_why_a_protocol_the_image_ships_is_not_on_it(
+    client,
+) -> None:
+    """The chooser's own hint, which was silent about the gap it had just opened.
+
+    An operator who knows the image ships four protocols and counts three here has one
+    question, and a shorter list answers none of it — the same "sends them looking for
+    the missing one" this milestone's row on the Transports screen exists to prevent.
+    So the hint says a missing one has been retired and where the reason is, in the
+    field's own help text, which is where a person looks before they go hunting.
+
+    Asserted on the word rather than on the sentence: the wording is a person's to
+    improve, and this dialog has no other source for it — no row on it renders
+    ``retired_note``, so a green assertion here can only come from the hint.
+    """
+    node_id = await a_node(client, name="offer-hint", address="192.0.2.78")
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert dialog.status_code == 200, dialog.text
+    assert "retired" in reading(dialog).lower(), (
+        "this image retires a transport, the dialog silently drops it, and nothing on "
+        "the form says a protocol the operator can see elsewhere has been withheld"
+    )
+
+
 async def test_the_enable_dialog_loses_a_transport_retired_later(
     client, monkeypatch
 ) -> None:
@@ -225,6 +252,62 @@ async def test_the_panel_refuses_a_submission_naming_a_retired_transport(
     ).scalars().unique().all() == [], "the refusal wrote a row anyway"
 
 
+async def test_the_hop_form_refuses_a_submission_naming_a_transport_retired_later(
+    client, session, monkeypatch
+) -> None:
+    """The OTHER submission handler, given the same answer in the same words.
+
+    The enable form's refusal above is reachable today; this one is not, because no
+    transport this image ships is both hop-capable and retired — so, like the hop dialog
+    two tests up, only a fabricated fleet can reach it at all. It is asserted rather than
+    left for the next retirement to discover, and the failure it prevents is specific:
+    ``hop_transports`` already subtracts a retired transport, so without a refusal here
+    the submission falls through with an EMPTY set of tuning boxes, reaches the hop
+    renderer with no parameters, and comes back as a per-field complaint about boxes the
+    dialog never drew — a message addressed to a form nobody can see, on the one dialog
+    whose transport crosses a border.
+
+    Every required box is answered, so the only thing left for the panel to object to is
+    the name. Both node ids are real for the same reason: a refusal that merely said
+    "required" would pass an assertion about a sentence it never composed.
+    """
+    entry_id = await a_node(client, name="hop-retired-entry", address="192.0.2.75")
+    leaf_id = await a_node(client, name="hop-retired-leaf", address="192.0.2.79")
+    victim = transports_service.hop_transports()[0]
+    reason = "fabricated for this test"
+    fleet = dict(discover())
+    fleet[victim] = replace(fleet[victim], retired=Retirement(reason=reason))
+    monkeypatch.setattr(transports_service, "discover", lambda: fleet)
+
+    answers = operator_params(victim)
+    boxes = transports_service.hop_tuning(victim)
+    assert {box.name for box in boxes if box.required} <= set(answers), (
+        f"{victim} requires a hop parameter this file has no value for, so the "
+        "submission below would be refused for being incomplete rather than for naming "
+        "a retired transport"
+    )
+    typed = {
+        "entry_node_id": entry_id,
+        "leaf_node_id": leaf_id,
+        "transport_name": victim,
+    } | {
+        f"{side}-{box.name}": str(answers[box.name])
+        for side in ("entry", "leaf")
+        for box in boxes
+        if box.name in answers
+    }
+
+    refused = await client.post("/panel/hops", data=typed, headers=HTMX)
+
+    assert refused.status_code == 422, refused.text
+    said = reading(refused)
+    assert panel_routes.NO_LONGER_OFFERED.format(name=victim, reason=reason) in said, said
+    session.expire_all()
+    assert (
+        await session.execute(select(NodeTransport))
+    ).scalars().unique().all() == [], "the refusal established half a hop anyway"
+
+
 async def test_the_operator_api_says_which_transports_are_retired_and_why(
     client,
 ) -> None:
@@ -264,6 +347,36 @@ async def test_the_transports_screen_says_a_retired_transport_is_no_longer_offer
         assert name in said, f"{name} vanished from the capability table"
         assert reason in said, f"the screen does not say why {name} is not offered"
     assert "no longer offered when enabling a transport" in said, said
+
+
+async def test_the_overview_counts_what_can_be_enabled_and_not_only_what_ships(
+    client,
+) -> None:
+    """The first screen an operator sees, which counted the retired one.
+
+    "transports enabled: 1 — of 4 this image ships" reads as three left to enable when
+    only two are, which is the identical effect the retired row above exists to prevent
+    — a count the operator acts on by going looking for the protocols it implies. Both
+    figures are asserted rather than the shipped one dropped: the package IS in the
+    image, and a card that stopped saying so would be answering an honest question with
+    less information instead of more.
+
+    Neither number is a name compared here. The card asks ``offerable_transports`` the
+    same question the enable dialog asks, so a transport retired later moves this figure
+    with nothing on this screen to edit.
+    """
+    installed = len(discover())
+    offerable = len(transports_service.offerable_transports())
+    assert installed != offerable, (
+        "this image offers everything it ships, so the card cannot be wrong about a "
+        "retirement and this test would pass on the sentence it exists to replace"
+    )
+
+    screen = await client.get("/panel/")
+
+    assert screen.status_code == 200, screen.text
+    said = reading(screen)
+    assert f"of {installed} this image ships, {offerable} can be enabled" in said, said
 
 
 # --- and what retiring one may not do -----------------------------------------

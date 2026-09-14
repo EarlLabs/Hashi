@@ -127,9 +127,21 @@ TRANSPORT_ADDRESS_PER_USER = (
 # so an operator who took that advice on an unfiltered network would get a handshake
 # that completes and traffic that never moves. A table that states what a protocol IS
 # only has to be right about the protocol; the moment it tells the operator what to DO
-# it has to be right about the whole stack, and here it is not. The gap is background
-# in ``docs/tracker/M9/carry-over.md``: no field of ``TransportMeta`` expresses it, and
-# closing it is an ``edge``-side declaration rather than a name compared here.
+# it has to be right about the whole stack, and here it is not. The gap was background
+# in ``docs/tracker/M9/carry-over.md`` — no field of ``TransportMeta`` expressed it, so
+# the only way to show it was for `control` to recognise a protocol by name — AND M20
+# CLOSED IT the way that note said it had to be: an ``edge``-side declaration,
+# ``TransportMeta.retired``, measured twice on a live node. This sentence is unchanged by
+# that, because the two say different things: this one is what a protocol IS on any
+# network, and the declaration is what this image can carry on the hosts this project
+# builds. ``TRANSPORT_RETIRED`` below is the second one's words.
+TRANSPORT_WHY_IDENTIFIED = (
+    "it has no camouflage. The wire format is fixed and looks like itself, so a "
+    "network that inspects traffic can name the protocol and drop it: both ends stay "
+    "correctly configured, no tunnel comes up, and nothing on the user's device says "
+    "what happened."
+)
+
 # What retirement MEANS to the operator, in front of the transport's own reason for it
 # — M20. Two sentences deliberately: the first is the consequence on this panel and is
 # the same for every retired transport, so it is written once here; the second is the
@@ -142,13 +154,6 @@ TRANSPORT_ADDRESS_PER_USER = (
 TRANSPORT_RETIRED = (
     "no longer offered when enabling a transport, and a node already running it keeps "
     "serving it —"
-)
-
-TRANSPORT_WHY_IDENTIFIED = (
-    "it has no camouflage. The wire format is fixed and looks like itself, so a "
-    "network that inspects traffic can name the protocol and drop it: both ends stay "
-    "correctly configured, no tunnel comes up, and nothing on the user's device says "
-    "what happened."
 )
 
 
@@ -1508,6 +1513,14 @@ async def overview(session: AsyncSession) -> Overview:
         if row.purpose == TransportPurpose.FRIENDS
     }
     installed = discover()
+    # What the panel would let the operator enable today — services/transports.py's own
+    # answer, not a name compared here. It is a SUBSET of what the image ships: a
+    # transport the registry has retired is not proposed (M20), and neither is one that
+    # serialises into no subscription shape. "of 4 this image ships" beside a value of 1
+    # therefore read as "three left to enable" when only two were — the same sentence
+    # the Transports screen's retired row exists to stop the operator hunting for, on the
+    # screen they meet first.
+    offerable = transports.offerable_transports()
 
     return Overview(
         stats=[
@@ -1537,7 +1550,12 @@ async def overview(session: AsyncSession) -> Overview:
             Stat(
                 kicker="transports enabled",
                 value=len(offered),
-                meta=f"of {len(installed)} this image ships",
+                meta=(
+                    f"of {len(installed)} this image ships, "
+                    f"{len(offerable)} can be enabled"
+                    if len(offerable) != len(installed)
+                    else f"of {len(installed)} this image ships"
+                ),
             ),
         ],
         nodes=rows,
