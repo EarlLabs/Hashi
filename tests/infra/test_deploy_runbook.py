@@ -461,6 +461,26 @@ def _flat(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _prose_paragraphs(text: str) -> list[str]:
+    """Every blank-line-delimited block of ``text``, with each TABLE ROW dropped first.
+
+    The tables are dropped because a check over the whole document cannot otherwise tell
+    prose from the cell it is supposed to be explaining — which is how the retirement
+    check below spent its first round passing on the table row five lines above it, and
+    on two pre-existing sentences about a node record's ``retired`` state that have
+    nothing to do with a transport. Every row, not only the capability table's: a second
+    table answering for the first is the same defect with a different address.
+
+    Per PARAGRAPH rather than over the remainder in one piece, for the same reason: the
+    claim is that some paragraph both names the transport and says what happened to it,
+    and a document-wide search is satisfied by two unrelated sentences in two sections.
+    """
+    prose = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("|")
+    )
+    return [_flat(block).strip() for block in re.split(r"\n\s*\n", prose) if block.strip()]
+
+
 def _numbered_steps(body: str) -> list[str]:
     """Each numbered instruction in a section, with its continuation lines.
 
@@ -623,21 +643,49 @@ def test_the_table_says_why_a_transport_it_no_longer_recommends_is_not_offered(
 
     The registry carries a reason for every retirement precisely so that nothing has to
     write one down twice — so the runbook has to say the transport is retired where the
-    operator meets the row, and point at the section that explains it. Checked as prose
-    rather than word for word: the sentence on the panel is the transport's own and this
-    file is a different audience.
+    operator meets the row, and the paragraphs around the table have to say what that
+    means for the node they are standing in front of. Checked as prose rather than word
+    for word: the sentence on the panel is the transport's own and this file is a
+    different audience.
+
+    THE SECOND HALF OF THIS TEST COULD NOT FAIL UNTIL REVIEW FOUND IT, and the shape is
+    worth keeping written down. It searched the whole document for the word "retired",
+    which the cell asserted three lines above it already guarantees, and which two
+    pre-existing sentences about setting a NODE RECORD to ``retired`` supply as well —
+    so deleting the only paragraph that explains a retirement to an operator left the
+    suite green. It now asks for the conjunction instead: one paragraph, outside every
+    table, that both NAMES the transport and says it is retired. Nothing else in this
+    document can satisfy that, which is the property the old assertion was missing.
+
+    The two have to be in the SAME paragraph deliberately. An explanation whose subject
+    is in one paragraph and whose verdict is in another is one an operator searching this
+    file for either word does not find whole, which is the failure the cell points at
+    them to avoid.
     """
     retired = set(retired_transports())
-    for name in retired & set(capability_table):
+    marked = retired & set(capability_table)
+    if not marked:
+        pytest.skip("this image retires no transport, so no cell can mark one")
+
+    paragraphs = _prose_paragraphs(runbook)
+    for name in marked:
         _, without_hop, _ = capability_table[name]
         assert "retired" in without_hop.lower(), (
             f"the runbook tells an operator not to give {name} to friends on a node with "
             "no hop and does not say it has been retired, so the only way to find out is "
             "to go looking for it on a form that no longer has it"
         )
-        assert "retired" in _flat(runbook).lower(), (
-            "the table marks a transport retired and no prose anywhere says what that "
-            "means, so the cell is a verdict with no appeal"
+        explained = [
+            block
+            for block in paragraphs
+            if re.search(rf"`{re.escape(name)}`", block) and "retire" in block.lower()
+        ]
+        assert explained, (
+            f"the capability table marks {name} retired and no paragraph outside the "
+            "tables both names it and says so, so the cell is a verdict with no appeal "
+            "— and the operator's only way to find out what happened to a protocol they "
+            "know this image ships is to go looking for it on a form that no longer "
+            "has it"
         )
 
 
