@@ -55,6 +55,32 @@ class NotDeliverable(DomainError):
     code = "not_deliverable"
 
 
+class TransportRetired(DomainError):
+    """A transport the registry has withdrawn cannot be enabled on anything — M20.
+
+    Its own type, and the only refusal in this file that is about the PROTOCOL rather
+    than about the request: the transport is installed, its parameters are fine and it
+    would serialise into a friend's configuration perfectly. What is wrong with it is
+    that it does not work on the hosts this project prepares — a handshake that completes
+    and carries nothing — which is the silent failure the charter calls the worst kind,
+    and minting fresh material for it would hand a friend a dead tunnel with nothing on
+    their device saying so.
+
+    422 rather than 400, and the same status the console's own form answers with: the
+    request was well-formed and was understood, and the reason it cannot be carried out
+    is a property of what it names. One fact, one status, one sentence, whichever surface
+    asked — see ``transports.NO_LONGER_OFFERED``, which both of them format.
+
+    It refuses the CREATION and nothing else. A row already on a node keeps rendering,
+    keeps serving the people granted on it and can still be withdrawn or removed; that
+    asymmetry is the whole of done-when 3 and is asserted rather than described (see
+    ``tests/control/test_a_retired_transport_is_not_offered.py``).
+    """
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "transport_retired"
+
+
 class HopEndRefused(DomainError):
     """One end of a hop was refused by the transport's own model, field by field.
 

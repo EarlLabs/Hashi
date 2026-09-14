@@ -31,10 +31,12 @@ HOW:  required fields of the transport's own model, minus every name the transpo
       M20 adds ``retired_transports()`` and subtracts its answer from both lists above.
       A transport the registry declares retired is not proposed by any form here — the
       owner's instruction, after one was measured twice on a live node completing a
-      handshake and carrying nothing. It is a subtraction from what the panel OFFERS and
-      not a new refusal: ``nodes.enable_transport`` is untouched, so a node that already
-      runs one keeps it, ``POST /api/nodes/{id}/transports`` still does what an operator
-      names outright, and the user holding that configuration keeps it.
+      handshake and carrying nothing. M20's ACCEPTANCE made it a refusal as well as a
+      subtraction: ``nodes.enable_transport`` reads the same declaration and will not
+      create a row on any route, because the thing being minted is a complete credential
+      for a tunnel that carries nothing and the friend holding it has no way to notice.
+      What retirement still does not touch is a row that EXISTS — it keeps rendering,
+      keeps serving the people granted on it, and can still be withdrawn or removed.
 
       Nothing here names a protocol. The answer comes from the transport's own
       declaration, so a new package under ``edge/transports/`` gets working forms with
@@ -223,6 +225,32 @@ def hop_transports() -> list[str]:
     )
 
 
+# What a request naming a transport the registry has withdrawn is answered with — M20,
+# and since M20's acceptance it is the answer on EVERY surface rather than on the two
+# panel forms alone. It lives here, beside the function that supplies half of it, because
+# three callers now format it and a sentence kept in any one of them would be a sentence
+# the other two have to be remembered to match: the enable service refuses with it, and
+# the enable and establish-hop forms answer with it before they compose a complaint about
+# boxes that were never drawn.
+#
+# The reason is the TRANSPORT's, carried by ``retired_transports()`` below. Nothing in
+# `control` knows what is wrong with a protocol, and a sentence written here would be one
+# more thing to rewrite the next time a transport has to be retired.
+#
+# It says what is still true as well as what is refused, and that half is load-bearing:
+# an operator who reaches this has a node running the transport already, or has just read
+# the Transports screen, and the thing they most need to know is that neither their node
+# nor their users have changed. Enabling is refused; serving is not.
+#
+# NO WORD OF IT IS TRANSLATED at the console's boundary (``panel/wording.py``) — it names
+# no ``friend`` and gives no directions — so an API caller and an operator read the same
+# sentence character for character, which is the point of there being one.
+NO_LONGER_OFFERED = (
+    "nothing was enabled — {name} is no longer offered here: {reason} A node already "
+    "running it keeps serving it, and nobody's configuration has changed."
+)
+
+
 def retired_transports() -> dict[str, str]:
     """Every installed transport the registry has withdrawn from this panel, and why.
 
@@ -235,8 +263,10 @@ def retired_transports() -> dict[str, str]:
     the tree that nothing offers is a puzzle, and the only file that can answer it is the
     transport's own — `control` passes the sentence through and never composes one, being
     built not to recognise the protocol the sentence is about. It is read by the enable
-    route, which has to say why a submission naming one is refused, and by the Transports
-    screen, which has to say why a row an operator can see is not on the dialog.
+    SERVICE, which refuses to create a row and has to say why on every route at once; by
+    the two panel forms, which say it before composing a complaint about boxes they never
+    drew; and by the Transports screen, which has to say why a row an operator can see is
+    not on the dialog.
     """
     return {
         meta.name: meta.retired.reason
@@ -478,10 +508,17 @@ def offerable_transports() -> list[str]:
     put the refusal — every sentence on that dialog is shown under the box it is about,
     and there would be no box.
 
-    What this does NOT do is refuse the operation. ``nodes.enable_transport`` is
-    unchanged, so ``POST /api/nodes/{id}/transports`` still enables what an operator
-    names outright, an existing row keeps rendering, and the tests that exercise both
-    members of the WireGuard family against that path keep both.
+    What this does NOT do by itself is refuse the operation — ``nodes.enable_transport``
+    does that, since M20's acceptance, reading the same declaration so that a caller who
+    names a retired transport outright is answered rather than obeyed. This list and that
+    refusal are two halves of one rule and neither implies the other: a form must not
+    propose an action whose only outcome is a refusal, and an operation must not mint a
+    live credential for a protocol that carries nothing.
+
+    Neither half touches a row that already exists. It keeps rendering and keeps serving,
+    which is what the owner's own leaf depends on, and the tests that exercise both
+    members of the WireGuard family lift the retirement in a fabricated fleet rather than
+    stopping at one member (``tests/control/conftest.py``, ``nothing_retired``).
     """
     return sorted(
         meta.name

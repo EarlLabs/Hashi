@@ -1,9 +1,10 @@
 """Fixtures for the control zone's tests, and the assertions they share.
 
 WHAT: a real Postgres schema, freshly created per test, an application built against
-      it, an HTTP client already authenticated as the operator, and — at the bottom —
-      ``assert_plain_reason``, imported with ``from .conftest import`` the way
-      ``test_migrations.py`` does.
+      it, an HTTP client already authenticated as the operator, ``nothing_retired`` for
+      the family tests that must still reach a retired transport's capabilities, and — at
+      the bottom — ``assert_plain_reason``, imported with ``from .conftest import`` the
+      way ``test_migrations.py`` does.
 WHY:  the control rulebook requires a real Postgres rather than SQLite — async
       drivers, JSONB and constraints all behave differently, and a suite that passes
       on SQLite proves nothing about production. This schema has a JSONB column and
@@ -18,6 +19,7 @@ Skips loudly, with the command to fix it, when no database is configured — a c
 suite that silently passes without a database is a suite that proves nothing.
 """
 
+import dataclasses
 import os
 import socket
 from collections.abc import Iterator
@@ -31,7 +33,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from control.app.crypto import hash_password
 from control.app.main import create_app
 from control.app.models import Base
+from control.app.services import transports as transports_service
 from control.app.settings import Settings
+from edge.registry import discover
 
 # Where the tests find a database. Defaults to the dev stack's published Postgres, so
 # a developer who ran `make up-dev` needs no extra configuration. Override with
@@ -198,6 +202,41 @@ def reality_params() -> dict[str, object]:
         "decoy_port": 443,
         "server_names": ["www.example.com"],
     }
+
+
+@pytest.fixture
+def nothing_retired(monkeypatch) -> None:
+    """A fabricated fleet in which no transport is retired — M20's acceptance, round 2.
+
+    THE OTHER HALF OF ``test_a_retired_transport_is_not_offered``'s harness, and the same
+    tool pointed the other way: that file fabricates a retirement onto a transport the
+    registry offers, to prove the panel reads a declaration rather than a name; this one
+    lifts the declaration off the one that carries it, so a test about what a transport
+    DOES can still reach both members of the WireGuard family.
+
+    It exists because ``nodes.enable_transport`` now refuses to create a row for a retired
+    transport on every route — a retired transport is one whose handshake completes and
+    which carries nothing, and minting a fresh complete credential for it is the silent
+    failure the charter calls the worst kind. Without this fixture the family tests below
+    would each have narrowed to their one un-retired member, which is how a family stops
+    being a family: the whole reason they are parametrised is that the allocator, the
+    renderer and the refusals must not know one member from the other.
+
+    ONE PATCH POINT, ``services.transports.discover``, because that module is where this
+    zone asks whether a transport is retired — every surface and the enable service alike
+    read ``retired_transports()``, so a fleet fabricated here is the answer all of them
+    get. The metas are REAL ones with one field replaced, so ``profile()`` still loads
+    each transport's renderers and parameter model.
+
+    What it does NOT do is weaken the refusal. The code under test is untouched; the test
+    is simply asking it about a world in which nothing has been retired. A test that wants
+    the refusal itself does not take this fixture.
+    """
+    fleet = {
+        name: dataclasses.replace(meta, retired=None)
+        for name, meta in discover().items()
+    }
+    monkeypatch.setattr(transports_service, "discover", lambda: fleet)
 
 
 @pytest.fixture

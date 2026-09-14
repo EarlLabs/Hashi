@@ -26,6 +26,7 @@ from control.app.errors import (
     NotDeliverable,
     NotFound,
     ParamsRefused,
+    TransportRetired,
 )
 from control.app.models import (
     AuditAction,
@@ -34,7 +35,7 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, keymaterial, placement
+from control.app.services import addresses, audit, keymaterial, placement, transports
 from edge.addressing import pool_problem
 from edge.egress import Egress, resolver_problem
 from edge.node import NodeView
@@ -425,6 +426,31 @@ async def _enable(
         )
 
     meta = installed[transport_name]
+
+    # A transport the registry has WITHDRAWN — M20's acceptance, and the first refusal
+    # here that is about the protocol rather than about the request. Before the node is
+    # loaded and before anything is minted: nothing is written, nothing is claimed, and
+    # no material exists to be thrown away.
+    #
+    # It sits here and not on a route because every route has to give the same answer.
+    # The panel had stopped OFFERING a retired transport and the operator API went on
+    # enabling one — 201, ``enabled: true``, and a complete credential for it in the next
+    # friend's archive. That is not a wrong status code, it is a friend with a tunnel
+    # whose handshake completes and which carries nothing, on every host this project
+    # prepares, with nothing on their device saying so. Refusing to CREATE is not
+    # refusing to SERVE: the row the owner's own leaf already holds renders exactly as it
+    # did, and removing it still works.
+    #
+    # Asked of ``transports.retired_transports()`` — the one place `control` asks this
+    # question — so the declaration is read and no protocol is named here, and so the
+    # sentence is the one both panel forms answer with, word for word.
+    retired = transports.retired_transports()
+    if transport_name in retired:
+        raise TransportRetired(
+            transports.NO_LONGER_OFFERED.format(
+                name=transport_name, reason=retired[transport_name]
+            )
+        )
 
     # Refused out loud rather than silently omitted later. The charter's amendment A
     # and backlog item 7 S2a: a transport a friend cannot receive AT ALL would produce

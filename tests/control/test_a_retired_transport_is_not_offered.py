@@ -2,22 +2,39 @@
 
 WHAT: every surface that proposes a transport, asked whether it proposes a retired one:
       the enable dialog, the establish-hop dialog, the submission handler behind each of
-      those two, the operator API's listing and the Transports screen. And the other
-      half, which is most of this file: a node already running one still renders, its
-      users' configurations are unchanged, and the API still enables what an operator
-      names outright.
+      those two, the operator API's listing and the Transports screen. Then the refusal
+      itself, which is not a panel's but the operation's — no route creates such a row.
+      And the other half, which is most of this file: a node already running one still
+      renders, its users' configurations are unchanged, and it can still be removed.
 WHY:  the owner asked for it in these words — *"just stop suggest the wireguard for
       users now… the admin panel do not even should show this protocol, for me in
       suggestions"* — after the transport was measured twice on a live node completing a
       handshake and carrying nothing. Their own leaf has a row of it today, so a change
       that stopped it being offered by breaking it would have cost them the node they
       were complaining about.
+
+      M20'S ACCEPTANCE CLOSED THE OTHER HALF, and this file used to pin it open: the
+      operator API went on answering ``POST /api/nodes/{id}/transports`` with 201 and
+      ``enabled: true`` for a retired transport, and the complete credential it minted
+      reached the next friend's archive. The reading that allowed it — that the owner's
+      words were about SUGGESTIONS — understated them ("may be it's better to drop it?"),
+      and the consequence is not a status code but a friend holding a tunnel that
+      completes its handshake and carries nothing, with nothing on their device saying
+      so. Refusing to CREATE is still not refusing to SERVE, which is the whole of the
+      other half below.
 HOW:  the in-process client from conftest, holding an operator session. Which transport
-      is retired is read from the registry, never written here, and the three tests that
-      prove the panel needs no edit for the NEXT one fabricate a fleet in which an
-      offered transport is retired — the only way to assert "no panel change" rather than
-      to claim it. Two of those three are the hop surfaces, which no shipped transport
-      can reach: nothing here is both hop-capable and retired.
+      is retired is read from the registry, never written here, and the tests that prove
+      the panel needs no edit for the NEXT one fabricate a fleet in which an offered
+      transport is retired — the only way to assert "no panel change" rather than to
+      claim it. Two of those are the hop surfaces, which no shipped transport can reach:
+      nothing here is both hop-capable and retired.
+
+      THE SAME TOOL POINTED THE OTHER WAY is how a row of a retired transport comes to
+      exist at all now that no route will make one — ``a_row_from_before_the_retirement``
+      below, which lifts the declaration for the length of one API call and puts it back.
+      That is not a workaround for the refusal: it is the history it was written for. The
+      owner's leaf holds such a row because it was enabled before the transport was
+      retired, and every assertion after that call runs in the real fleet, where it is.
 
 Nothing here asserts that plain WireGuard is broken on a real network. That was measured
 in the field and is recorded in the plan; a test run cannot reach a node.
@@ -31,7 +48,6 @@ import pytest
 from sqlalchemy import select
 
 from control.app.models import Friend, NodeState, NodeTransport
-from control.app.panel import routes as panel_routes
 from control.app.services import apply as apply_service
 from control.app.services import nodes as nodes_service
 from control.app.services import subscriptions as subscriptions_service
@@ -67,12 +83,13 @@ def a_pool_size(transport_name: str) -> int | None:
     return 50 if addresses.spec_for(transport_name) is not None else None
 
 
-def operator_params(transport_name: str) -> dict[str, object]:
+def operator_params(transport_name: str, **overrides: object) -> dict[str, object]:
     """Plausible values for every field this transport asks an operator for.
 
     Filtered against the transport's own model, so one literal serves the whole image and
     a transport that declares a field nobody here anticipated fails loudly on the enable
-    rather than quietly on the assertion.
+    rather than quietly on the assertion — and an override for a field this transport does
+    not declare is dropped by the same filter rather than refused by its model.
     """
     supplied: dict[str, object] = {
         "port": 51820,
@@ -94,7 +111,7 @@ def operator_params(transport_name: str) -> dict[str, object]:
         "server_name": "www.example.com",
     }
     declared = set(profile(transport_name).params_model.model_fields)
-    return {key: value for key, value in supplied.items() if key in declared}
+    return {key: value for key, value in (supplied | overrides).items() if key in declared}
 
 
 async def a_node(client, *, name: str, address: str) -> str:
@@ -104,6 +121,36 @@ async def a_node(client, *, name: str, address: str) -> str:
     )
     assert created.status_code == 201, created.text
     return created.json()["id"]
+
+
+async def a_row_from_before_the_retirement(client, node_id: str, name: str) -> str:
+    """The row the owner's own leaf holds: enabled while the transport was still offered.
+
+    No route makes one any more, which is the refusal below, so the only honest way to
+    get the state this file's second half is about is to reproduce how it arose. The
+    declaration is lifted for the length of ONE API call and restored before anything is
+    asserted — ``MonkeyPatch.context`` rather than the ``nothing_retired`` fixture,
+    because a fixture lasts the whole test and every assertion after this line has to run
+    in the real fleet, where the transport IS retired and the panel does not offer it.
+
+    The fabricated meta is the real one with a single field replaced, so the row that
+    comes back was minted, validated and placed by the transport's own code exactly as
+    the leaf's was.
+    """
+    fleet = dict(discover())
+    fleet[name] = replace(fleet[name], retired=None)
+    with pytest.MonkeyPatch.context() as before_the_retirement:
+        before_the_retirement.setattr(transports_service, "discover", lambda: fleet)
+        enabled = await client.post(
+            f"/api/nodes/{node_id}/transports",
+            json={
+                "transport_name": name,
+                "params": operator_params(name),
+                **({"pool_size": a_pool_size(name)} if a_pool_size(name) else {}),
+            },
+        )
+    assert enabled.status_code == 201, enabled.text
+    return enabled.json()["id"]
 
 
 # AT MODULE LEVEL, where an empty image is the only thing that can make this whole file
@@ -243,7 +290,7 @@ async def test_the_panel_refuses_a_submission_naming_a_retired_transport(
 
     assert refused.status_code == 422, refused.text
     said = reading(refused)
-    assert panel_routes.NO_LONGER_OFFERED.format(name=name, reason=reason) in said, said
+    assert transports_service.NO_LONGER_OFFERED.format(name=name, reason=reason) in said, said
     session.expire_all()
     assert (
         await session.execute(
@@ -301,7 +348,7 @@ async def test_the_hop_form_refuses_a_submission_naming_a_transport_retired_late
 
     assert refused.status_code == 422, refused.text
     said = reading(refused)
-    assert panel_routes.NO_LONGER_OFFERED.format(name=victim, reason=reason) in said, said
+    assert transports_service.NO_LONGER_OFFERED.format(name=victim, reason=reason) in said, said
     session.expire_all()
     assert (
         await session.execute(select(NodeTransport))
@@ -400,6 +447,10 @@ async def test_removing_a_retired_row_does_not_promise_it_can_be_enabled_again(
     looked only at the retired one would pass on a dialog that had simply deleted the
     promise for everybody. The offered transport is read from
     ``offerable_transports`` rather than named, the same way the retired one is.
+
+    Both rows are made by the same helper, which is a no-op for a transport that is not
+    retired — so the only difference between the two readings below is the declaration on
+    one of them.
     """
     offered = [
         name for name in transports_service.offerable_transports()
@@ -412,18 +463,8 @@ async def test_removing_a_retired_row_does_not_promise_it_can_be_enabled_again(
         ((next(iter(RETIRED)), "retired-row"), (offered[0], "offered-row"))
     ):
         node_id = await a_node(client, name=node, address=f"192.0.2.{80 + index}")
-        enabled = await client.post(
-            f"/api/nodes/{node_id}/transports",
-            json={
-                "transport_name": name,
-                "params": operator_params(name),
-                **({"pool_size": a_pool_size(name)} if a_pool_size(name) else {}),
-            },
-        )
-        assert enabled.status_code == 201, enabled.text
-        dialog = await client.get(
-            f"/panel/transports/{enabled.json()['id']}/remove", headers=HTMX
-        )
+        row_id = await a_row_from_before_the_retirement(client, node_id, name)
+        dialog = await client.get(f"/panel/transports/{row_id}/remove", headers=HTMX)
         assert dialog.status_code == 200, dialog.text
         said[name] = reading(dialog)
 
@@ -449,23 +490,22 @@ async def test_a_node_already_running_a_retired_transport_still_renders(
 ) -> None:
     """THE HALF THE OWNER'S OWN LEAF DEPENDS ON — done-when 3, end to end.
 
-    The row is created the way theirs was, through the operator API, and then every
-    surface that has to keep working is asked: the node's own transports dialog, the
-    config the node is pushed, and the file the user's device holds. A retirement that
-    took any of those with it would have turned a protocol that carries nothing into a
-    node that serves nothing.
+    The row is created the way theirs was — through the operator API, while the transport
+    was still offered — and then every surface that has to keep working is asked, in the
+    real fleet where it is retired: the node's own transports dialog, the config the node
+    is pushed, and the file the user's device holds. A retirement that took any of those
+    with it would have turned a protocol that carries nothing into a node that serves
+    nothing.
+
+    THE FRIEND IS MADE AFTER THE RETIREMENT IS BACK, which is the sharper half: this is
+    somebody who joined the fleet today, on a node whose row predates the withdrawal, and
+    the archive they are handed still has to contain that row's configuration. Refusing to
+    create a row is not refusing to serve the one that exists, and nothing about the
+    refusal may reach the fan-out that grants a new person material on it.
     """
     name = next(iter(RETIRED))
     node_id = await a_node(client, name="already-running", address="192.0.2.73")
-    enabled = await client.post(
-        f"/api/nodes/{node_id}/transports",
-        json={
-            "transport_name": name,
-            "params": operator_params(name),
-            **({"pool_size": a_pool_size(name)} if a_pool_size(name) else {}),
-        },
-    )
-    assert enabled.status_code == 201, enabled.text
+    await a_row_from_before_the_retirement(client, node_id, name)
     await nodes_service.set_node_state(
         session, node_id=node_id, state=NodeState.ACTIVE
     )
@@ -495,25 +535,32 @@ async def test_a_node_already_running_a_retired_transport_still_renders(
     )
 
 
-async def test_the_api_still_enables_a_transport_an_operator_names_outright(
-    client,
+async def test_the_api_refuses_a_transport_the_registry_has_retired(
+    client, session
 ) -> None:
-    """The deliberate asymmetry, pinned so nobody closes it by accident.
+    """THE ROUTE THAT USED TO SAY 201 — M20's acceptance, and the reason this file moved.
 
-    Retirement is a subtraction from what this product PROPOSES. The operator API
-    proposes nothing — it does what it is told, by an operator who typed the name — and
-    the fleet's existing rows were made that way. Refusing here would also reduce every
-    test that exercises this path over both members of the WireGuard family to one
-    member, which is the guard M17 added after finding the family's own refusal had never
-    been asserted in any commit.
+    An operator naming a retired transport outright was obeyed here: a row, ``enabled:
+    true``, and a complete credential for it in the next friend's archive. What that costs
+    is not a status code. It is a person on a tunnel whose handshake completes and which
+    carries nothing on every host this project prepares, with nothing on their device
+    saying so — and they would have no reason to suspect the protocol rather than the
+    network they are on, which is the failure this whole product is built against.
 
-    If this is ever deliberately changed, it is a decision for ``docs/decisions.md`` and
-    this test is where it lands — not a line that quietly stopped working.
+    The sentence is the one the console answers with, character for character, because an
+    API caller and an operator are learning the same fact: both read the transport's own
+    reason, and both are told that a node already running it is untouched. It is asserted
+    against the constant rather than against a copy of its words — a sentence pinned by a
+    literal here is one that drifts out of the panel's the first time either is edited.
+
+    Nothing is written, and that is asserted rather than assumed: this refusal is raised
+    before the node is loaded and before any material is minted, so a partial row is not
+    a thing that can be left behind.
     """
-    name = next(iter(RETIRED))
+    name, reason = next(iter(RETIRED.items()))
     node_id = await a_node(client, name="named-outright", address="192.0.2.74")
 
-    enabled = await client.post(
+    refused = await client.post(
         f"/api/nodes/{node_id}/transports",
         json={
             "transport_name": name,
@@ -522,4 +569,100 @@ async def test_the_api_still_enables_a_transport_an_operator_names_outright(
         },
     )
 
-    assert enabled.status_code == 201, enabled.text
+    assert refused.status_code == 422, refused.text
+    envelope = refused.json()["error"]
+    assert envelope["code"] == "transport_retired", envelope
+    assert envelope["message"] == transports_service.NO_LONGER_OFFERED.format(
+        name=name, reason=reason
+    ), envelope
+    session.expire_all()
+    assert (
+        await session.execute(select(NodeTransport))
+    ).scalars().unique().all() == [], "the refusal enabled it anyway"
+
+
+async def test_a_retired_transport_is_refused_on_a_node_that_is_already_serving(
+    client, session
+) -> None:
+    """The same refusal on the path that would have fanned out to everybody.
+
+    Enabling on a SERVING node grants every active friend material in the same
+    transaction (``enable_and_grant``), so this is the one call where a retired
+    transport's credential reaches devices immediately rather than at the next apply. A
+    refusal that only guarded the draft case would leave the worst version of the bug
+    reachable, and the two paths share ``_enable`` precisely so that they cannot differ —
+    which is a claim worth one scenario rather than a comment.
+
+    The friend exists before the attempt and holds no credential after it: nothing was
+    minted, nothing was granted, and nobody's archive changed.
+
+    THE SECOND ROW ASKS FOR A PORT AND A TUNNEL OF ITS OWN, and that is what makes this
+    test able to fail for its own reason. Two rows on one node may share neither, and this
+    control plane refuses both on its own — so with the retirement check deleted the call
+    would still not be a 201, and the scenario would be pinning a collision while claiming
+    to pin a retirement. Every value below is dropped by ``operator_params`` for a
+    transport that does not declare it, so no protocol is assumed to have either.
+    """
+    name = next(iter(RETIRED))
+    node_id = await a_node(client, name="serving-already", address="192.0.2.77")
+    offered = transports_service.offerable_transports()
+    assert offered, "this image offers nothing, so no node here can reach service"
+    await a_row_from_before_the_retirement(client, node_id, offered[0])
+    await nodes_service.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+    assert (await client.post("/api/friends", json={"nickname": "yura"})).status_code == 201
+
+    refused = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": name,
+            "params": operator_params(
+                name,
+                port=51899,
+                tunnel_address="10.92.0.1/24",
+                peer_tunnel_address="10.92.0.2/24",
+            ),
+            **({"pool_size": a_pool_size(name)} if a_pool_size(name) else {}),
+        },
+    )
+
+    assert refused.status_code == 422, refused.text
+    session.expire_all()
+    rows = (
+        await session.execute(
+            select(NodeTransport).where(NodeTransport.transport_name == name)
+        )
+    ).scalars().unique().all()
+    assert rows == [], "the refusal enabled it on a serving node anyway"
+
+
+async def test_a_row_of_a_retired_transport_can_still_be_removed(
+    client, session
+) -> None:
+    """The operator can get rid of it — the half a refusal must not take with it.
+
+    A protocol nobody may enable any more is one every operator will eventually want off
+    their nodes, and it is the single action they have left for it. Both surfaces are
+    asked in one scenario because a console that could no longer do it would be the
+    version of this bug an API check never sees, and the console is where an operator is.
+
+    The row's material goes with it, which is ``remove_transport``'s own contract and is
+    asserted here only as the absence of the row: what this test is about is that the
+    refusal above reaches the CREATION and nothing else.
+    """
+    name = next(iter(RETIRED))
+    first = await a_node(client, name="removable-api", address="192.0.2.81")
+    second = await a_node(client, name="removable-panel", address="192.0.2.82")
+    by_api = await a_row_from_before_the_retirement(client, first, name)
+    by_panel = await a_row_from_before_the_retirement(client, second, name)
+
+    removed = await client.delete(f"/api/transports/{by_api}")
+    assert removed.status_code == 200, removed.text
+    from_the_console = await client.post(
+        f"/panel/transports/{by_panel}/remove", headers=HTMX
+    )
+    assert from_the_console.status_code == 200, from_the_console.text
+
+    session.expire_all()
+    assert (
+        await session.execute(select(NodeTransport))
+    ).scalars().unique().all() == [], "a retired transport's row cannot be removed"

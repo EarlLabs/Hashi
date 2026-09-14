@@ -114,7 +114,19 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(params=POOL_TRANSPORTS)
-def pool_transport(request) -> str:
+def pool_transport(request, nothing_retired) -> str:
+    """One member of the family, in a fleet where nothing is retired — M20's acceptance.
+
+    ``nothing_retired`` is taken HERE rather than by forty test signatures, and it is the
+    fixture's own claim: a test handed a family member is a test about what that transport
+    DOES, and retirement says nothing about that. ``nodes.enable_transport`` refuses to
+    create a row for a retired transport since M20's acceptance, so without this every
+    test below would have run over the one member that is not retired — and a family whose
+    second member is never exercised is the exact gap M17 added these parameters to close.
+
+    The tests that are about the PANEL's own offering take ``offered_pool_transport``
+    below instead, and do not lift anything.
+    """
     return request.param
 
 
@@ -125,14 +137,15 @@ def pool_transport(request) -> str:
 # no longer has the box.
 #
 # The API half above keeps the whole family, and that split is the milestone rather than
-# a compromise: retirement subtracted a suggestion, not a capability, so everything that
-# is about what the transport DOES stays parametrised over both members, and the only
-# tests that narrow are the ones that SUBMIT THE ENABLE DIALOG. Not every panel test —
-# the replace-parameters dialog is a console screen too and stays on the whole family,
-# because it is about a row that already exists and ``_params_form`` gates its boxes on
-# ``key.installed`` rather than on what is offered. ``transports.offerable_transports``
-# is asked rather than a name, so a transport retired later moves between these two
-# lists on its own.
+# a compromise: retirement subtracts a protocol from what may be CHOSEN and nothing from
+# what it does, so everything that is about the transport's behaviour stays parametrised
+# over both members — through ``nothing_retired``, since M20's acceptance also made
+# creating such a row a refusal — and the only tests that narrow are the ones that SUBMIT
+# THE ENABLE DIALOG. Not every panel test — the replace-parameters dialog is a console
+# screen too and stays on the whole family, because it is about a row that already exists
+# and ``_params_form`` gates its boxes on ``key.installed`` rather than on what is
+# offered. ``transports.offerable_transports`` is asked rather than a name, so a transport
+# retired later moves between these two lists on its own.
 OFFERED_POOL_TRANSPORTS = [
     name for name in POOL_TRANSPORTS if name in transports_service.offerable_transports()
 ]

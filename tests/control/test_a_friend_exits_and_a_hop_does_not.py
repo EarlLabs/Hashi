@@ -70,7 +70,16 @@ def params_for(transport_name: str, **overrides) -> dict[str, object]:
 
 
 @pytest.fixture(params=KERNEL_TUNNELS)
-def kernel_tunnel(request) -> str:
+def kernel_tunnel(request, nothing_retired) -> str:
+    """One member of the family, in a fleet where nothing is retired — M20's acceptance.
+
+    Nothing in this file is about what the panel offers: every test here is about what a
+    kernel tunnel's rendered configuration tells the host to do with the packets it
+    decrypts, which is a property of the transport and not of whether an operator may
+    still choose it. ``nodes.enable_transport`` refuses to create a row for a retired
+    transport, so the fleet these tests enable into is one where none is — see
+    ``nothing_retired`` in conftest for why that is not a weakened refusal.
+    """
     return request.param
 
 

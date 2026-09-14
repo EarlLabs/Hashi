@@ -463,22 +463,11 @@ NOT_ITS_PARAMETER = (
     "submission."
 )
 
-# What a submission naming a transport this panel no longer offers is answered with —
-# M20. Above the form, because it is about the choice rather than about any box: the
-# dialog renders no group for such a transport, so there is no box for a sentence to sit
-# under and every other complaint about it would be withheld.
-#
-# The reason is the TRANSPORT's, carried here by ``transports.retired_transports()``.
-# Nothing in this module knows what is wrong with a protocol, and a sentence written here
-# would be one more thing to rewrite the next time a transport has to be retired.
-#
-# It says what is still true as well as what is refused. An operator who reaches this has
-# a node running the transport already, or has just read the Transports screen, and the
-# thing they most need to know is that neither their node nor their users have changed.
-NO_LONGER_OFFERED = (
-    "nothing was enabled — {name} is no longer offered here: {reason} A node already "
-    "running it keeps serving it, and nobody's configuration has changed."
-)
+# The sentence a submission naming a retired transport is answered with used to be
+# written here and now lives beside the declaration it reads — ``transports.
+# NO_LONGER_OFFERED``, M20's acceptance. Three surfaces format it since the enable
+# service began refusing the operation as well, and the one this module shows above the
+# form is the same one an API caller is answered with.
 
 
 @router.get("/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
@@ -1192,7 +1181,7 @@ async def establish_hop(
             request,
             session,
             values=typed,
-            failure=NO_LONGER_OFFERED.format(
+            failure=transports.NO_LONGER_OFFERED.format(
                 name=transport_name, reason=retired[transport_name]
             ),
         )
@@ -2130,10 +2119,12 @@ async def enable_transport(
     # The sentence is the registry's own, and the name is the operator's own submission,
     # so no protocol is named in this module.
     #
-    # The refusal is this SURFACE's and not the operation's: ``nodes.enable_transport``
-    # accepts a retired transport still, because an operator naming one outright through
-    # the API is not being offered anything, and the fleet's existing rows were made that
-    # way.
+    # THE OPERATION REFUSES TOO, since M20's acceptance — ``nodes.enable_transport``
+    # raises ``TransportRetired`` with this same sentence, so a submission that named only
+    # the transport would be answered identically two screens down. This one stays because
+    # it answers BEFORE the per-box reading below runs on a form that drew no boxes, and
+    # because the operator must not be told about parameters when the fact they need is
+    # about the protocol.
     retired = transports.retired_transports()
     if transport_name in retired:
         return await _refuse_the_form(
@@ -2141,7 +2132,7 @@ async def enable_transport(
             session,
             node_id,
             typed,
-            failure=NO_LONGER_OFFERED.format(
+            failure=transports.NO_LONGER_OFFERED.format(
                 name=transport_name, reason=retired[transport_name]
             ),
         )
