@@ -52,6 +52,19 @@
   claim is that nothing IT holds has ever been pushed, and what is on the host is not
   something it can see from here.
 
+  AND "ENABLING IT HERE AGAIN MINTS NEW MATERIAL" IS FALSE ON A RETIRED PROTOCOL —
+  M20's acceptance. The walk removed such a row and the enable dialog went on offering
+  three: there is no form on this panel that would put it back, so the sentence promised
+  an action that is not there. Only the promise was stale — the destructive half above it
+  is true of every row and is untouched, which is why this is one clause and not an arm.
+
+  ``offerable_again`` is the same list the enable dialog is built from
+  (``transports.offerable_transports``), so this claim and that form cannot disagree, and
+  neither this template nor the console compares a protocol's name to decide it. What the
+  else-arm does NOT do is say why: the reason is the transport's own and belongs where the
+  transport can give it, which is the Transports screen — so this points there instead of
+  composing a sentence about a protocol this panel is built not to recognise.
+
   The title is offer.transport, which is services/console.py's placed_as: on a node
   running two instances of one protocol it reads `amneziawg (amneziawg-2)`, so the
   confirmation cannot name the wrong one of two. No key material is named and none could
@@ -64,7 +77,11 @@
     <div class="dialog-title" id="remove-transport-title">Remove {{ offer.transport }}?</div>
     <div class="dialog-body">
       It goes from {{ offer.node }} altogether, and the material every user holds on it
-      goes with it — there is no undo, and enabling it here again mints new material.
+      goes with it — there is no undo,
+      {%- if offer.offerable_again %} and enabling it here again mints new material.
+      {%- else %} and this panel would not offer this protocol again: no form here puts
+      it back on {{ offer.node }}. The Transports screen says why.
+      {%- endif %}
       Their links keep working and nobody re-imports anything; they simply have one
       fewer way in.
     </div>

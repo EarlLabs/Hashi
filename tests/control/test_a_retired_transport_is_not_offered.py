@@ -354,12 +354,17 @@ async def test_the_overview_counts_what_can_be_enabled_and_not_only_what_ships(
 ) -> None:
     """The first screen an operator sees, which counted the retired one.
 
-    "transports enabled: 1 — of 4 this image ships" reads as three left to enable when
-    only two are, which is the identical effect the retired row above exists to prevent
-    — a count the operator acts on by going looking for the protocols it implies. Both
+    "transports serving: 1 — 4 in this image" reads as three left to enable when only
+    two are, which is the identical effect the retired row above exists to prevent — a
+    count the operator acts on by going looking for the protocols it implies. Both
     figures are asserted rather than the shipped one dropped: the package IS in the
     image, and a card that stopped saying so would be answering an honest question with
     less information instead of more.
+
+    THE CARD SAYS "in this image" AND NOT "of 4 this image ships" SINCE M20's ACCEPTANCE:
+    the "of" read as a denominator of the value above it, so a fleet serving everything it
+    ships looked like an arithmetic error beside "3 can be enabled". Both figures here are
+    counts of the IMAGE and the value is a count of the FLEET.
 
     Neither number is a name compared here. The card asks ``offerable_transports`` the
     same question the enable dialog asks, so a transport retired later moves this figure
@@ -376,7 +381,65 @@ async def test_the_overview_counts_what_can_be_enabled_and_not_only_what_ships(
 
     assert screen.status_code == 200, screen.text
     said = reading(screen)
-    assert f"of {installed} this image ships, {offerable} can be enabled" in said, said
+    assert f"{installed} in this image, {offerable} can be enabled" in said, said
+
+
+async def test_removing_a_retired_row_does_not_promise_it_can_be_enabled_again(
+    client,
+) -> None:
+    """M20's acceptance, on the last surface that had not been told — the remove dialog.
+
+    *"There is no undo, and enabling it here again mints new material"* is two claims and
+    only the first survives a retirement: the walk removed a retired row and the enable
+    dialog went on offering three, so the sentence described a form that is not there.
+    The destructive half is untouched and asserted here too — a confirmation that lost its
+    warning while gaining a correction would be a worse dialog than the one that was
+    wrong.
+
+    BOTH KINDS OF ROW, in one scenario, because the claim is a difference and a test that
+    looked only at the retired one would pass on a dialog that had simply deleted the
+    promise for everybody. The offered transport is read from
+    ``offerable_transports`` rather than named, the same way the retired one is.
+    """
+    offered = [
+        name for name in transports_service.offerable_transports()
+        if name not in RETIRED
+    ]
+    assert offered, "this image offers nothing, so there is no contrast to draw"
+
+    said = {}
+    for index, (name, node) in enumerate(
+        ((next(iter(RETIRED)), "retired-row"), (offered[0], "offered-row"))
+    ):
+        node_id = await a_node(client, name=node, address=f"192.0.2.{80 + index}")
+        enabled = await client.post(
+            f"/api/nodes/{node_id}/transports",
+            json={
+                "transport_name": name,
+                "params": operator_params(name),
+                **({"pool_size": a_pool_size(name)} if a_pool_size(name) else {}),
+            },
+        )
+        assert enabled.status_code == 201, enabled.text
+        dialog = await client.get(
+            f"/panel/transports/{enabled.json()['id']}/remove", headers=HTMX
+        )
+        assert dialog.status_code == 200, dialog.text
+        said[name] = reading(dialog)
+
+    retired, offerable = said[next(iter(RETIRED))], said[offered[0]]
+
+    # The stale promise is gone from the retired row and still there for the one the
+    # panel would really offer again.
+    assert "mints new material" not in retired, retired
+    assert "mints new material" in offerable, offerable
+    assert "would not offer this protocol again" in retired, retired
+    assert "would not offer this protocol again" not in offerable, offerable
+
+    # And the destructive warning is on BOTH, which is the half that was never wrong.
+    for reads in (retired, offerable):
+        assert "there is no undo" in reads, reads
+        assert "the material every user holds on it goes with it" in reads, reads
 
 
 # --- and what retiring one may not do -----------------------------------------

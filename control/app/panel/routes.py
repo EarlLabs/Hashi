@@ -574,7 +574,9 @@ async def _set_offered(
         # Offering again runs the same grant fan-out ``enable_transport`` does, so the
         # material a user holds moves and the Keys screen's "users on it" count with it.
         events = "nodes-changed, keys-changed, friends-changed"
-        toast = console.offer_summary(offer.node, offer.transport)
+        toast = console.offer_summary(
+            offer.node, offer.transport, deliverable=offer.deliverable
+        )
     else:
         # Withdrawing fires two as well. What it does NOT take away is a MINTED
         # CREDENTIAL — that stays minted, which is why the Keys screen is left alone —

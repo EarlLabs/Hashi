@@ -95,7 +95,22 @@ TRANSPORT_IDENTIFIED = "identified and blocked — do not offer this as a workin
 TRANSPORT_CAMOUFLAGED = "obfuscated or TLS-shaped"
 TRANSPORT_NO_HOP = "never on an entry→leaf hop"
 TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
-TRANSPORT_UNDELIVERED = "not in a user's link yet — this panel cannot hand it over"
+# THIS SAID "not in a user's link yet — this panel cannot hand it over" AND THAT WAS NOT
+# TRUE — found while fixing M20's acceptance finding about the sentence one screen over.
+# It was written before item 27 landed and describes the world it was written in. Item 27
+# landed: ``GET /sub/{token}?format=client-config-file`` answers the same bearer token
+# with an archive of this friend's configuration files (``control/app/api/delivery.py``,
+# which says so in its own docstring), and the delivery endpoint is this same
+# application. So the product hands it over; what is true is only that it is not IN the
+# base64 link, which is exactly what ``subscription_expressible`` measures and all this
+# cell may therefore claim.
+#
+# It does not name the query parameter, and that is deliberate rather than coy: the
+# format is the one already printed in this row's own delivery column, so the sentence
+# stays one arm per FORMAT and gains nothing to edit when a third shape arrives.
+TRANSPORT_NOT_IN_THE_LINK = (
+    "not in the subscription link itself — delivered from that same link as a config file"
+)
 
 # What it means, on the screen the operator learns the protocols from, that a transport
 # declares each of its consumers needs an address of their own — M17.2. Read from
@@ -482,9 +497,9 @@ class KeyRow:
 
 # What one transport on one node is doing for the people this fleet exists for, as the
 # words the Nodes screen's own actions are read beside. Every one of them is composed
-# from two facts about OUR configuration — the row's purpose and its ``enabled`` flag —
-# and never from which protocol it is, which is the same rule the chips on the table
-# follow.
+# from facts about OUR configuration — the row's purpose, its ``enabled`` flag, and what
+# the transport DECLARES it serialises into — and never from which protocol it is, which
+# is the same rule the chips on the table follow.
 #
 # The withdrawn sentence carries the thing ``nodes.set_transport_enabled`` insists on
 # and that a panel is most likely to blur: switching a transport off changes what the
@@ -498,7 +513,29 @@ class KeyRow:
 # that answers "nothing to push". The distinction is the node's, not the row's: one enabled row
 # anywhere on it — a hop end counts, it renders too — and the apply goes through without
 # the withdrawn one, which is exactly what stops the container serving it.
+#
+# AND THERE ARE TWO OFFERED SENTENCES because "in every user's link" is not true of every
+# transport — M20's acceptance. It was said of every enabled row, including the rows whose
+# protocol is not a link at all: the ``/sub/`` document is the v1 URI list and holds
+# nothing else, so a config-file transport was promised a delivery that document does not
+# make. The walk read a real subscription to settle it — the URI entries and nothing else.
+#
+# WHAT THE SECOND SENTENCE MAY NOT SAY IS THAT IT IS UNDELIVERED, which is where the
+# obvious wording would have gone and would have been the same defect pointed the other
+# way. The same bearer token answers ``?format=`` with an archive of this friend's
+# configuration files (``control/app/api/delivery.py``, item 27), so "this panel cannot
+# hand it over" is false about this product — see ``TRANSPORT_NOT_IN_THE_LINK``, which
+# said exactly that and has been corrected with it. What is true, and all of it, is the
+# three facts below: the host is told to serve it, it is not in the link itself, and the
+# shape it arrives in is a file.
+#
+# Chosen by the transport's own derived declaration and never by a name, like every other
+# string in this module.
 OFFER_IN_EVERY_LINK = "offered — in every user's link at their next refresh"
+OFFER_NOT_IN_THE_LINK = (
+    "offered — the node serves it once applied, but not in the subscription link itself: "
+    "this transport is delivered from that same link as a config file"
+)
 OFFER_WITHDRAWN = (
     "withdrawn — out of every user's link. The node is still configured to serve it "
     "until you apply the node without it."
@@ -664,6 +701,27 @@ class OfferRow:
     # "nothing this panel holds has ever been pushed" — a fact about the rows — and never
     # "the host is running nothing", which this control plane cannot know from here.
     never_applied_here: bool
+    # Whether this row's transport reaches a user's link at all — M20's acceptance. The
+    # transport's own derived declaration (``subscription_expressible``), carried on the
+    # row because ``standing`` above is not the only sentence that turns on it: the toast
+    # this row's own button raises makes the same promise, and the two were both making
+    # it of a protocol this panel cannot hand over.
+    #
+    # A flag rather than a composed sentence, like ``nothing_else_enabled``: the row and
+    # the toast say different things about the same fact, and each keeps its own words.
+    deliverable: bool
+    # Whether this panel would let the operator enable this transport here again — M20's
+    # acceptance. The remove confirmation promises that "enabling it here again mints new
+    # material", and on a RETIRED transport there is no form on this panel that would:
+    # the walk removed such a row and the enable dialog went on offering three. The
+    # destructive half of that sentence was right and only the promise was stale.
+    #
+    # ``transports.offerable_transports`` and not ``meta.retired``, because it is the same
+    # list the enable dialog is built from and the enable route reads a submission
+    # against — so what this claims and what that would do cannot drift. It also answers
+    # correctly for a row whose package has left the image, which retirement alone would
+    # not.
+    offerable_again: bool
     # Why the offer button is not drawn at all — M17.2, and ``None`` on nearly every row.
     # An action the service would refuse is withheld rather than offered, with the pool
     # it is about named: see ``POOL_SHORT_TO_OFFER``.
@@ -880,6 +938,20 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
     # push and by nothing else, and a withdrawal leaves it alone — so a row that carries
     # one is proof, and no row carrying one is only the absence of proof.
     never_applied_here = not any(row.applied_at is not None for row in rows)
+    # Whether each row's transport reaches a user's link at all — its own declaration,
+    # keyed by row id and read once for the whole dialog like every other measurement
+    # above. ``get`` and not ``[]``: a row whose package has left the image still has to
+    # render a line, the same reason ``key_rows`` resolves it this way, and a transport
+    # that is not in this image delivers nothing.
+    installed = discover()
+    delivers = {
+        row.id: row.transport_name in installed
+        and installed[row.transport_name].subscription_expressible
+        for row in rows
+    }
+    # And whether this panel would offer each of them again — the same list the enable
+    # dialog is built from, asked once for the whole dialog.
+    offerable = set(transports.offerable_transports())
     return [
         OfferRow(
             id=row.id,
@@ -889,8 +961,13 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             offered=row.enabled,
             for_friends=row.purpose == TransportPurpose.FRIENDS,
             standing=_standing(
-                row.purpose, row.enabled, nothing_left_enabled=nothing_left_enabled
+                row.purpose,
+                row.enabled,
+                nothing_left_enabled=nothing_left_enabled,
+                deliverable=delivers[row.id],
             ),
+            deliverable=delivers[row.id],
+            offerable_again=row.transport_name in offerable,
             # Measured per row rather than reusing the whole-dialog reading above,
             # because it is a different question: that one is "is anything enabled
             # here now", this one is "would anything be enabled here without this
@@ -955,24 +1032,39 @@ async def offer_row(session: AsyncSession, node_transport_id: str) -> OfferRow:
 
 
 def _standing(
-    purpose: TransportPurpose, enabled: bool, *, nothing_left_enabled: bool
+    purpose: TransportPurpose,
+    enabled: bool,
+    *,
+    nothing_left_enabled: bool,
+    deliverable: bool,
 ) -> str:
-    """Which of the four sentences this row is in.
+    """Which of the five sentences this row is in.
 
-    A branch on our own topology and on the operator's own flag — never on a protocol.
-    A hop end is answered first because ``enabled`` means something different there: it
-    says the tunnel should be running, not that anybody is being offered anything.
+    A branch on our own topology, on the operator's own flag and on the transport's own
+    declaration — never on a protocol. A hop end is answered first because ``enabled``
+    means something different there: it says the tunnel should be running, not that
+    anybody is being offered anything.
 
     ``nothing_left_enabled`` is a fact about the NODE, passed in rather than measured
     here because it is the same measurement for every row in the dialog and the caller
     has already read them all. It only ever changes the withdrawn sentence: an apply that
     has something to push is what stops the host serving a withdrawn row, and on a node
     with nothing enabled at all there is no such apply.
+
+    ``deliverable`` is a fact about the TRANSPORT, passed in for the same reason: the
+    caller has the registry open already. It is ``subscription_expressible`` — whether the
+    protocol rides in the base64 LINK, not whether a user can receive it, which is a
+    different question this panel got wrong in both directions (see
+    ``OFFER_NOT_IN_THE_LINK``). It only ever changes the OFFERED sentence — M20's
+    acceptance, which read "in every user's link at their next refresh" on a row that is
+    in no link. The withdrawn sentences are left alone deliberately: "out of every user's
+    link" claims nothing about having been in one, so it is true of both kinds and stays
+    one sentence.
     """
     if purpose != TransportPurpose.FRIENDS:
         return OFFER_HOP_END
     if enabled:
-        return OFFER_IN_EVERY_LINK
+        return OFFER_IN_EVERY_LINK if deliverable else OFFER_NOT_IN_THE_LINK
     return OFFER_WITHDRAWN_LAST_ON_THE_NODE if nothing_left_enabled else OFFER_WITHDRAWN
 
 
@@ -1048,12 +1140,11 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
     declares itself identified and the warning appears with no edit; retire one and the
     row says so, with nothing in this zone to change.
 
-    The two conditions in ``delivery_note`` are not the same condition. A transport
-    with no declared format serialises into nothing a user could consume at all; a
-    transport with one this panel does not yet deliver serialises fine and is simply not
-    handed over (``subscription_expressible``, and its own docstring in
-    ``edge/registry.py``, say why). Reporting the second as the first would tell the
-    operator a protocol is unusable when it is merely undelivered.
+    The two conditions in ``delivery_note`` are not the same condition. A transport with
+    no declared format serialises into nothing a user could consume at all; a transport
+    with one that is not the base64 link serialises fine and is handed over in its own
+    shape (``subscription_expressible``). Reporting the second as the first would tell the
+    operator a protocol is unusable when it is merely not a link.
     """
     low, high = meta.port_range
     formats = sorted(str(shape) for shape in meta.subscription_formats)
@@ -1065,7 +1156,7 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
         delivery_note=(
             None
             if not formats or meta.subscription_expressible
-            else TRANSPORT_UNDELIVERED
+            else TRANSPORT_NOT_IN_THE_LINK
         ),
         exposure=(
             TRANSPORT_IDENTIFIED
@@ -1452,12 +1543,28 @@ def removal_summary(node: str, transport: str, *, nothing_left_enabled: bool) ->
     )
 
 
-def offer_summary(node: str, transport: str) -> str:
+def offer_summary(node: str, transport: str, *, deliverable: bool) -> str:
     """What offering a transport again costs the people on it: nothing.
 
     The other half of criterion 3, and the half that has to say "nobody does anything":
     every active user is granted material on it here, and their link does not move.
+
+    ON A TRANSPORT THAT IS NOT A LINK the first half of that was false — M20's acceptance.
+    The grant still happens and the node is still told to serve it; what does not change
+    is the base64 document, because it is the v1 URI list and this protocol is not one.
+    Same fact as the row's own sentence (``OFFER_NOT_IN_THE_LINK``) and deliberately not
+    the same words: this one is read after the press and has to say what just happened.
+
+    It says the material is MINTED rather than that nothing reaches anybody, because
+    something does: the same token answers with this friend's configuration file, so the
+    honest report of this press is that everyone was granted and the link did not move.
     """
+    if not deliverable:
+        return (
+            f"{transport} offered again on {node} — every user is granted material on it, "
+            "and the subscription link itself does not change: this transport is "
+            "delivered from that same link as a config file."
+        )
     return (
         f"{transport} offered again on {node} — in every user's link at their next "
         "refresh, and nobody re-imports anything."
@@ -1485,7 +1592,7 @@ async def overview(session: AsyncSession) -> Overview:
     """The Overview screen's whole content, in one call.
 
     The four stat cards are decision 6's replacements, in the design's own order:
-    nodes active, active users, hops established, transports enabled. Each is a fact
+    nodes active, active users, hops established, transports serving. Each is a fact
     about the FLEET. How many friends exist is not a record of what any of them did.
 
     THE FIRST KICKER WAS "nodes online" AND COUNTED NEITHER — M18's acceptance. The value
@@ -1498,6 +1605,15 @@ async def overview(session: AsyncSession) -> Overview:
     the one the Nodes screen's own column shows and the one ``NodeState.serving()``
     admits to a subscription. What each node is actually running stays where it already
     is and is a different question: the drift cell, per node, on that screen.
+
+    AND THE FOURTH KICKER WAS "transports enabled" AND COUNTED SOMETHING NARROWER —
+    M20's acceptance, which is the identical defect one card over. The value has always
+    been ``nodes.serving_transports``: distinct protocols enabled for friends ON A NODE
+    THAT IS SERVING. The walk watched it read 0 with four rows at ``enabled=true``,
+    because every node holding them was still draft — a true number whose meaning was
+    nowhere on the screen. The label now names the state, exactly as "nodes active" and
+    "hops established" beside it do, and the zero it shows is then the same zero the card
+    to its left is showing for the same reason.
     """
     rows = await node_rows(session)
     people = await friend_rows(session)
@@ -1514,7 +1630,11 @@ async def overview(session: AsyncSession) -> Overview:
         for entry, leaf in hops
         if leaf is not None and entry.applied_at and leaf.applied_at
     ]
-    offered = {
+    # Distinct protocols a user could be routed onto right now: enabled, friend-facing,
+    # and on a node in a state that reaches a subscription at all. NAMED for what it
+    # measures since M20's acceptance, because the kicker beside it now says the same
+    # word — see this function's own docstring.
+    serving = {
         row.transport_name
         for row in await nodes.serving_transports(session)
         if row.purpose == TransportPurpose.FRIENDS
@@ -1555,13 +1675,18 @@ async def overview(session: AsyncSession) -> Overview:
                 ),
             ),
             Stat(
-                kicker="transports enabled",
-                value=len(offered),
+                kicker="transports serving",
+                value=len(serving),
+                # "OF 4 this image ships" read as a denominator of the value above it, so
+                # a fleet serving all four beside "3 can be enabled" looked like an
+                # arithmetic error — M20's acceptance. It never was one: the value is a
+                # count of the FLEET and both figures here are counts of the IMAGE, which
+                # is what dropping the "of" says.
                 meta=(
-                    f"of {len(installed)} this image ships, "
+                    f"{len(installed)} in this image, "
                     f"{len(offerable)} can be enabled"
                     if len(offerable) != len(installed)
-                    else f"of {len(installed)} this image ships"
+                    else _plural(len(installed), "transport", "in this image")
                 ),
             ),
         ],
