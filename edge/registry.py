@@ -444,11 +444,17 @@ class TransportMeta:
         changed shape: an entry in the v1 document, or not. What changed is that "not"
         no longer means "nothing a friend can consume" — see ``subscription_formats``.
 
-        Delivery of the second format is backlog item 27, in the `control` zone. Until
-        it lands, a transport that produces only a config file is still refused for
-        friends, which is correct: the serialiser existing is not the same as the
-        endpoint handing it over, and pretending otherwise would put a friend one
-        unreachable node short with nothing saying so.
+        NOT "can a friend receive this", which this paragraph used to say it was: delivery
+        of the second format was backlog item 27 and it has LANDED —
+        ``GET /sub/{token}?format=client-config-file`` answers the same bearer token with
+        an archive of that friend's configuration files. The distinction survived the
+        wording that described the world before it: a transport can be undeliverable-by-
+        link and perfectly deliverable, and `control` still needs this answer because the
+        base64 document is assembled from URIs and nothing else can go in it.
+
+        Two surfaces in `control` went on reading it as "cannot be handed over" and said
+        so to the operator, in opposite directions, until M20's acceptance found one of
+        them. Anything asking this question is asking about the LINK.
         """
         return SubscriptionFormat.V1_URI_LIST in self.subscription_formats
 
