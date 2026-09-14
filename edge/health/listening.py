@@ -43,14 +43,16 @@ HOW:  ``ss``, restricted to LISTENING sockets. The restriction is not tidiness: 
       here compares a transport's name to anything.
 """
 
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from edge.bootstrap.ssh import NodeConnection
 from edge.registry import Layer4
 
-logger = logging.getLogger(__name__)
+# NO MODULE LOGGER, unlike every other module in this zone, and the absence is the point.
+# This one reads a node's socket table; a logger sitting ready beside that is an
+# invitation, and the charter's no-logging rule has no "temporarily, while debugging"
+# clause. Anything this module ever needs to say, it says by returning it.
 
 # The node's listening sockets, and nothing else on the node.
 #
