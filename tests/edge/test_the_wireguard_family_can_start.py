@@ -321,7 +321,12 @@ class _FakeNode:
 
     async def run(self, command: str, *, check: bool = True) -> CommandResult:
         if "docker inspect" in command:
-            lines = [f"{service}|{digest}|true" for service, digest in self.containers.items()]
+            # Four fields since M22: service, digest, running, restarting. Nothing here
+            # crash-loops, so the last is always false.
+            lines = [
+                f"{service}|{digest}|true|false"
+                for service, digest in self.containers.items()
+            ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
         return CommandResult(exit_status=0, stdout="", stderr="")
 
