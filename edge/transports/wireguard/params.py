@@ -41,9 +41,18 @@ class Params(BaseModel):
 
     # Resolvers written into a friend's config. Empty by default and never defaulted to
     # an address: a hardcoded resolver is an address this fleet could never rotate away
-    # from. Empty means the device keeps its own resolver, which the client template
-    # states in the file itself rather than leaving as an absence.
-    client_dns: tuple[str, ...] = ()
+    # from. Empty falls back to the NODE's own resolver (``egress.client_resolvers``), and
+    # only with neither does the client template say — truthfully, since M23 — that the
+    # device is left asking a resolver the tunnel's route has put out of its reach.
+    client_dns: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "the resolver a FRIEND's device is told to use inside the tunnel. Not used "
+            "at a hop end. An address, not a name. Left empty this node's own resolver "
+            "is written instead; with neither, a friend's device keeps asking a "
+            "resolver it can no longer reach and no name resolves."
+        ),
+    )
 
     @field_validator("port")
     @classmethod

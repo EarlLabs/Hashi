@@ -77,6 +77,28 @@ META = TransportMeta(
             scope=KeyScope.CLIENT,
             public_name="peer_public_key",
         ),
+        # WireGuard's pre-shared key is a property of a PAIR, and until M23 this transport
+        # declared only the node-scoped one above — so every friend on a node was handed
+        # the identical value. Read off the real leaf: two PresharedKey lines in the node's
+        # config, one distinct value. One friend's leaked file therefore exposed the
+        # symmetric layer protecting every other friend's handshake on that node, and
+        # revoking that friend rotated nothing.
+        #
+        # The same shape M17 gave the tunnel address one field over: CLIENT scope means
+        # "one per consumer", so `control` mints it per (friend, node, transport) with no
+        # knowledge of what it is for, and dropping that row is what makes a revocation
+        # total.
+        #
+        # The node-scoped key above stays rather than being deleted, and on this transport
+        # it now has exactly one job: it is what ``render_server`` falls back to for a
+        # credential minted before this declaration existed, so a node whose friends hold
+        # older files keeps authorising them until they are re-issued. Removing it would
+        # cut those friends off at the next apply.
+        KeySpec(
+            name="peer_preshared_key",
+            kind=KeyKind.SYMMETRIC_32_BASE64,
+            scope=KeyScope.CLIENT,
+        ),
         # The contract requires a client-scoped identity under the name "subject".
         KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
     ),

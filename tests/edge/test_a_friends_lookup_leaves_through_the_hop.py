@@ -168,6 +168,12 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     The golden files pin these bytes from the other side; this pins that a resolver on the
     record changes none of them. There the lookup and the exit already leave one host by
     one route, so there is nothing to move.
+
+    The NODE's config, and since M23 that qualifier is load-bearing: a friend's own
+    configuration file on such a node DOES change with the record, because a friend's
+    device has no route to its usual resolver once the tunnel routes every address. That
+    is ``tests/edge/test_a_friend_can_resolve_a_name.py``, and the two claims are about
+    two different files.
     """
     with_one = rendered(name, node, request, egress=Egress.LOCAL)
     without = rendered(

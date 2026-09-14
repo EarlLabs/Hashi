@@ -217,6 +217,28 @@ def test_mismatched_preshared_keys_are_refused(
         relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
 
 
+def test_both_ends_of_a_hop_still_carry_the_one_key_they_agree_on(
+    entry_node, leaf_node, amneziawg_params
+) -> None:
+    """M23 gave every friend a pre-shared key of their own; a hop must not get two.
+
+    The peer at each end of a hop is a NODE, and its pre-shared key is declared at node
+    scope and ``shared_between_peers`` precisely because two independently minted values
+    are two valid files and a handshake that never completes — the refusal above exists
+    for that. ``relay`` synthesises each end's peer from parameters alone and gives it no
+    per-pair material, so the renderer's fallback is what keeps this true. Asserted here
+    because the owner's live hop runs these bytes and nothing else would notice them
+    changing.
+    """
+    entry, leaf = ends(entry_node, leaf_node, amneziawg_params)
+
+    entry_config, leaf_config = relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
+
+    shared = f"PresharedKey = {amneziawg_params['preshared_key']}"
+    assert shared in directives(entry_config)
+    assert shared in directives(leaf_config)
+
+
 def test_an_ipv6_endpoint_is_bracketed(leaf_node, entry_node, amneziawg_params) -> None:
     """Otherwise the daemon reads the last group of the address as the port."""
     leaf_v6 = NodeView(

@@ -95,6 +95,51 @@ def rule_spec(command: str) -> str:
     return " ".join(reduced)
 
 
+# A stand-in for whatever this host's route to the internet is called. It is never
+# RENDERED — the rules name only ``%i`` and the test above holds them to it — so this is
+# only a second interface to evaluate a packet against, and any name that is not ``%i``
+# would do.
+SOME_OTHER_INTERFACE = "not-the-tunnel"
+
+
+def forward_chain(config: str) -> list[str]:
+    """The filter FORWARD chain as the kernel holds it once ``PostUp`` has run.
+
+    Built rather than read off the line, because ORDER is the whole finding here and the
+    order in the file is the reverse of the order in the chain: every rule is installed
+    with ``-I FORWARD 1``, so the last command in the hook ends up at the head. A test
+    that asserted "the DROP is present" would have passed against a DROP sitting behind
+    the two ACCEPTs, which is a DROP that decides nothing.
+    """
+    chain: list[str] = []
+    for command in commands(hook_lines(config, "PostUp")[0]):
+        words = command.split()
+        if words[:3] != ["iptables", "-t", "filter"]:
+            continue
+        assert words[3:5] == ["-I", "FORWARD"], f"unexpected verb: {command}"
+        chain.insert(int(words[5]) - 1, " ".join(words[6:]))
+    return chain
+
+
+def verdict(chain: list[str], *, arriving_on: str, leaving_by: str) -> str | None:
+    """What netfilter does with one forwarded packet: the FIRST matching rule's target.
+
+    ``None`` when nothing matches, which means the chain's own policy decides — on the
+    measured host that is ufw's DROP, and on a host without ufw it is ACCEPT. Neither is
+    a property of what this project renders, which is why "nothing matched" is its own
+    answer rather than being reported as a drop.
+    """
+    for rule in chain:
+        words = rule.split()
+        if any(
+            flag in words and words[words.index(flag) + 1] != value
+            for flag, value in (("-i", arriving_on), ("-o", leaving_by))
+        ):
+            continue
+        return words[words.index("-j") + 1]
+    return None
+
+
 def rendered(name: str, node, request, egress: Egress) -> str:
     """One transport's server config under one egress policy."""
     transport = profile(name)
@@ -123,6 +168,66 @@ def test_a_local_exit_renders_the_rules_the_kernel_needs(name: str, node, reques
     assert "FORWARD -i %i -j ACCEPT" in " | ".join(specs), specs
     assert "FORWARD -o %i -j ACCEPT" in " | ".join(specs), specs
     assert any("MASQUERADE" in spec for spec in specs), specs
+
+
+# --- M23: and it must leave, rather than arrive at the friend in the next flat -------
+
+@pytest.mark.parametrize("name", WG_FAMILY)
+def test_one_friend_cannot_reach_another_inside_the_tunnel(
+    name: str, node, request
+) -> None:
+    """The walk's ``ping`` and its ``nc``, asked of the chain instead of of a host.
+
+    Measured on the real leaf with two real clients: one friend pinged the other's tunnel
+    address with 0% loss and carried a TCP payload to a listener on it. The cause was not
+    the crypto — a friend cannot forge another's address, which the same walk confirmed —
+    it was this chain. ``-i %i -j ACCEPT`` matches a packet that arrives on the tunnel and
+    leaves by the tunnel, and with a pool every friend on the node is in one routed
+    network, so thirty people who need not know each other could reach each other's
+    laptops and phones.
+
+    Asserted as the VERDICT rather than as the presence of a rule, because the presence of
+    a rule was never the question: a DROP behind either ACCEPT is a DROP that never runs.
+    """
+    chain = forward_chain(rendered(name, node, request, Egress.LOCAL))
+
+    assert verdict(chain, arriving_on=INTERFACE_TOKEN, leaving_by=INTERFACE_TOKEN) == "DROP"
+
+
+@pytest.mark.parametrize("name", WG_FAMILY)
+def test_the_way_out_and_the_way_back_stay_open(name: str, node, request) -> None:
+    """The other half, and the one a wider drop would take with it.
+
+    ``-i %i -j DROP`` would close friend-to-friend and the exit in the same stroke, which
+    is M14 again with a different author. The drop has to be exactly the pair that both
+    enters and leaves by this interface; everything else is what the tunnel is for, in
+    both directions.
+    """
+    chain = forward_chain(rendered(name, node, request, Egress.LOCAL))
+
+    assert verdict(
+        chain, arriving_on=INTERFACE_TOKEN, leaving_by=SOME_OTHER_INTERFACE
+    ) == "ACCEPT"
+    assert verdict(
+        chain, arriving_on=SOME_OTHER_INTERFACE, leaving_by=INTERFACE_TOKEN
+    ) == "ACCEPT"
+
+
+@pytest.mark.parametrize("name", WG_FAMILY)
+def test_nothing_between_two_other_interfaces_is_touched(
+    name: str, node, request
+) -> None:
+    """Scoped to this tunnel, so nothing else the operator firewalls is decided here.
+
+    A node runs other things — the control plane reaches it over SSH, and a second
+    transport may have its own interface — and a rule of ours that matched their traffic
+    would be this project deciding a policy it was never asked about.
+    """
+    chain = forward_chain(rendered(name, node, request, Egress.LOCAL))
+
+    assert verdict(
+        chain, arriving_on=SOME_OTHER_INTERFACE, leaving_by=SOME_OTHER_INTERFACE
+    ) is None
 
 
 @pytest.mark.parametrize("name", WG_FAMILY)

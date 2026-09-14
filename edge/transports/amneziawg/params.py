@@ -47,11 +47,25 @@ class Params(BaseModel):
     # defaulted to an address: a hardcoded resolver is an address this fleet could
     # never rotate away from, which `CLAUDE.md` forbids for exactly that reason.
     #
-    # Empty is a real, documented state rather than a missing feature — the device
-    # keeps its own resolver and its queries do not enter the tunnel. The client
-    # template says so in the file itself, so a friend reading their config is not left
-    # to guess. Unused by the hop, where the consumer is a node with its own resolver.
-    client_dns: tuple[str, ...] = ()
+    # Empty is a real state rather than a missing feature, but it is NOT the state the
+    # comment in ``client.j2`` used to describe. A friend's config routes every address
+    # into the tunnel, their own resolver included, so "the device keeps its own resolver
+    # and its queries do not enter the tunnel" was false for every destination — M23,
+    # measured. Empty now falls back to the NODE's own resolver
+    # (``egress.client_resolvers``), and only with neither does the file say, truthfully,
+    # that nothing here answers a lookup. Unused by the hop, where the consumer is a node
+    # with its own resolver — which is why the field carries a ``description`` saying so:
+    # the establish-hop dialog renders it, and until M23 that box explained nothing
+    # (``docs/decisions.md``, 2026-09-10).
+    client_dns: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "the resolver a FRIEND's device is told to use inside the tunnel. Not used "
+            "at a hop end. An address, not a name. Left empty this node's own resolver "
+            "is written instead; with neither, a friend's device keeps asking a "
+            "resolver it can no longer reach and no name resolves."
+        ),
+    )
 
     # MTU. Explicit and required, never defaulted: this hop is a tunnel inside a
     # tunnel, and the default fragments. The symptom is "TLS works, large downloads

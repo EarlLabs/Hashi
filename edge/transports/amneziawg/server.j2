@@ -61,7 +61,10 @@ H4 = {{ params.transport_packet_magic_header }}
 [Peer]
 # {{ peer.label }}
 PublicKey = {{ peer.public_key }}
-PresharedKey = {{ params.preshared_key }}
+# This peer's OWN pre-shared key. Per PAIR, which is what WireGuard's design makes
+# it: one value across every peer meant one leaked config exposed the symmetric
+# layer protecting everyone else here, and revoking that peer rotated nothing.
+PresharedKey = {{ peer.preshared_key }}
 {% if peer.endpoint %}
 # Where this peer is dialled. Only ONE end of a hop has this: the other sits behind a
 # carrier NAT and can never be dialled, so it waits and is found by the handshake.

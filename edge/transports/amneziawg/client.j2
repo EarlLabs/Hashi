@@ -31,15 +31,21 @@
 PrivateKey = {{ peer.private_key }}
 Address = {{ peer.tunnel_address }}
 MTU = {{ params.mtu }}
-{% if params.client_dns %}
-# The resolver this device should use inside the tunnel. Operator-supplied: there is
-# no default, because a hardcoded resolver would be a fixed address this fleet could
-# never rotate away from.
-DNS = {{ params.client_dns | join(", ") }}
+{% if resolvers %}
+# The resolver this device asks inside the tunnel. Operator-supplied — this transport's
+# own setting, or failing that the one on the node's record: there is no default, because
+# a hardcoded resolver would be a fixed address this fleet could never rotate away from.
+# It has to be here, because AllowedIPs below routes every address into the tunnel and
+# that includes whichever resolver this device was using before.
+DNS = {{ resolvers | join(", ") }}
 {% else %}
-# No DNS line: this device keeps its own resolver, and its queries do not go through
-# the tunnel. Said out loud rather than left as an absence — it is a real property of
-# the configuration a friend receives, not a forgotten field.
+# NO RESOLVER WAS SET FOR THIS NODE, and this line is the warning rather than a
+# reassurance. AllowedIPs below routes EVERY address into the tunnel — that is the point
+# of it — and the resolver this device already uses is one of those addresses. If it is a
+# private one on the network this device is sitting in, a home router or an office
+# server, it cannot be reached from the far end, and while this tunnel is up no name will
+# resolve at all: addresses still work, names do not. Ask whoever gave you this file to
+# set a resolver.
 {% endif %}
 
 # AmneziaWG obfuscation. These MUST match the node's values exactly — they are not
@@ -56,7 +62,7 @@ H4 = {{ params.transport_packet_magic_header }}
 [Peer]
 # The node. One peer, never a list: a friend's device talks to the exit it was given.
 PublicKey = {{ params.public_key }}
-PresharedKey = {{ params.preshared_key }}
+PresharedKey = {{ peer.preshared_key }}
 AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = {{ endpoint }}
 # Keeps the UDP path open through NAT and stateful middleboxes. 25s is below the

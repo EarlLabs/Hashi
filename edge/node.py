@@ -64,6 +64,20 @@ class NodeView:
     # WAY OUT, and a node has one of those (``egress.HOP_ROUTE_TABLE``): two friend-facing
     # transports on one entry must look names up in the same place, and a copy per
     # transport is two places to disagree.
+    #
+    # **M23 widened what it answers, and the widening is the point.** It said "while its
+    # traffic leaves through a hop" because a proxy was the only consumer. A friend's
+    # kernel-tunnel config is the second, and it asks the identical question: a friend's
+    # traffic leaves through this node, so the names it asks for are looked up wherever
+    # this node looks names up. The real leaf proved the field was the one an operator
+    # reaches for — the owner set it, and nothing used it, and no name resolved. So a node
+    # that never dials a hop now renders this into the config its friends import
+    # (``egress.client_resolvers``), and a transport that wants its own answer overrides
+    # it with ``client_dns``.
+    #
+    # What follows for `control`, and it is a wording change rather than a schema one: the
+    # panel still says "leave it empty on a node that will never dial a hop", which is now
+    # the sentence that costs a friend their DNS.
     resolver: str | None
 
 

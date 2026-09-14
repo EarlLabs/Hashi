@@ -1,11 +1,13 @@
 """What a node does with the packets it decrypts — M14.3, its way out — M3, and where it
-looks a name up — M16.
+looks a name up — M16, and M23 for the friend.
 
 WHAT: ``Egress``, the closed vocabulary that says which way out traffic arriving over one
       tunnel takes, and the two expressions of it: ``wg_quick_egress`` for a data plane
       whose packets the kernel routes, ``exit_origin`` for one that terminates a
       connection and opens a new one. Beside the second, ``lookup_resolver``: the resolver
-      such a proxy must ask, instead of its host's, when its way out is a hop.
+      such a proxy must ask, instead of its host's, when its way out is a hop — and
+      ``client_resolvers``, the same question asked of a FRIEND's own config file, whose
+      device has no resolver left once the tunnel routes every address.
 WHY:  M14, measured on a real entry node with a real client. The handshake completed in
       both directions, the interface was up, the container was up — and nothing moved,
       because a decrypted packet was dropped by the host's FORWARD chain having never
@@ -55,6 +57,7 @@ ends up on a node.
 
 import enum
 import ipaddress
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -122,10 +125,31 @@ class WgQuickHooks:
 # ``! -o %i`` on the MASQUERADE is what removes the need for an egress interface name AND
 # keeps tunnel-internal traffic alone: a packet from one peer to another never leaves the
 # interface, so it must not be rewritten to look like the node.
+#
+# THE DROP IS THIRD IN THIS TUPLE AND FIRST IN THE CHAIN, and the inversion is the point
+# rather than an accident — M23, measured on the real leaf. Every rule here is installed
+# with ``-I <chain> 1``, so the LAST one inserted ends up at the head, and the two ACCEPTs
+# above each match a packet going from this interface back out of it: ``-i %i -j ACCEPT``
+# permits ``%i → %i``, and so does ``-o %i -j ACCEPT``. With a pool, every friend on this
+# node holds an address in one routed network, so those two rules give thirty people who
+# need not know each other full IP reachability to each other's laptops and phones —
+# observed on a real node with two real clients (``ping`` 0% loss, a TCP payload carried).
+# Placing the DROP after them here is what places it BEFORE them there, which is the only
+# position at which it decides anything.
+#
+# It is a DROP and not a REJECT: a rejection answers, and an answer is a signal one
+# friend's device can use to enumerate the others. It does not log, like everything else
+# in this module.
+#
+# Safe on the leaf end of a hop, which renders this same policy: that interface has one
+# peer authorised for a single ``/32``, so ``%i → %i`` there is the far end addressing
+# itself through the tunnel, which is not a packet any working hop sends. The entry end
+# renders ``Egress.HOP`` and no filter rule at all, so it never sees this line.
 def _rules(network: str) -> tuple[tuple[str, str, str], ...]:
     return (
         ("filter", "FORWARD", "-i %i -j ACCEPT"),
         ("filter", "FORWARD", "-o %i -j ACCEPT"),
+        ("filter", "FORWARD", "-i %i -o %i -j DROP"),
         ("nat", "POSTROUTING", f"-s {network} ! -o %i -j MASQUERADE"),
     )
 
@@ -463,9 +487,11 @@ def lookup_resolver(egress: Egress, resolver: str | None) -> str | None:
     every node without a hop has always used, and correctly: there the lookup and the exit
     already leave one host by one route, so nothing needs moving and the config stays byte
     for byte what it was. A resolver on such a node's record is not the contradiction an
-    ``exit_via`` would be: it is a fact about the node, kept for the day it dials a hop, and
-    not needed yet — so it is not checked here either, and a leaf never fails to render
-    over a field it does not use.
+    ``exit_via`` would be: it is a fact about the node, kept for the day it dials a hop —
+    and, since M23, read by ``client_resolvers`` for a friend's own config file on a node
+    that never dials one. This function still ignores it off a hop, because a PROXY on a
+    node without one has nothing to move; that is a statement about this consumer and no
+    longer about the field.
 
     Under a hop with no usable resolver it REFUSES, for the reason ``exit_origin`` refuses
     a hop with no address: rendering anyway is not neutral. It is the host's resolver — the
@@ -481,6 +507,73 @@ def lookup_resolver(egress: Egress, resolver: str | None) -> str | None:
     return resolver
 
 
+def client_resolvers(
+    client_dns: Sequence[str], node_resolver: str | None, tunnel_address: str
+) -> tuple[str, ...]:
+    """The resolvers a FRIEND's config names, in the order they are written.
+
+    The third consumer of the same M16 question — "where are the names this node's
+    traffic asks for looked up" — and the one M23 found missing on a real leaf. A
+    friend's config routes every address into the tunnel (``AllowedIPs = 0.0.0.0/0,
+    ::/0``, which is the charter: their traffic exits abroad, not some of it). That route
+    includes the resolver the device was already using, and on a home or office network
+    that resolver is a private address on the near side, unreachable from the exit. So
+    the tunnel comes up, the handshake completes, five megabytes move — and not one name
+    resolves. Measured on the real leaf with two real clients, both identically.
+
+    Two sources, most specific first, and neither is a value this module chose:
+
+    * ``client_dns`` — the transport's own parameter, per node × transport. An operator
+      who answers it has said exactly what a friend's device should ask.
+    * the node record's ``resolver`` — M16's field, and the one an operator reaches for
+      first. It already answers "where does the traffic leaving this node look names
+      up"; a friend's traffic leaves through this node, so it is the same question and
+      gets the same answer rather than a second field to keep in step. The friend's query
+      travels the tunnel, is decrypted here and leaves by this node's own route — so a
+      resolver this node can reach is one that friend can reach. **This widens what the
+      field means, deliberately and on the record: see ``edge/node.py``.**
+
+    Empty when neither is set, which is a real state rather than an error, and the client
+    template says so in the file itself — including what it costs, which is the half the
+    file used to get wrong. It is not refused here: the refusal would punish an operator
+    who has no box to answer in, because ``client_dns`` declares a default and
+    ``control``'s enable dialog offers a box only for what a transport REQUIRES. That is
+    the control-side half of this finding, and until it lands a refusal would turn "a
+    friend with no names" into "a friend with no config".
+
+    One thing IS refused, because it would be worse than silence: a resolver inside this
+    tunnel's own network. Every address in that range is one a friend's device holds, so
+    a resolver there points every friend's lookups at whichever person was given it — the
+    one record this project must never create. The transport's own ``Params`` already
+    refuses that where it is TYPED; this is the same rule applied to the value arriving
+    from the node record, where nothing has yet checked it against this tunnel.
+    """
+    resolvers = tuple(client_dns) or tuple(
+        value for value in (node_resolver,) if value and value.strip()
+    )
+    if not resolvers:
+        return ()
+
+    network = ipaddress.ip_interface(tunnel_address).network
+    for resolver in resolvers:
+        try:
+            address = ipaddress.ip_address(resolver)
+        except ValueError as exc:
+            raise EgressNotRenderable(
+                f"{resolver!r} is not an address, and a resolver written into a tunnel's "
+                "DNS setting cannot be a name: looking that name up is the very thing "
+                "the setting is for."
+            ) from exc
+        if address.version == network.version and address in network:
+            raise EgressNotRenderable(
+                f"the resolver {resolver!r} is inside {network}, which is this tunnel's "
+                "own range. Every address in it is one a friend's device is given, so "
+                "every friend's lookups would go to whoever holds it. Give a resolver "
+                "outside the tunnel."
+            )
+    return resolvers
+
+
 __all__ = [
     "EXIT_ROUTE",
     "HOP_ROUTE_TABLE",
@@ -491,6 +584,7 @@ __all__ = [
     "ResolverMissing",
     "WgQuickEgress",
     "WgQuickHooks",
+    "client_resolvers",
     "exit_origin",
     "lookup_resolver",
     "resolver_problem",
