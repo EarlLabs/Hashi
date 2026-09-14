@@ -109,7 +109,8 @@ TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
 # format is the one already printed in this row's own delivery column, so the sentence
 # stays one arm per FORMAT and gains nothing to edit when a third shape arrives.
 TRANSPORT_NOT_IN_THE_LINK = (
-    "not in the subscription link itself — delivered from that same link as a config file"
+    "not in the subscription link itself — a user's client gets it from that same link "
+    "by asking for the shape above"
 )
 
 # What it means, on the screen the operator learns the protocols from, that a transport
@@ -525,16 +526,24 @@ class KeyRow:
 # way. The same bearer token answers ``?format=`` with an archive of this friend's
 # configuration files (``control/app/api/delivery.py``, item 27), so "this panel cannot
 # hand it over" is false about this product — see ``TRANSPORT_NOT_IN_THE_LINK``, which
-# said exactly that and has been corrected with it. What is true, and all of it, is the
-# three facts below: the host is told to serve it, it is not in the link itself, and the
-# shape it arrives in is a file.
+# said exactly that and has been corrected with it.
+#
+# NOR MAY IT SAY THE FRIEND SIMPLY GETS IT, which is the other way to be wrong here and
+# the more dangerous one: nothing in this panel hands the operator the URL that asks for
+# the file shape, so an operator told "delivered from that same link" would tell a friend
+# to open the link they already have and the friend would meet an empty page. That gap is
+# its own milestone and is not closed here. So the sentence says ONLY BY ASKING for the
+# shape — three facts, all true today, and none of them a decision that milestone has to
+# make: the host is told to serve it, it is not in the link itself, and the shape it
+# arrives in is a file.
 #
 # Chosen by the transport's own derived declaration and never by a name, like every other
 # string in this module.
 OFFER_IN_EVERY_LINK = "offered — in every user's link at their next refresh"
 OFFER_NOT_IN_THE_LINK = (
-    "offered — the node serves it once applied, but not in the subscription link itself: "
-    "this transport is delivered from that same link as a config file"
+    "offered — the node serves it once applied, but it is not in the subscription link "
+    "itself: this transport is a config file, and a user's client gets it from that same "
+    "link only by asking for that shape"
 )
 OFFER_WITHDRAWN = (
     "withdrawn — out of every user's link. The node is still configured to serve it "
@@ -1562,8 +1571,8 @@ def offer_summary(node: str, transport: str, *, deliverable: bool) -> str:
     if not deliverable:
         return (
             f"{transport} offered again on {node} — every user is granted material on it, "
-            "and the subscription link itself does not change: this transport is "
-            "delivered from that same link as a config file."
+            "and the subscription link itself does not change: this transport is a config "
+            "file, which a user's client gets from that same link by asking for it."
         )
     return (
         f"{transport} offered again on {node} — in every user's link at their next "
