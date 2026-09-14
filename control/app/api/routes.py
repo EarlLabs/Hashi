@@ -42,6 +42,13 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
     The panel builds its "enable a transport" form from this, which is what lets a
     new protocol appear in the UI with no change to the panel — criterion 4's
     "selectable in the panel without modifying the control plane's core".
+
+    EVERY transport, including one the registry has retired, because this endpoint
+    answers "what does this image ship" and a list that silently dropped a package would
+    leave an operator reading a node's existing row against an inventory that does not
+    contain it. Which of them may be PROPOSED is the ``retired`` flag's answer, so a
+    chooser built from this list filters on a declaration rather than on a name — the
+    same rule the HTML forms follow.
     """
     listed = []
     for name, meta in sorted(discover().items()):
@@ -57,6 +64,11 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
                 subscription_formats=sorted(str(f) for f in meta.subscription_formats),
                 blocked_by_inspection=meta.blocked_by_inspection,
                 hop_capable=meta.hop_capable,
+                # The retirement, passed through in both halves — M20. A caller building
+                # a chooser reads the flag; a caller showing a person why an option is
+                # missing reads the sentence, which is the transport's own.
+                retired=meta.retired is not None,
+                retired_because=meta.retired.reason if meta.retired else None,
                 # Required fields the operator must fill in: everything the model
                 # requires minus everything we mint for them. Shared with the panel's
                 # rotation form so the two screens cannot drift apart.

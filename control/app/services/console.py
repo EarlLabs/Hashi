@@ -130,6 +130,20 @@ TRANSPORT_ADDRESS_PER_USER = (
 # it has to be right about the whole stack, and here it is not. The gap is background
 # in ``docs/tracker/M9/carry-over.md``: no field of ``TransportMeta`` expresses it, and
 # closing it is an ``edge``-side declaration rather than a name compared here.
+# What retirement MEANS to the operator, in front of the transport's own reason for it
+# — M20. Two sentences deliberately: the first is the consequence on this panel and is
+# the same for every retired transport, so it is written once here; the second is the
+# fact that caused it, which only the transport can know and which is read straight out
+# of ``TransportMeta.retired``.
+#
+# It says what still works as well as what stopped, because the operator reading this
+# most likely has a node running the transport already — the leaf did when this was
+# written — and a row that said only "retired" would read as "your node has stopped".
+TRANSPORT_RETIRED = (
+    "no longer offered when enabling a transport, and a node already running it keeps "
+    "serving it —"
+)
+
 TRANSPORT_WHY_IDENTIFIED = (
     "it has no camouflage. The wire format is fixed and looks like itself, so a "
     "network that inspects traffic can name the protocol and drop it: both ends stay "
@@ -351,11 +365,13 @@ class TransportRow:
     ``None`` for every other transport, so the screen warns about what the image
     declares rather than about what anybody wrote down.
 
-    What is deliberately NOT here, because no transport declares it: whether a protocol
-    has been proven on real hardware, and whether the image this project pins can carry
-    it to a user without failing silently. Both are recorded in prose (see
-    ``docs/decisions.md``, 2026-09-09) and neither is machine-readable, so putting
-    either on the screen would mean `control` recognising a protocol by name.
+    ``retired_note`` CLOSED THE GAP THIS DOCSTRING USED TO RECORD. It said that whether
+    the image this project pins can carry a protocol to a user without failing silently
+    was recorded in prose alone, not machine-readable, and therefore unshowable without
+    `control` recognising a protocol by name. M20 made it a declaration
+    (``TransportMeta.retired``), measured twice on a live node, so the screen now says
+    it — from the same place every other cell comes from, and still with no name compared
+    anywhere on the path.
     """
 
     name: str
@@ -386,6 +402,10 @@ class TransportRow:
     # that needs a sentence is the one with a consequence for the operator, which here
     # is a number they will be asked for on every node they enable it on.
     address_note: str | None
+    # ``retired``, and only when it is declared: what the panel will no longer do with
+    # this transport, followed by the transport's own reason. One-sided like
+    # ``hop_note`` — a transport that is offered needs no sentence saying so.
+    retired_note: str | None
     why: str | None
 
 
@@ -1009,11 +1029,12 @@ def transport_rows() -> list[TransportRow]:
 def _transport_row(meta: TransportMeta) -> TransportRow:
     """One transport's declaration, projected into the words the screen shows.
 
-    This is the whole of M9.3's hard rule. Four of the strings below are chosen by
-    something the TRANSPORT declares about itself, and none of them is chosen by which
-    protocol it is — there is no name compared to anything here, in the template, or
-    anywhere on the path between them. Ship a fifth protocol and its row writes itself;
-    ship one that declares itself identified and the warning appears with no edit.
+    This is the whole of M9.3's hard rule. Every string below is chosen by something the
+    TRANSPORT declares about itself, and none of them is chosen by which protocol it is
+    — there is no name compared to anything here, in the template, or anywhere on the
+    path between them. Ship a fifth protocol and its row writes itself; ship one that
+    declares itself identified and the warning appears with no edit; retire one and the
+    row says so, with nothing in this zone to change.
 
     The two conditions in ``delivery_note`` are not the same condition. A transport
     with no declared format serialises into nothing a user could consume at all; a
@@ -1048,6 +1069,13 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
             TRANSPORT_ADDRESS_PER_USER
             if addresses.spec_for(meta.name) is not None
             else None
+        ),
+        # M20, and the one cell on this screen that is about what the PANEL will do
+        # rather than about what the protocol is. The consequence is this zone's
+        # sentence and the cause is the transport's, joined here so the template still
+        # prints one composed string and still cannot tell one protocol from another.
+        retired_note=(
+            f"{TRANSPORT_RETIRED} {meta.retired.reason}" if meta.retired else None
         ),
         why=TRANSPORT_WHY_IDENTIFIED if meta.blocked_by_inspection else None,
     )

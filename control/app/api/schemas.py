@@ -145,6 +145,24 @@ class TransportMetaResponse(BaseModel):
     # should not offer an option the renderer will refuse.
     hop_capable: bool
 
+    # Whether the registry has withdrawn this transport from every list a chooser is
+    # built from — M20. Surfaced here because this endpoint is what a script or a second
+    # front end builds an "enable a transport" form out of, and a declaration the HTML
+    # honours while the JSON does not is a retirement that only holds where somebody
+    # remembered it.
+    #
+    # It says nothing about whether the transport can be enabled: a retired one still
+    # renders, still mints material, and is still accepted by
+    # ``POST /api/nodes/{id}/transports`` for an operator who names it outright. What
+    # stopped is being proposed.
+    retired: bool
+
+    # Why, in the transport's own words, and ``None`` when it is not retired. Carried
+    # rather than composed here for the reason every other sentence in this response is
+    # the transport's: `control` cannot know what is wrong with a protocol it is built
+    # not to recognise.
+    retired_because: str | None
+
     # The parameters an operator must supply, i.e. everything the transport's model
     # requires that is not generated for them. Lets the panel build a form without
     # knowing any protocol.

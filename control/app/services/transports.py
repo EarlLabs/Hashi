@@ -28,6 +28,14 @@ HOW:  required fields of the transport's own model, minus every name the transpo
       order those are tried in, and for the one case where the answer comes from
       ``TransportMeta`` rather than from the field.
 
+      M20 adds ``retired_transports()`` and subtracts its answer from both lists above.
+      A transport the registry declares retired is not proposed by any form here — the
+      owner's instruction, after one was measured twice on a live node completing a
+      handshake and carrying nothing. It is a subtraction from what the panel OFFERS and
+      not a new refusal: ``nodes.enable_transport`` is untouched, so a node that already
+      runs one keeps it, ``POST /api/nodes/{id}/transports`` still does what an operator
+      names outright, and the user holding that configuration keeps it.
+
       Nothing here names a protocol. The answer comes from the transport's own
       declaration, so a new package under ``edge/transports/`` gets working forms with
       no edit to this file. ONE field name appears, and it is the hop contract's
@@ -196,12 +204,42 @@ def hop_transports() -> list[str]:
 
     Note the overlap this allows, and which is correct: a transport can be on this list
     AND offerable to friends.
+
+    A THIRD CONDITION SINCE M20, and it is the same shape as the other two: a transport
+    the registry declares retired is not proposed here either. No transport this image
+    ships is both hop-capable and retired today, so this is the declaration holding a
+    door shut rather than one already closed — but a chooser that had to be REMEMBERED
+    when the next transport is retired is a chooser that will not be.
     """
     return sorted(
         meta.name
         for meta in discover().values()
-        if not meta.subscription_expressible and meta.hop_capable
+        if not meta.subscription_expressible
+        and meta.hop_capable
+        and meta.retired is None
     )
+
+
+def retired_transports() -> dict[str, str]:
+    """Every installed transport the registry has withdrawn from this panel, and why.
+
+    THE ONE PLACE `control` ASKS THAT QUESTION — M20, and the same rule the three
+    declarations before it follow: the panel reads a field, never a name. A transport
+    found unusable is retired by one line in its own ``meta.py``, and every form in this
+    zone empties itself of it with no edit here, in any route, or in any template.
+
+    The reason comes back with the name because the two are useless apart. A package in
+    the tree that nothing offers is a puzzle, and the only file that can answer it is the
+    transport's own — `control` passes the sentence through and never composes one, being
+    built not to recognise the protocol the sentence is about. It is read by the enable
+    route, which has to say why a submission naming one is refused, and by the Transports
+    screen, which has to say why a row an operator can see is not on the dialog.
+    """
+    return {
+        meta.name: meta.retired.reason
+        for meta in discover().values()
+        if meta.retired is not None
+    }
 
 
 def hop_parameters(transport_name: str) -> list[str]:
@@ -427,9 +465,25 @@ def offerable_transports() -> list[str]:
     "may a person be handed this", and a transport can honestly be on both lists or on
     neither. Nothing here names a protocol; both answers come from what each transport
     declares about itself.
+
+    SECOND CONDITION SINCE M20: a transport the registry declares retired is not offered,
+    whatever it can serialise — *"the admin panel do not even should show this protocol,
+    for me in suggestions"*. It is subtracted HERE rather than only where the dialog is
+    built, because this list is also what the enable route reads a submission against:
+    a form that stopped rendering a transport's boxes while the route went on reading
+    them would accept a submission it could not have produced, and then have nowhere to
+    put the refusal — every sentence on that dialog is shown under the box it is about,
+    and there would be no box.
+
+    What this does NOT do is refuse the operation. ``nodes.enable_transport`` is
+    unchanged, so ``POST /api/nodes/{id}/transports`` still enables what an operator
+    names outright, an existing row keeps rendering, and the tests that exercise both
+    members of the WireGuard family against that path keep both.
     """
     return sorted(
-        meta.name for meta in discover().values() if meta.subscription_formats
+        meta.name
+        for meta in discover().values()
+        if meta.subscription_formats and meta.retired is None
     )
 
 

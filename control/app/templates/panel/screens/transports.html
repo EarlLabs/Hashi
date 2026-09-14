@@ -86,6 +86,24 @@
               {% endif %}
             </td>
           </tr>
+          {% if transport.retired_note %}
+          {#
+            A transport the registry has withdrawn from the enable dialog's choices, in
+            the same shape as the reason below it: its own row, because it is a sentence
+            and the columns beside it are short. The words are composed in
+            services/console.py out of the transport's OWN declaration — this file still
+            names no protocol, and a package retired later gets this row with nothing
+            here to edit.
+
+            It is on this screen rather than only absent from the chooser because a table
+            that lists four protocols while the enable dialog offers three sends the
+            operator looking for the missing one. The row that is no longer offered is
+            the one that has to say so.
+          #}
+          <tr class="row-detail">
+            <td class="text-muted" colspan="5">retired: {{ transport.retired_note }}</td>
+          </tr>
+          {% endif %}
           {% if transport.why %}
           {#
             Why the panel refuses to offer this one as an exit, in words. Its own row

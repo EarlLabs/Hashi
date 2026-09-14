@@ -463,6 +463,23 @@ NOT_ITS_PARAMETER = (
     "submission."
 )
 
+# What a submission naming a transport this panel no longer offers is answered with —
+# M20. Above the form, because it is about the choice rather than about any box: the
+# dialog renders no group for such a transport, so there is no box for a sentence to sit
+# under and every other complaint about it would be withheld.
+#
+# The reason is the TRANSPORT's, carried here by ``transports.retired_transports()``.
+# Nothing in this module knows what is wrong with a protocol, and a sentence written here
+# would be one more thing to rewrite the next time a transport has to be retired.
+#
+# It says what is still true as well as what is refused. An operator who reaches this has
+# a node running the transport already, or has just read the Transports screen, and the
+# thing they most need to know is that neither their node nor their users have changed.
+NO_LONGER_OFFERED = (
+    "nothing was enabled — {name} is no longer offered here: {reason} A node already "
+    "running it keeps serving it, and nobody's configuration has changed."
+)
+
 
 @router.get("/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
 async def withdraw_transport_dialog(
@@ -694,7 +711,13 @@ async def _enable_form(
     every box out of the transport's own model — so this dialog names no protocol, no
     field and no port, exactly as the establish-hop dialog does not. The list of
     protocols it may offer is the image's own answer (``offerable_transports``) and
-    nothing is subtracted from it.
+    nothing else is subtracted from it.
+
+    WHAT THAT ANSWER NOW SUBTRACTS is a transport the registry declares retired — M20,
+    on the owner's instruction after one was measured twice on a live node completing a
+    handshake and carrying no traffic. The subtraction is in the service, asked of the
+    declaration and never of a name, so retiring a future transport empties its group out
+    of this dialog with no edit here and none in its template.
 
     IT USED TO SUBTRACT what the node already ran, on the reasoning that the form should
     not present an action whose only outcome is a refusal. That reasoning went with the
@@ -1092,6 +1115,10 @@ async def _hop_form(
     transport, a country, an address or a port" made structural rather than checked:
     this dialog has twenty-two boxes and not one of them has a value written into the
     markup.
+
+    ``hop_transports`` subtracts a retired transport too, since M20, so this dialog needs
+    no edit when one is retired — including a hop-capable one, which this image does not
+    ship today.
 
     Everything the operator typed comes back on a refusal, all of it — unlike the
     add-node dialog, which drops the private key. There is no key in this form to drop:
@@ -2065,6 +2092,29 @@ async def enable_transport(
     if not transport_name:
         return await _refuse_the_form(
             request, session, node_id, typed, {"transport_name": NO_TRANSPORT_CHOSEN}
+        )
+
+    # A transport this panel has stopped offering — M20. Answered here rather than left
+    # to the service, and the difference is what the operator reads: this dialog renders
+    # no group for a retired transport, so the submission below would be measured against
+    # an empty set of boxes and refused for missing every field of a form nothing drew.
+    # The sentence is the registry's own, and the name is the operator's own submission,
+    # so no protocol is named in this module.
+    #
+    # The refusal is this SURFACE's and not the operation's: ``nodes.enable_transport``
+    # accepts a retired transport still, because an operator naming one outright through
+    # the API is not being offered anything, and the fleet's existing rows were made that
+    # way.
+    retired = transports.retired_transports()
+    if transport_name in retired:
+        return await _refuse_the_form(
+            request,
+            session,
+            node_id,
+            typed,
+            failure=NO_LONGER_OFFERED.format(
+                name=transport_name, reason=retired[transport_name]
+            ),
         )
 
     # Which boxes this transport declares it needs, and — wider — every field it lets an
