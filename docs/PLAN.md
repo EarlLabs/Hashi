@@ -2050,67 +2050,72 @@ changed.
 
 ---
 
-## → M24 — A friend cannot receive a config-file transport · found three times, independently · PROPOSED 2026-09-14
+## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day
 
-**Not started. Written down because it has now been found by three separate
-agents that could not see each other's work, and because it sits on the path a
-friend actually touches.**
+**Not started.**
 
-### What was measured
+### The correction that defines this milestone
 
-| found by | what it saw |
-|---|---|
-| **M17 acceptance** | `GET /sub/<token>` → **200, `content-length: 0`**. The configs come only from `?format=client-config-file`, which no screen mentions. |
-| **M18/M20 walks** | anna's `/sub/` returns 344 bytes holding **only** the vless entries, while her `wireguard` and `amneziawg` rows are enabled and rendering. |
-| **M20 acceptance** | Two surfaces contradict each other. Every enabled row's confirmation says *"— offered — **in every user's link at their next refresh**"*, while the Transports screen says of the same rows *"**not in a user's link yet — this panel cannot hand it over**"*. |
+This was first written up — by the orchestrator, on 2026-09-14 — as *"a friend
+cannot receive a config-file transport… there is simply no route from it to the
+person."* **That was false, and the error is worth keeping visible**, because two
+separate false sentences in the product are what produced it.
 
-### Why it is a milestone and not a bug
+**`GET /sub/{token}?format=client-config-file` exists and works.** It is
+`control/app/api/delivery.py` (backlog item 27, landed). Fetched through the real
+app during M20's fix round: **200 `application/zip`, 1286 bytes**, containing a
+valid `awg-probe-1.conf` with `[Interface]`, `PrivateKey`, `Address`, `MTU`.
 
-**The two families deliver differently, and only one of them has a delivery path.**
+**So the route exists. What is missing is that no screen ever shows it.**
+`control/app/api/routes.py:225` composes `{public_base_url}/sub/{token}` — the
+plain shape only. An operator following the panel hands a friend a link that, for
+a node serving only WireGuard-family transports, returns an empty document.
 
-- **VLESS-family** declares `subscription_formats = {V1_URI_LIST}` — a URI goes into
-  the subscription body, the friend pastes one link, and it works.
-- **WireGuard-family** declares `subscription_formats = {CLIENT_CONFIG_FILE}` — there
-  **is no URI form**. A `.conf` file has to reach the friend's device some other way,
-  and nothing in the product does that.
+### Both sentences the product shows are wrong, in opposite directions
 
-So a friend whose node runs only WireGuard-family transports opens their link and
-gets **an empty page**. Nothing is broken in the renderer — the config exists and
-is correct. **There is simply no route from it to the person.**
+| surface | says | truth |
+|---|---|---|
+| every enabled row | *"offered — **in every user's link at their next refresh**"* | false for a config-file transport: it is not in the link's body |
+| Transports screen | *"not in a user's link yet — **this panel cannot hand it over**"* | also false: the same link hands it over when asked for that shape |
 
-M17 made a WireGuard row able to carry the whole fleet, and M20 retired the one
-wg-family transport that could not carry traffic. Both of those make the
-remaining question sharper: **the fleet's recommended friend-facing transport is
-`amneziawg`, and `amneziawg` is exactly the kind the panel cannot hand over.**
+M20's fix round corrected **both sentences**. It did not build a delivery surface,
+and its own note says the wording it wrote — *"only by asking for that shape"* —
+**describes today's gap rather than deciding how the link should carry the
+parameter. That decision is this milestone's.**
+
+*Recorded because the near-miss is instructive: a fix that corrected only the
+first sentence would have replaced one falsehood with another, and the suite
+would have been green either way.*
 
 ### What the milestone has to decide, before it writes code
 
-1. **How does a `.conf` reach a device?** The subscription endpoint already serves
-   it under `?format=client-config-file` — is the answer as small as *the link
-   the panel shows the operator carries that parameter when the node's transports
-   need it*? Or does a friend need something else (a QR code, a per-transport
-   link, a page that offers the file)?
-2. **What does one link mean when a node serves both families?** The subscription
-   promise is *"One URL, every serving node."* A body that is a URI list and a
-   body that is a file are not the same kind of thing.
-3. **Bearer-token rules still apply.** `/sub/{token}` is a bearer credential in a
-   URL path; access logging is off in uvicorn and discarded in Caddy. Any new
-   delivery surface inherits that, **and must not become a second place a token
-   can be recorded.**
-4. **What the operator is told.** Whatever the answer, the two sentences above
-   must stop contradicting each other. *(The sentence itself is being corrected
-   under M20 — this milestone owns the mechanism.)*
+1. **What URL does the operator get handed?** The plain one, with the friend
+   expected to know about `?format=`? One URL per shape? One URL that answers
+   correctly based on what the node actually serves? The last sounds obviously
+   right and is the one that quietly changes what a token means.
+2. **What does "one link, every serving node" mean when a node serves both
+   families?** A base64 URI list and a zip archive are not the same kind of
+   document, and the subscription promise is currently written as if they were.
+3. **What does the friend do with a `.conf`?** A URI pastes into a client. A file
+   has to be imported. Whatever is shown must match the client the runbook tells
+   people to install.
+4. **Bearer-token rules are inherited, not re-decided.** `/sub/{token}` is a
+   bearer credential in a URL path; access logging is off in uvicorn and discarded
+   in Caddy. **A new surface must not become a second place a token can be
+   recorded**, and a `?format=` in a link is one more thing that can land in a
+   history, a bookmark or a chat log.
 
 **Done when**
-- [ ] A friend on a node whose only transports are WireGuard-family can obtain a
-      working configuration by following what the panel gives the operator.
-- [ ] The panel's description of what a link contains is true for every
+- [ ] An operator following only what the panel shows can give a friend on a
+      WireGuard-family-only node something that works.
+- [ ] Every sentence the panel says about what a link contains is true for every
       combination of enabled transports.
 - [ ] No new surface records a token, an address, or who fetched what.
 
 acceptance: yes
-Take a friend on a node serving only `amneziawg`, follow exactly what the panel
-hands the operator, and get a configuration onto a device that then connects.
+Take a friend on a node serving only `amneziawg`. Follow exactly what the panel
+hands the operator — nothing learned from the source — and get a working
+configuration onto a device.
 
 ---
 
