@@ -25,7 +25,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened six times since, each deliberately, each recorded
+      **It has been widened seven times since, each deliberately, each recorded
       where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
       own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
       now declares the SET of subscription shapes it serialises into rather than a
@@ -52,7 +52,16 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       not one existing ``META`` changes: a transport that identifies its consumers by
       key material or by a UUID says nothing and is asked for nothing.
 
-      None of the six was a branch on a protocol; each replaced one with a
+      ``Retirement`` came with M20, and is the first of the seven that takes something
+      AWAY rather than adding a capability: a transport measured to be unusable on the
+      hosts this project builds has to stop being suggested, and the only alternative
+      was a name compared in the panel — the exact branch this whole module exists to
+      prevent. It subtracts the transport from what `control` PROPOSES and from nothing
+      else, so the package stays, discovery stays, and the rows already running it
+      render the same bytes. Optional, defaulting to ``None``, so not one existing
+      ``META`` changes.
+
+      None of the seven was a branch on a protocol; each replaced one with a
       vocabulary or a property. None was free either, and a reader deserves to know
       the contract has moved and why rather than to discover it from a diff.
 """
@@ -301,6 +310,36 @@ class PeerAddress:
 
 
 @dataclass(frozen=True)
+class Retirement:
+    """A transport declaring that it must no longer be OFFERED, and why.
+
+    The narrowest possible statement, and note what it does NOT say: nothing here
+    removes the package, stops it being discovered, stops ``profile()`` loading it, or
+    stops a node that already runs it rendering exactly the bytes it rendered before.
+    A retired transport is one that must not be PROPOSED — it is subtracted from the
+    lists `control` builds when it asks an operator to choose a transport, and from
+    nothing else. That split is the whole design: the fleet's existing rows keep
+    working, and nobody is offered the thing anew.
+
+    ``reason`` is required, and it is carried here rather than written in `control`
+    because it is a fact about this protocol on the hosts this project builds — the
+    panel has no way to know it, and a reader who finds a package in the tree that is
+    never offered deserves the answer without going to ``git log``. It is the only
+    field, which is also why this is a dataclass rather than a bare ``str | None``: an
+    empty string in a nullable field reads as "not retired", so a package could retire
+    itself and say nothing, or fail to retire itself and look as though it had.
+    ``_check_declaration`` refuses the empty reason, which a plain string could not
+    distinguish from the ordinary case.
+
+    Retiring a future transport is therefore one line in its own ``meta.py`` and no edit
+    anywhere else — the same property ``hop_capable`` and ``blocked_by_inspection``
+    have, and the reason none of the three is a name compared in `control`.
+    """
+
+    reason: str
+
+
+@dataclass(frozen=True)
 class TransportMeta:
     """What the control plane may know about a transport without knowing which."""
 
@@ -381,6 +420,20 @@ class TransportMeta:
     # which is the opposite of ``listens_on``'s case for being required — and it means
     # no shipped ``META`` had to change when this field arrived.
     peer_address: PeerAddress | None = None
+
+    # Whether this transport has been withdrawn from every list `control` builds when it
+    # asks an operator to choose a transport — and, if so, why. See ``Retirement``.
+    #
+    # Optional and defaulting to "no" for the same reason ``peer_address`` is: the
+    # ordinary answer is that a shipped transport is offered, and no existing ``META``
+    # should have to say so. A package says this only when it has stopped being an
+    # honest suggestion.
+    #
+    # It is deliberately NOT a refusal. Discovery, ``profile()``, rendering, key
+    # material, an existing node's row and an existing consumer's configuration are all
+    # untouched — a fleet does not break because a protocol stopped being recommended.
+    # `control` reads it once per chooser; see ``control/app/services/transports.py``.
+    retired: Retirement | None = None
 
     @property
     def subscription_expressible(self) -> bool:
@@ -726,6 +779,18 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
                 "name. An address is allocated from a pool, never generated: `control` "
                 "would mint a value over the address it had just handed out."
             )
+
+    # A retirement with nothing in it is the one shape this declaration can take that
+    # says less than saying nothing. The field is what removes the transport from every
+    # chooser, so an empty reason leaves a package in the tree that the panel never
+    # offers and no file explains — which is exactly the reader the reason exists for.
+    if meta.retired is not None and not meta.retired.reason.strip():
+        raise ContractViolation(
+            f"transport {meta.name!r} declares itself retired and gives no reason. The "
+            "reason is the declaration's whole value to a reader: without it the panel "
+            "stops offering a package that is still in the tree, and nothing on disk "
+            "says why."
+        )
 
     # The one implication between the two declarations item 28 added. A package with both
     # True compiles and reads plausibly and hands the fleet a hop that cannot come up.
