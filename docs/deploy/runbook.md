@@ -769,7 +769,7 @@ Every transport this image ships, and what each one may be asked to do:
 
 | transport | friends on a node with a hop | friends on a node with no hop | the entry→leaf hop |
 |---|---|---|---|
-| `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — its configuration is a link rather than a file, so the hop form does not offer it |
+| `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — a hop is two ends of one tunnel network that each need an address of their own, and this transport hands its consumers none: it identifies them by their material |
 | `vless-ws-tls` | yes, once a certificate and key are on the node | yes, on the same condition | no, for the same reason |
 | `amneziawg` | no — the panel accepts the row and the apply refuses it | yes | yes, and today it is the only one |
 | `wireguard` | no — the same refusal, for the same reason | no — retired: the panel does not offer it, and a row enabled before that carries no traffic on a host this runbook prepared | no — it is protocol-blocked where this matters, and the form will not offer it |
