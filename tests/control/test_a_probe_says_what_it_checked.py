@@ -24,9 +24,9 @@ import pytest
 import yaml
 
 from control.app.models import NodeState
-from control.app.services import apply, console, health
+from control.app.services import apply, console, health, placement
 from edge.health import listening
-from edge.registry import Layer4
+from edge.registry import discover, profile
 
 from .conftest import GENERATED_SSH_KEY
 
@@ -35,6 +35,54 @@ from .conftest import GENERATED_SSH_KEY
 NODE_ADDRESS = "192.0.2.10"
 
 TRANSPORT = "vless-reality"
+
+# Every transport this image ships, so the fifth one is probed here by ARRIVING rather
+# than by somebody remembering to add it to a list.
+INSTALLED = sorted(discover())
+
+# The operator half of a wg-family transport's parameters, minus the port. Merged with
+# the two Xray fixtures below and filtered against each transport's own model, so one
+# literal serves the whole image without this file knowing which transport it is
+# describing. NO PORT HERE, deliberately — see this file's header.
+FAMILY_PARAMS: dict[str, object] = {
+    "tunnel_address": "10.77.0.1/24",
+    "peer_tunnel_address": "10.77.0.2/24",
+    "mtu": 1280,
+    "junk_packet_count": 4,
+    "junk_packet_min_size": 40,
+    "junk_packet_max_size": 80,
+    "init_packet_magic_header": 1020327352,
+    "response_packet_magic_header": 2060487442,
+    "underload_packet_magic_header": 3679305607,
+    "transport_packet_magic_header": 1436947798,
+}
+
+# How many users a row that hands out addresses may serve. Far above anything this file
+# creates and comfortably inside the /24 above: a pool sized to exactly what a test needs
+# is one that turns red when somebody adds a user somewhere else.
+POOL_SIZE = 200
+
+
+def params_for(transport_name: str, supplied: dict[str, object]) -> dict[str, object]:
+    """The operator-supplied half, minus knobs this transport does not declare.
+
+    Filtered against the transport's own model rather than branched on its name, which is
+    the same helper two other files in this suite already use.
+    """
+    declared = set(profile(transport_name).params_model.model_fields)
+    return {key: value for key, value in supplied.items() if key in declared}
+
+
+def port_for(transport_name: str, chosen: int) -> int:
+    """The operator's port, moved into the range this transport declares it accepts.
+
+    Still not a literal: the value comes from the fixture, and what happens to it is the
+    transport's OWN ``port_range``. Every transport in this image accepts the fixture's
+    port unchanged; a future one declaring a narrower range is enabled here rather than
+    failing validation, which is what keeps the test below true by arrival.
+    """
+    low, high = profile(transport_name).meta.port_range
+    return min(max(chosen, low), high)
 
 # A node's listening table as ``ss -l -n -t -u`` prints it. Only sshd, which every node
 # this code is talking to has — the reading is taken over it.
@@ -145,8 +193,15 @@ def host_for(monkeypatch, host) -> object:
     return host
 
 
-async def an_applied_node(client, session, params, *, transport=TRANSPORT) -> str:
-    """One node with one transport, applied — so there is something to probe."""
+async def an_applied_node(
+    client, session, params, *, transport=TRANSPORT, pool_size=None
+) -> str:
+    """One node with one transport, applied — so there is something to probe.
+
+    ``pool_size`` is what a transport that hands each user an address of its own has to
+    be enabled with (M17). Passed by the caller that asked the transport's declaration,
+    never worked out from a name here.
+    """
     from control.app.services import nodes
 
     node_id = (
@@ -162,10 +217,11 @@ async def an_applied_node(client, session, params, *, transport=TRANSPORT) -> st
             },
         )
     ).json()["id"]
-    await client.post(
-        f"/api/nodes/{node_id}/transports",
-        json={"transport_name": transport, "params": params},
-    )
+    payload: dict[str, object] = {"transport_name": transport, "params": params}
+    if pool_size is not None:
+        payload["pool_size"] = pool_size
+    enabled = await client.post(f"/api/nodes/{node_id}/transports", json=payload)
+    assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
     await client.post(f"/api/nodes/{node_id}/apply")
     return node_id
@@ -174,26 +230,68 @@ async def an_applied_node(client, session, params, *, transport=TRANSPORT) -> st
 # --- what `control` hands `edge` ---------------------------------------------------
 
 
-async def test_the_port_expectation_is_the_operators_own_value(
-    client, session, reality_params, monkeypatch
+@pytest.mark.parametrize("transport_name", INSTALLED)
+async def test_the_expectation_is_the_operators_port_and_the_transports_declaration(
+    client,
+    session,
+    reality_params,
+    ws_params,
+    monkeypatch,
+    nothing_retired,
+    transport_name,
 ) -> None:
     """Built from the row's parameter and the transport's declaration, and nothing else.
 
     Not from a table in this zone, and not from the transport's name: `control` reads a
-    port the operator typed and a ``listens_on`` the package declared. A fourth transport
-    added tomorrow is probed by arriving.
+    port the operator typed and a ``listens_on`` the package declared. OVER EVERY
+    TRANSPORT IN THE IMAGE, which is the whole of what makes this a test of the link:
+    ``vless-reality`` declares TCP, and TCP is also what code that had quietly stopped
+    reading the declaration would hand `edge` — so asserting it on that transport alone
+    cannot tell one from the other. The wg family declares UDP, and no constant written
+    here can be right for four transports at once.
+
+    The assertion is the PROPERTY (``protocols == listens_on``) rather than a value,
+    because that is what a fifth transport arriving tomorrow is covered by.
+
+    What breaks if the link is ever cut: every wg-family row in the fleet is checked for
+    a TCP socket on its UDP port, finds none, and every working node answers that its
+    container is up and nothing holds the port the transport was given — a probe calling
+    a working node broken, on the one transport proven end to end on real hardware.
     """
     from control.app.services import nodes
 
+    meta = profile(transport_name).meta
+    port = port_for(transport_name, reality_params["port"])
+    params = params_for(transport_name, {**FAMILY_PARAMS, **ws_params, **reality_params})
+
     host_for(monkeypatch, _FakeHost())
-    node_id = await an_applied_node(client, session, reality_params)
+    node_id = await an_applied_node(
+        client,
+        session,
+        {**params, "port": port},
+        transport=transport_name,
+        # The declaration again, never a name: a transport that gives each user an
+        # address of its own is enabled with a pool size, and one that does not is not.
+        pool_size=POOL_SIZE if meta.peer_address is not None else None,
+    )
     node = await nodes.get_node(session, node_id)
 
+    placed = await apply.placed_transports(session, node)
     listeners = await apply.placed_listeners(session, node)
 
-    assert set(listeners) == {TRANSPORT}
-    assert listeners[TRANSPORT].port == reality_params["port"]
-    assert listeners[TRANSPORT].protocols == {Layer4.TCP}
+    assert set(listeners) == set(placed), (
+        "a placed row produced no port expectation, so the probe will report its "
+        "transport as unchecked on a node where it is running"
+    )
+    for config_name, name in placed.items():
+        assert listeners[config_name].port == port, (
+            "the port checked on the node is not the one the operator stored"
+        )
+        assert listeners[config_name].protocols == profile(name).meta.listens_on, (
+            f"{name} is probed over {set(listeners[config_name].protocols)} while its "
+            f"package declares it binds {set(profile(name).meta.listens_on)} — the "
+            "declaration is no longer what chooses the measurement"
+        )
 
 
 async def test_a_row_whose_port_cannot_be_resolved_is_left_out(
@@ -223,6 +321,110 @@ async def test_a_row_whose_port_cannot_be_resolved_is_left_out(
     await session.flush()
 
     node = await nodes.get_node(session, node_id)
+
+    assert await apply.placed_listeners(session, node) == {}
+
+
+async def test_a_row_whose_port_is_not_a_number_is_unchecked_rather_than_an_error(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The other shape of the same row, and the one that costs an answer if unguarded.
+
+    A missing key is above; this is a key holding something that is not a port number.
+    Without the check, building the expectation is ``int("8443/tcp")`` and the whole
+    probe raises — the operator asks a node how it is and gets an internal error, about
+    a row a screen let them save. Left out instead, which the probe reports as a port it
+    did not check.
+
+    Written straight onto the row and COMMITTED, because the assertion below is on the
+    endpoint's own answer and the request reads through its own session.
+    """
+    from control.app.models import NodeTransport
+    from control.app.services import nodes
+
+    host_for(monkeypatch, _FakeHost())
+    node_id = await an_applied_node(client, session, reality_params)
+
+    from sqlalchemy import select
+
+    row = (
+        await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    ).scalars().unique().one()
+    # The port with a protocol suffix — the shape a person writes and a shape no
+    # ``int()`` accepts. Built from the fixture, so no port is written down here.
+    row.params = {**row.params, "port": f"{reality_params['port']}/tcp"}
+    await session.commit()
+
+    node = await nodes.get_node(session, node_id)
+    assert await apply.placed_listeners(session, node) == {}
+
+    answer = await client.get(f"/api/nodes/{node_id}/health")
+
+    assert answer.status_code == 200, (
+        "a row whose port cannot be read turns the probe into an internal error, so the "
+        "operator learns nothing about the rest of the node either"
+    )
+    body = answer.json()
+    assert body["listening"] == []
+    assert body["not_listening"] == [], (
+        "a transport whose port was never checked is reported as holding nothing, which "
+        "is a finding about a measurement that was not taken"
+    )
+
+
+async def test_a_row_naming_a_transport_this_image_does_not_ship_is_left_out(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """A row whose package is gone — an image rolled back, a transport removed.
+
+    Not reachable through ``health.check_node`` today: that renders the node's configs
+    first, and rendering raises for a transport nothing can load, so the probe never gets
+    this far. It is reachable HERE, by calling this function directly, which is what the
+    guard is for — without it the missing package surfaces as ``KeyError`` out of
+    ``profile()`` rather than as a row nothing can be said about.
+    """
+    from control.app.models import NodeTransport
+    from control.app.services import nodes
+
+    host_for(monkeypatch, _FakeHost())
+    node_id = await an_applied_node(client, session, reality_params)
+
+    from sqlalchemy import select
+
+    row = (
+        await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    ).scalars().unique().one()
+    # Derived from an installed name rather than invented, and asserted absent, so this
+    # cannot quietly become a test about a transport somebody later ships.
+    gone = f"{INSTALLED[0]}-this-image-does-not-ship"
+    assert gone not in INSTALLED
+    row.transport_name = gone
+    await session.flush()
+
+    node = await nodes.get_node(session, node_id)
+
+    assert await apply.placed_listeners(session, node) == {}
+
+
+async def test_a_transport_declaring_it_binds_nothing_is_left_out(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The last of the four, and the only one that has to be fabricated to be reached.
+
+    ``edge.registry`` refuses a ``listens_on`` that is empty when it loads a transport at
+    all, so no installed package can produce this and no row can be written into it — the
+    declaration is patched here instead, the same tool ``nothing_retired`` uses one field
+    over. The guard is what stands between that and an expectation of "holds its port
+    over no protocol at all", which ``is_answering`` answers False to: a working node
+    reported as holding nothing, off a declaration nobody measured.
+    """
+    from control.app.services import nodes
+
+    host_for(monkeypatch, _FakeHost())
+    node_id = await an_applied_node(client, session, reality_params)
+    node = await nodes.get_node(session, node_id)
+
+    monkeypatch.setattr(placement, "binds_of", lambda transport_name: frozenset())
 
     assert await apply.placed_listeners(session, node) == {}
 

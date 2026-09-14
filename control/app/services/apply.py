@@ -410,19 +410,31 @@ async def placed_listeners(session: AsyncSession, node: Node) -> dict[str, Liste
     which transport it is looking at.
 
     A ROW THIS CANNOT ANSWER FOR IS LEFT OUT, never guessed at, and the probe reports such
-    a config as unchecked rather than as silent. Four ways that happens, and all four are
-    ordinary: a transport this image no longer ships (nothing can say what it binds), one
-    that declares no port at all, one that declares it in a shape that is not a port
-    number, and one whose package declares it binds nothing. Inventing an answer for any
-    of them would report a working node as broken, which is the same defect as reporting
-    a broken one as working — M22's own subject, pointed the other way.
+    a config as unchecked rather than as silent. Four ways that happens, and they are not
+    equally reachable — which is worth saying, because a reader who takes all four for
+    ordinary will delete the ones nothing seems to exercise. TWO ARE ORDINARY and arrive
+    through ``health.check_node``: a row that declares no port at all, and one that
+    declares it in a shape that is not a port number (a value out of a future migration,
+    a transport that names its port something else). The other two cannot arrive that
+    way. A transport this image no longer ships is refused by ``render_for_node`` before
+    the probe gets here, so the guard below holds only for a direct call — without it the
+    missing package is a ``KeyError`` out of ``profile()``. And a package declaring it
+    binds nothing cannot exist at all: ``edge.registry`` refuses an empty ``listens_on``
+    when it loads a transport, so that guard is the second line behind a rule held in the
+    other zone, and it is tested by fabricating the declaration. Inventing an answer for
+    any of the four would report a working node as broken, which is the same defect as
+    reporting a broken one as working — M22's own subject, pointed the other way.
 
-    NO RANGE IS CHECKED HERE, and that is deliberate rather than an omission. What a legal
-    port is belongs to the transport's own declaration and to the kernel, not to this
-    zone; writing a ceiling down here would be a port number hardcoded in code, which
-    ``CLAUDE.md`` forbids, and it would buy nothing — a row holding a number no socket can
-    be bound on is a row whose container bound nothing, and "nothing is listening for it"
-    is the true answer to give about it.
+    NO RANGE IS CHECKED HERE, and that is deliberate rather than an omission — but not
+    because a ceiling would be a hardcoded port. It would not be: ``edge.registry``
+    already writes ``1 <= low <= high <= 65535`` for this same concept, and 65535 is a
+    property of the protocol rather than a node anyone could rotate away from. The reason
+    is that a ceiling would make this answer WEAKER. Which ports exist belongs to the
+    transport's declaration and to the kernel; a row holding a number no socket can be
+    bound on is a row whose container bound nothing, so "nothing is listening for it" is
+    true — and it is what the operator needs to hear. Refusing the row instead would
+    report the same node as one whose port was not checked, which is the vaguer of two
+    honest answers.
     """
     listed = await session.execute(
         select(
