@@ -8,6 +8,14 @@
   revocation could reach it. Everything else on a node stays fixed; a new host is still a
   new node.
 
+  IT IS NO LONGER ONLY ABOUT DIALLING A HOP — M23, measured on the owner's leaf. This
+  same value is what a user's own configuration file names as its `DNS` when the
+  transport they hold declares no resolver of its own (edge/egress.py, `client_resolvers`),
+  and a friend whose config names none resolves nothing at all: their whole address space
+  goes into the tunnel, their own resolver included. The hint below says both jobs,
+  because a sentence that said only the first one is what left a leaf node — which dials
+  nothing — with no reason to have a resolver set.
+
   The box holds what the record holds now, and what was typed when it comes back refused:
   an address is not a secret, and retyping it is how a second mistake gets in. No
   placeholder — a suggested value would be a resolver this panel chose for every node,
@@ -26,10 +34,14 @@
                aria-describedby="node-resolver-hint{% if errors.get('resolver') %} node-resolver-error{% endif %}"
                {% if errors.get('resolver') %}aria-invalid="true"{% endif %}>
         <div class="field-hint" id="node-resolver-hint">
-          Where a user's destination names are looked up while {{ node.name }} dials a
-          hop — asked through the hop, so the lookup leaves from its far end. An address,
-          not a name. One this node itself answers on is the case this panel cannot check
-          for you: the host would answer it here, on the near side of the hop.
+          Where the people {{ node.name }} serves have destination names looked up, and
+          it does two jobs. While {{ node.name }} dials a hop the lookup is asked through
+          the hop, so it leaves from the far end. And it is the resolver written into a
+          user's own configuration file when the protocol they hold names none of its
+          own — with neither, every address that device asks for goes into the tunnel,
+          its own resolver included, and no name resolves. An address, not a name. One
+          this node itself answers on is the case this panel cannot check for you: the
+          host would answer it here, on the near side of the hop.
         </div>
         {% if errors.get('resolver') %}
         <div class="field-error" id="node-resolver-error" role="alert">{{ errors['resolver'] }}</div>
@@ -39,7 +51,9 @@
       <div class="dialog-body">
         This changes the record, not the host: apply {{ node.name }} afterwards. A node
         that dials a hop cannot be applied without a resolver — and a revocation cannot
-        reach it either.
+        reach it either. A user's own configuration file is built when their client
+        fetches their link, so the new resolver reaches them at their next fetch with
+        nothing for them to re-import.
       </div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>

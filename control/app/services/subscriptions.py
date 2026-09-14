@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.models import Credential, Friend, Subscription
-from control.app.services import addresses, nodes
+from control.app.services import addresses, keymaterial, nodes
 from edge.node import Credential as EdgeCredential
 from edge.registry import ClientConfig, ClientEntry, SubscriptionFormat, profile
 
@@ -172,6 +172,12 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
     A friend on only URI transports gets an empty list, which is correct rather than an
     error: they have nothing in this shape, and the endpoint says so with an empty
     archive for the same reason ``render`` returns an empty document.
+
+    THREE THINGS ARE SKIPPED RATHER THAN REFUSED, and the third is M23's: a row that is
+    not serving, a transport with no file shape, and a credential that does not carry
+    what its transport declares a consumer's material is. All three for one reason — this
+    is the only route a friend touches, and a refusal anywhere in this loop is a 500 that
+    takes away every node they have, not just the one it was about.
     """
     serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
 
@@ -192,6 +198,34 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
             # the other one.
             continue
 
+        # THE SAME BUILDER the render below is handed, built once so the credential that
+        # is checked is the credential that is rendered.
+        rendering = addresses.edge_credential(
+            credential, addresses.spec_for(node_transport.transport_name)
+        )
+
+        # A credential that does not carry what its transport declares a consumer's
+        # material IS — M23. A transport that gains a per-consumer value leaves every
+        # credential minted before it unrenderable, and the renderer says so by refusing
+        # rather than by handing the older, shared value out again. Skipped here, for the
+        # reason the two skips above are: this friend may hold working credentials on
+        # other nodes, and letting one refusal out of this loop answers their whole
+        # subscription with a 500 — every node they have, lost to one stale row.
+        #
+        # SILENT TO THE FRIEND AND LOUD TO THE OPERATOR, which is the only honest split
+        # available: this route may not explain itself to a stranger holding a token, and
+        # the person who can fix it is reading the Keys screen, which counts exactly these
+        # (``console.stale_material``). Their existing tunnel is unaffected — the node's
+        # own config still authorises them.
+        #
+        # Asked of the DECLARATION rather than by catching the renderer's refusal: a
+        # transport's exceptions share no base class, and giving them one in `control`
+        # would mean importing a protocol's own module here.
+        if keymaterial.missing_client_material(transport.meta.key_material, {
+            **rendering.secrets, "subject": rendering.subject
+        }):
+            continue
+
         produced.append(
             transport.serialise(
                 SubscriptionFormat.CLIENT_CONFIG_FILE,
@@ -202,9 +236,7 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
                 # renders of one allocation, and a second builder here is exactly how a
                 # person ends up authorised for an address their device does not use:
                 # a tunnel that comes up and carries nothing, with every screen green.
-                addresses.edge_credential(
-                    credential, addresses.spec_for(node_transport.transport_name)
-                ),
+                rendering,
             )
         )
 

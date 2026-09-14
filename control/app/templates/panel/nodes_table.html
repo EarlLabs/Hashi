@@ -120,13 +120,25 @@
                         hx-get="/panel/nodes/{{ node.id }}/state"
                         hx-target="#dialog-slot" hx-swap="innerHTML">set state</button>
                 {#
-                  M16's. The one edit a node record admits after registration: where this
-                  node's lookups go through its hop. Its own dialog, like the state, because
-                  it is about the node rather than about anything it runs.
+                  M16's. The first of the two edits a node record admits after
+                  registration: where this node's lookups go, through its hop and in the
+                  configuration file its users hold. Its own dialog, like the state,
+                  because it is about the node rather than about anything it runs.
                 #}
                 <button class="btn btn-secondary" type="button"
                         hx-get="/panel/nodes/{{ node.id }}/resolver"
                         hx-target="#dialog-slot" hx-swap="innerHTML">resolver</button>
+                {#
+                  M23's, and the second edit a node record admits. Its own dialog beside
+                  the resolver's for the same reason: it is about the node rather than
+                  about anything it runs. Shown on every row rather than only on a node
+                  with no key — a key that has to be replaced is the same action, and a
+                  control that appears only in a failure state is one nobody can find
+                  when they need it.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/ssh-key"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">ssh key</button>
               </span>
             </td>
           </tr>

@@ -112,6 +112,23 @@
               </span>
             </td>
           </tr>
+          {% if key.stale_material %}
+          {#
+            M23. Users on this row whose material was minted before the protocol declared
+            all of it: their configuration file cannot be built, and nothing else on this
+            screen would ever say so. Its own row under the one it is about, exactly as
+            the Nodes table carries `why:` under a degraded node — the sentence is long,
+            it is composed in services/console.py, and no cell in a row may break (app.css).
+
+            A NOTE and not a failure: nothing was refused here and nobody has lost access.
+            The danger hue belongs to a request that was refused or failed
+            (docs/decisions.md, 2026-09-10), and this is a standing fact about the row
+            with an action beside it — which is the button already in the cell above.
+          #}
+          <tr class="row-detail">
+            <td class="text-muted wraps" colspan="7">note: {{ key.stale_material }}</td>
+          </tr>
+          {% endif %}
           {% endfor %}
         </tbody>
       </table>

@@ -93,6 +93,11 @@ _THE_CONSOLES_DIRECTIONS: dict[str, str] = {
     apply.NOTHING_STOPS_A_SERVING_HOST: (
         "Nothing else in this panel stops a node serving what it was last given."
     ),
+    # M23. The console can name the control the operator presses; an API caller has no
+    # row and no button, so the service's own clause says only what has to happen.
+    apply.GIVE_IT_A_KEY: (
+        f'Give it one with "ssh key" on its row on {apply.WHERE_TO_RETRY}, then apply it.'
+    ),
 }
 
 
@@ -157,6 +162,7 @@ _EVENTS: dict[AuditAction, str] = {
     AuditAction.NODE_STATE_CHANGED: "{first} is now {second}",
     AuditAction.NODE_APPLIED: "config applied to {first}",
     AuditAction.NODE_RESOLVER_SET: "resolver set for {first}",
+    AuditAction.NODE_SSH_KEY_SET: "ssh key set for {first}",
     AuditAction.TRANSPORT_ENABLED: "{second} enabled on {first}",
     AuditAction.TRANSPORT_OFFERED: "{second} offered again on {first}",
     AuditAction.TRANSPORT_WITHDRAWN: "{second} withdrawn on {first}",

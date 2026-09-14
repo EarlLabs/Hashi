@@ -39,22 +39,59 @@ _WHY_NOT_UPDATED: dict[NotUpdated, str] = {
         "{node} could not be given a configuration: it was refused before anything was "
         "pushed, and retrying will not change that — apply it from {where} to read why"
     ),
+    NotUpdated.NOT_SERVING: (
+        "{node} was reached and its configuration WAS replaced on it, but it did not come "
+        "back running that configuration — so the process on it may still be serving the "
+        "file that carries this credential. Retrying will not change that on its own: "
+        "apply it from {where} and read what did not come up"
+    ),
     NotUpdated.UNREACHED: (
         "{node} could not be reached — apply it again from {where} once it can be"
     ),
 }
+
+# What the operator is told when they press revoke on somebody who has already been
+# revoked — M23, and it exists because the honest answer to the SECOND press was the
+# reassuring one. The walk pressed revoke twice on a node that could not be updated: the
+# first press said so correctly, and the second said "the link is dead" because the
+# credential rows were already gone and the fan-out therefore had nothing to fail on. An
+# operator cutting somebody off in a hurry presses again after a failure — that is the
+# natural gesture — and was told the thing they were checking for.
+#
+# So the second press says what is true of it: the database half was already done, this
+# request pushed nothing, and nothing about it can confirm that a node stopped serving
+# the credential. It ends where the incomplete report ends, at the screen where a node is
+# probed and applied, because that is the only place the answer actually lives.
+#
+# It names no node. A node that failed the first time is not knowable from here — the
+# rows that said which ones were affected are what the first press deleted — and naming
+# the ones that happen to be degraded now would be a guess about a different question.
+ALREADY_WITHDRAWN = (
+    "nothing changed — this access was already withdrawn, so nothing was pushed to any "
+    "node and this press cannot tell you that any node has stopped serving it. A node "
+    "still running an older configuration goes on serving anyone withdrawn while it was "
+    "in that state: probe it on {where}, and apply it there."
+)
 
 
 @dataclass
 class RevocationOutcome:
     """What actually happened, in enough detail for the operator to act.
 
-    ``complete`` is the field that matters. Anything else being reported as success
-    would be the "revoked in the database, still connected on a node" state the
-    charter forbids.
+    ``confirmed`` is the field that matters, and ``complete`` is the field that used to
+    be mistaken for it. Anything else being reported as success would be the "revoked in
+    the database, still connected on a node" state the charter forbids.
     """
 
     friend_id: str
+
+    # Whether THIS request withdrew anything at all — M23. False when the friend was
+    # already revoked before it ran, which is what a second press of the revoke button is.
+    # Kept apart from ``complete`` rather than folded into it: ``complete`` answers "did
+    # every affected node accept", and with no affected node that is vacuously true and
+    # stays true, which is what made the second press read as a success. See ``confirmed``
+    # below for the pair a caller should actually act on.
+    withdrew: bool = True
 
     # Nodes whose configuration was re-pushed successfully. The friend's credential
     # is gone from the running daemon on each of these.
@@ -80,6 +117,17 @@ class RevocationOutcome:
         """True only when every affected node accepted the new configuration."""
         return not self.nodes_failed
 
+    @property
+    def confirmed(self) -> bool:
+        """True only when THIS request withdrew access AND every node accepted it — M23.
+
+        The one property a surface may draw a reassurance from. ``complete`` is not it and
+        never was: it is vacuously true for a request that had nothing to push, so a
+        second press on an already-revoked person satisfied it while the node that failed
+        the first press was still serving them.
+        """
+        return self.withdrew and self.complete
+
     def summary(self) -> str:
         """One line for the operator. Says the uncomfortable thing when it is true.
 
@@ -96,6 +144,10 @@ class RevocationOutcome:
         output, which is known to quote that node's private key, and this sentence has no
         safe place for it. The name is the only text in it the operator did not read here.
         """
+        if not self.withdrew:
+            # Said before ``complete`` is consulted, because ``complete`` is TRUE here:
+            # nothing was affected, so nothing failed. M23.
+            return ALREADY_WITHDRAWN.format(where=apply.WHERE_TO_RETRY)
         if self.complete:
             return (
                 f"access withdrawn everywhere; {len(self.nodes_updated)} node(s) updated"
@@ -136,12 +188,18 @@ async def revoke_friend(session: AsyncSession, *, friend_id: str) -> RevocationO
     # somebody who has none changes nothing, and a trail that grows on a retried request
     # is a trail that says a thing happened twice.
     friend = await friends.get_friend(session, friend_id)
-    if friend.is_active:
+    # Read BEFORE the database half runs, and it is what separates a revocation from a
+    # second press of the same button — M23. After ``friends.revoke`` the two are
+    # indistinguishable from here: the credential rows are deleted either way, so an
+    # empty fan-out means "nobody to push" in one case and "already pushed, or already
+    # failed to push" in the other.
+    withdrawing = friend.is_active
+    if withdrawing:
         audit.record(session, AuditAction.FRIEND_REVOKED, first_label=friend.nickname)
 
     affected = await friends.revoke(session, friend_id=friend_id)
 
-    outcome = RevocationOutcome(friend_id=friend_id)
+    outcome = RevocationOutcome(friend_id=friend_id, withdrew=withdrawing)
     if not affected:
         # A friend who held no credentials — never granted, or already revoked.
         # Complete by definition, and worth returning as such rather than as an error.

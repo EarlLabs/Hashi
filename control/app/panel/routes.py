@@ -721,9 +721,14 @@ async def _enable_form(
     collision arrives as a refusal on this dialog with the port named.
 
     NO BOX CAN EXIST FOR KEY MATERIAL and that is structural: ``operator_tuning`` is
-    built from ``operator_params``, which subtracts everything the transport declares as
+    built from ``supplied_params``, which subtracts everything the transport declares as
     material and every public counterpart of one. Enabling is the moment material is
     MINTED, which is exactly why the form it is minted from may not ask for any.
+
+    ``supplied_params`` AND NOT ``operator_params`` SINCE M23, so a parameter the
+    transport defaults finally has a box here — the route has always read one, and no
+    form drew it. The subtraction above is the same either way; only the ``is_required``
+    filter went, which is why this dialog's one rule is untouched.
     """
     node = await nodes.get_node(session, node_id)
     offers = await console.offers_on(session, node_id)
@@ -872,6 +877,78 @@ def _refuse_resolver(
         request,
         "panel/node_resolver_dialog.html",
         {"node": node, "values": values, "errors": errors},
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
+@router.get("/nodes/{node_id}/ssh-key", response_class=HTMLResponse)
+async def node_ssh_key_dialog(
+    node_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Give this node the key `control` reaches it with — M23.
+
+    The second edit a node record admits, and it exists because the add-node dialog
+    invites a node without a key (*"Optional now"*) while nothing could supply one
+    afterwards: the real-host walk found every candidate route 404ing, leaving such a
+    node unappliable and unreachable by a revocation for good.
+
+    ``has_key`` and never the key. Whether one is stored is a fact the operator needs —
+    it decides whether this dialog is supplying or replacing — and the value itself is
+    the one credential in this system that reaches every host in the fleet.
+    """
+    node = await nodes.get_node(session, node_id)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_ssh_key_dialog.html",
+        {"node": node, "has_key": bool(node.ssh_private_key), "errors": {}},
+    )
+
+
+@router.post("/nodes/{node_id}/ssh-key", response_class=HTMLResponse)
+async def set_node_ssh_key(
+    node_id: str,
+    request: Request,
+    ssh_private_key: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Store the pasted key, or say why it cannot be read — M23.
+
+    NOTHING TYPED COMES BACK. Every other refusal in this console re-fills the boxes it
+    refused, and this one may not: putting a submitted private key back into the markup
+    would make the panel a place key material appears, which is the rule the add-node
+    dialog states for the same box. The refusal quotes no part of what was pasted either
+    — ``SSH_KEY_UNUSABLE`` is a sentence about the shape of a key and never about this
+    one.
+    """
+    node = await nodes.get_node(session, node_id)
+    try:
+        # NOT stripped, unlike every other box in this console: ``create_node`` above
+        # hands this same field over exactly as it was pasted, and a key that survives one
+        # route and not the other is a difference nobody would look for. What decides
+        # whether it is usable is the loader, asked by the service.
+        node = await nodes.set_ssh_key(
+            session, node_id=node_id, ssh_private_key=ssh_private_key
+        )
+    except DomainError as exc:
+        return _refuse_ssh_key(
+            request, node, errors={"ssh_private_key": wording.for_the_page(exc.message)}
+        )
+    return _mutation(
+        request,
+        toast=console.ssh_key_set(node.name),
+        keeping=node.name,
+        events="nodes-changed",
+    )
+
+
+def _refuse_ssh_key(request: Request, node, *, errors: dict) -> Response:
+    """The ssh-key dialog again, at 422, with the message under the box and an empty box."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_ssh_key_dialog.html",
+        {"node": node, "has_key": bool(node.ssh_private_key), "errors": errors},
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
@@ -2239,7 +2316,14 @@ async def enable_transport(
     # every other box on this dialog gets, and the same sentence: nothing defaults it,
     # because a default pool size would be a number this project chose for somebody
     # else's node.
-    empty = [box.name for box in boxes if not supplied(box.name)]
+    #
+    # ``box.required`` SINCE M23, and without it the widening one module over would have
+    # turned a fix into a wall. ``operator_tuning`` now draws a box for every field an
+    # operator may supply rather than only the required ones, so this list holds boxes
+    # the transport itself defaults — and leaving one empty is the answer the form is
+    # offering, not an omission. The flag is the transport's own declaration read through
+    # ``TuningField``: nothing here knows which field it is looking at.
+    empty = [box.name for box in boxes if box.required and not supplied(box.name)]
     if pool_spec and not supplied(addresses.POOL_BOX):
         empty.append(addresses.POOL_BOX)
     if empty:
@@ -2585,14 +2669,23 @@ async def revoke_friend(
     the difference is deliberate: a revocation that could not reach every node leaves
     somebody still connected, and a message that removes itself after 2200ms is the
     wrong carrier for that. The banner stays until the next successful action.
+
+    ``confirmed`` AND NOT ``complete`` DECIDES WHICH — M23, found by pressing the button
+    twice on the real hosts. The first press failed honestly on a node it could not
+    update; the second answered *"kolya revoked — link is dead"*, because the credential
+    rows were gone by then and a fan-out with nothing to push cannot fail. Pressing again
+    after a failure is the natural gesture of an operator cutting somebody off in a hurry,
+    and this is the one sentence in the console that must never be the reassuring one by
+    accident. The second press is a banner now, carrying the service's own account of
+    what a press that changed nothing can and cannot tell them.
     """
     friend = await friends.get_friend(session, friend_id)
     nickname = friend.nickname
     outcome = await revocation.revoke_friend(session, friend_id=friend_id)
     return _mutation(
         request,
-        toast=f"{nickname} revoked — link is dead" if outcome.complete else None,
-        banner=None if outcome.complete else outcome.summary(),
+        toast=f"{nickname} revoked — link is dead" if outcome.confirmed else None,
+        banner=None if outcome.confirmed else outcome.summary(),
         events="friends-changed",
         keeping=nickname,
     )

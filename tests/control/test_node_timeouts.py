@@ -35,7 +35,7 @@ import pytest
 
 from control.app.services import apply, health, nodes
 
-from .conftest import assert_plain_reason
+from .conftest import GENERATED_SSH_KEY, assert_plain_reason
 
 # What a FRIEND would dial: a reserved documentation address (RFC 5737), as everywhere
 # else in this zone. Nothing in this file dials it — the control plane reaches a node at
@@ -46,7 +46,13 @@ ADVERTISED_ADDRESS = "192.0.2.10"
 
 
 async def a_node(client, ssh) -> str:
-    """A registered node whose SSH endpoint is the socket the test is holding open."""
+    """A registered node whose SSH endpoint is the socket the test is holding open.
+
+    It carries a real key — M23. ``apply.target_for`` refuses a record with none before
+    it dials, so without one every test in this file would stop at that refusal instead
+    of reaching the socket it exists to hold open. The key authenticates nothing: the
+    socket accepts and then says nothing, which is the whole point of it.
+    """
     response = await client.post(
         "/api/nodes",
         json={
@@ -55,6 +61,7 @@ async def a_node(client, ssh) -> str:
             "location_label": "Testland",
             "ssh_host": ssh.host,
             "ssh_port": ssh.port,
+            "ssh_private_key": GENERATED_SSH_KEY,
         },
     )
     return response.json()["id"]

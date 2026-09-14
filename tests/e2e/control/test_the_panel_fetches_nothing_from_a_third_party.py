@@ -163,6 +163,10 @@ async def surfaces(operator, unique: str) -> list[str]:
         # M16's, added in the change that added it: the resolver dialog behind the same
         # row, which renders the value it edits back into its box.
         f"/panel/nodes/{node.json()['id']}/resolver",
+        # M23's, added in the change that added it: the second edit a node record admits,
+        # and the only form in this console that takes an SSH private key after
+        # registration.
+        f"/panel/nodes/{node.json()['id']}/ssh-key",
         # …and the confirmation behind one of its buttons, which needs a protocol
         # actually enabled on that node before it exists.
         *await _with_an_offer(operator, node.json()["id"]),

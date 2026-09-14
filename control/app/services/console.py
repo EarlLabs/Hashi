@@ -32,9 +32,10 @@ device is in a drawer.
 
 import dataclasses
 import datetime
+import json
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
@@ -494,6 +495,11 @@ class KeyRow:
     # Whether the transport declares anything an operator may retype. A transport whose
     # every parameter is minted has nothing for the replace form to hold.
     replaceable: bool
+    # What the operator has to do about the users on this row whose material predates
+    # what the transport now declares, or ``None`` when there are none — M23. A sentence
+    # and never a list: which person is affected is a fact about a person, and the repair
+    # is the same one button for all of them.
+    stale_material: str | None
 
 
 # What one transport on one node is doing for the people this fleet exists for, as the
@@ -1193,6 +1199,49 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
     )
 
 
+# What the Keys screen says about users on one row whose material predates what the
+# transport now declares — M23, and the whole of the panel's half of that finding.
+#
+# The situation is real and the owner has one: a transport gained a per-consumer value
+# (the WireGuard family's per-pair pre-shared key), and a credential minted before that
+# declaration does not carry it. The renderer refuses to build a configuration file for
+# such a credential rather than hand out the node-wide key to a second person, so the
+# download quietly stops producing a file for this node — while the tunnel those people
+# already hold keeps working, because the node still authorises them.
+#
+# So the sentence says both halves, in that order: nothing is broken for them yet, and
+# the repair is one button on this row. Without it the refusal is written in a place
+# nobody reads — ``edge``, at the moment a user's client asks — and the operator's first
+# notice is somebody reporting a download that gives them nothing.
+#
+# COUNTS AND NEVER NAMES. Which person holds pre-declaration material is a fact about a
+# person on a screen that may not hold one, and the action is the same for all of them.
+#
+# In the panel's vocabulary (``user``) like every other constant in this module, and it
+# names no protocol: what is missing is read from the transport's own declaration and
+# never printed — a field name here would be this file knowing which protocol it is
+# looking at, and would tell the operator something they cannot act on either way.
+STALE_MATERIAL = (
+    "material for {count} of the users on this row was minted before this protocol "
+    "declared all of it, so no configuration file can be built for them on this node and "
+    "their download returns nothing for it. What they already imported keeps working — "
+    "the node still authorises them. Use \"rotate keys\" on this row: it re-mints what "
+    "each of them holds, and nobody re-imports a link."
+)
+
+
+def stale_material(count: int) -> str | None:
+    """The sentence for a row whose users cannot all be handed a configuration — M23.
+
+    ``None`` for a row where every credential carries what its transport declares, which
+    is every row on a fleet where nothing was minted before a declaration changed — so
+    the cell exists only when there is something to do about it.
+    """
+    if not count:
+        return None
+    return STALE_MATERIAL.format(count=count)
+
+
 def _holders_of_pool(holders: int, pool: int | None) -> str:
     """"2 of 10" where there is a pool, and the bare count where there is not — M17.2.
 
@@ -1215,20 +1264,32 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
     ``NodeTransport.credentials``: that relationship loads lazily, and lazy I/O on an
     async session raises at runtime rather than in a test.
 
-    Nothing here decrypts anything. The row's ``secrets`` column is not read on this
-    path at all — the fingerprint is computed from ``params``, which is the clear one —
-    so the screen cannot show key material even by accident.
+    THE NODE-TRANSPORT ROW's ``secrets`` COLUMN IS NEVER READ HERE, and that is what
+    keeps the fingerprint cell honest: it is computed from ``params``, the clear column,
+    so the screen cannot show a node's key material even by accident.
+
+    WHAT IS READ SINCE M23 is each CREDENTIAL's material, and only to count the ones that
+    do not carry what their transport declares (``stale_material``). No value from it
+    reaches this function's result — the credential loop produces an integer — and no
+    value from it reaches the template, which is handed a sentence. It is read because
+    the alternative was the operator learning about it from a user whose download stopped
+    working, which is how the owner's own leaf was found.
     """
     installed = discover()
-    counted = dict(
-        (
-            await session.execute(
-                select(Credential.node_transport_id, func.count(Credential.id)).group_by(
-                    Credential.node_transport_id
-                )
-            )
-        ).all()
-    )
+    held_by = {}
+    for node_transport_id, subject, secrets in (
+        await session.execute(
+            select(Credential.node_transport_id, Credential.subject, Credential.secrets)
+        )
+    ).all():
+        # As ``edge`` sees a consumer's material: the credential's own secrets with the
+        # subject under the name the contract requires (``edge.node.Credential``). The
+        # tunnel address is not overlaid and does not need to be — it is not key
+        # material, so no ``KeySpec`` names it and nothing below looks for it.
+        held_by.setdefault(node_transport_id, []).append(
+            {**json.loads(secrets), "subject": subject}
+        )
+    counted = {row_id: len(held) for row_id, held in held_by.items()}
 
     rows = []
     for node in await nodes.list_nodes(session):
@@ -1278,8 +1339,25 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                         )
                     ),
                     installed=meta is not None,
+                    # The same set the replace form draws its boxes from — M23 widened
+                    # that to every field an operator may supply, and this flag decides
+                    # whether the button to it exists, so the two are read from one
+                    # answer. A row whose every parameter is minted still offers nothing.
                     replaceable=bool(
-                        meta and transports.operator_params(row.transport_name)
+                        meta and transports.supplied_params(row.transport_name)
+                    ),
+                    stale_material=(
+                        stale_material(
+                            sum(
+                                1
+                                for held in held_by.get(row.id, ())
+                                if keymaterial.missing_client_material(
+                                    meta.key_material, held
+                                )
+                            )
+                        )
+                        if meta and for_friends
+                        else None
                     ),
                 )
             )
@@ -2262,6 +2340,18 @@ def resolver_set(node_name: str) -> str:
     operator is most likely to believe they are done.
     """
     return f"resolver set for {node_name} — apply it for the change to reach the node"
+
+
+# --- M23: the key a node was registered without -------------------------------
+
+def ssh_key_set(node_name: str) -> str:
+    """The toast for a stored SSH key — naming the step the operator still owes.
+
+    Same shape and same reason as ``resolver_set`` above: storing the key changes the
+    record and touches no host, and this is the moment an operator who registered a node
+    without one is most likely to believe the node is now working.
+    """
+    return f"ssh key stored for {node_name} — apply it to push its configuration"
 
 
 # --- M17: the box an operator sizes a pool of addresses in --------------------

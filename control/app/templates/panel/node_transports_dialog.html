@@ -9,8 +9,8 @@
   for putting this here rather than beside the chips in the table is written down.
 
   NOTHING HERE NAMES A PROTOCOL, A PORT OR A HOST, and it cannot: `transports` is what
-  this image ships that a client could receive, `tuning` is every box each of them
-  declares it needs, and both arrive from services/transports.py, which reads them out
+  this image ships that a client could receive, `tuning` is every box each of them lets
+  an operator answer, and both arrive from services/transports.py, which reads them out
   of the transport's own model. A new package under edge/transports/ therefore gets a
   working enable form with no edit here — charter criterion 4 in one file.
 
@@ -37,11 +37,19 @@
   136px, which is right for twenty-four short numeric knobs and wrong for a form whose
   boxes hold a hostname or a filesystem path.
 
-  Deliberately NOT marked `required` in the markup, although every one of these is
-  required by the transport. A browser refuses to submit a form with an empty required
-  field it cannot focus, and a field inside a HIDDEN group is exactly that — choosing
-  one transport would make the form silently unsubmittable because another group's boxes
-  are empty. The server refuses per box at 422 instead.
+  Deliberately NOT marked `required` in the markup, although most of these are required
+  by the transport. A browser refuses to submit a form with an empty required field it
+  cannot focus, and a field inside a HIDDEN group is exactly that — choosing one
+  transport would make the form silently unsubmittable because another group's boxes are
+  empty. The server refuses per box at 422 instead, and only for the boxes whose
+  transport declares no default for them.
+
+  MOST, not all, since M23: this list is every field an operator MAY supply rather than
+  only the ones they MUST, so a box here can be one the transport defaults. What says
+  which is the PLACEHOLDER, and that is the mechanism M9 built for exactly this — a
+  declared default is shown in the empty box, so leaving it alone visibly produces that
+  value, while a box with no default shows the shape it will accept instead. See
+  services/transports.py's `tuning_field`.
 #}
 {% set field = group ~ "-" ~ parameter.name %}
 <div class="param-field">

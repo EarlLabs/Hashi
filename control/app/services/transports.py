@@ -9,16 +9,20 @@ WHAT: ``operator_params(name)`` — the fields a transport requires that `contro
       ``replaceable_params(name, current)``, the same question for a transport that is
       already enabled somewhere and is being retyped rather than filled in. M9.5 adds
       ``offerable_transports()`` and ``operator_tuning(name)``: which transports a
-      person can be handed at all, and what the box for each of their required fields
-      should say — and lifts ``supplied_params(name)`` out of ``hop_parameters``, since
-      "every field an operator may supply" is now asked by the enable route too.
+      person can be handed at all, and what the box for each of their fields should say
+      — and lifts ``supplied_params(name)`` out of ``hop_parameters``, since "every field
+      an operator may supply" is now asked by the enable route too. M23 makes that set
+      the answer for all THREE forms: see ``operator_tuning`` for why a parameter the
+      transport defaults now gets a box everywhere instead of nowhere.
 WHY:  two screens need exactly this list and must not disagree: the "enable a
       transport" form (item 7) and the "replace parameters" form (item 24). When the
       two were computed separately, a transport could offer a field on one screen and
       not the other, and the operator would read that as a bug in the protocol.
-HOW:  required fields of the transport's own model, minus every name the transport
-      declared as key material — including the public counterpart of a secret, which
-      is derived and never typed.
+HOW:  fields of the transport's own model, minus every name the transport declared as
+      key material — including the public counterpart of a secret, which is derived and
+      never typed. ``operator_params`` narrows that to the REQUIRED ones and is still
+      what the JSON API publishes under that name; the three forms draw a box for the
+      wider set.
 
       ``hop_tuning`` adds one thing on top of that list, and it is the whole of M9's
       "an empty box visibly means use the default": what each box should SAY before
@@ -279,13 +283,15 @@ def hop_parameters(transport_name: str) -> list[str]:
     """Every field of ``transport_name`` an operator may supply, sorted.
 
     ``operator_params`` minus its ``is_required`` filter, and the difference is the
-    whole point rather than a nuance. That filter is right for its own two callers —
-    the enable and rotate forms ask what an operator MUST supply — and wrong here: a
-    field with a declared default is by definition not required, so filtering on it
-    would drop exactly the parameters whose box can honestly promise something. The
-    dialog would then show no box at all for a field the transport defaults, and adding
-    a default to a transport field would make its box vanish rather than gain a
-    placeholder.
+    whole point rather than a nuance: a field with a declared default is by definition
+    not required, so filtering on it would drop exactly the parameters whose box can
+    honestly promise something. The dialog would then show no box at all for a field the
+    transport defaults, and adding a default to a transport field would make its box
+    vanish rather than gain a placeholder.
+
+    This dialog got that right first and the other two got it wrong until M23 — which is
+    why all three now read this same set, and why the sentence that used to stand here
+    calling the ``is_required`` filter "right for its own two callers" is gone.
 
     Still minus every name the transport declares as key material, including the public
     counterpart of a secret: those are minted, never typed, and a hop must not become
@@ -454,6 +460,20 @@ def replaceable_params(
     renders it. ``placeholder`` is the value the row currently holds; a field with no
     value stored gets an empty box rather than a suggestion, because the one thing this
     placeholder means is "this is what you are replacing".
+
+    THE LIST IS ``supplied_params`` SINCE M23, and the widening is the fix rather than a
+    tidy-up. It was ``operator_params``, which filters on ``is_required`` — so a field
+    the transport DEFAULTS had no box on this form and none on the enable form either,
+    and the only way to answer one was the JSON API. The field that made that concrete is
+    the one a friend's resolver is written from: the walk on the real leaf found no
+    setting in this panel that gives a person working DNS, and the reason was this
+    filter rather than the renderer. See ``operator_tuning`` for the whole judgement.
+
+    What the subtraction still guarantees is unchanged. ``supplied_params`` removes
+    exactly what ``operator_params`` removed — everything the transport declares as key
+    material and every public counterpart of one — so **no box on this form can exist for
+    a minted value** for the same structural reason as before; only the ``is_required``
+    filter went.
     """
     fields = profile(transport_name).params_model.model_fields
     return tuple(
@@ -462,7 +482,7 @@ def replaceable_params(
             placeholder=_as_typed(current.get(name)),
             hint=(fields[name].description or "").strip(),
         )
-        for name in operator_params(transport_name)
+        for name in sorted(supplied_params(transport_name))
     )
 
 
@@ -537,27 +557,42 @@ def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
     fields are the operator's, nor with the hop dialog about what a box may promise.
 
     ``TuningField`` and NOT ``ParamBox``, and the difference is the reason M9.4 refused
-    to reuse it the other way round: on this form an empty box is REFUSED, exactly as on
-    the hop dialog, because nothing is in place yet to keep. Every field here is required
-    by construction — ``operator_params`` filters on it — so ``required`` is true of all
-    of them, and the placeholder can only ever be the shape the field will accept.
+    to reuse it the other way round: on this form an empty box is REFUSED when the
+    transport declares no default for it, exactly as on the hop dialog, because nothing
+    is in place yet to keep. ``required`` is what says which of the two a box is, and the
+    enable route reads it — a box the transport defaults is left empty on purpose and
+    must not be refused.
 
-    What follows from ``operator_params``, stated rather than discovered: a parameter the
-    transport DEFAULTS gets no BOX here, the same as on the form this replaced — an
-    operator filling this dialog in cannot set one. It is not narrower than what the
-    route accepts, and that difference is deliberate: ``POST /panel/nodes/{id}/
-    transports`` reads every field of ``supplied_params``, so a submission that answers a
-    defaulted parameter is honoured rather than dropped.
+    THE LIST IS ``supplied_params`` SINCE M23, AND THAT IS THE M23 FIX. It was
+    ``operator_params``, which filters on ``is_required``, so a parameter the transport
+    DEFAULTS got no box here and none on the replace form either. The paragraph that
+    stood here called that "not narrower than what the route accepts … deliberate",
+    because ``POST /panel/nodes/{id}/transports`` has always read every field of
+    ``supplied_params``. The real-host walk measured what the asymmetry cost: the one
+    defaulted field any shipped transport has is the one a friend's ``DNS`` line is
+    written from, so **there was no setting in this panel that gave a person working
+    DNS** — the route would have honoured it and no form would draw the box.
 
-    Do not read this as parity with ``replaceable_params``, whose narrowing IS the
-    accepted set — and that narrowing is now PERMANENT. It was parity with the
-    pre-redesign form until M9.6 deleted it, which is the moment M9's carry-over asked a
-    later reader to notice: a parameter the transport defaults can no longer be replaced
-    from the panel at all. ``POST /api/transports/{id}/params`` still changes either.
+    The alternative was to drop the default in ``edge`` and let ``operator_params`` find
+    the field on its own. That is the wrong half to move: a required ``client_dns``
+    invalidates every params row already stored on the owner's live nodes, and a row
+    whose stored parameters no longer validate cannot be rotated, retyped or re-rendered
+    — the repair would be unreachable from the product. Widening the form costs a box
+    that may be left empty; narrowing the model costs the fleet.
+
+    What the widening does NOT relax is the one rule this form exists under.
+    ``supplied_params`` subtracts exactly what ``operator_params`` subtracted — every
+    name the transport declares as key material and every public counterpart of one — so
+    enabling, which is the moment material is minted, still cannot draw a box for any of
+    it.
+
+    A box only says something useful if the field declares a ``description``; a defaulted
+    field that declares none arrives with an empty hint and a placeholder showing its
+    default, which is the same defect ``tuning_field`` names for a required one.
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields
     return tuple(
         tuning_field(name, fields[name], transport.meta.port_range)
-        for name in operator_params(transport_name)
+        for name in sorted(supplied_params(transport_name))
     )

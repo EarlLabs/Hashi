@@ -412,3 +412,44 @@ async def test_a_revoked_friend_leaves_the_running_daemon_too(
         "the revocation rewrote the file and left the same process running, so the "
         "revoked friend is still being authorised by the daemon"
     )
+
+
+async def test_a_revocation_over_a_stale_daemon_says_the_push_landed(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """M23, measured on the owner's leaf: the node WAS reached, and was told it was not.
+
+    The host here takes the file and never recreates the container — the same state the
+    test above asserts an apply refuses to call success. On the walk that state arrived
+    through a revocation instead, and the banner said *"could not be reached — apply it
+    again once it can be"* about a node whose peer count had just gone 2 → 1 on disk.
+    Every word of that is wrong in the direction that matters: the operator is sent to
+    wait for a host that is answering, while the process on it goes on authorising the
+    person they just withdrew.
+
+    So the kind is asserted as well as the sentence. The kind is what the banner is
+    composed from — a node's own message may quote its private key and can never be
+    printed — so a right sentence over a wrong kind would be a coincidence of this
+    fleet rather than a property.
+
+    Red against the previous commit: ``why_not_updated`` had no arm for this, so the
+    failure fell through to ``UNREACHED`` and both assertions below fail.
+    """
+    from control.app.services import revocation
+    from control.app.services.apply import NotUpdated
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    # The friend first, so the container the host starts is one that authorises them —
+    # from that point the host is frozen on it and the withdrawal cannot reach the
+    # process, which is the state this test is about.
+    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+
+    outcome = await revocation.revoke_friend(session, friend_id=friend_id)
+
+    assert outcome.why_failed == {node_id: NotUpdated.NOT_SERVING}, outcome.why_failed
+    summary = outcome.summary()
+    assert "was reached and its configuration WAS replaced on it" in summary, summary
+    assert "could not be reached" not in summary, summary

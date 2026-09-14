@@ -189,6 +189,26 @@ class ConfigRefused(NodeOperationFailed):
     """
 
 
+class ConfigNotServing(NodeOperationFailed):
+    """The configuration reached the host and the host is not running it — M23.
+
+    The third fact in this family, and it is neither of the other two. ``ConfigRefused``
+    means nothing was written; a bare ``NodeOperationFailed`` out of the push covers a
+    node that could not be reached at all. This one is the node that WAS reached, whose
+    files WERE replaced, and whose daemon then did not come back on them — a container
+    that never started, or one still running the configuration it was started with
+    before.
+
+    Its own type because the revocation fan-out has to tell the operator what to do about
+    it and must not find out by reading the message (``apply.NotUpdated``). Without it,
+    the walk on the owner's real leaf was told *"could not be reached — apply it again
+    once it can be"* about a node whose peer count had just gone 2 → 1 on disk: the push
+    landed, the restart is what failed, and the sentence sent the operator to debug the
+    wrong half. Same status and code as its parent: to the API it is still a node
+    operation that failed.
+    """
+
+
 class SecretsUnreadable(DomainError):
     """A stored secret cannot be decrypted with the configured key.
 

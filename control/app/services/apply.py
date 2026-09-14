@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.crypto import SecretUnreadable
 from control.app.errors import (
+    ConfigNotServing,
     ConfigRefused,
     Conflict,
     DomainError,
@@ -104,6 +105,27 @@ OFFER_ONE_AGAIN = (
 )
 NOTHING_STOPS_A_SERVING_HOST = (
     "Nothing else in this control plane stops a node serving what it was last given."
+)
+
+# The fourth clause written for any caller, and the fourth refusal that has a different
+# direction on the console — M23. ``target_for`` refuses a node whose record carries no
+# SSH key at all, and an API caller has no row to press anything on.
+GIVE_IT_A_KEY = "Give it one, then apply it."
+
+# What an operator is told when a node's record holds no SSH key — M23, found on the real
+# hosts. It used to be ``edge``'s ``PermissionDenied`` sentence, *"the node refused the
+# key this control plane holds for it"*, which sent the operator to debug a host's
+# ``authorized_keys`` over a control plane that had offered the host nothing. That
+# sentence is right where it fires; reaching it with an empty key was the defect, and the
+# fix is on this side because this is the side that knows what is on the record.
+#
+# It says what did NOT happen as well as what did, because the two failures look the same
+# from the node's row: nothing was dialled, so nothing on the host changed, and the node
+# is still running whatever it was last given.
+NO_SSH_KEY = (
+    "this node has no SSH key on its record, so no connection was attempted and nothing "
+    "on the node was changed — the host refused nothing, because nothing was offered to "
+    f"it. {GIVE_IT_A_KEY}"
 )
 
 # What an operator is told when they press apply on a node that offers nothing — M18.1.
@@ -465,9 +487,18 @@ async def placed_listeners(session: AsyncSession, node: Node) -> dict[str, Liste
 def target_for(node: Node, node_settings: Settings) -> NodeTarget:
     """How to reach a node over SSH, from its record.
 
-    The two ways a node's record cannot produce a session at all are refused here, in
+    The three ways a node's record cannot produce a session at all are refused here, in
     the one function both the push and the probe build their target with, so neither has
     to recognise them separately.
+
+    THE THIRD IS "NO KEY AT ALL", and it is M23's. A record with an empty key produced a
+    target the SSH layer dialled with no credential, the host answered ``PermissionDenied``,
+    and both the apply banner and the probe banner said *"the node refused the key this
+    control plane holds for it"* — about a control plane that holds none. That sentence is
+    ``edge``'s and it is right where it fires; what was wrong is reaching it. The fact
+    belongs here, because this is the side that knows what is on the record, and the
+    operator's next action is a paste into this panel rather than an edit to a host's
+    ``authorized_keys``.
 
     The key is the second of them and it was an internal error until this line existed:
     the SSH layer loads it OUTSIDE the block that turns a connection failure into
@@ -483,7 +514,9 @@ def target_for(node: Node, node_settings: Settings) -> NodeTarget:
         raise NodeOperationFailed(
             "this node has no SSH address, so its configuration cannot be pushed"
         )
-    if node.ssh_private_key and not nodes.ssh_key_is_usable(node.ssh_private_key):
+    if not node.ssh_private_key:
+        raise NodeOperationFailed(NO_SSH_KEY)
+    if not nodes.ssh_key_is_usable(node.ssh_private_key):
         raise NodeOperationFailed(
             "the SSH private key stored for this node cannot be read, so no connection "
             "was attempted and nothing on the node was changed"
@@ -764,7 +797,13 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             if part
         )
         await _record_failure(session, node, detail)
-        raise NodeOperationFailed(
+        # ``ConfigNotServing`` since M23, and the type is the whole of the change — this
+        # sentence was already true on the apply banner. What was not true was the
+        # revocation's, which composes from the KIND rather than from these words and had
+        # no kind for "the push landed and the daemon did not come back on it": it fell
+        # through to UNREACHED and told the operator the node could not be reached, about
+        # a host whose file had just been replaced.
+        raise ConfigNotServing(
             f"configuration was applied but the node is not serving it — marked "
             f"degraded: {detail}"
         )
@@ -827,6 +866,14 @@ class NotUpdated(enum.StrEnum):
     # was pushed, and retrying changes nothing on its own.
     REFUSED = "refused"
 
+    # The host WAS reached and its files were replaced, and the daemon did not come back
+    # on them — M23. Its own kind because the operator's next move differs from both of
+    # the others: nothing about the record needs to change, and "apply it again once it
+    # can be reached" is advice about a node that was reached. What is unknown here, and
+    # what makes it the more dangerous of the three, is that the process may still be
+    # running the file that authorises the withdrawn credential.
+    NOT_SERVING = "not-serving"
+
     # Everything else: the host could not be reached, the push or its verification failed,
     # or something unexpected happened. The one kind a retry can fix.
     UNREACHED = "unreached"
@@ -855,6 +902,11 @@ def why_not_updated(exc: BaseException) -> NotUpdated:
     # which is precisely what REFUSED means.
     if isinstance(exc, ConfigRefused | NothingToApply):
         return NotUpdated.REFUSED
+    # Checked after ``ConfigRefused`` only because the two are siblings rather than
+    # related; neither is an instance of the other. ``apply_node`` raises this one past
+    # every connection arm, so reaching it means the push landed — M23.
+    if isinstance(exc, ConfigNotServing):
+        return NotUpdated.NOT_SERVING
     return NotUpdated.UNREACHED
 
 

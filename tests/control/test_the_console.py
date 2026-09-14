@@ -1837,12 +1837,15 @@ async def test_a_hop_end_is_not_something_a_user_is_offered(client, session) -> 
 async def test_the_enable_form_asks_only_what_the_transport_declares(
     client, reality_params
 ) -> None:
-    """A box per required field, per transport, and not one of them written here.
+    """A box per supplied field, per transport, and not one of them written here.
 
     Asserted against the transport's OWN declaration rather than a list: a protocol that
     gains a parameter gets a box the day it ships, and one that declares a piece of key
     material can never get one — the box list subtracts every minted name and every
     public counterpart of one.
+
+    REQUIRED until M23 and SUPPLIABLE since, which is the same declaration with one
+    filter removed. The filter is why the panel had no way to give a user DNS.
     """
     node_id, _ = await a_node_with_an_offer(client, reality_params)
 
@@ -1858,7 +1861,12 @@ async def test_the_enable_form_asks_only_what_the_transport_declares(
     # refusal naming the port, not as a missing form.
     for name in transports_service.offerable_transports():
         boxes = _enable_boxes(dialog.text, name)
-        expected = set(transports_service.operator_params(name))
+        # EVERY FIELD AN OPERATOR MAY SUPPLY, not only the required ones — M23. The
+        # narrower set was this form's rule until the real-host walk measured what it
+        # cost: the only defaulted parameter any shipped transport has is the one a
+        # user's DNS line is written from, so no box for it meant no setting in this
+        # panel that gives a person working DNS, while the ROUTE had always accepted one.
+        expected = set(transports_service.supplied_params(name))
         # ONE MORE BOX since M17, and only for a transport that declares each user needs
         # an address of their own. Asserted as an addition rather than folded into the
         # list above, because it is not a parameter of the transport at all: the size is
@@ -3761,9 +3769,14 @@ async def every_console_surface(client, reality_params) -> list[str]:
         # it is addressed by a node-transport rather than by a node.
         f"/panel/nodes/{node_id}/transports",
         f"/panel/nodes/{node_id}/state",
-        # M16's, added in the change that added it: the one dialog that edits a node
+        # M16's, added in the change that added it: the first dialog that edits a node
         # record after registration, and it renders the value it edits back into a box.
         f"/panel/nodes/{node_id}/resolver",
+        # M23's, added in the change that added it — and the one dialog on this list the
+        # key sweep below was written for: it is the only form in the console that
+        # accepts an SSH private key after registration, so a surface that renders one
+        # back would render it here first.
+        f"/panel/nodes/{node_id}/ssh-key",
         f"/panel/transports/{node_transport_id}/withdraw",
         # M15.2's, added in the change that added it. The second confirmation behind the
         # same row, and the one with the most to disclose: it is about the row whose
@@ -4290,14 +4303,25 @@ async def test_a_refused_parameter_lands_under_its_own_box(
 # field nobody typed. `""` is what a model-level validator produces, `x.0` a nested one,
 # and the last is a field this form has no box for.
 #
+# THE LAST ONE USED TO BE ``decoy_port`` — a parameter this transport DEFAULTS, which
+# until M23 was a field no form in this console drew a box for. It draws one now (the
+# enable and replace forms ask what an operator MAY supply rather than what they MUST),
+# so a complaint located there is a complaint about a box, and the allow-list correctly
+# prints it. The shape still has to be held, so the stand-in is a location that is not a
+# field of this transport at all — which is what a validator on a renamed or future
+# parameter reports, and what nothing on this form can ever have a box for.
+#
 # The message on each carries a value that must never reach the page. Only the first
 # entry is a box on the replace form, and it is the only one whose sentence may be read.
+# Asserted to really not be a field, so this entry cannot quietly become a box.
+UNRENDERED_FIELD = "decoy_hostname"
+
 REFUSAL_SHAPES = {
     "port": "must be inside the range — QUOTED-BOX-VALUE",
     "private_key": "is not usable — QUOTED-MATERIAL-VALUE",
     "": "these parameters disagree with each other — QUOTED-MODEL-VALUE",
     "server_names.0": "is not a hostname — QUOTED-NESTED-VALUE",
-    "decoy_port": "is out of range — QUOTED-UNRENDERED-VALUE",
+    UNRENDERED_FIELD: "is out of range — QUOTED-UNRENDERED-VALUE",
 }
 
 
@@ -4319,6 +4343,9 @@ async def test_a_refusal_prints_the_transport_s_words_only_under_a_box(
     """
     node_transport_id = await a_node_holding_material(client, reality_params)
     assert "port" in transports_service.operator_params("vless-reality")
+    # Non-vacuous: the unrendered shape only proves anything while this really is a name
+    # no box on this form can exist for.
+    assert UNRENDERED_FIELD not in transports_service.supplied_params("vless-reality")
 
     async def refuse(session, *, node_transport_id, params, **rest):
         raise ParamsRefused("transport rejected these parameters", fields=REFUSAL_SHAPES)
@@ -5322,6 +5349,7 @@ EVENT_SENTENCES = {
     AuditAction.TRANSPORT_REMOVED: f"{TRAIL_TRANSPORT} removed from {TRAIL_NODE}",
     AuditAction.HOP_ESTABLISHED: f"hop established from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
     AuditAction.HOP_DISSOLVED: f"hop torn down from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
+    AuditAction.NODE_SSH_KEY_SET: f"ssh key set for {TRAIL_NODE}",
     AuditAction.KEYS_ROTATED: f"keys rotated for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
     AuditAction.PARAMS_REPLACED: f"parameters replaced for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
 }
@@ -6540,18 +6568,26 @@ def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
         apply_service.ENABLE_ONE_HERE,
         apply_service.OFFER_ONE_AGAIN,
         apply_service.NOTHING_STOPS_A_SERVING_HOST,
+        apply_service.GIVE_IT_A_KEY,
     }
 
     assert set(wording._THE_CONSOLES_DIRECTIONS) == exported, (
         "a clause written for any caller has no console version, or the mapping still "
         "holds one that no longer exists"
     )
+    # Every sentence a service composes out of these clauses. M23 adds the fourth, which
+    # is composed by a different refusal — a node whose record holds no SSH key at all —
+    # so the joined text is what the clause must appear in, not any one of the three.
+    composed = "".join((
+        apply_service.NOTHING_TO_APPLY_YET,
+        apply_service.NOTHING_LEFT_TO_APPLY,
+        apply_service.NOTHING_LEFT_TO_APPLY_UNPUSHED,
+        apply_service.NO_SSH_KEY,
+    ))
     for clause, on_the_console in wording._THE_CONSOLES_DIRECTIONS.items():
-        assert clause in (
-            apply_service.NOTHING_TO_APPLY_YET
-            + apply_service.NOTHING_LEFT_TO_APPLY
-            + apply_service.NOTHING_LEFT_TO_APPLY_UNPUSHED
-        ), f"nothing composes this clause any more, so it is translating nothing: {clause}"
+        assert clause in composed, (
+            f"nothing composes this clause any more, so it is translating nothing: {clause}"
+        )
         assert on_the_console != clause, clause
 
 

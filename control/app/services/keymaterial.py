@@ -21,6 +21,12 @@ HOW:  ``mint(specs, scope)`` returns a ``Minted`` split into ``params`` (storabl
 it is the only function in this codebase that turns key material into something a
 person reads, so it lives next to the one that makes it. What it will and will not
 accept as input is the whole of it — see its own docstring.
+
+``missing_client_material`` is ``mint`` asked backwards — does a stored credential carry
+what its transport declares a consumer's material IS — and it is here so that "what a
+credential should hold" has one definition rather than one per reader. M23, where a
+transport declared a new per-consumer value and every credential minted before it
+stopped being renderable into a file.
 """
 
 import base64
@@ -165,6 +171,50 @@ def rotate(specs: Iterable[KeySpec], scope: KeyScope) -> Minted:
     ``control/app/services/rotation.py``.
     """
     return mint(specs, scope)
+
+
+def missing_client_material(
+    specs: Iterable[KeySpec], held: Mapping[str, object]
+) -> list[str]:
+    """Which CLIENT-scoped values a transport declares that this credential does not hold.
+
+    The mirror of ``mint`` and it belongs beside it: one says what a consumer's material
+    is, the other says whether a stored credential actually carries it. Empty for a
+    credential minted against the current declaration, and non-empty for one minted
+    before a transport declared a new piece — which is not hypothetical. M23 gave the
+    WireGuard family a per-pair pre-shared key, and every credential minted before that
+    carries none, so the renderer refuses to build a configuration file for it rather
+    than hand out the node-wide key again.
+
+    ``held`` is the material as ``edge`` would see it: the credential's own secrets, with
+    the ``subject`` column under the name the contract requires. ``addresses.edge_credential``
+    is the one builder of that mapping for the two renders that must agree, and a caller
+    here passes the same thing — which is what makes this answer the same question the
+    download does rather than one near it.
+
+    Both halves of a spec, like ``transports.key_material_names``: a renderer reads the
+    public counterpart of an asymmetric value by the name the transport declared for it,
+    so a credential holding the private half alone is as unrenderable as one holding
+    neither.
+
+    NOTHING IS RETURNED BUT NAMES — never a value, and never a count of characters. A
+    name is a field of a declaration that is already in the tree; the value is the
+    credential.
+
+    What this deliberately does NOT answer is whether a given renderer would actually
+    refuse: one may fall back for a value another insists on, and asking that here would
+    mean `control` recognising fields. The question it answers is the declaration's —
+    this credential does not carry what the transport says a consumer's material is —
+    and the repair is the same either way, which is why one predicate serves both the
+    screen that reports it and the endpoint that skips it.
+    """
+    return sorted(
+        name
+        for spec in specs
+        if spec.scope is KeyScope.CLIENT
+        for name in (spec.name, spec.public_name)
+        if name and not held.get(name)
+    )
 
 
 # How much of a digest a fingerprint shows at each end — ``9f3c…a17d``, the shape

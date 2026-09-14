@@ -59,7 +59,7 @@ from control.app.panel import wording
 from control.app.services import apply, nodes
 from edge.bootstrap import NodeUnreachable
 
-from .conftest import assert_plain_reason
+from .conftest import GENERATED_SSH_KEY, assert_plain_reason
 
 # What a FRIEND would dial, and the only thing this address is here: RFC 5737
 # TEST-NET-1, the same one every other fixture in this zone uses. Nothing in this file
@@ -100,6 +100,10 @@ async def a_drafted_node(client, reality_params, ssh) -> str:
 
     ``ssh`` is the endpoint the control plane will dial — the ``refusing_ssh`` socket,
     so the apply fails because the test said it would, not because of a route.
+
+    It carries a real key — M23. ``apply.target_for`` refuses a record with none before
+    it dials, so a keyless node would fail this file's applies for a reason none of its
+    tests are about. The key authenticates nothing; the socket refuses the connection.
     """
     node_id = (await client.post(
         "/api/nodes",
@@ -109,6 +113,7 @@ async def a_drafted_node(client, reality_params, ssh) -> str:
             "location_label": "Testland",
             "ssh_host": ssh.host,
             "ssh_port": ssh.port,
+            "ssh_private_key": GENERATED_SSH_KEY,
         },
     )).json()["id"]
     enabled = await client.post(

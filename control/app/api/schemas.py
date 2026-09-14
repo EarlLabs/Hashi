@@ -211,6 +211,12 @@ class RevocationResponse(BaseModel):
 
     friend_id: str
     complete: bool
+    # Whether THIS call withdrew anything — M23. ``complete`` alone is vacuously true for
+    # a call that had nothing to push, so a script re-issuing a revocation that failed
+    # earlier reads success from it while the node that failed is still serving the
+    # person. A caller wanting the reassurance wants both fields, which is what
+    # ``summary`` says in words.
+    withdrew: bool
     nodes_updated: list[str]
     nodes_failed: dict[str, str]
     summary: str

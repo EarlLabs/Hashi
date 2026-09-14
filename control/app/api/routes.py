@@ -233,6 +233,7 @@ async def revoke_friend(friend_id: str, session: AsyncSession = Depends(session_
     return schemas.RevocationResponse(
         friend_id=outcome.friend_id,
         complete=outcome.complete,
+        withdrew=outcome.withdrew,
         nodes_updated=outcome.nodes_updated,
         nodes_failed=outcome.nodes_failed,
         summary=outcome.summary(),

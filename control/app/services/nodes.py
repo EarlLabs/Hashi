@@ -248,7 +248,9 @@ async def create_node(
     a paste that lost its last line, a key with a passphrase — and the alternative is
     what it used to be: the record accepted, and the mistake reported at the first apply
     as an internal error naming an exception class and pointing at a container log. The
-    node cannot be edited afterwards either, so the moment to say so is this one.
+    node's other fields cannot be edited afterwards, so the moment to say so is this one
+    — the key itself can be pasted again from the Nodes screen since M23
+    (``set_ssh_key``), which is what makes "optional now" on the dialog true.
     """
     # Truthiness rather than ``is not None``: an empty string means "not supplied"
     # everywhere else on this path — the SSH layer treats it as no key at all — and a
@@ -298,8 +300,9 @@ async def create_node(
 async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) -> Node:
     """Name the resolver a node's lookups are sent to through its hop — after registration.
 
-    The one field on a node record that can change once the node exists (M16). Everything
-    else there stays fixed and a new host is a new node, but this one could not: the
+    The first of the two fields a node record admits once the node exists (M16; the other
+    is ``set_ssh_key`` below, M23). Everything else stays fixed and a new host is a new
+    node, but this one could not: the
     upgrade that added it gave every existing node none, a node that dials a hop does not
     render without one, and a node that cannot be rendered cannot be reached by a
     revocation either. So the value is node-record data that has to be writable onto the
@@ -321,6 +324,50 @@ async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) ->
         audit.record(session, AuditAction.NODE_RESOLVER_SET, first_label=node.name)
         await session.commit()
         logger.info("node %s resolver set", node.id)
+    return node
+
+
+async def set_ssh_key(
+    session: AsyncSession, *, node_id: str, ssh_private_key: str
+) -> Node:
+    """Give a node the SSH key `control` reaches it with — after registration. M23.
+
+    THE SECOND FIELD A NODE RECORD ADMITS AFTER IT EXISTS, and it is here for the reason
+    ``set_resolver`` above is: without it a node could reach a state the product invited
+    and could not leave. The add-node dialog says the key is *"optional now"*, and every
+    route that would have supplied one afterwards answered 404 — so a node registered on
+    that invitation was unappliable for ever, unreachable by a revocation, and could only
+    be retired.
+
+    Deliberately NOT a node EDIT. The name, the address, the exit label, the SSH user and
+    port stay fixed and a new host is still a new node: the charter's answer to a host
+    that changed is to register another one in ten minutes, and widening this into a
+    general edit form would be a different milestone. This is the one field whose absence
+    the product itself created.
+
+    Refused with ``SSH_KEY_UNUSABLE`` — the same sentence ``create_node`` refuses a bad
+    paste with, and the same check the connection itself makes — so "accepted by this
+    dialog" and "usable for reaching a node" cannot come to mean two different things. An
+    empty box is refused by the same sentence rather than by clearing the stored key:
+    there is no in-product reason to make a node unreachable on purpose, and doing it by
+    submitting an empty form would be the accident version of that.
+
+    Pasting the key already stored changes nothing and records nothing, exactly as
+    ``set_resolver`` treats a resolver that is already in place: a retried click is not an
+    event. The comparison is on the decrypted value and its result is a boolean —
+    nothing about the key is logged, recorded or returned.
+    """
+    node = await get_node(session, node_id)
+    if not ssh_private_key or not ssh_key_is_usable(ssh_private_key):
+        raise DomainError(SSH_KEY_UNUSABLE)
+    if ssh_private_key != node.ssh_private_key:
+        node.ssh_private_key = ssh_private_key
+        # The node's name and nothing else. Not a fingerprint of the key, not whether one
+        # was replaced or supplied for the first time: this credential reaches every host
+        # in the fleet, and a durable record has no safe shape for any part of it.
+        audit.record(session, AuditAction.NODE_SSH_KEY_SET, first_label=node.name)
+        await session.commit()
+        logger.info("node %s ssh key set", node.id)
     return node
 
 

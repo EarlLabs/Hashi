@@ -93,6 +93,12 @@ async def a_revocation_that_cannot_finish(
     quotes that node's own private key, which is the shape the M9 carry-over measured.
     ``quiet-1`` has no SSH key. The friend is created last: that is the order that mints a
     credential on every serving node.
+
+    Note what ``quiet-1`` actually exercises since M23: ``apply.target_for`` refuses a
+    record with no key before it dials, so this node is UNREACHED because nothing was
+    dialled rather than because a dial failed. The kind and the sentence are unchanged,
+    and the fixture is left as it is because the alternative is a node at an address whose
+    behaviour belongs to the routing table — which is what M21.2 removed from this zone.
     """
     entry = await a_node(client, "entry-ru", ENTRY)
     await serving_friends(client, session, entry, reality_params)
@@ -277,17 +283,24 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
     outcome = revocation.RevocationOutcome(
         friend_id="f",
         nodes_updated=["n0"],
-        nodes_failed={"n1": planted, "n2": f"refused: {planted}", "n3": f"ssh: {planted}"},
+        nodes_failed={
+            "n1": planted,
+            "n2": f"refused: {planted}",
+            "n3": f"ssh: {planted}",
+            "n4": f"stale: {planted}",
+        },
         why_failed={
             "n1": NotUpdated.NO_RESOLVER,
             "n2": NotUpdated.REFUSED,
             "n3": NotUpdated.UNREACHED,
+            # M23's fourth kind: the push landed and the daemon did not come back on it.
+            "n4": NotUpdated.NOT_SERVING,
         },
-        names={"n1": "entry-ru", "n2": "refused-1", "n3": "quiet-1"},
+        names={"n1": "entry-ru", "n2": "refused-1", "n3": "quiet-1", "n4": "stale-1"},
     )
 
     assert outcome.summary() == (
-        "access withdrawn in the database and on 1 node(s), but 3 node(s) could NOT be "
+        "access withdrawn in the database and on 1 node(s), but 4 node(s) could NOT be "
         "updated and the credential is still live on each until it is: "
         "'entry-ru' has no resolver on its record, so its configuration cannot be "
         "rendered and retrying will not change that — set its resolver on the Nodes "
@@ -296,8 +309,35 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
         "can be; "
         "'refused-1' could not be given a configuration: it was refused before anything "
         "was pushed, and retrying will not change that — apply it from the Nodes screen "
-        "to read why."
+        "to read why; "
+        "'stale-1' was reached and its configuration WAS replaced on it, but it did not "
+        "come back running that configuration — so the process on it may still be "
+        "serving the file that carries this credential. Retrying will not change that "
+        "on its own: apply it from the Nodes screen and read what did not come up."
     )
     assert revocation.RevocationOutcome(friend_id="f", nodes_updated=["a", "b"]).summary() == (
         "access withdrawn everywhere; 2 node(s) updated"
     )
+
+
+def test_every_kind_of_failure_has_its_own_sentence() -> None:
+    """A kind with no clause is a ``KeyError`` at the worst moment there is.
+
+    ``summary`` looks its clause up by kind while composing the one sentence read when
+    somebody who should be cut off is still connected, so a kind added without one turns
+    that moment into a 500. Driven off the enum, so the next kind fails here — in the
+    change that adds it, which is M23's own lesson one level down.
+
+    The sentences are also required to differ: two kinds reading alike is two different
+    next actions the operator cannot tell apart, which is the defect M16 filed against
+    the single sentence this mapping replaced.
+    """
+    said = {}
+    for kind in NotUpdated:
+        assert kind in revocation._WHY_NOT_UPDATED, (
+            f"{kind.value} has no sentence, so a revocation that hit it would raise "
+            "instead of telling the operator who is still connected"
+        )
+        sentence = revocation._WHY_NOT_UPDATED[kind].format(node="'n'", where="THE SCREEN")
+        assert sentence not in said, f"{kind.value} reads exactly like {said[sentence]}"
+        said[sentence] = kind.value
