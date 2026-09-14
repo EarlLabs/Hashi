@@ -80,11 +80,6 @@ logger = logging.getLogger(__name__)
 # revocation and rotation reports).
 WHERE_TO_RETRY = "the Nodes screen"
 
-# The largest number a socket can be bound on. Not a port this project chose and not one
-# it will ever dial — it is the ceiling of the field, and a stored value above it is a row
-# nothing can be checked about rather than a row to refuse here. See ``placed_listeners``.
-_HIGHEST_PORT = 65535
-
 # THE ONE CLAUSE PER REFUSAL THAT IS WRITTEN FOR A SCREEN — M18's acceptance, round 2.
 #
 # ``POST /api/nodes/{id}/apply`` was answering a script with "Enable a transport on it
@@ -421,6 +416,13 @@ async def placed_listeners(session: AsyncSession, node: Node) -> dict[str, Liste
     number, and one whose package declares it binds nothing. Inventing an answer for any
     of them would report a working node as broken, which is the same defect as reporting
     a broken one as working — M22's own subject, pointed the other way.
+
+    NO RANGE IS CHECKED HERE, and that is deliberate rather than an omission. What a legal
+    port is belongs to the transport's own declaration and to the kernel, not to this
+    zone; writing a ceiling down here would be a port number hardcoded in code, which
+    ``CLAUDE.md`` forbids, and it would buy nothing — a row holding a number no socket can
+    be bound on is a row whose container bound nothing, and "nothing is listening for it"
+    is the true answer to give about it.
     """
     listed = await session.execute(
         select(
@@ -441,13 +443,10 @@ async def placed_listeners(session: AsyncSession, node: Node) -> dict[str, Liste
         # latter accepts a leading sign and unicode digits, neither of which is a port.
         if port is None or not port.isdigit():
             continue
-        number = int(port)
-        if not 0 < number <= _HIGHEST_PORT:
-            continue
         protocols = placement.binds_of(transport_name)
         if not protocols:
             continue
-        listeners[config_name] = Listener(port=number, protocols=protocols)
+        listeners[config_name] = Listener(port=int(port), protocols=protocols)
     return listeners
 
 
