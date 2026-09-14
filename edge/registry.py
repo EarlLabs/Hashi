@@ -452,6 +452,35 @@ class TransportMeta:
         """
         return SubscriptionFormat.V1_URI_LIST in self.subscription_formats
 
+    @property
+    def hop_expressible(self) -> bool:
+        """Whether an entry→leaf hop can actually be BUILT out of this transport.
+
+        Derived for the same reason ``subscription_expressible`` is, and it answers the
+        question every chooser and every hop form has really been asking. ``hop_capable``
+        alone does not: it is a permission and says so — *"a charter constraint rather
+        than a capability"* — so it defaults to True and a transport that has simply
+        never been shaped like a hop end says nothing and reads as able.
+
+        The second half is the ability, and it is ``peer_address``. A hop is two ends of
+        one tunnel network, each holding an address of its own and naming the other as
+        its single authorised peer: ``edge/relay.py`` is written in those terms from end
+        to end — the two addresses are compared for collision and for a common network,
+        each is handed to the far end as ``peer_tunnel_address``, and the entry's way out
+        is a source route from its own one (``exit_via``). A transport that hands its
+        consumers no address of their own has nothing to put in any of those places. That
+        is a real difference between protocol families rather than a gap in this module:
+        a userspace proxy terminates a connection and originates a new one from the node,
+        so it has no second end to agree with about anything.
+
+        Asked HERE, once, because the alternative is each surface deriving it again from
+        two fields and one of them getting it wrong — which is how a control plane came
+        to advertise a capability whose renderer raised ``HopNotRenderable`` on the first
+        press. ``edge/relay.py`` refuses on this, the panel's hop chooser is built from
+        it, and ``GET /api/transports`` reports it.
+        """
+        return self.hop_capable and self.peer_address is not None
+
     def clamp_port(self, port: int) -> int:
         """Raise unless ``port`` is inside this transport's declared range."""
         low, high = self.port_range
