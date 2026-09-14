@@ -2280,7 +2280,7 @@ untouched throughout.
 
 ---
 
-## → M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · APPROVED BY THE OWNER 2026-09-13
+## ✅ M22 — The probe says a crash-looping transport is serving · found in acceptance 2026-09-13 · done 2026-09-14 (acceptance folded into M23's real-host walk)
 
 **Proposed by the autopilot run on 2026-09-13 and approved by the owner the same
 day** ("m22 yes"). Written down separately because the run declined to build it
