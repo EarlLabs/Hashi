@@ -397,9 +397,16 @@ class TransportRow:
     # loud to be.
     exposure: str
     identified: bool
-    # ``hop_capable``, but only when it is False: a transport that may carry a hop needs
-    # no sentence about it, and a column that says "may carry a hop" on three rows out
-    # of four teaches nothing.
+    # ``hop_expressible``, but only when it is False: a transport a hop can be built out
+    # of needs no sentence about it, and a column that says "may carry a hop" on every
+    # row that can teaches nothing.
+    #
+    # THE DERIVED ANSWER AND NOT THE RAW ``hop_capable`` PERMISSION — M20's acceptance,
+    # which found ``GET /api/transports`` advertising a capability whose renderer refuses
+    # it. Both surfaces answer that one question and they read one value, because two
+    # readings of it is how the JSON came to disagree with the renderer in the first
+    # place. It puts the sentence on more rows than before, and that is the correction:
+    # the rows it appears on now are exactly the ones the hop dialog will not offer.
     hop_note: str | None
     # ``peer_address``, and only when it is declared — M17.2. Present on the transports
     # that hand each user an address out of a pool, absent on the ones that identify a
@@ -1066,7 +1073,7 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
             else TRANSPORT_CAMOUFLAGED
         ),
         identified=meta.blocked_by_inspection,
-        hop_note=None if meta.hop_capable else TRANSPORT_NO_HOP,
+        hop_note=None if meta.hop_expressible else TRANSPORT_NO_HOP,
         # THE REGISTRY'S OWN DECLARATION, asked through the one function in this zone
         # that asks it — no name is compared here, in the template, or anywhere between
         # them, which is the same rule the three strings above follow.

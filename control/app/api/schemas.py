@@ -141,8 +141,19 @@ class TransportMetaResponse(BaseModel):
     # backlog item 28's constraint, whose declaration half lives in `edge`.
     blocked_by_inspection: bool
 
-    # Whether it may carry an entry-to-leaf hop. Listed for the same reason: the hop form
-    # should not offer an option the renderer will refuse.
+    # Whether an entry-to-leaf hop can actually be BUILT out of it. Listed for the same
+    # reason as the field above: the hop form should not offer an option the renderer
+    # will refuse.
+    #
+    # IT CARRIES ``hop_expressible``, NOT THE RAW ``hop_capable`` DECLARATION — M20's
+    # acceptance, and the distinction is what that walk fell into. The raw one is a
+    # charter constraint that defaults to True ("this protocol is not identified at the
+    # border the hop crosses"), so a transport that was never shaped like a hop end says
+    # nothing and reads as able: both VLESS transports were advertised here as capable
+    # and answered ``POST /api/hops`` with a 500. The name stays because it is the
+    # question a caller asks — may I build a hop out of this — and the value is now the
+    # answer to it. The border half of the story is already a field of its own,
+    # ``blocked_by_inspection``, so nothing is hidden by not surfacing the permission.
     hop_capable: bool
 
     # Whether the registry has withdrawn this transport from every list a chooser is

@@ -191,32 +191,35 @@ class TuningField:
 def hop_transports() -> list[str]:
     """Every installed transport that may carry an entry→leaf hop, sorted.
 
-    Two conditions, and neither implies the other. A hop's configuration is consumed as
-    a FILE by a node rather than as a link by a phone, which is what
-    ``subscription_expressible`` being false has always meant here — offering the URI
-    ones would invite the operator to build a tunnel out of a friend-facing link. And
-    since item 28 a transport may declare that it cannot carry a hop AT ALL, which is a
-    charter constraint rather than a capability: the hop crosses the border by
-    definition, so a protocol-blocked transport there would leave both ends configured
-    correctly and no tunnel between them. Plain WireGuard is a config file too, so the
-    first condition alone would have offered it and the renderer would have refused it
-    after the operator had filled in a form.
+    Two conditions, and neither implies the other. The first is ``hop_expressible``,
+    which is the renderer's own answer asked where the renderer lives: `control` must not
+    re-derive "can a hop be built out of this" from the fields it is derived from, or the
+    form and ``edge.relay`` eventually disagree about one transport and the operator
+    meets that as a refusal after filling in twenty-two boxes.
+
+    THIS USED TO READ ``not subscription_expressible and hop_capable`` — M20's
+    acceptance. Both clauses were proxies. The second is a permission rather than an
+    ability (see ``TransportMeta.hop_expressible``), and the first stood in for it: a
+    hop's configuration is consumed as a FILE by a node rather than as a link by a phone,
+    so "not a URI" happened to exclude exactly the transports with no address of their
+    own. It excluded them for the wrong reason and only by luck — the same pair of
+    proxies on the JSON side advertised both VLESS transports as hop-capable and answered
+    ``POST /api/hops`` with a 500. Nothing in the offered list changes: the set is the
+    same one today, arrived at by asking the question instead of two things near it.
 
     Note the overlap this allows, and which is correct: a transport can be on this list
     AND offerable to friends.
 
     A THIRD CONDITION SINCE M20, and it is the same shape as the other two: a transport
     the registry declares retired is not proposed here either. No transport this image
-    ships is both hop-capable and retired today, so this is the declaration holding a
+    ships is both hop-expressible and retired today, so this is the declaration holding a
     door shut rather than one already closed — but a chooser that had to be REMEMBERED
     when the next transport is retired is a chooser that will not be.
     """
     return sorted(
         meta.name
         for meta in discover().values()
-        if not meta.subscription_expressible
-        and meta.hop_capable
-        and meta.retired is None
+        if meta.hop_expressible and meta.retired is None
     )
 
 

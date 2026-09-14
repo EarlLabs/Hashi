@@ -63,7 +63,10 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
                 # a stable order rather than a set's iteration order.
                 subscription_formats=sorted(str(f) for f in meta.subscription_formats),
                 blocked_by_inspection=meta.blocked_by_inspection,
-                hop_capable=meta.hop_capable,
+                # The derived answer and not the raw permission — see the field's own
+                # note in ``schemas``. A caller builds a hop form out of this, and the
+                # permission alone said yes to transports whose renderer refuses them.
+                hop_capable=meta.hop_expressible,
                 # The retirement, passed through in both halves — M20. A caller building
                 # a chooser reads the flag; a caller showing a person why an option is
                 # missing reads the sentence, which is the transport's own.

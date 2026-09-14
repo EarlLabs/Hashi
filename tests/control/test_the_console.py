@@ -3246,7 +3246,7 @@ async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
     ``TransportMeta`` to the rendered cell recognised a protocol by name, the warning
     would follow the name and neither of these rows would move.
     """
-    from edge.registry import Layer4, TransportMeta
+    from edge.registry import Layer4, PeerAddress, TransportMeta
 
     def a_fleet_of_one(**declared) -> None:
         meta = TransportMeta(
@@ -3255,6 +3255,12 @@ async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
             needs_tls=False,
             listens_on=frozenset({Layer4.UDP}),
             port_range=(1024, 65535),
+            # Shaped like something a hop could be built out of, in BOTH fleets — M20's
+            # acceptance. The hop sentence is chosen by ``hop_expressible``, which is the
+            # permission and the ability together, so a shape declaring no address of its
+            # own would carry that sentence whatever the two booleans below said and the
+            # calm half of this scenario would assert nothing.
+            peer_address=PeerAddress(name="peer_addr", within="iface_addr"),
             **declared,
         )
         monkeypatch.setattr(console_service, "discover", lambda: {meta.name: meta})
