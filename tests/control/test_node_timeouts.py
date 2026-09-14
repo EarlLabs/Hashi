@@ -98,6 +98,13 @@ async def test_a_node_that_never_answers_is_reported_with_a_plain_reason(
     # The FACT that the node could not be reached is a flag, not a sentence, and this
     # is where it is recorded — ``check_node`` sets it only for ``NodeUnreachable``.
     assert report.reachable is False
+    # AND IT REPORTS NOTHING IT DID NOT MEASURE — M22, held on the arm most likely to
+    # start guessing. A node that never answered told us nothing about its containers and
+    # nothing about its sockets, so neither "it is listening", nor "it is not", nor "it is
+    # crash-looping" may be filled in from what we expected to find there.
+    assert report.restarting == []
+    assert report.listening == []
+    assert report.not_listening == []
     # And this is the part the operator reads. Asserted as a property (words, one
     # line, no traceback, no bare class name, no address travelling with it) rather
     # than as the particular sentence the timeout arm happens to write — M21.1.

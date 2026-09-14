@@ -1988,10 +1988,26 @@ async def probe_node(
 ):
     """Ask a node what it is actually running, and say so on the console.
 
-    A healthy answer is a toast: it is good news and it does not need to survive the
-    next click. Anything else is a BANNER, which stays until the next successful
-    action — an unreachable node, or one running a configuration older than the file
+    BOTH ANSWERS PERSIST — M22.3, and the previous sentence here is the finding. It read
+    *"a healthy answer is a toast: it is good news and it does not need to survive the
+    next click"*, which is right about a mutation and wrong about this button. Acceptance
+    pressed probe four times, waiting 2, 3, 4 and 8 seconds, and never saw an answer at
+    all, while every FAILING probe's banner was there at the same waits — because a toast
+    is cleared after 2200ms and that is shorter than the time it takes to look.
+
+    A probe is not a mutation. Nothing changed, and its answer is not a confirmation of
+    something the operator already knows they did — it IS the thing they pressed the
+    button for, the only oracle this console has for "is that node working", and an
+    oracle nobody can read is not an oracle. So a healthy answer is a NOTICE in the
+    banner slot: the quieter weight, the same lifetime as a failure, cleared by the next
+    action or by navigating away. Anything else is the failure banner, unchanged — an
+    unreachable node, a crash loop, or one running a configuration older than the file
     on it, is a fault the operator has to still be able to read while they act on it.
+
+    THE SENTENCE ITSELF IS NARROWER THAN IT WAS, and that is M22.2: it says what was
+    checked — containers up, ports held, read on the node rather than dialled from
+    outside — instead of the single word "serving", which is what an operator read as
+    "working" about a node that was crash-looping on six consecutive probes.
 
     Until M9.6 there was a second probe route, ``/nodes/{id}/health``, answering the
     pre-redesign page with a ``panel/health.html`` fragment. It went with the page; the
@@ -2014,7 +2030,7 @@ async def probe_node(
     summary = console.health_summary(node.name, result)
     return _mutation(
         request,
-        toast=summary if result.healthy else None,
+        notice=summary if result.healthy else None,
         banner=None if result.healthy else summary,
         keeping=node.name,
         # A probe changes nothing, but it is the moment the operator most wants the
@@ -2405,6 +2421,7 @@ def _mutation(
     toast: str | None = None,
     banner: str | None = None,
     banner_label: str | None = None,
+    notice: str | None = None,
     events: str | None = None,
     context: dict | None = None,
     keeping: str | None = None,
@@ -2413,12 +2430,12 @@ def _mutation(
     """The one answer shape every console mutation gives.
 
     Something for the dialog slot (a new dialog, or ``None`` — which closes the open
-    one), plus at most one out-of-band toast or banner, plus the events that tell the
-    screen's tables to refresh themselves. Routed through one function so
+    one), plus at most one out-of-band toast, banner or notice, plus the events that tell
+    the screen's tables to refresh themselves. Routed through one function so
     "every mutation emits a toast naming its object" (UI-PATTERNS §8) is checkable by
     reading the call sites rather than every template.
 
-    Both sentences pass through ``wording.for_the_page``: they are composed in
+    Every sentence passes through ``wording.for_the_page``: they are composed in
     ``services/``, which speaks the code's vocabulary, and decision 9 says that word
     stops before the rendered page. ``keeping`` is the operator's own text inside the
     sentence — a nickname — which is handed back exactly as they typed it.
@@ -2428,6 +2445,13 @@ def _mutation(
     was attempted and nothing changed. It is a caller's choice rather than something the
     template works out because only the caller knows which of the two it is holding: the
     same element carries a node whose apply failed and a node that was never dialled.
+
+    ``notice`` is the third thing that can hold the banner slot — M22.3, and the one use
+    for it today is a probe that found nothing wrong. It is a persistent answer that is
+    not a failure, and it goes through the same slot so it clears the same way and is
+    scrolled into view by the same observer. See ``panel/notice.html`` for why an answer
+    to a question is not a toast, and ``probe_node`` for the argument that a probe is not
+    a mutation.
     """
     response = TEMPLATES.TemplateResponse(
         request,
@@ -2437,6 +2461,7 @@ def _mutation(
             "toast": wording.for_the_page(toast, keeping=keeping) if toast else None,
             "banner": wording.for_the_page(banner, keeping=keeping) if banner else None,
             "banner_label": banner_label,
+            "notice": wording.for_the_page(notice, keeping=keeping) if notice else None,
             **(context or {}),
         },
         status_code=status_code,

@@ -35,6 +35,7 @@ import yaml
 
 from control.app.models import NodeState
 from edge.bootstrap import node_stack
+from edge.health import listening
 
 from .conftest import GENERATED_SSH_KEY
 
@@ -71,7 +72,15 @@ class _FakeHost:
 
     learned_host_key = None
 
-    def __init__(self, *, recreates: bool = True) -> None:
+    def __init__(self, *, recreates: bool = True, sockets: str | None = None) -> None:
+        # The node's listening table, as ``ss`` prints it, or ``None`` for a host that
+        # does not have the tool. ``None`` is the DEFAULT on purpose: this file is M1's
+        # and its subject is what the daemon loaded, not what it bound. A host that
+        # cannot be asked reports its ports as unchecked, which is the honest answer and
+        # leaves every assertion here about the question it was written for. M22's own
+        # control-level scenarios are in
+        # ``tests/control/test_a_probe_says_what_it_checked.py``.
+        self.sockets = sockets
         self.files: dict[str, str] = {}
         # service name -> the definition it was created from, and the digest label on it
         self.containers: dict[str, dict] = {}
@@ -96,11 +105,20 @@ class _FakeHost:
             return CommandResult(exit_status=0, stdout="", stderr="")
 
         if "docker inspect" in command:
+            # Four fields since M22 — service, digest, running, RESTARTING. Nothing this
+            # fake runs crash-loops: a container it created either exists and is up or was
+            # never created, which is the only rule of Docker this file models.
             lines = [
-                f"{service}|{container['digest']}|true"
+                f"{service}|{container['digest']}|true|false"
                 for service, container in self.containers.items()
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
+
+        if command == listening.LISTENING_SOCKETS:
+            if self.sockets is None:
+                # What a shell answers for a command that is not on the host.
+                return CommandResult(exit_status=127, stdout="", stderr="ss: not found")
+            return CommandResult(exit_status=0, stdout=self.sockets, stderr="")
 
         if "docker compose ps --services" in command:
             # The PRE-M1 question — "which services are up" — still answerable, and

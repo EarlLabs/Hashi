@@ -870,17 +870,21 @@ async def test_a_failed_apply_stays_on_screen_in_plain_words(client, monkeypatch
 @pytest.mark.parametrize(
     "healthy,reachable,detail,carrier",
     [
-        (True, True, None, "toast"),
+        (True, True, None, "notice"),
         (False, False, "the node did not answer", "banner"),
     ],
 )
 async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
     client, monkeypatch, healthy: bool, reachable: bool, detail: str | None, carrier: str
 ) -> None:
-    """Good news disappears; a fault does not.
+    """NEITHER answer disappears — M22.3, and this test used to assert the opposite.
 
-    A node that cannot be reached, or one running a configuration older than the file
-    on it, is something the operator has to still be able to read while they fix it.
+    It read "good news disappears; a fault does not", and the good news went into a toast
+    that app.js clears after 2200ms. Acceptance pressed probe four times, waiting 2, 3, 4
+    and 8 seconds, and never saw an answer — while every failing probe's banner was there
+    at the same waits. A probe is not a mutation: nothing changed, and its answer is the
+    reason the button was pressed, so it is stated as persistently as a failure and in
+    the quieter weight.
     """
     node_id = (
         await client.post(
@@ -895,9 +899,12 @@ async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
             reachable=reachable,
             healthy=healthy,
             running=["vless-reality"] if healthy else [],
+            restarting=[],
             missing=[],
             drifted=[],
             stale=[],
+            listening=["vless-reality"] if healthy else [],
+            not_listening=[],
             detail=detail,
         )
 
@@ -907,9 +914,18 @@ async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
 
     assert response.status_code == 200
     assert "leaf-1" in response.text
-    if carrier == "toast":
-        assert "is serving" in response.text
+    assert 'hx-swap-oob="innerHTML:#banner-slot"' in response.text
+    if carrier == "notice":
+        assert "is listening for" in response.text
+        assert '<span class="banner-label">checked</span>' in response.text, (
+            "a successful probe no longer says what it is, or is no longer in the slot "
+            "that survives the operator looking away"
+        )
         assert "banner-failure" not in response.text
+        assert "toast" not in response.text, (
+            "the answer a probe exists to give is back in a carrier that clears itself "
+            "after 2200ms"
+        )
     else:
         assert "banner-failure" in response.text
         assert "the node did not answer" in response.text
@@ -938,9 +954,12 @@ async def test_no_probe_answer_says_anything_about_who_connected(
             reachable=True,
             healthy=False,
             running=["vless-reality"],
+            restarting=[],
             missing=[],
             drifted=[],
             stale=["vless-reality"],
+            listening=["vless-reality"],
+            not_listening=[],
             detail="a container is up on an older configuration",
         )
 
@@ -6087,9 +6106,12 @@ async def test_every_console_answer_owns_the_banner_slot(client, reality_params)
             reachable=True,
             healthy=True,
             running=["vless-reality"],
+            restarting=[],
             missing=[],
             drifted=[],
             stale=[],
+            listening=["vless-reality"],
+            not_listening=[],
             detail=None,
         )
 

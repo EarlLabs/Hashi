@@ -19,7 +19,18 @@
   at all. A table refreshing itself on a `-changed` event is a successful exchange too,
   which is why "clear it earlier" is not the fix either: only an answer that OWNS the
   slot can know whether it is meant to be empty.
+
+  THREE THINGS CAN BE IN THAT SLOT SINCE M22.3, not two: a failure, a NOTICE, or
+  nothing. The notice is the same element in the quieter weight, and it is here rather
+  than as a longer-lived toast because a toast that outlived its 2200ms would be a
+  second rule for one element — see panel/notice.html for what it is for and what it is
+  not. Still exactly one of the three, so the slot's meaning is unchanged: whatever the
+  last answer put there is what the operator is looking at, until the next one.
+
+  A notice and a failure are mutually exclusive by construction below, so a caller that
+  passes both gets the failure — the louder of the two, which is the safe way for that
+  mistake to land.
 #}
 {% if dialog %}{% include dialog %}{% endif %}
 {% if toast %}{% include "panel/toast.html" %}{% endif %}
-{% if banner %}{% include "panel/banner.html" %}{% else %}<div hx-swap-oob="innerHTML:#banner-slot"></div>{% endif %}
+{% if banner %}{% include "panel/banner.html" %}{% elif notice %}{% include "panel/notice.html" %}{% else %}<div hx-swap-oob="innerHTML:#banner-slot"></div>{% endif %}

@@ -228,6 +228,15 @@ class HealthResponse(BaseModel):
     reachable: bool
     healthy: bool
     running: list[str]
+    # Transports whose container the engine is restarting after it died — M22. Its own
+    # field rather than an absence from ``running``, because the repairs differ: nothing
+    # running is a transport never pushed, a crash loop is a configuration the daemon
+    # will not accept and applying the same one again changes nothing.
+    #
+    # ``running`` used to include these. Docker reports ``Running: true`` throughout a
+    # restart backoff, so a daemon that had never once started was listed as running and
+    # the panel said the node was serving it.
+    restarting: list[str]
     missing: list[str]
     drifted: list[str]
     # Transports whose container is up on a configuration we did not just push —
@@ -236,7 +245,29 @@ class HealthResponse(BaseModel):
     # reported ``drifted: []`` while its daemon had never read the file it was reporting
     # about.
     stale: list[str]
+    # Transports whose container is running and something holds the port it was given —
+    # and, beside it, those whose port nothing holds. M22, and the strongest thing this
+    # probe can say: what it establishes is that the port is bound on the node, never
+    # that our container bound it and never that anything reached it from outside.
+    #
+    # A running transport in NEITHER list is one whose port could not be asked about —
+    # no port on the row, or a node whose socket table could not be read. That is a third
+    # answer on purpose: reporting it as "nothing is listening" would be a confident
+    # statement about something nobody measured.
+    listening: list[str]
+    not_listening: list[str]
     detail: str | None
+
+    @property
+    def unchecked_ports(self) -> list[str]:
+        """Running transports whose port this probe could not ask about.
+
+        Derived rather than a fourth list, and derived the same way
+        ``edge.health.probe.NodeHealth.unchecked_ports`` derives it — a stored copy would
+        be a fourth place for the three to disagree. Not a serialised field: an API
+        consumer holds the same three lists and can take the same difference.
+        """
+        return sorted(set(self.running) - set(self.listening) - set(self.not_listening))
 
 
 class ParamsReplace(BaseModel):

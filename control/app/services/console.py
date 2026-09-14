@@ -1704,14 +1704,29 @@ async def overview(session: AsyncSession) -> Overview:
     )
 
 
+# What a probe can never establish, said in the sentence that reports the good news —
+# M22.2. The probe reads a node's containers and its socket table over SSH; it does not
+# dial the node, it cannot ask whether a peer completed a handshake (``edge.health
+# .listening`` says why that is refused rather than unimplemented), and what it finds on
+# a port is SOMETHING holding it rather than provably our container.
+#
+# It is on the healthy answer and not on the failing ones deliberately. A failure is
+# already a narrower claim than the operator wants; it is the word "serving" that was
+# read as "working", and this is the sentence that word lived in.
+WHAT_A_PROBE_CANNOT_SEE = (
+    "Read on the node itself, not dialled from outside — so this is not proof that "
+    "anyone can connect."
+)
+
+
 def health_summary(name: str, health: schemas.HealthResponse) -> str:
     """One node's probe result as a sentence the console can put on screen.
 
     Composed here rather than in the route because it is the same judgement the
     pre-redesign panel's ``panel/health.html`` made in markup, and the console needs it
-    as TEXT: a probe answers into a toast when the node is fine and into a persistent
-    banner when it is not, and neither carries a template. That fragment went with the
-    page in M9.6; this function is what carried its reading across.
+    as TEXT: a probe answers into a persistent notice when the node is fine and into a
+    persistent failure banner when it is not, and neither carries a template. That
+    fragment went with the page in M9.6; this function is what carried its reading across.
 
     Note what it cannot say, because the value does not exist upstream: no client
     count, no address, no traffic figure. Health means "is this node serving what we
@@ -1720,20 +1735,36 @@ def health_summary(name: str, health: schemas.HealthResponse) -> str:
     ``drifted`` and ``stale`` get their own sentences and are not collapsed into one:
     they are different faults with different repairs, and M1 found a node in the field
     reporting no drift while its daemon had never read the file it was reporting about.
+
+    AND THE HEALTHY SENTENCE NO LONGER SAYS "SERVING" — M22.2. It said *"realhost is
+    serving amneziawg, vless-ws-tls"* about a node where one of the two was exiting 23
+    every second with nothing on its port, and the operator stopped looking, which is
+    what the charter treats as the failure that hurts most. The verb now names what was
+    actually established and nothing beyond it, and it is a DIFFERENT verb depending on
+    how much was established: "is listening for" where the port was checked and held,
+    "is running" where it could not be checked. A sentence that reads the same either
+    way is a sentence that means the weaker of the two, always.
     """
+    if not health.reachable:
+        return f"{name} could not be reached — {health.detail or 'no reason was reported'}"
+
     if health.healthy:
-        running = ", ".join(health.running)
-        return (
-            f"{name} is serving {running}"
-            if running
-            else f"{name} answered, and has no transport enabled to serve"
-        )
+        return _serving_summary(name, health)
 
     reason = health.detail or "no reason was reported"
-    if not health.reachable:
-        return f"{name} could not be reached — {reason}"
-
     parts = [f"{name} answered but is not serving — {reason}."]
+    if health.restarting:
+        parts.append(
+            "A container that keeps restarting is up in the engine's own reading and "
+            "carrying nothing: it starts, fails and starts again. Applying the same "
+            "configuration will not change that — what the container itself printed on "
+            "the node says why it will not start."
+        )
+    if health.not_listening:
+        parts.append(
+            "Its container is up and nothing holds the port that transport was given, "
+            "so there is nothing on the node for anyone to reach."
+        )
     if health.drifted:
         parts.append(
             "Its configuration differs from the one we would push; applying again "
@@ -1746,6 +1777,36 @@ def health_summary(name: str, health: schemas.HealthResponse) -> str:
             "Anyone revoked while it was in this state is still being served. Applying "
             "again recreates the container."
         )
+    return " ".join(parts)
+
+
+def _serving_summary(name: str, health: schemas.HealthResponse) -> str:
+    """The good-news sentence, which says exactly how much good news it is.
+
+    Three shapes, because there are three states worth telling apart and one word for
+    all of them is the defect M22 is about. Everything checked and holding; some running
+    transports whose port nobody could ask about; and nothing enabled at all, which is
+    not a fault and never was.
+    """
+    if not health.running:
+        return f"{name} answered, and has no transport enabled to serve"
+
+    parts = []
+    if health.listening:
+        each = "each container is" if len(health.listening) > 1 else "its container is"
+        parts.append(
+            f"{name} is listening for {', '.join(health.listening)} — {each} up and "
+            f"something holds its port."
+        )
+    if health.unchecked_ports:
+        # The weaker claim, in its own sentence and in its own verb. These containers are
+        # up on the configuration we pushed and that is the whole of what is known about
+        # them: nothing asked whether anything is bound, so nothing here says it is.
+        subject = "It is also running" if health.listening else f"{name} is running"
+        parts.append(
+            f"{subject} {', '.join(health.unchecked_ports)}, whose port was not checked."
+        )
+    parts.append(WHAT_A_PROBE_CANNOT_SEE)
     return " ".join(parts)
 
 

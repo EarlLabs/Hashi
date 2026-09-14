@@ -47,12 +47,13 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, nodes, relay
+from control.app.services import addresses, audit, nodes, placement, relay
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
 from edge.egress import ResolverMissing
-from edge.registry import profile
+from edge.health import Listener
+from edge.registry import discover, profile
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,11 @@ logger = logging.getLogger(__name__)
 # are ONLY ever read on the console still use it (``services/console.py``, the incomplete
 # revocation and rotation reports).
 WHERE_TO_RETRY = "the Nodes screen"
+
+# The largest number a socket can be bound on. Not a port this project chose and not one
+# it will ever dial — it is the ceiling of the field, and a stored value above it is a row
+# nothing can be checked about rather than a row to refuse here. See ``placed_listeners``.
+_HIGHEST_PORT = 65535
 
 # THE ONE CLAUSE PER REFUSAL THAT IS WRITTEN FOR A SCREEN — M18's acceptance, round 2.
 #
@@ -390,6 +396,59 @@ async def placed_transports(session: AsyncSession, node: Node) -> dict[str, str]
         .where(NodeTransport.enabled.is_(True))
     )
     return {config_name: transport_name for config_name, transport_name in listed.all()}
+
+
+async def placed_listeners(session: AsyncSession, node: Node) -> dict[str, Listener]:
+    """Where each of this node's placed configs is expected to answer — M22.
+
+    The third member of ``render_for_node``'s family, and it exists for the same reason
+    ``placed_transports`` does: the probe needs a fact about each placed config that the
+    config itself does not carry. Here it is the socket — the port the OPERATOR chose,
+    which lives in the row's own parameters, and the transport-layer protocols the
+    TRANSPORT declared it binds, which live in its package. `edge` resolves neither: it
+    has no database and no business reading a registry to answer a question about a row.
+
+    Both halves are read through ``services.placement``, which is where this codebase
+    already asks them for the port-collision rule — ``port_of`` for the value, under the
+    one parameter name the hop contract knows, and ``binds_of`` for the declaration.
+    Nothing here compares a transport's name to a literal, and no branch anywhere asks
+    which transport it is looking at.
+
+    A ROW THIS CANNOT ANSWER FOR IS LEFT OUT, never guessed at, and the probe reports such
+    a config as unchecked rather than as silent. Four ways that happens, and all four are
+    ordinary: a transport this image no longer ships (nothing can say what it binds), one
+    that declares no port at all, one that declares it in a shape that is not a port
+    number, and one whose package declares it binds nothing. Inventing an answer for any
+    of them would report a working node as broken, which is the same defect as reporting
+    a broken one as working — M22's own subject, pointed the other way.
+    """
+    listed = await session.execute(
+        select(
+            NodeTransport.config_name, NodeTransport.transport_name, NodeTransport.params
+        )
+        .where(NodeTransport.node_id == node.id)
+        .where(NodeTransport.enabled.is_(True))
+    )
+    installed = discover()
+    listeners: dict[str, Listener] = {}
+    for config_name, transport_name, params in listed.all():
+        if transport_name not in installed:
+            continue
+        port = placement.port_of(params or {})
+        # As text, because that is what ``port_of`` promises for every transport whatever
+        # shape it stores its port in. A value that is not a port number is a row nothing
+        # can be checked about — and ``isdigit`` rather than ``try: int()`` because the
+        # latter accepts a leading sign and unicode digits, neither of which is a port.
+        if port is None or not port.isdigit():
+            continue
+        number = int(port)
+        if not 0 < number <= _HIGHEST_PORT:
+            continue
+        protocols = placement.binds_of(transport_name)
+        if not protocols:
+            continue
+        listeners[config_name] = Listener(port=number, protocols=protocols)
+    return listeners
 
 
 def target_for(node: Node, node_settings: Settings) -> NodeTarget:
