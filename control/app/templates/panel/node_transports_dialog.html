@@ -263,14 +263,27 @@
         {% if name in pools %}
         {{ box(name, pools[name], values, errors) }}
         {% endif %}
+        {#
+          WHAT ENABLING THIS ONE DOES — M20's acceptance, round 2. It was a single
+          sentence in the footer below, said unchanged for every protocol on this dialog,
+          and it promised every active user's link: true of a transport that rides in the
+          link and false of one whose configuration is a file, which is what this node's
+          own serving protocol is. Read at the MOMENT OF DECISION, which is why it is in
+          the group with the boxes rather than under the button.
+
+          Composed in services/console.py from the transport's own declaration, like every
+          other sentence on this screen, so this file still names no protocol and cannot
+          tell one from another. Inside the group, so the operator reads the sentence for
+          the protocol they chose — a group is hidden with its own boxes.
+        #}
+        <p class="text-muted section-note">{{ enabling[name] }}</p>
       </div>
       {% endfor %}
 
       <div class="dialog-body">
         Key material is minted here and stored encrypted — never type a key into this
-        panel, and none of these boxes will ever ask you for one. Enabling puts this
-        protocol into every active user's link at their next refresh and asks nothing of
-        anybody; the host itself serves nothing new until you apply the node.
+        panel, and none of these boxes will ever ask you for one. The host itself serves
+        nothing new until you apply the node.
       </div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>

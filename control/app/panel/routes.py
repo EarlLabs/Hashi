@@ -744,6 +744,14 @@ async def _enable_form(
         # pool size is a column on the node-transport record rather than anything the
         # transport declares or validates.
         "pools": await console.pool_boxes(session, installed),
+        # WHAT ENABLING THIS ONE DOES, per transport — M20's acceptance, round 2. Keyed
+        # like ``pools`` above and printed inside the group, because the dialog's footer
+        # said it once for every protocol on it and a config-file transport is in nobody's
+        # link: the one sentence on this screen that is read while the operator is
+        # deciding was the one making a promise the product does not keep. Composed in
+        # ``services/console.py`` from ``subscription_expressible``, so this file and its
+        # template still know one protocol from another only as data.
+        "enabling": console.enabling_notes(installed),
         "values": values or {},
         "errors": errors or {},
         # A refusal about the request rather than about one box — a transport this image

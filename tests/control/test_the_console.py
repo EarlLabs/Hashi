@@ -1356,6 +1356,87 @@ async def test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in(
     assert len(base64.b64decode(refetched.text).decode().splitlines()) == 1
 
 
+# Where one transport's boxes begin on the enable dialog. The groups are siblings in the
+# markup, so a group's own extent is "from its opening tag to the next group's, or to the
+# footer" — which is what makes an assertion about WHICH group a sentence is in possible
+# at all. A dialog renders every group and hides all but the chosen one, so a sentence
+# outside them is a sentence shown for every protocol at once.
+_GROUP_OPENS = re.compile(r'data-transport-group="([^"]+)"')
+_FOOTER_OPENS = '<div class="dialog-body"'
+
+
+def _groups_of(markup: str) -> dict[str, str]:
+    """The enable dialog's markup, sliced into one piece per transport group."""
+    opens = [(match.group(1), match.start()) for match in _GROUP_OPENS.finditer(markup)]
+    sliced = {}
+    for index, (name, start) in enumerate(opens):
+        next_group = opens[index + 1][1] if index + 1 < len(opens) else len(markup)
+        footer = markup.find(_FOOTER_OPENS, start)
+        sliced[name] = markup[start:min(next_group, footer if footer != -1 else next_group)]
+    return sliced
+
+
+async def test_the_enable_dialog_says_what_enabling_each_protocol_will_do(
+    client,
+) -> None:
+    """M20's acceptance, round 2: the one sentence read at the MOMENT OF DECISION.
+
+    The dialog's footer promised *"Enabling puts this protocol into every active user's
+    link at their next refresh and asks nothing of anybody"* — once, under every group,
+    unchanged for every protocol on the form. It is true of a transport that rides in the
+    link and false in both halves of one whose configuration is a file: that one is in
+    nobody's link, and somebody does have to ask for it in the shape it comes in.
+
+    WORSE PLACED THAN THE ROW SENTENCE the test above corrects, which is why it is its own
+    scenario rather than a line added there. A row's standing is read afterwards; this is
+    read while the operator is choosing, and an operator who enables a config-file
+    transport on this sentence's word walks away believing every friend now has it.
+
+    Asserted PER GROUP, not per page. Both sentences exist in this image, so a dialog that
+    printed both somewhere would pass any assertion that looked at the whole document —
+    while showing the operator two contradictory promises, one of them hidden with
+    somebody else's boxes. And the footer is asserted to promise nothing about delivery at
+    all, because that is where the false sentence was: a fix that left a copy behind would
+    leave the defect behind with it.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={
+                "name": "deciding-1",
+                "address": "192.0.2.42",
+                "location_label": "Testland",
+            },
+        )
+    ).json()["id"]
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert dialog.status_code == 200, dialog.text
+    groups = _groups_of(dialog.text)
+    assert set(groups) == set(transports_service.offerable_transports()), sorted(groups)
+    # Both arms are reachable in this image, so neither is asserted vacuously. If that
+    # ever stops being true the assertion below is still right — it just stops being a
+    # comparison — and this line says so out loud rather than leaving a silent half.
+    assert NOT_A_LINK_OFFERABLE, "no offered transport is a config file"
+    assert set(groups) - set(NOT_A_LINK_OFFERABLE), "every offered transport is a file"
+
+    for name, markup in groups.items():
+        said = _as_one_line(markup)
+        promised, denied = (
+            (console_service.ENABLING_IN_EVERY_LINK, console_service.ENABLING_NOT_IN_THE_LINK)
+            if registry.profile(name).meta.subscription_expressible
+            else (console_service.ENABLING_NOT_IN_THE_LINK, console_service.ENABLING_IN_EVERY_LINK)
+        )
+        assert promised in said, (name, said)
+        assert denied not in said, (name, said)
+
+    # And the footer under them says nothing about anybody's link. It is the piece that
+    # cannot be per-transport, so whatever it claims it claims about all four.
+    footer = _as_one_line(dialog.text[dialog.text.rindex(_FOOTER_OPENS):])
+    assert "link" not in footer, footer
+
+
 async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     client, session, reality_params
 ) -> None:

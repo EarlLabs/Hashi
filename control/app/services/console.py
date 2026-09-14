@@ -2240,6 +2240,62 @@ POOL_BOX_RESIZE_HINT = (
 )
 
 
+# What ENABLING a transport will do, at the moment the operator decides to — M20's
+# acceptance, round 2. The enable dialog's footer said one of these for every protocol on
+# it ("Enabling puts this protocol into every active user's link at their next refresh
+# and asks nothing of anybody"), and for a transport whose configuration is a FILE that
+# is false in both halves: it is in nobody's link, and somebody does have to ask for it
+# in the shape it comes in.
+#
+# WORSE PLACED THAN THE ROW SENTENCES the same acceptance corrected (``OFFER_IN_EVERY
+# _LINK`` and its sibling), which is why it is here rather than left for a later pass: a
+# row's standing is read afterwards, and this is read while the operator is choosing. An
+# operator who enables a config-file transport on this sentence's word walks away
+# believing every friend has it.
+#
+# The second arm may not say the friend cannot have it, and may not say they simply get
+# it — the same two failures ``OFFER_NOT_IN_THE_LINK`` names at length, and the same
+# wording is used here so the operator reads one fact in both places. Nothing in this
+# panel yet hands the operator the URL that asks for the file shape; closing that is its
+# own milestone and is not what this sentence may promise.
+#
+# Chosen by ``subscription_expressible`` — whether the protocol rides in the base64 LINK
+# — and never by a name, like every other string in this module.
+ENABLING_IN_EVERY_LINK = (
+    "Enabling puts this protocol into every active user's link at their next refresh and "
+    "asks nothing of anybody."
+)
+ENABLING_NOT_IN_THE_LINK = (
+    "Enabling grants every active user material on this protocol and puts it in nobody's "
+    "link: this transport is a config file, and a user's client gets it from that same "
+    "link only by asking for that shape."
+)
+
+
+def enabling_notes(offered: list[str]) -> dict[str, str]:
+    """What enabling each offered transport does, keyed by transport.
+
+    Keyed the way ``pool_boxes`` and ``tuning`` are, so the dialog prints it inside the
+    group it is about and the operator reads the sentence for the protocol they chose
+    rather than one sentence stretched over all of them.
+
+    TWO ARMS AND NOT THREE, unlike the Transports screen's own delivery note: this list
+    is ``offerable_transports``, so every name in it declares a format a client can
+    consume — a transport that declares none is not proposed here, and the enable service
+    refuses it outright. The question left is only which SHAPE, which is what
+    ``subscription_expressible`` answers.
+    """
+    installed = discover()
+    return {
+        name: (
+            ENABLING_IN_EVERY_LINK
+            if installed[name].subscription_expressible
+            else ENABLING_NOT_IN_THE_LINK
+        )
+        for name in offered
+    }
+
+
 async def pool_boxes(
     session: AsyncSession, offered: list[str]
 ) -> dict[str, transports.TuningField]:
