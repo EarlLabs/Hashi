@@ -23,11 +23,14 @@ HOW:  every figure here is derived from configuration rows: node states, credent
       adding a column that ``test_no_model_records_anything_about_a_connection`` would
       refuse.
 
-The one figure that looks like a measurement and is not: ``nodes_served``. It counts
+The one figure that looks like a measurement and is not: ``transports_served``. It counts
 the credentials WE minted for a friend against the node-transports currently serving —
 "is this person covered", a property of our own configuration. It does not move when
 they connect, it does not move when they do not, and it is identical for a friend whose
-device is in a drawer.
+device is in a drawer. It was called ``nodes_served`` and the column above it read
+*nodes served* until M23's eighth round, which found the two disagreeing on the real
+hosts: one node serving two protocols reads ``2 / 2``, and what is being counted is the
+node-transport — the unit a friend's link actually carries an entry for.
 """
 
 import dataclasses
@@ -85,6 +88,28 @@ IN_SYNC = "in sync"
 NEVER_APPLIED = "never applied"
 NOTHING_ENABLED = "nothing enabled"
 UNRENDERABLE = "cannot render"
+
+# And what the cell says about a node this control plane will never push to again — M23,
+# round 8, which read ``retired`` beside ``in sync`` on the real hosts with five friends
+# revoked since that node's last apply.
+#
+# The comparison the other four answers come from is arithmetic on two digests, and for
+# this one node the arithmetic is sound and the SENTENCE is not: what "in sync" means to a
+# reader is "nothing to do here", and the one host where that is false in the way that
+# costs a person something is the host nothing can be pushed to. Whatever it was last
+# given is what it is still running, including the credentials of everyone withdrawn since
+# — which is exactly what the Users screen's standing note says about the same node
+# (``WITHDRAWAL_UNCONFIRMABLE``), and that note sends the operator to this screen.
+#
+# ASKED THROUGH ``apply.cannot_serve_again``, which is the predicate the apply door, the
+# probe door and that note already ask, so a state added later that cannot serve again
+# lands here without this module being found and edited. It names no literal state: what
+# may serve again is the machine's to say.
+#
+# It ends in the one move that is left, in ``apply.REGISTER_IT_AGAIN``'s words rather than
+# in new ones — every other sentence this console says about such a host ends there, and a
+# cell that invented its own would be a fifth wording of one answer.
+CANNOT_BE_RECONCILED = "cannot be reconciled — register the host again as a new node"
 
 # What the Transports screen may say about a protocol, as the words the operator
 # reads. Every one of them is the prose for a DECLARATION a transport makes about
@@ -342,8 +367,15 @@ class FriendRow:
     nickname: str
     is_active: bool
     added: datetime.datetime
-    nodes_served: int
-    nodes_serving: int
+
+    # NAMED FOR WHAT THEY COUNT since M23's eighth round, which read ``2 / 2`` under a
+    # column headed *nodes served* on a fleet with one node in service. The unit is the
+    # NODE-TRANSPORT, and it is the right unit rather than the convenient one: it is what
+    # a friend's link carries one entry per, so a person missing the second protocol on
+    # the only node in the fleet is a fault this column can show. Counting distinct nodes
+    # instead would have read ``1 / 1`` over exactly that fault.
+    transports_served: int
+    transports_serving: int
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -786,7 +818,18 @@ async def drift_of(session: AsyncSession, node: Node) -> str:
     So a node reading "in sync" here means "nobody has changed the intent since we
     pushed", not "the host is running it". Both questions are real; conflating them is
     how an operator concludes a node is fine.
+
+    AND FOR ONE NODE THE COMPARISON IS NOT THE QUESTION AT ALL — M23, round 8. A node the
+    state machine will not put back into service is never pushed to again, so how far its
+    last configuration sits from the one we would render is a measurement of nothing, and
+    the answer it produced was the reassuring one: the walk read ``retired`` beside ``in
+    sync`` on a host five revocations old. That is asked FIRST, above the render, because
+    no later branch could unsay it — and because rendering a node nothing will be sent is
+    work done for an answer that cannot be used.
     """
+    if apply.cannot_serve_again(node.state):
+        return CANNOT_BE_RECONCILED
+
     try:
         rendered = await apply.render_for_node(session, node)
     except Exception:
@@ -1039,9 +1082,13 @@ def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
 async def friend_rows(session: AsyncSession) -> list[FriendRow]:
     """Every friend, with how much of the fleet they are covered on.
 
-    ``nodes_serving`` is the denominator every active friend shares, so a row reading
-    ``2 / 3`` says "this person is missing a node", which is an actionable fault in OUR
-    configuration and the reason the column exists.
+    ``transports_serving`` is the denominator every active friend shares, so a row reading
+    ``2 / 3`` says "this person is missing one of the protocols being served", which is an
+    actionable fault in OUR configuration and the reason the column exists.
+
+    ``serving_transports`` is friend-facing rows only, so the denominator never counts one
+    end of a hop — a tunnel between two of our own nodes is not something a person holds a
+    credential on.
     """
     serving = await nodes.serving_transports(session)
     serving_ids = {row.id for row in serving}
@@ -1051,12 +1098,12 @@ async def friend_rows(session: AsyncSession) -> list[FriendRow]:
             nickname=friend.nickname,
             is_active=friend.is_active,
             added=friend.created_at,
-            nodes_served=sum(
+            transports_served=sum(
                 1
                 for credential in friend.credentials
                 if credential.node_transport_id in serving_ids
             ),
-            nodes_serving=len(serving_ids),
+            transports_serving=len(serving_ids),
         )
         for friend in await friends.list_friends(session)
     ]

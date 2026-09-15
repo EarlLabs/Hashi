@@ -149,7 +149,15 @@ class RevocationOutcome:
 
     @property
     def complete(self) -> bool:
-        """True only when every affected node accepted the new configuration."""
+        """True only when every affected node accepted the new configuration.
+
+        A COMPONENT OF THE ANSWER AND NOT THE ANSWER, and since M23's eighth round no
+        surface serialises it or renders it: both the panel and the API report
+        ``confirmed``. It stays because ``summary`` below branches on it — "nothing
+        failed" and "this request settled anything" are two different facts, and the
+        sentence needs them apart — but a reader reaching for a field to reassure on
+        wants the one below.
+        """
         return not self.nodes_failed
 
     @property
@@ -160,6 +168,11 @@ class RevocationOutcome:
         never was: it is vacuously true for a request that had nothing to push, so a
         second press on an already-revoked person satisfied it while the node that failed
         the first press was still serving them.
+
+        BOTH SURFACES NOW, since round 8. Round 6 taught the panel this and left the API's
+        ``complete`` field carrying the vacuous one, so the machine-readable half went on
+        answering ``true`` to the retry that is the natural thing for an integration to
+        do — the same defect, on the surface nobody watches.
         """
         return self.withdrew and self.complete
 
@@ -223,12 +236,18 @@ async def revoke_friend(session: AsyncSession, *, friend_id: str) -> RevocationO
     # somebody who has none changes nothing, and a trail that grows on a retried request
     # is a trail that says a thing happened twice.
     friend = await friends.get_friend(session, friend_id)
-    # Read BEFORE the database half runs, and it is what separates a revocation from a
-    # second press of the same button — M23. After ``friends.revoke`` the two are
-    # indistinguishable from here: the credential rows are deleted either way, so an
-    # empty fan-out means "nobody to push" in one case and "already pushed, or already
-    # failed to push" in the other.
-    withdrawing = friend.is_active
+    # Taken BEFORE the rest of the database half runs, and it is what separates a
+    # revocation from a second press of the same button — M23. After ``friends.revoke``
+    # the two are indistinguishable from here: the credential rows are deleted either way,
+    # so an empty fan-out means "nobody to push" in one case and "already pushed, or
+    # already failed to push" in the other.
+    #
+    # A WRITE AND NOT A READ SINCE ROUND 8. This was ``friend.is_active``, asked of the
+    # object this session was holding, so two revocations of one person in the same
+    # instant both saw an active friend and both claimed to have withdrawn the access —
+    # and the second one had pushed nothing. ``claim_withdrawal`` asks the row and can
+    # only be answered once.
+    withdrawing = await friends.claim_withdrawal(session, friend_id=friend_id)
     if withdrawing:
         audit.record(session, AuditAction.FRIEND_REVOKED, first_label=friend.nickname)
 

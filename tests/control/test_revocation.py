@@ -257,8 +257,15 @@ async def test_revoking_twice_is_not_an_error(
     """An operator retrying after a failed push must not get a 500.
 
     Retrying is the DOCUMENTED remedy for an incomplete revocation, so it has to be
-    safe — and the second call has no credentials left to remove, which is complete by
-    definition rather than an error.
+    safe: 200 both times, and the second call has no credentials left to remove.
+
+    WHAT IT MAY NOT ANSWER IS SUCCESS — M23, round 8, which reverses the second half of
+    this test as it was written. It asserted ``complete is True`` on the second call, on
+    the reading that "nothing left to do" is completion. It is not: a revocation deletes
+    the rows that say which nodes the person was on, so from the second call this control
+    plane cannot tell a first push that landed everywhere from one that failed and left a
+    host serving them. ``false`` is what it is in a position to say, and ``withdrew``
+    beside it is what tells a caller this is not a new failure.
     """
     _, friend_id, _ = await fleet_with_friend(client, session, reality_params, ws_params)
 
@@ -267,6 +274,9 @@ async def test_revoking_twice_is_not_an_error(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["complete"] is True, (
-        "a second revocation had nothing left to do and should report complete"
+    assert second.json()["withdrew"] is False, (
+        "a second revocation claimed to have withdrawn access that was already withdrawn"
+    )
+    assert second.json()["complete"] is False, (
+        "a second revocation confirmed a withdrawal it pushed nothing for and cannot see"
     )

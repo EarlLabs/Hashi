@@ -14,15 +14,24 @@ WHY:  measured on the owner's real hosts. The first press said, correctly, *"fai
       node. Pressing again after a failure is the natural gesture of an operator cutting
       somebody off in a hurry, and the panel answered it with the one reassurance that
       moment must never produce by accident.
+      AND THE SAME THING ON THE API, found by round 8 on the same hosts: the panel was
+      taught in round 6 and ``RevocationResponse.complete`` was not, so
+      ``POST /api/friends/<id>/revoke`` answered ``complete: true`` to the second call
+      while the first had reported a node it could not update. Retrying after a partial
+      failure is what an integration does, so the retry was the one call that reported
+      success.
 HOW:  real Postgres, real rendering, a real revocation through the service and through
       the panel route. Nothing is dialled: the node that cannot be updated has no SSH
-      key, which is how this zone's other revocation tests make one.
+      key, which is how this zone's other revocation tests make one — and the one test
+      that needs a push to LAND takes ``accepting_nodes``, which answers for the host.
 """
 
 import html
 
 from control.app.models import NodeState
 from control.app.services import nodes, revocation
+
+from .conftest import GENERATED_SSH_KEY
 
 FRIEND_TRANSPORT = "vless-reality"
 
@@ -98,8 +107,12 @@ async def test_the_outcome_says_it_withdrew_nothing_while_complete_stays_true(
 
     ``complete`` is true on the second press and is not wrong: no affected node failed,
     because no node was affected. It is simply not the question a surface reassures on,
-    and asserting that it stays true is what stops a later change from "fixing" this by
-    making it false and breaking every caller that reads it for what it says.
+    and asserting that it stays true is what stops a later change from "fixing" it here,
+    in the one place the distinction is still needed — ``summary`` branches on it.
+
+    NO SURFACE SERIALISES IT since round 8: the API's ``complete`` field carries
+    ``confirmed``, like the panel, because the vacuous answer was what a retrying
+    integration read as success. This property is the component, not the answer.
     """
     friend_id = await a_friend_on_a_node_that_cannot_be_updated(
         client, session, reality_params
@@ -131,19 +144,72 @@ async def test_the_api_says_it_withdrew_nothing_too(
 ) -> None:
     """A script re-issuing a failed revocation reads the same fact the console does.
 
-    ``complete`` alone is what a caller would poll, and on the second call it is true —
-    so the field that separates the two is on the response as well as on the screen.
+    ``complete`` is what a caller polls, and retrying after a partial failure is exactly
+    what an integration does — so the retry is the call that must not answer success.
+
+    Red against the previous commit: ``complete`` came back TRUE on the second call, with
+    the fleet unchanged between the two and the node that failed the first one still
+    serving the credential. The panel had been taught this in round 6 and the
+    machine-readable field had not.
     """
     friend_id = await a_friend_on_a_node_that_cannot_be_updated(
         client, session, reality_params
     )
 
-    assert (await client.post(f"/api/friends/{friend_id}/revoke")).json()["withdrew"] is True
+    first = (await client.post(f"/api/friends/{friend_id}/revoke")).json()
     second = (await client.post(f"/api/friends/{friend_id}/revoke")).json()
 
+    assert first["withdrew"] is True
+    assert first["complete"] is False, first
+    assert first["nodes_failed"], "the node that kept the credential is not reported"
+
     assert second["withdrew"] is False
-    assert second["complete"] is True
+    assert second["complete"] is False, (
+        "the retry reported a completed revocation with nothing changed on the fleet "
+        "between the two calls"
+    )
+    # And the two kinds of "not complete" are still told apart, which is what stops a
+    # caller reading this as a new failure: nothing failed here, because nothing was
+    # pushed.
+    assert second["nodes_failed"] == {}, second
     assert "already withdrawn" in second["summary"], second["summary"]
+
+
+async def test_a_revocation_the_api_could_finish_still_reports_complete(
+    client, accepting_nodes, reality_params
+) -> None:
+    """The other half, on the machine-readable surface — so the fix is not "never true".
+
+    A fleet that took the push answers ``complete: true`` on the call that did it. Without
+    this, a field that is false for every revocation would satisfy the assertion above and
+    tell a caller nothing at all.
+    """
+    node = await client.post(
+        "/api/nodes",
+        json={
+            "name": "leaf-nl",
+            "address": UNREACHABLE,
+            "location_label": "Testland",
+            "ssh_host": UNREACHABLE,
+            "ssh_private_key": GENERATED_SSH_KEY,
+        },
+    )
+    assert node.status_code == 201, node.text
+    enabled = await client.post(
+        f"/api/nodes/{node.json()['id']}/transports",
+        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+    applied = await client.post(f"/api/nodes/{node.json()['id']}/apply")
+    assert applied.status_code == 200, applied.text
+    friend = await client.post("/api/friends", json={"nickname": "masha"})
+    assert friend.status_code < 300, friend.text
+
+    revoked = (await client.post(f"/api/friends/{friend.json()['id']}/revoke")).json()
+
+    assert revoked["withdrew"] is True
+    assert revoked["complete"] is True, revoked
+    assert revoked["nodes_updated"], revoked
 
 
 async def test_a_revocation_that_really_did_finish_still_gets_its_toast(

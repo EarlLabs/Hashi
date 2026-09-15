@@ -210,12 +210,38 @@ class RevocationResponse(BaseModel):
     """The outcome of a revocation, including the uncomfortable case."""
 
     friend_id: str
+
+    # ``RevocationOutcome.confirmed``, NOT ``RevocationOutcome.complete`` — M23, round 8,
+    # and it is the same finding as the panel's one surface over. This field is what an
+    # integration polls, and retrying after a partial failure is exactly what an
+    # integration does: the second call reported ``complete: true`` with the fleet
+    # unchanged between the two, because the service's ``complete`` answers "did every
+    # AFFECTED node accept" and a revocation deletes the credential rows that say which
+    # nodes were affected. With none left, nothing can fail and the answer is vacuously
+    # true. The panel already refused to reassure on it (``panel/routes.py``); this field
+    # went on saying it.
+    #
+    # So what is serialised is the pair a caller may act on: this call withdrew access AND
+    # every node it affected accepted the new configuration. FALSE ON A SECOND CALL, and
+    # that is the honest direction rather than an inconvenience — once the rows are gone
+    # this control plane cannot tell a revocation that was pushed everywhere from one
+    # whose push failed, so "the credential is gone from every node" is not a claim it is
+    # in a position to make twice. ``withdrew``, ``nodes_failed`` and ``summary`` are what
+    # separate "nothing to do" from "a node kept it": a caller that retried and got
+    # ``complete: false`` with ``withdrew: false`` has not found a new failure, it has
+    # reached the end of what this endpoint can settle, and the rest is a probe and an
+    # apply of the node.
+    #
+    # The NAME is kept deliberately, exactly as ``HealthResponse.running`` kept its name
+    # when M22 took crash-looping containers out of it: a field that has been lying is
+    # corrected where a caller already reads it, rather than renamed into one they would
+    # not notice had gone.
     complete: bool
-    # Whether THIS call withdrew anything — M23. ``complete`` alone is vacuously true for
-    # a call that had nothing to push, so a script re-issuing a revocation that failed
-    # earlier reads success from it while the node that failed is still serving the
-    # person. A caller wanting the reassurance wants both fields, which is what
-    # ``summary`` says in words.
+
+    # Whether THIS call withdrew anything — M23. The half of the pair above that says
+    # which kind of "not complete" this is: false here means the access was already
+    # withdrawn before the call, so nothing was pushed and nothing about this call can
+    # confirm that any node stopped serving it. ``summary`` says the same in words.
     withdrew: bool
     nodes_updated: list[str]
     nodes_failed: dict[str, str]

@@ -73,7 +73,12 @@
             <th>nickname</th>
             <th>status</th>
             <th>added</th>
-            <th>nodes served</th>
+            {# THE UNIT IS THE NODE-TRANSPORT and the header says so since M23's eighth
+               round, which read `2 / 2` here with ONE node in service. The cell counts
+               what a friend's link carries an entry for — one per protocol per node —
+               so a person missing the second protocol on the only node in the fleet is
+               a fault this column can still show. See services/console.py. #}
+            <th>transports served</th>
             <th class="right">actions</th>
           </tr>
         </thead>
@@ -99,7 +104,7 @@
             #}
             <td class="mono nowrap">
               {% if friend.is_active %}
-                {{ friend.nodes_served }} / {{ friend.nodes_serving }}
+                {{ friend.transports_served }} / {{ friend.transports_serving }}
               {% else %}—{% endif %}
             </td>
             <td class="right">
@@ -133,7 +138,7 @@
                 note. `access_withdrawn` is `None` exactly while the note is up
                 (services/console.py's `withdrawn_cell`, composed from the same reading),
                 and what stands in for it is the em dash this table already uses for "no
-                answer to give here" — the nodes-served cell one column over.
+                answer to give here" — the transports-served cell one column over.
 
                 Not a per-row hedge, deliberately: a sentence about THIS person would have
                 to name the nodes they were on, and a revocation deletes exactly the rows

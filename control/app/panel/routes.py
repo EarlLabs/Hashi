@@ -31,10 +31,19 @@ and confirms first and the other is not and does not.
 
 WHAT DID NOT GO WITH THEM. The two routes that answered a plain browser form with a
 303 — ``POST /panel/nodes`` and ``POST /panel/nodes/{id}/transports`` — no longer
-redirect: the console is the only caller and it asks with htmx. What is kept is the
-REFUSAL split in ``_refuse_node`` and ``_refuse_the_form``: a caller that is not htmx
-has nowhere to render a field error, so it still gets the ``DomainError`` envelope
-rather than a dialog fragment it could not use.
+redirect: the console is the only caller and it asks with htmx.
+
+AND THE REFUSAL SPLIT IS GONE TOO, since M23's eighth round. Those two routes kept one
+last piece of the pre-redesign form: a caller that was not htmx got the ``DomainError``
+envelope at 400 instead of the dialog at 422, on the reading that such a caller has
+nowhere to render a field error. ``POST /panel/friends`` never had it — it re-renders
+its dialog for every caller — so one console answered the same kind of refusal in two
+shapes, and the walk read the worse of them: 400 with the field sentences joined into
+one paragraph that named no field and repeated itself once per missing box. Every panel
+form now refuses the same way, which is the dialog at 422 with the message under the
+box it is about. A caller that wants a machine-readable refusal has ``/api/**``, where
+a request model answers per field and a service refusal answers in the envelope — the
+panel is the operator's screen and was never the second API it was being read as.
 """
 
 import dataclasses
@@ -2057,17 +2066,25 @@ async def create_node(
 def _refuse_node(
     request: Request, *, values: dict, errors: dict, key_dropped: bool = False
 ) -> Response:
-    """A refused node form, in whichever panel asked.
+    """A refused node form: the dialog back at 422, with the message under its field.
 
-    The console gets its dialog back at 422 with the message under the field it is
-    about — M8.6, and static/app.js allows exactly that one status to swap. A caller
-    that is not htmx has nowhere to put a field error, so it gets a ``DomainError``,
-    which the one exception handler turns into this codebase's error envelope. That
-    split outlived the pre-redesign form it was written for: the bare shape of this
-    POST is still reachable, and a dialog fragment is not an answer to it.
+    M8.6, and static/app.js allows exactly that one status to swap.
+
+    ONE SHAPE FOR EVERY CALLER since M23's eighth round, which is what this function
+    stopped doing rather than what it started doing. A caller that was not htmx got
+    ``raise DomainError(" ".join(errors.values()))`` — the envelope at 400, carrying every
+    field sentence run together with nothing saying which field any of them was about, so
+    a form submitted with two boxes empty was refused with *"required — a node cannot be
+    registered without it required — a node cannot be registered without it"*. Those
+    sentences are written to sit under a box; joined into a paragraph they name nothing.
+    ``POST /panel/friends`` answers the same kind of refusal with its dialog at 422
+    whoever asked, and one console may not hold two answers to one question.
+
+    What that costs is a non-htmx caller getting markup, and it is the right cost: the
+    machine surface is ``/api/**``, which refuses a node record per field through
+    ``schemas.NodeCreate`` and refuses a service's own complaint in the error envelope.
+    Nothing this used to say is unavailable there.
     """
-    if not _is_htmx(request):
-        raise DomainError(" ".join(errors.values()))
     return TEMPLATES.TemplateResponse(
         request,
         "panel/add_node_dialog.html",
@@ -2418,7 +2435,6 @@ async def enable_transport(
             node_id,
             typed,
             {f"{transport_name}-{name}": NO_DEFAULT for name in empty},
-            plainly="; ".join(f"{name}: {NO_DEFAULT}" for name in empty),
         )
 
     # A value longer than any parameter this image ships takes — refused HERE, before the
@@ -2436,7 +2452,6 @@ async def enable_transport(
             node_id,
             typed,
             {f"{transport_name}-{name}": VALUE_TOO_LONG for name in over_long},
-            plainly="; ".join(f"{name}: {VALUE_TOO_LONG}" for name in over_long),
         )
 
     pool_size = None
@@ -2454,7 +2469,6 @@ async def enable_transport(
                 node_id,
                 typed,
                 {pool_field: POOL_NOT_A_NUMBER},
-                plainly=f"{addresses.POOL_BOX}: {POOL_NOT_A_NUMBER}",
             )
 
     # Reading the form is shared with the rotation form below: a field the transport
@@ -2564,20 +2578,20 @@ async def _refuse_the_form(
     errors: dict | None = None,
     *,
     failure: str | None = None,
-    plainly: str | None = None,
 ) -> Response:
-    """A submission this panel refused before the service saw it, in whichever panel.
+    """A submission this panel refused before the service saw it.
 
-    The console gets its dialog back at 422, with the message under the control it is
-    about when there is one and above the form when the complaint is about a name that
-    has no box. A caller that is not htmx has nowhere to render a field error and gets a
-    ``DomainError`` instead, which the one exception handler turns into this codebase's
-    error envelope — the same split as ``_refuse_node``, and it outlived the pre-redesign
-    form it was written for. ``plainly`` is what that envelope says: the box NAMES
-    without the group prefix, which is markup a caller with no form knows nothing about.
+    The dialog back at 422, with the message under the control it is about when there is
+    one and above the form when the complaint is about a name that has no box.
+
+    FOR EVERY CALLER, since M23's eighth round — ``_refuse_node``'s docstring carries the
+    finding, and this is the other half of the one split it names. It took a ``plainly``
+    argument beside ``errors``: the same complaints with the group prefix stripped off
+    each box name, composed only so the 400 envelope this used to raise could say
+    something a caller with no form could read. There is no such envelope on this route
+    now, so there is nothing for a second wording to be for, and a sentence that exists
+    in two versions is a sentence that ends up disagreeing with itself.
     """
-    if not _is_htmx(request):
-        raise DomainError(plainly or failure or " ".join((errors or {}).values()))
     return await _refuse_enable(
         request, session, node_id, values=typed, errors=errors, failure=failure
     )

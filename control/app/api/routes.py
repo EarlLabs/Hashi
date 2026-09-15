@@ -234,11 +234,16 @@ async def friend_subscription(
 
 @router.post("/friends/{friend_id}/revoke", response_model=schemas.RevocationResponse)
 async def revoke_friend(friend_id: str, session: AsyncSession = Depends(session_dependency)):
-    """Withdraw access everywhere, and report honestly if a node could not be reached."""
+    """Withdraw access everywhere, and report honestly if a node could not be reached.
+
+    ``complete`` carries ``outcome.confirmed`` and not ``outcome.complete`` — M23, round
+    8. The schema says why; the short version is that the field an integration polls was
+    true on the retry that changed nothing, which is the one moment it must not be.
+    """
     outcome = await revocation.revoke_friend(session, friend_id=friend_id)
     return schemas.RevocationResponse(
         friend_id=outcome.friend_id,
-        complete=outcome.complete,
+        complete=outcome.confirmed,
         withdrew=outcome.withdrew,
         nodes_updated=outcome.nodes_updated,
         nodes_failed=outcome.nodes_failed,

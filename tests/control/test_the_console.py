@@ -2317,9 +2317,13 @@ async def test_no_submission_can_name_a_value_the_control_plane_mints(
     named its boxes plainly — and it has one now; that a bare name is refused for being
     unreadable rather than accepted is
     ``test_a_bare_field_name_is_no_longer_a_name_this_form_can_read``'s claim, not this
-    one. Here the bare case doubles as the NON-HTMX caller, which has nowhere to render
-    a field error and gets the 400 envelope, against the console's 422 fragment — the
-    split the body below asserts either side of.
+    one. Here the bare case doubles as the NON-HTMX caller — and since M23's eighth round
+    that caller gets the SAME answer as the console: the dialog at 422, message under the
+    box. It used to get the 400 envelope, and the two shapes in one console are what that
+    round refused (``test_one_console_one_refusal_shape.py``). What this file asserts
+    either side of the parametrisation is therefore the REFUSAL and not the shape: a
+    minted name is named back, whichever way the submission arrived, and nothing it
+    carried was stored.
 
     The marker is checked against what the fleet actually HOLDS, decrypted, rather than
     against the response: the failure this is about is a stored value, not a rendered
@@ -2349,15 +2353,11 @@ async def test_no_submission_can_name_a_value_the_control_plane_mints(
     )
 
     # Refused, because a minted name is not a field this form can read — and refused is
-    # the answer rather than dropped, so a caller naming one is told which names. Each
-    # panel in the answer it can render: the console's dialog at 422, and the caller with
-    # no form the error envelope it has always had.
-    if prefixed:
-        assert enabled.status_code == 422, enabled.text
-        said = _reading(enabled.text)
-    else:
-        assert enabled.status_code == 400, enabled.text
-        said = enabled.json()["error"]["message"]
+    # the answer rather than dropped, so a caller naming one is told which names. One
+    # answer for both callers since M23's eighth round: the dialog at 422, whether or not
+    # htmx asked for it.
+    assert enabled.status_code == 422, enabled.text
+    said = _reading(enabled.text)
     for name in material:
         assert name in said, name
 
