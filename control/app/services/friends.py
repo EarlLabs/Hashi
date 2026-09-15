@@ -22,6 +22,7 @@ HOW:  ``grant_everywhere`` is called both when a friend is created and when a ne
 import datetime
 import json
 import logging
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -131,6 +132,28 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
     enabled, which is how "a replacement node needs no action from any user"
     (criterion 2) actually happens.
     """
+    return await grant_on(session, friend, await nodes.serving_transports(session))
+
+
+async def grant_on(
+    session: AsyncSession, friend: Friend, rows: Sequence[NodeTransport]
+) -> list[Credential]:
+    """The same grant, over rows the caller chose. Does NOT commit.
+
+    Split out of ``grant_everywhere`` in M23's round 3 for one caller: ``apply.apply_node``
+    grants on the node it is about to push BEFORE it renders, so the peers in the file are
+    the people the file authorises. At that moment the node is still a draft or degraded,
+    so it is in nothing ``serving_transports`` returns — the query above is precisely the
+    one that cannot answer this case.
+
+    THE ROWS ARE THE CALLER'S RESPONSIBILITY and there is one rule about them:
+    friend-facing only. ``serving_transports`` filters ``purpose == FRIENDS`` because a
+    friend handed a hop end would be routed straight past the entry node the topology
+    exists to hide behind, and that rule does not stop being true because the rows arrived
+    from somewhere else. Nothing here re-filters, deliberately — a second copy of the rule
+    is a second place for it to drift — so a caller passing its own list says in its own
+    words why the list is friend-facing.
+    """
     if not friend.is_active:
         # Silently granting a revoked friend would be the exact failure criterion 6
         # forbids: access returning through a side door.
@@ -153,7 +176,7 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
     )
     held = set(existing.scalars())
 
-    for node_transport in await nodes.serving_transports(session):
+    for node_transport in rows:
         if node_transport.id in held:
             continue
 

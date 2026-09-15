@@ -26,6 +26,7 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 import datetime
 import enum
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -234,6 +235,37 @@ NOTHING_LEFT_TO_APPLY_UNPUSHED = (
     f"{OFFER_ONE_AGAIN} {NOTHING_STOPS_A_SERVING_HOST}"
 )
 
+# What an apply is refused with when the node it would put into service has a pool that
+# cannot hold the fleet — M23, round 3. The walk pressed apply on a degraded node with a
+# two-address pool and three users: the push went out, the host's config changed, the
+# daemon was restarted, and only THEN did the fan-out below refuse and roll the record
+# back. The API said "Nothing has been changed", which was true of the database and false
+# of the node, and every repeat press pushed and restarted again.
+#
+# So the measurement moved above the render, where ``nodes.set_transport_enabled`` and
+# the state dialog already take it: ``addresses.shortfalls_among`` over this node's own
+# enabled rows, which are exactly the ones that become serving with it. Nothing is
+# dialled, so the sentence is true about the host as well as about the record.
+#
+# The pools are named in ``addresses.named``'s words, like every other refusal about a
+# pool, and it ends where the size is actually changed — there is no resize action on the
+# Nodes screen, and an operator sent to "make the pool bigger" with no screen named has
+# nowhere to go.
+#
+# The direction is its own clause for the reason the four above it are: this sentence is
+# also the body of a 409 from ``POST /api/nodes/{id}/apply``, where naming a screen is
+# the one thing a message must not do. The console says where the size is changed
+# (``panel/wording.py``); the service says what has to happen.
+MAKE_THE_POOL_BIGGER = (
+    "Make the pool bigger on that transport first, or take somebody off the fleet."
+)
+POOL_SHORT_TO_APPLY = (
+    "applying this node is what puts it into service, and a node that serves gives every "
+    "active friend an address on each transport it offers — {pools}. Nothing was pushed "
+    f"and nothing on the node was changed. {MAKE_THE_POOL_BIGGER}"
+)
+
+
 # The boundary between "this node failed" and "stop the whole operation".
 #
 # Everything ``apply_node`` does is work for ONE node — read its record, render its
@@ -399,6 +431,31 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     return rendered
 
 
+async def enabled_transports(session: AsyncSession, node: Node) -> list[NodeTransport]:
+    """Every row on this node that is currently offered, as rows.
+
+    THE FILTER, in one place — M23, round 3. It is the same one ``render_for_node`` runs,
+    and since this milestone three things in this module need it rather than one: which
+    configs get rendered, which transport each placed config came from, and whether the
+    pools on the rows about to become serving can hold the fleet. Written out a third
+    time it would be the drift ``fleet_size`` and ``sized_pool`` already exist to prevent,
+    one module over.
+
+    Rows rather than columns, because the pool question is asked of the row itself
+    (``addresses.shortfalls_among``). Queried rather than read off ``node.transports``
+    for the reason ``render_for_node`` gives: this is reached straight after a revocation
+    deleted rows in the same session, where touching the collection is lazy IO on an
+    async session.
+    """
+    listed = await session.execute(
+        select(NodeTransport)
+        .where(NodeTransport.node_id == node.id)
+        .where(NodeTransport.enabled.is_(True))
+        .order_by(NodeTransport.transport_name)
+    )
+    return list(listed.scalars().unique())
+
+
 async def placed_transports(session: AsyncSession, node: Node) -> dict[str, str]:
     """Which transport each of this node's placed configs came from, by config name.
 
@@ -408,17 +465,15 @@ async def placed_transports(session: AsyncSession, node: Node) -> dict[str, str]
     gets (``edge.bootstrap.node_stack``). Before M15 the key was the transport's name and
     both were free.
 
-    Its own query rather than a second return value, so no caller that indexes a config
-    by name had to change. It is the same filter ``render_for_node`` runs, in the same
-    transaction, against a database only the operator writes to — and the two are used
-    together within one request.
+    Its own function rather than a second return value, so no caller that indexes a config
+    by name had to change. It reads ``enabled_transports`` — the same filter
+    ``render_for_node`` runs, in the same transaction, against a database only the
+    operator writes to — and the two are used together within one request.
     """
-    listed = await session.execute(
-        select(NodeTransport.config_name, NodeTransport.transport_name)
-        .where(NodeTransport.node_id == node.id)
-        .where(NodeTransport.enabled.is_(True))
-    )
-    return {config_name: transport_name for config_name, transport_name in listed.all()}
+    return {
+        row.config_name: row.transport_name
+        for row in await enabled_transports(session, node)
+    }
 
 
 async def placed_listeners(session: AsyncSession, node: Node) -> dict[str, Listener]:
@@ -587,7 +642,7 @@ async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
     """Which of the three refusals this node gets.
 
     One query, on the refusal path only, and it reads both axes off one column.
-    ``render_for_node`` already filtered to the enabled rows and came back empty, so
+    ``enabled_transports`` already filtered to the offered rows and came back empty, so
     what is left to learn is:
 
     * whether the node has any transport row AT ALL — which decides whether there is
@@ -616,8 +671,15 @@ async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
     return NOTHING_LEFT_TO_APPLY_UNPUSHED
 
 
-async def _record_failure(session: AsyncSession, node: Node, reason: str) -> None:
-    """Log why an apply failed, then mark the node degraded. In that order.
+async def _record_failure(
+    session: AsyncSession,
+    node: Node,
+    reason: str,
+    granted: Sequence[Credential] = (),
+) -> None:
+    """Log why an apply failed, undo what it granted, then mark the node degraded.
+
+    In that order.
 
     The order is the whole point, and it was bought with an evening in the field on
     2026-09-08. Recording the failure is itself a write that can fail, and when it did
@@ -636,8 +698,27 @@ async def _record_failure(session: AsyncSession, node: Node, reason: str) -> Non
     The reason is the node's own diagnostic — our command, its stderr, our timeout. It
     names no user and no connection, which is what makes it loggable at all (core
     invariants §6).
+
+    ``granted`` IS WHAT THIS APPLY MINTED ON ITS WAY IN — M23, round 3 — and it is deleted
+    here rather than rolled back. Since this milestone an apply that puts a node into
+    service grants every active user BEFORE it renders, because the peers in the file are
+    exactly the people who hold a credential on the row; a failed push must still grant
+    nobody, which is the property ``test_an_apply_that_fails_grants_nobody`` holds. A
+    ``session.rollback()`` would do it in one line and would also discard the learned SSH
+    host key ``apply_node`` may have put on the node inside the connection block —
+    the pending edit ``nodes._node_to_write`` refreshes column by column to preserve. So
+    the credentials are deleted explicitly and everything else stands.
+
+    What that costs is worth naming: on the one failure where the push actually landed,
+    the host is left authorising peers whose key material this database no longer holds.
+    That is the ordinary orphaned-key-material shape of any interrupted push — the node
+    is degraded, so nobody is routed onto it, and the next apply rewrites the file whole.
     """
     logger.error("apply failed for node %s: %s", node.id, reason)
+    for credential in granted:
+        await session.delete(credential)
+    if granted:
+        await session.flush()
     try:
         await nodes.set_node_state(
             session, node_id=node.id, state=NodeState.DEGRADED, detail=reason[:500]
@@ -651,6 +732,72 @@ async def _record_failure(session: AsyncSession, node: Node, reason: str) -> Non
         )
 
 
+async def _take_into_service(
+    session: AsyncSession, node: Node, rows: Sequence[NodeTransport]
+) -> list[Credential]:
+    """Hand every active friend a credential on the rows this apply is about to serve.
+
+    THE ORDER AGAINST THE RENDER IS THE WHOLE OF THIS FUNCTION — M23, round 3. Round 2
+    added this fan-out at the END of ``apply_node``, after the push, and the real-host
+    walk found what that costs: a draft node applied once went active, handed both users
+    a credential at that instant, and pushed a file with zero peer blocks in it, because
+    ``render_for_node`` had already run. The users' archives then held a config for a node
+    that holds none of their key material — a link that is live immediately and cannot
+    work — and the repair was a second apply nothing asked for. Whether the product worked
+    came down to the order the operator pressed two buttons in.
+
+    So becoming serving happens BEFORE the render and the bytes carry the people. Three
+    shapes were weighed: grant first (this one), re-render and push a second time after
+    granting, and refusing to serve a draft node from apply at all — which also takes
+    ``degraded -> active`` away, and that is the retry every failed apply depends on.
+
+    IT DOES NOT TOUCH ``node.state``, and that is the second decision. Writing ACTIVE here
+    so ``serving_transports`` could see the node would put this function's own answer
+    above ``NodeState.allowed_from`` — a retired node would be flushed active, and the
+    failure path would then read the row and find ``active -> degraded`` perfectly legal,
+    resurrecting the one node the state machine exists to refuse. The state still moves in
+    one place, on the success path, past every failure arm. What made that possible is
+    ``friends.grant_on``, which grants over the rows it is given rather than over the ones
+    a query calls serving.
+
+    THE ROWS ARE THIS NODE'S OWN, not the fleet's. An apply is about one node, and an
+    apply of node A that quietly mints material on node B is a side effect nobody pressed.
+    FRIEND-FACING ONLY, filtered here because ``grant_on`` deliberately re-filters nothing:
+    a hop end's consumer is the far NODE, and a friend granted one would be routed straight
+    past the entry node the topology exists to hide behind.
+
+    Does NOT commit: the caller owns the transaction that carries the applied digests, the
+    audit entries and this.
+    """
+    friend_facing = [row for row in rows if row.purpose == TransportPurpose.FRIENDS]
+
+    # Refused before anything is minted, before anything is rendered and before the node is
+    # dialled, which is what makes ``POOL_SHORT_TO_APPLY``'s own sentence true about the
+    # host as well as about the record. ``shortfalls_among`` and not the fan-out's own
+    # ``PoolFull``, for the reason ``nodes.set_transport_enabled`` gives at the same
+    # measurement: the fan-out skips a friend who already holds a credential here, so a row
+    # everybody is already on refuses nothing and the node would go into service carrying a
+    # pool with no room for the next person. ``PoolFull`` stays underneath as the backstop
+    # for a pool that is big enough on paper and full in fact.
+    short = await addresses.shortfalls_among(session, friend_facing)
+    if short:
+        raise addresses.PoolFull(
+            POOL_SHORT_TO_APPLY.format(
+                pools="; ".join(addresses.named(row) for row in short)
+            )
+        )
+
+    # Deferred import for the cycle its siblings name: ``friends`` imports the services
+    # this one does.
+    from control.app.services import friends  # noqa: PLC0415
+
+    granted: list[Credential] = []
+    for friend in await friends.list_friends(session):
+        if friend.is_active:
+            granted.extend(await friends.grant_on(session, friend, friend_facing))
+    return granted
+
+
 async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     """Render, validate, push and verify one node. Returns what was applied.
 
@@ -660,24 +807,47 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     node = await nodes.get_node(session, node_id)
     node_settings = settings()
 
-    configs = await render_for_node(session, node)
+    # The rows this apply is about, read once and used three times — M23, round 3. It was
+    # ``render_for_node``'s own empty return that answered "is anything enabled here", and
+    # that answer had to move above the render, because ``_take_into_service`` below runs
+    # before the render and must not mint anything for a node with nothing to push.
+    enabled = await enabled_transports(session, node)
+
     # NOTHING ENABLED IS NOT A FAILURE — M18.1, and the position of this check is the
-    # whole of it. It sits where ``render_for_node`` returned, OUTSIDE both try blocks
-    # below, so the node's recorded state is not touched: a draft stays a draft and an
-    # already-active node keeps serving its last config, which is the same asymmetry a
-    # render failure has always had. Inside either block it would degrade the node,
-    # which is exactly the outcome this step exists to remove.
+    # whole of it. It sits ABOVE everything this function writes and OUTSIDE both try
+    # blocks below, so the node's recorded state is not touched: a draft stays a draft and
+    # an already-active node keeps serving its last config, which is the same asymmetry a
+    # render failure has always had. Inside either block it would degrade the node, which
+    # is exactly the outcome this step exists to remove.
     #
     # Before validation and before the compose file, because the compose file is where
     # the old answer came from: zero services renders an empty ``services:`` mapping,
     # which the daemon rejects, and the operator was handed that rejection.
-    if not configs:
+    if not enabled:
         raise NothingToApply(await _nothing_to_apply(session, node))
+
+    # Whether this apply is what PUTS the node into service, read before the line that
+    # does it — M23. The answer is not "did the state change": a re-apply of an active
+    # node changes nothing and must grant nobody twice.
+    becoming_serving = node.state not in NodeState.serving()
+    # THE FOURTH PLACE A NODE STARTS SERVING. ``nodes.set_node_state``,
+    # ``nodes.enable_and_grant`` and ``nodes.set_transport_enabled`` are the other three,
+    # and each hands every active user a credential on whatever has just become theirs to
+    # reach. Above the render since round 3, so the file carries them — see
+    # ``_take_into_service``, which is where the whole of that reasoning lives.
+    granted = await _take_into_service(session, node, enabled) if becoming_serving else []
+
+    configs = await render_for_node(session, node)
 
     # Which transport is behind each placed config. Needed from here down wherever the
     # answer is the TRANSPORT's rather than the file's — the checker, the extension, the
     # data plane — because since M15 a config's name and its transport's name can differ.
-    placed = await placed_transports(session, node)
+    #
+    # ``placed_transports``' own mapping, built from the rows already in hand rather than
+    # asked for a second time: that function IS this comprehension over
+    # ``enabled_transports``, and it stays for the probe, which reaches the same answer
+    # from a route that has no rows.
+    placed = {row.config_name: row.transport_name for row in enabled}
     for config_name, config in configs.items():
         # The FORMAT comes from the transport's own declaration, so the right checker
         # runs without this module knowing which protocol it is looking at.
@@ -706,7 +876,7 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     try:
         target = target_for(node, node_settings)
     except NodeOperationFailed as exc:
-        await _record_failure(session, node, exc.message)
+        await _record_failure(session, node, exc.message, granted)
         raise
 
     try:
@@ -747,7 +917,7 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             )
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
-        await _record_failure(session, node, str(exc))
+        await _record_failure(session, node, str(exc), granted)
         raise NodeOperationFailed(
             f"the node could not be configured and has been marked degraded: {exc}"
         ) from exc
@@ -783,7 +953,7 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             "so what reached the node is unknown; the traceback is in the control "
             "plane's log"
         )
-        await _record_failure(session, node, reason)
+        await _record_failure(session, node, reason, granted)
         raise NodeOperationFailed(
             f"the node could not be configured and has been marked degraded: {reason}"
         ) from exc
@@ -802,7 +972,7 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             )
             if part
         )
-        await _record_failure(session, node, detail)
+        await _record_failure(session, node, detail, granted)
         # ``ConfigNotServing`` since M23, and the type is the whole of the change — this
         # sentence was already true on the apply banner. What was not true was the
         # revocation's, which composes from the KIND rather than from these words and had
@@ -840,54 +1010,42 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             configs[node_transport.config_name]
         )
 
-    # Whether this apply is what PUTS the node into service, read before the line that
-    # does it — M23. The answer decides the fan-out below and it is not "did the state
-    # change": a re-apply of an active node changes nothing and must grant nobody twice.
-    became_serving = node.state not in NodeState.serving()
-
+    # ``state`` is already ACTIVE when this apply put the node into service —
+    # ``_take_into_service`` wrote it before the render, because the fan-out that goes
+    # with it has to happen before the bytes are built. Written again here rather than
+    # conditionally, because a node that was ALREADY serving still ends an apply active
+    # with no reason on its row: the same two lines close both paths.
     node.state = NodeState.ACTIVE
     node.state_detail = None
+
+    if becoming_serving:
+        # RECORDED THE WAY ``set_node_state`` RECORDS IT — M23, round 3. A node going into
+        # service is an audited event wherever it is reached from, and reached from this
+        # button it produced no entry at all: the walk watched a node go draft -> active
+        # with every user granted on it and nothing in the trail saying so.
+        #
+        # HERE rather than in ``_take_into_service``, and that is the point of the split.
+        # An entry is written only past every failure arm above, so a push that failed
+        # leaves no record claiming the node went into service — which is the same rule
+        # the ``node-applied`` entry below already follows, and the same rule
+        # ``_record_failure`` follows when it deletes what the fan-out minted.
+        #
+        # The state is a member of a closed enum and the node's name is the whole of the
+        # rest: no reason, no transports, no digests. ``state_detail`` is 500 characters
+        # that can carry a remote host's words and is deliberately not in this table.
+        audit.record(
+            session,
+            AuditAction.NODE_STATE_CHANGED,
+            first_label=node.name,
+            second_label=str(NodeState.ACTIVE),
+        )
+
     # Success only, and only here — past every failure arm above, which record nothing.
     # A push that failed is not a change that committed, and its reason is a sentence
     # that can come from a remote host; the node's own row carries it for the operator.
     # The node's name is the whole entry: not which transports, not their digests, not
     # how long it took.
     audit.record(session, AuditAction.NODE_APPLIED, first_label=node.name)
-
-    if became_serving:
-        # THE FOURTH PLACE A NODE STARTS SERVING, and until M23 the only one that did not
-        # grant anybody. ``nodes.set_node_state``, ``nodes.enable_and_grant`` and
-        # ``nodes.set_transport_enabled`` each hand every active user a credential on
-        # whatever has just become theirs to reach; this line does the same, because the
-        # state change above is the same event however it was reached.
-        #
-        # It was not reached through ``set_node_state`` — that function commits, and this
-        # one owns a transaction carrying the applied digests and the audit entry — so the
-        # grant was simply absent: a node registered, enabled and APPLIED went active with
-        # every existing user holding nothing on it, and the Nodes screen went on
-        # promising that "adding or replacing one asks nothing of them". It self-heals at
-        # the next unrelated mint, which is how it stayed invisible; what it costs is the
-        # charter's central case, an owner rotating away from a blocked node in a hurry
-        # and seeing nothing happen.
-        #
-        # IN THIS TRANSACTION, for the reason ``set_node_state`` states: granting
-        # allocates an address per person, and a pool with no room must refuse the whole
-        # thing rather than leave a node recorded as serving people it cannot carry. What
-        # that costs here — and it is the cost this comment exists for — is that such a
-        # refusal rolls back the applied digests of a push that really did land, so the
-        # host runs a configuration the record does not claim. That is the safe direction:
-        # the node stays out of ``serving_transports``, so nobody is routed onto it, and
-        # the next apply pushes the same bytes again and records them.
-        #
-        # Flushed first, because ``serving_transports`` is a query and this node is still
-        # draft as far as the database is concerned until it runs. Deferred import for the
-        # cycle its three siblings name: ``friends`` imports the services this one does.
-        from control.app.services import friends  # noqa: PLC0415
-
-        await session.flush()
-        for friend in await friends.list_friends(session):
-            if friend.is_active:
-                await friends.grant_everywhere(session, friend)
 
     await session.commit()
     logger.info("node applied: %s (%d transports)", node.id, len(configs))

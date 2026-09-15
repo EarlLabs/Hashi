@@ -247,19 +247,22 @@ async def friends_table(
 
 async def _friends_context(session: AsyncSession) -> dict:
     """What the users table needs, in one place so the screen and the refresh agree."""
+    # READ ONCE and handed to both — M23, round 3. The note above the table and the cell
+    # on a revoked row are two answers to the same question, and asking it twice is how
+    # they come to disagree: the cell may only say the access is gone while the note says
+    # nothing is in doubt.
+    unconfirmed = await console.unconfirmed_nodes(session)
     return {
         "friends": await console.friend_rows(session),
         "serving": len(await nodes.serving_transports(session)),
         # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
         # services/console.py from the Nodes screen's own two readings, and ``None`` on a
         # fleet where every host is confirmed, so the table carries no standing warning.
-        "withdrawal_doubt": console.withdrawal_doubt(
-            await console.unconfirmed_nodes(session)
-        ),
-        # The cell that used to read "no access". Passed in rather than written in the
-        # template because it is a claim this zone decided it may make — see the
-        # constant.
-        "access_withdrawn": console.ACCESS_WITHDRAWN,
+        "withdrawal_doubt": console.withdrawal_doubt(unconfirmed),
+        # The cell that used to read "no access", and since round 3 reads nothing at all
+        # while that note is up. Passed in rather than written in the template because
+        # whether it may be said is a decision this zone makes — see ``withdrawn_cell``.
+        "access_withdrawn": console.withdrawn_cell(unconfirmed),
     }
 
 
@@ -2151,18 +2154,35 @@ async def apply_node(
     degraded", which is the one thing the refusal exists to stop the operator believing.
     """
     node = await nodes.get_node(session, node_id)
+    # READ BEFORE THE CALL AND NEVER OFF THE OBJECT AFTERWARDS — M23, round 3, and the
+    # same lesson ``_refuse_state`` carries one screen over. A refusal from the fan-out
+    # this apply now runs comes out of ``friends.grant_everywhere``, which ROLLS BACK
+    # before it raises; a rollback expires every object in the identity map whatever
+    # ``expire_on_commit`` says, so ``node`` is a husk afterwards and ``node.name`` in
+    # either arm below emits a SELECT from a plain frame on an async session. That is a
+    # ``MissingGreenlet``, not a ``DomainError``, so it escaped as a 500 — the walk
+    # pressed apply on a short pool and got ``internal_error`` from the console while the
+    # API answered the refusal correctly. A string read while the session was still whole
+    # cannot expire.
+    name = node.name
     try:
         applied = await apply.apply_node(session, node_id=node_id)
-    except NothingToApply as exc:
-        # A REFUSAL, and the label says so. Caught ahead of its own base class rather
-        # than branching inside one handler, because the two differ in what happened to
-        # the node as well as in the word: nothing was dialled, nothing was pushed and
-        # the node's state has not moved.
+    except (NothingToApply, addresses.PoolFull) as exc:
+        # A REFUSAL, and the label says so. Caught ahead of their base class rather than
+        # branched inside one handler, because these two differ from a failure in what
+        # happened to the NODE as well as in the word: nothing was dialled, nothing was
+        # pushed and the node's state has not moved.
+        #
+        # ``PoolFull`` joined it in M23's round 3. It is the same shape — apply measures
+        # the pools of the rows it is about to put into service before it renders
+        # anything — and it was the one refusal on this button that was not shaped: it
+        # fell through to the generic handler and the operator got a 500 where the API
+        # got a sentence naming the pool.
         return _mutation(
             request,
             banner=exc.message,
             banner_label="refused",
-            keeping=node.name,
+            keeping=name,
             events="nodes-changed",
         )
     except DomainError as exc:
@@ -2172,7 +2192,7 @@ async def apply_node(
         return _mutation(
             request,
             banner=exc.message,
-            keeping=node.name,
+            keeping=name,
             events="nodes-changed",
         )
     # ``applied`` cannot be empty: since M18.1 a node with nothing enabled is refused

@@ -124,11 +124,26 @@
                 What the OPERATOR did, not a claim about what the person can reach —
                 M23, round 2. It read "no access", which is a statement about a host this
                 panel may not have been able to update: the walk measured it printed over
-                a tunnel that was carrying. What is always true is that the access was
-                withdrawn here; whether every host has stopped serving it is the note
-                above, which appears only when it cannot be confirmed.
+                a tunnel that was carrying.
+
+                AND NOTHING AT ALL while that cannot be confirmed — round 3, where the
+                walk read the replacement sentence on the row of somebody downloading a
+                megabyte through the real leaf, directly under the note saying the
+                withdrawal was not confirmed. The cell was the sentence contradicting the
+                note. `access_withdrawn` is `None` exactly while the note is up
+                (services/console.py's `withdrawn_cell`, composed from the same reading),
+                and what stands in for it is the em dash this table already uses for "no
+                answer to give here" — the nodes-served cell one column over.
+
+                Not a per-row hedge, deliberately: a sentence about THIS person would have
+                to name the nodes they were on, and a revocation deletes exactly the rows
+                that would say. The doubt is stated once, above the table.
               #}
+              {% if access_withdrawn %}
               <span class="text-muted">{{ access_withdrawn }}</span>
+              {% else %}
+              <span class="text-muted">—</span>
+              {% endif %}
               {% endif %}
             </td>
           </tr>

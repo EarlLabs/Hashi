@@ -888,6 +888,29 @@ WITHDRAWAL_UNCONFIRMED = (
 ACCESS_WITHDRAWN = "access withdrawn"
 
 
+def withdrawn_cell(unconfirmed: Sequence[str]) -> str | None:
+    """What the actions cell may say about a revoked row, or ``None`` for nothing at all.
+
+    ROUND 2 CHANGED THE WORDS AND ROUND 3 FOUND THEM STILL WRONG. "access withdrawn" is
+    about the operator's own action and is always true of the database — but the walk read
+    it on the row of somebody who downloaded a megabyte through the real leaf while it was
+    on screen, and a reader does not parse a cell that carefully. Beside a standing note
+    saying the withdrawal is not confirmed, the cell was the sentence contradicting it.
+
+    So the cell says nothing while that note is up. NOTHING, and not a hedge of its own:
+    what a per-row sentence would have to claim is which nodes THIS person was on, and a
+    revocation deletes exactly the rows that would say (``friends.revoke``) — so there is
+    no per-row answer to give, which is the finding round 2 got right and this does not
+    reopen. An empty cell is the honest amount, and the doubt is stated once, above the
+    table, where it names the nodes and the two controls that resolve it.
+
+    Driven by the SAME reading as that note, and from the same list, so the two cannot
+    disagree: while the fleet is confirmed the cell says what the operator did, and the
+    moment it is not, it stops saying anything.
+    """
+    return None if unconfirmed else ACCESS_WITHDRAWN
+
+
 async def unconfirmed_nodes(session: AsyncSession) -> list[str]:
     """Every node this panel cannot say is running the configuration it would push.
 

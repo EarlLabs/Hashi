@@ -6569,6 +6569,7 @@ def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
         apply_service.OFFER_ONE_AGAIN,
         apply_service.NOTHING_STOPS_A_SERVING_HOST,
         apply_service.GIVE_IT_A_KEY,
+        apply_service.MAKE_THE_POOL_BIGGER,
     }
 
     assert set(wording._THE_CONSOLES_DIRECTIONS) == exported, (
@@ -6583,6 +6584,10 @@ def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
         apply_service.NOTHING_LEFT_TO_APPLY,
         apply_service.NOTHING_LEFT_TO_APPLY_UNPUSHED,
         apply_service.NO_SSH_KEY,
+        # M23, round 3. The fifth clause, and the one composed by the refusal an apply
+        # gives when the node it would put into service has a pool that cannot hold the
+        # fleet — which sends the operator to a different screen from the other four.
+        apply_service.POOL_SHORT_TO_APPLY,
     ))
     for clause, on_the_console in wording._THE_CONSOLES_DIRECTIONS.items():
         assert clause in composed, (

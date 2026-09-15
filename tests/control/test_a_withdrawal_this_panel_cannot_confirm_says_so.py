@@ -144,6 +144,15 @@ async def test_a_withdrawal_that_could_not_be_pushed_is_not_reported_as_no_acces
         "the screen still says a person has no access while a host it could not update "
         "may still be serving them"
     )
+    # AND THE CELL SAYS NOTHING AT ALL — M23, round 3. Round 2 replaced "no access" with
+    # a sentence about what the operator did, which is always true of the database; the
+    # walk then read it on the row of somebody who downloaded a megabyte through the real
+    # leaf while it was on screen, directly under the note saying the withdrawal was not
+    # confirmed. The cell was the sentence contradicting the note.
+    assert console.ACCESS_WITHDRAWN not in said, (
+        "the row still states the withdrawal while the note above it says that cannot be "
+        "confirmed, so the screen contradicts itself about a tunnel that may be carrying"
+    )
     assert "Withdrawn access is not confirmed" in said, said
     # It names the hosts, because that is the text the operator acts on — and sends them
     # to the one screen where the state is read and changed.
@@ -177,3 +186,21 @@ async def test_a_node_nothing_was_ever_pushed_to_raises_no_doubt(
 
     assert await console.unconfirmed_nodes(session) == []
     assert console.withdrawal_doubt([]) is None
+
+
+def test_the_cell_and_the_note_are_two_readings_of_one_answer() -> None:
+    """They are composed from the same list, so they cannot disagree — M23, round 3.
+
+    The screen has one question to answer about a withdrawal — can this panel confirm it
+    stopped — and two places that answer it. Asked twice they drift, which is exactly the
+    state the walk found: a standing note saying the withdrawal is not confirmed, over
+    rows each asserting it is. So the cell is a function of the same list the note is, and
+    it says nothing whenever the note has something to say.
+
+    NOTHING, and not a per-row hedge of its own: a sentence about THIS person would have
+    to name the nodes they were on, and a revocation deletes exactly the rows that would
+    say. Round 2 got that right and this does not reopen it.
+    """
+    assert console.withdrawn_cell([]) == console.ACCESS_WITHDRAWN
+    assert console.withdrawn_cell(["leaf-nl"]) is None
+    assert console.withdrawn_cell(["leaf-nl", "leaf-is"]) is None

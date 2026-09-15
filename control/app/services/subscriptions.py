@@ -50,6 +50,37 @@ ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 # unguessable rather than convenient.
 TOKEN_BYTES = 32
 
+# WHAT AN EMPTY ARCHIVE IS — M23, round 1's item 4, re-confirmed on the real hosts in
+# round 3. A link resolving to nothing answered 200 with a 22-byte ZIP: the bytes of an
+# empty central directory and nothing else. A friend's unarchiver opens it, shows an empty
+# folder and says nothing, which is indistinguishable from a download that went wrong —
+# and the walk watched one person's archive go 3897 B to 22 B after a failed revocation
+# degraded both nodes, with nothing anywhere telling them their link was still good.
+#
+# So an empty archive holds one file saying so. That is the whole of the change, and the
+# alternatives were both worse: a 404 says the token is unknown, which is the answer a
+# REVOKED link gets and must keep getting, and an error status turns a fleet that is
+# momentarily degraded into a client reporting a dead subscription.
+#
+# THE NAME CARRIES THE ANSWER, because a listing is often all a friend sees before they
+# decide the download failed.
+#
+# WHAT IT MAY NOT SAY is the rest of it: this text is served on a bearer path to whoever
+# holds the token, so it names no node, no country, no address and no count, and it does
+# not say whether this person has ever had anything. It says the link is fine, that
+# nothing on their device needs changing, and who to ask — which is everything they can
+# act on and nothing a stranger learns from.
+EMPTY_ARCHIVE_NOTE_NAME = "no-configurations-right-now.txt"
+EMPTY_ARCHIVE_NOTE = """\
+There is nothing in this archive at the moment.
+
+That is not a broken download and your link is not dead: the same link keeps
+working, and there is simply nothing for it to hand over right now. Nothing on
+your device needs to change and nothing needs re-importing.
+
+Fetch the link again later. If it stays empty, ask the person who gave it to you.
+"""
+
 
 def token_digest(token: str) -> str:
     """The indexed lookup key for a token.
@@ -299,11 +330,23 @@ def archive_of(configs: Sequence[ClientConfig]) -> bytes:
     of what makes a config importable. A collision between two nodes is resolved by
     suffixing rather than by overwriting: a ZIP with two identical names is one a client
     unpacks into a single file, and the friend would silently be missing an exit.
+
+    AN EMPTY ONE IS NOT EMPTY — M23. It carries one note instead, so a friend can tell an
+    archive with nothing in it from a download that failed; see ``EMPTY_ARCHIVE_NOTE``
+    for what it may and may not say. Written through the same entry code as any config,
+    so it is as deterministic and as unreadable-by-others as the rest.
     """
     buffer = io.BytesIO()
     used: set[str] = set()
 
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if not configs:
+            note = zipfile.ZipInfo(
+                filename=EMPTY_ARCHIVE_NOTE_NAME, date_time=ARCHIVE_TIMESTAMP
+            )
+            note.external_attr = 0o600 << 16
+            archive.writestr(note, EMPTY_ARCHIVE_NOTE)
+
         for config in configs:
             name = config.safe_filename()
             if name in used:

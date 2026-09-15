@@ -142,7 +142,7 @@ async def test_each_shape_includes_only_the_transports_that_declare_it(
     assert len(document.splitlines()) == 1
 
 
-async def test_a_friend_with_nothing_in_this_shape_gets_an_empty_archive(
+async def test_a_friend_with_nothing_in_this_shape_gets_an_archive_that_says_so(
     client, session, reality_params
 ) -> None:
     """Empty, not an error — the same rule as the empty v1 document.
@@ -150,6 +150,14 @@ async def test_a_friend_with_nothing_in_this_shape_gets_an_empty_archive(
     A friend whose nodes are momentarily degraded has not been revoked. An error here
     would make a node outage look like a withdrawal of access, which is the one thing
     their client reports to them directly.
+
+    AND IT SAYS SO IN WORDS — M23, round 1's item 4, re-confirmed on the real hosts in
+    round 3. The answer was a 22-byte ZIP: an empty central directory and nothing else,
+    which a friend's unarchiver opens as an empty folder without comment. The walk watched
+    one person's archive go 3897 B to 22 B after a failed revocation degraded both nodes,
+    with nothing anywhere telling them their link was still good. So an empty archive
+    holds exactly one file, named for the answer, because a listing is often all a friend
+    sees before deciding the download failed.
     """
     await serving_node(
         client, session, name="uri-only", address="192.0.2.22",
@@ -158,11 +166,65 @@ async def test_a_friend_with_nothing_in_this_shape_gets_an_empty_archive(
     friend = (await client.post("/api/friends", json={"nickname": "masha"})).json()
     handle = await friends.get_friend(session, friend["id"])
 
-    archive = subscriptions.archive_of(await subscriptions.config_files_for(session, handle))
-    assert names_in(archive) == []
-    # Still a real, openable archive rather than zero bytes: a truncated body is what a
-    # client reports as a network error.
-    assert archive
+    configs = await subscriptions.config_files_for(session, handle)
+    assert configs == []
+    archive = subscriptions.archive_of(configs)
+
+    assert names_in(archive) == [subscriptions.EMPTY_ARCHIVE_NOTE_NAME]
+    with zipfile.ZipFile(io.BytesIO(archive)) as opened:
+        note = opened.read(subscriptions.EMPTY_ARCHIVE_NOTE_NAME).decode()
+    assert note == subscriptions.EMPTY_ARCHIVE_NOTE
+    # What it may not say. This text is served on a bearer path to whoever holds the
+    # token, so it names nothing about the fleet and nothing about this person.
+    for said in ("uri-only", "masha", "192.0.2.22", "node", "revoke"):
+        assert said not in note.lower(), note
+    # And what it must: the link is fine and nothing on the device needs changing, which
+    # is the whole reason a friend can tell this from a download that went wrong.
+    assert "your link is not dead" in note
+    # Byte-stable like every other archive: no clock inside the response.
+    assert subscriptions.archive_of([]) == subscriptions.archive_of([])
+
+
+async def test_an_archive_that_holds_configs_carries_no_note(
+    client, session, file_transport: str, anonymous
+) -> None:
+    """The note is what an EMPTY archive is, and nothing else — and the route serves it.
+
+    Both halves in one place because they are one decision. A note that also rode along
+    with a working archive would be a file every friend unpacks beside their configs and
+    has to wonder about; and the fetch that matters is the one a friend's client actually
+    makes, which is the route rather than the builder.
+    """
+    await serving_node(
+        client, session, name="has-configs", address="192.0.2.26",
+        transport_name=file_transport,
+        params={**AWG_PARAMS, "port": 51823,
+                "tunnel_address": "10.26.0.1/24", "peer_tunnel_address": "10.26.0.2/24"},
+    )
+    friend = (await client.post("/api/friends", json={"nickname": "grisha"})).json()
+    token = (
+        await client.get(f"/api/friends/{friend['id']}/subscription")
+    ).json()["url"].rsplit("/", 1)[-1]
+
+    served = await anonymous.get(f"/sub/{token}", params={"format": "client-config-file"})
+    assert served.status_code == 200
+    assert subscriptions.EMPTY_ARCHIVE_NOTE_NAME not in names_in(served.content)
+
+    # And the same token once nothing is serving: the link still works, the archive still
+    # opens, and what it holds is the sentence rather than nothing at all.
+    node_id = (await client.get("/api/nodes")).json()[0]["id"]
+    await nodes.set_node_state(
+        session, node_id=node_id, state=NodeState.DEGRADED, detail="taken out for the test"
+    )
+
+    empty = await anonymous.get(f"/sub/{token}", params={"format": "client-config-file"})
+
+    assert empty.status_code == 200, empty.text
+    assert empty.headers["content-type"] == "application/zip"
+    assert names_in(empty.content) == [subscriptions.EMPTY_ARCHIVE_NOTE_NAME], (
+        "a link that resolves to nothing still answers with an archive a friend cannot "
+        "tell from a download that went wrong"
+    )
 
 
 async def test_the_archive_is_byte_stable_across_builds(

@@ -99,6 +99,15 @@ _THE_CONSOLES_DIRECTIONS: dict[str, str] = {
         f'Give it one with "ssh key" on its row on {apply.WHERE_TO_RETRY}, then try '
         "again."
     ),
+    # M23, round 3. The fifth, and the one place a pool's size is actually changed — which
+    # is not the screen this refusal is read on. There is no resize control on the Nodes
+    # screen, so an operator told to make the pool bigger and nothing else has nowhere to
+    # go; the console's words are the ones ``console.POOL_SHORT_TO_OFFER`` and
+    # ``console.POOL_SHORT_TO_SERVE`` already send them to, so the same instruction reads
+    # the same whichever of the three refusals about a short pool they met.
+    apply.MAKE_THE_POOL_BIGGER: (
+        "Make the pool bigger first: Keys & configs, replace params."
+    ),
 }
 
 
