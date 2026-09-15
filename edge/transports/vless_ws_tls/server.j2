@@ -54,7 +54,7 @@
   peer entry authorises. No packet of theirs is forwarded by this node's kernel, so no
   firewall rule this project renders is anywhere on that path: the policy has to live in
   the thing that opens the connection, which is this file. The FIRST routing rule refuses
-  every destination IANA's special-purpose registry says is not on the public internet —
+  every destination that is not on the public internet, and every second spelling of one —
   `edge.egress.NOT_THE_INTERNET`, the same list a kernel tunnel drops and never a second
   copy of it — and first is load-bearing, because Xray takes the first rule that matches
   and the rule below it matches everything from this inbound.
@@ -112,13 +112,30 @@
   `routing.rules[].ip` takes both families, and `iptables` takes one, which is why the
   list `edge.egress` keeps is now split there BY DERIVATION rather than by a second list
   somebody maintains: this file takes the whole of it, and the wg family takes what its
-  own tool can express. One range of the registry is deliberately absent — see that
+  own tool can express. Two ranges of the registry are deliberately absent — see that
   constant, and the test that measures the mapped spelling's verdict.
 
   What was measured afterwards, on the same live proxy: `[::1]` and `[fc00::2]` refused,
   a globally-routable IPv6 address carried, a NAME resolving to a v6 address off the
   internet refused and one resolving to a v6 address on it carried, and the log still
   empty of every one of them.
+
+  AND M23's THIRTEENTH round, which is the same address in a THIRD spelling. The twelfth
+  round's v6 half was the registry's own, which carries the LOCAL-USE NAT64 prefix
+  `64:ff9b:1::/48` and not the WELL-KNOWN one — and the well-known one is the half that
+  puts an IPv4 address in its low 32 bits. So `[64:ff9b::7f00:1]` was still reached, on a
+  responder bound to this node's own loopback, in the same run that refused `127.0.0.1`
+  and `[::ffff:127.0.0.1]`. Measured, not inferred: the daemon does NOT fold a NAT64
+  address the way it folds a mapped one — `[::ffff:192.88.99.9]` reached the host at
+  `192.88.99.9` while `[64:ff9b::c058:6309]` timed out — so it is dialled as literal IPv6
+  and nothing but a translator on the path turns it back.
+
+  The list now carries the well-known prefix's EMBEDDING of each range it already refuses
+  and not the prefix itself, which is the part a wider rule would have got wrong: an
+  address in that prefix with a GLOBAL IPv4 address inside is how a v6-only client reaches
+  the v4 internet, and this project's own scenarios use exactly such an address for the
+  word "internet". Re-measured with the new list in place: `[64:ff9b::7f00:1]` refused,
+  `[64:ff9b::c058:6301]` carried, and every verdict above unchanged.
 
   Where that resolution is asked is the part worth checking rather than assuming, because a
   lookup is the one record this project must never create and the one it most easily leaks.

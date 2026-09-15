@@ -191,9 +191,47 @@ _CARRY = (
     "-i %i -o %i -j DROP",
 )
 
-# What a FRIEND's traffic may not reach: every destination IANA's special-purpose registry
-# says is not on the public internet. Their traffic is here to reach the internet, and
-# the walk that found this measured the cost of the difference.
+# What a FRIEND's traffic may not reach: every destination that is not on the public
+# internet, and every second SPELLING of one. Their traffic is here to reach the internet,
+# and the walk that found this measured the cost of the difference.
+#
+# WHAT THIS LIST TRACKS, stated before the ranges because M23's thirteenth round spent a
+# finding on the question and the answer is not "IANA's registry". It is IANA's registry
+# MINUS the entries that registry marks *globally reachable*, PLUS the one range that is
+# globally reachable and carries a refused address inside it. Two entries sit on that
+# line and they are the two a reader will ask about:
+#
+#   * ``192.88.99.0/24`` — the deprecated 6to4 relay anycast block. In the registry, and
+#     GLOBALLY REACHABLE by it: a packet addressed there arrives at a relay router on the
+#     public internet, and nothing about the address says where it goes next. It is
+#     therefore the internet, it is deliberately NOT here, and it is the address this
+#     project's own stands use for the word (``tests/e2e/edge/`` and ``tests/edge/``).
+#     Adding it because the registry names it would refuse the one destination those
+#     scenarios exist to prove a friend still reaches.
+#   * ``64:ff9b::/96`` — the WELL-KNOWN NAT64 prefix (RFC 6052 §2.1). Also in the registry
+#     and also globally reachable, and it is the one range where that is not the whole
+#     answer: its low 32 bits ARE an IPv4 address, and a NAT64 translator on the path is
+#     standard, deployed equipment that puts the packet exactly there. So the prefix is
+#     not refused and its EMBEDDINGS OF THE V4 HALF ABOVE are — derived below, never
+#     typed. ``64:ff9b::7f00:1`` is ``127.0.0.1`` wearing a different hat; ``64:ff9b::``
+#     with a global address in it is the internet, and stays reachable.
+#
+# So the membership test is "not globally reachable, or a spelling of something that is
+# not" — and ``is_global`` is the standard library's name for the registry's own column,
+# which is what makes the test below able to hold this list to it.
+#
+# WHAT IS DELIBERATELY NOT HERE, so the next walk reads it instead of re-finding it:
+# ``::/96``, the IPv4-COMPATIBLE prefix, which looks like the NAT64 case and is not.
+# Measured against the pinned Xray as a live proxy, with responders on a container's own
+# loopback: ``[::ffff:192.88.99.9]`` reached the host at ``192.88.99.9`` — folded — while
+# ``[::c058:6309]`` and ``[64:ff9b::c058:6309]`` both timed out, so neither is folded by
+# the daemon and both are dialled as literal IPv6. The difference between the two is what
+# the NETWORK does with them: RFC 6052 makes the NAT64 prefix mandatory for a translator,
+# while ``::/96`` was deprecated by RFC 4291 §2.5.5.1, its tunnelling mechanism removed by
+# RFC 4213, and it is in no registry — nothing anywhere turns ``::7f00:1`` into
+# ``127.0.0.1``. Refusing it would take away a class of address on the grounds of a
+# translation no deployed equipment performs, which is the ad-hoc widening this note
+# exists to stop.
 #
 # TWO CONSUMERS AND ONE LIST, which is the reason it is a constant here and not a rule.
 # A kernel tunnel drops these in the FORWARD chain (``_friend_rules``); a proxy, which
@@ -219,9 +257,9 @@ _CARRY = (
 #
 # WHY THE LIST IS HERE AND NOT ON A NODE'S RECORD. ``CLAUDE.md`` forbids a hardcoded
 # country, provider, IP, domain or port because each names something a node could have to
-# rotate away from. This names nothing of any node: it is IANA's registry, identical on
-# every host in every country, and no node this fleet can register is reachable at one of
-# these addresses. It is also not OUR list —
+# rotate away from. This names nothing of any node: it is read off a registry, identical
+# on every host in every country, and no node this fleet can register is reachable at one
+# of these addresses. It is also not OUR list —
 # ``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py`` holds it against the
 # standard library's own answer in both directions, so a range that drifts from
 # ``ipaddress`` fails the suite rather than a friend's tunnel.
@@ -269,7 +307,7 @@ _CARRY = (
 # The range is covered by this list one spelling over, not left out of it —
 # ``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py`` states that as the single
 # exception it allows, and the proxy file measures the mapped spelling's verdict.
-NOT_THE_INTERNET = (
+_NOT_GLOBALLY_REACHABLE = (
     "0.0.0.0/8",
     "10.0.0.0/8",
     "100.64.0.0/10",
@@ -295,6 +333,54 @@ NOT_THE_INTERNET = (
     "3fff::/20",
     "fc00::/7",
     "fe80::/10",
+)
+
+# The prefix a NAT64 translator is required to translate, and the reason the list above is
+# not the whole list — M23's thirteenth round, measured on the same live proxy the twelfth
+# used. ``[64:ff9b::7f00:1]`` was REACHED through the product's own rendered config while
+# ``127.0.0.1`` and ``[::ffff:127.0.0.1]`` beside it were refused: the low 32 bits of a
+# well-known-prefix address ARE an IPv4 address (RFC 6052 §2.2), so that is the node's own
+# loopback under a third spelling and the list named two of the three.
+#
+# The prefix ITSELF is not refused — it is globally reachable, and an address in it with a
+# global IPv4 address inside is how a v6-only client reaches the v4 internet. What is
+# refused is exactly its embedding of each range the v4 half already refuses, which is a
+# fixed arithmetic rather than a judgement: prefix, then the range's own bits, then the
+# range's own width 96 bits further in.
+_NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+
+
+def _as_nat64_spells_it(destination: str) -> str:
+    """One IPv4 range, written the way the well-known NAT64 prefix carries it.
+
+    DERIVED, so the two spellings of the list cannot drift: a range added to the v4 half
+    gets its NAT64 spelling by being added, and one removed loses it the same way. Typing
+    the thirteen out is how the round after this one finds the fourteenth missing.
+
+    Pure arithmetic on the standard library's own types, like everything else in this
+    module: no clock, no I/O, and the same answer on every host.
+    """
+    network = ipaddress.ip_network(destination)
+    return str(
+        ipaddress.IPv6Network(
+            (
+                int(_NAT64_WELL_KNOWN.network_address) | int(network.network_address),
+                _NAT64_WELL_KNOWN.prefixlen + network.prefixlen,
+            )
+        )
+    )
+
+
+# The one list both data planes read. The literal half first — which is also what keeps
+# ``NOT_THE_INTERNET_IPV4`` below a PREFIX of this tuple, the property the wg family's
+# chain order is asserted on — and the derived spellings after it.
+NOT_THE_INTERNET = (
+    *_NOT_GLOBALLY_REACHABLE,
+    *(
+        _as_nat64_spells_it(destination)
+        for destination in _NOT_GLOBALLY_REACHABLE
+        if ipaddress.ip_network(destination).version == 4
+    ),
 )
 
 # What ``iptables`` can express of the list above — read off it, never typed again.
@@ -376,6 +462,28 @@ def _friend_rules(
     drops would otherwise take away — see ``_resolver_exceptions``. They are written LAST
     so they land at the head of the chain, in front of the drops they are exceptions to;
     everything about the order here reads backwards, and the comment above says why.
+
+    WHAT THESE RULES STILL DO NOT REACH, recorded rather than half-closed — M23's
+    thirteenth round, and it is the FORWARD chain's own boundary. Every rule here is about
+    a packet this node forwards; a friend opening a connection to the node's OWN address on
+    this interface is INPUT, and nothing in this chain is on that path. On the owner's real
+    leaf that reaches the host's sshd, which writes ``Connection closed by <the friend's
+    tunnel address>`` into ``auth.log`` — the one record the charter says must not exist,
+    written by a daemon this project did not render and does not configure. Nothing hashi
+    renders logs anything: there is no ``-j LOG`` here or anywhere, ufw's own logging is
+    turned off before the firewall can come up, ``nf_conntrack_acct`` is read and answered
+    for, and Xray's access log is ``none``. This is the one address that lands in a log
+    anyway, and it lands in somebody else's.
+
+    IT IS NOT CLOSED HERE BECAUSE THE RULE THAT CLOSES IT IS NOT THIS SHAPE. It would be an
+    INPUT rule naming the node's own tunnel address and the port sshd answers on — a port
+    this module may not name (``CLAUDE.md``) and a fact it is not given, since the node's
+    SSH port is operator data on a record `control` holds. And it must NOT be mirrored onto
+    the entry's end of a hop, where the leaf's replies arrive addressed to the tunnel: a
+    rule written once and rendered by both ends would take the hop down. That is a decision
+    about two roles and a value neither of them currently carries, which is a milestone and
+    not a line — the same judgement round nine made about the mirror above, and the same
+    shape M22 was proposed in.
     """
     return (
         *_forward(

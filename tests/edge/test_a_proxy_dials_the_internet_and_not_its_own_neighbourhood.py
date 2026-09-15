@@ -109,12 +109,24 @@ SOMEWHERE_ON_THE_INTERNET = "192.88.99.10"
 # and ``[fc00::2]`` were refused. A refusal that also took IPv6 to the internet away would
 # not be a fix.
 NAT64_PREFIX = "64:ff9b::"
-SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY = str(
-    ipaddress.IPv6Address(
-        int(ipaddress.IPv6Address(NAT64_PREFIX))
-        | int(ipaddress.IPv4Address(SOMEWHERE_ON_THE_INTERNET))
+
+
+def through_nat64(address: str) -> str:
+    """One IPv4 address, spelled the way the well-known NAT64 prefix carries it.
+
+    RFC 6052 §2.2: the four bytes go in the low 32 bits of the /96. A function rather than
+    two inline expressions because the thirteenth round needed the same arithmetic for the
+    LOOPBACK, and the whole point of these two constants is that they differ in nothing
+    but what they carry.
+    """
+    return str(
+        ipaddress.IPv6Address(
+            int(ipaddress.IPv6Address(NAT64_PREFIX)) | int(ipaddress.IPv4Address(address))
+        )
     )
-)
+
+
+SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY = through_nat64(SOMEWHERE_ON_THE_INTERNET)
 
 # The two addresses the twelfth walk actually reached through the product's own config,
 # named rather than left inside the parametrised class above — the same way the fifth
@@ -144,6 +156,19 @@ def an_address_in(destination: str) -> str:
 # over rather than left out. Computed for the same reason as the pair above.
 LOOPBACK_SPELLED_AS_IPV6 = f"::ffff:{an_address_in('127.0.0.0/8')}"
 THE_INTERNET_SPELLED_AS_IPV6 = f"::ffff:{SOMEWHERE_ON_THE_INTERNET}"
+
+# The THIRD spelling of the node's own loopback, and the one M23's thirteenth round found
+# still reaching it. ``64:ff9b::7f00:1`` is ``127.0.0.1`` in the low 32 bits of the
+# well-known NAT64 prefix, and unlike the mapped spelling above the daemon does NOT fold
+# it — measured on the live proxy: ``[::ffff:192.88.99.9]`` reached the host at
+# ``192.88.99.9`` while ``[64:ff9b::c058:6309]`` timed out, so a NAT64 address is dialled
+# as literal IPv6 and only a translator on the path turns it back. That is why it has to
+# be in the list rather than covered by the v4 half the way ``::ffff:`` is.
+#
+# Computed from the SAME helper as the internet's own NAT64 spelling, so the pair differ
+# in nothing but the address they carry — which is exactly what the two assertions below
+# are about.
+THE_LOOPBACK_THROUGH_NAT64 = through_nat64(an_address_in("127.0.0.0/8"))
 
 
 # Xray's outbound that opens nothing. Named once so the assertions below read as "the
@@ -298,6 +323,14 @@ def test_the_destinations_this_file_uses_are_what_it_says_they_are() -> None:
     internet = ipaddress.ip_address(SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY)
     assert internet.version == 6 and internet.is_global, internet
     assert not ipaddress.ip_address(THE_NODES_OWN_LOOPBACK).is_global
+
+    # And the thirteenth round's own address, where the standard library is no help at
+    # all: it says this is globally reachable, exactly as it says of the address above,
+    # because the prefix IS. What tells them apart is the four bytes inside — so that is
+    # what is asserted, and it is the same fact the rules are built on.
+    loopback_over_nat64 = ipaddress.ip_address(THE_LOOPBACK_THROUGH_NAT64)
+    assert loopback_over_nat64.version == 6 and loopback_over_nat64.is_global
+    assert ipaddress.IPv4Address(int(loopback_over_nat64) & 0xFFFFFFFF).is_loopback
     assert not ipaddress.ip_address(THE_PRIVATE_NEIGHBOURHOOD).is_global
 
     # The mapped pair are one address each, said in the other family — which is the whole
@@ -638,6 +671,48 @@ def test_an_ipv4_destination_spelled_as_ipv6_gets_the_ipv4_answer(
     Both directions, because the cost of the folding is the other half of it: a global
     IPv4 address written as a mapped one must still be carried, or a client that prefers
     the v6 form of a dual-stack answer would lose the web.
+    """
+    landed = where_a_friend_lands(
+        SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination
+    )
+
+    assert (landed["protocol"] != REACHES_NOTHING) is carried, landed
+
+
+# --- M23, round 13: the third spelling of the same address ----------------------------
+
+@pytest.mark.parametrize(
+    ("destination", "carried"),
+    [
+        pytest.param(THE_LOOPBACK_THROUGH_NAT64, False, id="the loopback, through NAT64"),
+        pytest.param(
+            SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY, True, id="the internet, through NAT64"
+        ),
+    ],
+)
+@pytest.mark.parametrize("seat", SEATS)
+@pytest.mark.parametrize("name", PROXIES)
+def test_the_nat64_spelling_of_an_address_gets_that_addresss_answer(
+    name: str, seat: str, destination: str, carried: bool, node, request
+) -> None:
+    """The thirteenth walk's own measurement, and the two halves are one decision.
+
+    ``http://[64:ff9b::7f00:1]:8008/`` was REACHED through the product's own rendered
+    config in the round before this one, in the same run that refused ``127.0.0.1`` and
+    ``[::ffff:127.0.0.1]``: the twelfth round added the registry's own v6 ranges, which
+    carry the LOCAL-USE NAT64 prefix ``64:ff9b:1::/48`` and not the WELL-KNOWN one — and
+    the well-known one is the half that embeds an IPv4 address.
+
+    BOTH DIRECTIONS IN ONE TEST, because a fix that refused the prefix would satisfy the
+    first and break the second, and the second is the reason the prefix exists: an address
+    in it with a GLOBAL IPv4 address inside is how a v6-only client reaches the v4
+    internet. What ``edge.egress`` refuses is the prefix's embedding of each range the v4
+    half already refuses, derived from it — so these two addresses differ in nothing but
+    the four bytes they carry, and get opposite answers for that reason alone.
+
+    Measured afterwards on the live proxy with the new list in place:
+    ``[64:ff9b::7f00:1]`` refused, ``[64:ff9b::c058:6301]`` reached, and every verdict the
+    twelfth round measured unchanged.
     """
     landed = where_a_friend_lands(
         SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination

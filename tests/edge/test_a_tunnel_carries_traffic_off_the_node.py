@@ -435,15 +435,55 @@ IANAS_REGISTRY = {
 }
 SPELLED_IN_THE_OTHER_FAMILY = ipaddress.IPv6Network("::ffff:0:0/96")
 
+# The well-known NAT64 prefix — M23's thirteenth round, and the reason the first
+# direction below is no longer one assertion. Stated here rather than imported from
+# ``edge.egress`` for the reason ``IANAS_REGISTRY`` reads the standard library rather
+# than the renderer: what this file is for is holding the constant against an answer it
+# worked out without it.
+#
+# RFC 6052 §2.2 puts the IPv4 address in the low 32 bits of a /96 well-known-prefix
+# address, which is the arithmetic ``decoded_from_nat64`` below undoes.
+NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
 
-def test_the_ranges_a_friend_cannot_reach_are_the_standard_librarys_own() -> None:
-    """The list is IANA's, and this is what says so — both directions, both families.
+# The other registry entry that is GLOBALLY REACHABLE, and the one range this list must
+# never grow. Named so the decision is under assertion instead of in a comment somebody
+# re-opens: see ``test_the_two_globally_reachable_registry_entries_are_a_decision``.
+THE_6TO4_RELAY_ANYCAST = ipaddress.IPv4Network("192.88.99.0/24")
+
+
+def decoded_from_nat64(network: ipaddress.IPv6Network) -> ipaddress.IPv4Network:
+    """The IPv4 range a well-known-prefix NAT64 range carries in its low 32 bits."""
+    return ipaddress.IPv4Network(
+        (
+            int(network.network_address) & 0xFFFFFFFF,
+            network.prefixlen - NAT64_WELL_KNOWN.prefixlen,
+        )
+    )
+
+
+def test_every_range_a_friend_cannot_reach_is_the_registrys_or_a_spelling_of_one() -> None:
+    """What the list tracks, in both directions and both families — and it is not one rule.
 
     ``CLAUDE.md`` forbids a hardcoded address because it names something a node could
     have to rotate away from. These name nothing of any node, and they are not ours to
     choose: what is on the public internet is a registry, and the standard library
     carries it. Holding the constant against ``ipaddress`` is what keeps that true — a
     range that drifts fails here rather than in a friend's tunnel.
+
+    TWO KINDS OF ENTRY SINCE M23's THIRTEENTH ROUND, which is the round that had to say
+    what the list actually tracks. It is NOT IANA's registry as such: two entries of that
+    registry are marked globally reachable, and a friend dialling either reaches the
+    public internet. So the ordinary entry is held to ``not is_global`` exactly as before,
+    and the second kind — a range inside the well-known NAT64 prefix — is held to
+    something else entirely, because it IS globally reachable and is refused anyway: its
+    low 32 bits are an IPv4 address this list already refuses, and a NAT64 translator on
+    the path puts the packet there. Measured, not argued: ``[64:ff9b::7f00:1]`` was
+    reached through the product's own rendered config in the round before this one, in
+    the same run that refused ``127.0.0.1`` and ``[::ffff:127.0.0.1]``.
+
+    Each is checked against its OWN claim rather than one loosened claim covering both,
+    so an ordinary range that becomes globally reachable still fails here, and a NAT64
+    range that stopped decoding into the v4 half fails too.
 
     BOTH FAMILIES SINCE M23's TWELFTH ROUND, which is the round that found the list was
     only ever half of what it claimed to be: ``[::1]`` and ``[fc00::2]`` answered a
@@ -459,10 +499,20 @@ def test_the_ranges_a_friend_cannot_reach_are_the_standard_librarys_own() -> Non
     depend on an underscore.
     """
     ours = [ipaddress.ip_network(network) for network in NOT_THE_INTERNET]
+    refusing_v4 = [network for network in ours if network.version == 4]
 
     # Nothing we drop is on the internet — so no friend loses a destination they could
-    # legitimately have reached.
+    # legitimately have reached. Unless it is one address wearing another's hat, which is
+    # the one licence this list has and is spent entirely inside the NAT64 prefix.
     for network in ours:
+        if network.version == 6 and network.subnet_of(NAT64_WELL_KNOWN):
+            carried = decoded_from_nat64(network)
+            assert any(carried.subnet_of(covering) for covering in refusing_v4), (
+                f"{network} is globally reachable and is dropped, and what it carries "
+                f"({carried}) is not something this list refuses — so it is not a second "
+                "spelling of anything and a friend loses a destination for nothing"
+            )
+            continue
         assert not network.is_global, f"{network} is on the internet and is dropped"
 
     # And nothing off the internet escapes, in either family.
@@ -488,6 +538,80 @@ def test_the_ranges_a_friend_cannot_reach_are_the_standard_librarys_own() -> Non
                 network for network in ours if network.version == exception.version
             ]
             assert any(exception.subnet_of(covering) for covering in covering_us), exception
+
+
+def test_every_range_the_v4_half_refuses_is_refused_in_its_nat64_spelling_too() -> None:
+    """The derivation, held — so the fourteenth range cannot arrive without its spelling.
+
+    M23's thirteenth round found ``[64:ff9b::7f00:1]`` reaching a node's own loopback
+    through the product's own rendered config: ``64:ff9b::/96`` carries an IPv4 address in
+    its low 32 bits, and every range this list held in that family was written out by
+    hand, so the one that mattered was simply not among them. Typing the thirteen would
+    have closed that finding and left the class open — the next range added to the v4 half
+    would arrive with no spelling in the other.
+
+    So the spelling is derived in ``edge/egress.py`` and this is what says it stayed
+    derived. A second hand-maintained tuple passes every other assertion in this file.
+
+    The v4 half ONLY. The v6 ranges have no NAT64 spelling: the prefix embeds four bytes,
+    which is what makes the arithmetic total for one family and undefined for the other.
+    """
+    ours = [ipaddress.ip_network(network) for network in NOT_THE_INTERNET]
+    spelled = {
+        decoded_from_nat64(network)
+        for network in ours
+        if network.version == 6 and network.subnet_of(NAT64_WELL_KNOWN)
+    }
+
+    assert spelled == {ipaddress.ip_network(network) for network in NOT_THE_INTERNET_IPV4}, (
+        "the two spellings of this list have drifted: a destination a friend cannot reach "
+        "in one family is reachable in the other, which is the whole of the finding"
+    )
+
+
+def test_the_two_globally_reachable_registry_entries_are_a_decision() -> None:
+    """Why the list is not simply IANA's registry, pinned so the next walk reads it.
+
+    Two entries of that registry are marked GLOBALLY REACHABLE, and a walk that reads the
+    registry and not this test files both as gaps. They are not gaps, and they are not the
+    same case as each other:
+
+    * ``192.88.99.0/24``, the deprecated 6to4 relay anycast block. A packet addressed
+      there arrives at a relay router on the public internet and nothing in the address
+      says where it goes next — so it IS the internet, and it is the address this
+      project's own stands use for that word (``tests/edge`` above, and
+      ``tests/e2e/edge/test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py``, which
+      round eleven had to fix because it was passing through the very bypass it was
+      closing). Adding it would refuse the one destination those scenarios exist to prove
+      a friend still reaches.
+    * ``64:ff9b::/96``, the well-known NAT64 prefix. Globally reachable too, and an
+      address in it with a GLOBAL IPv4 address inside is how a v6-only client reaches the
+      v4 internet — so the prefix itself stays reachable, and only its embeddings of what
+      this list already refuses are refused. That split is the thirteenth round's whole
+      answer, and this holds both halves of it.
+
+    So the membership test this list actually applies is "not globally reachable, or a
+    spelling of something that is not" — and these two are what make that sentence
+    necessary rather than a restatement of the registry.
+    """
+    ours = [ipaddress.ip_network(network) for network in NOT_THE_INTERNET]
+
+    assert THE_6TO4_RELAY_ANYCAST.is_global and NAT64_WELL_KNOWN.is_global, (
+        "the two ranges this test is about are no longer globally reachable, so the "
+        "decision it pins has changed and the reasoning above has to be rewritten"
+    )
+    # By family, because ``subnet_of`` across two is a ``TypeError`` rather than a False —
+    # the same trap round twelve fell into with a flat loop.
+    for reachable in (THE_6TO4_RELAY_ANYCAST, NAT64_WELL_KNOWN):
+        for network in ours:
+            if network.version != reachable.version:
+                continue
+            assert not reachable.subnet_of(network), (
+                f"{network} refuses the whole of {reachable}, which is on the public "
+                "internet: the first is what this project's stands mean by the word, and "
+                "the second is every v6-only client's route to the v4 internet. Only the "
+                "NAT64 prefix's embeddings of the v4 half belong in this list"
+            )
 
 
 def test_the_one_list_carries_both_families_and_each_renderer_takes_its_own() -> None:
