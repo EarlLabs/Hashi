@@ -51,6 +51,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_PORT = 22
 
+# The width of ``Node.state_detail``, stated at the layer that refuses a value the column
+# could not hold — the same pairing ``friends.NICKNAME_MAX_LENGTH`` is half of, and the
+# model is the other half of this one.
+#
+# M23, round 12. The console's own box was given ``maxlength="500"`` in round 8, which
+# stopped the console being the surface that produced the failure and left the failure
+# there: a 1000-character reason submitted to ``POST /panel/nodes/{id}/state`` reached
+# Postgres, which raised ``value too long for type character varying(500)``, and the
+# operator got ``{"error":{"code":"internal_error"}}`` with no sentence at all. The JSON
+# API was never in it — ``schemas.NodeStateChange.detail`` declares the bound and answers
+# 422 — so what was missing was a declaration on the path a FORM takes.
+#
+# Refused rather than trimmed, which is this console's own rule twice over
+# (``panel/add_friend_dialog.html``, ``panel/routes.VALUE_TOO_LONG``): a note silently
+# clipped to 500 characters is a record written under something other than what the
+# operator typed, and this is the note that outlives the host it describes.
+STATE_DETAIL_MAX_LENGTH = 500
+STATE_DETAIL_TOO_LONG = (
+    f"the reason for this state must be {STATE_DETAIL_MAX_LENGTH} characters or fewer. "
+    "Nothing was changed, and it is not repeated here."
+)
+
 # What an operator is told when the text in the SSH key box is not a key this control
 # plane can load. One sentence, used by the form that accepts a key and by the push path
 # that finds an unusable one already stored, so the two cannot describe it differently.
@@ -1063,6 +1085,15 @@ async def set_node_state(
     says what that is worth; it is the difference between this function moving a node and
     this function saying it did.
     """
+    # BEFORE the row is read, because nothing about this value needs the node and a
+    # refusal that had already taken a write lock's worth of work is a refusal that ran
+    # for nothing. Both surfaces come through here, so a reason that cannot be stored is
+    # answered with a sentence on either instead of arriving at the database and coming
+    # back as an opaque 500 — ``STATE_DETAIL_MAX_LENGTH`` is the column's own width, and
+    # the two must not drift.
+    if detail is not None and len(detail) > STATE_DETAIL_MAX_LENGTH:
+        raise DomainError(STATE_DETAIL_TOO_LONG)
+
     node = await _node_to_write(session, node_id, "state", "state_detail")
 
     # A no-op is allowed and does nothing, so a retry after a failed apply is safe.

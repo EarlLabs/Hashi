@@ -218,6 +218,10 @@ async def test_a_revocation_does_not_bring_a_retired_node_back(
     will not change it — which is the truth, and the more urgent half of it is that a host
     the record says is gone may still be running the file that authorises the person just
     revoked.
+
+    ITS OWN KIND SINCE ROUND 12, and not ``REFUSED``. That kind's sentence ends "apply it
+    from the Nodes screen to read why", which is the one button this node refuses — see
+    the test below, which presses it.
     """
     node_id, _ = await a_node_with_something_to_serve(client, reality_params, name="gone")
     applied = await client.post(f"/api/nodes/{node_id}/apply")
@@ -230,7 +234,7 @@ async def test_a_revocation_does_not_bring_a_retired_node_back(
     )
 
     assert not outcome.complete, "the fan-out reported a retired node as updated"
-    assert outcome.why_failed[node_id] is apply.NotUpdated.REFUSED, (
+    assert outcome.why_failed[node_id] is apply.NotUpdated.CANNOT_SERVE, (
         "the operator is sent to retry a push that will be refused for ever"
     )
     session.expire_all()
@@ -318,3 +322,42 @@ def test_the_refusal_sends_a_script_nowhere_and_an_operator_somewhere() -> None:
     # What does NOT move between the two: the substance is one fact for both readers.
     for held in ("Nothing was pushed, nobody was granted anything",):
         assert held in written and held in on_the_console, on_the_console
+
+
+async def test_the_revocation_banner_names_no_button_this_node_refuses(
+    client, session, reality_params, accepting_nodes, a_user_who_is_still_here: str
+) -> None:
+    """M23, round 12: the walk that followed the banner's own instruction and hit a wall.
+
+    Every fact the report gave was correct — the credential row was gone and the link
+    404'd — and its last clause said *"apply it from the Nodes screen to read why"*.
+    Apply answers *"this node is retired… the one move a retired node is refused"*. No
+    screen in this panel completes it, so the operator is left pressing a button that
+    tells them it will never work.
+
+    Both halves in one test on purpose. Asserting the new sentence alone would hold the
+    words and not the claim; pressing the button afterwards is what says the sentence and
+    the product still agree, and it is the walk's own gesture.
+    """
+    node_id, _ = await a_node_with_something_to_serve(
+        client, reality_params, name="written-off-then-revoked"
+    )
+    applied = await client.post(f"/api/nodes/{node_id}/apply")
+    assert applied.status_code == 200, applied.text
+    await retire(client, node_id)
+
+    outcome = await revocation.revoke_friend(
+        session, friend_id=a_user_who_is_still_here
+    )
+    banner = outcome.summary()
+
+    assert not outcome.complete, "the fan-out reported a retired node as updated"
+    # It still says the uncomfortable half — the host may be serving the credential yet.
+    assert "still authorise this credential" in banner, banner
+    # And it does not send them to the screen, because the screen cannot finish it.
+    assert apply.WHERE_TO_RETRY not in banner, banner
+
+    # The gesture the walk made next, which is what the old sentence asked for.
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "node_cannot_serve", refused.text

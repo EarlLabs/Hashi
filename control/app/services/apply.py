@@ -305,6 +305,58 @@ CANNOT_SERVE_AGAIN = (
     f"nothing about this node was changed. {REGISTER_IT_AGAIN}"
 )
 
+# And what a PROBE is refused with on the same node — M23, round 12, which found the two
+# buttons disagreeing about one address.
+#
+# The refusal above turns apply away because the address "may now answer for somebody
+# else". The probe, sitting beside it on the same row, then opened an SSH session to that
+# exact address: measured, on a retired node, ``GET /api/nodes/{id}/health`` answered 200
+# having dialled it. A read is still a connection — it offers this control plane's key to
+# whoever is there and asks them what they are running — and the one address this product
+# refuses to push to was the one address it went on dialling.
+#
+# SO THE PROBE YIELDS AND THE APPLY DOES NOT, which is the way round that costs least.
+# Apply's refusal closes a hole nothing else closes: it is what stops a written-off host
+# reappearing in every friend's subscription with key material minted for the whole fleet.
+# The probe's answer, by contrast, is not lost — it is behind the step the operator has to
+# take anyway. If that host is genuinely theirs again they register it as a new node, and
+# they can probe THAT node freely; if it is not theirs, the probe was a connection to a
+# stranger.
+#
+# What it costs, named rather than discovered: the probe is this console's only oracle for
+# "is that host still running the file it was last given", and a retired node is exactly
+# where that question is most uncomfortable — a withdrawn friend may still be authorised
+# there. This says so instead of answering it, because the answer would not change what
+# the operator can do about it: nothing this control plane pushes reaches a node it will
+# not put into service.
+#
+# Asked through ``cannot_serve_again`` so the two doors cannot drift, and the same type is
+# raised for the same reason: what refuses is the machine, and the operator's next move
+# after either is the same one. The SENTENCE differs because the two buttons do.
+CANNOT_BE_DIALLED = (
+    "this node is {state}, and a node in that state is not dialled by this control "
+    "plane. That state is where an operator records that a host is gone, so its address "
+    "may now answer for somebody else — and a probe is a connection like any other: it "
+    "would offer this control plane's key to whoever is there and ask them what they are "
+    "running. Nothing was dialled. What its host is still running cannot be read from "
+    f"here, and nothing this control plane pushes reaches it either. {REGISTER_IT_AGAIN}"
+)
+
+
+def cannot_serve_again(state: NodeState) -> bool:
+    """Whether the machine refuses to put a node in this state back into service.
+
+    One predicate, two doors — the apply below and the probe in ``services/health.py`` —
+    because a safety rule with two copies is a safety rule with one copy and a bug. It
+    names no state: what may serve again is ``NodeState.allowed_from``'s to say, so
+    widening the machine widens both doors and neither has to be found and edited.
+
+    ``!=`` first, for the no-op ``set_node_state`` allows and for the same reason: a node
+    that is ALREADY active is re-applied constantly — that is what an ordinary push is —
+    and ``allowed_from`` lists no self-transition.
+    """
+    return state != NodeState.ACTIVE and NodeState.ACTIVE not in NodeState.allowed_from(state)
+
 # What a FAN-OUT is refused with on a node that is not serving — M23, round 4, and it is
 # the same defect class as the refusal above, one state over and one door over.
 #
@@ -839,7 +891,16 @@ async def _record_failure(
         await session.flush()
     try:
         await nodes.set_node_state(
-            session, node_id=node.id, state=NodeState.DEGRADED, detail=reason[:500]
+            session,
+            node_id=node.id,
+            state=NodeState.DEGRADED,
+            # TRIMMED HERE and refused everywhere else, which is not two rules. A reason
+            # an OPERATOR typed is theirs and is refused rather than clipped; this one is
+            # a machine's, often an upstream checker's output, and there is nobody to
+            # refuse it to — the alternative to trimming is a failed apply that also
+            # fails to record why it failed. The bound is the column's own, read from the
+            # one place that states it, so the two cannot drift into this call raising.
+            detail=reason[: nodes.STATE_DETAIL_MAX_LENGTH],
         )
     except Conflict:
         logger.error(
@@ -977,9 +1038,7 @@ async def apply_node(
     # The condition names no state. What may serve again is the machine's to say, so
     # widening ``allowed_from`` widens this with it and nothing here has to be found and
     # edited — which is what a second copy of a safety rule always needs and never gets.
-    if node.state != NodeState.ACTIVE and NodeState.ACTIVE not in NodeState.allowed_from(
-        node.state
-    ):
+    if cannot_serve_again(node.state):
         raise NodeCannotServe(CANNOT_SERVE_AGAIN.format(state=node.state))
 
     # AND THE DOOR'S OWN ANSWER, asked second and on the same fresh read. The machine's
@@ -1298,6 +1357,13 @@ class NotUpdated(enum.StrEnum):
     # what is needed is a decision they have not made yet about a host they parked.
     OUT_OF_SERVICE = "out-of-service"
 
+    # The node is one the state machine will not put back into service — M23, round 12.
+    # Its own kind because REFUSED, which it used to be, ends by sending the operator to
+    # press apply and read why, and apply is precisely the button this node refuses: the
+    # banner named a remedy the product does not have. Nothing was pushed, no apply will
+    # push, and what is left is a decision about the HOST rather than about this record.
+    CANNOT_SERVE = "cannot-serve"
+
     # Everything else: the host could not be reached, the push or its verification failed,
     # or something unexpected happened. The one kind a retry can fix.
     UNREACHED = "unreached"
@@ -1325,14 +1391,17 @@ def why_not_updated(exc: BaseException) -> NotUpdated:
     # for the same reason for ever. Nothing was pushed and retrying changes nothing,
     # which is precisely what REFUSED means.
     #
-    # ``NodeCannotServe`` is the third for that same reason, and its case is real in the
-    # same way: a retired node keeps the credentials minted on it, so revoking somebody
-    # who holds one fans out to a node this control plane will not push to again. What
-    # the operator must not be told there is "apply it again once it can be reached" —
-    # no retry reaches it, and the honest reading is that a host the record says is gone
-    # may still be running the file that carries the withdrawn credential. REFUSED sends
-    # them to press apply and read why, which is where that sentence is.
-    if isinstance(exc, ConfigRefused | NothingToApply | NodeCannotServe):
+    # ``NodeCannotServe`` HAS ITS OWN KIND SINCE ROUND 12, and it used to be one of the
+    # three above. The reasoning that put it there was right about everything except where
+    # it sent the operator: a retired node does keep the credentials minted on it, so
+    # revoking somebody who holds one does fan out to a node this control plane will not
+    # push to again — but REFUSED's sentence ends "apply it from the Nodes screen to read
+    # why", and apply on that node answers "this node is retired… the one move a retired
+    # node is refused". The banner named a remedy the product refuses. Measured in round
+    # 12's walk; the data was correct throughout, and only the sentence was wrong.
+    if isinstance(exc, NodeCannotServe):
+        return NotUpdated.CANNOT_SERVE
+    if isinstance(exc, ConfigRefused | NothingToApply):
         return NotUpdated.REFUSED
     # Its own kind rather than REFUSED, and the difference is the whole of the operator's
     # next move — M23, round 4. REFUSED says "retrying will not change that", which is

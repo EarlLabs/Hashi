@@ -30,6 +30,15 @@ logger = logging.getLogger(__name__)
 # nothing a node itself said may join them. Acceptance judges this wording, and
 # tests/control/test_a_revocation_says_why_a_node_kept_the_credential.py holds it
 # literally.
+#
+# EVERY SENTENCE HERE HAS TO END SOMEWHERE THE OPERATOR CAN ACTUALLY GO — M23, round 12,
+# which is the round that found one that did not. A node the state machine will not put
+# back into service was reported as ``REFUSED``, whose sentence ends "apply it from the
+# Nodes screen to read why"; apply on that node answers that applying is the one move it
+# is refused. Every fact in the report was correct and the last clause sent the operator
+# to a button that cannot complete it. So ``CANNOT_SERVE`` is its own kind below, and its
+# sentence ends where the answer actually is — which, for a host the record says is gone,
+# is not on this panel at all.
 _WHY_NOT_UPDATED: dict[NotUpdated, str] = {
     NotUpdated.NO_RESOLVER: (
         "{node} has no resolver on its record, so its configuration cannot be rendered "
@@ -51,6 +60,15 @@ _WHY_NOT_UPDATED: dict[NotUpdated, str] = {
         "makes. It is serving nobody by this control plane's records, but whatever its "
         "host was last given is still running there and may still authorise this "
         "credential: apply it from {where} once its host is ready, and that is what ends it"
+    ),
+    NotUpdated.CANNOT_SERVE: (
+        "{node} is in the state an operator records a host as GONE in, so nothing was "
+        "pushed to it and no apply will push to it again — putting a node in that state "
+        "back into service is the one move it is refused, and no screen in this panel "
+        "finishes this. Whatever its host was last given is still running there and may "
+        "still authorise this credential; nothing this control plane pushes reaches it. "
+        "If that host is genuinely back, register it again as a new node and apply that "
+        "one — otherwise it is the host being gone that ends this"
     ),
     NotUpdated.UNREACHED: (
         "{node} could not be reached — apply it again from {where} once it can be"

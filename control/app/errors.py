@@ -172,7 +172,7 @@ class NothingToApply(Conflict):
 
 
 class NodeCannotServe(Conflict):
-    """An apply was asked for on a node the state machine will not let serve again.
+    """A node the state machine will not let serve again was asked to do something.
 
     ``NothingToApply``'s sibling on the same endpoint, and the one refusal here that is
     about the node's STATE rather than about what it runs. An apply is what puts a node
@@ -194,8 +194,17 @@ class NodeCannotServe(Conflict):
     Its own code so a script can tell this from the node having nothing enabled: the two
     are both 409s on one endpoint and the operator's next move differs completely.
     Deliberately NOT named for ``retired``, because what refuses is the machine rather
-    than a literal state — see ``apply.apply_node``, which asks it rather than restating
-    it.
+    than a literal state — see ``apply.cannot_serve_again``, which asks it rather than
+    restating it.
+
+    SINCE M23's ROUND 12 IT IS ALSO THE PROBE'S REFUSAL, and one type for the two is the
+    decision rather than an economy. The walk found the buttons disagreeing about one
+    address: apply turned away because the address "may now answer for somebody else",
+    and the probe beside it on the same row opened an SSH session to it. Both doors now
+    ask one predicate and raise this — the machine's answer is one answer — while the
+    MESSAGE differs, because what each button would have done differs. The second is
+    ``apply.CANNOT_BE_DIALLED``, which is where the cost of the probe yielding rather
+    than the apply is written down.
     """
 
     code = "node_cannot_serve"

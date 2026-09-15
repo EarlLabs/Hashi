@@ -18,6 +18,9 @@ NOT serving, and a node that serves has no such reason. Clearing it there is als
 keeps a stale push failure from being read under a healthy row.
 """
 
+import pytest
+
+from control.app.errors import DomainError
 from control.app.models import NodeState
 from control.app.services import nodes
 
@@ -125,3 +128,98 @@ async def test_the_dialog_no_longer_promises_the_reason_is_dropped(client) -> No
     assert dialog.status_code == 200, dialog.text
     assert "Ignored for every other state" not in dialog.text, dialog.text
     assert "kept on every state" in dialog.text, dialog.text
+
+
+# --- M23, round 12: and a reason too long to keep is REFUSED, not dropped -------------
+
+async def test_a_reason_the_column_cannot_hold_is_refused_with_a_sentence(client) -> None:
+    """The finding: it was answered by Postgres, which has nothing to say to an operator.
+
+    Round 8 bounded the console's own box with ``maxlength="500"``, which stopped the
+    console producing the failure and left the failure where it was. Measured: a
+    1000-character reason posted to this path reached the column and came back as
+    ``{"error":{"code":"internal_error"}}`` — a 500, with no sentence in it, on the form
+    an operator uses to record why a host is gone.
+
+    Refused rather than trimmed, which is this console's rule twice over: a note silently
+    clipped is a record written under something other than what the operator typed, and
+    on ``retired`` that note is never rewritten again.
+    """
+    node_id = await a_node(client, name="long-reason")
+    too_long = "x" * (nodes.STATE_DETAIL_MAX_LENGTH + 1)
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/state",
+        data={"state": "retired", "detail": too_long},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422, refused.status_code
+    # Under the box it is about, and not under the state control, which is where every
+    # other refusal on this route lands.
+    assert 'id="node-detail-error"' in refused.text, refused.text
+    assert nodes.STATE_DETAIL_TOO_LONG in refused.text, refused.text
+    # And nothing was written: the node is where the operator left it.
+    shown = await client.get(f"/api/nodes/{node_id}")
+    assert shown.json()["state"] == "draft", shown.text
+    assert shown.json()["state_detail"] is None, shown.text
+
+
+async def test_a_reason_exactly_at_the_limit_is_still_taken(client) -> None:
+    """The boundary, because a bound written one character out is a bound that refuses a
+    value the column would have held — and the operator would never learn which."""
+    node_id = await a_node(client, name="exact-reason")
+    exactly = "y" * nodes.STATE_DETAIL_MAX_LENGTH
+
+    retired = await move(client, node_id, "retired", exactly)
+
+    assert retired.status_code == 200, retired.text
+    assert retired.json()["state_detail"] == exactly
+
+
+async def test_the_box_states_its_limit_and_does_not_silently_clip(client) -> None:
+    """Both halves, and neither is enough alone.
+
+    The hint means the operator rarely meets the refusal; the absent ``maxlength`` means
+    they are never handed a record saying something other than what they typed. This
+    console has decided that twice already — for a user's nickname and for a transport's
+    parameters — and this box was the exception.
+    """
+    node_id = await a_node(client, name="limit-shown")
+
+    dialog = await client.get(
+        f"/panel/nodes/{node_id}/state", headers={"HX-Request": "true"}
+    )
+
+    assert dialog.status_code == 200, dialog.text
+    assert "maxlength" not in dialog.text, dialog.text
+    assert f"up to {nodes.STATE_DETAIL_MAX_LENGTH}" in dialog.text, dialog.text
+
+
+async def test_the_bound_is_the_services_and_not_the_forms(client, session) -> None:
+    """Where the refusal actually lives, asked without a form in front of it.
+
+    The panel checks the same length before it calls, and that check exists only to put
+    the sentence under the right BOX — so a test that went through the panel alone would
+    hold the placement and not the rule. The layer that refuses is this one: it answers
+    every caller, including one added later that has no form at all, and it is what stops
+    a value the column cannot hold reaching Postgres.
+
+    Refused and not trimmed, which is the assertion this makes twice over: a raise, and a
+    row still carrying nothing afterwards.
+    """
+    node_id = await a_node(client, name="service-bound")
+
+    with pytest.raises(DomainError) as refused:
+        await nodes.set_node_state(
+            session,
+            node_id=node_id,
+            state=NodeState.RETIRED,
+            detail="z" * (nodes.STATE_DETAIL_MAX_LENGTH + 1),
+        )
+
+    assert refused.value.message == nodes.STATE_DETAIL_TOO_LONG
+    session.expire_all()
+    node = await nodes.get_node(session, node_id)
+    assert node.state == NodeState.DRAFT, node.state
+    assert node.state_detail is None, node.state_detail

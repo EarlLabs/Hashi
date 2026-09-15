@@ -24,6 +24,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
+from control.app.errors import NodeCannotServe
 from control.app.services import apply, nodes
 from edge.bootstrap import NodeConnection, NodeUnreachable
 from edge.health import probe
@@ -37,8 +38,21 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
     A node that cannot be reached is reported as unreachable rather than raising: the
     panel must be able to show a dead node's row, and an exception here would make one
     unreachable host break the whole nodes page.
+
+    A node the state machine will not put back into service is REFUSED rather than dialled
+    — M23, round 12, and the reasoning is at ``apply.CANNOT_BE_DIALLED``. It raises rather
+    than answering ``reachable=False``, which would have been the smaller change and a
+    lie: that field means this control plane tried and could not, and every list beside it
+    is composed on the same promise. Nothing was tried here.
     """
     node = await nodes.get_node(session, node_id)
+
+    # BEFORE anything is rendered, decrypted or dialled — the same place the apply door
+    # asks it, through the same predicate, so the two buttons on one row cannot come to
+    # different answers about one address.
+    if apply.cannot_serve_again(node.state):
+        raise NodeCannotServe(apply.CANNOT_BE_DIALLED.format(state=node.state))
+
     expected = await apply.render_for_node(session, node)
     # Which transport each placed config came from — the probe needs it to know which
     # EXTENSION the file on the node carries, and since M15 a config's name and its

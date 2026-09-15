@@ -1009,6 +1009,10 @@ async def _state_form(
         "choices": await console.state_choices(session, node),
         "values": values or {},
         "errors": errors or {},
+        # Passed in rather than written into the markup, for the reason M9 gives about a
+        # port: a number a template carries is a number nobody finds when it changes. The
+        # hint says it because the box no longer clips silently — see the dialog.
+        "detail_limit": nodes.STATE_DETAIL_MAX_LENGTH,
     }
 
 
@@ -1045,6 +1049,22 @@ async def set_node_state(
         # this one came from a form, and the states themselves are on screen already.
         return await _refuse_state(
             request, session, node_id, values=typed, errors={"state": NO_SUCH_STATE}
+        )
+
+    # The one refusal on this route that is about the OTHER control, which is the whole
+    # reason it is asked here — M23, round 12. The service refuses this too, for every
+    # caller and in the same words; what the panel adds is nothing but WHICH BOX the
+    # sentence lands under, because ``_refuse_state`` puts a service refusal under
+    # ``state`` and this one is not about the state at all. The limit and the sentence
+    # are both read from ``services/nodes.py``: repeating either here is how a box comes
+    # to disagree with the layer that actually enforces it (``_refused_field``).
+    if len(detail) > nodes.STATE_DETAIL_MAX_LENGTH:
+        return await _refuse_state(
+            request,
+            session,
+            node_id,
+            values=typed,
+            errors={"detail": nodes.STATE_DETAIL_TOO_LONG},
         )
 
     try:
@@ -2115,10 +2135,32 @@ async def probe_node(
     is an answer to the operator, not a fault, so it is shown here the way a failed
     apply is. Without this arm it was a 500, and a 500 on this button is the one outcome
     the screen has no way to explain.
+
+    AND SINCE M23's ROUND 12 THIS BUTTON REFUSES A NODE OUTRIGHT, which it never did
+    before: one whose record says its host is gone is not dialled at all. The walk found
+    this button and the one beside it disagreeing about a single address — apply turned it
+    away because it "may now answer for somebody else", and probe opened an SSH session to
+    it. ``services/health.py`` holds the guard and ``apply.CANNOT_BE_DIALLED`` holds the
+    reasoning, including what refusing costs; what belongs here is the word above the
+    banner, which is `refused` and not `failed`.
     """
     node = await nodes.get_node(session, node_id)
     try:
         result = await health.check_node(session, node_id=node_id)
+    except NodeCannotServe as exc:
+        # A REFUSAL, and the word above the banner says so — M23, round 12, and the same
+        # argument the apply button's own arm carries. `failed` on this button reads as
+        # "that node is broken"; this node is in a state the operator set deliberately,
+        # nothing was dialled, and nothing about it has moved. Caught ahead of its base
+        # class rather than branched inside the handler below, for the reason that arm
+        # gives: the two differ in what happened to the NODE and not only in the word.
+        return _mutation(
+            request,
+            banner=exc.message,
+            banner_label="refused",
+            keeping=node.name,
+            events="nodes-changed",
+        )
     except DomainError as exc:
         return _mutation(
             request, banner=exc.message, keeping=node.name, events="nodes-changed"

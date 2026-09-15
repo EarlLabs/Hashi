@@ -288,6 +288,7 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
             "n2": f"refused: {planted}",
             "n3": f"ssh: {planted}",
             "n4": f"stale: {planted}",
+            "n5": f"cannot serve: {planted}",
         },
         why_failed={
             "n1": NotUpdated.NO_RESOLVER,
@@ -295,12 +296,21 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
             "n3": NotUpdated.UNREACHED,
             # M23's fourth kind: the push landed and the daemon did not come back on it.
             "n4": NotUpdated.NOT_SERVING,
+            # And round 12's: a node the machine will not put back into service. It was
+            # REFUSED until then, whose clause ends at a button this node turns away.
+            "n5": NotUpdated.CANNOT_SERVE,
         },
-        names={"n1": "entry-ru", "n2": "refused-1", "n3": "quiet-1", "n4": "stale-1"},
+        names={
+            "n1": "entry-ru",
+            "n2": "refused-1",
+            "n3": "quiet-1",
+            "n4": "stale-1",
+            "n5": "written-off-1",
+        },
     )
 
     assert outcome.summary() == (
-        "access withdrawn in the database and on 1 node(s), but 4 node(s) could NOT be "
+        "access withdrawn in the database and on 1 node(s), but 5 node(s) could NOT be "
         "updated and the credential is still live on each until it is: "
         "'entry-ru' has no resolver on its record, so its configuration cannot be "
         "rendered and retrying will not change that — set its resolver on the Nodes "
@@ -313,7 +323,14 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
         "'stale-1' was reached and its configuration WAS replaced on it, but it did not "
         "come back running that configuration — so the process on it may still be "
         "serving the file that carries this credential. Retrying will not change that "
-        "on its own: apply it from the Nodes screen and read what did not come up."
+        "on its own: apply it from the Nodes screen and read what did not come up; "
+        "'written-off-1' is in the state an operator records a host as GONE in, so "
+        "nothing was pushed to it and no apply will push to it again — putting a node in "
+        "that state back into service is the one move it is refused, and no screen in "
+        "this panel finishes this. Whatever its host was last given is still running "
+        "there and may still authorise this credential; nothing this control plane "
+        "pushes reaches it. If that host is genuinely back, register it again as a new "
+        "node and apply that one — otherwise it is the host being gone that ends this."
     )
     assert revocation.RevocationOutcome(friend_id="f", nodes_updated=["a", "b"]).summary() == (
         "access withdrawn everywhere; 2 node(s) updated"
