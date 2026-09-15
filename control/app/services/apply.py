@@ -38,6 +38,7 @@ from control.app.errors import (
     ConfigRefused,
     Conflict,
     DomainError,
+    NodeCannotServe,
     NodeOperationFailed,
     NothingToApply,
 )
@@ -263,6 +264,44 @@ POOL_SHORT_TO_APPLY = (
     "applying this node is what puts it into service, and a node that serves gives every "
     "active friend an address on each transport it offers — {pools}. Nothing was pushed "
     f"and nothing on the node was changed. {MAKE_THE_POOL_BIGGER}"
+)
+
+# What an apply is refused with on a node the state machine will not let serve again —
+# and today that is exactly one state, ``retired``.
+#
+# It exists because ``apply_node`` writes ``node.state`` itself instead of going through
+# ``nodes.set_node_state``, so the machine that has refused ``retired -> active`` since
+# backlog item 17 was never asked on this door: apply on a retired node answered 200 and
+# left it active. Round 5 made that worse rather than created it — the fan-out above now
+# mints material for every active friend on the way in, so the button re-activated a
+# host the operator had recorded as gone AND granted the whole fleet on it, and its
+# address was back in every subscription at the next fetch.
+#
+# WRITTEN FOR ``retired``, which is the only state that can reach it while
+# ``allowed_from`` says what it says. The guard asks the machine rather than comparing to
+# a literal, so a state added later that cannot become active would be refused here too —
+# and would be handed a sentence about a host that was destroyed or seized, which may not
+# be what that state means. Whoever adds one rewrites this.
+#
+# The direction is its own clause for the reason the five above it are: this sentence is
+# the body of a 409 from ``POST /api/nodes/{id}/apply`` as well as a line on the console,
+# and naming a screen is the one thing an API message must not do.
+#
+# It says what did NOT happen in the same breath, because the fan-out is the part an
+# operator cannot see: nothing was dialled, nobody was granted anything, and the node is
+# still exactly as they left it. What it does not claim is anything about the HOST — a
+# retired node's daemon may well still be running the last file it was given, and this
+# control plane has no way to know from here.
+REGISTER_IT_AGAIN = (
+    "If that host is genuinely back, register it again as a new node and apply that one."
+)
+CANNOT_SERVE_AGAIN = (
+    "this node is {state}, and applying a node is what puts it into service — which is "
+    "the one move a {state} node is refused. That state is where an operator records "
+    "that a host is gone, so bringing the record back would put an address that may now "
+    "answer for somebody else into every friend's subscription and hand every active "
+    "friend key material on it. Nothing was pushed, nobody was granted anything and "
+    f"nothing about this node was changed. {REGISTER_IT_AGAIN}"
 )
 
 
@@ -803,8 +842,59 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
 
     Marks the node degraded on any failure after the first byte is written, and
     active only once it came back up serving every transport we expect.
+
+    A node the state machine will not let serve is refused before any of that — see the
+    guard below, which is the only thing standing between this function's own write of
+    ``node.state`` and ``NodeState.allowed_from``.
     """
     node = await nodes.get_node(session, node_id)
+
+    # Re-read off the ROW rather than trusted off the copy this session is holding, for
+    # ``nodes._node_to_write``'s reason and against the same harm its docstring names: a
+    # session keeps what it loaded (``expire_on_commit=False``), so a node another
+    # session retired still reads ``draft`` here, and the guard below would wave through
+    # the transition it exists to refuse. Named column, not a whole-object refresh,
+    # because these sessions are ``autoflush=False`` and a refresh discards a pending
+    # edit instead of writing it first.
+    #
+    # It also decides ``becoming_serving`` further down, which is the same question asked
+    # for the fan-out: a stale ``active`` in memory over a row that says degraded would
+    # grant nobody on a node going back into service.
+    #
+    # A READ, NOT A LOCK, exactly as ``_node_to_write`` says — and the window this one
+    # leaves open is longer than that one's, because what sits between this read and the
+    # write it decides is a host being dialled rather than two statements. An operator
+    # who retires a node while an apply to it is in flight loses the race: that apply
+    # finishes, and it finishes active and granted, because both decisions were taken
+    # from the row as it read here. The repair is to retire it again once the apply has
+    # landed, which works — ``active -> retired`` is legal and the state endpoint takes
+    # it. Named rather than closed, for the reason ``_node_to_write`` gives: one operator,
+    # one console, and the lock this would need is on the table the delivery endpoint
+    # joins against.
+    await session.refresh(node, ["state"])
+
+    # THE MACHINE'S ANSWER, ASKED RATHER THAN RESTATED — and asked here, above everything
+    # this function writes, dials and mints, which is the whole of the refusal. An apply
+    # ends by writing ``active`` directly (see the end of this function), so without this
+    # line ``POST /nodes/{id}/apply`` was the one door where ``retired -> active`` went
+    # through: the node came back into ``serving_transports``, the fan-out below handed
+    # every active friend material on it, and its address was in every subscription at
+    # the next fetch.
+    #
+    # ``!=`` first, for the same no-op ``set_node_state`` allows and for the same reason:
+    # a node that is ALREADY active is re-applied constantly — that is what an ordinary
+    # push is — and ``allowed_from`` lists no self-transition. ``degraded -> active`` and
+    # ``draft -> active`` are both in the machine and both stay: they are the first apply
+    # and the retry after a failed one, which is every apply this product has.
+    #
+    # The condition names no state. What may serve again is the machine's to say, so
+    # widening ``allowed_from`` widens this with it and nothing here has to be found and
+    # edited — which is what a second copy of a safety rule always needs and never gets.
+    if node.state != NodeState.ACTIVE and NodeState.ACTIVE not in NodeState.allowed_from(
+        node.state
+    ):
+        raise NodeCannotServe(CANNOT_SERVE_AGAIN.format(state=node.state))
+
     node_settings = settings()
 
     # The rows this apply is about, read once and used three times — M23, round 3. It was
@@ -1010,11 +1100,23 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             configs[node_transport.config_name]
         )
 
-    # ``state`` is already ACTIVE when this apply put the node into service —
-    # ``_take_into_service`` wrote it before the render, because the fan-out that goes
-    # with it has to happen before the bytes are built. Written again here rather than
-    # conditionally, because a node that was ALREADY serving still ends an apply active
-    # with no reason on its row: the same two lines close both paths.
+    # THE ONE PLACE THE STATE MOVES, past every failure arm above — which is the whole
+    # of ``_take_into_service``'s second decision: the fan-out runs before the render and
+    # still does not touch this column, so a push that failed leaves the node degraded by
+    # ``_record_failure`` and never claims to have served.
+    #
+    # Written directly rather than through ``nodes.set_node_state``, which commits and
+    # would cut this transaction in half — the applied digests, the audit entries and the
+    # grants are one write with this. What that skips is the machine, and the guard at the
+    # top of this function is what asks it instead: every state that reaches this line may
+    # legally become active, or already is. The comment that stood here said
+    # ``_take_into_service`` had already written ACTIVE; it had not, and has not since
+    # round 3 of M23 — a reader who believed it would have concluded the machine was
+    # consulted somewhere it was not.
+    #
+    # Written unconditionally rather than only when the node was not serving, because a
+    # node that was ALREADY active still ends an apply active with no reason on its row:
+    # the same two lines close both paths.
     node.state = NodeState.ACTIVE
     node.state_detail = None
 
@@ -1105,7 +1207,15 @@ def why_not_updated(exc: BaseException) -> NotUpdated:
     # again once it can be" would send the operator to retry a button that will refuse
     # for the same reason for ever. Nothing was pushed and retrying changes nothing,
     # which is precisely what REFUSED means.
-    if isinstance(exc, ConfigRefused | NothingToApply):
+    #
+    # ``NodeCannotServe`` is the third for that same reason, and its case is real in the
+    # same way: a retired node keeps the credentials minted on it, so revoking somebody
+    # who holds one fans out to a node this control plane will not push to again. What
+    # the operator must not be told there is "apply it again once it can be reached" —
+    # no retry reaches it, and the honest reading is that a host the record says is gone
+    # may still be running the file that carries the withdrawn credential. REFUSED sends
+    # them to press apply and read why, which is where that sentence is.
+    if isinstance(exc, ConfigRefused | NothingToApply | NodeCannotServe):
         return NotUpdated.REFUSED
     # Checked after ``ConfigRefused`` only because the two are siblings rather than
     # related; neither is an instance of the other. ``apply_node`` raises this one past

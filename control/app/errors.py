@@ -171,6 +171,36 @@ class NothingToApply(Conflict):
     code = "nothing_to_apply"
 
 
+class NodeCannotServe(Conflict):
+    """An apply was asked for on a node the state machine will not let serve again.
+
+    ``NothingToApply``'s sibling on the same endpoint, and the one refusal here that is
+    about the node's STATE rather than about what it runs. An apply is what puts a node
+    into service: it ends by writing ``active``, and since M23 it hands every active
+    friend a credential on the way in. On a ``retired`` node that is the transition
+    ``NodeState.allowed_from`` exists to refuse — the row is how an operator records that
+    a host is gone, sold on or seized, and bringing it back would put an address that may
+    now answer for a stranger into every friend's subscription and mint key material for
+    everybody on it.
+
+    The state endpoint has refused that move since backlog item 17; ``apply`` wrote the
+    column itself and so never asked. This type is what the asking answers with.
+
+    ``Conflict`` rather than ``NodeOperationFailed`` for ``NothingToApply``'s reason,
+    and it is the same fact here: nothing is dialled, nothing is pushed, nobody is
+    granted anything, and the node's state is left exactly as the operator set it —
+    which is what the raise being above everything ``apply_node`` writes buys.
+
+    Its own code so a script can tell this from the node having nothing enabled: the two
+    are both 409s on one endpoint and the operator's next move differs completely.
+    Deliberately NOT named for ``retired``, because what refuses is the machine rather
+    than a literal state — see ``apply.apply_node``, which asks it rather than restating
+    it.
+    """
+
+    code = "node_cannot_serve"
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 

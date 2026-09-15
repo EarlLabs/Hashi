@@ -108,6 +108,14 @@ _THE_CONSOLES_DIRECTIONS: dict[str, str] = {
     apply.MAKE_THE_POOL_BIGGER: (
         "Make the pool bigger first: Keys & configs, replace params."
     ),
+    # The sixth. A retired node cannot be brought back — the state machine says so and
+    # this refusal does not offer to widen it — so the only honest direction is a NEW
+    # record for that host, and the console can name the control that makes one. The
+    # service's own clause cannot: an API caller has no screen and no button.
+    apply.REGISTER_IT_AGAIN: (
+        f'If that host is genuinely back, register it again with "add node" on '
+        f"{apply.WHERE_TO_RETRY} and apply that one."
+    ),
 }
 
 

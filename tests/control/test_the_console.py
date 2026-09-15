@@ -6570,6 +6570,7 @@ def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
         apply_service.NOTHING_STOPS_A_SERVING_HOST,
         apply_service.GIVE_IT_A_KEY,
         apply_service.MAKE_THE_POOL_BIGGER,
+        apply_service.REGISTER_IT_AGAIN,
     }
 
     assert set(wording._THE_CONSOLES_DIRECTIONS) == exported, (
@@ -6588,6 +6589,11 @@ def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
         # gives when the node it would put into service has a pool that cannot hold the
         # fleet — which sends the operator to a different screen from the other four.
         apply_service.POOL_SHORT_TO_APPLY,
+        # The sixth: the refusal an apply gives on a node the state machine will not let
+        # serve again. Its direction is the only one of the six that sends the operator to
+        # make a NEW record rather than to change this one, because a retired node has
+        # nowhere to go and this refusal does not offer to widen that.
+        apply_service.CANNOT_SERVE_AGAIN,
     ))
     for clause, on_the_console in wording._THE_CONSOLES_DIRECTIONS.items():
         assert clause in composed, (

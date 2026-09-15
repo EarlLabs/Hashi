@@ -50,7 +50,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.api import schemas
 from control.app.dependencies import session_dependency
-from control.app.errors import DomainError, HopEndRefused, NothingToApply, ParamsRefused
+from control.app.errors import (
+    DomainError,
+    HopEndRefused,
+    NodeCannotServe,
+    NothingToApply,
+    ParamsRefused,
+)
 from control.app.models import NodeState, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
@@ -2167,9 +2173,9 @@ async def apply_node(
     name = node.name
     try:
         applied = await apply.apply_node(session, node_id=node_id)
-    except (NothingToApply, addresses.PoolFull) as exc:
+    except (NothingToApply, addresses.PoolFull, NodeCannotServe) as exc:
         # A REFUSAL, and the label says so. Caught ahead of their base class rather than
-        # branched inside one handler, because these two differ from a failure in what
+        # branched inside one handler, because these three differ from a failure in what
         # happened to the NODE as well as in the word: nothing was dialled, nothing was
         # pushed and the node's state has not moved.
         #
@@ -2178,6 +2184,13 @@ async def apply_node(
         # anything — and it was the one refusal on this button that was not shaped: it
         # fell through to the generic handler and the operator got a 500 where the API
         # got a sentence naming the pool.
+        #
+        # ``NodeCannotServe`` is the third, and the word above the banner is the point of
+        # it being here rather than in the arm below: `failed` on this button additionally
+        # means "the node is now degraded", and this refusal is read on a node whose state
+        # the operator set deliberately and which has not moved. It is also the one
+        # refusal here that fires on a node that was NEVER dialled and never will be from
+        # this button, which is what `refused` says and `failed` denies.
         return _mutation(
             request,
             banner=exc.message,

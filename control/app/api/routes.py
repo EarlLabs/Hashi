@@ -176,6 +176,12 @@ async def apply_node(node_id: str, session: AsyncSession = Depends(session_depen
     A node with no transports enabled is answered 409 ``nothing_to_apply`` instead —
     M18.1. Nothing is dialled, nothing is pushed and the node's state is untouched: it
     is not a failure, it is a node that has nothing to serve yet.
+
+    A node the state machine will not let serve is answered 409 ``node_cannot_serve``,
+    on the same terms and for a different reason: applying a node is what puts it into
+    service, and ``retired -> active`` is the transition ``NodeState.allowed_from``
+    refuses. This endpoint wrote the column itself and so used to answer 200 and leave a
+    retired node active — see ``apply.apply_node``, which now asks the machine first.
     """
     applied = await apply.apply_node(session, node_id=node_id)
     return schemas.ApplyResponse(node_id=node_id, transports_applied=sorted(applied))
