@@ -475,6 +475,53 @@ def resolver_problem(resolver: str) -> str | None:
     return None
 
 
+def client_resolver_problem(resolver: str) -> str | None:
+    """Why a FRIEND's device could not reach ``resolver`` through their tunnel, or ``None``.
+
+    ``resolver_problem``'s sibling, one consumer further out, and written in the same
+    shape for the same reason: a sentence rather than an exception, so the renderer can
+    raise it and an INPUT FORM can refuse the value while the operator is still looking
+    at the box. That split is the whole of M23's second round — the rule below was
+    enforced here at render only, so an IPv6 resolver was accepted by the panel, stored,
+    and then took away the configuration of every user on that node at the moment they
+    downloaded it.
+
+    Two exclusions, and neither is a property of either protocol — which is why they live
+    beside the tunnel's egress policy rather than in a transport's own model, and why a
+    transport that asks this question asks it HERE:
+
+    * **a name** cannot be written into a tunnel's DNS setting at all: resolving it is the
+      very thing the setting is for, so the device would have to resolve in order to learn
+      how to resolve.
+    * **IPv6** — a friend's config routes every v6 address into the tunnel
+      (``CLIENT_ROUTES``) and the node drops all of it (see that constant's note), so a v6
+      resolver is one the device can ask and never hear from. Every name fails, which is
+      exactly the M23 failure the client's ``DNS`` line was added to fix, with the box
+      filled in.
+
+    What it does NOT ask is whether the resolver is inside a particular tunnel's own
+    range: that needs the tunnel, and the caller that has one asks it separately — see
+    ``client_resolvers``. A predicate over one value is what an input form can call
+    field by field.
+    """
+    try:
+        address = ipaddress.ip_address(resolver)
+    except ValueError:
+        return (
+            f"{resolver!r} is not an address, and a resolver written into a tunnel's "
+            "DNS setting cannot be a name: looking that name up is the very thing "
+            "the setting is for."
+        )
+    if address.version != 4:
+        return (
+            f"the resolver {resolver!r} is an IPv6 address, and this tunnel carries "
+            "IPv4 only — every IPv6 packet a friend's device sends into it is dropped "
+            "at the node. The device would ask this resolver and never hear back, so "
+            "no name would resolve at all. Give an IPv4 address."
+        )
+    return None
+
+
 def lookup_resolver(egress: Egress, resolver: str | None) -> str | None:
     """The resolver a proxy must look its destinations up at, or ``None`` for its host's.
 
@@ -604,21 +651,14 @@ def client_resolvers(
 
     network = ipaddress.ip_interface(tunnel_address).network
     for resolver in resolvers:
-        try:
-            address = ipaddress.ip_address(resolver)
-        except ValueError as exc:
-            raise EgressNotRenderable(
-                f"{resolver!r} is not an address, and a resolver written into a tunnel's "
-                "DNS setting cannot be a name: looking that name up is the very thing "
-                "the setting is for."
-            ) from exc
-        if address.version != 4:
-            raise EgressNotRenderable(
-                f"the resolver {resolver!r} is an IPv6 address, and this tunnel carries "
-                "IPv4 only — every IPv6 packet a friend's device sends into it is dropped "
-                "at the node. The device would ask this resolver and never hear back, so "
-                "no name would resolve at all. Give an IPv4 address."
-            )
+        # The two rules that need nothing but the value, asked through the predicate a
+        # FORM asks them through as well (``client_resolver_problem``) — so the sentence
+        # an operator reads when a box refuses their resolver and the sentence a render
+        # refuses by are one sentence, and neither can be fixed without the other.
+        problem = client_resolver_problem(resolver)
+        if problem:
+            raise EgressNotRenderable(problem)
+        address = ipaddress.ip_address(resolver)
         if address.version == network.version and address in network:
             raise EgressNotRenderable(
                 f"the resolver {resolver!r} is inside {network}, which is this tunnel's "
@@ -640,6 +680,7 @@ __all__ = [
     "ResolverMissing",
     "WgQuickEgress",
     "WgQuickHooks",
+    "client_resolver_problem",
     "client_resolvers",
     "exit_origin",
     "lookup_resolver",

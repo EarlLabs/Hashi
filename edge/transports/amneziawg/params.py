@@ -12,9 +12,20 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from edge.egress import client_resolver_problem
 from edge.transports.amneziawg.meta import META
 
 BASE64_32 = re.compile(r"^[A-Za-z0-9+/]{42}[A-Za-z0-9+/=]{2}$")
+
+# What every one of the four magic-header boxes says, written once because they are four
+# instances of one decision rather than four fields — see the fields themselves for why
+# they need a sentence at all, and why the example set is not quoted in it.
+MAGIC_HEADER_HINT = (
+    "one of four numbers that replace WireGuard's fixed message types. Pick a value for "
+    "THIS node and never the protocol documentation's example set: four numbers shared "
+    "across the fleet are themselves the signature that identifies it. All four must "
+    "differ from each other."
+)
 
 
 class Params(BaseModel):
@@ -83,10 +94,23 @@ class Params(BaseModel):
     # Magic headers, which replace WireGuard's four fixed message-type constants.
     # Distinct values required — two equal headers make two message types
     # indistinguishable to the peer, and the tunnel simply never comes up.
-    init_packet_magic_header: int = Field(ge=1)
-    response_packet_magic_header: int = Field(ge=1)
-    underload_packet_magic_header: int = Field(ge=1)
-    transport_packet_magic_header: int = Field(ge=1)
+    #
+    # EACH ONE CARRIES ITS OWN WARNING SINCE M23, for the reason ``decoy_host`` has
+    # carried one since M1: these four numbers ARE this fleet's fingerprint, and the
+    # hazard is not a value the panel might default — it declares none — but a value an
+    # operator copies out of the protocol's own documentation. The real hop was found
+    # carrying the upstream project's published example set, typed by hand, directly
+    # beneath a comment in the rendered file saying that shared values would themselves
+    # be the fingerprint. A box that says nothing is where that happens; the sentence
+    # belongs on the box, which is the one place it is read at the moment it is chosen.
+    #
+    # The example values are deliberately NOT quoted here. Naming them would put the
+    # very set a node must not use into this file, where the next operator reads it as
+    # the suggestion the field is careful not to make.
+    init_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    response_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    underload_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    transport_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
 
     @field_validator("port")
     @classmethod
@@ -116,23 +140,28 @@ class Params(BaseModel):
 
     @field_validator("client_dns")
     @classmethod
-    def _resolvers_are_addresses(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """Each entry must be a bare IP address.
+    def _each_resolver_is_one_a_device_could_reach(
+        cls, value: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Each entry must be an address a friend's device can actually ask — M23.
 
-        A hostname here cannot work: resolving it is the very thing the tunnel's DNS
-        setting is for, so the device would have to already be able to resolve in order
-        to learn how to resolve. Refused with that reason rather than written through
-        and silently ignored by the client.
+        ``egress.client_resolver_problem`` decides, and this validator only raises what it
+        answers. The rule is not a property of this protocol — what makes a resolver
+        unreachable is the tunnel's own egress, which is why it lives beside the routes
+        the tunnel carries and is asked here rather than copied here. Asking it at
+        VALIDATION is what makes the refusal arrive while the operator is still looking
+        at the box: the renderer asked the same question and nobody reached it until a
+        user downloaded their configuration, which is one 500 for every node they hold.
+
+        It covers a name (resolving it is the very thing the setting is for) and an IPv6
+        address (this tunnel carries IPv4 only, so the device would ask and never hear
+        back). The tunnel's own range is the validator below, because that one needs the
+        tunnel as well as the value.
         """
         for entry in value:
-            try:
-                ipaddress.ip_address(entry)
-            except ValueError as exc:
-                raise ValueError(
-                    f"{entry!r} is not an IP address — a resolver written into a "
-                    "tunnel's DNS setting cannot be a name, because resolving that "
-                    "name is what the setting is for"
-                ) from exc
+            problem = client_resolver_problem(entry)
+            if problem:
+                raise ValueError(problem)
         return value
 
     @field_validator("client_dns")

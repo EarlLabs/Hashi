@@ -37,8 +37,9 @@ that has IPv6 — and no assertion here stands in for it.
 import ipaddress
 
 import pytest
+from pydantic import ValidationError
 
-from edge.egress import Egress, EgressNotRenderable
+from edge.egress import Egress, EgressNotRenderable, client_resolver_problem
 from edge.registry import SubscriptionFormat, discover, profile
 
 # Derived the way the rest of this suite derives it: the transports that hand a friend a
@@ -69,6 +70,23 @@ def rendered_client(name: str, node, request, **params_overrides) -> str:
     transport = profile(name)
     fixture = request.getfixturevalue("transport_fixture")
     params = transport.validate({**fixture(name, "params"), **params_overrides})
+    return transport.profile.render_client_config(
+        node, params, fixture(name, "credentials")[0]
+    ).content
+
+
+def rendered_client_from_stored(name: str, node, request, **stored) -> str:
+    """The same file, from a row whose parameters were STORED before a rule existed.
+
+    The override is applied after validation rather than through it, and that is the only
+    way to reach the renderer's own refusal now that the transport's model refuses the
+    same value: a fleet that stored one before the model did still holds it, and the
+    renderer is what meets it. Validating the override instead would test the validator
+    twice and the renderer not at all.
+    """
+    transport = profile(name)
+    fixture = request.getfixturevalue("transport_fixture")
+    params = {**transport.validate(fixture(name, "params")), **stored}
     return transport.profile.render_client_config(
         node, params, fixture(name, "credentials")[0]
     ).content
@@ -198,12 +216,80 @@ def test_a_resolver_a_friends_device_could_never_reach_is_refused(
     that fixes it. ``resolver_problem`` already refuses this on a node's record for the
     same reason one hop further in; this is the transport's own parameter, which nothing
     had checked against what the tunnel can carry.
+
+    FROM A STORED ROW since M23's round 2, and the change is what the fix cost this test
+    rather than a weakening of it. The value is refused when it is typed now (the test
+    below), so the only way to still hold one is to have stored it before that rule
+    existed — which is true of any fleet running this product today, and is exactly the
+    row whose render must keep refusing.
     """
     with pytest.raises(EgressNotRenderable) as refusal:
-        rendered_client(
+        rendered_client_from_stored(
             name, node, request, client_dns=(A_RESOLVER_THE_TUNNEL_CANNOT_CARRY,)
         )
 
     assert A_RESOLVER_THE_TUNNEL_CANNOT_CARRY in str(refusal.value), (
         "the refusal does not name the value an operator has to change"
     )
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_that_resolver_is_refused_when_it_is_TYPED_and_not_when_it_is_rendered(
+    name: str, request
+) -> None:
+    """The round-2 finding: refusing at render is refusing in the wrong place — M23.
+
+    The refusal above fires when a USER downloads their configuration, which is a 500
+    that takes away every node they hold rather than a complaint about the box the value
+    was typed into. It is also the last moment anyone can act on it: by then the value is
+    stored, the panel has answered 200, and the person who could fix it has left the
+    screen.
+
+    So the transport's own model asks the same question of the same value, which puts the
+    refusal on every path that can store one — both panel forms and the JSON API — with
+    no route knowing the field's name. A hostname in this box was always refused this way;
+    an address of the wrong family was not.
+
+    Red against the previous commit: ``validate`` accepts the value and nothing complains
+    until a download.
+    """
+    fixture = request.getfixturevalue("transport_fixture")
+    params = {
+        **fixture(name, "params"),
+        "client_dns": (A_RESOLVER_THE_TUNNEL_CANNOT_CARRY,),
+    }
+
+    with pytest.raises(ValidationError) as refused:
+        profile(name).validate(params)
+
+    assert "client_dns" in str(refused.value), refused.value
+    assert A_RESOLVER_THE_TUNNEL_CANNOT_CARRY in str(refused.value), refused.value
+
+
+@pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
+def test_the_box_and_the_renderer_refuse_it_in_one_sentence(
+    name: str, node, request
+) -> None:
+    """One rule, one wording, and ``edge`` owns both halves of it.
+
+    The value is unreachable because of what the TUNNEL carries, not because of anything
+    either protocol does, so the sentence is written once in ``egress`` and quoted by
+    whoever is asking. If a transport ever grows its own copy, this is what fails: two
+    sentences for one rule is how a fix lands on one path and not the other, which is the
+    shape of the finding this test was written for.
+    """
+    said = client_resolver_problem(A_RESOLVER_THE_TUNNEL_CANNOT_CARRY)
+    assert said, "the predicate accepts a resolver the tunnel cannot carry"
+
+    fixture = request.getfixturevalue("transport_fixture")
+    with pytest.raises(ValidationError) as typed:
+        profile(name).validate(
+            {**fixture(name, "params"), "client_dns": (A_RESOLVER_THE_TUNNEL_CANNOT_CARRY,)}
+        )
+    with pytest.raises(EgressNotRenderable) as rendered:
+        rendered_client_from_stored(
+            name, node, request, client_dns=(A_RESOLVER_THE_TUNNEL_CANNOT_CARRY,)
+        )
+
+    assert said in str(typed.value), typed.value
+    assert said in str(rendered.value), rendered.value
