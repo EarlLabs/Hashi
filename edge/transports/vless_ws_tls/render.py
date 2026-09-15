@@ -41,18 +41,21 @@ def render_server(
     carries exactly ONE outbound, bound to that address. There is no second outbound to
     fall back to, which is decision 3 expressed structurally: when the hop is down the
     connection cannot be opened, and a friend gets no exit rather than a Russian one.
-    With no hop, nothing changes — the same direct outbound as before, byte for byte.
+    With no hop the way out is unchanged — this node's own route, bound to nothing — and
+    only what a friend may ASK for is narrower since M23's tenth round.
 
     M16 is the part of that ``sendThrough`` cannot reach, and it is the first transport's
     reasoning unchanged: a friend's client sends a NAME, the outbound resolves it before it
     dials, and under a hop that lookup goes through the hop to the resolver on the node's
     record (``node.resolver``) — or the node is refused, never given the host's resolver.
 
-    M23's ninth round is the first transport's reasoning unchanged too: a proxy dials
-    whatever it is asked for, so under a hop this config refuses every destination off the
-    public internet (``NOT_THE_INTERNET``) for the friend-facing inbound alone. The list is
-    ``edge.egress``'s one copy, shared with the kernel tunnels that drop the same ranges;
-    the rule expressing it is this package's, in its own template.
+    M23's ninth and tenth rounds are the first transport's reasoning unchanged too: a proxy
+    dials whatever it is asked for, so this config refuses every destination off the public
+    internet (``NOT_THE_INTERNET``) for the friend-facing inbound alone — on a leaf as much
+    as on an entry, and by the destination's resolved ADDRESS rather than by the name a
+    friend happened to send. The list is ``edge.egress``'s one copy, shared with the kernel
+    tunnels that drop the same ranges; the rule expressing it is this package's, in its own
+    template.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,

@@ -1,6 +1,7 @@
 {
   "log": {
     "loglevel": "warning",
+    "dnsLog": false,
     "access": "none"
   },
   "inbounds": [
@@ -41,10 +42,49 @@
       }
     }
   ],
+  "routing": {
+    "domainStrategy": "IpOnDemand",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["in"],
+        "ip": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.0.0.0/24",
+          "192.0.2.0/24",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "198.51.100.0/24",
+          "203.0.113.0/24",
+          "240.0.0.0/4"
+        ],
+        "outboundTag": "refused"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["in"],
+        "outboundTag": "direct"
+      }
+    ]
+  },
   "outbounds": [
     {
       "tag": "direct",
       "protocol": "freedom"
+    },
+    {
+      "tag": "refused",
+      "protocol": "blackhole",
+      "settings": {
+        "response": {
+          "type": "none"
+        }
+      }
     }
   ]
 }

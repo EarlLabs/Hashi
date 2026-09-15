@@ -53,7 +53,8 @@ def render_server(
     carries exactly ONE outbound, bound to that address. There is no second outbound to
     fall back to, which is decision 3 expressed structurally: when the hop is down the
     connection cannot be opened, and a friend gets no exit rather than a Russian one.
-    With no hop, nothing changes — the same direct outbound as before, byte for byte.
+    With no hop the way out is unchanged — this node's own route, bound to nothing — and
+    only what a friend may ASK for is narrower since M23's tenth round.
 
     M16 is the part of that ``sendThrough`` cannot reach. A friend's client sends a NAME,
     and the outbound resolves it before it dials — left alone, through the host's own
@@ -67,9 +68,17 @@ def render_server(
     dials whatever it is asked for — so a friend on an entry node could name the leaf's
     address on the hop and be answered by its SSH daemon, having reached it from the one
     address that leaf's peer entry trusts. Nothing this node forwards is on that path, so
-    the refusal is a routing rule here and not a firewall rule anywhere: under a hop the
-    config refuses every destination off the public internet (``NOT_THE_INTERNET``) for
-    the friend-facing inbound alone, which is what leaves M16's own lookups untouched.
+    the refusal is a routing rule here and not a firewall rule anywhere: the config refuses
+    every destination off the public internet (``NOT_THE_INTERNET``) for the friend-facing
+    inbound alone, which is what leaves M16's own lookups untouched.
+
+    M23's tenth round is that refusal made true rather than nearly true, and it is why this
+    function passes ``refused`` on EVERY render rather than only under a hop. A leaf's own
+    proxy renders no ``sendThrough`` and no resolver, and used to render no refusal either —
+    while sitting beside the far end of the hop, its provider's LAN and its metadata
+    service. And the rule matched an ADDRESS, so a name resolving into one of those ranges
+    was dialled anyway; the template closes that with ``routing.domainStrategy``, which is
+    its business and not this module's. See its header for both, measured.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,

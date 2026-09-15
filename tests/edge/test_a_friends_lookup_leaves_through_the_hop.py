@@ -222,7 +222,13 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     if profile(name).meta.config_format is ConfigFormat.XRAY_JSON:
         config = json.loads(with_one)
         assert "dns" not in config
-        assert "dnsLog" not in config["log"]
+        # And ``dnsLog`` IS here, written out as ``false``, which reads backwards until you
+        # know why: M23's tenth round made routing resolve a destination before it matches
+        # an address rule, so a node with no resolver of its own still looks names up —
+        # through its host's, where its own traffic has always looked them up. The key an
+        # entry node needs is therefore one every node needs, and its absence would be a
+        # promise about an upstream default rather than a statement of this file's.
+        assert config["log"]["dnsLog"] is False
 
 
 # --- and it fails closed ------------------------------------------------------------
