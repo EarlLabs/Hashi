@@ -230,6 +230,45 @@ _CARRY = (
 # (``255.255.255.255/32`` is inside ``240.0.0.0/4``, ``192.0.0.170/31`` inside
 # ``192.0.0.0/24``): a rule that can never be reached is a rule an operator reading
 # ``iptables -S`` has to work out is dead.
+#
+# BOTH FAMILIES SINCE M23's TWELFTH ROUND, and that round is the reason the split below
+# exists at all. Measured by running the product's own rendered ``vless-reality.json``
+# unedited in the pinned Xray: ``127.0.0.1`` was refused, the NAME ``localhost`` was
+# refused, ``172.17.0.5`` was refused — and ``[::1]`` and ``[fc00::2]`` were reached and
+# answered. Every range this list held was IPv4, so the same destinations spelled in the
+# other family walked straight past a list written to name them.
+#
+# ONE LIST STILL, because a second hand-typed one is exactly how the two answers drift
+# and only one of them would be under the test that holds these against the standard
+# library. What differs between the consumers is not the policy but their REACH: a proxy
+# writes these into Xray's ``routing.rules[].ip``, which takes both families happily; the
+# wg family writes them into ``iptables``, which takes one — ``ip6tables`` is a different
+# binary and one of the pinned data-plane images does not ship it, the same fact
+# ``wg_quick_hooks`` refuses a v6 tunnel over. So the FAMILY SPLIT IS DERIVED rather than
+# typed: everything is written once here and ``NOT_THE_INTERNET_IPV4`` below is what
+# ``ipaddress`` says of it, so a range added to either half reaches every renderer that
+# can express it and reaches none that cannot.
+#
+# DERIVING THE LIST ITSELF FROM ``ipaddress`` IS STILL REFUSED, and that is round nine's
+# decision extended rather than a new one. The registry the standard library holds lives
+# behind ``_private_networks``, and a rendered firewall rule may not depend on an
+# underscore; a TEST may, and should, so a Python release that moves the registry turns
+# the suite red instead of a friend's tunnel. The literal is here; the test holds it
+# against that answer in both directions, now for both families.
+#
+# ``::ffff:0:0/96`` — every IPv4 address written as an IPv6 one — IS ABSENT, and it is
+# the one entry of this registry that is, so here is why rather than a reader having to
+# work out whether it was forgotten. The pinned Xray REFUSES it, in both spellings:
+#
+#     invalid IP: ::ffff:0:0/96 > invalid network mask for router: 96
+#
+# It folds an IPv4-mapped address back to four bytes before it measures the prefix, so
+# /96 is a mask wider than the address it thinks it has. That same folding is what makes
+# the absence safe rather than a hole: a destination arriving as ``::ffff:127.0.0.1`` is
+# ``127.0.0.1`` by the time any rule is read, and the v4 half above already refuses it.
+# The range is covered by this list one spelling over, not left out of it —
+# ``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py`` states that as the single
+# exception it allows, and the proxy file measures the mapped spelling's verdict.
 NOT_THE_INTERNET = (
     "0.0.0.0/8",
     "10.0.0.0/8",
@@ -244,6 +283,36 @@ NOT_THE_INTERNET = (
     "198.51.100.0/24",
     "203.0.113.0/24",
     "240.0.0.0/4",
+    # The same registry, the other family. ``2001:db8::/32`` and ``3fff::/20`` are the
+    # documentation ranges, so they are outside ``2001::/23`` rather than inside it.
+    "::/128",
+    "::1/128",
+    "64:ff9b:1::/48",
+    "100::/64",
+    "2001::/23",
+    "2001:db8::/32",
+    "2002::/16",
+    "3fff::/20",
+    "fc00::/7",
+    "fe80::/10",
+)
+
+# What ``iptables`` can express of the list above — read off it, never typed again.
+#
+# An IPv6 destination in an ``iptables`` rule is not a narrower rule, it is a rule the
+# command refuses outright: the hook fails, wg-quick is running it under ``set -e``, and
+# the interface does not come up. So each data plane takes what it can say and the one
+# list stays one list.
+#
+# What that leaves a friend on a kernel tunnel is not the hole it looks like. Their own
+# config routes ``::/0`` into the tunnel and the node discards every IPv6 packet before
+# any chain is consulted — WireGuard's own authorisation list, not ours — so there is
+# nothing at this end for a rule to refuse. See ``CLIENT_ROUTES``, where that is argued;
+# it is not reopened here.
+NOT_THE_INTERNET_IPV4 = tuple(
+    destination
+    for destination in NOT_THE_INTERNET
+    if ipaddress.ip_network(destination).version == 4
 )
 
 # The one thing off the internet a friend may still reach: the resolver their own config
@@ -312,7 +381,12 @@ def _friend_rules(
         *_forward(
             (
                 *_CARRY,
-                *(f"-i %i -d {destination} -j DROP" for destination in NOT_THE_INTERNET),
+                *(
+                    f"-i %i -d {destination} -j DROP"
+                    # The v4 half only, and the filter is the whole of M23's twelfth
+                    # round at this end: ``iptables`` cannot be handed the other one.
+                    for destination in NOT_THE_INTERNET_IPV4
+                ),
                 *(
                     f"-i %i -d {resolver} -p {protocol} --dport {RESOLVER_PORT} -j ACCEPT"
                     for resolver in resolvers
@@ -382,14 +456,20 @@ def _hop_rules(exit_via: str) -> tuple[tuple[str, str], ...]:
 def _off_the_internet(address: str) -> bool:
     """Whether the rules a friend's tunnel carries would drop a packet addressed here.
 
-    Asked of ``NOT_THE_INTERNET`` itself rather than of ``ipaddress.is_global``, so an
-    exception can never be rendered for an address the drops do not take away, nor
-    withheld from one they do. The two answers agree today and the test holds them to it;
-    deriving the question from the list is what keeps them agreeing.
+    Asked of the list itself rather than of ``ipaddress.is_global``, so an exception can
+    never be rendered for an address the drops do not take away, nor withheld from one
+    they do. The two answers agree today and the test holds them to it; deriving the
+    question from the list is what keeps them agreeing.
+
+    Of ``NOT_THE_INTERNET_IPV4`` and not of the whole list, because the drops this is
+    about are the ones ``_friend_rules`` renders and those are the v4 half. No IPv6
+    resolver reaches here — ``client_resolvers`` refuses one first, which is what
+    ``_resolver_exceptions`` catches — so this is the same answer said honestly rather
+    than a second behaviour.
     """
     destination = ipaddress.ip_address(address)
     return any(
-        destination in ipaddress.ip_network(network) for network in NOT_THE_INTERNET
+        destination in ipaddress.ip_network(network) for network in NOT_THE_INTERNET_IPV4
     )
 
 
@@ -916,6 +996,7 @@ __all__ = [
     "EXIT_ROUTE",
     "HOP_ROUTE_TABLE",
     "NOT_THE_INTERNET",
+    "NOT_THE_INTERNET_IPV4",
     "NO_RESOLVER",
     "NO_ROUTES",
     "RESOLVER_PORT",

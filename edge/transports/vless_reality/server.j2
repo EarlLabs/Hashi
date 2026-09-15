@@ -105,6 +105,24 @@
   unmatched for it to resolve. `IpOnDemand` resolves the destination the moment a rule
   carrying addresses is read.
 
+  AND M23's TWELFTH round, which is the same rule asked in the other family. Everything
+  above held, and every range in the list was IPv4 — so the product's own rendered config,
+  run unedited in the pinned Xray, refused `127.0.0.1`, refused the name `localhost` and
+  refused a private v4 address, while `[::1]` answered from the node's own loopback and
+  `[fc00::2]` answered from the network the node sits in. A refusal that names only one
+  spelling of a destination is not a refusal.
+
+  `routing.rules[].ip` takes both families, and `iptables` takes one, which is why the
+  list `edge.egress` keeps is now split there BY DERIVATION rather than by a second list
+  somebody maintains: this file takes the whole of it, and the wg family takes what its
+  own tool can express. One range of the registry is deliberately absent — see that
+  constant, and the test that measures the mapped spelling's verdict.
+
+  What was measured afterwards, on the same live proxy: `[::1]` and `[fc00::2]` refused,
+  a globally-routable IPv6 address carried, a NAME resolving to a v6 address off the
+  internet refused and one resolving to a v6 address on it carried, and the log still
+  empty of every one of them.
+
   Where that resolution is asked is the part worth checking rather than assuming, because a
   lookup is the one record this project must never create and the one it most easily leaks.
   It goes to THIS FILE'S OWN `dns` object where there is one: measured, a name that only the

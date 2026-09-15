@@ -45,7 +45,7 @@ import pytest
 
 from edge.bootstrap.node_stack import DATA_PLANES
 from edge.checker import validate, xray_binary
-from edge.egress import NOT_THE_INTERNET, Egress
+from edge.egress import NOT_THE_INTERNET, NOT_THE_INTERNET_IPV4, Egress
 from edge.registry import ConfigFormat, discover, profile
 
 # The transports whose data plane terminates a connection and opens a new one. Derived as
@@ -90,6 +90,61 @@ A_NAME = "the-entry-on-the-hop.example"
 # the wg family's own file uses, written out again rather than imported: pytest runs with
 # ``--import-mode=importlib`` and this zone's test modules do not import each other.
 SOMEWHERE_ON_THE_INTERNET = "192.88.99.10"
+
+# The same word in the other family — M23's twelfth round, which is the round that found
+# every refusal this file asserts was IPv4-only.
+#
+# COMPUTED from the address above rather than chosen beside it. ``64:ff9b::/96`` is the
+# well-known NAT64 prefix, whose whole purpose is to carry an IPv4 address inside an IPv6
+# one, so "the internet in the other family" is literally the same reserved address: it
+# cannot drift away from what this file means by the word, and it inherits the argument
+# for that address rather than needing a second one. It is globally routable by the
+# standard library's own answer, which the guard below holds it to.
+#
+# The LOCAL-USE NAT64 prefix ``64:ff9b:1::/48`` is a different range and IS refused, which
+# is why the two are worth telling apart here and not only in the constant they come from.
+#
+# Measured against the pinned Xray run as a live proxy with the product's own rendered
+# config: a friend asking for this address was carried, in the same run in which ``[::1]``
+# and ``[fc00::2]`` were refused. A refusal that also took IPv6 to the internet away would
+# not be a fix.
+NAT64_PREFIX = "64:ff9b::"
+SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY = str(
+    ipaddress.IPv6Address(
+        int(ipaddress.IPv6Address(NAT64_PREFIX))
+        | int(ipaddress.IPv4Address(SOMEWHERE_ON_THE_INTERNET))
+    )
+)
+
+# The two addresses the twelfth walk actually reached through the product's own config,
+# named rather than left inside the parametrised class above — the same way the fifth
+# walk's own address is named. A friend on the owner's real leaf could open TCP to the
+# node's own loopback and to the private network it sits in, spelled in IPv6, while every
+# IPv4 spelling of both was refused.
+THE_NODES_OWN_LOOPBACK = "::1"
+THE_PRIVATE_NEIGHBOURHOOD = "fc00::2"
+
+def an_address_in(destination: str) -> str:
+    """One address out of a refused range, for a range of any width.
+
+    ``[1]`` was enough while every entry was IPv4 and none was a single address; the v6
+    half carries ``::/128`` and ``::1/128``, where there is no second address to take and
+    the index is an ``IndexError`` rather than a failure anyone could read.
+    """
+    network = ipaddress.ip_network(destination)
+    return str(network[1] if network.num_addresses > 1 else network[0])
+
+
+# The one range of IANA's registry ``NOT_THE_INTERNET`` does not carry, and an address in
+# it. The pinned Xray refuses ``::ffff:0:0/96`` as a CIDR outright — ``invalid network
+# mask for router: 96`` — because it folds an IPv4-mapped address back to four bytes
+# before measuring the prefix. This is the same fact from the friend's side, measured on
+# the live proxy: the mapped spelling of a refused address is refused by the v4 half, and
+# the mapped spelling of a reachable one is carried, so the range is covered one spelling
+# over rather than left out. Computed for the same reason as the pair above.
+LOOPBACK_SPELLED_AS_IPV6 = f"::ffff:{an_address_in('127.0.0.0/8')}"
+THE_INTERNET_SPELLED_AS_IPV6 = f"::ffff:{SOMEWHERE_ON_THE_INTERNET}"
+
 
 # Xray's outbound that opens nothing. Named once so the assertions below read as "the
 # connection reached nothing" rather than as a protocol string repeated nine times.
@@ -192,6 +247,15 @@ def where_a_friend_lands(
     def pass_over(
         destination: ipaddress.IPv4Address | ipaddress.IPv6Address | None,
     ) -> dict | None:
+        # Xray folds an IPv4-mapped address back to four bytes before any rule reads it,
+        # which is why ``NOT_THE_INTERNET`` carries no ``::ffff:0:0/96`` and does not
+        # need one — see that constant, and ``LOOPBACK_SPELLED_AS_IPV6`` above for the
+        # measurement. Modelled here rather than at the call sites so every way into
+        # this evaluator gets the daemon's answer rather than the standard library's,
+        # which says a mapped address is in no IPv4 network at all.
+        mapped = getattr(destination, "ipv4_mapped", None)
+        if mapped is not None:
+            destination = mapped
         for rule in config["routing"]["rules"]:
             tags = rule.get("inboundTag")
             if tags is not None and arriving_on not in tags:
@@ -226,6 +290,24 @@ def test_the_destinations_this_file_uses_are_what_it_says_they_are() -> None:
     """If these drifted, every assertion below would be asking the opposite question."""
     assert ipaddress.ip_address(SOMEWHERE_ON_THE_INTERNET).is_global
     assert not ipaddress.ip_address(THE_LEAF_ON_THE_HOP).is_global
+
+    # And the other family, where getting this wrong is easier: the NAT64 prefix a
+    # globally-routable address is computed through has a LOCAL-USE sibling one nibble
+    # away, and ``fc00::2`` and ``::1`` have to be off the internet or the refusals below
+    # are asserting nothing.
+    internet = ipaddress.ip_address(SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY)
+    assert internet.version == 6 and internet.is_global, internet
+    assert not ipaddress.ip_address(THE_NODES_OWN_LOOPBACK).is_global
+    assert not ipaddress.ip_address(THE_PRIVATE_NEIGHBOURHOOD).is_global
+
+    # The mapped pair are one address each, said in the other family — which is the whole
+    # of what makes the absent range safe.
+    assert ipaddress.ip_address(LOOPBACK_SPELLED_AS_IPV6).ipv4_mapped == ipaddress.ip_address(
+        an_address_in("127.0.0.0/8")
+    )
+    assert ipaddress.ip_address(THE_INTERNET_SPELLED_AS_IPV6).ipv4_mapped == ipaddress.ip_address(
+        SOMEWHERE_ON_THE_INTERNET
+    )
 
 
 # --- M23, round 9's mirror: what a friend may ask this node to dial ------------------
@@ -265,7 +347,7 @@ def test_nothing_off_the_internet_can_be_dialled_for_a_friend(
     landed = where_a_friend_lands(
         SEATS[seat](name, node, request),
         arriving_on=A_FRIEND,
-        destined_for=str(ipaddress.ip_network(destination)[1]),
+        destined_for=an_address_in(destination),
     )
 
     assert landed["protocol"] == REACHES_NOTHING, landed
@@ -405,7 +487,7 @@ def test_a_name_that_resolves_off_the_internet_is_refused_too(
         SEATS[seat](name, node, request),
         arriving_on=A_FRIEND,
         destined_for=A_NAME,
-        resolves_to=str(ipaddress.ip_network(destination)[1]),
+        resolves_to=an_address_in(destination),
     )
 
     assert landed["protocol"] == REACHES_NOTHING, landed
@@ -477,6 +559,93 @@ def test_even_the_outbound_that_dials_nothing_is_bound_to_the_hop(
         assert outbound.get("sendThrough") == HOP_ADDRESS, outbound
 
 
+# --- M23, round 12: the same question asked in the other family -----------------------
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        pytest.param(THE_NODES_OWN_LOOPBACK, id="the node's own loopback"),
+        pytest.param(THE_PRIVATE_NEIGHBOURHOOD, id="the private network it sits in"),
+    ],
+)
+@pytest.mark.parametrize("seat", SEATS)
+@pytest.mark.parametrize("name", PROXIES)
+def test_a_friend_cannot_dial_what_the_node_sits_in_spelled_as_ipv6(
+    name: str, seat: str, destination: str, node, request
+) -> None:
+    """The twelfth walk's own measurement, and the reason the list grew a second half.
+
+    The product's rendered ``vless-reality.json``, unedited, in the pinned Xray:
+    ``127.0.0.1`` was refused, the name ``localhost`` was refused, a private v4 address
+    was refused — and ``[::1]`` answered from the node's own loopback while ``[fc00::2]``
+    answered from the network it sits in. Thirteen ranges, all IPv4, so every destination
+    the rule named had a second spelling that walked past it.
+
+    These two are named rather than left to the parametrised class above for the same
+    reason the fifth walk's address is: the class says the policy holds, and this says
+    the thing that actually answered a friend does not.
+    """
+    landed = where_a_friend_lands(
+        SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination
+    )
+
+    assert landed["protocol"] == REACHES_NOTHING, landed
+
+
+@pytest.mark.parametrize("seat", SEATS)
+@pytest.mark.parametrize("name", PROXIES)
+def test_a_friend_still_reaches_the_internet_over_ipv6(
+    name: str, seat: str, node, request
+) -> None:
+    """The control for the whole of the twelfth round, and the half that is easy to lose.
+
+    A refusal that also refused IPv6 to the internet would satisfy every assertion above
+    while taking away every destination a friend reaches over the family most of the web
+    is now dual-stacked on — silently, because their device would simply fall back to v4
+    where there is one and stall where there is not. Measured on the live proxy in the
+    same run as the refusals: carried, on both seats' rules.
+    """
+    landed = where_a_friend_lands(
+        SEATS[seat](name, node, request),
+        arriving_on=A_FRIEND,
+        destined_for=SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY,
+    )
+
+    assert landed["protocol"] != REACHES_NOTHING, landed
+
+
+@pytest.mark.parametrize(
+    ("destination", "carried"),
+    [
+        pytest.param(LOOPBACK_SPELLED_AS_IPV6, False, id="the loopback, mapped"),
+        pytest.param(THE_INTERNET_SPELLED_AS_IPV6, True, id="the internet, mapped"),
+    ],
+)
+@pytest.mark.parametrize("seat", SEATS)
+@pytest.mark.parametrize("name", PROXIES)
+def test_an_ipv4_destination_spelled_as_ipv6_gets_the_ipv4_answer(
+    name: str, seat: str, destination: str, carried: bool, node, request
+) -> None:
+    """Why ``NOT_THE_INTERNET`` carries no ``::ffff:0:0/96``, asserted rather than argued.
+
+    That range is the one member of IANA's registry this project does not write down, and
+    it is left out because the pinned Xray REFUSES it as a CIDR — ``invalid network mask
+    for router: 96`` — having folded the mapped address back to four bytes before it
+    measured the prefix. A reader is entitled to ask whether that leaves every refused
+    address reachable under ``::ffff:``, and this is the answer: the same folding decides
+    a friend's destination, so the v4 half already covers it.
+
+    Both directions, because the cost of the folding is the other half of it: a global
+    IPv4 address written as a mapped one must still be carried, or a client that prefers
+    the v6 form of a dual-stack answer would lose the web.
+    """
+    landed = where_a_friend_lands(
+        SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination
+    )
+
+    assert (landed["protocol"] != REACHES_NOTHING) is carried, landed
+
+
 # --- and what the refusal must NOT take with it -------------------------------------
 
 @pytest.mark.parametrize("name", PROXIES)
@@ -533,6 +702,14 @@ def test_the_refused_destinations_are_the_one_list_this_project_keeps(
     assert refused, "no rule carries a destination at all"
     for destinations in refused:
         assert tuple(destinations) == NOT_THE_INTERNET, destinations
+        # The WHOLE list and not the half a kernel tunnel can express — M23's twelfth
+        # round. ``routing.rules[].ip`` takes both families, so a proxy rendering only
+        # what ``iptables`` can say would leave every destination it refuses reachable
+        # under its IPv6 spelling, which is exactly what the walk measured.
+        assert tuple(destinations) != NOT_THE_INTERNET_IPV4, (
+            "this config refuses only what a kernel tunnel's firewall could express, so "
+            "the same destinations spelled as IPv6 walk past it"
+        )
 
 
 @pytest.mark.parametrize("seat", SEATS)

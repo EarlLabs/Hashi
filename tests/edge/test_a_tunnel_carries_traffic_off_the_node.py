@@ -32,6 +32,7 @@ from edge import relay
 from edge.bootstrap.node_stack import DATA_PLANES
 from edge.egress import (
     NOT_THE_INTERNET,
+    NOT_THE_INTERNET_IPV4,
     RESOLVER_PORT,
     RESOLVER_PROTOCOLS,
     Egress,
@@ -383,7 +384,7 @@ def test_a_friend_cannot_reach_the_node_this_one_is_attached_to(
     ) == "DROP"
 
 
-@pytest.mark.parametrize("destination", NOT_THE_INTERNET)
+@pytest.mark.parametrize("destination", NOT_THE_INTERNET_IPV4)
 @pytest.mark.parametrize("name", WG_FAMILY)
 def test_nothing_off_the_internet_is_reachable_from_a_friends_tunnel(
     name: str, destination: str, node, request
@@ -394,6 +395,12 @@ def test_nothing_off_the_internet_is_reachable_from_a_friends_tunnel(
     provider's LAN, its metadata service on ``169.254.169.254``, any other tunnel on the
     box. One rule per range, and this asks each of them for a verdict rather than
     asserting the rule is in the file.
+
+    Over ``NOT_THE_INTERNET_IPV4`` rather than over the whole list since M23's twelfth
+    round, and the narrowing is asserted rather than assumed: the test below holds that
+    constant to being exactly the v4 half of the one list, and the one after it holds
+    these rules to naming no other family. Asking an ``iptables`` chain for its verdict
+    on ``fc00::2`` would be asking it a question it cannot be given.
     """
     chain = forward_chain(rendered(name, node, request, Egress.LOCAL))
     somewhere_in_it = str(ipaddress.ip_network(destination)[1])
@@ -406,14 +413,45 @@ def test_nothing_off_the_internet_is_reachable_from_a_friends_tunnel(
     ) == "DROP"
 
 
+# The registry as the standard library holds it, by family, and the ONE range this
+# project deliberately does not carry.
+#
+# ``100.64.0.0/10`` joins the v4 half because ``ipaddress`` keeps it out of
+# ``_private_networks`` and answers for it separately, at address level, inside
+# ``is_global``. There is no v6 equivalent — carrier-grade NAT is a v4 problem.
+#
+# ``::ffff:0:0/96`` is the exception, and it is stated here rather than discovered at
+# the assertion so that it is read as a decision. The pinned Xray refuses that CIDR
+# outright — ``invalid network mask for router: 96`` — because it folds an IPv4-mapped
+# address back to four bytes before measuring the prefix. The same folding is why
+# nothing escapes: every address in it IS an address in the v4 half by the time any rule
+# reads it, which the proxy file measures rather than argues.
+IANAS_REGISTRY = {
+    4: [
+        *ipaddress.IPv4Address._constants._private_networks,
+        ipaddress.IPv4Network("100.64.0.0/10"),
+    ],
+    6: list(ipaddress.IPv6Address._constants._private_networks),
+}
+SPELLED_IN_THE_OTHER_FAMILY = ipaddress.IPv6Network("::ffff:0:0/96")
+
+
 def test_the_ranges_a_friend_cannot_reach_are_the_standard_librarys_own() -> None:
-    """The list is IANA's, and this is what says so — both directions.
+    """The list is IANA's, and this is what says so — both directions, both families.
 
     ``CLAUDE.md`` forbids a hardcoded address because it names something a node could
     have to rotate away from. These name nothing of any node, and they are not ours to
     choose: what is on the public internet is a registry, and the standard library
     carries it. Holding the constant against ``ipaddress`` is what keeps that true — a
     range that drifts fails here rather than in a friend's tunnel.
+
+    BOTH FAMILIES SINCE M23's TWELFTH ROUND, which is the round that found the list was
+    only ever half of what it claimed to be: ``[::1]`` and ``[fc00::2]`` answered a
+    friend through the product's own rendered proxy config while ``127.0.0.1`` and
+    ``172.17.0.5`` were refused. Asked per family rather than over one flat list, because
+    ``subnet_of`` across families is a ``TypeError`` — so a flat loop would have passed
+    by short-circuiting on the v4 entries that come first, which is exactly what it did
+    for one round after the v6 half was added.
 
     The second half reads ``ipaddress``'s own private list, which is not public API. That
     is deliberate and it belongs HERE rather than in the renderer: a test may notice that
@@ -427,24 +465,99 @@ def test_the_ranges_a_friend_cannot_reach_are_the_standard_librarys_own() -> Non
     for network in ours:
         assert not network.is_global, f"{network} is on the internet and is dropped"
 
-    # And nothing off the internet escapes. The registry as the standard library holds
-    # it, plus the shared address space it answers for separately at address level.
-    registry = [
-        *ipaddress.IPv4Address._constants._private_networks,
-        ipaddress.IPv4Network("100.64.0.0/10"),
-    ]
-    for network in registry:
-        assert any(network.subnet_of(covering) for covering in ours), (
-            f"{network} is not on the internet and nothing drops it"
-        )
+    # And nothing off the internet escapes, in either family.
+    for version, registry in IANAS_REGISTRY.items():
+        covering_us = [network for network in ours if network.version == version]
+        assert covering_us, f"nothing in this list is IPv{version} at all"
+        for network in registry:
+            if network == SPELLED_IN_THE_OTHER_FAMILY:
+                continue
+            assert any(network.subnet_of(covering) for covering in covering_us), (
+                f"{network} is not on the internet and nothing drops it"
+            )
 
     # Two /32s inside ``192.0.0.0/24`` — the PCP and NAT64 discovery anycast addresses —
     # ARE globally reachable, and are dropped with the block around them. Deliberate, and
     # asserted rather than left to be discovered: they are IETF protocol machinery no
     # friend's device asks a VPN for, and two exceptions in every node's firewall would
-    # cost more to read than they buy.
-    for exception in ipaddress.IPv4Address._constants._private_networks_exceptions:
-        assert any(exception.subnet_of(covering) for covering in ours), exception
+    # cost more to read than they buy. The v6 half has six of the same shape, all inside
+    # ``2001::/23``, and they are carried on the same terms.
+    for constants in (ipaddress.IPv4Address._constants, ipaddress.IPv6Address._constants):
+        for exception in constants._private_networks_exceptions:
+            covering_us = [
+                network for network in ours if network.version == exception.version
+            ]
+            assert any(exception.subnet_of(covering) for covering in covering_us), exception
+
+
+def test_the_one_list_carries_both_families_and_each_renderer_takes_its_own() -> None:
+    """One list, split by ``ipaddress`` rather than by a second tuple somebody types.
+
+    The two data planes that read ``NOT_THE_INTERNET`` do not have the same reach: a
+    proxy writes it into Xray's ``routing.rules[].ip``, which takes both families, and
+    the wg family writes it into ``iptables``, which takes one. Round eleven named that
+    as the reason the v6 half could not simply be added, and this is the shape that
+    answers it — so what this holds is that the split stays DERIVED. A second
+    hand-maintained list would pass every other assertion in this file while drifting.
+    """
+    families = {ipaddress.ip_network(network).version for network in NOT_THE_INTERNET}
+    assert families == {4, 6}, (
+        f"the one list names only IPv{families.pop()}, so a destination spelled in the "
+        "other family walks past every refusal this project renders"
+    )
+
+    assert NOT_THE_INTERNET_IPV4 == tuple(
+        network for network in NOT_THE_INTERNET if ipaddress.ip_network(network).version == 4
+    )
+    # Order too, and not only membership: the wg family's rules are installed at the head
+    # of the chain in reverse, so a reordering is a different chain.
+    assert NOT_THE_INTERNET[: len(NOT_THE_INTERNET_IPV4)] == NOT_THE_INTERNET_IPV4
+
+
+@pytest.mark.parametrize("name", WG_FAMILY)
+def test_no_rule_a_kernel_tunnel_renders_names_an_address_iptables_cannot_take(
+    name: str, node, request
+) -> None:
+    """The constraint that made the split necessary, asserted where it would break.
+
+    An IPv6 destination in an ``iptables`` rule is not a narrower rule — the command
+    refuses it, wg-quick runs the hook under ``set -e``, and the interface does not come
+    up. So every node in the wg family would stop carrying traffic, which is the failure
+    this whole module exists to prevent, produced by a fix for a different one.
+
+    Every address any rendered rule names, whatever the flag that names it, so a resolver
+    exception or a masqueraded source added later is held to the same answer as a drop.
+    """
+    config = rendered(name, node, request, Egress.LOCAL)
+    rules = [
+        rule_spec(command)
+        for directive in ("PostUp", "PostDown")
+        for hook in hook_lines(config, directive)
+        for command in commands(hook)
+    ]
+    assert rules, "nothing was rendered, so this asserts nothing"
+
+    named: list[tuple[str, object]] = []
+    for rule in rules:
+        for word in rule.split():
+            try:
+                network = ipaddress.ip_network(word, strict=False)
+            except ValueError:
+                continue
+            named.append((rule, network))
+
+    # Counted, not just filtered: if what a rule looks like ever changed enough that
+    # nothing here parses as an address, every assertion below would hold vacuously and
+    # this test would go on passing over rules it had stopped reading.
+    assert len(named) > len(NOT_THE_INTERNET_IPV4), (
+        f"only {len(named)} addresses were found in {len(rules)} rules, which is fewer "
+        "than the drops alone — this test is no longer reading what it is about"
+    )
+    for rule, network in named:
+        assert network.version == 4, (
+            f"{rule!r} names {network}, which iptables cannot take: the hook fails, "
+            "the interface never comes up, and the node carries nothing"
+        )
 
 
 @pytest.mark.parametrize("name", WG_FAMILY)
