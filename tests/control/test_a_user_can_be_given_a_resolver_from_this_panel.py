@@ -110,6 +110,26 @@ async def a_users_file(client, session, *, nickname: str) -> str:
     return await the_file_for(session, await a_user(client, nickname=nickname))
 
 
+async def the_file_a_user_would_download(app, friend_id: str) -> str:
+    """The same file, produced by a session that has been holding nothing.
+
+    Which is what a friend's download actually is: a request of its own, with a session
+    of its own, reading every row for the first time. THE TEST'S OWN ``session`` FIXTURE
+    IS NOT THAT — it stays open across POSTs made in other sessions, and a session keeps
+    what it loaded (``expire_on_commit=False``), so a node-transport it read before the
+    replace still holds the parameters from before the replace. Asserting through it
+    would be asserting that this test can see a change, not that a user can.
+
+    Consumed with ``async for`` off the application's own generator, exactly as the
+    retention sweeper consumes it (``services/audit.sweep_forever``) and as the fixtures
+    do: one session, closed when the loop ends.
+    """
+    content = ""
+    async for handle in app.state.database.session():
+        content = await the_file_for(handle, friend_id)
+    return content
+
+
 # --- the boxes exist ----------------------------------------------------------
 
 def test_at_least_one_shipped_transport_defaults_a_parameter() -> None:
@@ -244,7 +264,7 @@ async def test_the_enable_form_can_give_a_user_a_resolver(
 
 
 async def test_the_replace_form_can_give_a_resolver_to_a_row_that_has_none(
-    client, session, file_transport: str
+    client, session, app, file_transport: str
 ) -> None:
     """The repair path, which is the one the owner's fleet needs.
 
@@ -266,7 +286,7 @@ async def test_the_replace_form_can_give_a_resolver_to_a_row_that_has_none(
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
     friend_id = await a_user(client, nickname="masha")
-    before = await the_file_for(session, friend_id)
+    before = await the_file_a_user_would_download(app, friend_id)
     assert "DNS = " not in before, before
 
     replaced = await client.post(
@@ -279,9 +299,15 @@ async def test_the_replace_form_can_give_a_resolver_to_a_row_that_has_none(
     # leaves it degraded — which takes it out of every subscription. That is correct and
     # is not this test's subject: put it back in service, the way the operator would
     # after fixing whatever the push hit, and read the same person's file again.
+    #
+    # That put-back is decided against the ROW rather than against the node this session
+    # was left holding (``nodes._node_to_write``). Until that fix it wrote nothing at all
+    # — the degrade had happened in the request's session, this one still read ``active``,
+    # and the line below then read an empty subscription for a node the database had
+    # never taken out of ``degraded``.
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    after = await the_file_for(session, friend_id)
+    after = await the_file_a_user_would_download(app, friend_id)
     assert f"DNS = {ANOTHER_RESOLVER}" in after, after
 
 

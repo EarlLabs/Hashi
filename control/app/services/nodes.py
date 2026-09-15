@@ -226,6 +226,55 @@ def render_params(node_transport: NodeTransport) -> dict:
 
 # --- writing ----------------------------------------------------------------
 
+async def _node_to_write(session: AsyncSession, node_id: str, *decided_by: str) -> Node:
+    """The node, with the columns a write DECIDES BY re-read off its row.
+
+    THE HOLE THIS CLOSES — M23. Every write below asks "is this actually a change?" and
+    does nothing when the answer is no: a retried click is not an event, and a retry
+    after a failed apply has to be safe. But the question was asked of the copy the
+    caller's session had in memory, which is not the same thing as the row. A session
+    keeps what it loaded (``expire_on_commit=False``, ``control/app/db.py``), so once
+    anything else has moved the node — an apply that degraded it, another request, a
+    second console — the comparison is against a value that was true some time ago. The
+    answer comes back "no change", nothing is written, the caller is told it worked, and
+    the row still says what it said before. That is the failure shape this product keeps
+    finding: an operation that reports success and changes nothing.
+
+    It is not only a lost write. ``set_node_state`` reads the same stale value to decide
+    whether the transition is ALLOWED, so a node another session retired still looks
+    draft here — and ``retired -> active``, the one transition the machine exists to
+    refuse, goes through as ``draft -> active``. That puts a destroyed host's address
+    back into every friend's subscription, which is the harm ``NodeState.allowed_from``
+    is written against.
+
+    ``_refuse_state`` in the panel re-reads for the neighbouring reason — a service that
+    rolled back leaves a husk in the identity map — and this is that lesson one door
+    over: a rollback is not the only way a session's copy stops matching the row.
+
+    NAMED COLUMNS rather than a whole-object refresh, and that is not tidiness. These
+    sessions are built ``autoflush=False`` on purpose (``services/addresses.py`` says
+    why), so a refresh DISCARDS a pending edit instead of writing it first — and
+    ``apply_node`` has one in flight exactly here: it puts a learned SSH host key on the
+    node inside the connection block, and a failure after that reaches this module
+    through ``_record_failure``. Refreshing only what the decision reads leaves that
+    edit where it is.
+
+    A READ, not a lock. Two operators moving one node in the same instant can still both
+    read the old value — the same window ``placement`` accepts by name (docs/decisions.md)
+    and for the same reason: one operator, one console, and a row lock on ``nodes`` would
+    be taken on a table the delivery endpoint joins against.
+
+    The three node-record writes come through here. ``set_transport_enabled`` does the
+    same thing in one line of its own, because the row it decides by is a
+    ``NodeTransport`` and cannot be fetched by this helper — the reasoning above is the
+    reasoning there too, and that is why it points back at this docstring instead of
+    repeating it.
+    """
+    node = await get_node(session, node_id)
+    await session.refresh(node, decided_by)
+    return node
+
+
 async def create_node(
     session: AsyncSession,
     *,
@@ -310,10 +359,12 @@ async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) ->
 
     Refused with ``edge``'s own sentence when the value could never carry a lookup: the
     rule a render refuses by, in the same words. Setting the value a node already holds
-    changes nothing and records nothing — a retried click is not an event. It changes the
-    record and never the host; the operator's next apply carries it there.
+    changes nothing and records nothing — a retried click is not an event, and "already
+    holds" is asked of the ROW (``_node_to_write``) rather than of whatever this session
+    last loaded. It changes the record and never the host; the operator's next apply
+    carries it there.
     """
-    node = await get_node(session, node_id)
+    node = await _node_to_write(session, node_id, "resolver")
     problem = resolver_problem(resolver)
     if problem:
         raise DomainError(problem)
@@ -354,10 +405,11 @@ async def set_ssh_key(
 
     Pasting the key already stored changes nothing and records nothing, exactly as
     ``set_resolver`` treats a resolver that is already in place: a retried click is not an
-    event. The comparison is on the decrypted value and its result is a boolean —
-    nothing about the key is logged, recorded or returned.
+    event, and "already stored" means stored in the row (``_node_to_write``). The
+    comparison is on the decrypted value and its result is a boolean — nothing about the
+    key is logged, recorded or returned.
     """
-    node = await get_node(session, node_id)
+    node = await _node_to_write(session, node_id, "ssh_private_key")
     if not ssh_private_key or not ssh_key_is_usable(ssh_private_key):
         raise DomainError(SSH_KEY_UNUSABLE)
     if ssh_private_key != node.ssh_private_key:
@@ -794,6 +846,14 @@ async def set_transport_enabled(
     altogether, which is also the only thing that frees its port and its config name.
     """
     node_transport = await get_node_transport(session, node_transport_id)
+    # THE FLAG IS RE-READ, for the reason ``_node_to_write`` gives about the three node
+    # writes above: the value this compares against is whatever the calling session last
+    # loaded, and on a stale copy a withdraw that finds the transport "already off"
+    # returns success while the row stays on — leaving it in every friend's subscription,
+    # which is the half of criterion 3 this function exists to make expressible. One
+    # column, so nothing else this session has pending is touched. ``purpose`` is not
+    # re-read: it is written once, when the row is created, and no service moves it.
+    await session.refresh(node_transport, ["enabled"])
 
     # A hop end is not an offer to friends, and switching one off is not a delivery
     # change — it is half a tunnel that stops completing a handshake while both ends
@@ -966,8 +1026,13 @@ async def set_node_state(
     The only way state changes. Centralised so that "degraded" always carries a
     reason for the operator — a node sitting in degraded with no explanation is a
     node nobody fixes.
+
+    Both questions below — may this transition happen, and is it a change at all — are
+    asked of the row rather than of the copy this session is holding. ``_node_to_write``
+    says what that is worth; it is the difference between this function moving a node and
+    this function saying it did.
     """
-    node = await get_node(session, node_id)
+    node = await _node_to_write(session, node_id, "state", "state_detail")
 
     # A no-op is allowed and does nothing, so a retry after a failed apply is safe.
     #
@@ -1047,6 +1112,15 @@ async def set_node_state(
                 await friends.grant_everywhere(session, friend)
 
     await session.commit()
-    logger.info("node %s state -> %s", node.id, state)
+    # Which of the two happened, rather than one line for both. A no-op is a legitimate
+    # outcome here and always was, but it is not a state change — and "node X state ->
+    # active" printed for a node that was already active is how a write that never
+    # happened reads as work in the one record a person goes looking at afterwards. The
+    # two siblings above already log only what they wrote; this is the same honesty with
+    # the no-op said out loud, because the no-op is the branch that went wrong.
+    if changed:
+        logger.info("node %s state -> %s", node.id, state)
+    else:
+        logger.info("node %s was already %s; nothing was written", node.id, state)
 
     return node
