@@ -119,7 +119,10 @@ async def test_the_outcome_says_it_withdrew_nothing_while_complete_stays_true(
         "nothing changed — this access was already withdrawn, so nothing was pushed to "
         "any node and this press cannot tell you that any node has stopped serving it. "
         "A node still running an older configuration goes on serving anyone withdrawn "
-        "while it was in that state: probe it on the Nodes screen, and apply it there."
+        "while it was in that state: probe it on the Nodes screen, and apply it there — "
+        "unless its record says its host is gone, which is the one state a node is "
+        "neither probed nor applied in, and nothing pushed from here reaches such a host "
+        "at all."
     )
 
 

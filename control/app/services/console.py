@@ -873,12 +873,44 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
 # that cannot see a running daemon may say. It names the nodes, because that is the text
 # the operator acts on, and it ends where the answer lives — probe and apply are on the
 # Nodes screen and nowhere else.
+#
+# FOR THE NODES WHERE THAT IS ACTUALLY TRUE, since M23's thirteenth round. Round 12 taught
+# the revoke dialog that a node the state machine will not put back into service cannot be
+# finished from this panel, and left this banner saying the opposite about the same host:
+# "probe it on the Nodes screen and apply it; that is where this state is read and the
+# only place it changes", over a node where both buttons answer that they refuse it. The
+# banner appears exactly when it matters — a withdrawn person may still be carried there —
+# so the one sentence the operator acts on was the one that sent them nowhere.
 WITHDRAWAL_UNCONFIRMED = (
     "Withdrawn access is not confirmed on {nodes}: {this} not running the configuration "
     "this panel would give {it}, and a daemon goes on serving the file it was last "
     "started with — so anyone withdrawn while that is true may still be carried there, "
     "whatever this table says. Probe {it} on the Nodes screen and apply {it}; that is "
     "where this state is read and the only place it changes."
+)
+
+# And the same doubt about a node no press on this panel can resolve — the other half of
+# the sentence above, split off rather than hedged into it.
+#
+# ONE PREDICATE DECIDES WHICH, and it is ``apply.cannot_serve_again``: the same one round
+# 12 gave the apply door and the probe door, so a state added later that cannot serve
+# again lands here without this module being found and edited. It names no literal state
+# for that reason — what refuses is the machine.
+#
+# It says MORE than the sentence beside it rather than less, because the operator's next
+# move is genuinely different and there is no button on this screen or the Nodes screen
+# that makes it. The wording is ``revocation._WHY_NOT_UPDATED[NotUpdated.CANNOT_SERVE]``'s,
+# said in a standing note's voice: nothing reaches that host from here, the host may still
+# be authorising the credential, and the way back is a new record for it. The two are not
+# one constant because one is about a press that just happened and this is about a fleet
+# reading — but they must not disagree, and acceptance judges both.
+WITHDRAWAL_UNCONFIRMABLE = (
+    "Withdrawn access is not confirmed on {nodes}, and no screen in this panel "
+    "finishes it: {this} in the state an operator records a host as GONE in, which is the "
+    "one state this control plane will neither probe nor apply — so anyone withdrawn while "
+    "that was true may still be carried there, and nothing pushed from here reaches {it}. "
+    "If such a host is genuinely back, register it again with \"add node\" on the Nodes "
+    "screen and apply that one; otherwise it is the host being gone that ends this."
 )
 
 # What the actions cell says on a row nobody can act on any more. It replaced "no access"
@@ -888,7 +920,26 @@ WITHDRAWAL_UNCONFIRMED = (
 ACCESS_WITHDRAWN = "access withdrawn"
 
 
-def withdrawn_cell(unconfirmed: Sequence[str]) -> str | None:
+@dataclasses.dataclass(frozen=True, slots=True)
+class UnconfirmedNode:
+    """One host this panel cannot say has stopped serving what it was last given.
+
+    Two fields because the screen has two things to say about such a host and they are not
+    the same sentence — M23's thirteenth round. Which one it gets is not a property of the
+    doubt but of the node's STATE: a degraded host is probed and applied, and a host the
+    operator has recorded as gone is neither, ever.
+    """
+
+    name: str
+
+    # Whether probe and apply are still the way to end the doubt here. Read through
+    # ``apply.cannot_serve_again`` and never off a literal state, so the two buttons'
+    # refusal and this banner's instruction come from one answer — that predicate is the
+    # one round 12 built for exactly this question.
+    can_be_finished: bool
+
+
+def withdrawn_cell(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
     """What the actions cell may say about a revoked row, or ``None`` for nothing at all.
 
     ROUND 2 CHANGED THE WORDS AND ROUND 3 FOUND THEM STILL WRONG. "access withdrawn" is
@@ -911,7 +962,7 @@ def withdrawn_cell(unconfirmed: Sequence[str]) -> str | None:
     return None if unconfirmed else ACCESS_WITHDRAWN
 
 
-async def unconfirmed_nodes(session: AsyncSession) -> list[str]:
+async def unconfirmed_nodes(session: AsyncSession) -> list[UnconfirmedNode]:
     """Every node this panel cannot say is running the configuration it would push.
 
     The Nodes screen's own two readings, joined and named: a node is CONFIRMED when it is
@@ -928,29 +979,60 @@ async def unconfirmed_nodes(session: AsyncSession) -> list[str]:
     unreachable costs exactly what a healthy one does, and it is bounded by the size of a
     fleet this product is built for — one owner and a handful of nodes.
     """
-    names = []
+    unconfirmed = []
     for node in await nodes.list_nodes(session):
         if not any(row.applied_at for row in node.transports):
             continue
         if node.state in NodeState.serving() and await drift_of(session, node) == IN_SYNC:
             continue
-        names.append(node.name)
-    return names
+        unconfirmed.append(
+            UnconfirmedNode(
+                name=node.name,
+                can_be_finished=not apply.cannot_serve_again(node.state),
+            )
+        )
+    return unconfirmed
 
 
-def withdrawal_doubt(names: Sequence[str]) -> str | None:
+def _about(names: Sequence[str], sentence: str) -> str:
+    """One of the two sentences above, agreeing with the number of hosts it names."""
+    return sentence.format(
+        nodes=", ".join(names),
+        this="that node is" if len(names) == 1 else "those nodes are",
+        it="it" if len(names) == 1 else "them",
+    )
+
+
+def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
     """The sentence for those nodes, or ``None`` when there is nothing to say.
 
     ``None`` on a fleet where every host is confirmed, so the screen carries no standing
     warning — a banner that is always there is a banner nobody reads on the day it means
     something.
+
+    UP TO TWO SENTENCES SINCE M23's THIRTEENTH ROUND, and both are said when the fleet has
+    both kinds of host in it. Splitting rather than picking one is what the finding forces:
+    the nodes are named because naming them is the text the operator acts on, so a fleet
+    with a degraded host AND a retired one has to say which instruction belongs to which —
+    one sentence covering both would either send them to a button that refuses half the
+    list, which is the defect, or drop the instruction entirely from the half where it
+    works.
+
+    Sorted only by the order ``unconfirmed_nodes`` read the fleet in, which is the Nodes
+    screen's own order: a banner that reshuffles between reloads reads as the fleet
+    changing.
     """
-    if not names:
+    if not unconfirmed:
         return None
-    return WITHDRAWAL_UNCONFIRMED.format(
-        nodes=", ".join(names),
-        this="that node is" if len(names) == 1 else "those nodes are",
-        it="it" if len(names) == 1 else "them",
+    finishable = [node.name for node in unconfirmed if node.can_be_finished]
+    written_off = [node.name for node in unconfirmed if not node.can_be_finished]
+    return " ".join(
+        _about(names, sentence)
+        for names, sentence in (
+            (finishable, WITHDRAWAL_UNCONFIRMED),
+            (written_off, WITHDRAWAL_UNCONFIRMABLE),
+        )
+        if names
     )
 
 

@@ -91,11 +91,21 @@ _WHY_NOT_UPDATED: dict[NotUpdated, str] = {
 # It names no node. A node that failed the first time is not knowable from here — the
 # rows that said which ones were affected are what the first press deleted — and naming
 # the ones that happen to be degraded now would be a guess about a different question.
+#
+# WHICH IS WHY ITS LAST CLAUSE HAD TO STOP BEING UNCONDITIONAL — M23, round 13, which
+# found the same instruction on the Users screen's standing note being given about a host
+# where both buttons refuse it. That note names its nodes and can now say which of them
+# probe and apply still finish (``console.WITHDRAWAL_UNCONFIRMABLE``); this sentence names
+# none and cannot, so it states the exception instead of promising the rule. The clause is
+# written for every caller, like the rest of this sentence: it names a STATE the record is
+# in and no screen, which is what keeps it answerable in a JSON envelope too.
 ALREADY_WITHDRAWN = (
     "nothing changed — this access was already withdrawn, so nothing was pushed to any "
     "node and this press cannot tell you that any node has stopped serving it. A node "
     "still running an older configuration goes on serving anyone withdrawn while it was "
-    "in that state: probe it on {where}, and apply it there."
+    "in that state: probe it on {where}, and apply it there — unless its record says its "
+    "host is gone, which is the one state a node is neither probed nor applied in, and "
+    "nothing pushed from here reaches such a host at all."
 )
 
 

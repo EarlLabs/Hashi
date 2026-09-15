@@ -67,10 +67,18 @@ DEFAULT_SSH_PORT = 22
 # (``panel/add_friend_dialog.html``, ``panel/routes.VALUE_TOO_LONG``): a note silently
 # clipped to 500 characters is a record written under something other than what the
 # operator typed, and this is the note that outlives the host it describes.
+#
+# IT USED TO END "and it is not repeated here", and M23's thirteenth round read that
+# sentence on a page that was repeating all 1000 characters back in the box's ``value=``.
+# The clause was true of the MESSAGE and false of the RESPONSE, and the response is what
+# the operator was looking at. Keeping the paste is the right half of that — refusing
+# rather than clipping is pointless if the refusal also throws the text away — so the
+# sentence is what changed. It now says the thing that is true for both callers at once:
+# nothing was written, nothing was cut, and the next move is the same one either way.
 STATE_DETAIL_MAX_LENGTH = 500
 STATE_DETAIL_TOO_LONG = (
     f"the reason for this state must be {STATE_DETAIL_MAX_LENGTH} characters or fewer. "
-    "Nothing was changed, and it is not repeated here."
+    "Nothing was changed and nothing was clipped — shorten it and set the state again."
 )
 
 # What an operator is told when the text in the SSH key box is not a key this control

@@ -188,6 +188,99 @@ async def test_a_node_nothing_was_ever_pushed_to_raises_no_doubt(
     assert console.withdrawal_doubt([]) is None
 
 
+async def retire(client, node_id: str) -> None:
+    """Take a node out the way an operator does: the state endpoint, which allows it."""
+    retired = await client.post(
+        f"/api/nodes/{node_id}/state",
+        json={"state": "retired", "detail": "the host is gone"},
+    )
+    assert retired.status_code == 200, retired.text
+
+
+async def test_a_node_no_press_can_finish_is_not_sent_to_probe_and_apply(
+    client, session, reality_params, accepting_nodes
+) -> None:
+    """The finding of M23's thirteenth round: one fix that landed on one surface of two.
+
+    Round 12 taught the revoke dialog that a node the state machine will not put back into
+    service cannot be finished from this panel. This banner went on saying the opposite
+    about the same host — *"Probe it on the Nodes screen and apply it; that is where this
+    state is read and the only place it changes"* — while both of those buttons answer
+    that they refuse a node in that state. The banner appears exactly when it matters, so
+    the sentence the operator acts on at the worst moment was the one that sent them
+    nowhere.
+
+    Both halves in one test, as round 12 wrote its own: the words, and then the two
+    presses that say the words and the product still agree. Pressing them is the walk's
+    own gesture.
+    """
+    node_ids = await a_served_fleet(client, reality_params, names=("old-leaf",))
+    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    await retire(client, node_ids[0])
+
+    revoked = await client.post(f"/api/friends/{friend_id}/revoke")
+    assert revoked.status_code == 200, revoked.text
+
+    table = await client.get("/panel/friends/table")
+
+    assert table.status_code == 200, table.text
+    said = " ".join(table.text.split())
+    # The doubt is still stated — that is the whole reason this banner exists.
+    assert "Withdrawn access is not confirmed" in said, said
+    assert "old-leaf" in said, said
+    assert "no screen in this panel finishes it" in said, said
+    # And the instruction that refuses is gone from it.
+    assert "Probe it on the Nodes screen and apply it" not in said, (
+        "the banner still sends the operator to two buttons that refuse this node"
+    )
+
+    # The gesture the old sentence asked for, on the two buttons it named — pressed on
+    # the console, because the console is where the banner said they were.
+    for button in ("probe", "apply"):
+        pressed = await client.post(
+            f"/panel/nodes/{node_ids[0]}/{button}", headers={"HX-Request": "true"}
+        )
+        assert pressed.status_code == 200, (button, pressed.text)
+        assert '<span class="banner-label">refused</span>' in pressed.text, (
+            button,
+            pressed.text,
+        )
+
+
+async def test_a_fleet_with_both_kinds_of_doubt_says_which_node_is_which(
+    client, session, reality_params, a_node_that_stops_answering
+) -> None:
+    """Two sentences, because the operator's next move differs per host.
+
+    The reason the fix is a split and not a rewrite: a fleet can hold a host that probe
+    and apply WILL finish and a host no press finishes at all, and the banner names the
+    nodes because naming them is the text the operator acts on. One sentence covering both
+    would send them to a button that refuses half the list — the defect — or drop the
+    instruction from the half where it works.
+    """
+    node_ids = await a_served_fleet(client, reality_params)
+    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    await retire(client, node_ids[1])
+    a_node_that_stops_answering()
+
+    revoked = await client.post(f"/api/friends/{friend_id}/revoke")
+    assert revoked.status_code == 200, revoked.text
+
+    session.expire_all()
+    still_pushable = (await nodes.get_node(session, node_ids[0])).name
+    written_off = (await nodes.get_node(session, node_ids[1])).name
+    said = " ".join((await client.get("/panel/friends/table")).text.split())
+
+    # Each host under the sentence whose instruction is true of it, asserted by the join
+    # between the two rather than by both merely being on the page.
+    assert said.count("Withdrawn access is not confirmed") == 2, said
+    assert f"not confirmed on {still_pushable}: " in said, said
+    assert (
+        f"not confirmed on {written_off}, and no screen in this panel finishes it" in said
+    ), said
+    assert "Probe it on the Nodes screen and apply it" in said, said
+
+
 def test_the_cell_and_the_note_are_two_readings_of_one_answer() -> None:
     """They are composed from the same list, so they cannot disagree — M23, round 3.
 
@@ -202,5 +295,14 @@ def test_the_cell_and_the_note_are_two_readings_of_one_answer() -> None:
     say. Round 2 got that right and this does not reopen it.
     """
     assert console.withdrawn_cell([]) == console.ACCESS_WITHDRAWN
-    assert console.withdrawn_cell(["leaf-nl"]) is None
+    assert (
+        console.withdrawn_cell([console.UnconfirmedNode(name="leaf-nl", can_be_finished=True)])
+        is None
+    )
+    # And for the kind of doubt no press resolves, which is a different sentence above the
+    # table and must be the same silence in the cell — M23, round 13.
+    assert (
+        console.withdrawn_cell([console.UnconfirmedNode(name="old-leaf", can_be_finished=False)])
+        is None
+    )
     assert console.withdrawn_cell(["leaf-nl", "leaf-is"]) is None

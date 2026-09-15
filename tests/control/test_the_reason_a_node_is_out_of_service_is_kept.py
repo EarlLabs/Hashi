@@ -165,6 +165,32 @@ async def test_a_reason_the_column_cannot_hold_is_refused_with_a_sentence(client
     assert shown.json()["state_detail"] is None, shown.text
 
 
+async def test_the_refusal_does_not_say_it_threw_away_a_paste_it_kept(client) -> None:
+    """M23, round 13: the sentence and the response disagreed about the same text.
+
+    The refusal ended *"and it is not repeated here"* while the dialog behind it put all
+    1000 characters back in the box's ``value=`` — true of the message, false of the page
+    the operator was reading. KEEPING the paste is the right half: refusing rather than
+    clipping buys nothing if the refusal also throws the text away, and this is the note
+    that outlives the host it describes. So the sentence is what changed, and this holds
+    the two together — the box still has it, and nothing on screen claims otherwise.
+    """
+    node_id = await a_node(client, name="kept-paste")
+    too_long = "x" * (nodes.STATE_DETAIL_MAX_LENGTH + 1)
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/state",
+        data={"state": "retired", "detail": too_long},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422, refused.status_code
+    assert f'value="{too_long}"' in refused.text, "the operator's paste was thrown away"
+    assert "not repeated here" not in refused.text, (
+        "the refusal still says the value is not repeated, on a page repeating all of it"
+    )
+
+
 async def test_a_reason_exactly_at_the_limit_is_still_taken(client) -> None:
     """The boundary, because a bound written one character out is a bound that refuses a
     value the column would have held — and the operator would never learn which."""
