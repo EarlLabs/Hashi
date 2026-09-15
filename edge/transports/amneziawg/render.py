@@ -77,7 +77,17 @@ def render_server(
     refused rather than rendered, which is ``wg_quick_egress``'s decision and not a branch
     here.
     """
-    plan = wg_quick_egress(egress, str(params["tunnel_address"]), exit_via)
+    plan = wg_quick_egress(
+        egress,
+        str(params["tunnel_address"]),
+        exit_via,
+        # What a FRIEND's own file tells their device to ask, so this node's rules can let
+        # exactly that through and nothing else that is not on the internet — M23. The
+        # same two sources ``render_client_config`` reads, passed to one function
+        # (``egress.client_resolvers``) so the file and the firewall cannot disagree.
+        client_dns=[str(entry) for entry in params.get("client_dns", ())],
+        node_resolver=node.resolver,
+    )
 
     peers = []
     seen_routes: set[str] = set()

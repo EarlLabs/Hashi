@@ -23,6 +23,7 @@ acceptance walk.
 """
 
 import dataclasses
+import ipaddress
 import json
 
 import pytest
@@ -52,6 +53,14 @@ INSTALLED = sorted(discover())
 
 # The hop's near end on an entry node, as in the M3 file. RFC 1918.
 HOP_ADDRESS = "10.44.0.1"
+
+# A resolver that is ON THE INTERNET, which every other address in this zone's fixtures
+# deliberately is not: the documentation ranges (RFC 5737) the rulebook mandates are all
+# addresses a friend's tunnel now drops, so a test that wanted "a resolver needing no
+# exception" could not use one. This is the deprecated 6to4 relay anycast block — still
+# reserved, so it is nobody's host, and still globally routable, so the rules carry it
+# without an exception. The test below asserts that rather than trusting this comment.
+A_RESOLVER_ON_THE_INTERNET = "192.88.99.53"
 
 
 def rendered(name: str, node, request, **policy) -> str:
@@ -174,8 +183,22 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     device has no route to its usual resolver once the tunnel routes every address. That
     is ``tests/edge/test_a_friend_can_resolve_a_name.py``, and the two claims are about
     two different files.
+
+    ONE EXCEPTION, added by M23's fifth round and narrower than it sounds: a friend's
+    tunnel now carries only what is on the internet, so a resolver that is NOT — a
+    private one, which the record is allowed to name — has to be let through by name in
+    the node's own rules. A resolver on the internet needs no such rule and changes
+    nothing, which is why this test uses one, and the exception itself is asserted where
+    the rest of that policy is
+    (``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py``).
     """
-    with_one = rendered(name, node, request, egress=Egress.LOCAL)
+    assert ipaddress.ip_address(A_RESOLVER_ON_THE_INTERNET).is_global, (
+        "this test's resolver must be one the friend-facing rules carry with no "
+        "exception of its own, or it proves nothing about the bytes"
+    )
+    on_the_internet = dataclasses.replace(node, resolver=A_RESOLVER_ON_THE_INTERNET)
+
+    with_one = rendered(name, on_the_internet, request, egress=Egress.LOCAL)
     without = rendered(
         name, dataclasses.replace(node, resolver=None), request, egress=Egress.LOCAL
     )

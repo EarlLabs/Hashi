@@ -35,6 +35,18 @@ WHY:  M14, measured on a real entry node with a real client. The handshake compl
       the host's resolver on the near side of the hop. Same shape again — the answer is
       a value from the node's record — and the same refusal when the value is missing,
       because rendering without it IS the leak, with every screen green.
+
+      M23's fifth walk found the one thing none of them looked at: not where a friend's
+      traffic LEAVES, but what it can reach on the way. On the owner's real leaf a friend
+      opened TCP to the Russian entry node's address on the hop and was answered by its
+      SSH daemon — an RFC1918 address no client can reach from the open internet, with
+      the packet masqueraded on the way in so the entry saw it arrive from its own
+      trusted peer. ``-i %i -j ACCEPT`` lets a decrypted packet leave by ANY interface,
+      and one of a leaf's interfaces is the hop. So a friend-facing tunnel now says what
+      a friend's traffic may reach — the internet, and the resolver their own file tells
+      them to ask — and the LEAF END OF A HOP, which carries another node's traffic and
+      is nobody's device, is its own policy (``RELAY``) instead of the same value asked
+      to mean two things.
 HOW:  pure, like everything in this zone: text in, text out, no clock, no I/O, and
       nothing here reads a node, an interface or an address off this machine.
 
@@ -78,8 +90,28 @@ class Egress(enum.StrEnum):
     NONE = "none"
 
     # Forwarded, and masqueraded out of whatever route this node has to the internet.
-    # What a friend-facing transport on a leaf needs, and the whole of M14.1.
+    # What a friend-facing transport on a leaf needs, and the whole of M14.1. Since M23
+    # it also says WHOSE traffic this is — a friend's device, which may reach the
+    # internet and nothing else this node is attached to (``NOT_THE_INTERNET``).
     LOCAL = "local"
+
+    # The same exit, for the far END OF A HOP rather than for a friend's device: what
+    # arrives here has already been through another node of ours, and leaves by this
+    # node's own route. A second value rather than a second meaning for ``LOCAL``,
+    # because the two differ in exactly the way that matters — M23's fifth walk.
+    #
+    # A friend's packets are theirs, arrive from a device this project does not control,
+    # and must reach only the internet. What arrives over a hop is an ENTRY NODE's
+    # forwarded traffic, and the entry's own lookups go through it to a resolver the
+    # record is allowed to name privately (``resolver_problem``), so the narrow rule
+    # would take away the very thing the hop was built to carry. Told apart HERE rather
+    # than guessed at: ``relay.render_hop`` is the only caller, and it knows which end it
+    # is rendering — see the note there, and ``control`` keeps sending ``LOCAL`` for a
+    # friend-facing row and gets the strict answer without knowing this value exists.
+    #
+    # It renders the rules ``LOCAL`` rendered before this walk, byte for byte, which is
+    # the property that lets the owner's live hop be re-applied without a change.
+    RELAY = "relay"
 
     # Out through a HOP to another node, and never out of this node's own route — M3,
     # and the charter's core claim. The near end of that hop is named separately
@@ -120,39 +152,165 @@ class WgQuickHooks:
 # The rules, as (table, chain, rule) — one place, so ``PostUp`` and ``PostDown`` cannot
 # drift into describing different rule sets.
 #
-# Both FORWARD rules are needed and neither is enough. The measured host had ufw's
-# ``deny (routed)`` default, so the return direction is dropped just as readily as the
-# outbound one.
+# THE ORDER HERE IS THE INVERSE OF THE ORDER IN THE CHAIN, and that is the point rather
+# than an accident — M23, measured on the real leaf. Every rule is installed with
+# ``-I <chain> 1``, so the LAST one written ends up at the HEAD and decides first. A rule
+# written first sits behind the others and decides nothing — and a test asserting it was
+# present would pass, which is why the tests assert the VERDICT a packet gets.
 #
 # ``! -o %i`` on the MASQUERADE is what removes the need for an egress interface name AND
 # keeps tunnel-internal traffic alone: a packet from one peer to another never leaves the
 # interface, so it must not be rewritten to look like the node.
 #
-# THE DROP IS THIRD IN THIS TUPLE AND FIRST IN THE CHAIN, and the inversion is the point
-# rather than an accident — M23, measured on the real leaf. Every rule here is installed
-# with ``-I <chain> 1``, so the LAST one inserted ends up at the head, and the two ACCEPTs
-# above each match a packet going from this interface back out of it: ``-i %i -j ACCEPT``
-# permits ``%i → %i``, and so does ``-o %i -j ACCEPT``. With a pool, every friend on this
-# node holds an address in one routed network, so those two rules give thirty people who
-# need not know each other full IP reachability to each other's laptops and phones —
-# observed on a real node with two real clients (``ping`` 0% loss, a TCP payload carried).
-# Placing the DROP after them here is what places it BEFORE them there, which is the only
-# position at which it decides anything.
+# Nothing below REJECTs, and every refusal is a DROP: a rejection answers, and an answer
+# is a signal — one friend's device enumerating the others, or a scan mapping what a node
+# is attached to. Nothing below logs either. netfilter has a ``LOG`` target that would
+# break the charter's one absolute rule in a single word; there is none here, not even
+# commented out.
+
+
+# The two ACCEPTs that make a tunnel carry traffic at all, and the DROP that stops what
+# arrives on it from leaving by it again.
 #
-# It is a DROP and not a REJECT: a rejection answers, and an answer is a signal one
-# friend's device can use to enumerate the others. It does not log, like everything else
-# in this module.
+# Both ACCEPTs are needed and neither is enough: the measured host had ufw's ``deny
+# (routed)`` default, so the return direction is dropped just as readily as the outbound
+# one. Both are also wider than they look — ``-i %i -j ACCEPT`` permits ``%i → %i``, and
+# so does ``-o %i -j ACCEPT``. With a pool every friend on this node holds an address in
+# one routed network, so those two alone gave thirty people who need not know each other
+# full IP reachability to each other's laptops and phones: observed on a real node with
+# two real clients, ``ping`` at 0% loss and a TCP payload carried. The DROP is written
+# after them so that it lands in front of them.
 #
-# Safe on the leaf end of a hop, which renders this same policy: that interface has one
-# peer authorised for a single ``/32``, so ``%i → %i`` there is the far end addressing
-# itself through the tunnel, which is not a packet any working hop sends. The entry end
-# renders ``Egress.HOP`` and no filter rule at all, so it never sees this line.
-def _rules(network: str) -> tuple[tuple[str, str, str], ...]:
+# Safe on the leaf end of a hop, which renders exactly these three: that interface has
+# one peer authorised for a single ``/32``, so ``%i → %i`` there is the far end
+# addressing itself through the tunnel, which is not a packet any working hop sends. The
+# entry end renders ``Egress.HOP`` and no filter rule at all, so it never sees this line.
+_CARRY = (
+    "-i %i -j ACCEPT",
+    "-o %i -j ACCEPT",
+    "-i %i -o %i -j DROP",
+)
+
+# What a FRIEND's tunnel may not reach: every destination IANA's special-purpose registry
+# says is not on the public internet. Their traffic is here to reach the internet, and
+# the walk that found this measured the cost of the difference.
+#
+# M23, round 5, on the owner's real leaf: a friend opened TCP to ``10.90.0.1`` — the
+# Russian entry node's address on the hop — and was answered by its SSH daemon, 104 ms
+# away against the leaf's own 52. That address is RFC1918 and unreachable from the open
+# internet, so the tunnel was granting reach that nothing else grants, to the one node in
+# this fleet that is inside Russia, for every one of thirty to fifty friends.
+#
+# WHY A DESTINATION RULE AND NOT AN INTERFACE ONE — the decision worth recording, rather
+# than the list. What makes the entry reachable is a ROUTE on the leaf, out of an
+# interface this module may not name: it renders one file per transport, it may never
+# look at a host, and a node's other interfaces are not data it is given. Inside one
+# interface's own rules the only thing that tells the internet apart from the private
+# neighbourhood a node sits in is the DESTINATION, so that is what is matched. Naming the
+# hop's interface would also have closed exactly one hole and left the host's own LAN, its
+# provider's metadata service and every other tunnel on the box wide open.
+#
+# WHY THE LIST IS HERE AND NOT ON A NODE'S RECORD. ``CLAUDE.md`` forbids a hardcoded
+# country, provider, IP, domain or port because each names something a node could have to
+# rotate away from. This names nothing of any node: it is IANA's registry, identical on
+# every host in every country, and no node this fleet can register is reachable at one of
+# these addresses. It is also not OUR list —
+# ``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py`` holds it against the
+# standard library's own answer in both directions, so a range that drifts from
+# ``ipaddress`` fails the suite rather than a friend's tunnel.
+#
+# Contained blocks are left out where a wider one already covers them
+# (``255.255.255.255/32`` is inside ``240.0.0.0/4``, ``192.0.0.170/31`` inside
+# ``192.0.0.0/24``): a rule that can never be reached is a rule an operator reading
+# ``iptables -S`` has to work out is dead.
+NOT_THE_INTERNET = (
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "240.0.0.0/4",
+)
+
+# The one thing off the internet a friend may still reach: the resolver their own config
+# file tells them to ask, on the port a resolver is asked on.
+#
+# It exists because ``client_resolvers`` hands a friend's device the node record's own
+# resolver and ``resolver_problem`` deliberately allows that to be a private address —
+# "a resolver this node can reach is one that friend can reach" is the sentence round
+# one's DNS fix was built on, and an operator copying the value out of their leaf's
+# ``/etc/resolv.conf``, which is the most natural place to find one, gets a private
+# address. Without this exception the drops above would take every name away from every
+# friend on such a node, silently, while addresses kept working: the failure shape this
+# project is most afraid of, reintroduced by the fix for it.
+#
+# Scoped to the port and the two protocols DNS is spoken on, which is not the hardcoded
+# port ``CLAUDE.md`` forbids: a wg-quick ``DNS =`` line carries no port at all, so there
+# is no other value this could be and nothing to rotate. An address-only exception would
+# be far wider than the hole it closes — an operator who pointed their friends' DNS at
+# the entry node would hand back, in full, the reach these rules exist to take away.
+RESOLVER_PORT = "53"
+RESOLVER_PROTOCOLS = ("udp", "tcp")
+
+
+def _forward(rules: Sequence[str]) -> tuple[tuple[str, str, str], ...]:
+    """Filter-table FORWARD rules, in the order they are written — see above for why."""
+    return tuple(("filter", "FORWARD", rule) for rule in rules)
+
+
+def _masquerade(network: str) -> tuple[str, str, str]:
+    """The one NAT rule: what came from this tunnel and is leaving by anything else."""
+    return ("nat", "POSTROUTING", f"-s {network} ! -o %i -j MASQUERADE")
+
+
+def _relay_rules(network: str) -> tuple[tuple[str, str, str], ...]:
+    """The leaf end of a hop: what arrives over it leaves by this node's own route.
+
+    Deliberately unchanged by M23's fifth round, byte for byte, and the restraint is the
+    decision. What arrives here is an ENTRY node's forwarded traffic, not a device's, and
+    it includes that node's own lookups — which M16 lets the record point at a private
+    resolver on this side of the hop. The narrow rule a friend's tunnel gets would take
+    that away, and the owner's live hop renders from this line.
+
+    What it therefore does NOT close is the mirror of the finding: a friend served by the
+    ENTRY, whose proxy will dial whatever it is asked for, can be sent to an address on
+    this node's own private neighbourhood. That is a policy for the thing that opens the
+    connection — the proxy's outbound routing — and it is recorded rather than half-built
+    here, because a rule at this end cannot tell that packet from the hop's own traffic.
+    """
+    return (*_forward(_CARRY), _masquerade(network))
+
+
+def _friend_rules(
+    network: str, resolvers: Sequence[str]
+) -> tuple[tuple[str, str, str], ...]:
+    """A friend's own tunnel: the internet, the resolver they were told to ask, no more.
+
+    ``resolvers`` are the addresses this friend's own configuration file names that the
+    drops would otherwise take away — see ``_resolver_exceptions``. They are written LAST
+    so they land at the head of the chain, in front of the drops they are exceptions to;
+    everything about the order here reads backwards, and the comment above says why.
+    """
     return (
-        ("filter", "FORWARD", "-i %i -j ACCEPT"),
-        ("filter", "FORWARD", "-o %i -j ACCEPT"),
-        ("filter", "FORWARD", "-i %i -o %i -j DROP"),
-        ("nat", "POSTROUTING", f"-s {network} ! -o %i -j MASQUERADE"),
+        *_forward(
+            (
+                *_CARRY,
+                *(f"-i %i -d {destination} -j DROP" for destination in NOT_THE_INTERNET),
+                *(
+                    f"-i %i -d {resolver} -p {protocol} --dport {RESOLVER_PORT} -j ACCEPT"
+                    for resolver in resolvers
+                    for protocol in RESOLVER_PROTOCOLS
+                ),
+            )
+        ),
+        _masquerade(network),
     )
 
 
@@ -211,8 +369,53 @@ def _hop_rules(exit_via: str) -> tuple[tuple[str, str], ...]:
     )
 
 
+def _off_the_internet(address: str) -> bool:
+    """Whether the rules a friend's tunnel carries would drop a packet addressed here.
+
+    Asked of ``NOT_THE_INTERNET`` itself rather than of ``ipaddress.is_global``, so an
+    exception can never be rendered for an address the drops do not take away, nor
+    withheld from one they do. The two answers agree today and the test holds them to it;
+    deriving the question from the list is what keeps them agreeing.
+    """
+    destination = ipaddress.ip_address(address)
+    return any(
+        destination in ipaddress.ip_network(network) for network in NOT_THE_INTERNET
+    )
+
+
+def _resolver_exceptions(
+    client_dns: Sequence[str], node_resolver: str | None, tunnel_address: str
+) -> tuple[str, ...]:
+    """The resolvers a friend on this tunnel must still reach through the drops.
+
+    Asked through ``client_resolvers`` rather than beside it: the address a rule opens and
+    the address the friend's own file names are then one answer, and cannot drift into a
+    hole for a resolver nobody was told to ask. Only those the drops would take away are
+    returned, so a node whose resolver is on the internet renders no exception at all and
+    the rule set states exactly what its exceptions are.
+
+    A resolver this tunnel could never give a friend gets no exception either, rather than
+    a refusal, and the asymmetry is deliberate. The refusal belongs to the file that would
+    have carried it — ``render_client_config`` raises there, and `control` already knows
+    to skip such a row when a friend downloads. Raising HERE would take a whole node out
+    of service, every transport on it and every friend, over a value that reaches one
+    file; and a fleet that stored such a value before it was refused at input still holds
+    it. Fail-closed either way: no exception is the strict answer, not the lenient one.
+    """
+    try:
+        resolvers = client_resolvers(client_dns, node_resolver, tunnel_address)
+    except EgressNotRenderable:
+        return ()
+    return tuple(resolver for resolver in resolvers if _off_the_internet(resolver))
+
+
 def wg_quick_hooks(
-    egress: Egress, tunnel_address: str, exit_via: str | None = None
+    egress: Egress,
+    tunnel_address: str,
+    exit_via: str | None = None,
+    *,
+    client_dns: Sequence[str] = (),
+    node_resolver: str | None = None,
 ) -> WgQuickHooks | None:
     """The ``PostUp``/``PostDown`` pair for one interface under one policy.
 
@@ -228,6 +431,13 @@ def wg_quick_hooks(
     under ``Egress.HOP`` — where it must be THIS interface's own address, because the only
     tunnel that can carry a node's exit is the tunnel that is the exit. Anything else is
     refused by ``wg_quick_egress``, which is where the two are compared.
+
+    ``client_dns`` and ``node_resolver`` are the two sources a FRIEND's own config file
+    names its resolver from, and they are here for one reason: under ``Egress.LOCAL`` the
+    rules have to let through exactly what that file tells the device to ask, and nothing
+    else off the internet. They are the same two values ``render_client_config`` reads,
+    passed through one function so the file and the firewall cannot disagree. Ignored by
+    every other policy — a hop end carries nobody's device.
     """
     if egress is Egress.HOP:
         rules = _hop_rules(exit_via or "")
@@ -243,7 +453,7 @@ def wg_quick_hooks(
         down = "; ".join(f"ip {command} del {arguments} || true" for command, arguments in rules)
         return WgQuickHooks(up=up, down=down)
 
-    if egress is not Egress.LOCAL:
+    if egress not in (Egress.LOCAL, Egress.RELAY):
         return None
 
     interface = ipaddress.ip_interface(tunnel_address)
@@ -260,7 +470,17 @@ def wg_quick_hooks(
             "transport an IPv4 tunnel address, or leave it with no local exit."
         )
 
-    rules = _rules(str(interface.network))
+    # Which rule set, decided by the policy's own value and nothing else. A friend's
+    # device may reach the internet and the resolver it was handed; the far end of a hop
+    # is another node of ours and keeps what it always had — see both functions.
+    rules = (
+        _friend_rules(
+            str(interface.network),
+            _resolver_exceptions(client_dns, node_resolver, tunnel_address),
+        )
+        if egress is Egress.LOCAL
+        else _relay_rules(str(interface.network))
+    )
 
     # Inserted at the head of the chain rather than appended: the measured host runs ufw,
     # whose own rules sit in the same chain, and a rule appended behind them is a rule
@@ -306,7 +526,12 @@ def _bare_address(address: str) -> str:
 
 
 def wg_quick_egress(
-    egress: Egress, tunnel_address: str, exit_via: str | None = None
+    egress: Egress,
+    tunnel_address: str,
+    exit_via: str | None = None,
+    *,
+    client_dns: Sequence[str] = (),
+    node_resolver: str | None = None,
 ) -> WgQuickEgress:
     """One kernel tunnel's whole egress policy, ready for its template.
 
@@ -325,7 +550,14 @@ def wg_quick_egress(
                 "leaves. Nothing is rendered from a contradiction."
             )
         return WgQuickEgress(
-            hooks=wg_quick_hooks(egress, tunnel_address), table=None, peer_route=None
+            hooks=wg_quick_hooks(
+                egress,
+                tunnel_address,
+                client_dns=client_dns,
+                node_resolver=node_resolver,
+            ),
+            table=None,
+            peer_route=None,
         )
 
     if not exit_via:
@@ -673,8 +905,11 @@ __all__ = [
     "CLIENT_ROUTES",
     "EXIT_ROUTE",
     "HOP_ROUTE_TABLE",
+    "NOT_THE_INTERNET",
     "NO_RESOLVER",
     "NO_ROUTES",
+    "RESOLVER_PORT",
+    "RESOLVER_PROTOCOLS",
     "Egress",
     "EgressNotRenderable",
     "ResolverMissing",
