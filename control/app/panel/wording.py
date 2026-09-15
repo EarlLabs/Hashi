@@ -96,7 +96,8 @@ _THE_CONSOLES_DIRECTIONS: dict[str, str] = {
     # M23. The console can name the control the operator presses; an API caller has no
     # row and no button, so the service's own clause says only what has to happen.
     apply.GIVE_IT_A_KEY: (
-        f'Give it one with "ssh key" on its row on {apply.WHERE_TO_RETRY}, then apply it.'
+        f'Give it one with "ssh key" on its row on {apply.WHERE_TO_RETRY}, then try '
+        "again."
     ),
 }
 

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.models import Credential, Friend, Subscription
 from control.app.services import addresses, keymaterial, nodes
+from edge.egress import EgressNotRenderable
 from edge.node import Credential as EdgeCredential
 from edge.registry import ClientConfig, ClientEntry, SubscriptionFormat, profile
 
@@ -173,11 +174,13 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
     error: they have nothing in this shape, and the endpoint says so with an empty
     archive for the same reason ``render`` returns an empty document.
 
-    THREE THINGS ARE SKIPPED RATHER THAN REFUSED, and the third is M23's: a row that is
-    not serving, a transport with no file shape, and a credential that does not carry
-    what its transport declares a consumer's material is. All three for one reason — this
-    is the only route a friend touches, and a refusal anywhere in this loop is a 500 that
-    takes away every node they have, not just the one it was about.
+    FOUR THINGS ARE SKIPPED RATHER THAN REFUSED, and the last two are M23's: a row that
+    is not serving, a transport with no file shape, a credential that does not carry what
+    its transport declares a consumer's material is, and — round 2 — a row whose
+    parameters cannot be rendered into a tunnel at all. All four for one reason, and it
+    is a property of this LOOP rather than a judgement about any of them: this is the
+    only route a friend touches, and a refusal anywhere in it is a 500 that takes away
+    every node they have, not just the one it was about.
     """
     serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
 
@@ -226,19 +229,51 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
         }):
             continue
 
-        produced.append(
-            transport.serialise(
-                SubscriptionFormat.CLIENT_CONFIG_FILE,
-                nodes.node_view(node_transport.node),
-                nodes.render_params(node_transport),
-                # THE SAME BUILDER the node's own config is rendered from — M17. This
-                # file's ``Address`` line and that config's ``AllowedIPs`` are two
-                # renders of one allocation, and a second builder here is exactly how a
-                # person ends up authorised for an address their device does not use:
-                # a tunnel that comes up and carries nothing, with every screen green.
-                rendering,
+        try:
+            produced.append(
+                transport.serialise(
+                    SubscriptionFormat.CLIENT_CONFIG_FILE,
+                    nodes.node_view(node_transport.node),
+                    nodes.render_params(node_transport),
+                    # THE SAME BUILDER the node's own config is rendered from — M17. This
+                    # file's ``Address`` line and that config's ``AllowedIPs`` are two
+                    # renders of one allocation, and a second builder here is exactly how
+                    # a person ends up authorised for an address their device does not
+                    # use: a tunnel that comes up and carries nothing, with every screen
+                    # green.
+                    rendering,
+                )
             )
-        )
+        except EgressNotRenderable:
+            # THE FOURTH SKIP, and the general form of the third — M23, round 2. A row
+            # whose stored parameters no longer describe a tunnel anything can be built
+            # for: a resolver in a family this tunnel cannot carry, or one inside the
+            # tunnel's own range. Both are refused at input now, on every path that can
+            # store one — but a fleet that stored one before that landed still holds it,
+            # and this is the route that meets it.
+            #
+            # Skipped for the reason the three above are, which is the property this loop
+            # has rather than a judgement about resolvers: this is the only route a user
+            # touches, and ONE refusal escaping it answers their whole subscription with a
+            # 500 — every node they hold, lost to one row that is not even about them. A
+            # user whose only node is this one gets an empty archive instead, which is the
+            # same answer a momentarily degraded fleet gives them and is not mistakable
+            # for a revocation.
+            #
+            # ``EgressNotRenderable`` and nothing wider. It is ``edge``'s own type, shared
+            # by every transport and owned by none, so catching it names no protocol —
+            # which is exactly why the skip above asks a DECLARATION instead: a
+            # transport's own exceptions share no base class, and reaching for one here
+            # would mean importing a protocol's module into this file.
+            #
+            # WHAT THIS DOES NOT DO is tell the operator. The screen that counts the skip
+            # above (``console.stale_material``) reads a credential's material, which is
+            # `control`'s own vocabulary; whether a ROW can be rendered is a question only
+            # the transport's parameters answer, and nothing declares which of them a
+            # client file needs. So this one is silent on both sides until a declaration
+            # exists to hang it on — recorded here rather than papered over, because the
+            # repair is the same one the input refusal now forces: retype the resolver.
+            continue
 
     # Same ordering rule, and the same reason, as ``entries_for``: a list that reorders
     # itself between refreshes looks like nodes appearing and disappearing.

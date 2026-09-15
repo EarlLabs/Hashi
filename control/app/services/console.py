@@ -34,6 +34,7 @@ import dataclasses
 import datetime
 import json
 import logging
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -853,6 +854,81 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
         )
         for node in await nodes.list_nodes(session)
     ]
+
+
+# What the Users screen says instead of nothing about a withdrawal it cannot confirm —
+# M23, round 2, measured on the real leaf: a revoke whose push failed left the row reading
+# "revoked / no access" while that person's tunnel was carrying traffic, with the truth
+# only on the Nodes screen and only in a banner that had already gone.
+#
+# IT IS A FLEET SENTENCE AND NOT A PER-PERSON ONE, and that is forced rather than chosen.
+# A revocation DELETES the credential rows — which is the property that makes revocation
+# total (``friends.revoke``) — so the moment it commits, nothing in this database records
+# which nodes that person was on. Naming them per row would need a record this schema does
+# not carry and the charter would not obviously want; what is knowable is which hosts this
+# panel cannot say are running what it would give them, which is the same set for
+# everybody and is exactly what "may still be serving a withdrawn credential" means.
+#
+# So it hedges, and the hedge is the honest part: "may still be carried" is what a panel
+# that cannot see a running daemon may say. It names the nodes, because that is the text
+# the operator acts on, and it ends where the answer lives — probe and apply are on the
+# Nodes screen and nowhere else.
+WITHDRAWAL_UNCONFIRMED = (
+    "Withdrawn access is not confirmed on {nodes}: {this} not running the configuration "
+    "this panel would give {it}, and a daemon goes on serving the file it was last "
+    "started with — so anyone withdrawn while that is true may still be carried there, "
+    "whatever this table says. Probe {it} on the Nodes screen and apply {it}; that is "
+    "where this state is read and the only place it changes."
+)
+
+# What the actions cell says on a row nobody can act on any more. It replaced "no access"
+# — M23, round 2: that is a claim about a person's connectivity, which this control plane
+# cannot make about a host it has not confirmed, and the walk measured it being false. The
+# words are about what the OPERATOR did, which is the part that is always true.
+ACCESS_WITHDRAWN = "access withdrawn"
+
+
+async def unconfirmed_nodes(session: AsyncSession) -> list[str]:
+    """Every node this panel cannot say is running the configuration it would push.
+
+    The Nodes screen's own two readings, joined and named: a node is CONFIRMED when it is
+    in a serving state and its drift cell reads in sync, and is in this list otherwise —
+    but only once something has actually been pushed to it. A node nothing ever reached is
+    serving nobody, so it carries no withdrawn credential either, and listing it would put
+    a permanent warning on a first-run panel.
+
+    Nothing here is about a person. It is the fleet's own state, asked once for a screen
+    that has to say what a withdrawal it cannot confirm means.
+
+    One render per node, like ``node_rows``, and for the same reason: the answer is
+    honest rather than cached. It touches no network, so a fleet with every host
+    unreachable costs exactly what a healthy one does, and it is bounded by the size of a
+    fleet this product is built for — one owner and a handful of nodes.
+    """
+    names = []
+    for node in await nodes.list_nodes(session):
+        if not any(row.applied_at for row in node.transports):
+            continue
+        if node.state in NodeState.serving() and await drift_of(session, node) == IN_SYNC:
+            continue
+        names.append(node.name)
+    return names
+
+
+def withdrawal_doubt(names: Sequence[str]) -> str | None:
+    """The sentence for those nodes, or ``None`` when there is nothing to say.
+
+    ``None`` on a fleet where every host is confirmed, so the screen carries no standing
+    warning — a banner that is always there is a banner nobody reads on the day it means
+    something.
+    """
+    if not names:
+        return None
+    return WITHDRAWAL_UNCONFIRMED.format(
+        nodes=", ".join(names),
+        this="that node is" if len(names) == 1 else "those nodes are",
+        it="it" if len(names) == 1 else "them",
+    )
 
 
 async def friend_rows(session: AsyncSession) -> list[FriendRow]:
@@ -1791,9 +1867,20 @@ async def overview(session: AsyncSession) -> Overview:
 # It is on the healthy answer and not on the failing ones deliberately. A failure is
 # already a narrower claim than the operator wants; it is the word "serving" that was
 # read as "working", and this is the sentence that word lived in.
+#
+# IT NAMES THE FIREWALLS SINCE M23, round 2, and that sentence was bought on the real
+# leaf: a transport was enabled on a port the host's ufw did not allow, the node read
+# "active / in sync", this probe read "is listening", and the client sent 12 479 bytes and
+# received none. Every reading was true. "Not dialled from outside" was already the whole
+# of it in principle, and in practice the operator read it as a formality — so the two
+# layers that actually sit between a bound socket and a user are named, because a socket
+# bound behind a closed firewall is exactly what this probe must not be read as
+# disproving. Neither layer is one this control plane can see or change: the host's is
+# opened by ``scripts/node-bootstrap.sh --port``, and the provider's is in their console.
 WHAT_A_PROBE_CANNOT_SEE = (
     "Read on the node itself, not dialled from outside — so this is not proof that "
-    "anyone can connect."
+    "anyone can connect. A port bound behind a closed host firewall, or behind a closed "
+    "security group at the provider, reads from here exactly like this one does."
 )
 
 
@@ -2514,7 +2601,7 @@ def pool_takers(people: int) -> str:
         return (
             "No user is active yet, so nothing takes an address from it today — the "
             "size is the ceiling on how many this node serves on this protocol, until "
-            "you raise it under replace params."
+            "you raise it on Keys & configs, under replace params."
         )
     if people == 1:
         return "1 active user takes an address from it the moment this node serves."

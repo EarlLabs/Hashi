@@ -293,6 +293,28 @@
         panel, and none of these boxes will ever ask you for one. The host itself serves
         nothing new until you apply the node.
       </div>
+      {#
+        WHAT APPLY DOES NOT DO — M23, round 2, measured on the real leaf. A transport was
+        enabled on a port the host's firewall did not allow; the node read active and in
+        sync, the probe read "is listening", and the client sent twelve kilobytes and
+        received nothing. Apply writes configuration files and restarts containers. It
+        runs no firewall command, and it cannot: the account it logs in as is deliberately
+        unprivileged, and the provider's own firewall is not on the host at all.
+
+        So the sentence is here, at the moment the number is chosen, rather than as a
+        check this panel cannot make — nothing in this control plane knows which ports a
+        host was prepared with, and a refusal based on a guess would turn away a port that
+        is open. It names no port, no protocol and no host: which number is a property of
+        the box above, and which layer-4 protocol is the transport's own declaration.
+      #}
+      <div class="dialog-body">
+        Nothing here opens a port. The number you give is one the host must already
+        allow — <span class="mono">scripts/node-bootstrap.sh --port</span> is what opens
+        it on the host, and the provider's own firewall is a second place it can be shut.
+        A port nobody opened looks exactly like a working transport from this panel: the
+        container comes up, a probe finds something holding the port, and the user's
+        client times out.
+      </div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
         <button class="btn btn-primary" type="submit">enable</button>

@@ -2,9 +2,10 @@
 
 WHAT: a real Postgres schema, freshly created per test, an application built against
       it, an HTTP client already authenticated as the operator, ``nothing_retired`` for
-      the family tests that must still reach a retired transport's capabilities, and — at
-      the bottom — ``assert_plain_reason``, imported with ``from .conftest import`` the
-      way ``test_migrations.py`` does.
+      the family tests that must still reach a retired transport's capabilities,
+      ``accepting_nodes`` for the two files that need an apply to SUCCEED, and — at the
+      bottom — ``assert_plain_reason``, imported with ``from .conftest import`` the way
+      ``test_migrations.py`` does.
 WHY:  the control rulebook requires a real Postgres rather than SQLite — async
       drivers, JSONB and constraints all behave differently, and a suite that passes
       on SQLite proves nothing about production. This schema has a JSONB column and
@@ -20,6 +21,7 @@ suite that silently passes without a database is a suite that proves nothing.
 """
 
 import dataclasses
+import inspect
 import os
 import socket
 from collections.abc import Iterator
@@ -35,6 +37,7 @@ from control.app.main import create_app
 from control.app.models import Base
 from control.app.services import transports as transports_service
 from control.app.settings import Settings
+from edge.bootstrap import NodeConnection, node_stack
 from edge.registry import discover
 
 # Where the tests find a database. Defaults to the dev stack's published Postgres, so
@@ -276,6 +279,136 @@ class LoopbackSSH(NamedTuple):
 
     host: str
     port: int
+
+
+# --- a node that accepts an apply (M4.2, moved here in M23) -------------------
+#
+# Lived in ``test_revocation_push.py`` until M23's round 2, which needed the same node in
+# a second file: an apply is also the moment a node STARTS SERVING, and what that must do
+# for every existing user is not a fact about revocation. Moved rather than copied,
+# because two harnesses standing in for one set of upstream calls is exactly the drift
+# ``pinned`` below exists to refuse.
+#
+# THE BOUNDARY, stated where the double is: this stands in for the five calls in
+# ``edge.bootstrap.node_stack`` that touch a host, and for nothing else. What a test using
+# it proves is the control plane's own bookkeeping after a push the host accepted. It
+# proves nothing about a real daemon reloading, and nothing about a real network.
+
+
+def _parameters(function) -> list[tuple]:
+    """A callable's parameters as a call site depends on them: name, kind, default.
+
+    Annotations are deliberately left out. The doubles leave ``connection`` untyped,
+    because typing it would mean importing the very class they exist to stand in for —
+    and an annotation is not what breaks a caller. A renamed keyword is.
+    """
+    return [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in inspect.signature(function).parameters.values()
+    ]
+
+
+def pinned(monkeypatch: pytest.MonkeyPatch, module, name: str, double) -> None:
+    """Install a double, refusing if it and the real function have drifted apart.
+
+    The gap this closes: a double is monkeypatched in whether or not it still resembles
+    anything. Change ``place_config``'s keyword and the file keeps passing, still green,
+    no longer standing in for code that exists — and what it guards is charter criterion
+    6, that a revocation reports per node instead of 500-ing. A stale double there buys a
+    suite that proves nothing at exactly the moment it matters.
+
+    Fails at fixture setup, naming both signatures, because a drift is a fact about the
+    test rather than about the node being simulated.
+    """
+    real = getattr(module, name)
+    assert _parameters(real) == _parameters(double), (
+        f"the double for {module.__name__}.{name} no longer matches the real one:\n"
+        f"  real:   {inspect.signature(real)}\n"
+        f"  double: {inspect.signature(double)}"
+    )
+    assert inspect.iscoroutinefunction(real) == inspect.iscoroutinefunction(double), (
+        f"{module.__name__}.{name} and its double disagree about being a coroutine"
+    )
+    monkeypatch.setattr(module, name, double)
+
+
+class AcceptingNode:
+    """A node that accepts every step of an apply.
+
+    Records the DIGEST of each config it was handed, so ``loaded_digests`` can answer
+    with exactly those — which is what makes the "did the daemon come back up on this
+    config" check pass honestly rather than by returning a fixed list. Before M1 it
+    recorded only the names, and a node that had accepted the bytes and gone on running
+    the previous ones would have satisfied that.
+    """
+
+    # No host key is learned, so a test using this says nothing about host-key pinning.
+    learned_host_key = None
+
+    def __init__(self) -> None:
+        self.placed: dict[str, str] = {}
+
+    # Untyped return: the class is its own annotation and py314 still needs a string
+    # for that, which this repo's ruff rules reject (UP037).
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc_info) -> bool:
+        return False
+
+
+@pytest.fixture
+def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the five node_stack calls that touch a host, and nothing else."""
+    from control.app.services import apply
+
+    def connection_for(target):
+        return AcceptingNode()
+
+    # ``NodeConnection`` is replaced by a factory rather than by a function, so it is
+    # pinned against the constructor it stands in for and against the surface
+    # ``apply_node`` reaches for on a live connection: the async context manager, and
+    # the host key it persists on a first successful connect. A double that lost
+    # ``learned_host_key`` would make the pinning branch quietly untestable.
+    assert _parameters(NodeConnection.__init__)[1:] == _parameters(connection_for), (
+        f"the connection double no longer matches NodeConnection.__init__:\n"
+        f"  real:   {inspect.signature(NodeConnection.__init__)}\n"
+        f"  double: {inspect.signature(connection_for)}"
+    )
+    for attribute in ("learned_host_key", "__aenter__", "__aexit__"):
+        assert hasattr(AcceptingNode, attribute), (
+            f"the connection double has no {attribute!r}, which apply_node uses"
+        )
+    monkeypatch.setattr(apply, "NodeConnection", connection_for)
+
+    async def prepare(connection) -> None:
+        return None
+
+    # ``path`` carries the real function's default, which the double had already drifted
+    # away from — found by ``pinned`` the moment it was introduced, which is the whole
+    # argument for it.
+    async def place_config(
+        connection, *, transport_name: str, config: str, path: str | None = None
+    ) -> None:
+        connection.placed[transport_name] = node_stack.digest_of(config)
+
+    async def place_compose(connection, *, compose: str) -> None:
+        return None
+
+    async def restart(connection) -> None:
+        return None
+
+    async def loaded_digests(connection) -> dict[str, str]:
+        # A node whose restart DID take: every container comes back on the config it
+        # was just handed. ``digest_of`` is the real one, so this is the value
+        # production would compare against.
+        return dict(connection.placed)
+
+    pinned(monkeypatch, node_stack, "prepare", prepare)
+    pinned(monkeypatch, node_stack, "place_config", place_config)
+    pinned(monkeypatch, node_stack, "place_compose", place_compose)
+    pinned(monkeypatch, node_stack, "restart", restart)
+    pinned(monkeypatch, node_stack, "loaded_digests", loaded_digests)
 
 
 def _bound_loopback_socket() -> socket.socket:

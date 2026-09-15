@@ -2099,6 +2099,19 @@ async def test_the_enable_dialog_says_how_many_users_will_each_take_an_address(
     assert 'placeholder="2 or more"' in dialog.text
 
 
+def test_the_first_run_sentence_names_the_screen_the_size_is_raised_on() -> None:
+    """M23, round 2: it named the control without naming where the control is.
+
+    "Under replace params" is a button on a dialog on a screen this sentence never named,
+    read by the operator least able to guess it — the one with no users yet, sizing their
+    first pool. Every sibling sentence in this module names the screen; this one did not.
+    """
+    said = console.pool_takers(0)
+
+    assert "Keys & configs" in said, said
+    assert "replace params" in said, said
+
+
 async def test_a_transport_whose_pool_is_short_is_not_offered_at_all(
     client, session, pool_transport: str
 ) -> None:

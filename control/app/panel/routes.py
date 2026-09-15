@@ -250,6 +250,16 @@ async def _friends_context(session: AsyncSession) -> dict:
     return {
         "friends": await console.friend_rows(session),
         "serving": len(await nodes.serving_transports(session)),
+        # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
+        # services/console.py from the Nodes screen's own two readings, and ``None`` on a
+        # fleet where every host is confirmed, so the table carries no standing warning.
+        "withdrawal_doubt": console.withdrawal_doubt(
+            await console.unconfirmed_nodes(session)
+        ),
+        # The cell that used to read "no access". Passed in rather than written in the
+        # template because it is a claim this zone decided it may make — see the
+        # constant.
+        "access_withdrawn": console.ACCESS_WITHDRAWN,
     }
 
 

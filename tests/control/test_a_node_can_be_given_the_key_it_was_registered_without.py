@@ -21,7 +21,7 @@ HOW:  real Postgres, real encryption, the real panel routes. No host is dialled:
 import pytest
 from sqlalchemy import select
 
-from control.app.models import AuditAction, AuditEntry
+from control.app.models import AuditAction, AuditEntry, NodeState
 from control.app.services import apply, nodes
 
 from .conftest import GENERATED_SSH_KEY
@@ -229,6 +229,85 @@ async def test_a_probe_on_a_keyless_node_does_not_blame_the_host_either(
     assert banner.status_code == 200, banner.text
     assert "this node has no SSH key on its record" in banner.text, banner.text
     assert THE_HOSTS_REFUSAL not in banner.text, banner.text
+    # AND IT DOES NOT NAME THE OTHER BUTTON — M23, round 2. This sentence ended "then
+    # apply it", on a screen where apply sits beside probe in the same row and one
+    # misclick rewrites a live node's configuration. The operator pressed probe; what
+    # they are told to do again is probe.
+    assert "then apply it" not in banner.text, (
+        "a probe answered with directions to the button beside it"
+    )
+    assert "try again" in banner.text, banner.text
+
+
+async def test_storing_the_key_stops_the_row_saying_the_node_has_none(
+    client, session, reality_params
+) -> None:
+    """The reason on a degraded node outlives the thing it names — M23, round 2.
+
+    ``state_detail`` is the last failure, and nothing but another apply rewrites it. So a
+    node that failed for having no key went on saying *"this node has no SSH key on its
+    record"* after one was stored, on the screen the operator was standing on when they
+    stored it — the one cell they would read to find out whether it had worked.
+
+    The state is deliberately unchanged: the node is still degraded, because nothing has
+    succeeded on it since. Only the sentence is made true again.
+
+    Red against the previous commit: the row keeps the stale sentence word for word.
+    """
+    node_id = await a_keyless_node(client, reality_params, name="keyless-detail")
+    failed = await client.post(
+        f"/panel/nodes/{node_id}/apply", headers={"HX-Request": "true"}
+    )
+    assert failed.status_code == 200, failed.text
+    degraded = await nodes.get_node(session, node_id)
+    assert degraded.state_detail == apply.NO_SSH_KEY, degraded.state_detail
+
+    stored = await client.post(
+        f"/panel/nodes/{node_id}/ssh-key",
+        data={"ssh_private_key": GENERATED_SSH_KEY},
+        headers={"HX-Request": "true"},
+    )
+
+    assert stored.status_code == 200, stored.text
+    # Both writes happened in the ROUTES' sessions, and this one keeps what it loaded
+    # (``expire_on_commit=False``) — so without this the assertions below would be read
+    # off the copy this test was holding before either request ran.
+    session.expire_all()
+    node = await nodes.get_node(session, node_id)
+    assert node.state_detail != apply.NO_SSH_KEY, (
+        "the row still says the node has no key, over a record that holds one"
+    )
+    assert node.state_detail == nodes.KEY_STORED_SINCE_THE_FAILURE
+    # Still degraded: nothing has been applied with the new key, and saying otherwise
+    # would put an unproven node back into every user's link.
+    assert node.state == NodeState.DEGRADED, node.state
+
+
+async def test_another_failure_is_left_exactly_as_it_was(
+    client, session, reality_params
+) -> None:
+    """Only the reason this write actually answered is rewritten.
+
+    A node degraded for anything else — a host that could not be reached, a daemon that
+    would not come up — has a reason storing a key says nothing about, and replacing it
+    would destroy the one record of what went wrong. Compared against the sentence rather
+    than searched for words in it, because this column can carry a remote host's text.
+    """
+    node_id = await a_keyless_node(client, reality_params, name="keyless-other")
+    somebody_elses_reason = "pushed, but these did not come up: vless-reality"
+    await nodes.set_node_state(
+        session,
+        node_id=node_id,
+        state=NodeState.DEGRADED,
+        detail=somebody_elses_reason,
+    )
+
+    await nodes.set_ssh_key(
+        session, node_id=node_id, ssh_private_key=GENERATED_SSH_KEY
+    )
+
+    node = await nodes.get_node(session, node_id)
+    assert node.state_detail == somebody_elses_reason, node.state_detail
 
 
 async def test_the_node_is_appliable_the_moment_it_has_a_key(

@@ -16,6 +16,16 @@ WHY:  measured on the owner's Amsterdam leaf with two real AmneziaWG clients. Bo
       changed nothing an operator could reach, because ``client_dns`` DECLARES A DEFAULT
       and both forms filtered their boxes on ``is_required``. The route had always
       accepted the value. No form had ever drawn the box.
+
+      ROUND 2 ADDED THE OTHER HALF, and it is a regression this milestone introduced:
+      the box exists, and an address in a family the tunnel cannot carry was ACCEPTED by
+      it. The refusal lived at render, so the value was stored, the form answered 200, and
+      the next download of every user on that node was a 500 — or, where it was their only
+      node, a twenty-two-byte empty archive with nothing said. ``edge`` owns that rule and
+      now answers it as a predicate both a form and a renderer can ask
+      (``egress.client_resolver_problem``); what is asserted here is that the panel really
+      does ask it, on both forms, and that a row already holding such a value no longer
+      costs a user the nodes it is not about.
 HOW:  real Postgres, real encryption, real rendering, and the panel's own forms — the
       value is typed into the dialog the operator uses rather than posted to the API,
       because the API was never the half that was broken.
@@ -26,7 +36,7 @@ import html
 import pytest
 
 from control.app.models import NodeState
-from control.app.services import friends, nodes, subscriptions
+from control.app.services import friends, nodes, rotation, subscriptions
 from control.app.services import transports as transports_service
 from edge.registry import SubscriptionFormat, discover
 
@@ -36,6 +46,12 @@ NODE_ADDRESS = "192.0.2.90"
 # address in that range is one a user's device holds.
 A_RESOLVER = "192.0.2.53"
 ANOTHER_RESOLVER = "198.51.100.53"
+
+# An address a friend's device could never hear back from: their config routes every IPv6
+# address into the tunnel and the node drops all of it. RFC 3849's documentation prefix,
+# standing in for the public resolver an operator pastes in when their own machine happens
+# to print the v6 form first — which is how the walk produced it.
+A_RESOLVER_THE_TUNNEL_CANNOT_CARRY = "2001:db8::53"
 
 # The one field name this file writes down, and it is the subject rather than an
 # incidental: the walk's finding is about the parameter a user's resolver is written
@@ -362,3 +378,116 @@ async def test_the_node_dialogs_say_the_resolver_reaches_a_users_own_configurati
         assert "user's own configuration file" in seen, seen
         assert "no name resolves" in seen, seen
     assert "never dial one" not in html.unescape(adding.text), adding.text
+
+
+# --- and the answer that is worse than an empty box (round 2) -----------------
+
+async def test_a_resolver_the_tunnel_cannot_carry_is_refused_by_the_enable_form(
+    client, file_transport: str
+) -> None:
+    """The regression, on the first of the two forms that stored it.
+
+    A hostname in this box was always refused clearly, so the box already knew how to
+    refuse; an address of the wrong family was not, and the cost landed on the user's
+    download rather than on the operator's screen.
+
+    Red against the previous commit: the submission is accepted with a 200 toast.
+    """
+    node_id = await a_node(client)
+
+    refused = await client.post(
+        f"/panel/nodes/{node_id}/transports",
+        data=form_for(
+            file_transport, **{RESOLVER_FIELD: A_RESOLVER_THE_TUNNEL_CANNOT_CARRY}
+        ),
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert f'id="enable-{file_transport}-{RESOLVER_FIELD}-error"' in refused.text
+    # The reason names the family and what it costs, which is what makes the box
+    # answerable rather than merely closed.
+    assert "IPv6" in refused.text and "no name would resolve" in refused.text
+
+
+async def test_a_resolver_the_tunnel_cannot_carry_is_refused_by_the_replace_form(
+    client, session, file_transport: str
+) -> None:
+    """And on the form the owner's existing rows are repaired from.
+
+    The enable form is where a new row gets it wrong; this one is where a row that is
+    already serving people would — and a refusal here is the only thing standing between
+    a typo and every one of those people losing their configuration file at once.
+    """
+    node_id = await a_node(client)
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": file_transport,
+            "params": AWG_PARAMS,
+            "pool_size": POOL_SIZE,
+        },
+    )
+    assert enabled.status_code == 201, enabled.text
+
+    refused = await client.post(
+        f"/panel/keys/{enabled.json()['id']}/params",
+        data={RESOLVER_FIELD: A_RESOLVER_THE_TUNNEL_CANNOT_CARRY},
+        headers={"HX-Request": "true"},
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert f'id="param-{RESOLVER_FIELD}-error"' in refused.text, refused.text
+
+
+async def test_one_row_that_cannot_be_rendered_does_not_take_away_the_others(
+    client, session, app, file_transport: str
+) -> None:
+    """The general form of the finding, which is the half that outlives it.
+
+    A row whose stored parameters cannot be rendered is not hypothetical on the owner's
+    fleet: every value the two forms now refuse could have been stored before they did.
+    What must not happen is what did — one such row answering a user's whole subscription
+    with a 500, taking away every node they hold rather than the one it is about.
+
+    The value is written straight onto the row, PAST the model, because that is exactly
+    what an older fleet's database looks like and there is no other way to reach it now.
+    """
+    good = await a_node(client, "leaf-nl")
+    bad = await a_node(client, "leaf-is")
+    rows = []
+    for node_id in (good, bad):
+        enabled = await client.post(
+            f"/api/nodes/{node_id}/transports",
+            json={
+                "transport_name": file_transport,
+                "params": AWG_PARAMS,
+                "pool_size": POOL_SIZE,
+            },
+        )
+        assert enabled.status_code == 201, enabled.text
+        rows.append(enabled.json()["id"])
+        await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+
+    friend_id = await a_user(client, nickname="kolya")
+    row = await rotation.get_node_transport(session, rows[1])
+    row.params = {**row.params, RESOLVER_FIELD: [A_RESOLVER_THE_TUNNEL_CANNOT_CARRY]}
+    await session.commit()
+
+    handle = await friends.get_friend(session, friend_id)
+    configs = await subscriptions.config_files_for(session, handle)
+
+    assert len(configs) == 1, [config.filename for config in configs]
+    assert "leaf-nl" in configs[0].filename, configs[0].filename
+
+    # And on the route a user's client actually fetches, which is where the 500 was.
+    token = (
+        await client.get(f"/panel/friends/{friend_id}/subscription")
+    ).text
+    assert "/sub/" in token, token
+    path = token.split("/sub/")[1].split("<")[0].split('"')[0].strip()
+    delivered = await client.get(f"/sub/{path}?format=client-config-file")
+    assert delivered.status_code == 200, delivered.text
+    assert len(delivered.content) > len(subscriptions.archive_of([])), (
+        "the user was handed an empty archive over a node that renders perfectly well"
+    )

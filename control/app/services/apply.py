@@ -110,7 +110,13 @@ NOTHING_STOPS_A_SERVING_HOST = (
 # The fourth clause written for any caller, and the fourth refusal that has a different
 # direction on the console — M23. ``target_for`` refuses a node whose record carries no
 # SSH key at all, and an API caller has no row to press anything on.
-GIVE_IT_A_KEY = "Give it one, then apply it."
+#
+# IT NAMES NO BUTTON, since M23's round 2. It said "then apply it", and ``target_for`` is
+# reached by the PROBE as well — so an operator who pressed probe on a keyless node was
+# answered about the other button, on a screen where the two sit side by side and one of
+# them rewrites a live node's configuration. "Try again" is the same instruction for both
+# callers and for an API caller who pressed nothing at all.
+GIVE_IT_A_KEY = "Give it one, then try again."
 
 # What an operator is told when a node's record holds no SSH key — M23, found on the real
 # hosts. It used to be ``edge``'s ``PermissionDenied`` sentence, *"the node refused the
@@ -834,6 +840,11 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
             configs[node_transport.config_name]
         )
 
+    # Whether this apply is what PUTS the node into service, read before the line that
+    # does it — M23. The answer decides the fan-out below and it is not "did the state
+    # change": a re-apply of an active node changes nothing and must grant nobody twice.
+    became_serving = node.state not in NodeState.serving()
+
     node.state = NodeState.ACTIVE
     node.state_detail = None
     # Success only, and only here — past every failure arm above, which record nothing.
@@ -842,6 +853,42 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     # The node's name is the whole entry: not which transports, not their digests, not
     # how long it took.
     audit.record(session, AuditAction.NODE_APPLIED, first_label=node.name)
+
+    if became_serving:
+        # THE FOURTH PLACE A NODE STARTS SERVING, and until M23 the only one that did not
+        # grant anybody. ``nodes.set_node_state``, ``nodes.enable_and_grant`` and
+        # ``nodes.set_transport_enabled`` each hand every active user a credential on
+        # whatever has just become theirs to reach; this line does the same, because the
+        # state change above is the same event however it was reached.
+        #
+        # It was not reached through ``set_node_state`` — that function commits, and this
+        # one owns a transaction carrying the applied digests and the audit entry — so the
+        # grant was simply absent: a node registered, enabled and APPLIED went active with
+        # every existing user holding nothing on it, and the Nodes screen went on
+        # promising that "adding or replacing one asks nothing of them". It self-heals at
+        # the next unrelated mint, which is how it stayed invisible; what it costs is the
+        # charter's central case, an owner rotating away from a blocked node in a hurry
+        # and seeing nothing happen.
+        #
+        # IN THIS TRANSACTION, for the reason ``set_node_state`` states: granting
+        # allocates an address per person, and a pool with no room must refuse the whole
+        # thing rather than leave a node recorded as serving people it cannot carry. What
+        # that costs here — and it is the cost this comment exists for — is that such a
+        # refusal rolls back the applied digests of a push that really did land, so the
+        # host runs a configuration the record does not claim. That is the safe direction:
+        # the node stays out of ``serving_transports``, so nobody is routed onto it, and
+        # the next apply pushes the same bytes again and records them.
+        #
+        # Flushed first, because ``serving_transports`` is a query and this node is still
+        # draft as far as the database is concerned until it runs. Deferred import for the
+        # cycle its three siblings name: ``friends`` imports the services this one does.
+        from control.app.services import friends  # noqa: PLC0415
+
+        await session.flush()
+        for friend in await friends.list_friends(session):
+            if friend.is_active:
+                await friends.grant_everywhere(session, friend)
+
     await session.commit()
     logger.info("node applied: %s (%d transports)", node.id, len(configs))
     return configs

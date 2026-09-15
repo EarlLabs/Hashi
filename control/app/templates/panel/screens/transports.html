@@ -124,6 +124,21 @@
       its own, and one that fails to load does not appear at all — so a row missing
       from this table is a package to fix, never a protocol to add here.
     </p>
+    {#
+      What the ports column is NOT — M23, round 2. It is each transport's own declared
+      range, which is what the daemon will accept; it says nothing about what any host
+      will let through, and the walk enabled a transport on a number inside this range
+      that the leaf's firewall did not allow. Every screen read healthy and the tunnel
+      carried nothing. The sentence is here because this is where the range is read, and
+      it names no port and no host — see the enable dialog for the same fact at the moment
+      the number is chosen.
+    #}
+    <p class="text-muted section-note">
+      The ports column is what each protocol will accept, not what a host will let
+      through. Nothing in this panel opens a port: a node allows the ones it was
+      prepared with (<span class="mono">scripts/node-bootstrap.sh --port</span>), and a
+      provider's own firewall is a second place the same number can be shut.
+    </p>
     {% else %}
     {#
       An image that discovered nothing. It cannot happen to a working build, which is

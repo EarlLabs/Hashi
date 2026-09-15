@@ -47,6 +47,25 @@
       </span>
     </div>
     {% endif %}
+    {% if withdrawal_doubt %}
+    {#
+      What a withdrawal on this screen cannot promise — M23, round 2. The walk revoked
+      somebody, the push to one node failed, the alert said so correctly and then went
+      away with the next click — and the row it left behind read "revoked / no access"
+      about a person whose tunnel was carrying traffic at that moment.
+
+      A NOTICE and not a failure banner, in the same frame as the one above it: nothing
+      has gone wrong here, and the request that did go wrong already had its own banner.
+      This is a standing fact about the fleet, which is why it is composed once in
+      services/console.py from the Nodes screen's own readings rather than per row — the
+      credential rows that would say WHICH nodes a revoked person was on are exactly what
+      a revocation deletes.
+    #}
+    <div class="banner" role="status">
+      <span class="banner-label">note</span>
+      <span>{{ withdrawal_doubt }}</span>
+    </div>
+    {% endif %}
     <div class="table-scroll">
       <table class="table">
         <thead>
@@ -101,7 +120,15 @@
                         hx-target="#dialog-slot" hx-swap="innerHTML">revoke</button>
               </span>
               {% else %}
-              <span class="text-muted">no access</span>
+              {#
+                What the OPERATOR did, not a claim about what the person can reach —
+                M23, round 2. It read "no access", which is a statement about a host this
+                panel may not have been able to update: the walk measured it printed over
+                a tunnel that was carrying. What is always true is that the access was
+                withdrawn here; whether every host has stopped serving it is the note
+                above, which appears only when it cannot be confirmed.
+              #}
+              <span class="text-muted">{{ access_withdrawn }}</span>
               {% endif %}
             </td>
           </tr>

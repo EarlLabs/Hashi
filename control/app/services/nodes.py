@@ -378,6 +378,21 @@ async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) ->
     return node
 
 
+# What replaces a degraded node's recorded reason once the thing it names is fixed — M23,
+# round 2. The walk stored a key on a node whose ``state_detail`` read *"this node has no
+# SSH key on its record"*, and the row went on saying it: the reason a node is degraded is
+# a record of the LAST failure, and nothing but another apply rewrites it.
+#
+# The state is deliberately NOT changed with it. The node is still degraded, because
+# nothing has succeeded on it since — only the sentence was made true again. It says what
+# is known and what is not, which is the same split every other refusal here keeps.
+KEY_STORED_SINCE_THE_FAILURE = (
+    "the failure recorded on this node was that its record held no SSH key. One has been "
+    "stored since, and nothing has been applied with it yet — so this node's last known "
+    "state is still that failure. Apply it to find out what it does now."
+)
+
+
 async def set_ssh_key(
     session: AsyncSession, *, node_id: str, ssh_private_key: str
 ) -> Node:
@@ -409,11 +424,27 @@ async def set_ssh_key(
     comparison is on the decrypted value and its result is a boolean — nothing about the
     key is logged, recorded or returned.
     """
-    node = await _node_to_write(session, node_id, "ssh_private_key")
+    # ``state_detail`` as well as the key since M23's round 2: this write now decides by
+    # it too — see below — and ``_node_to_write`` re-reads exactly what a write decides by.
+    # An apply that degraded this node in another session is the ordinary way that value
+    # arrives, and it is the whole case the branch below exists for.
+    node = await _node_to_write(session, node_id, "ssh_private_key", "state_detail")
     if not ssh_private_key or not ssh_key_is_usable(ssh_private_key):
         raise DomainError(SSH_KEY_UNUSABLE)
     if ssh_private_key != node.ssh_private_key:
         node.ssh_private_key = ssh_private_key
+        # And the recorded reason, when it is the one this write just answered — M23,
+        # round 2. Compared against the sentence ``apply`` composed rather than searched
+        # for words in it: this column can hold a remote host's own text, and a substring
+        # test over that is a test that eventually matches something else. Any other
+        # reason is left exactly as it is, because nothing here has answered it.
+        #
+        # Imported inside the function for the cycle the two ``friends`` imports below
+        # name from the other side: ``apply`` imports this module.
+        from control.app.services import apply  # noqa: PLC0415
+
+        if node.state_detail == apply.NO_SSH_KEY:
+            node.state_detail = KEY_STORED_SINCE_THE_FAILURE
         # The node's name and nothing else. Not a fingerprint of the key, not whether one
         # was replaced or supplied for the first time: this credential reaches every host
         # in the fleet, and a durable record has no safe shape for any part of it.
