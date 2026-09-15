@@ -23,6 +23,7 @@ acceptance walk.
 """
 
 import dataclasses
+import ipaddress
 import json
 
 import pytest
@@ -52,6 +53,14 @@ INSTALLED = sorted(discover())
 
 # The hop's near end on an entry node, as in the M3 file. RFC 1918.
 HOP_ADDRESS = "10.44.0.1"
+
+# A resolver that is ON THE INTERNET, which every other address in this zone's fixtures
+# deliberately is not: the documentation ranges (RFC 5737) the rulebook mandates are all
+# addresses a friend's tunnel now drops, so a test that wanted "a resolver needing no
+# exception" could not use one. This is the deprecated 6to4 relay anycast block — still
+# reserved, so it is nobody's host, and still globally routable, so the rules carry it
+# without an exception. The test below asserts that rather than trusting this comment.
+A_RESOLVER_ON_THE_INTERNET = "192.88.99.53"
 
 
 def rendered(name: str, node, request, **policy) -> str:
@@ -87,6 +96,14 @@ def test_the_lookup_is_asked_of_the_resolver_on_the_nodes_record(
     assert hop_config(name, node, request)["dns"]["servers"] == [node.resolver]
 
 
+# Xray's outbound that opens no connection at all. Since M23's ninth round a config with
+# a hop carries one, to refuse the destinations a friend's traffic may not reach — see
+# ``tests/edge/test_a_proxy_dials_the_internet_and_not_its_own_neighbourhood.py``. It is
+# named here because the assertion below is about outbounds that RESOLVE a name, and this
+# one resolves nothing because it dials nothing.
+REACHES_NOTHING = "blackhole"
+
+
 @pytest.mark.parametrize("name", PROXIES)
 def test_the_outbound_resolves_through_it_rather_than_through_the_host(
     name: str, node, request
@@ -95,10 +112,18 @@ def test_the_outbound_resolves_through_it_rather_than_through_the_host(
 
     Without it the outbound is ``AsIs``: it hands the NAME to the host's resolver and the
     ``dns`` object is never consulted — which is the config M3 shipped, with a resolver
-    pasted on top. Checked on every outbound, because the one without it is the one a
-    friend's names leak through.
+    pasted on top. Checked on every outbound that opens one, because the one without it is
+    the one a friend's names leak through.
+
+    The blackhole is excluded and its exclusion is asserted rather than skipped past: it
+    dials nothing, so a resolution strategy on it would be a key that reads as a decision
+    and decides nothing. Written as a partition so a THIRD kind of outbound arriving is
+    held to the strategy rather than quietly waved through.
     """
     for outbound in hop_config(name, node, request)["outbounds"]:
+        if outbound["protocol"] == REACHES_NOTHING:
+            assert "domainStrategy" not in outbound.get("settings", {}), outbound
+            continue
         assert outbound.get("settings", {}).get("domainStrategy") == "UseIPv4", outbound
 
 
@@ -168,8 +193,28 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     The golden files pin these bytes from the other side; this pins that a resolver on the
     record changes none of them. There the lookup and the exit already leave one host by
     one route, so there is nothing to move.
+
+    The NODE's config, and since M23 that qualifier is load-bearing: a friend's own
+    configuration file on such a node DOES change with the record, because a friend's
+    device has no route to its usual resolver once the tunnel routes every address. That
+    is ``tests/edge/test_a_friend_can_resolve_a_name.py``, and the two claims are about
+    two different files.
+
+    ONE EXCEPTION, added by M23's fifth round and narrower than it sounds: a friend's
+    tunnel now carries only what is on the internet, so a resolver that is NOT — a
+    private one, which the record is allowed to name — has to be let through by name in
+    the node's own rules. A resolver on the internet needs no such rule and changes
+    nothing, which is why this test uses one, and the exception itself is asserted where
+    the rest of that policy is
+    (``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py``).
     """
-    with_one = rendered(name, node, request, egress=Egress.LOCAL)
+    assert ipaddress.ip_address(A_RESOLVER_ON_THE_INTERNET).is_global, (
+        "this test's resolver must be one the friend-facing rules carry with no "
+        "exception of its own, or it proves nothing about the bytes"
+    )
+    on_the_internet = dataclasses.replace(node, resolver=A_RESOLVER_ON_THE_INTERNET)
+
+    with_one = rendered(name, on_the_internet, request, egress=Egress.LOCAL)
     without = rendered(
         name, dataclasses.replace(node, resolver=None), request, egress=Egress.LOCAL
     )
@@ -177,7 +222,13 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     if profile(name).meta.config_format is ConfigFormat.XRAY_JSON:
         config = json.loads(with_one)
         assert "dns" not in config
-        assert "dnsLog" not in config["log"]
+        # And ``dnsLog`` IS here, written out as ``false``, which reads backwards until you
+        # know why: M23's tenth round made routing resolve a destination before it matches
+        # an address rule, so a node with no resolver of its own still looks names up —
+        # through its host's, where its own traffic has always looked them up. The key an
+        # entry node needs is therefore one every node needs, and its absence would be a
+        # promise about an upstream default rather than a statement of this file's.
+        assert config["log"]["dnsLog"] is False
 
 
 # --- and it fails closed ------------------------------------------------------------

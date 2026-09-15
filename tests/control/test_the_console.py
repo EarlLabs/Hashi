@@ -14,13 +14,16 @@ HOW:  the in-process client from conftest, already holding an operator session. 
 """
 
 import ast
+import base64
 import datetime
 import hashlib
 import html.parser
+import io
 import json
 import pathlib
 import re
 import typing
+import zipfile
 
 import jinja2
 import pydantic
@@ -34,6 +37,7 @@ from control.app.models import (
     AuditAction,
     Credential,
     Node,
+    NodeState,
     NodeTransport,
     TransportPurpose,
 )
@@ -51,6 +55,7 @@ from control.app.services import relay as relay_service
 from control.app.services import rotation as rotation_service
 from control.app.services import transports as transports_service
 from control.app.settings import Settings
+from edge import registry
 from edge.registry import profile
 
 TEMPLATES = pathlib.Path(__file__).resolve().parents[2] / "control" / "app" / "templates"
@@ -160,7 +165,7 @@ async def test_the_overview_carries_only_facts_about_the_fleet(
 
     body = (await client.get("/panel/")).text
 
-    for kicker in ("nodes active", "active users", "hops established", "transports enabled"):
+    for kicker in ("nodes active", "active users", "hops established", "transports serving"):
         assert kicker in body, f"the Overview lost the {kicker!r} card"
     for cell in FORBIDDEN_CELLS:
         assert cell not in body.lower(), (
@@ -200,6 +205,58 @@ async def test_the_first_stat_card_names_the_state_it_counts(client) -> None:
 
     after = _as_one_line((await client.get("/panel/overview/body")).text)
     assert "nodes active 1 2 nodes in the fleet" in after, (
+        f"the card does not count the state it names: {after}"
+    )
+
+
+async def test_the_fourth_stat_card_names_the_state_it_counts(
+    client, reality_params
+) -> None:
+    """It counted SERVING and called it "enabled" — M20's acceptance.
+
+    The identical defect as the card two above, found two milestones later: the value is
+    ``nodes.serving_transports``, so a protocol enabled on a node that is still draft is
+    not in it. The walk read 0 beside four rows at ``enabled=true`` and nothing on the
+    screen said the count was about service — a true number whose meaning was invisible.
+
+    BOTH STATES IN ONE SCENARIO, because a card that renamed itself while counting
+    something else would pass on either half alone: the draft half proves the number is
+    about serving, and the active half proves the number is not simply stuck.
+
+    The meta is asserted too, and for a different reason. It read "of 4 this image
+    ships", whose "of" made it a denominator of the value — so a fleet serving everything
+    it ships looked like an arithmetic error beside "3 can be enabled". Both those figures
+    count the IMAGE and the value counts the FLEET.
+    """
+    created = await client.post(
+        "/api/nodes",
+        json={"name": "serving-0", "address": "192.0.2.74", "location_label": "Testland"},
+    )
+    assert created.status_code == 201, created.text
+    node_id = created.json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert enabled.status_code == 201, enabled.text
+
+    draft = _as_one_line((await client.get("/panel/overview/body")).text)
+    assert "transports serving 0" in draft, (
+        f"the card counts a protocol nobody can be routed onto yet: {draft}"
+    )
+    assert "transports enabled" not in draft, (
+        "the card claims a count of enabled rows and counts serving ones"
+    )
+    assert "this image ships" not in draft, (
+        f"the image counts still read as a denominator of the value: {draft}"
+    )
+
+    assert (await client.post(
+        f"/api/nodes/{node_id}/state", json={"state": "active"}
+    )).status_code == 200
+
+    after = _as_one_line((await client.get("/panel/overview/body")).text)
+    assert "transports serving 1" in after, (
         f"the card does not count the state it names: {after}"
     )
 
@@ -813,17 +870,21 @@ async def test_a_failed_apply_stays_on_screen_in_plain_words(client, monkeypatch
 @pytest.mark.parametrize(
     "healthy,reachable,detail,carrier",
     [
-        (True, True, None, "toast"),
+        (True, True, None, "notice"),
         (False, False, "the node did not answer", "banner"),
     ],
 )
 async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
     client, monkeypatch, healthy: bool, reachable: bool, detail: str | None, carrier: str
 ) -> None:
-    """Good news disappears; a fault does not.
+    """NEITHER answer disappears — M22.3, and this test used to assert the opposite.
 
-    A node that cannot be reached, or one running a configuration older than the file
-    on it, is something the operator has to still be able to read while they fix it.
+    It read "good news disappears; a fault does not", and the good news went into a toast
+    that app.js clears after 2200ms. Acceptance pressed probe four times, waiting 2, 3, 4
+    and 8 seconds, and never saw an answer — while every failing probe's banner was there
+    at the same waits. A probe is not a mutation: nothing changed, and its answer is the
+    reason the button was pressed, so it is stated as persistently as a failure and in
+    the quieter weight.
     """
     node_id = (
         await client.post(
@@ -838,9 +899,12 @@ async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
             reachable=reachable,
             healthy=healthy,
             running=["vless-reality"] if healthy else [],
+            restarting=[],
             missing=[],
             drifted=[],
             stale=[],
+            listening=["vless-reality"] if healthy else [],
+            not_listening=[],
             detail=detail,
         )
 
@@ -850,9 +914,18 @@ async def test_a_probe_answers_in_the_carrier_its_answer_deserves(
 
     assert response.status_code == 200
     assert "leaf-1" in response.text
-    if carrier == "toast":
-        assert "is serving" in response.text
+    assert 'hx-swap-oob="innerHTML:#banner-slot"' in response.text
+    if carrier == "notice":
+        assert "is listening for" in response.text
+        assert '<span class="banner-label">checked</span>' in response.text, (
+            "a successful probe no longer says what it is, or is no longer in the slot "
+            "that survives the operator looking away"
+        )
         assert "banner-failure" not in response.text
+        assert "toast" not in response.text, (
+            "the answer a probe exists to give is back in a carrier that clears itself "
+            "after 2200ms"
+        )
     else:
         assert "banner-failure" in response.text
         assert "the node did not answer" in response.text
@@ -881,9 +954,12 @@ async def test_no_probe_answer_says_anything_about_who_connected(
             reachable=True,
             healthy=False,
             running=["vless-reality"],
+            restarting=[],
             missing=[],
             drifted=[],
             stale=["vless-reality"],
+            listening=["vless-reality"],
+            not_listening=[],
             detail="a container is up on an older configuration",
         )
 
@@ -1162,6 +1238,222 @@ async def test_the_transports_dialog_says_what_each_one_is_doing_for_a_user(
     # ``test_a_withdrawn_row_says_whether_an_apply_can_still_stop_it``.
     assert console_service.OFFER_WITHDRAWN_LAST_ON_THE_NODE in _reading(again.text)
     assert f'hx-post="/panel/transports/{node_transport_id}/offer"' in again.text
+
+
+# Every transport this image ships that a user's client could consume, that is NOT the
+# base64 link, and that the enable form still offers. All three from the transports' own
+# declarations, never from a name — the offered sentence is chosen by
+# ``subscription_expressible``, so this is exactly the set it must be chosen differently
+# for. "Not a link" and "not deliverable" are different things and this is the first:
+# ``?format=`` hands the second shape over from the same token.
+NOT_A_LINK_OFFERABLE = sorted(
+    name
+    for name, meta in registry.discover().items()
+    if meta.subscription_formats
+    and not meta.subscription_expressible
+    and name in transports_service.offerable_transports()
+)
+
+# A superset of the operator-supplied knobs those transports declare, filtered per
+# transport against its own model below. One literal rather than one per protocol, so a
+# transport added later is exercised by arriving rather than by being listed here.
+_NOT_A_LINK_KNOBS: dict[str, object] = {
+    "port": 51821,
+    "mtu": 1280,
+    "tunnel_address": "10.91.0.1/24",
+    "peer_tunnel_address": "10.91.0.2/24",
+    "junk_packet_count": 4,
+    "junk_packet_min_size": 40,
+    "junk_packet_max_size": 80,
+    "init_packet_magic_header": 1020327352,
+    "response_packet_magic_header": 2060487442,
+    "underload_packet_magic_header": 3679305607,
+    "transport_packet_magic_header": 1436947798,
+}
+
+
+async def test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in(
+    client, session, anonymous, reality_params
+) -> None:
+    """M20's acceptance: "in every user's link" was said of a row that is in no link.
+
+    The Nodes screen's dialog said of an enabled config-file protocol *"offered — in every
+    user's link at their next refresh"*, and the walk read a real subscription to settle
+    it: the URI entries and nothing else.
+
+    BOTH SHAPES OF THE SAME TOKEN ARE FETCHED HERE, and the second one is why this test
+    is worth more than an assertion that a constant appears. The obvious correction — "not
+    in any user's link, this panel cannot hand it over" — is the sentence the Transports
+    screen was already carrying, and it is FALSE: item 27 landed, and the same bearer
+    token answers ``?format=`` with an archive of this friend's configuration files. So a
+    fix written from the finding alone would have replaced one false sentence with another
+    and had a green suite either way. What is asserted is therefore the pair: the link
+    does not carry it, and the friend is not empty-handed.
+
+    Not parametrised over ``NOT_A_LINK_OFFERABLE``: the branch is one read of one
+    declaration, so a second transport exercises the same line, and the declaration-driven
+    half over the whole registry is held on the Transports screen by
+    ``test_a_transport_this_panel_cannot_hand_over_says_so``.
+    """
+    if not NOT_A_LINK_OFFERABLE:
+        pytest.skip("every transport this panel offers rides in the subscription it serves")
+    transport = NOT_A_LINK_OFFERABLE[0]
+    declared = set(profile(transport).params_model.model_fields)
+
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={
+                "name": "by-file-1",
+                "address": "192.0.2.41",
+                "location_label": "Testland",
+            },
+        )
+    ).json()["id"]
+    enabled = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={
+            "transport_name": transport,
+            "params": {k: v for k, v in _NOT_A_LINK_KNOBS.items() if k in declared},
+            # Room for far more people than this scenario creates: a pool sized to what a
+            # test needs turns red when somebody adds a user to an unrelated assertion.
+            "pool_size": 50,
+        },
+    )
+    assert enabled.status_code == 201, enabled.text
+    # Serving, so the node is in every active user's subscription and only the
+    # TRANSPORT's own declaration can keep this row out of it.
+    await nodes_service.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
+
+    friend_id = (
+        await client.post("/api/friends", json={"nickname": "anna"})
+    ).json()["id"]
+    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    token = url.rsplit("/", 1)[-1]
+    fetched = await anonymous.get(f"/sub/{token}")
+    assert fetched.status_code == 200, fetched.text
+    carried = base64.b64decode(fetched.text).decode().splitlines()
+    assert carried == [], (
+        f"{transport} declares it does not ride in the v1 subscription and the panel "
+        f"delivered it in the link anyway: {carried}"
+    )
+
+    # The other half of the true sentence, and the half a fix written from the finding
+    # alone would have denied: the same token, the file shape asked for, and this friend's
+    # configuration in it. Read as a real archive rather than as a byte count, because
+    # "something came back" is what an empty zip also looks like.
+    archive = await anonymous.get(f"/sub/{token}?format=client-config-file")
+    assert archive.status_code == 200, archive.text
+    held = zipfile.ZipFile(io.BytesIO(archive.content))
+    assert held.namelist(), "the link carries nothing and neither does the file shape"
+    assert all(held.read(name).strip() for name in held.namelist()), held.namelist()
+
+    reading = _reading((await client.get(f"/panel/nodes/{node_id}/transports")).text)
+    assert console_service.OFFER_NOT_IN_THE_LINK in reading
+    assert console_service.OFFER_IN_EVERY_LINK not in reading, (
+        "the row promises a delivery the document above proves does not happen"
+    )
+
+    # And the toast raised by the row's own button makes the same promise, so it gets the
+    # same correction — one surface fixed and one left is the defect this came from.
+    row = await console_service.offer_row(session, enabled.json()["id"])
+    assert row.deliverable is False
+    said = console_service.offer_summary("by-file-1", transport, deliverable=False)
+    assert "in every user's link" not in said, said
+
+    # Last, and it is what keeps the empty link above from being vacuous: the same node,
+    # the same friend and the same endpoint, with one transport added that DOES ride in the
+    # v1 list. The link is not broken and this friend is not unreachable — one protocol is
+    # not a link, which is the walk's own reading, where the document held the URI entries
+    # and only those.
+    in_the_link = await client.post(
+        f"/api/nodes/{node_id}/transports",
+        json={"transport_name": "vless-reality", "params": reality_params},
+    )
+    assert in_the_link.status_code == 201, in_the_link.text
+    refetched = await anonymous.get(f"/sub/{token}")
+    assert len(base64.b64decode(refetched.text).decode().splitlines()) == 1
+
+
+# Where one transport's boxes begin on the enable dialog. The groups are siblings in the
+# markup, so a group's own extent is "from its opening tag to the next group's, or to the
+# footer" — which is what makes an assertion about WHICH group a sentence is in possible
+# at all. A dialog renders every group and hides all but the chosen one, so a sentence
+# outside them is a sentence shown for every protocol at once.
+_GROUP_OPENS = re.compile(r'data-transport-group="([^"]+)"')
+_FOOTER_OPENS = '<div class="dialog-body"'
+
+
+def _groups_of(markup: str) -> dict[str, str]:
+    """The enable dialog's markup, sliced into one piece per transport group."""
+    opens = [(match.group(1), match.start()) for match in _GROUP_OPENS.finditer(markup)]
+    sliced = {}
+    for index, (name, start) in enumerate(opens):
+        next_group = opens[index + 1][1] if index + 1 < len(opens) else len(markup)
+        footer = markup.find(_FOOTER_OPENS, start)
+        sliced[name] = markup[start:min(next_group, footer if footer != -1 else next_group)]
+    return sliced
+
+
+async def test_the_enable_dialog_says_what_enabling_each_protocol_will_do(
+    client,
+) -> None:
+    """M20's acceptance, round 2: the one sentence read at the MOMENT OF DECISION.
+
+    The dialog's footer promised *"Enabling puts this protocol into every active user's
+    link at their next refresh and asks nothing of anybody"* — once, under every group,
+    unchanged for every protocol on the form. It is true of a transport that rides in the
+    link and false in both halves of one whose configuration is a file: that one is in
+    nobody's link, and somebody does have to ask for it in the shape it comes in.
+
+    WORSE PLACED THAN THE ROW SENTENCE the test above corrects, which is why it is its own
+    scenario rather than a line added there. A row's standing is read afterwards; this is
+    read while the operator is choosing, and an operator who enables a config-file
+    transport on this sentence's word walks away believing every friend now has it.
+
+    Asserted PER GROUP, not per page. Both sentences exist in this image, so a dialog that
+    printed both somewhere would pass any assertion that looked at the whole document —
+    while showing the operator two contradictory promises, one of them hidden with
+    somebody else's boxes. And the footer is asserted to promise nothing about delivery at
+    all, because that is where the false sentence was: a fix that left a copy behind would
+    leave the defect behind with it.
+    """
+    node_id = (
+        await client.post(
+            "/api/nodes",
+            json={
+                "name": "deciding-1",
+                "address": "192.0.2.42",
+                "location_label": "Testland",
+            },
+        )
+    ).json()["id"]
+
+    dialog = await client.get(f"/panel/nodes/{node_id}/transports")
+
+    assert dialog.status_code == 200, dialog.text
+    groups = _groups_of(dialog.text)
+    assert set(groups) == set(transports_service.offerable_transports()), sorted(groups)
+    # Both arms are reachable in this image, so neither is asserted vacuously. If that
+    # ever stops being true the assertion below is still right — it just stops being a
+    # comparison — and this line says so out loud rather than leaving a silent half.
+    assert NOT_A_LINK_OFFERABLE, "no offered transport is a config file"
+    assert set(groups) - set(NOT_A_LINK_OFFERABLE), "every offered transport is a file"
+
+    for name, markup in groups.items():
+        said = _as_one_line(markup)
+        promised, denied = (
+            (console_service.ENABLING_IN_EVERY_LINK, console_service.ENABLING_NOT_IN_THE_LINK)
+            if registry.profile(name).meta.subscription_expressible
+            else (console_service.ENABLING_NOT_IN_THE_LINK, console_service.ENABLING_IN_EVERY_LINK)
+        )
+        assert promised in said, (name, said)
+        assert denied not in said, (name, said)
+
+    # And the footer under them says nothing about anybody's link. It is the piece that
+    # cannot be per-transport, so whatever it claims it claims about all four.
+    footer = _as_one_line(dialog.text[dialog.text.rindex(_FOOTER_OPENS):])
+    assert "link" not in footer, footer
 
 
 async def test_withdrawing_confirms_first_and_says_what_is_still_true(
@@ -1545,12 +1837,15 @@ async def test_a_hop_end_is_not_something_a_user_is_offered(client, session) -> 
 async def test_the_enable_form_asks_only_what_the_transport_declares(
     client, reality_params
 ) -> None:
-    """A box per required field, per transport, and not one of them written here.
+    """A box per supplied field, per transport, and not one of them written here.
 
     Asserted against the transport's OWN declaration rather than a list: a protocol that
     gains a parameter gets a box the day it ships, and one that declares a piece of key
     material can never get one — the box list subtracts every minted name and every
     public counterpart of one.
+
+    REQUIRED until M23 and SUPPLIABLE since, which is the same declaration with one
+    filter removed. The filter is why the panel had no way to give a user DNS.
     """
     node_id, _ = await a_node_with_an_offer(client, reality_params)
 
@@ -1566,7 +1861,12 @@ async def test_the_enable_form_asks_only_what_the_transport_declares(
     # refusal naming the port, not as a missing form.
     for name in transports_service.offerable_transports():
         boxes = _enable_boxes(dialog.text, name)
-        expected = set(transports_service.operator_params(name))
+        # EVERY FIELD AN OPERATOR MAY SUPPLY, not only the required ones — M23. The
+        # narrower set was this form's rule until the real-host walk measured what it
+        # cost: the only defaulted parameter any shipped transport has is the one a
+        # user's DNS line is written from, so no box for it meant no setting in this
+        # panel that gives a person working DNS, while the ROUTE had always accepted one.
+        expected = set(transports_service.supplied_params(name))
         # ONE MORE BOX since M17, and only for a transport that declares each user needs
         # an address of their own. Asserted as an addition rather than folded into the
         # list above, because it is not a parameter of the transport at all: the size is
@@ -2017,9 +2317,13 @@ async def test_no_submission_can_name_a_value_the_control_plane_mints(
     named its boxes plainly — and it has one now; that a bare name is refused for being
     unreadable rather than accepted is
     ``test_a_bare_field_name_is_no_longer_a_name_this_form_can_read``'s claim, not this
-    one. Here the bare case doubles as the NON-HTMX caller, which has nowhere to render
-    a field error and gets the 400 envelope, against the console's 422 fragment — the
-    split the body below asserts either side of.
+    one. Here the bare case doubles as the NON-HTMX caller — and since M23's eighth round
+    that caller gets the SAME answer as the console: the dialog at 422, message under the
+    box. It used to get the 400 envelope, and the two shapes in one console are what that
+    round refused (``test_one_console_one_refusal_shape.py``). What this file asserts
+    either side of the parametrisation is therefore the REFUSAL and not the shape: a
+    minted name is named back, whichever way the submission arrived, and nothing it
+    carried was stored.
 
     The marker is checked against what the fleet actually HOLDS, decrypted, rather than
     against the response: the failure this is about is a stored value, not a rendered
@@ -2049,15 +2353,11 @@ async def test_no_submission_can_name_a_value_the_control_plane_mints(
     )
 
     # Refused, because a minted name is not a field this form can read — and refused is
-    # the answer rather than dropped, so a caller naming one is told which names. Each
-    # panel in the answer it can render: the console's dialog at 422, and the caller with
-    # no form the error envelope it has always had.
-    if prefixed:
-        assert enabled.status_code == 422, enabled.text
-        said = _reading(enabled.text)
-    else:
-        assert enabled.status_code == 400, enabled.text
-        said = enabled.json()["error"]["message"]
+    # the answer rather than dropped, so a caller naming one is told which names. One
+    # answer for both callers since M23's eighth round: the dialog at 422, whether or not
+    # htmx asked for it.
+    assert enabled.status_code == 422, enabled.text
+    said = _reading(enabled.text)
     for name in material:
         assert name in said, name
 
@@ -3246,7 +3546,7 @@ async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
     ``TransportMeta`` to the rendered cell recognised a protocol by name, the warning
     would follow the name and neither of these rows would move.
     """
-    from edge.registry import Layer4, TransportMeta
+    from edge.registry import Layer4, PeerAddress, TransportMeta
 
     def a_fleet_of_one(**declared) -> None:
         meta = TransportMeta(
@@ -3255,6 +3555,12 @@ async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
             needs_tls=False,
             listens_on=frozenset({Layer4.UDP}),
             port_range=(1024, 65535),
+            # Shaped like something a hop could be built out of, in BOTH fleets — M20's
+            # acceptance. The hop sentence is chosen by ``hop_expressible``, which is the
+            # permission and the ability together, so a shape declaring no address of its
+            # own would carry that sentence whatever the two booleans below said and the
+            # calm half of this scenario would assert nothing.
+            peer_address=PeerAddress(name="peer_addr", within="iface_addr"),
             **declared,
         )
         monkeypatch.setattr(console_service, "discover", lambda: {meta.name: meta})
@@ -3279,13 +3585,20 @@ async def test_the_warning_follows_a_declaration_and_never_a_protocol_s_name(
 async def test_a_transport_this_panel_cannot_hand_over_says_so(client) -> None:
     """"How a user receives it" is two questions, and the screen answers both.
 
-    A transport declares which subscription shapes it serialises into; whether this
-    panel actually delivers any of them is ``subscription_expressible``, and today it
-    is False for the config-file shape (backlog item 27). Collapsing the two would tell
-    the operator a user is holding something they have never been sent.
+    A transport declares which subscription shapes it serialises into; whether any of them
+    is the base64 LINK is ``subscription_expressible``, and today it is False for the
+    config-file shape. Collapsing the two would tell the operator a user finds this in a
+    link they will not find it in.
 
-    Skipped rather than asserted blindly if every installed transport is deliverable —
-    that is a legitimate image and this scenario would prove nothing about it.
+    THE CELL USED TO SAY "this panel cannot hand it over" AND THAT WAS FALSE — found while
+    fixing M20's acceptance finding about the offered sentence. Item 27 landed: the same
+    bearer token answers ``?format=`` with the friend's configuration files. The question
+    this screen is answering is which SHAPE, not whether — see
+    ``TRANSPORT_NOT_IN_THE_LINK``, and the end-to-end proof in
+    ``test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in``.
+
+    Skipped rather than asserted blindly if every installed transport is a link — that is
+    a legitimate image and this scenario would prove nothing about it.
     """
     from edge.registry import discover
 
@@ -3302,7 +3615,7 @@ async def test_a_transport_this_panel_cannot_hand_over_says_so(client) -> None:
     for meta in undelivered:
         for shape in meta.subscription_formats:
             assert str(shape) in reads, meta.name
-    assert console_service.TRANSPORT_UNDELIVERED in reads
+    assert console_service.TRANSPORT_NOT_IN_THE_LINK in reads
 
 
 async def test_the_transports_screen_measures_the_image_and_never_the_people(
@@ -3456,9 +3769,14 @@ async def every_console_surface(client, reality_params) -> list[str]:
         # it is addressed by a node-transport rather than by a node.
         f"/panel/nodes/{node_id}/transports",
         f"/panel/nodes/{node_id}/state",
-        # M16's, added in the change that added it: the one dialog that edits a node
+        # M16's, added in the change that added it: the first dialog that edits a node
         # record after registration, and it renders the value it edits back into a box.
         f"/panel/nodes/{node_id}/resolver",
+        # M23's, added in the change that added it — and the one dialog on this list the
+        # key sweep below was written for: it is the only form in the console that
+        # accepts an SSH private key after registration, so a surface that renders one
+        # back would render it here first.
+        f"/panel/nodes/{node_id}/ssh-key",
         f"/panel/transports/{node_transport_id}/withdraw",
         # M15.2's, added in the change that added it. The second confirmation behind the
         # same row, and the one with the most to disclose: it is about the row whose
@@ -3985,14 +4303,25 @@ async def test_a_refused_parameter_lands_under_its_own_box(
 # field nobody typed. `""` is what a model-level validator produces, `x.0` a nested one,
 # and the last is a field this form has no box for.
 #
+# THE LAST ONE USED TO BE ``decoy_port`` — a parameter this transport DEFAULTS, which
+# until M23 was a field no form in this console drew a box for. It draws one now (the
+# enable and replace forms ask what an operator MAY supply rather than what they MUST),
+# so a complaint located there is a complaint about a box, and the allow-list correctly
+# prints it. The shape still has to be held, so the stand-in is a location that is not a
+# field of this transport at all — which is what a validator on a renamed or future
+# parameter reports, and what nothing on this form can ever have a box for.
+#
 # The message on each carries a value that must never reach the page. Only the first
 # entry is a box on the replace form, and it is the only one whose sentence may be read.
+# Asserted to really not be a field, so this entry cannot quietly become a box.
+UNRENDERED_FIELD = "decoy_hostname"
+
 REFUSAL_SHAPES = {
     "port": "must be inside the range — QUOTED-BOX-VALUE",
     "private_key": "is not usable — QUOTED-MATERIAL-VALUE",
     "": "these parameters disagree with each other — QUOTED-MODEL-VALUE",
     "server_names.0": "is not a hostname — QUOTED-NESTED-VALUE",
-    "decoy_port": "is out of range — QUOTED-UNRENDERED-VALUE",
+    UNRENDERED_FIELD: "is out of range — QUOTED-UNRENDERED-VALUE",
 }
 
 
@@ -4014,6 +4343,9 @@ async def test_a_refusal_prints_the_transport_s_words_only_under_a_box(
     """
     node_transport_id = await a_node_holding_material(client, reality_params)
     assert "port" in transports_service.operator_params("vless-reality")
+    # Non-vacuous: the unrendered shape only proves anything while this really is a name
+    # no box on this form can exist for.
+    assert UNRENDERED_FIELD not in transports_service.supplied_params("vless-reality")
 
     async def refuse(session, *, node_transport_id, params, **rest):
         raise ParamsRefused("transport rejected these parameters", fields=REFUSAL_SHAPES)
@@ -5017,6 +5349,7 @@ EVENT_SENTENCES = {
     AuditAction.TRANSPORT_REMOVED: f"{TRAIL_TRANSPORT} removed from {TRAIL_NODE}",
     AuditAction.HOP_ESTABLISHED: f"hop established from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
     AuditAction.HOP_DISSOLVED: f"hop torn down from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
+    AuditAction.NODE_SSH_KEY_SET: f"ssh key set for {TRAIL_NODE}",
     AuditAction.KEYS_ROTATED: f"keys rotated for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
     AuditAction.PARAMS_REPLACED: f"parameters replaced for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
 }
@@ -5801,9 +6134,12 @@ async def test_every_console_answer_owns_the_banner_slot(client, reality_params)
             reachable=True,
             healthy=True,
             running=["vless-reality"],
+            restarting=[],
             missing=[],
             drifted=[],
             stale=[],
+            listening=["vless-reality"],
+            not_listening=[],
             detail=None,
         )
 
@@ -6232,18 +6568,42 @@ def test_every_clause_written_for_a_screen_has_a_console_version() -> None:
         apply_service.ENABLE_ONE_HERE,
         apply_service.OFFER_ONE_AGAIN,
         apply_service.NOTHING_STOPS_A_SERVING_HOST,
+        apply_service.GIVE_IT_A_KEY,
+        apply_service.MAKE_THE_POOL_BIGGER,
+        apply_service.REGISTER_IT_AGAIN,
+        apply_service.APPLY_IT_YOURSELF,
     }
 
     assert set(wording._THE_CONSOLES_DIRECTIONS) == exported, (
         "a clause written for any caller has no console version, or the mapping still "
         "holds one that no longer exists"
     )
+    # Every sentence a service composes out of these clauses. M23 adds the fourth, which
+    # is composed by a different refusal — a node whose record holds no SSH key at all —
+    # so the joined text is what the clause must appear in, not any one of the three.
+    composed = "".join((
+        apply_service.NOTHING_TO_APPLY_YET,
+        apply_service.NOTHING_LEFT_TO_APPLY,
+        apply_service.NOTHING_LEFT_TO_APPLY_UNPUSHED,
+        apply_service.NO_SSH_KEY,
+        # M23, round 3. The fifth clause, and the one composed by the refusal an apply
+        # gives when the node it would put into service has a pool that cannot hold the
+        # fleet — which sends the operator to a different screen from the other four.
+        apply_service.POOL_SHORT_TO_APPLY,
+        # The sixth: the refusal an apply gives on a node the state machine will not let
+        # serve again. Its direction is the only one of the six that sends the operator to
+        # make a NEW record rather than to change this one, because a retired node has
+        # nowhere to go and this refusal does not offer to widen that.
+        apply_service.CANNOT_SERVE_AGAIN,
+        # The seventh — M23, round 4. The refusal a FAN-OUT gives on a node that is not
+        # serving, and the only one whose direction names a button the operator did not
+        # press: they pressed revoke or rotate, and what finishes it is apply.
+        apply_service.NOT_IN_SERVICE_TO_PUSH,
+    ))
     for clause, on_the_console in wording._THE_CONSOLES_DIRECTIONS.items():
-        assert clause in (
-            apply_service.NOTHING_TO_APPLY_YET
-            + apply_service.NOTHING_LEFT_TO_APPLY
-            + apply_service.NOTHING_LEFT_TO_APPLY_UNPUSHED
-        ), f"nothing composes this clause any more, so it is translating nothing: {clause}"
+        assert clause in composed, (
+            f"nothing composes this clause any more, so it is translating nothing: {clause}"
+        )
         assert on_the_console != clause, clause
 
 

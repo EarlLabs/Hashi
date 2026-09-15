@@ -28,8 +28,10 @@
   and three settings put the lookup through the hop. Each is necessary and none is enough
   alone — measured against the pinned Xray, with the resolver's side watched on loopback:
     - the outbound's `settings.domainStrategy`. Without it (`AsIs`) the outbound hands the
-      name to the host's resolver and the `dns` object is never consulted at all. Not to be
-      confused with `routing.domainStrategy`, which only decides how routing rules match.
+      name to the host's resolver and the `dns` object is never consulted at all. Since the
+      tenth round `routing.domainStrategy` below asks the same `dns` object one step
+      earlier, so the two are belt and braces rather than one setting — and reproducing M16
+      now takes removing BOTH.
     - `dns.servers`: the resolver itself, from the node's record. Never a default here.
     - `dns.tag` and the second routing rule. The resolver's own queries leave by the hop
       outbound, so they are sent from the hop's address like the traffic they are for —
@@ -38,15 +40,118 @@
   the hop cannot reach. Xray does NOT reject a misspelt `queryStrategy` — it silently asks
   for both — so the value is held by a test, not by the checker. `clientIp` is absent on
   purpose: it would attach the asker's network to every query. And `log.dnsLog` is written
-  out as `false` wherever the resolver is in use: with it on, every name looked up would go
-  to the container log, the one record the charter says must not exist.
+  out as `false` in EVERY config this file renders and not only in one that carries a
+  resolver of its own: since the tenth round a name is resolved on every node, so every node
+  has something for that key to record. With it on, every name looked up would go to the
+  container log, the one record the charter says must not exist.
+
+  And M23's ninth round, which is the same finding as the kernel tunnels' but on the other
+  side of the topology: not where a friend's traffic LEAVES, but WHAT THEY MAY ASK THIS
+  NODE TO DIAL. `sendThrough` binds the address a connection is opened from and says
+  nothing about the address it is opened to, so a friend on an entry node could hand this
+  proxy the leaf's own address on the hop and be answered by its SSH daemon — an RFC 1918
+  address nothing on the open internet can reach, reached from the one address the leaf's
+  peer entry authorises. No packet of theirs is forwarded by this node's kernel, so no
+  firewall rule this project renders is anywhere on that path: the policy has to live in
+  the thing that opens the connection, which is this file. The FIRST routing rule refuses
+  every destination that is not on the public internet, and every second spelling of one —
+  `edge.egress.NOT_THE_INTERNET`, the same list a kernel tunnel drops and never a second
+  copy of it — and first is load-bearing, because Xray takes the first rule that matches
+  and the rule below it matches everything from this inbound.
+
+  Two things it deliberately does not refuse, and each would be silently broken by a wider
+  rule:
+    - THE RESOLVER'S OWN QUERIES. They arrive tagged `lookup` and the refusal names `in`,
+      so a node record pointing at a private resolver on the far side of the hop goes on
+      working — which is the whole of M16, and M16 is why the record is allowed to name a
+      private one at all. Scoped by WHOSE connection it is rather than by an address and a
+      port, so unlike an address exception it can never open a hole for an address a
+      friend's own device could hold.
+    - THE HOP ITSELF. What carries this node's traffic abroad is another transport's
+      interface and another process; the entry dials the leaf through the kernel and never
+      through this file, so nothing here can take it away.
+
+  It refuses by dropping rather than by answering. `blackhole` with `response.type: none`
+  sends nothing to the destination and writes nothing back, which is the same choice the
+  kernel rules made in preferring DROP to REJECT: an answer is a signal, and a signal is
+  how a fleet is enumerated. The refusal outbound carries `sendThrough` wherever the one
+  beside it does — it dials nothing, but a file in which EVERY outbound is bound to the hop
+  cannot grow one that is not, and that invariant is what M3 is asserted as.
+
+  And M23's TENTH round, which closed the two holes the ninth left open and reported. Both
+  were measured against the pinned Xray run as a live proxy, not argued from the docs.
+
+  FIRST, THE RULE IS NOT ONLY FOR A NODE WITH A HOP. It used to be rendered inside the same
+  branch as `sendThrough` and the resolver, so a LEAF refused nothing at all — and a leaf's
+  neighbourhood is the wider one: the far end of the hop (whose near end is the Russian
+  entry), the provider's LAN, the metadata service, this node's own loopback. Every friend
+  this project has who is served directly by a leaf had all of it. So the refusal sits
+  outside that branch now, and the only thing the exit policy still decides is WHERE what
+  is carried goes — `hop`, bound to the hop's near address, or `direct` by this node's own
+  route. A proxy is never one end of a hop (`edge/relay.py` refuses a transport that hands
+  its consumers no address of their own), so `Egress.RELAY`'s deliberately wider licence —
+  which the leaf END of a kernel-tunnel hop needs, because what arrives there is another
+  NODE's traffic — can never reach this file.
+
+  SECOND, `routing.domainStrategy: "IpOnDemand"`, which is what makes an address rule mean
+  anything. Left at Xray's default (`AsIs`) the rules see the destination as the friend
+  sent it, so `127.0.0.1` was refused and the NAME `localhost` was reached: any name
+  resolving into one of these ranges walked straight past the rule, and a wildcard DNS
+  service makes such a name out of any address. `IpIfNonMatch` is a MEASURED no-op here —
+  the rule below the refusal matches this inbound unconditionally, so nothing is ever left
+  unmatched for it to resolve. `IpOnDemand` resolves the destination the moment a rule
+  carrying addresses is read.
+
+  AND M23's TWELFTH round, which is the same rule asked in the other family. Everything
+  above held, and every range in the list was IPv4 — so the product's own rendered config,
+  run unedited in the pinned Xray, refused `127.0.0.1`, refused the name `localhost` and
+  refused a private v4 address, while `[::1]` answered from the node's own loopback and
+  `[fc00::2]` answered from the network the node sits in. A refusal that names only one
+  spelling of a destination is not a refusal.
+
+  `routing.rules[].ip` takes both families, and `iptables` takes one, which is why the
+  list `edge.egress` keeps is now split there BY DERIVATION rather than by a second list
+  somebody maintains: this file takes the whole of it, and the wg family takes what its
+  own tool can express. Two ranges of the registry are deliberately absent — see that
+  constant, and the test that measures the mapped spelling's verdict.
+
+  What was measured afterwards, on the same live proxy: `[::1]` and `[fc00::2]` refused,
+  a globally-routable IPv6 address carried, a NAME resolving to a v6 address off the
+  internet refused and one resolving to a v6 address on it carried, and the log still
+  empty of every one of them.
+
+  AND M23's THIRTEENTH round, which is the same address in a THIRD spelling. The twelfth
+  round's v6 half was the registry's own, which carries the LOCAL-USE NAT64 prefix
+  `64:ff9b:1::/48` and not the WELL-KNOWN one — and the well-known one is the half that
+  puts an IPv4 address in its low 32 bits. So `[64:ff9b::7f00:1]` was still reached, on a
+  responder bound to this node's own loopback, in the same run that refused `127.0.0.1`
+  and `[::ffff:127.0.0.1]`. Measured, not inferred: the daemon does NOT fold a NAT64
+  address the way it folds a mapped one — `[::ffff:192.88.99.9]` reached the host at
+  `192.88.99.9` while `[64:ff9b::c058:6309]` timed out — so it is dialled as literal IPv6
+  and nothing but a translator on the path turns it back.
+
+  The list now carries the well-known prefix's EMBEDDING of each range it already refuses
+  and not the prefix itself, which is the part a wider rule would have got wrong: an
+  address in that prefix with a GLOBAL IPv4 address inside is how a v6-only client reaches
+  the v4 internet, and this project's own scenarios use exactly such an address for the
+  word "internet". Re-measured with the new list in place: `[64:ff9b::7f00:1]` refused,
+  `[64:ff9b::c058:6301]` carried, and every verdict above unchanged.
+
+  Where that resolution is asked is the part worth checking rather than assuming, because a
+  lookup is the one record this project must never create and the one it most easily leaks.
+  It goes to THIS FILE'S OWN `dns` object where there is one: measured, a name that only the
+  node record's resolver knows is reached from a node with a hop, and the host's resolver is
+  never asked — so on an entry the routing lookup crosses the hop exactly like the outbound's
+  own. On a node without a hop there is no `dns` object and Xray asks the host's resolver,
+  which is where that node's names have always been looked up and is abroad by construction.
+  It is one lookup per NAME rather than per connection (Xray caches it for the answer's TTL,
+  measured at one query for three connections), and nothing writes it down: `log.dnsLog` is
+  `false`, `sniffing` is off, and a `blackhole` has nowhere to record what it refused.
 #}
 {
   "log": {
     "loglevel": "warning",
-{% if exit_origin %}
     "dnsLog": false,
-{% endif %}
     "access": "none"
   },
   "inbounds": [
@@ -94,36 +199,61 @@
     "queryStrategy": "UseIPv4",
     "tag": "lookup"
   },
+{% endif %}
   "routing": {
+    "domainStrategy": "IpOnDemand",
     "rules": [
       {
         "type": "field",
         "inboundTag": ["in"],
-        "outboundTag": "hop"
+        "ip": [
+{% for destination in refused %}
+          {{ destination | tojson }}{{ "," if not loop.last }}
+{% endfor %}
+        ],
+        "outboundTag": "refused"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["in"],
+        "outboundTag": {{ ("hop" if exit_origin else "direct") | tojson }}
+{% if exit_origin %}
       },
       {
         "type": "field",
         "inboundTag": ["lookup"],
         "outboundTag": "hop"
       }
+{% else %}
+      }
+{% endif %}
     ]
   },
   "outbounds": [
     {
+{% if exit_origin %}
       "tag": "hop",
       "protocol": "freedom",
       "sendThrough": {{ exit_origin | tojson }},
       "settings": {
         "domainStrategy": "UseIPv4"
       }
-    }
-  ]
 {% else %}
-  "outbounds": [
-    {
       "tag": "direct",
       "protocol": "freedom"
+{% endif %}
+    },
+    {
+      "tag": "refused",
+      "protocol": "blackhole",
+{% if exit_origin %}
+      "sendThrough": {{ exit_origin | tojson }},
+{% endif %}
+      "settings": {
+        "response": {
+          "type": "none"
+        }
+      }
     }
   ]
-{% endif %}
 }

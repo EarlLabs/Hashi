@@ -65,6 +65,14 @@ class AuditAction(enum.StrEnum):
     # NAME only: the resolver is an address, and an address against a time is the record
     # this trail was shaped to refuse.
     NODE_RESOLVER_SET = "node-resolver-set"
+    # M23. The SECOND edit a node record admits after registration, and it exists for the
+    # reason the first one does: the add-node dialog calls the SSH key optional, and until
+    # this action existed a node registered on that invitation could never be given one —
+    # unappliable, unreachable by a revocation, and permanently in the list. Recorded by
+    # the node's NAME only. Nothing about the key itself: not its length, not a
+    # fingerprint, not whether it replaced one, because a credential for every host in the
+    # fleet has no safe shape in a durable record.
+    NODE_SSH_KEY_SET = "node-ssh-key-set"
     TRANSPORT_ENABLED = "transport-enabled"
     TRANSPORT_OFFERED = "transport-offered"
     TRANSPORT_WITHDRAWN = "transport-withdrawn"

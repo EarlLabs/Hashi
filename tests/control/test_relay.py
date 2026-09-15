@@ -24,6 +24,7 @@ from sqlalchemy import select
 from control.app.errors import DomainError, HopEndRefused
 from control.app.models import NodeState, NodeTransport, TransportPurpose
 from control.app.services import apply, keymaterial, nodes, relay
+from edge.registry import discover
 
 HOP_TRANSPORT = "amneziawg"
 
@@ -153,6 +154,55 @@ async def test_a_hop_on_an_unknown_transport_is_a_404(client, hop_params) -> Non
     entry_id, leaf_id = await two_nodes(client)
     body = hop_body(entry_id, leaf_id, hop_params) | {"transport_name": "nope"}
     assert (await client.post("/api/hops", json=body)).status_code == 404
+
+
+async def test_a_transport_no_hop_can_be_built_from_says_so_and_never_crashes(
+    client, session, reality_params
+) -> None:
+    """The two surfaces of M20's acceptance finding, held together in one scenario.
+
+    ``GET /api/transports`` advertised ``hop_capable: true`` for both VLESS transports
+    and ``POST /api/hops`` answered 500 on them — ``KeyError: 'tunnel_address'``, a
+    parameter neither has ever declared. The flag was the raw permission, which defaults
+    to True and only ever says "this protocol is not identified at the border this hop
+    crosses"; the ability is a per-consumer address, and a hop is two ends of one tunnel
+    network that each need one. Only ``HopNotRenderable`` becomes a 400 on this path, so
+    the gap reached the operator as a crash on a path the inventory called capable.
+
+    Asserted as a PAIR on purpose: either half alone is satisfiable by making the other
+    half wrong, and "these two surfaces agree" is the thing that was untrue.
+
+    Named rather than parametrised, because the parameters an operator types are this
+    transport's own. The declaration-driven half of the same rule — every installed
+    transport permitted on a hop and shaped like nothing that could be one — is held over
+    the whole registry in ``tests/edge/test_relay.py``. The guard below is what stops this
+    scenario passing vacuously the day that declaration changes.
+    """
+    name = "vless-reality"
+    if discover()[name].hop_expressible:
+        pytest.skip(f"{name} can now be built into a hop; this is about one that cannot")
+
+    listed = {row["name"]: row for row in (await client.get("/api/transports")).json()}
+    assert listed[name]["hop_capable"] is False, listed[name]
+
+    entry_id, leaf_id = await two_nodes(client)
+    response = await client.post(
+        "/api/hops",
+        json={
+            "entry_node_id": entry_id,
+            "leaf_node_id": leaf_id,
+            "transport_name": name,
+            "entry_params": reality_params,
+            "leaf_params": {**reality_params, "port": 8444},
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    # It has to name the reason, or the operator reads a refusal they cannot act on.
+    said = response.json()["error"]["message"]
+    assert name in said and "address" in said, said
+    rows = (await session.execute(select(NodeTransport))).scalars().unique().all()
+    assert rows == [], "a refused hop still wrote an end"
 
 
 # --- what a hop must never do -------------------------------------------------

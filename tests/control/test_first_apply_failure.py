@@ -59,7 +59,7 @@ from control.app.panel import wording
 from control.app.services import apply, nodes
 from edge.bootstrap import NodeUnreachable
 
-from .conftest import assert_plain_reason
+from .conftest import GENERATED_SSH_KEY, assert_plain_reason, pinned
 
 # What a FRIEND would dial, and the only thing this address is here: RFC 5737
 # TEST-NET-1, the same one every other fixture in this zone uses. Nothing in this file
@@ -100,6 +100,10 @@ async def a_drafted_node(client, reality_params, ssh) -> str:
 
     ``ssh`` is the endpoint the control plane will dial — the ``refusing_ssh`` socket,
     so the apply fails because the test said it would, not because of a route.
+
+    It carries a real key — M23. ``apply.target_for`` refuses a record with none before
+    it dials, so a keyless node would fail this file's applies for a reason none of its
+    tests are about. The key authenticates nothing; the socket refuses the connection.
     """
     node_id = (await client.post(
         "/api/nodes",
@@ -109,6 +113,7 @@ async def a_drafted_node(client, reality_params, ssh) -> str:
             "location_label": "Testland",
             "ssh_host": ssh.host,
             "ssh_port": ssh.port,
+            "ssh_private_key": GENERATED_SSH_KEY,
         },
     )).json()["id"]
     enabled = await client.post(
@@ -222,7 +227,7 @@ async def test_the_api_reports_the_node_rather_than_the_state_machine(
 
 
 async def test_a_refused_transition_never_replaces_the_reason(
-    client, session, reality_params, refusing_ssh
+    client, session, reality_params, refusing_ssh, monkeypatch
 ) -> None:
     """A retired node still has nowhere to go, and must not hijack the message.
 
@@ -231,9 +236,33 @@ async def test_a_refused_transition_never_replaces_the_reason(
     failure can still fail, and it must behave the way the draft path now does: the
     operator is told what went wrong with the node, not what went wrong with the
     bookkeeping.
+
+    THE NODE IS RETIRED MID-APPLY, and that is not a contrivance to keep an old test
+    alive — it is the only way a retired node reaches ``_record_failure`` now that
+    ``apply_node`` refuses one before it dials anything (``NodeCannotServe``). It is also
+    the residual window that guard leaves open, named here rather than left for somebody
+    to find: the guard reads the row and does not lock it, so an operator who retires a
+    node while a push to it is in flight is racing the same two writes.
+
+    The retirement arrives through the API, in the request's own session, the way a
+    second surface does in the field — and it lands on the first await after the guard,
+    which is the earliest moment this suite can put it there.
     """
     node_id = await a_drafted_node(client, reality_params, refusing_ssh)
-    await nodes.set_node_state(session, node_id=node_id, state=NodeState.RETIRED)
+
+    # Captured before the double replaces it, and called by the double: what this test
+    # changes is WHEN the row moves, not what the apply reads.
+    reading_the_rows = apply.enabled_transports
+
+    async def enabled_transports(session, node):
+        rows = await reading_the_rows(session, node)
+        retired = await client.post(
+            f"/api/nodes/{node_id}/state", json={"state": "retired"}
+        )
+        assert retired.status_code == 200, retired.text
+        return rows
+
+    pinned(monkeypatch, apply, "enabled_transports", enabled_transports)
 
     with pytest.raises(NodeOperationFailed) as raised:
         await apply.apply_node(session, node_id=node_id)
@@ -244,6 +273,9 @@ async def test_a_refused_transition_never_replaces_the_reason(
         "the bookkeeping's own failure replaced the node's"
     )
     assert not isinstance(raised.value, Conflict)
+    # The row, not the copy: ``_record_failure`` could not move it, and must not have
+    # left the session believing it had.
+    session.expire_all()
     assert (await nodes.get_node(session, node_id)).state == NodeState.RETIRED
 
 

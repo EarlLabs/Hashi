@@ -29,8 +29,10 @@ FAKE_PRIVATE_KEY = "wEJ0aXpBQlFtNVFDbEZLTFVqRXFRUlRLZXJhcXZJZ0k"
 FAKE_PUBLIC_KEY = "0Rf8h2v0aFVQVGxLZ0VNQmxwQVVCMFJmOGgydjBhRlY"
 
 # RFC 5737 documentation address, standing in for the resolver a node's record names —
-# M16. Only a node whose traffic leaves through a hop ever renders it, so it changes no
-# golden file.
+# M16, and since M23 the fallback a friend's own config file names when the transport
+# sets none (``egress.client_resolvers``). Outside every tunnel range in this file on
+# purpose: a resolver inside one is an address some friend's device holds, and the
+# renderer refuses it.
 FAKE_RESOLVER = "192.0.2.53"
 
 
@@ -192,6 +194,14 @@ FAKE_WG_PRESHARED_KEY = "bW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QUVI="
 FAKE_WG_PEER_PRIVATE_KEY = "cGVlckFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMDE="
 FAKE_WG_PEER_PUBLIC_KEY = "cGVlclpZWFdWVVRTUlFQT05NTEtKSUhHRkVEQ0JBOTg="
 
+# One pre-shared key PER PEER — M23. Distinct from each other and from the node's, for
+# the same reason the peer private key above is distinct from the node's: with one value
+# reused, "no two peers share a pre-shared key" compares a string to itself and cannot
+# fail. These are what a golden file has to show, because the defect they pin was two
+# identical PresharedKey lines in a real node's config.
+FAKE_WG_PEER_PRESHARED_KEY_ONE = "cGVlck9ORXByZXNoYXJlZEFCQ0RFRkdISUpLTE1OMDE="
+FAKE_WG_PEER_PRESHARED_KEY_TWO = "cGVlclRXT3ByZXNoYXJlZEFCQ0RFRkdISUpLTE1OMDI="
+
 
 @pytest.fixture
 def amneziawg_params() -> dict[str, object]:
@@ -233,6 +243,10 @@ def amneziawg_credentials() -> list[Credential]:
             secrets={
                 "peer_private_key": FAKE_WG_PEER_PRIVATE_KEY,
                 "peer_public_key": FAKE_WG_PEER_PUBLIC_KEY,
+                # Its OWN pre-shared key, like every consumer of this transport since
+                # M23. The hop is the one peer that still has none of its own, and
+                # ``tests/edge/test_relay.py`` is where that case is held.
+                "peer_preshared_key": FAKE_WG_PEER_PRESHARED_KEY_ONE,
             },
         ),
         Credential(
@@ -240,6 +254,7 @@ def amneziawg_credentials() -> list[Credential]:
             secrets={
                 "peer_private_key": FAKE_WG_PRESHARED_KEY,
                 "peer_public_key": FAKE_WG_PRESHARED_KEY,
+                "peer_preshared_key": FAKE_WG_PEER_PRESHARED_KEY_TWO,
                 # Its OWN tunnel address. Two peers sharing one would make the second
                 # silently take over the first's route, which the renderer refuses.
                 "peer_tunnel_address": "10.44.0.3/24",
@@ -281,6 +296,7 @@ def wireguard_credentials() -> list[Credential]:
             secrets={
                 "peer_private_key": FAKE_WG_PEER_PRIVATE_KEY,
                 "peer_public_key": FAKE_WG_PEER_PUBLIC_KEY,
+                "peer_preshared_key": FAKE_WG_PEER_PRESHARED_KEY_ONE,
                 "peer_tunnel_address": "10.55.0.2/24",
             },
         ),
@@ -289,6 +305,7 @@ def wireguard_credentials() -> list[Credential]:
             secrets={
                 "peer_private_key": FAKE_WG_PRESHARED_KEY,
                 "peer_public_key": FAKE_WG_PRESHARED_KEY,
+                "peer_preshared_key": FAKE_WG_PEER_PRESHARED_KEY_TWO,
                 "peer_tunnel_address": "10.55.0.3/24",
             },
         ),

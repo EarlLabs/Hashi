@@ -93,6 +93,38 @@ _THE_CONSOLES_DIRECTIONS: dict[str, str] = {
     apply.NOTHING_STOPS_A_SERVING_HOST: (
         "Nothing else in this panel stops a node serving what it was last given."
     ),
+    # M23. The console can name the control the operator presses; an API caller has no
+    # row and no button, so the service's own clause says only what has to happen.
+    apply.GIVE_IT_A_KEY: (
+        f'Give it one with "ssh key" on its row on {apply.WHERE_TO_RETRY}, then try '
+        "again."
+    ),
+    # M23, round 3. The fifth, and the one place a pool's size is actually changed — which
+    # is not the screen this refusal is read on. There is no resize control on the Nodes
+    # screen, so an operator told to make the pool bigger and nothing else has nowhere to
+    # go; the console's words are the ones ``console.POOL_SHORT_TO_OFFER`` and
+    # ``console.POOL_SHORT_TO_SERVE`` already send them to, so the same instruction reads
+    # the same whichever of the three refusals about a short pool they met.
+    apply.MAKE_THE_POOL_BIGGER: (
+        "Make the pool bigger first: Keys & configs, replace params."
+    ),
+    # The sixth. A retired node cannot be brought back — the state machine says so and
+    # this refusal does not offer to widen it — so the only honest direction is a NEW
+    # record for that host, and the console can name the control that makes one. The
+    # service's own clause cannot: an API caller has no screen and no button.
+    apply.REGISTER_IT_AGAIN: (
+        f'If that host is genuinely back, register it again with "add node" on '
+        f"{apply.WHERE_TO_RETRY} and apply that one."
+    ),
+    # The seventh — M23, round 4. The refusal a FAN-OUT gives on a node that is not
+    # serving, which is the one direction here that names the button the operator did not
+    # press: they pressed revoke or rotate, and what completes it is apply, on a screen
+    # they are not looking at. An API caller has neither.
+    apply.APPLY_IT_YOURSELF: (
+        f'Apply that node itself from {apply.WHERE_TO_RETRY} with "apply" once its host '
+        "is ready — that is what puts it back into service, and what replaces the file "
+        "on it."
+    ),
 }
 
 
@@ -157,6 +189,7 @@ _EVENTS: dict[AuditAction, str] = {
     AuditAction.NODE_STATE_CHANGED: "{first} is now {second}",
     AuditAction.NODE_APPLIED: "config applied to {first}",
     AuditAction.NODE_RESOLVER_SET: "resolver set for {first}",
+    AuditAction.NODE_SSH_KEY_SET: "ssh key set for {first}",
     AuditAction.TRANSPORT_ENABLED: "{second} enabled on {first}",
     AuditAction.TRANSPORT_OFFERED: "{second} offered again on {first}",
     AuditAction.TRANSPORT_WITHDRAWN: "{second} withdrawn on {first}",

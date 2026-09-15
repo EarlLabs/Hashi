@@ -73,12 +73,36 @@
 
       <div class="field">
         <label for="node-detail">why</label>
+        {#
+          NO `maxlength`, and round 8 put one here — M23, round 12. The attribute stopped
+          the console being the surface that produced the failure and left the failure
+          exactly where it was: a longer reason posted to this path still reached Postgres
+          and came back as `internal_error` with no sentence in it. It is also the thing
+          this console has already decided against twice, for the better reason
+          (`panel/add_friend_dialog.html`, `panel/routes.VALUE_TOO_LONG`): the attribute
+          silently clips a paste, so the note is written under something other than what
+          the operator typed — and this is the note that outlives the host it describes.
+
+          The limit is STATED in the hint below and ENFORCED in services/nodes.py, which
+          refuses every path at once. Neither number is written in this file.
+        #}
         <input class="input" id="node-detail" name="detail" type="text"
                value="{{ values.get('detail', "") }}" autocomplete="off"
-               aria-describedby="node-detail-hint">
-        <div class="field-hint" id="node-detail-hint">Optional, and kept only when you
-          mark it degraded — a degraded node with no reason on it is a node nobody
-          fixes. Ignored for every other state.</div>
+               aria-describedby="node-detail-hint{% if errors.get('detail') %} node-detail-error{% endif %}">
+        {% if errors.get('detail') %}
+        <div class="field-error" id="node-detail-error" role="alert">{{ errors['detail'] }}</div>
+        {% endif %}
+        {#
+          M23, round 4. This said "kept only when you mark it degraded … ignored for
+          every other state", and it was true: a node retired with "host was returned to
+          the provider" answered 200 and stored nothing. Retirement is terminal and its
+          record outlives the host, so that is the note the operator most wants later —
+          the reason is kept on every state but active now, and the hint says so.
+        #}
+        <div class="field-hint" id="node-detail-hint">Optional, up to {{ detail_limit }}
+          characters, and kept on every state but active — a node out of service with no
+          reason on it is a node nobody fixes, and a retired one nobody remembers.
+          Cleared when it goes back into service.</div>
       </div>
 
       <div class="dialog-actions">

@@ -1,0 +1,62 @@
+{#
+  "Give this node an SSH key" — M23, and the second edit a node record admits.
+
+  WHY IT EXISTS: the add-node dialog calls this key optional — *"without it the node can
+  be registered but its configuration cannot be applied"* — and until this dialog there
+  was nothing that could supply one afterwards. The real-host walk found every candidate
+  route 404ing, which made a node registered on that invitation permanently unappliable,
+  permanently unreachable by a revocation, and only ever retirable. Everything else on a
+  node record still stays fixed; a new host is still a new node.
+
+  THE BOX IS WRITE-ONLY, and it is the same exception the add-node dialog's key box is:
+  UI-PATTERNS §9 and CLAUDE.md say the panel states the rule where key material could
+  appear, and this is how the control plane is given the credential for reaching a host.
+  It is stored encrypted and never rendered anywhere again — which is why this template
+  is handed `has_key`, a boolean, and never the value behind it.
+
+  It is NEVER refilled on a refusal, unlike every other form in this console: putting a
+  submitted private key back into the markup would make the panel a place key material
+  appears. The refusal under it quotes no part of what was pasted either — it is a
+  sentence about the shape of a key (services/nodes.py, SSH_KEY_UNUSABLE).
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true"
+       aria-labelledby="node-ssh-key-title">
+    <div class="dialog-title" id="node-ssh-key-title">SSH key for {{ node.name }}</div>
+    <form class="dialog-form" hx-post="/panel/nodes/{{ node.id }}/ssh-key"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="node-ssh-key">ssh private key</label>
+        <textarea class="input" id="node-ssh-key" name="ssh_private_key" rows="3"
+                  autocomplete="off" spellcheck="false"
+                  aria-describedby="node-ssh-key-hint{% if errors.get('ssh_private_key') %} node-ssh-key-error{% endif %}"
+                  {% if errors.get('ssh_private_key') %}aria-invalid="true"{% endif %}></textarea>
+        <div class="field-hint" id="node-ssh-key-hint">
+          The whole key, from its BEGIN line to its END line, and not one protected by a
+          passphrase. Stored encrypted and never displayed again — this box is empty
+          every time it opens, including when this form comes back refused.
+        </div>
+        {% if errors.get('ssh_private_key') %}
+        <div class="field-error" id="node-ssh-key-error" role="alert">
+          {{ errors['ssh_private_key'] }}
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="dialog-body">
+        {% if has_key %}
+        A key is already stored for {{ node.name }}. Pasting one here replaces it, and
+        the next apply is what uses it.
+        {% else %}
+        {{ node.name }} has no key on its record, so nothing can be pushed to it and no
+        revocation can reach it. This gives it one; apply the node afterwards.
+        {% endif %}
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">store key</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

@@ -31,10 +31,19 @@ and confirms first and the other is not and does not.
 
 WHAT DID NOT GO WITH THEM. The two routes that answered a plain browser form with a
 303 — ``POST /panel/nodes`` and ``POST /panel/nodes/{id}/transports`` — no longer
-redirect: the console is the only caller and it asks with htmx. What is kept is the
-REFUSAL split in ``_refuse_node`` and ``_refuse_the_form``: a caller that is not htmx
-has nowhere to render a field error, so it still gets the ``DomainError`` envelope
-rather than a dialog fragment it could not use.
+redirect: the console is the only caller and it asks with htmx.
+
+AND THE REFUSAL SPLIT IS GONE TOO, since M23's eighth round. Those two routes kept one
+last piece of the pre-redesign form: a caller that was not htmx got the ``DomainError``
+envelope at 400 instead of the dialog at 422, on the reading that such a caller has
+nowhere to render a field error. ``POST /panel/friends`` never had it — it re-renders
+its dialog for every caller — so one console answered the same kind of refusal in two
+shapes, and the walk read the worse of them: 400 with the field sentences joined into
+one paragraph that named no field and repeated itself once per missing box. Every panel
+form now refuses the same way, which is the dialog at 422 with the message under the
+box it is about. A caller that wants a machine-readable refusal has ``/api/**``, where
+a request model answers per field and a service refusal answers in the envelope — the
+panel is the operator's screen and was never the second API it was being read as.
 """
 
 import dataclasses
@@ -50,7 +59,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app import auth
 from control.app.api import schemas
 from control.app.dependencies import session_dependency
-from control.app.errors import DomainError, HopEndRefused, NothingToApply, ParamsRefused
+from control.app.errors import (
+    DomainError,
+    HopEndRefused,
+    NodeCannotServe,
+    NothingToApply,
+    ParamsRefused,
+)
 from control.app.models import NodeState, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
@@ -247,9 +262,22 @@ async def friends_table(
 
 async def _friends_context(session: AsyncSession) -> dict:
     """What the users table needs, in one place so the screen and the refresh agree."""
+    # READ ONCE and handed to both — M23, round 3. The note above the table and the cell
+    # on a revoked row are two answers to the same question, and asking it twice is how
+    # they come to disagree: the cell may only say the access is gone while the note says
+    # nothing is in doubt.
+    unconfirmed = await console.unconfirmed_nodes(session)
     return {
         "friends": await console.friend_rows(session),
         "serving": len(await nodes.serving_transports(session)),
+        # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
+        # services/console.py from the Nodes screen's own two readings, and ``None`` on a
+        # fleet where every host is confirmed, so the table carries no standing warning.
+        "withdrawal_doubt": console.withdrawal_doubt(unconfirmed),
+        # The cell that used to read "no access", and since round 3 reads nothing at all
+        # while that note is up. Passed in rather than written in the template because
+        # whether it may be said is a decision this zone makes — see ``withdrawn_cell``.
+        "access_withdrawn": console.withdrawn_cell(unconfirmed),
     }
 
 
@@ -463,6 +491,12 @@ NOT_ITS_PARAMETER = (
     "submission."
 )
 
+# The sentence a submission naming a retired transport is answered with used to be
+# written here and now lives beside the declaration it reads — ``transports.
+# NO_LONGER_OFFERED``, M20's acceptance. Three surfaces format it since the enable
+# service began refusing the operation as well, and the one this module shows above the
+# form is the same one an API caller is answered with.
+
 
 @router.get("/transports/{node_transport_id}/withdraw", response_class=HTMLResponse)
 async def withdraw_transport_dialog(
@@ -557,7 +591,9 @@ async def _set_offered(
         # Offering again runs the same grant fan-out ``enable_transport`` does, so the
         # material a user holds moves and the Keys screen's "users on it" count with it.
         events = "nodes-changed, keys-changed, friends-changed"
-        toast = console.offer_summary(offer.node, offer.transport)
+        toast = console.offer_summary(
+            offer.node, offer.transport, deliverable=offer.deliverable
+        )
     else:
         # Withdrawing fires two as well. What it does NOT take away is a MINTED
         # CREDENTIAL — that stays minted, which is why the Keys screen is left alone —
@@ -694,7 +730,13 @@ async def _enable_form(
     every box out of the transport's own model — so this dialog names no protocol, no
     field and no port, exactly as the establish-hop dialog does not. The list of
     protocols it may offer is the image's own answer (``offerable_transports``) and
-    nothing is subtracted from it.
+    nothing else is subtracted from it.
+
+    WHAT THAT ANSWER NOW SUBTRACTS is a transport the registry declares retired — M20,
+    on the owner's instruction after one was measured twice on a live node completing a
+    handshake and carrying no traffic. The subtraction is in the service, asked of the
+    declaration and never of a name, so retiring a future transport empties its group out
+    of this dialog with no edit here and none in its template.
 
     IT USED TO SUBTRACT what the node already ran, on the reasoning that the form should
     not present an action whose only outcome is a refusal. That reasoning went with the
@@ -707,9 +749,14 @@ async def _enable_form(
     collision arrives as a refusal on this dialog with the port named.
 
     NO BOX CAN EXIST FOR KEY MATERIAL and that is structural: ``operator_tuning`` is
-    built from ``operator_params``, which subtracts everything the transport declares as
+    built from ``supplied_params``, which subtracts everything the transport declares as
     material and every public counterpart of one. Enabling is the moment material is
     MINTED, which is exactly why the form it is minted from may not ask for any.
+
+    ``supplied_params`` AND NOT ``operator_params`` SINCE M23, so a parameter the
+    transport defaults finally has a box here — the route has always read one, and no
+    form drew it. The subtraction above is the same either way; only the ``is_required``
+    filter went, which is why this dialog's one rule is untouched.
     """
     node = await nodes.get_node(session, node_id)
     offers = await console.offers_on(session, node_id)
@@ -730,6 +777,14 @@ async def _enable_form(
         # pool size is a column on the node-transport record rather than anything the
         # transport declares or validates.
         "pools": await console.pool_boxes(session, installed),
+        # WHAT ENABLING THIS ONE DOES, per transport — M20's acceptance, round 2. Keyed
+        # like ``pools`` above and printed inside the group, because the dialog's footer
+        # said it once for every protocol on it and a config-file transport is in nobody's
+        # link: the one sentence on this screen that is read while the operator is
+        # deciding was the one making a promise the product does not keep. Composed in
+        # ``services/console.py`` from ``subscription_expressible``, so this file and its
+        # template still know one protocol from another only as data.
+        "enabling": console.enabling_notes(installed),
         "values": values or {},
         "errors": errors or {},
         # A refusal about the request rather than about one box — a transport this image
@@ -854,6 +909,78 @@ def _refuse_resolver(
     )
 
 
+@router.get("/nodes/{node_id}/ssh-key", response_class=HTMLResponse)
+async def node_ssh_key_dialog(
+    node_id: str,
+    request: Request,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Give this node the key `control` reaches it with — M23.
+
+    The second edit a node record admits, and it exists because the add-node dialog
+    invites a node without a key (*"Optional now"*) while nothing could supply one
+    afterwards: the real-host walk found every candidate route 404ing, leaving such a
+    node unappliable and unreachable by a revocation for good.
+
+    ``has_key`` and never the key. Whether one is stored is a fact the operator needs —
+    it decides whether this dialog is supplying or replacing — and the value itself is
+    the one credential in this system that reaches every host in the fleet.
+    """
+    node = await nodes.get_node(session, node_id)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_ssh_key_dialog.html",
+        {"node": node, "has_key": bool(node.ssh_private_key), "errors": {}},
+    )
+
+
+@router.post("/nodes/{node_id}/ssh-key", response_class=HTMLResponse)
+async def set_node_ssh_key(
+    node_id: str,
+    request: Request,
+    ssh_private_key: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Store the pasted key, or say why it cannot be read — M23.
+
+    NOTHING TYPED COMES BACK. Every other refusal in this console re-fills the boxes it
+    refused, and this one may not: putting a submitted private key back into the markup
+    would make the panel a place key material appears, which is the rule the add-node
+    dialog states for the same box. The refusal quotes no part of what was pasted either
+    — ``SSH_KEY_UNUSABLE`` is a sentence about the shape of a key and never about this
+    one.
+    """
+    node = await nodes.get_node(session, node_id)
+    try:
+        # NOT stripped, unlike every other box in this console: ``create_node`` above
+        # hands this same field over exactly as it was pasted, and a key that survives one
+        # route and not the other is a difference nobody would look for. What decides
+        # whether it is usable is the loader, asked by the service.
+        node = await nodes.set_ssh_key(
+            session, node_id=node_id, ssh_private_key=ssh_private_key
+        )
+    except DomainError as exc:
+        return _refuse_ssh_key(
+            request, node, errors={"ssh_private_key": wording.for_the_page(exc.message)}
+        )
+    return _mutation(
+        request,
+        toast=console.ssh_key_set(node.name),
+        keeping=node.name,
+        events="nodes-changed",
+    )
+
+
+def _refuse_ssh_key(request: Request, node, *, errors: dict) -> Response:
+    """The ssh-key dialog again, at 422, with the message under the box and an empty box."""
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_ssh_key_dialog.html",
+        {"node": node, "has_key": bool(node.ssh_private_key), "errors": errors},
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
 @router.get("/nodes/{node_id}/state", response_class=HTMLResponse)
 async def node_state_dialog(
     node_id: str,
@@ -891,6 +1018,10 @@ async def _state_form(
         "choices": await console.state_choices(session, node),
         "values": values or {},
         "errors": errors or {},
+        # Passed in rather than written into the markup, for the reason M9 gives about a
+        # port: a number a template carries is a number nobody finds when it changes. The
+        # hint says it because the box no longer clips silently — see the dialog.
+        "detail_limit": nodes.STATE_DETAIL_MAX_LENGTH,
     }
 
 
@@ -927,6 +1058,22 @@ async def set_node_state(
         # this one came from a form, and the states themselves are on screen already.
         return await _refuse_state(
             request, session, node_id, values=typed, errors={"state": NO_SUCH_STATE}
+        )
+
+    # The one refusal on this route that is about the OTHER control, which is the whole
+    # reason it is asked here — M23, round 12. The service refuses this too, for every
+    # caller and in the same words; what the panel adds is nothing but WHICH BOX the
+    # sentence lands under, because ``_refuse_state`` puts a service refusal under
+    # ``state`` and this one is not about the state at all. The limit and the sentence
+    # are both read from ``services/nodes.py``: repeating either here is how a box comes
+    # to disagree with the layer that actually enforces it (``_refused_field``).
+    if len(detail) > nodes.STATE_DETAIL_MAX_LENGTH:
+        return await _refuse_state(
+            request,
+            session,
+            node_id,
+            values=typed,
+            errors={"detail": nodes.STATE_DETAIL_TOO_LONG},
         )
 
     try:
@@ -1093,6 +1240,10 @@ async def _hop_form(
     this dialog has twenty-two boxes and not one of them has a value written into the
     markup.
 
+    ``hop_transports`` subtracts a retired transport too, since M20, so this dialog needs
+    no edit when one is retired — including a hop-capable one, which this image does not
+    ship today.
+
     Everything the operator typed comes back on a refusal, all of it — unlike the
     add-node dialog, which drops the private key. There is no key in this form to drop:
     a hop's material is minted at both ends and the value the two must share is minted
@@ -1140,6 +1291,33 @@ async def establish_hop(
     form = await request.form()
     typed = {key: str(value).strip() for key, value in form.multi_items()}
     transport_name = typed.get("transport_name", "")
+
+    # A hop over a transport this panel has stopped offering — M20, and the same answer
+    # the enable route gives, in the same words, because it is the same refusal about the
+    # same submission. UNREACHABLE TODAY: no transport this image ships is both
+    # hop-capable and retired. It is written now because ``hop_transports`` already
+    # subtracts one, so this dialog draws no group of boxes for it — and without this
+    # line the submission would fall through with an empty ``tuning``, reach the hop
+    # renderer with no parameters at all, and come back as ``_on_their_boxes``'s homeless
+    # fallback: a per-field complaint about boxes nobody drew, instead of the one fact
+    # the operator needs. A refusal that has to be REMEMBERED when the next transport is
+    # retired is one that will not be, which is what ``hop_transports`` says about its
+    # own filter.
+    #
+    # Before the required-field check below, and deliberately: the name is the reason
+    # this submission cannot proceed, so filling in the two node boxes first would be a
+    # round trip that ends in this sentence anyway. An empty ``transport_name`` is in no
+    # retirement and falls through to that check like any other missing answer.
+    retired = transports.retired_transports()
+    if transport_name in retired:
+        return await _refuse_hop(
+            request,
+            session,
+            values=typed,
+            failure=transports.NO_LONGER_OFFERED.format(
+                name=transport_name, reason=retired[transport_name]
+            ),
+        )
 
     errors: dict[str, str] = {}
     for question in ("entry_node_id", "leaf_node_id", "transport_name"):
@@ -1888,17 +2066,25 @@ async def create_node(
 def _refuse_node(
     request: Request, *, values: dict, errors: dict, key_dropped: bool = False
 ) -> Response:
-    """A refused node form, in whichever panel asked.
+    """A refused node form: the dialog back at 422, with the message under its field.
 
-    The console gets its dialog back at 422 with the message under the field it is
-    about — M8.6, and static/app.js allows exactly that one status to swap. A caller
-    that is not htmx has nowhere to put a field error, so it gets a ``DomainError``,
-    which the one exception handler turns into this codebase's error envelope. That
-    split outlived the pre-redesign form it was written for: the bare shape of this
-    POST is still reachable, and a dialog fragment is not an answer to it.
+    M8.6, and static/app.js allows exactly that one status to swap.
+
+    ONE SHAPE FOR EVERY CALLER since M23's eighth round, which is what this function
+    stopped doing rather than what it started doing. A caller that was not htmx got
+    ``raise DomainError(" ".join(errors.values()))`` — the envelope at 400, carrying every
+    field sentence run together with nothing saying which field any of them was about, so
+    a form submitted with two boxes empty was refused with *"required — a node cannot be
+    registered without it required — a node cannot be registered without it"*. Those
+    sentences are written to sit under a box; joined into a paragraph they name nothing.
+    ``POST /panel/friends`` answers the same kind of refusal with its dialog at 422
+    whoever asked, and one console may not hold two answers to one question.
+
+    What that costs is a non-htmx caller getting markup, and it is the right cost: the
+    machine surface is ``/api/**``, which refuses a node record per field through
+    ``schemas.NodeCreate`` and refuses a service's own complaint in the error envelope.
+    Nothing this used to say is unavailable there.
     """
-    if not _is_htmx(request):
-        raise DomainError(" ".join(errors.values()))
     return TEMPLATES.TemplateResponse(
         request,
         "panel/add_node_dialog.html",
@@ -1935,10 +2121,26 @@ async def probe_node(
 ):
     """Ask a node what it is actually running, and say so on the console.
 
-    A healthy answer is a toast: it is good news and it does not need to survive the
-    next click. Anything else is a BANNER, which stays until the next successful
-    action — an unreachable node, or one running a configuration older than the file
+    BOTH ANSWERS PERSIST — M22.3, and the previous sentence here is the finding. It read
+    *"a healthy answer is a toast: it is good news and it does not need to survive the
+    next click"*, which is right about a mutation and wrong about this button. Acceptance
+    pressed probe four times, waiting 2, 3, 4 and 8 seconds, and never saw an answer at
+    all, while every FAILING probe's banner was there at the same waits — because a toast
+    is cleared after 2200ms and that is shorter than the time it takes to look.
+
+    A probe is not a mutation. Nothing changed, and its answer is not a confirmation of
+    something the operator already knows they did — it IS the thing they pressed the
+    button for, the only oracle this console has for "is that node working", and an
+    oracle nobody can read is not an oracle. So a healthy answer is a NOTICE in the
+    banner slot: the quieter weight, the same lifetime as a failure, cleared by the next
+    action or by navigating away. Anything else is the failure banner, unchanged — an
+    unreachable node, a crash loop, or one running a configuration older than the file
     on it, is a fault the operator has to still be able to read while they act on it.
+
+    THE SENTENCE ITSELF IS NARROWER THAN IT WAS, and that is M22.2: it says what was
+    checked — containers up, ports held, read on the node rather than dialled from
+    outside — instead of the single word "serving", which is what an operator read as
+    "working" about a node that was crash-looping on six consecutive probes.
 
     Until M9.6 there was a second probe route, ``/nodes/{id}/health``, answering the
     pre-redesign page with a ``panel/health.html`` fragment. It went with the page; the
@@ -1950,10 +2152,32 @@ async def probe_node(
     is an answer to the operator, not a fault, so it is shown here the way a failed
     apply is. Without this arm it was a 500, and a 500 on this button is the one outcome
     the screen has no way to explain.
+
+    AND SINCE M23's ROUND 12 THIS BUTTON REFUSES A NODE OUTRIGHT, which it never did
+    before: one whose record says its host is gone is not dialled at all. The walk found
+    this button and the one beside it disagreeing about a single address — apply turned it
+    away because it "may now answer for somebody else", and probe opened an SSH session to
+    it. ``services/health.py`` holds the guard and ``apply.CANNOT_BE_DIALLED`` holds the
+    reasoning, including what refusing costs; what belongs here is the word above the
+    banner, which is `refused` and not `failed`.
     """
     node = await nodes.get_node(session, node_id)
     try:
         result = await health.check_node(session, node_id=node_id)
+    except NodeCannotServe as exc:
+        # A REFUSAL, and the word above the banner says so — M23, round 12, and the same
+        # argument the apply button's own arm carries. `failed` on this button reads as
+        # "that node is broken"; this node is in a state the operator set deliberately,
+        # nothing was dialled, and nothing about it has moved. Caught ahead of its base
+        # class rather than branched inside the handler below, for the reason that arm
+        # gives: the two differ in what happened to the NODE and not only in the word.
+        return _mutation(
+            request,
+            banner=exc.message,
+            banner_label="refused",
+            keeping=node.name,
+            events="nodes-changed",
+        )
     except DomainError as exc:
         return _mutation(
             request, banner=exc.message, keeping=node.name, events="nodes-changed"
@@ -1961,7 +2185,7 @@ async def probe_node(
     summary = console.health_summary(node.name, result)
     return _mutation(
         request,
-        toast=summary if result.healthy else None,
+        notice=summary if result.healthy else None,
         banner=None if result.healthy else summary,
         keeping=node.name,
         # A probe changes nothing, but it is the moment the operator most wants the
@@ -1995,18 +2219,42 @@ async def apply_node(
     degraded", which is the one thing the refusal exists to stop the operator believing.
     """
     node = await nodes.get_node(session, node_id)
+    # READ BEFORE THE CALL AND NEVER OFF THE OBJECT AFTERWARDS — M23, round 3, and the
+    # same lesson ``_refuse_state`` carries one screen over. A refusal from the fan-out
+    # this apply now runs comes out of ``friends.grant_everywhere``, which ROLLS BACK
+    # before it raises; a rollback expires every object in the identity map whatever
+    # ``expire_on_commit`` says, so ``node`` is a husk afterwards and ``node.name`` in
+    # either arm below emits a SELECT from a plain frame on an async session. That is a
+    # ``MissingGreenlet``, not a ``DomainError``, so it escaped as a 500 — the walk
+    # pressed apply on a short pool and got ``internal_error`` from the console while the
+    # API answered the refusal correctly. A string read while the session was still whole
+    # cannot expire.
+    name = node.name
     try:
         applied = await apply.apply_node(session, node_id=node_id)
-    except NothingToApply as exc:
-        # A REFUSAL, and the label says so. Caught ahead of its own base class rather
-        # than branching inside one handler, because the two differ in what happened to
-        # the node as well as in the word: nothing was dialled, nothing was pushed and
-        # the node's state has not moved.
+    except (NothingToApply, addresses.PoolFull, NodeCannotServe) as exc:
+        # A REFUSAL, and the label says so. Caught ahead of their base class rather than
+        # branched inside one handler, because these three differ from a failure in what
+        # happened to the NODE as well as in the word: nothing was dialled, nothing was
+        # pushed and the node's state has not moved.
+        #
+        # ``PoolFull`` joined it in M23's round 3. It is the same shape — apply measures
+        # the pools of the rows it is about to put into service before it renders
+        # anything — and it was the one refusal on this button that was not shaped: it
+        # fell through to the generic handler and the operator got a 500 where the API
+        # got a sentence naming the pool.
+        #
+        # ``NodeCannotServe`` is the third, and the word above the banner is the point of
+        # it being here rather than in the arm below: `failed` on this button additionally
+        # means "the node is now degraded", and this refusal is read on a node whose state
+        # the operator set deliberately and which has not moved. It is also the one
+        # refusal here that fires on a node that was NEVER dialled and never will be from
+        # this button, which is what `refused` says and `failed` denies.
         return _mutation(
             request,
             banner=exc.message,
             banner_label="refused",
-            keeping=node.name,
+            keeping=name,
             events="nodes-changed",
         )
     except DomainError as exc:
@@ -2016,7 +2264,7 @@ async def apply_node(
         return _mutation(
             request,
             banner=exc.message,
-            keeping=node.name,
+            keeping=name,
             events="nodes-changed",
         )
     # ``applied`` cannot be empty: since M18.1 a node with nothing enabled is refused
@@ -2065,6 +2313,31 @@ async def enable_transport(
     if not transport_name:
         return await _refuse_the_form(
             request, session, node_id, typed, {"transport_name": NO_TRANSPORT_CHOSEN}
+        )
+
+    # A transport this panel has stopped offering — M20. Answered here rather than left
+    # to the service, and the difference is what the operator reads: this dialog renders
+    # no group for a retired transport, so the submission below would be measured against
+    # an empty set of boxes and refused for missing every field of a form nothing drew.
+    # The sentence is the registry's own, and the name is the operator's own submission,
+    # so no protocol is named in this module.
+    #
+    # THE OPERATION REFUSES TOO, since M20's acceptance — ``nodes.enable_transport``
+    # raises ``TransportRetired`` with this same sentence, so a submission that named only
+    # the transport would be answered identically two screens down. This one stays because
+    # it answers BEFORE the per-box reading below runs on a form that drew no boxes, and
+    # because the operator must not be told about parameters when the fact they need is
+    # about the protocol.
+    retired = transports.retired_transports()
+    if transport_name in retired:
+        return await _refuse_the_form(
+            request,
+            session,
+            node_id,
+            typed,
+            failure=transports.NO_LONGER_OFFERED.format(
+                name=transport_name, reason=retired[transport_name]
+            ),
         )
 
     # Which boxes this transport declares it needs, and — wider — every field it lets an
@@ -2145,7 +2418,14 @@ async def enable_transport(
     # every other box on this dialog gets, and the same sentence: nothing defaults it,
     # because a default pool size would be a number this project chose for somebody
     # else's node.
-    empty = [box.name for box in boxes if not supplied(box.name)]
+    #
+    # ``box.required`` SINCE M23, and without it the widening one module over would have
+    # turned a fix into a wall. ``operator_tuning`` now draws a box for every field an
+    # operator may supply rather than only the required ones, so this list holds boxes
+    # the transport itself defaults — and leaving one empty is the answer the form is
+    # offering, not an omission. The flag is the transport's own declaration read through
+    # ``TuningField``: nothing here knows which field it is looking at.
+    empty = [box.name for box in boxes if box.required and not supplied(box.name)]
     if pool_spec and not supplied(addresses.POOL_BOX):
         empty.append(addresses.POOL_BOX)
     if empty:
@@ -2155,7 +2435,6 @@ async def enable_transport(
             node_id,
             typed,
             {f"{transport_name}-{name}": NO_DEFAULT for name in empty},
-            plainly="; ".join(f"{name}: {NO_DEFAULT}" for name in empty),
         )
 
     # A value longer than any parameter this image ships takes — refused HERE, before the
@@ -2173,7 +2452,6 @@ async def enable_transport(
             node_id,
             typed,
             {f"{transport_name}-{name}": VALUE_TOO_LONG for name in over_long},
-            plainly="; ".join(f"{name}: {VALUE_TOO_LONG}" for name in over_long),
         )
 
     pool_size = None
@@ -2191,7 +2469,6 @@ async def enable_transport(
                 node_id,
                 typed,
                 {pool_field: POOL_NOT_A_NUMBER},
-                plainly=f"{addresses.POOL_BOX}: {POOL_NOT_A_NUMBER}",
             )
 
     # Reading the form is shared with the rotation form below: a field the transport
@@ -2301,20 +2578,20 @@ async def _refuse_the_form(
     errors: dict | None = None,
     *,
     failure: str | None = None,
-    plainly: str | None = None,
 ) -> Response:
-    """A submission this panel refused before the service saw it, in whichever panel.
+    """A submission this panel refused before the service saw it.
 
-    The console gets its dialog back at 422, with the message under the control it is
-    about when there is one and above the form when the complaint is about a name that
-    has no box. A caller that is not htmx has nowhere to render a field error and gets a
-    ``DomainError`` instead, which the one exception handler turns into this codebase's
-    error envelope — the same split as ``_refuse_node``, and it outlived the pre-redesign
-    form it was written for. ``plainly`` is what that envelope says: the box NAMES
-    without the group prefix, which is markup a caller with no form knows nothing about.
+    The dialog back at 422, with the message under the control it is about when there is
+    one and above the form when the complaint is about a name that has no box.
+
+    FOR EVERY CALLER, since M23's eighth round — ``_refuse_node``'s docstring carries the
+    finding, and this is the other half of the one split it names. It took a ``plainly``
+    argument beside ``errors``: the same complaints with the group prefix stripped off
+    each box name, composed only so the 400 envelope this used to raise could say
+    something a caller with no form could read. There is no such envelope on this route
+    now, so there is nothing for a second wording to be for, and a sentence that exists
+    in two versions is a sentence that ends up disagreeing with itself.
     """
-    if not _is_htmx(request):
-        raise DomainError(plainly or failure or " ".join((errors or {}).values()))
     return await _refuse_enable(
         request, session, node_id, values=typed, errors=errors, failure=failure
     )
@@ -2327,6 +2604,7 @@ def _mutation(
     toast: str | None = None,
     banner: str | None = None,
     banner_label: str | None = None,
+    notice: str | None = None,
     events: str | None = None,
     context: dict | None = None,
     keeping: str | None = None,
@@ -2335,12 +2613,12 @@ def _mutation(
     """The one answer shape every console mutation gives.
 
     Something for the dialog slot (a new dialog, or ``None`` — which closes the open
-    one), plus at most one out-of-band toast or banner, plus the events that tell the
-    screen's tables to refresh themselves. Routed through one function so
+    one), plus at most one out-of-band toast, banner or notice, plus the events that tell
+    the screen's tables to refresh themselves. Routed through one function so
     "every mutation emits a toast naming its object" (UI-PATTERNS §8) is checkable by
     reading the call sites rather than every template.
 
-    Both sentences pass through ``wording.for_the_page``: they are composed in
+    Every sentence passes through ``wording.for_the_page``: they are composed in
     ``services/``, which speaks the code's vocabulary, and decision 9 says that word
     stops before the rendered page. ``keeping`` is the operator's own text inside the
     sentence — a nickname — which is handed back exactly as they typed it.
@@ -2350,6 +2628,13 @@ def _mutation(
     was attempted and nothing changed. It is a caller's choice rather than something the
     template works out because only the caller knows which of the two it is holding: the
     same element carries a node whose apply failed and a node that was never dialled.
+
+    ``notice`` is the third thing that can hold the banner slot — M22.3, and the one use
+    for it today is a probe that found nothing wrong. It is a persistent answer that is
+    not a failure, and it goes through the same slot so it clears the same way and is
+    scrolled into view by the same observer. See ``panel/notice.html`` for why an answer
+    to a question is not a toast, and ``probe_node`` for the argument that a probe is not
+    a mutation.
     """
     response = TEMPLATES.TemplateResponse(
         request,
@@ -2359,6 +2644,7 @@ def _mutation(
             "toast": wording.for_the_page(toast, keeping=keeping) if toast else None,
             "banner": wording.for_the_page(banner, keeping=keeping) if banner else None,
             "banner_label": banner_label,
+            "notice": wording.for_the_page(notice, keeping=keeping) if notice else None,
             **(context or {}),
         },
         status_code=status_code,
@@ -2482,14 +2768,23 @@ async def revoke_friend(
     the difference is deliberate: a revocation that could not reach every node leaves
     somebody still connected, and a message that removes itself after 2200ms is the
     wrong carrier for that. The banner stays until the next successful action.
+
+    ``confirmed`` AND NOT ``complete`` DECIDES WHICH — M23, found by pressing the button
+    twice on the real hosts. The first press failed honestly on a node it could not
+    update; the second answered *"kolya revoked — link is dead"*, because the credential
+    rows were gone by then and a fan-out with nothing to push cannot fail. Pressing again
+    after a failure is the natural gesture of an operator cutting somebody off in a hurry,
+    and this is the one sentence in the console that must never be the reassuring one by
+    accident. The second press is a banner now, carrying the service's own account of
+    what a press that changed nothing can and cannot tell them.
     """
     friend = await friends.get_friend(session, friend_id)
     nickname = friend.nickname
     outcome = await revocation.revoke_friend(session, friend_id=friend_id)
     return _mutation(
         request,
-        toast=f"{nickname} revoked — link is dead" if outcome.complete else None,
-        banner=None if outcome.complete else outcome.summary(),
+        toast=f"{nickname} revoked — link is dead" if outcome.confirmed else None,
+        banner=None if outcome.confirmed else outcome.summary(),
         events="friends-changed",
         keeping=nickname,
     )

@@ -22,8 +22,9 @@ HOW:  ``grant_everywhere`` is called both when a friend is created and when a ne
 import datetime
 import json
 import logging
+from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -131,6 +132,28 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
     enabled, which is how "a replacement node needs no action from any user"
     (criterion 2) actually happens.
     """
+    return await grant_on(session, friend, await nodes.serving_transports(session))
+
+
+async def grant_on(
+    session: AsyncSession, friend: Friend, rows: Sequence[NodeTransport]
+) -> list[Credential]:
+    """The same grant, over rows the caller chose. Does NOT commit.
+
+    Split out of ``grant_everywhere`` in M23's round 3 for one caller: ``apply.apply_node``
+    grants on the node it is about to push BEFORE it renders, so the peers in the file are
+    the people the file authorises. At that moment the node is still a draft or degraded,
+    so it is in nothing ``serving_transports`` returns — the query above is precisely the
+    one that cannot answer this case.
+
+    THE ROWS ARE THE CALLER'S RESPONSIBILITY and there is one rule about them:
+    friend-facing only. ``serving_transports`` filters ``purpose == FRIENDS`` because a
+    friend handed a hop end would be routed straight past the entry node the topology
+    exists to hide behind, and that rule does not stop being true because the rows arrived
+    from somewhere else. Nothing here re-filters, deliberately — a second copy of the rule
+    is a second place for it to drift — so a caller passing its own list says in its own
+    words why the list is friend-facing.
+    """
     if not friend.is_active:
         # Silently granting a revoked friend would be the exact failure criterion 6
         # forbids: access returning through a side door.
@@ -153,7 +176,7 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
     )
     held = set(existing.scalars())
 
-    for node_transport in await nodes.serving_transports(session):
+    for node_transport in rows:
         if node_transport.id in held:
             continue
 
@@ -219,6 +242,50 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
     return granted
 
 
+async def claim_withdrawal(session: AsyncSession, *, friend_id: str) -> bool:
+    """Take the withdrawal of this friend's access, and answer whether THIS call took it.
+
+    ONE STATEMENT, AND THE DATABASE DECIDES IT — M23, round 8. Whether a revocation
+    withdrew anything was read off ``friend.is_active`` before the work started, which is
+    a read of the copy the caller's session is holding and not of the row. Two revocations
+    of one person in the same instant therefore both found an active friend and both
+    reported ``withdrew=True``: the second one pushed nothing, could confirm nothing, and
+    said it had cut somebody off. That is the failure shape ``nodes._node_to_write`` is
+    written against, one table over — a decision taken against a photograph.
+
+    A conditional ``UPDATE ... WHERE revoked_at IS NULL`` cannot be taken twice. The
+    second one blocks on the row the first is holding, re-reads it when that commits, and
+    matches nothing — so ``rowcount`` is the answer, taken from the database rather than
+    inferred.
+
+    IT IS A LOCK where ``_node_to_write`` settles for a read, and the difference is worth
+    naming because that docstring declines this deliberately. What it declines is a lock
+    on ``nodes``, taken for a whole apply — a host being dialled sits inside that window.
+    This one is one row of ``friends``, held for the two statements ``revoke_friend`` runs
+    after it, and the only thing it makes wait is another WRITE to the same person. The
+    delivery endpoint does join this table (``Subscription.friend`` is ``lazy="joined"``),
+    and it is unaffected: a plain read never waits on a row lock, so a friend fetching
+    their subscription mid-revocation sees the row as it was committed and then, an instant
+    later, as revoked — which is the outcome either way.
+
+    ``synchronize_session=False``: with the default, SQLAlchemy would evaluate the
+    criteria against objects this session is holding and mark a stale copy revoked in
+    memory even where the row matched nothing. ``revoke`` below re-reads the column off
+    the row for exactly that reason, and the two must not disagree.
+
+    It does not commit. The caller's transaction is what makes the withdrawal durable —
+    ``revocation.revoke_friend`` records the audit entry between this and ``revoke``, and
+    all three land together or not at all.
+    """
+    taken = await session.execute(
+        update(Friend)
+        .where(Friend.id == friend_id, Friend.revoked_at.is_(None))
+        .values(revoked_at=datetime.datetime.now(datetime.UTC))
+        .execution_options(synchronize_session=False)
+    )
+    return taken.rowcount == 1
+
+
 async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport]:
     """Withdraw a friend's access everywhere, and report what must be re-pushed.
 
@@ -261,6 +328,16 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
     """
     friend = await get_friend(session, friend_id)
     now = datetime.datetime.now(datetime.UTC)
+
+    # The withdrawal time is decided against the ROW — M23, round 8, and the same lesson
+    # ``nodes._node_to_write`` states for a node record. These sessions keep what they
+    # loaded (``expire_on_commit=False``), so a friend another session has already
+    # withdrawn still reads ``revoked_at = NULL`` here, and the line below would then
+    # overwrite that withdrawal's own timestamp with this call's. One named column rather
+    # than a whole-object refresh, for ``_node_to_write``'s reason: these sessions are
+    # ``autoflush=False`` and a refresh discards a pending edit instead of writing it
+    # first.
+    await session.refresh(friend, ["revoked_at"])
 
     # Explicit queries for the same reason as in ``grant_everywhere``: lazy access on
     # an async session raises rather than loading.

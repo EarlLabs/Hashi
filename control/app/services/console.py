@@ -23,18 +23,23 @@ HOW:  every figure here is derived from configuration rows: node states, credent
       adding a column that ``test_no_model_records_anything_about_a_connection`` would
       refuse.
 
-The one figure that looks like a measurement and is not: ``nodes_served``. It counts
+The one figure that looks like a measurement and is not: ``transports_served``. It counts
 the credentials WE minted for a friend against the node-transports currently serving —
 "is this person covered", a property of our own configuration. It does not move when
 they connect, it does not move when they do not, and it is identical for a friend whose
-device is in a drawer.
+device is in a drawer. It was called ``nodes_served`` and the column above it read
+*nodes served* until M23's eighth round, which found the two disagreeing on the real
+hosts: one node serving two protocols reads ``2 / 2``, and what is being counted is the
+node-transport — the unit a friend's link actually carries an entry for.
 """
 
 import dataclasses
 import datetime
+import json
 import logging
+from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
@@ -84,6 +89,28 @@ NEVER_APPLIED = "never applied"
 NOTHING_ENABLED = "nothing enabled"
 UNRENDERABLE = "cannot render"
 
+# And what the cell says about a node this control plane will never push to again — M23,
+# round 8, which read ``retired`` beside ``in sync`` on the real hosts with five friends
+# revoked since that node's last apply.
+#
+# The comparison the other four answers come from is arithmetic on two digests, and for
+# this one node the arithmetic is sound and the SENTENCE is not: what "in sync" means to a
+# reader is "nothing to do here", and the one host where that is false in the way that
+# costs a person something is the host nothing can be pushed to. Whatever it was last
+# given is what it is still running, including the credentials of everyone withdrawn since
+# — which is exactly what the Users screen's standing note says about the same node
+# (``WITHDRAWAL_UNCONFIRMABLE``), and that note sends the operator to this screen.
+#
+# ASKED THROUGH ``apply.cannot_serve_again``, which is the predicate the apply door, the
+# probe door and that note already ask, so a state added later that cannot serve again
+# lands here without this module being found and edited. It names no literal state: what
+# may serve again is the machine's to say.
+#
+# It ends in the one move that is left, in ``apply.REGISTER_IT_AGAIN``'s words rather than
+# in new ones — every other sentence this console says about such a host ends there, and a
+# cell that invented its own would be a fifth wording of one answer.
+CANNOT_BE_RECONCILED = "cannot be reconciled — register the host again as a new node"
+
 # What the Transports screen may say about a protocol, as the words the operator
 # reads. Every one of them is the prose for a DECLARATION a transport makes about
 # itself (``edge.registry.TransportMeta``) — never for a protocol's name. That is why
@@ -95,7 +122,23 @@ TRANSPORT_IDENTIFIED = "identified and blocked — do not offer this as a workin
 TRANSPORT_CAMOUFLAGED = "obfuscated or TLS-shaped"
 TRANSPORT_NO_HOP = "never on an entry→leaf hop"
 TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
-TRANSPORT_UNDELIVERED = "not in a user's link yet — this panel cannot hand it over"
+# THIS SAID "not in a user's link yet — this panel cannot hand it over" AND THAT WAS NOT
+# TRUE — found while fixing M20's acceptance finding about the sentence one screen over.
+# It was written before item 27 landed and describes the world it was written in. Item 27
+# landed: ``GET /sub/{token}?format=client-config-file`` answers the same bearer token
+# with an archive of this friend's configuration files (``control/app/api/delivery.py``,
+# which says so in its own docstring), and the delivery endpoint is this same
+# application. So the product hands it over; what is true is only that it is not IN the
+# base64 link, which is exactly what ``subscription_expressible`` measures and all this
+# cell may therefore claim.
+#
+# It does not name the query parameter, and that is deliberate rather than coy: the
+# format is the one already printed in this row's own delivery column, so the sentence
+# stays one arm per FORMAT and gains nothing to edit when a third shape arrives.
+TRANSPORT_NOT_IN_THE_LINK = (
+    "not in the subscription link itself — a user's client gets it from that same link "
+    "by asking for the shape above"
+)
 
 # What it means, on the screen the operator learns the protocols from, that a transport
 # declares each of its consumers needs an address of their own — M17.2. Read from
@@ -127,14 +170,33 @@ TRANSPORT_ADDRESS_PER_USER = (
 # so an operator who took that advice on an unfiltered network would get a handshake
 # that completes and traffic that never moves. A table that states what a protocol IS
 # only has to be right about the protocol; the moment it tells the operator what to DO
-# it has to be right about the whole stack, and here it is not. The gap is background
-# in ``docs/tracker/M9/carry-over.md``: no field of ``TransportMeta`` expresses it, and
-# closing it is an ``edge``-side declaration rather than a name compared here.
+# it has to be right about the whole stack, and here it is not. The gap was background
+# in ``docs/tracker/M9/carry-over.md`` — no field of ``TransportMeta`` expressed it, so
+# the only way to show it was for `control` to recognise a protocol by name — AND M20
+# CLOSED IT the way that note said it had to be: an ``edge``-side declaration,
+# ``TransportMeta.retired``, measured twice on a live node. This sentence is unchanged by
+# that, because the two say different things: this one is what a protocol IS on any
+# network, and the declaration is what this image can carry on the hosts this project
+# builds. ``TRANSPORT_RETIRED`` below is the second one's words.
 TRANSPORT_WHY_IDENTIFIED = (
     "it has no camouflage. The wire format is fixed and looks like itself, so a "
     "network that inspects traffic can name the protocol and drop it: both ends stay "
     "correctly configured, no tunnel comes up, and nothing on the user's device says "
     "what happened."
+)
+
+# What retirement MEANS to the operator, in front of the transport's own reason for it
+# — M20. Two sentences deliberately: the first is the consequence on this panel and is
+# the same for every retired transport, so it is written once here; the second is the
+# fact that caused it, which only the transport can know and which is read straight out
+# of ``TransportMeta.retired``.
+#
+# It says what still works as well as what stopped, because the operator reading this
+# most likely has a node running the transport already — the leaf did when this was
+# written — and a row that said only "retired" would read as "your node has stopped".
+TRANSPORT_RETIRED = (
+    "no longer offered when enabling a transport, and a node already running it keeps "
+    "serving it —"
 )
 
 
@@ -305,8 +367,15 @@ class FriendRow:
     nickname: str
     is_active: bool
     added: datetime.datetime
-    nodes_served: int
-    nodes_serving: int
+
+    # NAMED FOR WHAT THEY COUNT since M23's eighth round, which read ``2 / 2`` under a
+    # column headed *nodes served* on a fleet with one node in service. The unit is the
+    # NODE-TRANSPORT, and it is the right unit rather than the convenient one: it is what
+    # a friend's link carries one entry per, so a person missing the second protocol on
+    # the only node in the fleet is a fault this column can show. Counting distinct nodes
+    # instead would have read ``1 / 1`` over exactly that fault.
+    transports_served: int
+    transports_serving: int
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -351,11 +420,13 @@ class TransportRow:
     ``None`` for every other transport, so the screen warns about what the image
     declares rather than about what anybody wrote down.
 
-    What is deliberately NOT here, because no transport declares it: whether a protocol
-    has been proven on real hardware, and whether the image this project pins can carry
-    it to a user without failing silently. Both are recorded in prose (see
-    ``docs/decisions.md``, 2026-09-09) and neither is machine-readable, so putting
-    either on the screen would mean `control` recognising a protocol by name.
+    ``retired_note`` CLOSED THE GAP THIS DOCSTRING USED TO RECORD. It said that whether
+    the image this project pins can carry a protocol to a user without failing silently
+    was recorded in prose alone, not machine-readable, and therefore unshowable without
+    `control` recognising a protocol by name. M20 made it a declaration
+    (``TransportMeta.retired``), measured twice on a live node, so the screen now says
+    it — from the same place every other cell comes from, and still with no name compared
+    anywhere on the path.
     """
 
     name: str
@@ -376,9 +447,16 @@ class TransportRow:
     # loud to be.
     exposure: str
     identified: bool
-    # ``hop_capable``, but only when it is False: a transport that may carry a hop needs
-    # no sentence about it, and a column that says "may carry a hop" on three rows out
-    # of four teaches nothing.
+    # ``hop_expressible``, but only when it is False: a transport a hop can be built out
+    # of needs no sentence about it, and a column that says "may carry a hop" on every
+    # row that can teaches nothing.
+    #
+    # THE DERIVED ANSWER AND NOT THE RAW ``hop_capable`` PERMISSION — M20's acceptance,
+    # which found ``GET /api/transports`` advertising a capability whose renderer refuses
+    # it. Both surfaces answer that one question and they read one value, because two
+    # readings of it is how the JSON came to disagree with the renderer in the first
+    # place. It puts the sentence on more rows than before, and that is the correction:
+    # the rows it appears on now are exactly the ones the hop dialog will not offer.
     hop_note: str | None
     # ``peer_address``, and only when it is declared — M17.2. Present on the transports
     # that hand each user an address out of a pool, absent on the ones that identify a
@@ -386,6 +464,10 @@ class TransportRow:
     # that needs a sentence is the one with a consequence for the operator, which here
     # is a number they will be asked for on every node they enable it on.
     address_note: str | None
+    # ``retired``, and only when it is declared: what the panel will no longer do with
+    # this transport, followed by the transport's own reason. One-sided like
+    # ``hop_note`` — a transport that is offered needs no sentence saying so.
+    retired_note: str | None
     why: str | None
 
 
@@ -446,13 +528,18 @@ class KeyRow:
     # Whether the transport declares anything an operator may retype. A transport whose
     # every parameter is minted has nothing for the replace form to hold.
     replaceable: bool
+    # What the operator has to do about the users on this row whose material predates
+    # what the transport now declares, or ``None`` when there are none — M23. A sentence
+    # and never a list: which person is affected is a fact about a person, and the repair
+    # is the same one button for all of them.
+    stale_material: str | None
 
 
 # What one transport on one node is doing for the people this fleet exists for, as the
 # words the Nodes screen's own actions are read beside. Every one of them is composed
-# from two facts about OUR configuration — the row's purpose and its ``enabled`` flag —
-# and never from which protocol it is, which is the same rule the chips on the table
-# follow.
+# from facts about OUR configuration — the row's purpose, its ``enabled`` flag, and what
+# the transport DECLARES it serialises into — and never from which protocol it is, which
+# is the same rule the chips on the table follow.
 #
 # The withdrawn sentence carries the thing ``nodes.set_transport_enabled`` insists on
 # and that a panel is most likely to blur: switching a transport off changes what the
@@ -466,7 +553,37 @@ class KeyRow:
 # that answers "nothing to push". The distinction is the node's, not the row's: one enabled row
 # anywhere on it — a hop end counts, it renders too — and the apply goes through without
 # the withdrawn one, which is exactly what stops the container serving it.
+#
+# AND THERE ARE TWO OFFERED SENTENCES because "in every user's link" is not true of every
+# transport — M20's acceptance. It was said of every enabled row, including the rows whose
+# protocol is not a link at all: the ``/sub/`` document is the v1 URI list and holds
+# nothing else, so a config-file transport was promised a delivery that document does not
+# make. The walk read a real subscription to settle it — the URI entries and nothing else.
+#
+# WHAT THE SECOND SENTENCE MAY NOT SAY IS THAT IT IS UNDELIVERED, which is where the
+# obvious wording would have gone and would have been the same defect pointed the other
+# way. The same bearer token answers ``?format=`` with an archive of this friend's
+# configuration files (``control/app/api/delivery.py``, item 27), so "this panel cannot
+# hand it over" is false about this product — see ``TRANSPORT_NOT_IN_THE_LINK``, which
+# said exactly that and has been corrected with it.
+#
+# NOR MAY IT SAY THE FRIEND SIMPLY GETS IT, which is the other way to be wrong here and
+# the more dangerous one: nothing in this panel hands the operator the URL that asks for
+# the file shape, so an operator told "delivered from that same link" would tell a friend
+# to open the link they already have and the friend would meet an empty page. That gap is
+# its own milestone and is not closed here. So the sentence says ONLY BY ASKING for the
+# shape — three facts, all true today, and none of them a decision that milestone has to
+# make: the host is told to serve it, it is not in the link itself, and the shape it
+# arrives in is a file.
+#
+# Chosen by the transport's own derived declaration and never by a name, like every other
+# string in this module.
 OFFER_IN_EVERY_LINK = "offered — in every user's link at their next refresh"
+OFFER_NOT_IN_THE_LINK = (
+    "offered — the node serves it once applied, but it is not in the subscription link "
+    "itself: this transport is a config file, and a user's client gets it from that same "
+    "link only by asking for that shape"
+)
 OFFER_WITHDRAWN = (
     "withdrawn — out of every user's link. The node is still configured to serve it "
     "until you apply the node without it."
@@ -632,6 +749,27 @@ class OfferRow:
     # "nothing this panel holds has ever been pushed" — a fact about the rows — and never
     # "the host is running nothing", which this control plane cannot know from here.
     never_applied_here: bool
+    # Whether this row's transport reaches a user's link at all — M20's acceptance. The
+    # transport's own derived declaration (``subscription_expressible``), carried on the
+    # row because ``standing`` above is not the only sentence that turns on it: the toast
+    # this row's own button raises makes the same promise, and the two were both making
+    # it of a protocol this panel cannot hand over.
+    #
+    # A flag rather than a composed sentence, like ``nothing_else_enabled``: the row and
+    # the toast say different things about the same fact, and each keeps its own words.
+    deliverable: bool
+    # Whether this panel would let the operator enable this transport here again — M20's
+    # acceptance. The remove confirmation promises that "enabling it here again mints new
+    # material", and on a RETIRED transport there is no form on this panel that would:
+    # the walk removed such a row and the enable dialog went on offering three. The
+    # destructive half of that sentence was right and only the promise was stale.
+    #
+    # ``transports.offerable_transports`` and not ``meta.retired``, because it is the same
+    # list the enable dialog is built from and the enable route reads a submission
+    # against — so what this claims and what that would do cannot drift. It also answers
+    # correctly for a row whose package has left the image, which retirement alone would
+    # not.
+    offerable_again: bool
     # Why the offer button is not drawn at all — M17.2, and ``None`` on nearly every row.
     # An action the service would refuse is withheld rather than offered, with the pool
     # it is about named: see ``POOL_SHORT_TO_OFFER``.
@@ -680,7 +818,18 @@ async def drift_of(session: AsyncSession, node: Node) -> str:
     So a node reading "in sync" here means "nobody has changed the intent since we
     pushed", not "the host is running it". Both questions are real; conflating them is
     how an operator concludes a node is fine.
+
+    AND FOR ONE NODE THE COMPARISON IS NOT THE QUESTION AT ALL — M23, round 8. A node the
+    state machine will not put back into service is never pushed to again, so how far its
+    last configuration sits from the one we would render is a measurement of nothing, and
+    the answer it produced was the reassuring one: the walk read ``retired`` beside ``in
+    sync`` on a host five revocations old. That is asked FIRST, above the render, because
+    no later branch could unsay it — and because rendering a node nothing will be sent is
+    work done for an answer that cannot be used.
     """
+    if apply.cannot_serve_again(node.state):
+        return CANNOT_BE_RECONCILED
+
     try:
         rendered = await apply.render_for_node(session, node)
     except Exception:
@@ -750,12 +899,196 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
     ]
 
 
+# What the Users screen says instead of nothing about a withdrawal it cannot confirm —
+# M23, round 2, measured on the real leaf: a revoke whose push failed left the row reading
+# "revoked / no access" while that person's tunnel was carrying traffic, with the truth
+# only on the Nodes screen and only in a banner that had already gone.
+#
+# IT IS A FLEET SENTENCE AND NOT A PER-PERSON ONE, and that is forced rather than chosen.
+# A revocation DELETES the credential rows — which is the property that makes revocation
+# total (``friends.revoke``) — so the moment it commits, nothing in this database records
+# which nodes that person was on. Naming them per row would need a record this schema does
+# not carry and the charter would not obviously want; what is knowable is which hosts this
+# panel cannot say are running what it would give them, which is the same set for
+# everybody and is exactly what "may still be serving a withdrawn credential" means.
+#
+# So it hedges, and the hedge is the honest part: "may still be carried" is what a panel
+# that cannot see a running daemon may say. It names the nodes, because that is the text
+# the operator acts on, and it ends where the answer lives — probe and apply are on the
+# Nodes screen and nowhere else.
+#
+# FOR THE NODES WHERE THAT IS ACTUALLY TRUE, since M23's thirteenth round. Round 12 taught
+# the revoke dialog that a node the state machine will not put back into service cannot be
+# finished from this panel, and left this banner saying the opposite about the same host:
+# "probe it on the Nodes screen and apply it; that is where this state is read and the
+# only place it changes", over a node where both buttons answer that they refuse it. The
+# banner appears exactly when it matters — a withdrawn person may still be carried there —
+# so the one sentence the operator acts on was the one that sent them nowhere.
+WITHDRAWAL_UNCONFIRMED = (
+    "Withdrawn access is not confirmed on {nodes}: {this} not running the configuration "
+    "this panel would give {it}, and a daemon goes on serving the file it was last "
+    "started with — so anyone withdrawn while that is true may still be carried there, "
+    "whatever this table says. Probe {it} on the Nodes screen and apply {it}; that is "
+    "where this state is read and the only place it changes."
+)
+
+# And the same doubt about a node no press on this panel can resolve — the other half of
+# the sentence above, split off rather than hedged into it.
+#
+# ONE PREDICATE DECIDES WHICH, and it is ``apply.cannot_serve_again``: the same one round
+# 12 gave the apply door and the probe door, so a state added later that cannot serve
+# again lands here without this module being found and edited. It names no literal state
+# for that reason — what refuses is the machine.
+#
+# It says MORE than the sentence beside it rather than less, because the operator's next
+# move is genuinely different and there is no button on this screen or the Nodes screen
+# that makes it. The wording is ``revocation._WHY_NOT_UPDATED[NotUpdated.CANNOT_SERVE]``'s,
+# said in a standing note's voice: nothing reaches that host from here, the host may still
+# be authorising the credential, and the way back is a new record for it. The two are not
+# one constant because one is about a press that just happened and this is about a fleet
+# reading — but they must not disagree, and acceptance judges both.
+WITHDRAWAL_UNCONFIRMABLE = (
+    "Withdrawn access is not confirmed on {nodes}, and no screen in this panel "
+    "finishes it: {this} in the state an operator records a host as GONE in, which is the "
+    "one state this control plane will neither probe nor apply — so anyone withdrawn while "
+    "that was true may still be carried there, and nothing pushed from here reaches {it}. "
+    "If such a host is genuinely back, register it again with \"add node\" on the Nodes "
+    "screen and apply that one; otherwise it is the host being gone that ends this."
+)
+
+# What the actions cell says on a row nobody can act on any more. It replaced "no access"
+# — M23, round 2: that is a claim about a person's connectivity, which this control plane
+# cannot make about a host it has not confirmed, and the walk measured it being false. The
+# words are about what the OPERATOR did, which is the part that is always true.
+ACCESS_WITHDRAWN = "access withdrawn"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class UnconfirmedNode:
+    """One host this panel cannot say has stopped serving what it was last given.
+
+    Two fields because the screen has two things to say about such a host and they are not
+    the same sentence — M23's thirteenth round. Which one it gets is not a property of the
+    doubt but of the node's STATE: a degraded host is probed and applied, and a host the
+    operator has recorded as gone is neither, ever.
+    """
+
+    name: str
+
+    # Whether probe and apply are still the way to end the doubt here. Read through
+    # ``apply.cannot_serve_again`` and never off a literal state, so the two buttons'
+    # refusal and this banner's instruction come from one answer — that predicate is the
+    # one round 12 built for exactly this question.
+    can_be_finished: bool
+
+
+def withdrawn_cell(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
+    """What the actions cell may say about a revoked row, or ``None`` for nothing at all.
+
+    ROUND 2 CHANGED THE WORDS AND ROUND 3 FOUND THEM STILL WRONG. "access withdrawn" is
+    about the operator's own action and is always true of the database — but the walk read
+    it on the row of somebody who downloaded a megabyte through the real leaf while it was
+    on screen, and a reader does not parse a cell that carefully. Beside a standing note
+    saying the withdrawal is not confirmed, the cell was the sentence contradicting it.
+
+    So the cell says nothing while that note is up. NOTHING, and not a hedge of its own:
+    what a per-row sentence would have to claim is which nodes THIS person was on, and a
+    revocation deletes exactly the rows that would say (``friends.revoke``) — so there is
+    no per-row answer to give, which is the finding round 2 got right and this does not
+    reopen. An empty cell is the honest amount, and the doubt is stated once, above the
+    table, where it names the nodes and the two controls that resolve it.
+
+    Driven by the SAME reading as that note, and from the same list, so the two cannot
+    disagree: while the fleet is confirmed the cell says what the operator did, and the
+    moment it is not, it stops saying anything.
+    """
+    return None if unconfirmed else ACCESS_WITHDRAWN
+
+
+async def unconfirmed_nodes(session: AsyncSession) -> list[UnconfirmedNode]:
+    """Every node this panel cannot say is running the configuration it would push.
+
+    The Nodes screen's own two readings, joined and named: a node is CONFIRMED when it is
+    in a serving state and its drift cell reads in sync, and is in this list otherwise —
+    but only once something has actually been pushed to it. A node nothing ever reached is
+    serving nobody, so it carries no withdrawn credential either, and listing it would put
+    a permanent warning on a first-run panel.
+
+    Nothing here is about a person. It is the fleet's own state, asked once for a screen
+    that has to say what a withdrawal it cannot confirm means.
+
+    One render per node, like ``node_rows``, and for the same reason: the answer is
+    honest rather than cached. It touches no network, so a fleet with every host
+    unreachable costs exactly what a healthy one does, and it is bounded by the size of a
+    fleet this product is built for — one owner and a handful of nodes.
+    """
+    unconfirmed = []
+    for node in await nodes.list_nodes(session):
+        if not any(row.applied_at for row in node.transports):
+            continue
+        if node.state in NodeState.serving() and await drift_of(session, node) == IN_SYNC:
+            continue
+        unconfirmed.append(
+            UnconfirmedNode(
+                name=node.name,
+                can_be_finished=not apply.cannot_serve_again(node.state),
+            )
+        )
+    return unconfirmed
+
+
+def _about(names: Sequence[str], sentence: str) -> str:
+    """One of the two sentences above, agreeing with the number of hosts it names."""
+    return sentence.format(
+        nodes=", ".join(names),
+        this="that node is" if len(names) == 1 else "those nodes are",
+        it="it" if len(names) == 1 else "them",
+    )
+
+
+def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
+    """The sentence for those nodes, or ``None`` when there is nothing to say.
+
+    ``None`` on a fleet where every host is confirmed, so the screen carries no standing
+    warning — a banner that is always there is a banner nobody reads on the day it means
+    something.
+
+    UP TO TWO SENTENCES SINCE M23's THIRTEENTH ROUND, and both are said when the fleet has
+    both kinds of host in it. Splitting rather than picking one is what the finding forces:
+    the nodes are named because naming them is the text the operator acts on, so a fleet
+    with a degraded host AND a retired one has to say which instruction belongs to which —
+    one sentence covering both would either send them to a button that refuses half the
+    list, which is the defect, or drop the instruction entirely from the half where it
+    works.
+
+    Sorted only by the order ``unconfirmed_nodes`` read the fleet in, which is the Nodes
+    screen's own order: a banner that reshuffles between reloads reads as the fleet
+    changing.
+    """
+    if not unconfirmed:
+        return None
+    finishable = [node.name for node in unconfirmed if node.can_be_finished]
+    written_off = [node.name for node in unconfirmed if not node.can_be_finished]
+    return " ".join(
+        _about(names, sentence)
+        for names, sentence in (
+            (finishable, WITHDRAWAL_UNCONFIRMED),
+            (written_off, WITHDRAWAL_UNCONFIRMABLE),
+        )
+        if names
+    )
+
+
 async def friend_rows(session: AsyncSession) -> list[FriendRow]:
     """Every friend, with how much of the fleet they are covered on.
 
-    ``nodes_serving`` is the denominator every active friend shares, so a row reading
-    ``2 / 3`` says "this person is missing a node", which is an actionable fault in OUR
-    configuration and the reason the column exists.
+    ``transports_serving`` is the denominator every active friend shares, so a row reading
+    ``2 / 3`` says "this person is missing one of the protocols being served", which is an
+    actionable fault in OUR configuration and the reason the column exists.
+
+    ``serving_transports`` is friend-facing rows only, so the denominator never counts one
+    end of a hop — a tunnel between two of our own nodes is not something a person holds a
+    credential on.
     """
     serving = await nodes.serving_transports(session)
     serving_ids = {row.id for row in serving}
@@ -765,12 +1098,12 @@ async def friend_rows(session: AsyncSession) -> list[FriendRow]:
             nickname=friend.nickname,
             is_active=friend.is_active,
             added=friend.created_at,
-            nodes_served=sum(
+            transports_served=sum(
                 1
                 for credential in friend.credentials
                 if credential.node_transport_id in serving_ids
             ),
-            nodes_serving=len(serving_ids),
+            transports_serving=len(serving_ids),
         )
         for friend in await friends.list_friends(session)
     ]
@@ -848,6 +1181,20 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
     # push and by nothing else, and a withdrawal leaves it alone — so a row that carries
     # one is proof, and no row carrying one is only the absence of proof.
     never_applied_here = not any(row.applied_at is not None for row in rows)
+    # Whether each row's transport reaches a user's link at all — its own declaration,
+    # keyed by row id and read once for the whole dialog like every other measurement
+    # above. ``get`` and not ``[]``: a row whose package has left the image still has to
+    # render a line, the same reason ``key_rows`` resolves it this way, and a transport
+    # that is not in this image delivers nothing.
+    installed = discover()
+    delivers = {
+        row.id: row.transport_name in installed
+        and installed[row.transport_name].subscription_expressible
+        for row in rows
+    }
+    # And whether this panel would offer each of them again — the same list the enable
+    # dialog is built from, asked once for the whole dialog.
+    offerable = set(transports.offerable_transports())
     return [
         OfferRow(
             id=row.id,
@@ -857,8 +1204,13 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             offered=row.enabled,
             for_friends=row.purpose == TransportPurpose.FRIENDS,
             standing=_standing(
-                row.purpose, row.enabled, nothing_left_enabled=nothing_left_enabled
+                row.purpose,
+                row.enabled,
+                nothing_left_enabled=nothing_left_enabled,
+                deliverable=delivers[row.id],
             ),
+            deliverable=delivers[row.id],
+            offerable_again=row.transport_name in offerable,
             # Measured per row rather than reusing the whole-dialog reading above,
             # because it is a different question: that one is "is anything enabled
             # here now", this one is "would anything be enabled here without this
@@ -923,24 +1275,39 @@ async def offer_row(session: AsyncSession, node_transport_id: str) -> OfferRow:
 
 
 def _standing(
-    purpose: TransportPurpose, enabled: bool, *, nothing_left_enabled: bool
+    purpose: TransportPurpose,
+    enabled: bool,
+    *,
+    nothing_left_enabled: bool,
+    deliverable: bool,
 ) -> str:
-    """Which of the four sentences this row is in.
+    """Which of the five sentences this row is in.
 
-    A branch on our own topology and on the operator's own flag — never on a protocol.
-    A hop end is answered first because ``enabled`` means something different there: it
-    says the tunnel should be running, not that anybody is being offered anything.
+    A branch on our own topology, on the operator's own flag and on the transport's own
+    declaration — never on a protocol. A hop end is answered first because ``enabled``
+    means something different there: it says the tunnel should be running, not that
+    anybody is being offered anything.
 
     ``nothing_left_enabled`` is a fact about the NODE, passed in rather than measured
     here because it is the same measurement for every row in the dialog and the caller
     has already read them all. It only ever changes the withdrawn sentence: an apply that
     has something to push is what stops the host serving a withdrawn row, and on a node
     with nothing enabled at all there is no such apply.
+
+    ``deliverable`` is a fact about the TRANSPORT, passed in for the same reason: the
+    caller has the registry open already. It is ``subscription_expressible`` — whether the
+    protocol rides in the base64 LINK, not whether a user can receive it, which is a
+    different question this panel got wrong in both directions (see
+    ``OFFER_NOT_IN_THE_LINK``). It only ever changes the OFFERED sentence — M20's
+    acceptance, which read "in every user's link at their next refresh" on a row that is
+    in no link. The withdrawn sentences are left alone deliberately: "out of every user's
+    link" claims nothing about having been in one, so it is true of both kinds and stays
+    one sentence.
     """
     if purpose != TransportPurpose.FRIENDS:
         return OFFER_HOP_END
     if enabled:
-        return OFFER_IN_EVERY_LINK
+        return OFFER_IN_EVERY_LINK if deliverable else OFFER_NOT_IN_THE_LINK
     return OFFER_WITHDRAWN_LAST_ON_THE_NODE if nothing_left_enabled else OFFER_WITHDRAWN
 
 
@@ -1009,18 +1376,18 @@ def transport_rows() -> list[TransportRow]:
 def _transport_row(meta: TransportMeta) -> TransportRow:
     """One transport's declaration, projected into the words the screen shows.
 
-    This is the whole of M9.3's hard rule. Four of the strings below are chosen by
-    something the TRANSPORT declares about itself, and none of them is chosen by which
-    protocol it is — there is no name compared to anything here, in the template, or
-    anywhere on the path between them. Ship a fifth protocol and its row writes itself;
-    ship one that declares itself identified and the warning appears with no edit.
+    This is the whole of M9.3's hard rule. Every string below is chosen by something the
+    TRANSPORT declares about itself, and none of them is chosen by which protocol it is
+    — there is no name compared to anything here, in the template, or anywhere on the
+    path between them. Ship a fifth protocol and its row writes itself; ship one that
+    declares itself identified and the warning appears with no edit; retire one and the
+    row says so, with nothing in this zone to change.
 
-    The two conditions in ``delivery_note`` are not the same condition. A transport
-    with no declared format serialises into nothing a user could consume at all; a
-    transport with one this panel does not yet deliver serialises fine and is simply not
-    handed over (``subscription_expressible``, and its own docstring in
-    ``edge/registry.py``, say why). Reporting the second as the first would tell the
-    operator a protocol is unusable when it is merely undelivered.
+    The two conditions in ``delivery_note`` are not the same condition. A transport with
+    no declared format serialises into nothing a user could consume at all; a transport
+    with one that is not the base64 link serialises fine and is handed over in its own
+    shape (``subscription_expressible``). Reporting the second as the first would tell the
+    operator a protocol is unusable when it is merely not a link.
     """
     low, high = meta.port_range
     formats = sorted(str(shape) for shape in meta.subscription_formats)
@@ -1032,7 +1399,7 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
         delivery_note=(
             None
             if not formats or meta.subscription_expressible
-            else TRANSPORT_UNDELIVERED
+            else TRANSPORT_NOT_IN_THE_LINK
         ),
         exposure=(
             TRANSPORT_IDENTIFIED
@@ -1040,7 +1407,7 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
             else TRANSPORT_CAMOUFLAGED
         ),
         identified=meta.blocked_by_inspection,
-        hop_note=None if meta.hop_capable else TRANSPORT_NO_HOP,
+        hop_note=None if meta.hop_expressible else TRANSPORT_NO_HOP,
         # THE REGISTRY'S OWN DECLARATION, asked through the one function in this zone
         # that asks it — no name is compared here, in the template, or anywhere between
         # them, which is the same rule the three strings above follow.
@@ -1049,8 +1416,58 @@ def _transport_row(meta: TransportMeta) -> TransportRow:
             if addresses.spec_for(meta.name) is not None
             else None
         ),
+        # M20, and the one cell on this screen that is about what the PANEL will do
+        # rather than about what the protocol is. The consequence is this zone's
+        # sentence and the cause is the transport's, joined here so the template still
+        # prints one composed string and still cannot tell one protocol from another.
+        retired_note=(
+            f"{TRANSPORT_RETIRED} {meta.retired.reason}" if meta.retired else None
+        ),
         why=TRANSPORT_WHY_IDENTIFIED if meta.blocked_by_inspection else None,
     )
+
+
+# What the Keys screen says about users on one row whose material predates what the
+# transport now declares — M23, and the whole of the panel's half of that finding.
+#
+# The situation is real and the owner has one: a transport gained a per-consumer value
+# (the WireGuard family's per-pair pre-shared key), and a credential minted before that
+# declaration does not carry it. The renderer refuses to build a configuration file for
+# such a credential rather than hand out the node-wide key to a second person, so the
+# download quietly stops producing a file for this node — while the tunnel those people
+# already hold keeps working, because the node still authorises them.
+#
+# So the sentence says both halves, in that order: nothing is broken for them yet, and
+# the repair is one button on this row. Without it the refusal is written in a place
+# nobody reads — ``edge``, at the moment a user's client asks — and the operator's first
+# notice is somebody reporting a download that gives them nothing.
+#
+# COUNTS AND NEVER NAMES. Which person holds pre-declaration material is a fact about a
+# person on a screen that may not hold one, and the action is the same for all of them.
+#
+# In the panel's vocabulary (``user``) like every other constant in this module, and it
+# names no protocol: what is missing is read from the transport's own declaration and
+# never printed — a field name here would be this file knowing which protocol it is
+# looking at, and would tell the operator something they cannot act on either way.
+STALE_MATERIAL = (
+    "material for {count} of the users on this row was minted before this protocol "
+    "declared all of it, so no configuration file can be built for them on this node and "
+    "their download returns nothing for it. What they already imported keeps working — "
+    "the node still authorises them. Use \"rotate keys\" on this row: it re-mints what "
+    "each of them holds, and nobody re-imports a link."
+)
+
+
+def stale_material(count: int) -> str | None:
+    """The sentence for a row whose users cannot all be handed a configuration — M23.
+
+    ``None`` for a row where every credential carries what its transport declares, which
+    is every row on a fleet where nothing was minted before a declaration changed — so
+    the cell exists only when there is something to do about it.
+    """
+    if not count:
+        return None
+    return STALE_MATERIAL.format(count=count)
 
 
 def _holders_of_pool(holders: int, pool: int | None) -> str:
@@ -1075,20 +1492,32 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
     ``NodeTransport.credentials``: that relationship loads lazily, and lazy I/O on an
     async session raises at runtime rather than in a test.
 
-    Nothing here decrypts anything. The row's ``secrets`` column is not read on this
-    path at all — the fingerprint is computed from ``params``, which is the clear one —
-    so the screen cannot show key material even by accident.
+    THE NODE-TRANSPORT ROW's ``secrets`` COLUMN IS NEVER READ HERE, and that is what
+    keeps the fingerprint cell honest: it is computed from ``params``, the clear column,
+    so the screen cannot show a node's key material even by accident.
+
+    WHAT IS READ SINCE M23 is each CREDENTIAL's material, and only to count the ones that
+    do not carry what their transport declares (``stale_material``). No value from it
+    reaches this function's result — the credential loop produces an integer — and no
+    value from it reaches the template, which is handed a sentence. It is read because
+    the alternative was the operator learning about it from a user whose download stopped
+    working, which is how the owner's own leaf was found.
     """
     installed = discover()
-    counted = dict(
-        (
-            await session.execute(
-                select(Credential.node_transport_id, func.count(Credential.id)).group_by(
-                    Credential.node_transport_id
-                )
-            )
-        ).all()
-    )
+    held_by = {}
+    for node_transport_id, subject, secrets in (
+        await session.execute(
+            select(Credential.node_transport_id, Credential.subject, Credential.secrets)
+        )
+    ).all():
+        # As ``edge`` sees a consumer's material: the credential's own secrets with the
+        # subject under the name the contract requires (``edge.node.Credential``). The
+        # tunnel address is not overlaid and does not need to be — it is not key
+        # material, so no ``KeySpec`` names it and nothing below looks for it.
+        held_by.setdefault(node_transport_id, []).append(
+            {**json.loads(secrets), "subject": subject}
+        )
+    counted = {row_id: len(held) for row_id, held in held_by.items()}
 
     rows = []
     for node in await nodes.list_nodes(session):
@@ -1138,8 +1567,25 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                         )
                     ),
                     installed=meta is not None,
+                    # The same set the replace form draws its boxes from — M23 widened
+                    # that to every field an operator may supply, and this flag decides
+                    # whether the button to it exists, so the two are read from one
+                    # answer. A row whose every parameter is minted still offers nothing.
                     replaceable=bool(
-                        meta and transports.operator_params(row.transport_name)
+                        meta and transports.supplied_params(row.transport_name)
+                    ),
+                    stale_material=(
+                        stale_material(
+                            sum(
+                                1
+                                for held in held_by.get(row.id, ())
+                                if keymaterial.missing_client_material(
+                                    meta.key_material, held
+                                )
+                            )
+                        )
+                        if meta and for_friends
+                        else None
                     ),
                 )
             )
@@ -1412,12 +1858,28 @@ def removal_summary(node: str, transport: str, *, nothing_left_enabled: bool) ->
     )
 
 
-def offer_summary(node: str, transport: str) -> str:
+def offer_summary(node: str, transport: str, *, deliverable: bool) -> str:
     """What offering a transport again costs the people on it: nothing.
 
     The other half of criterion 3, and the half that has to say "nobody does anything":
     every active user is granted material on it here, and their link does not move.
+
+    ON A TRANSPORT THAT IS NOT A LINK the first half of that was false — M20's acceptance.
+    The grant still happens and the node is still told to serve it; what does not change
+    is the base64 document, because it is the v1 URI list and this protocol is not one.
+    Same fact as the row's own sentence (``OFFER_NOT_IN_THE_LINK``) and deliberately not
+    the same words: this one is read after the press and has to say what just happened.
+
+    It says the material is MINTED rather than that nothing reaches anybody, because
+    something does: the same token answers with this friend's configuration file, so the
+    honest report of this press is that everyone was granted and the link did not move.
     """
+    if not deliverable:
+        return (
+            f"{transport} offered again on {node} — every user is granted material on it, "
+            "and the subscription link itself does not change: this transport is a config "
+            "file, which a user's client gets from that same link by asking for it."
+        )
     return (
         f"{transport} offered again on {node} — in every user's link at their next "
         "refresh, and nobody re-imports anything."
@@ -1445,7 +1907,7 @@ async def overview(session: AsyncSession) -> Overview:
     """The Overview screen's whole content, in one call.
 
     The four stat cards are decision 6's replacements, in the design's own order:
-    nodes active, active users, hops established, transports enabled. Each is a fact
+    nodes active, active users, hops established, transports serving. Each is a fact
     about the FLEET. How many friends exist is not a record of what any of them did.
 
     THE FIRST KICKER WAS "nodes online" AND COUNTED NEITHER — M18's acceptance. The value
@@ -1458,6 +1920,15 @@ async def overview(session: AsyncSession) -> Overview:
     the one the Nodes screen's own column shows and the one ``NodeState.serving()``
     admits to a subscription. What each node is actually running stays where it already
     is and is a different question: the drift cell, per node, on that screen.
+
+    AND THE FOURTH KICKER WAS "transports enabled" AND COUNTED SOMETHING NARROWER —
+    M20's acceptance, which is the identical defect one card over. The value has always
+    been ``nodes.serving_transports``: distinct protocols enabled for friends ON A NODE
+    THAT IS SERVING. The walk watched it read 0 with four rows at ``enabled=true``,
+    because every node holding them was still draft — a true number whose meaning was
+    nowhere on the screen. The label now names the state, exactly as "nodes active" and
+    "hops established" beside it do, and the zero it shows is then the same zero the card
+    to its left is showing for the same reason.
     """
     rows = await node_rows(session)
     people = await friend_rows(session)
@@ -1474,12 +1945,24 @@ async def overview(session: AsyncSession) -> Overview:
         for entry, leaf in hops
         if leaf is not None and entry.applied_at and leaf.applied_at
     ]
-    offered = {
+    # Distinct protocols a user could be routed onto right now: enabled, friend-facing,
+    # and on a node in a state that reaches a subscription at all. NAMED for what it
+    # measures since M20's acceptance, because the kicker beside it now says the same
+    # word — see this function's own docstring.
+    serving = {
         row.transport_name
         for row in await nodes.serving_transports(session)
         if row.purpose == TransportPurpose.FRIENDS
     }
     installed = discover()
+    # What the panel would let the operator enable today — services/transports.py's own
+    # answer, not a name compared here. It is a SUBSET of what the image ships: a
+    # transport the registry has retired is not proposed (M20), and neither is one that
+    # serialises into no subscription shape. "of 4 this image ships" beside a value of 1
+    # therefore read as "three left to enable" when only two were — the same sentence
+    # the Transports screen's retired row exists to stop the operator hunting for, on the
+    # screen they meet first.
+    offerable = transports.offerable_transports()
 
     return Overview(
         stats=[
@@ -1507,9 +1990,19 @@ async def overview(session: AsyncSession) -> Overview:
                 ),
             ),
             Stat(
-                kicker="transports enabled",
-                value=len(offered),
-                meta=f"of {len(installed)} this image ships",
+                kicker="transports serving",
+                value=len(serving),
+                # "OF 4 this image ships" read as a denominator of the value above it, so
+                # a fleet serving all four beside "3 can be enabled" looked like an
+                # arithmetic error — M20's acceptance. It never was one: the value is a
+                # count of the FLEET and both figures here are counts of the IMAGE, which
+                # is what dropping the "of" says.
+                meta=(
+                    f"{len(installed)} in this image, "
+                    f"{len(offerable)} can be enabled"
+                    if len(offerable) != len(installed)
+                    else _plural(len(installed), "transport", "in this image")
+                ),
             ),
         ],
         nodes=rows,
@@ -1517,14 +2010,40 @@ async def overview(session: AsyncSession) -> Overview:
     )
 
 
+# What a probe can never establish, said in the sentence that reports the good news —
+# M22.2. The probe reads a node's containers and its socket table over SSH; it does not
+# dial the node, it cannot ask whether a peer completed a handshake (``edge.health
+# .listening`` says why that is refused rather than unimplemented), and what it finds on
+# a port is SOMETHING holding it rather than provably our container.
+#
+# It is on the healthy answer and not on the failing ones deliberately. A failure is
+# already a narrower claim than the operator wants; it is the word "serving" that was
+# read as "working", and this is the sentence that word lived in.
+#
+# IT NAMES THE FIREWALLS SINCE M23, round 2, and that sentence was bought on the real
+# leaf: a transport was enabled on a port the host's ufw did not allow, the node read
+# "active / in sync", this probe read "is listening", and the client sent 12 479 bytes and
+# received none. Every reading was true. "Not dialled from outside" was already the whole
+# of it in principle, and in practice the operator read it as a formality — so the two
+# layers that actually sit between a bound socket and a user are named, because a socket
+# bound behind a closed firewall is exactly what this probe must not be read as
+# disproving. Neither layer is one this control plane can see or change: the host's is
+# opened by ``scripts/node-bootstrap.sh --port``, and the provider's is in their console.
+WHAT_A_PROBE_CANNOT_SEE = (
+    "Read on the node itself, not dialled from outside — so this is not proof that "
+    "anyone can connect. A port bound behind a closed host firewall, or behind a closed "
+    "security group at the provider, reads from here exactly like this one does."
+)
+
+
 def health_summary(name: str, health: schemas.HealthResponse) -> str:
     """One node's probe result as a sentence the console can put on screen.
 
     Composed here rather than in the route because it is the same judgement the
     pre-redesign panel's ``panel/health.html`` made in markup, and the console needs it
-    as TEXT: a probe answers into a toast when the node is fine and into a persistent
-    banner when it is not, and neither carries a template. That fragment went with the
-    page in M9.6; this function is what carried its reading across.
+    as TEXT: a probe answers into a persistent notice when the node is fine and into a
+    persistent failure banner when it is not, and neither carries a template. That
+    fragment went with the page in M9.6; this function is what carried its reading across.
 
     Note what it cannot say, because the value does not exist upstream: no client
     count, no address, no traffic figure. Health means "is this node serving what we
@@ -1533,20 +2052,36 @@ def health_summary(name: str, health: schemas.HealthResponse) -> str:
     ``drifted`` and ``stale`` get their own sentences and are not collapsed into one:
     they are different faults with different repairs, and M1 found a node in the field
     reporting no drift while its daemon had never read the file it was reporting about.
+
+    AND THE HEALTHY SENTENCE NO LONGER SAYS "SERVING" — M22.2. It said *"realhost is
+    serving amneziawg, vless-ws-tls"* about a node where one of the two was exiting 23
+    every second with nothing on its port, and the operator stopped looking, which is
+    what the charter treats as the failure that hurts most. The verb now names what was
+    actually established and nothing beyond it, and it is a DIFFERENT verb depending on
+    how much was established: "is listening for" where the port was checked and held,
+    "is running" where it could not be checked. A sentence that reads the same either
+    way is a sentence that means the weaker of the two, always.
     """
+    if not health.reachable:
+        return f"{name} could not be reached — {health.detail or 'no reason was reported'}"
+
     if health.healthy:
-        running = ", ".join(health.running)
-        return (
-            f"{name} is serving {running}"
-            if running
-            else f"{name} answered, and has no transport enabled to serve"
-        )
+        return _serving_summary(name, health)
 
     reason = health.detail or "no reason was reported"
-    if not health.reachable:
-        return f"{name} could not be reached — {reason}"
-
     parts = [f"{name} answered but is not serving — {reason}."]
+    if health.restarting:
+        parts.append(
+            "A container that keeps restarting is up in the engine's own reading and "
+            "carrying nothing: it starts, fails and starts again. Applying the same "
+            "configuration will not change that — what the container itself printed on "
+            "the node says why it will not start."
+        )
+    if health.not_listening:
+        parts.append(
+            "Its container is up and nothing holds the port that transport was given, "
+            "so there is nothing on the node for anyone to reach."
+        )
     if health.drifted:
         parts.append(
             "Its configuration differs from the one we would push; applying again "
@@ -1559,6 +2094,36 @@ def health_summary(name: str, health: schemas.HealthResponse) -> str:
             "Anyone revoked while it was in this state is still being served. Applying "
             "again recreates the container."
         )
+    return " ".join(parts)
+
+
+def _serving_summary(name: str, health: schemas.HealthResponse) -> str:
+    """The good-news sentence, which says exactly how much good news it is.
+
+    Three shapes, because there are three states worth telling apart and one word for
+    all of them is the defect M22 is about. Everything checked and holding; some running
+    transports whose port nobody could ask about; and nothing enabled at all, which is
+    not a fault and never was.
+    """
+    if not health.running:
+        return f"{name} answered, and has no transport enabled to serve"
+
+    parts = []
+    if health.listening:
+        each = "each container is" if len(health.listening) > 1 else "its container is"
+        parts.append(
+            f"{name} is listening for {', '.join(health.listening)} — {each} up and "
+            f"something holds its port."
+        )
+    if health.unchecked_ports:
+        # The weaker claim, in its own sentence and in its own verb. These containers are
+        # up on the configuration we pushed and that is the whole of what is known about
+        # them: nothing asked whether anything is bound, so nothing here says it is.
+        subject = "It is also running" if health.listening else f"{name} is running"
+        parts.append(
+            f"{subject} {', '.join(health.unchecked_ports)}, whose port was not checked."
+        )
+    parts.append(WHAT_A_PROBE_CANNOT_SEE)
     return " ".join(parts)
 
 
@@ -2016,6 +2581,18 @@ def resolver_set(node_name: str) -> str:
     return f"resolver set for {node_name} — apply it for the change to reach the node"
 
 
+# --- M23: the key a node was registered without -------------------------------
+
+def ssh_key_set(node_name: str) -> str:
+    """The toast for a stored SSH key — naming the step the operator still owes.
+
+    Same shape and same reason as ``resolver_set`` above: storing the key changes the
+    record and touches no host, and this is the moment an operator who registered a node
+    without one is most likely to believe the node is now working.
+    """
+    return f"ssh key stored for {node_name} — apply it to push its configuration"
+
+
 # --- M17: the box an operator sizes a pool of addresses in --------------------
 
 # What the pool box says under itself, and the whole of what it has to teach: that one
@@ -2051,6 +2628,62 @@ POOL_BOX_RESIZE_HINT = (
     "already holds is ever moved — a size or a range that would move one is refused and "
     "nothing is saved."
 )
+
+
+# What ENABLING a transport will do, at the moment the operator decides to — M20's
+# acceptance, round 2. The enable dialog's footer said one of these for every protocol on
+# it ("Enabling puts this protocol into every active user's link at their next refresh
+# and asks nothing of anybody"), and for a transport whose configuration is a FILE that
+# is false in both halves: it is in nobody's link, and somebody does have to ask for it
+# in the shape it comes in.
+#
+# WORSE PLACED THAN THE ROW SENTENCES the same acceptance corrected (``OFFER_IN_EVERY
+# _LINK`` and its sibling), which is why it is here rather than left for a later pass: a
+# row's standing is read afterwards, and this is read while the operator is choosing. An
+# operator who enables a config-file transport on this sentence's word walks away
+# believing every friend has it.
+#
+# The second arm may not say the friend cannot have it, and may not say they simply get
+# it — the same two failures ``OFFER_NOT_IN_THE_LINK`` names at length, and the same
+# wording is used here so the operator reads one fact in both places. Nothing in this
+# panel yet hands the operator the URL that asks for the file shape; closing that is its
+# own milestone and is not what this sentence may promise.
+#
+# Chosen by ``subscription_expressible`` — whether the protocol rides in the base64 LINK
+# — and never by a name, like every other string in this module.
+ENABLING_IN_EVERY_LINK = (
+    "Enabling puts this protocol into every active user's link at their next refresh and "
+    "asks nothing of anybody."
+)
+ENABLING_NOT_IN_THE_LINK = (
+    "Enabling grants every active user material on this protocol and puts it in nobody's "
+    "link: this transport is a config file, and a user's client gets it from that same "
+    "link only by asking for that shape."
+)
+
+
+def enabling_notes(offered: list[str]) -> dict[str, str]:
+    """What enabling each offered transport does, keyed by transport.
+
+    Keyed the way ``pool_boxes`` and ``tuning`` are, so the dialog prints it inside the
+    group it is about and the operator reads the sentence for the protocol they chose
+    rather than one sentence stretched over all of them.
+
+    TWO ARMS AND NOT THREE, unlike the Transports screen's own delivery note: this list
+    is ``offerable_transports``, so every name in it declares a format a client can
+    consume — a transport that declares none is not proposed here, and the enable service
+    refuses it outright. The question left is only which SHAPE, which is what
+    ``subscription_expressible`` answers.
+    """
+    installed = discover()
+    return {
+        name: (
+            ENABLING_IN_EVERY_LINK
+            if installed[name].subscription_expressible
+            else ENABLING_NOT_IN_THE_LINK
+        )
+        for name in offered
+    }
 
 
 async def pool_boxes(
@@ -2120,7 +2753,7 @@ def pool_takers(people: int) -> str:
         return (
             "No user is active yet, so nothing takes an address from it today — the "
             "size is the ceiling on how many this node serves on this protocol, until "
-            "you raise it under replace params."
+            "you raise it on Keys & configs, under replace params."
         )
     if people == 1:
         return "1 active user takes an address from it the moment this node serves."

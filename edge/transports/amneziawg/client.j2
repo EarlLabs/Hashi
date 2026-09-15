@@ -23,6 +23,8 @@
     the node's own SSH session into the tunnel. On a friend's device the whole point
     is that everything leaves through the node, so the full route is the correct
     value — the same field, an opposite answer, because the consumer is different.
+    Both families, including the one no node in this fleet can carry —
+    ``edge/egress.py``'s ``CLIENT_ROUTES`` is where that is argued.
   * **No ListenPort.** A client dials; it does not wait to be found. Pinning a source
     port would also make the friend's traffic easier to correlate across networks.
 #}
@@ -31,15 +33,21 @@
 PrivateKey = {{ peer.private_key }}
 Address = {{ peer.tunnel_address }}
 MTU = {{ params.mtu }}
-{% if params.client_dns %}
-# The resolver this device should use inside the tunnel. Operator-supplied: there is
-# no default, because a hardcoded resolver would be a fixed address this fleet could
-# never rotate away from.
-DNS = {{ params.client_dns | join(", ") }}
+{% if resolvers %}
+# The resolver this device asks inside the tunnel. Operator-supplied — this transport's
+# own setting, or failing that the one on the node's record: there is no default, because
+# a hardcoded resolver would be a fixed address this fleet could never rotate away from.
+# It has to be here, because AllowedIPs below routes every address into the tunnel and
+# that includes whichever resolver this device was using before.
+DNS = {{ resolvers | join(", ") }}
 {% else %}
-# No DNS line: this device keeps its own resolver, and its queries do not go through
-# the tunnel. Said out loud rather than left as an absence — it is a real property of
-# the configuration a friend receives, not a forgotten field.
+# NO RESOLVER WAS SET FOR THIS NODE, and this line is the warning rather than a
+# reassurance. AllowedIPs below routes EVERY address into the tunnel — that is the point
+# of it — and the resolver this device already uses is one of those addresses. If it is a
+# private one on the network this device is sitting in, a home router or an office
+# server, it cannot be reached from the far end, and while this tunnel is up no name will
+# resolve at all: addresses still work, names do not. Ask whoever gave you this file to
+# set a resolver.
 {% endif %}
 
 # AmneziaWG obfuscation. These MUST match the node's values exactly — they are not
@@ -56,8 +64,14 @@ H4 = {{ params.transport_packet_magic_header }}
 [Peer]
 # The node. One peer, never a list: a friend's device talks to the exit it was given.
 PublicKey = {{ params.public_key }}
-PresharedKey = {{ params.preshared_key }}
-AllowedIPs = 0.0.0.0/0, ::/0
+PresharedKey = {{ peer.preshared_key }}
+# Everything, in both families, and the second family is the deliberate half. This node's
+# exit is IPv4 only, so IPv6 sent into this tunnel is dropped there and goes nowhere —
+# which is the better of two bad answers. Leaving IPv6 out of this line would be faster
+# and would send it out of this device's own connection instead, showing a real address
+# to every site that has an IPv6 one. The cost of dropping it is a pause before a site
+# that has both answers over IPv4.
+AllowedIPs = {{ routes | join(", ") }}
 Endpoint = {{ endpoint }}
 # Keeps the UDP path open through NAT and stateful middleboxes. 25s is below the
 # shortest common UDP idle timeout.

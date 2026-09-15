@@ -15,7 +15,7 @@ HOW:  the server config comes from ``server.j2``; the client entry is a URI this
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import Egress, exit_origin, lookup_resolver
+from edge.egress import NOT_THE_INTERNET, Egress, exit_origin, lookup_resolver
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -53,7 +53,8 @@ def render_server(
     carries exactly ONE outbound, bound to that address. There is no second outbound to
     fall back to, which is decision 3 expressed structurally: when the hop is down the
     connection cannot be opened, and a friend gets no exit rather than a Russian one.
-    With no hop, nothing changes — the same direct outbound as before, byte for byte.
+    With no hop the way out is unchanged — this node's own route, bound to nothing — and
+    only what a friend may ASK for is narrower since M23's tenth round.
 
     M16 is the part of that ``sendThrough`` cannot reach. A friend's client sends a NAME,
     and the outbound resolves it before it dials — left alone, through the host's own
@@ -61,6 +62,23 @@ def render_server(
     config also carries the resolver on the node's record (``node.resolver``) and routes
     the lookup out through the same outbound as the traffic; a node with a hop and no
     resolver is refused rather than rendered with the host's (``edge/egress.py``).
+
+    And M23's ninth round is the part NEITHER of them reaches: where a friend's traffic may
+    GO. Both of those settings are about this node's own side of a connection, and a proxy
+    dials whatever it is asked for — so a friend on an entry node could name the leaf's
+    address on the hop and be answered by its SSH daemon, having reached it from the one
+    address that leaf's peer entry trusts. Nothing this node forwards is on that path, so
+    the refusal is a routing rule here and not a firewall rule anywhere: the config refuses
+    every destination off the public internet (``NOT_THE_INTERNET``) for the friend-facing
+    inbound alone, which is what leaves M16's own lookups untouched.
+
+    M23's tenth round is that refusal made true rather than nearly true, and it is why this
+    function passes ``refused`` on EVERY render rather than only under a hop. A leaf's own
+    proxy renders no ``sendThrough`` and no resolver, and used to render no refusal either —
+    while sitting beside the far end of the hop, its provider's LAN and its metadata
+    service. And the rule matched an ADDRESS, so a name resolving into one of those ranges
+    was dialled anyway; the template closes that with ``routing.domainStrategy``, which is
+    its business and not this module's. See its header for both, measured.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
@@ -73,6 +91,13 @@ def render_server(
         # ``sendThrough`` cannot reach: it binds the connection, not the lookup before it.
         # ``None`` with no hop; refused, never defaulted, on a node with one.
         resolver=lookup_resolver(egress, node.resolver),
+        # What a friend may NOT ask this node to dial — M23's ninth round, and the mirror
+        # of the finding a kernel tunnel closed in its own firewall rules. ``edge.egress``
+        # owns the list and both kinds of data plane read that one copy; what differs is
+        # only how each expresses it, which is why the rule itself is in this package's
+        # template and the list is not. See the template's header for why the node's own
+        # lookups are not refused with it.
+        refused=NOT_THE_INTERNET,
         clients=[
             # `email` in an Xray client entry is a label, and Xray uses it in
             # statistics and log lines. It gets the friend's OPAQUE subject, never

@@ -78,14 +78,20 @@
 
       {#
         M16. On its own row rather than in the grid because its hint is the one on this
-        form that has to say WHEN the box matters: a node that never dials a hop has no use
-        for it, and a node that does is not applied without it. No placeholder: a suggested
-        value would be a resolver this panel chose for every node — the hardcoded address
-        CLAUDE.md forbids, arriving through markup. Refilled on a refusal like every field
-        but the key, because it is not a secret.
+        form that has to say WHEN the box matters. No placeholder: a suggested value would
+        be a resolver this panel chose for every node — the hardcoded address CLAUDE.md
+        forbids, arriving through markup. Refilled on a refusal like every field but the
+        key, because it is not a secret.
+
+        THE HINT SAID "Leave it empty on a node that will never dial one" UNTIL M23, and
+        that sentence cost a friend their DNS on the owner's real leaf. This value is also
+        what a user's own configuration file names as its `DNS` when the protocol they
+        hold declares no resolver of its own (edge/egress.py, `client_resolvers`) — so on
+        a leaf, which dials nothing, the old sentence read as "this box is not for you" to
+        the one operator it was most for.
       #}
       {{ field("resolver", "resolver",
-               "Where a user's destination names are looked up once this node dials a hop — asked through the hop, so the lookup leaves from its far end. An address, not a name. Leave it empty on a node that will never dial one; a node that does is not applied without it.",
+               "Where the people this node serves have destination names looked up, and it does two jobs. Once this node dials a hop the lookup is asked through the hop, so it leaves from its far end. And it is the resolver written into a user's own configuration file when the protocol they hold names none of its own — with neither, every address that device asks for goes into the tunnel, its own resolver included, and no name resolves. An address, not a name. A node that dials a hop is not applied without one.",
                values.get("resolver"), errors) }}
 
       {#
@@ -105,6 +111,11 @@
         refused is reading the message under the name, fixes that, resubmits, and
         registers a node with no key at all. The apply that cannot connect arrives much
         later and reads as a broken host.
+
+        And the hint now says where the key can be given LATER — M23. It said only that
+        the node "can be registered" without one, and every route that would have
+        supplied it afterwards 404'd, so a node registered on that invitation was
+        unappliable for good. `/panel/nodes/{id}/ssh-key` is that route.
       #}
       <div class="field">
         <label for="node-ssh_private_key">ssh private key</label>
@@ -114,8 +125,9 @@
                   {% if errors.get("ssh_private_key") %}aria-invalid="true"{% endif %}></textarea>
         <div class="field-hint" id="node-ssh_private_key-hint">
           Stored encrypted and never displayed again. Optional now — without it the node
-          can be registered but its configuration cannot be applied. This box is never
-          refilled, so if the form comes back, paste it again.
+          can be registered but its configuration cannot be applied, and you give it one
+          later with "ssh key" on the node's own row. This box is never refilled, so if
+          the form comes back, paste it again.
         </div>
         {#
           What was wrong with the key itself, when that is why the form came back. Its

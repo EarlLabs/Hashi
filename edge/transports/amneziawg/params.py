@@ -12,9 +12,33 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from edge.egress import client_resolver_problem
 from edge.transports.amneziawg.meta import META
 
 BASE64_32 = re.compile(r"^[A-Za-z0-9+/]{42}[A-Za-z0-9+/=]{2}$")
+
+# What every one of the four magic-header boxes says, written once because they are four
+# instances of one decision rather than four fields — see the fields themselves for why
+# they need a sentence at all, and why the example set is not quoted in it.
+MAGIC_HEADER_HINT = (
+    "one of four numbers that replace WireGuard's fixed message types. Pick a value for "
+    "THIS node and never the protocol documentation's example set: four numbers shared "
+    "across the fleet are themselves the signature that identifies it. All four must "
+    "differ from each other."
+)
+
+# The four, IN DECLARATION ORDER, which is the order Pydantic validates them in and
+# therefore the order the distinctness rule reads them in. A tuple rather than something
+# derived from the model because the validator below is applied at class-body time, when
+# ``model_fields`` does not exist yet — so the one thing that could drift is this list
+# against the fields themselves, and ``tests/edge/test_a_repeated_obfuscation_header_
+# names_the_one_it_repeats.py`` compares the two rather than trusting them to agree.
+MAGIC_HEADERS = (
+    "init_packet_magic_header",
+    "response_packet_magic_header",
+    "underload_packet_magic_header",
+    "transport_packet_magic_header",
+)
 
 
 class Params(BaseModel):
@@ -47,11 +71,25 @@ class Params(BaseModel):
     # defaulted to an address: a hardcoded resolver is an address this fleet could
     # never rotate away from, which `CLAUDE.md` forbids for exactly that reason.
     #
-    # Empty is a real, documented state rather than a missing feature — the device
-    # keeps its own resolver and its queries do not enter the tunnel. The client
-    # template says so in the file itself, so a friend reading their config is not left
-    # to guess. Unused by the hop, where the consumer is a node with its own resolver.
-    client_dns: tuple[str, ...] = ()
+    # Empty is a real state rather than a missing feature, but it is NOT the state the
+    # comment in ``client.j2`` used to describe. A friend's config routes every address
+    # into the tunnel, their own resolver included, so "the device keeps its own resolver
+    # and its queries do not enter the tunnel" was false for every destination — M23,
+    # measured. Empty now falls back to the NODE's own resolver
+    # (``egress.client_resolvers``), and only with neither does the file say, truthfully,
+    # that nothing here answers a lookup. Unused by the hop, where the consumer is a node
+    # with its own resolver — which is why the field carries a ``description`` saying so:
+    # the establish-hop dialog renders it, and until M23 that box explained nothing
+    # (``docs/decisions.md``, 2026-09-10).
+    client_dns: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "the resolver a FRIEND's device is told to use inside the tunnel. Not used "
+            "at a hop end. An address, not a name. Left empty this node's own resolver "
+            "is written instead; with neither, a friend's device keeps asking a "
+            "resolver it can no longer reach and no name resolves."
+        ),
+    )
 
     # MTU. Explicit and required, never defaulted: this hop is a tunnel inside a
     # tunnel, and the default fragments. The symptom is "TLS works, large downloads
@@ -69,10 +107,23 @@ class Params(BaseModel):
     # Magic headers, which replace WireGuard's four fixed message-type constants.
     # Distinct values required — two equal headers make two message types
     # indistinguishable to the peer, and the tunnel simply never comes up.
-    init_packet_magic_header: int = Field(ge=1)
-    response_packet_magic_header: int = Field(ge=1)
-    underload_packet_magic_header: int = Field(ge=1)
-    transport_packet_magic_header: int = Field(ge=1)
+    #
+    # EACH ONE CARRIES ITS OWN WARNING SINCE M23, for the reason ``decoy_host`` has
+    # carried one since M1: these four numbers ARE this fleet's fingerprint, and the
+    # hazard is not a value the panel might default — it declares none — but a value an
+    # operator copies out of the protocol's own documentation. The real hop was found
+    # carrying the upstream project's published example set, typed by hand, directly
+    # beneath a comment in the rendered file saying that shared values would themselves
+    # be the fingerprint. A box that says nothing is where that happens; the sentence
+    # belongs on the box, which is the one place it is read at the moment it is chosen.
+    #
+    # The example values are deliberately NOT quoted here. Naming them would put the
+    # very set a node must not use into this file, where the next operator reads it as
+    # the suggestion the field is careful not to make.
+    init_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    response_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    underload_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    transport_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
 
     @field_validator("port")
     @classmethod
@@ -102,23 +153,28 @@ class Params(BaseModel):
 
     @field_validator("client_dns")
     @classmethod
-    def _resolvers_are_addresses(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """Each entry must be a bare IP address.
+    def _each_resolver_is_one_a_device_could_reach(
+        cls, value: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Each entry must be an address a friend's device can actually ask — M23.
 
-        A hostname here cannot work: resolving it is the very thing the tunnel's DNS
-        setting is for, so the device would have to already be able to resolve in order
-        to learn how to resolve. Refused with that reason rather than written through
-        and silently ignored by the client.
+        ``egress.client_resolver_problem`` decides, and this validator only raises what it
+        answers. The rule is not a property of this protocol — what makes a resolver
+        unreachable is the tunnel's own egress, which is why it lives beside the routes
+        the tunnel carries and is asked here rather than copied here. Asking it at
+        VALIDATION is what makes the refusal arrive while the operator is still looking
+        at the box: the renderer asked the same question and nobody reached it until a
+        user downloaded their configuration, which is one 500 for every node they hold.
+
+        It covers a name (resolving it is the very thing the setting is for) and an IPv6
+        address (this tunnel carries IPv4 only, so the device would ask and never hear
+        back). The tunnel's own range is the validator below, because that one needs the
+        tunnel as well as the value.
         """
         for entry in value:
-            try:
-                ipaddress.ip_address(entry)
-            except ValueError as exc:
-                raise ValueError(
-                    f"{entry!r} is not an IP address — a resolver written into a "
-                    "tunnel's DNS setting cannot be a name, because resolving that "
-                    "name is what the setting is for"
-                ) from exc
+            problem = client_resolver_problem(entry)
+            if problem:
+                raise ValueError(problem)
         return value
 
     @field_validator("client_dns")
@@ -175,19 +231,44 @@ class Params(BaseModel):
             raise ValueError("junk_packet_max_size is below junk_packet_min_size")
         return value
 
-    @field_validator("transport_packet_magic_header")
+    @field_validator(*MAGIC_HEADERS[1:])
     @classmethod
     def _magic_headers_are_distinct(cls, value: int, info) -> int:
-        headers = [
-            info.data.get("init_packet_magic_header"),
-            info.data.get("response_packet_magic_header"),
-            info.data.get("underload_packet_magic_header"),
-            value,
-        ]
-        present = [header for header in headers if header is not None]
-        if len(set(present)) != len(present):
+        """No header may repeat one declared before it, and the refusal names which.
+
+        ON EVERY HEADER BUT THE FIRST, which is the whole of M23 round 3's small
+        finding. It used to sit on ``transport_packet_magic_header`` alone and compare
+        all four there — correct about WHETHER the set collides and useless about
+        WHICH pair does, because Pydantic attributes an error to the field whose
+        validator raised it. An operator who typed the same number into the init and
+        response boxes was sent to the transport box, which was the one value they had
+        got right; the walk provoked all three pairs and read the same field name back
+        every time.
+
+        Pydantic validates fields in declaration order, so ``info.data`` holds the
+        headers ABOVE this one and none below. Running here therefore lands the refusal
+        on the later of the two boxes — the one the operator reached most recently —
+        and the sentence names the earlier one, so both ends of the collision are on
+        screen. ``MAGIC_HEADERS[1:]`` is every header but the first, which is the one
+        with nothing above it to repeat.
+
+        THE VALUE IS NOT QUOTED. A field's own refusal is rendered by surfaces that did
+        not choose to render it (``control.errors.ParamsRefused``), and these four
+        numbers are this node's fingerprint rather than a detail — naming the two boxes
+        says everything the operator needs and echoes nothing back.
+        """
+        repeated = next(
+            (
+                earlier
+                for earlier in MAGIC_HEADERS[: MAGIC_HEADERS.index(info.field_name)]
+                if info.data.get(earlier) == value
+            ),
+            None,
+        )
+        if repeated is not None:
             raise ValueError(
-                "the four magic headers must be distinct — two equal values make two "
-                "message types indistinguishable and the tunnel never comes up"
+                f"this repeats {repeated} — the four magic headers must be distinct, "
+                "because two equal values make two message types indistinguishable and "
+                "the tunnel never comes up"
             )
         return value

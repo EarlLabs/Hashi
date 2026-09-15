@@ -47,6 +47,25 @@
       </span>
     </div>
     {% endif %}
+    {% if withdrawal_doubt %}
+    {#
+      What a withdrawal on this screen cannot promise — M23, round 2. The walk revoked
+      somebody, the push to one node failed, the alert said so correctly and then went
+      away with the next click — and the row it left behind read "revoked / no access"
+      about a person whose tunnel was carrying traffic at that moment.
+
+      A NOTICE and not a failure banner, in the same frame as the one above it: nothing
+      has gone wrong here, and the request that did go wrong already had its own banner.
+      This is a standing fact about the fleet, which is why it is composed once in
+      services/console.py from the Nodes screen's own readings rather than per row — the
+      credential rows that would say WHICH nodes a revoked person was on are exactly what
+      a revocation deletes.
+    #}
+    <div class="banner" role="status">
+      <span class="banner-label">note</span>
+      <span>{{ withdrawal_doubt }}</span>
+    </div>
+    {% endif %}
     <div class="table-scroll">
       <table class="table">
         <thead>
@@ -54,7 +73,12 @@
             <th>nickname</th>
             <th>status</th>
             <th>added</th>
-            <th>nodes served</th>
+            {# THE UNIT IS THE NODE-TRANSPORT and the header says so since M23's eighth
+               round, which read `2 / 2` here with ONE node in service. The cell counts
+               what a friend's link carries an entry for — one per protocol per node —
+               so a person missing the second protocol on the only node in the fleet is
+               a fault this column can still show. See services/console.py. #}
+            <th>transports served</th>
             <th class="right">actions</th>
           </tr>
         </thead>
@@ -80,7 +104,7 @@
             #}
             <td class="mono nowrap">
               {% if friend.is_active %}
-                {{ friend.nodes_served }} / {{ friend.nodes_serving }}
+                {{ friend.transports_served }} / {{ friend.transports_serving }}
               {% else %}—{% endif %}
             </td>
             <td class="right">
@@ -101,7 +125,30 @@
                         hx-target="#dialog-slot" hx-swap="innerHTML">revoke</button>
               </span>
               {% else %}
-              <span class="text-muted">no access</span>
+              {#
+                What the OPERATOR did, not a claim about what the person can reach —
+                M23, round 2. It read "no access", which is a statement about a host this
+                panel may not have been able to update: the walk measured it printed over
+                a tunnel that was carrying.
+
+                AND NOTHING AT ALL while that cannot be confirmed — round 3, where the
+                walk read the replacement sentence on the row of somebody downloading a
+                megabyte through the real leaf, directly under the note saying the
+                withdrawal was not confirmed. The cell was the sentence contradicting the
+                note. `access_withdrawn` is `None` exactly while the note is up
+                (services/console.py's `withdrawn_cell`, composed from the same reading),
+                and what stands in for it is the em dash this table already uses for "no
+                answer to give here" — the transports-served cell one column over.
+
+                Not a per-row hedge, deliberately: a sentence about THIS person would have
+                to name the nodes they were on, and a revocation deletes exactly the rows
+                that would say. The doubt is stated once, above the table.
+              #}
+              {% if access_withdrawn %}
+              <span class="text-muted">{{ access_withdrawn }}</span>
+              {% else %}
+              <span class="text-muted">—</span>
+              {% endif %}
               {% endif %}
             </td>
           </tr>

@@ -33,7 +33,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.models import Credential, Friend, Subscription
-from control.app.services import addresses, nodes
+from control.app.services import addresses, keymaterial, nodes
+from edge.egress import EgressNotRenderable
 from edge.node import Credential as EdgeCredential
 from edge.registry import ClientConfig, ClientEntry, SubscriptionFormat, profile
 
@@ -48,6 +49,37 @@ ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 # is the ONLY authentication on the delivery route, so it is sized to be
 # unguessable rather than convenient.
 TOKEN_BYTES = 32
+
+# WHAT AN EMPTY ARCHIVE IS — M23, round 1's item 4, re-confirmed on the real hosts in
+# round 3. A link resolving to nothing answered 200 with a 22-byte ZIP: the bytes of an
+# empty central directory and nothing else. A friend's unarchiver opens it, shows an empty
+# folder and says nothing, which is indistinguishable from a download that went wrong —
+# and the walk watched one person's archive go 3897 B to 22 B after a failed revocation
+# degraded both nodes, with nothing anywhere telling them their link was still good.
+#
+# So an empty archive holds one file saying so. That is the whole of the change, and the
+# alternatives were both worse: a 404 says the token is unknown, which is the answer a
+# REVOKED link gets and must keep getting, and an error status turns a fleet that is
+# momentarily degraded into a client reporting a dead subscription.
+#
+# THE NAME CARRIES THE ANSWER, because a listing is often all a friend sees before they
+# decide the download failed.
+#
+# WHAT IT MAY NOT SAY is the rest of it: this text is served on a bearer path to whoever
+# holds the token, so it names no node, no country, no address and no count, and it does
+# not say whether this person has ever had anything. It says the link is fine, that
+# nothing on their device needs changing, and who to ask — which is everything they can
+# act on and nothing a stranger learns from.
+EMPTY_ARCHIVE_NOTE_NAME = "no-configurations-right-now.txt"
+EMPTY_ARCHIVE_NOTE = """\
+There is nothing in this archive at the moment.
+
+That is not a broken download and your link is not dead: the same link keeps
+working, and there is simply nothing for it to hand over right now. Nothing on
+your device needs to change and nothing needs re-importing.
+
+Fetch the link again later. If it stays empty, ask the person who gave it to you.
+"""
 
 
 def token_digest(token: str) -> str:
@@ -172,6 +204,14 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
     A friend on only URI transports gets an empty list, which is correct rather than an
     error: they have nothing in this shape, and the endpoint says so with an empty
     archive for the same reason ``render`` returns an empty document.
+
+    FOUR THINGS ARE SKIPPED RATHER THAN REFUSED, and the last two are M23's: a row that
+    is not serving, a transport with no file shape, a credential that does not carry what
+    its transport declares a consumer's material is, and — round 2 — a row whose
+    parameters cannot be rendered into a tunnel at all. All four for one reason, and it
+    is a property of this LOOP rather than a judgement about any of them: this is the
+    only route a friend touches, and a refusal anywhere in it is a 500 that takes away
+    every node they have, not just the one it was about.
     """
     serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
 
@@ -192,21 +232,79 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
             # the other one.
             continue
 
-        produced.append(
-            transport.serialise(
-                SubscriptionFormat.CLIENT_CONFIG_FILE,
-                nodes.node_view(node_transport.node),
-                nodes.render_params(node_transport),
-                # THE SAME BUILDER the node's own config is rendered from — M17. This
-                # file's ``Address`` line and that config's ``AllowedIPs`` are two
-                # renders of one allocation, and a second builder here is exactly how a
-                # person ends up authorised for an address their device does not use:
-                # a tunnel that comes up and carries nothing, with every screen green.
-                addresses.edge_credential(
-                    credential, addresses.spec_for(node_transport.transport_name)
-                ),
-            )
+        # THE SAME BUILDER the render below is handed, built once so the credential that
+        # is checked is the credential that is rendered.
+        rendering = addresses.edge_credential(
+            credential, addresses.spec_for(node_transport.transport_name)
         )
+
+        # A credential that does not carry what its transport declares a consumer's
+        # material IS — M23. A transport that gains a per-consumer value leaves every
+        # credential minted before it unrenderable, and the renderer says so by refusing
+        # rather than by handing the older, shared value out again. Skipped here, for the
+        # reason the two skips above are: this friend may hold working credentials on
+        # other nodes, and letting one refusal out of this loop answers their whole
+        # subscription with a 500 — every node they have, lost to one stale row.
+        #
+        # SILENT TO THE FRIEND AND LOUD TO THE OPERATOR, which is the only honest split
+        # available: this route may not explain itself to a stranger holding a token, and
+        # the person who can fix it is reading the Keys screen, which counts exactly these
+        # (``console.stale_material``). Their existing tunnel is unaffected — the node's
+        # own config still authorises them.
+        #
+        # Asked of the DECLARATION rather than by catching the renderer's refusal: a
+        # transport's exceptions share no base class, and giving them one in `control`
+        # would mean importing a protocol's own module here.
+        if keymaterial.missing_client_material(transport.meta.key_material, {
+            **rendering.secrets, "subject": rendering.subject
+        }):
+            continue
+
+        try:
+            produced.append(
+                transport.serialise(
+                    SubscriptionFormat.CLIENT_CONFIG_FILE,
+                    nodes.node_view(node_transport.node),
+                    nodes.render_params(node_transport),
+                    # THE SAME BUILDER the node's own config is rendered from — M17. This
+                    # file's ``Address`` line and that config's ``AllowedIPs`` are two
+                    # renders of one allocation, and a second builder here is exactly how
+                    # a person ends up authorised for an address their device does not
+                    # use: a tunnel that comes up and carries nothing, with every screen
+                    # green.
+                    rendering,
+                )
+            )
+        except EgressNotRenderable:
+            # THE FOURTH SKIP, and the general form of the third — M23, round 2. A row
+            # whose stored parameters no longer describe a tunnel anything can be built
+            # for: a resolver in a family this tunnel cannot carry, or one inside the
+            # tunnel's own range. Both are refused at input now, on every path that can
+            # store one — but a fleet that stored one before that landed still holds it,
+            # and this is the route that meets it.
+            #
+            # Skipped for the reason the three above are, which is the property this loop
+            # has rather than a judgement about resolvers: this is the only route a user
+            # touches, and ONE refusal escaping it answers their whole subscription with a
+            # 500 — every node they hold, lost to one row that is not even about them. A
+            # user whose only node is this one gets an empty archive instead, which is the
+            # same answer a momentarily degraded fleet gives them and is not mistakable
+            # for a revocation.
+            #
+            # ``EgressNotRenderable`` and nothing wider. It is ``edge``'s own type, shared
+            # by every transport and owned by none, so catching it names no protocol —
+            # which is exactly why the skip above asks a DECLARATION instead: a
+            # transport's own exceptions share no base class, and reaching for one here
+            # would mean importing a protocol's module into this file.
+            #
+            # WHAT THIS DOES NOT DO is tell the operator. The screen that counts the skip
+            # above (``console.stale_material``) reads a credential's material, which is
+            # `control`'s own vocabulary; whether a ROW can be rendered is a question only
+            # the transport's parameters answer, and nothing declares which of them a
+            # client file needs. So this one is silent on both sides until a declaration
+            # exists to hang it on — recorded here rather than papered over, because the
+            # repair is the same one the input refusal now forces: retype the resolver.
+            continue
 
     # Same ordering rule, and the same reason, as ``entries_for``: a list that reorders
     # itself between refreshes looks like nodes appearing and disappearing.
@@ -232,11 +330,23 @@ def archive_of(configs: Sequence[ClientConfig]) -> bytes:
     of what makes a config importable. A collision between two nodes is resolved by
     suffixing rather than by overwriting: a ZIP with two identical names is one a client
     unpacks into a single file, and the friend would silently be missing an exit.
+
+    AN EMPTY ONE IS NOT EMPTY — M23. It carries one note instead, so a friend can tell an
+    archive with nothing in it from a download that failed; see ``EMPTY_ARCHIVE_NOTE``
+    for what it may and may not say. Written through the same entry code as any config,
+    so it is as deterministic and as unreadable-by-others as the rest.
     """
     buffer = io.BytesIO()
     used: set[str] = set()
 
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if not configs:
+            note = zipfile.ZipInfo(
+                filename=EMPTY_ARCHIVE_NOTE_NAME, date_time=ARCHIVE_TIMESTAMP
+            )
+            note.external_attr = 0o600 << 16
+            archive.writestr(note, EMPTY_ARCHIVE_NOTE)
+
         for config in configs:
             name = config.safe_filename()
             if name in used:

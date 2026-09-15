@@ -26,6 +26,7 @@ from control.app.errors import (
     NotDeliverable,
     NotFound,
     ParamsRefused,
+    TransportRetired,
 )
 from control.app.models import (
     AuditAction,
@@ -34,7 +35,7 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, keymaterial, placement
+from control.app.services import addresses, audit, keymaterial, placement, transports
 from edge.addressing import pool_problem
 from edge.egress import Egress, resolver_problem
 from edge.node import NodeView
@@ -49,6 +50,36 @@ logger = logging.getLogger(__name__)
 # copy. They are defaults for reaching a host we own, not a fact about any provider.
 DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_PORT = 22
+
+# The width of ``Node.state_detail``, stated at the layer that refuses a value the column
+# could not hold — the same pairing ``friends.NICKNAME_MAX_LENGTH`` is half of, and the
+# model is the other half of this one.
+#
+# M23, round 12. The console's own box was given ``maxlength="500"`` in round 8, which
+# stopped the console being the surface that produced the failure and left the failure
+# there: a 1000-character reason submitted to ``POST /panel/nodes/{id}/state`` reached
+# Postgres, which raised ``value too long for type character varying(500)``, and the
+# operator got ``{"error":{"code":"internal_error"}}`` with no sentence at all. The JSON
+# API was never in it — ``schemas.NodeStateChange.detail`` declares the bound and answers
+# 422 — so what was missing was a declaration on the path a FORM takes.
+#
+# Refused rather than trimmed, which is this console's own rule twice over
+# (``panel/add_friend_dialog.html``, ``panel/routes.VALUE_TOO_LONG``): a note silently
+# clipped to 500 characters is a record written under something other than what the
+# operator typed, and this is the note that outlives the host it describes.
+#
+# IT USED TO END "and it is not repeated here", and M23's thirteenth round read that
+# sentence on a page that was repeating all 1000 characters back in the box's ``value=``.
+# The clause was true of the MESSAGE and false of the RESPONSE, and the response is what
+# the operator was looking at. Keeping the paste is the right half of that — refusing
+# rather than clipping is pointless if the refusal also throws the text away — so the
+# sentence is what changed. It now says the thing that is true for both callers at once:
+# nothing was written, nothing was cut, and the next move is the same one either way.
+STATE_DETAIL_MAX_LENGTH = 500
+STATE_DETAIL_TOO_LONG = (
+    f"the reason for this state must be {STATE_DETAIL_MAX_LENGTH} characters or fewer. "
+    "Nothing was changed and nothing was clipped — shorten it and set the state again."
+)
 
 # What an operator is told when the text in the SSH key box is not a key this control
 # plane can load. One sentence, used by the form that accepts a key and by the push path
@@ -225,6 +256,55 @@ def render_params(node_transport: NodeTransport) -> dict:
 
 # --- writing ----------------------------------------------------------------
 
+async def _node_to_write(session: AsyncSession, node_id: str, *decided_by: str) -> Node:
+    """The node, with the columns a write DECIDES BY re-read off its row.
+
+    THE HOLE THIS CLOSES — M23. Every write below asks "is this actually a change?" and
+    does nothing when the answer is no: a retried click is not an event, and a retry
+    after a failed apply has to be safe. But the question was asked of the copy the
+    caller's session had in memory, which is not the same thing as the row. A session
+    keeps what it loaded (``expire_on_commit=False``, ``control/app/db.py``), so once
+    anything else has moved the node — an apply that degraded it, another request, a
+    second console — the comparison is against a value that was true some time ago. The
+    answer comes back "no change", nothing is written, the caller is told it worked, and
+    the row still says what it said before. That is the failure shape this product keeps
+    finding: an operation that reports success and changes nothing.
+
+    It is not only a lost write. ``set_node_state`` reads the same stale value to decide
+    whether the transition is ALLOWED, so a node another session retired still looks
+    draft here — and ``retired -> active``, the one transition the machine exists to
+    refuse, goes through as ``draft -> active``. That puts a destroyed host's address
+    back into every friend's subscription, which is the harm ``NodeState.allowed_from``
+    is written against.
+
+    ``_refuse_state`` in the panel re-reads for the neighbouring reason — a service that
+    rolled back leaves a husk in the identity map — and this is that lesson one door
+    over: a rollback is not the only way a session's copy stops matching the row.
+
+    NAMED COLUMNS rather than a whole-object refresh, and that is not tidiness. These
+    sessions are built ``autoflush=False`` on purpose (``services/addresses.py`` says
+    why), so a refresh DISCARDS a pending edit instead of writing it first — and
+    ``apply_node`` has one in flight exactly here: it puts a learned SSH host key on the
+    node inside the connection block, and a failure after that reaches this module
+    through ``_record_failure``. Refreshing only what the decision reads leaves that
+    edit where it is.
+
+    A READ, not a lock. Two operators moving one node in the same instant can still both
+    read the old value — the same window ``placement`` accepts by name (docs/decisions.md)
+    and for the same reason: one operator, one console, and a row lock on ``nodes`` would
+    be taken on a table the delivery endpoint joins against.
+
+    The three node-record writes come through here. ``set_transport_enabled`` does the
+    same thing in one line of its own, because the row it decides by is a
+    ``NodeTransport`` and cannot be fetched by this helper — the reasoning above is the
+    reasoning there too, and that is why it points back at this docstring instead of
+    repeating it.
+    """
+    node = await get_node(session, node_id)
+    await session.refresh(node, decided_by)
+    return node
+
+
 async def create_node(
     session: AsyncSession,
     *,
@@ -247,7 +327,9 @@ async def create_node(
     a paste that lost its last line, a key with a passphrase — and the alternative is
     what it used to be: the record accepted, and the mistake reported at the first apply
     as an internal error naming an exception class and pointing at a container log. The
-    node cannot be edited afterwards either, so the moment to say so is this one.
+    node's other fields cannot be edited afterwards, so the moment to say so is this one
+    — the key itself can be pasted again from the Nodes screen since M23
+    (``set_ssh_key``), which is what makes "optional now" on the dialog true.
     """
     # Truthiness rather than ``is not None``: an empty string means "not supplied"
     # everywhere else on this path — the SSH layer treats it as no key at all — and a
@@ -297,8 +379,9 @@ async def create_node(
 async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) -> Node:
     """Name the resolver a node's lookups are sent to through its hop — after registration.
 
-    The one field on a node record that can change once the node exists (M16). Everything
-    else there stays fixed and a new host is a new node, but this one could not: the
+    The first of the two fields a node record admits once the node exists (M16; the other
+    is ``set_ssh_key`` below, M23). Everything else stays fixed and a new host is a new
+    node, but this one could not: the
     upgrade that added it gave every existing node none, a node that dials a hop does not
     render without one, and a node that cannot be rendered cannot be reached by a
     revocation either. So the value is node-record data that has to be writable onto the
@@ -306,10 +389,12 @@ async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) ->
 
     Refused with ``edge``'s own sentence when the value could never carry a lookup: the
     rule a render refuses by, in the same words. Setting the value a node already holds
-    changes nothing and records nothing — a retried click is not an event. It changes the
-    record and never the host; the operator's next apply carries it there.
+    changes nothing and records nothing — a retried click is not an event, and "already
+    holds" is asked of the ROW (``_node_to_write``) rather than of whatever this session
+    last loaded. It changes the record and never the host; the operator's next apply
+    carries it there.
     """
-    node = await get_node(session, node_id)
+    node = await _node_to_write(session, node_id, "resolver")
     problem = resolver_problem(resolver)
     if problem:
         raise DomainError(problem)
@@ -320,6 +405,82 @@ async def set_resolver(session: AsyncSession, *, node_id: str, resolver: str) ->
         audit.record(session, AuditAction.NODE_RESOLVER_SET, first_label=node.name)
         await session.commit()
         logger.info("node %s resolver set", node.id)
+    return node
+
+
+# What replaces a degraded node's recorded reason once the thing it names is fixed — M23,
+# round 2. The walk stored a key on a node whose ``state_detail`` read *"this node has no
+# SSH key on its record"*, and the row went on saying it: the reason a node is degraded is
+# a record of the LAST failure, and nothing but another apply rewrites it.
+#
+# The state is deliberately NOT changed with it. The node is still degraded, because
+# nothing has succeeded on it since — only the sentence was made true again. It says what
+# is known and what is not, which is the same split every other refusal here keeps.
+KEY_STORED_SINCE_THE_FAILURE = (
+    "the failure recorded on this node was that its record held no SSH key. One has been "
+    "stored since, and nothing has been applied with it yet — so this node's last known "
+    "state is still that failure. Apply it to find out what it does now."
+)
+
+
+async def set_ssh_key(
+    session: AsyncSession, *, node_id: str, ssh_private_key: str
+) -> Node:
+    """Give a node the SSH key `control` reaches it with — after registration. M23.
+
+    THE SECOND FIELD A NODE RECORD ADMITS AFTER IT EXISTS, and it is here for the reason
+    ``set_resolver`` above is: without it a node could reach a state the product invited
+    and could not leave. The add-node dialog says the key is *"optional now"*, and every
+    route that would have supplied one afterwards answered 404 — so a node registered on
+    that invitation was unappliable for ever, unreachable by a revocation, and could only
+    be retired.
+
+    Deliberately NOT a node EDIT. The name, the address, the exit label, the SSH user and
+    port stay fixed and a new host is still a new node: the charter's answer to a host
+    that changed is to register another one in ten minutes, and widening this into a
+    general edit form would be a different milestone. This is the one field whose absence
+    the product itself created.
+
+    Refused with ``SSH_KEY_UNUSABLE`` — the same sentence ``create_node`` refuses a bad
+    paste with, and the same check the connection itself makes — so "accepted by this
+    dialog" and "usable for reaching a node" cannot come to mean two different things. An
+    empty box is refused by the same sentence rather than by clearing the stored key:
+    there is no in-product reason to make a node unreachable on purpose, and doing it by
+    submitting an empty form would be the accident version of that.
+
+    Pasting the key already stored changes nothing and records nothing, exactly as
+    ``set_resolver`` treats a resolver that is already in place: a retried click is not an
+    event, and "already stored" means stored in the row (``_node_to_write``). The
+    comparison is on the decrypted value and its result is a boolean — nothing about the
+    key is logged, recorded or returned.
+    """
+    # ``state_detail`` as well as the key since M23's round 2: this write now decides by
+    # it too — see below — and ``_node_to_write`` re-reads exactly what a write decides by.
+    # An apply that degraded this node in another session is the ordinary way that value
+    # arrives, and it is the whole case the branch below exists for.
+    node = await _node_to_write(session, node_id, "ssh_private_key", "state_detail")
+    if not ssh_private_key or not ssh_key_is_usable(ssh_private_key):
+        raise DomainError(SSH_KEY_UNUSABLE)
+    if ssh_private_key != node.ssh_private_key:
+        node.ssh_private_key = ssh_private_key
+        # And the recorded reason, when it is the one this write just answered — M23,
+        # round 2. Compared against the sentence ``apply`` composed rather than searched
+        # for words in it: this column can hold a remote host's own text, and a substring
+        # test over that is a test that eventually matches something else. Any other
+        # reason is left exactly as it is, because nothing here has answered it.
+        #
+        # Imported inside the function for the cycle the two ``friends`` imports below
+        # name from the other side: ``apply`` imports this module.
+        from control.app.services import apply  # noqa: PLC0415
+
+        if node.state_detail == apply.NO_SSH_KEY:
+            node.state_detail = KEY_STORED_SINCE_THE_FAILURE
+        # The node's name and nothing else. Not a fingerprint of the key, not whether one
+        # was replaced or supplied for the first time: this credential reaches every host
+        # in the fleet, and a durable record has no safe shape for any part of it.
+        audit.record(session, AuditAction.NODE_SSH_KEY_SET, first_label=node.name)
+        await session.commit()
+        logger.info("node %s ssh key set", node.id)
     return node
 
 
@@ -425,6 +586,31 @@ async def _enable(
         )
 
     meta = installed[transport_name]
+
+    # A transport the registry has WITHDRAWN — M20's acceptance, and the first refusal
+    # here that is about the protocol rather than about the request. Before the node is
+    # loaded and before anything is minted: nothing is written, nothing is claimed, and
+    # no material exists to be thrown away.
+    #
+    # It sits here and not on a route because every route has to give the same answer.
+    # The panel had stopped OFFERING a retired transport and the operator API went on
+    # enabling one — 201, ``enabled: true``, and a complete credential for it in the next
+    # friend's archive. That is not a wrong status code, it is a friend with a tunnel
+    # whose handshake completes and which carries nothing, on every host this project
+    # prepares, with nothing on their device saying so. Refusing to CREATE is not
+    # refusing to SERVE: the row the owner's own leaf already holds renders exactly as it
+    # did, and removing it still works.
+    #
+    # Asked of ``transports.retired_transports()`` — the one place `control` asks this
+    # question — so the declaration is read and no protocol is named here, and so the
+    # sentence is the one both panel forms answer with, word for word.
+    retired = transports.retired_transports()
+    if transport_name in retired:
+        raise TransportRetired(
+            transports.NO_LONGER_OFFERED.format(
+                name=transport_name, reason=retired[transport_name]
+            )
+        )
 
     # Refused out loud rather than silently omitted later. The charter's amendment A
     # and backlog item 7 S2a: a transport a friend cannot receive AT ALL would produce
@@ -721,6 +907,14 @@ async def set_transport_enabled(
     altogether, which is also the only thing that frees its port and its config name.
     """
     node_transport = await get_node_transport(session, node_transport_id)
+    # THE FLAG IS RE-READ, for the reason ``_node_to_write`` gives about the three node
+    # writes above: the value this compares against is whatever the calling session last
+    # loaded, and on a stale copy a withdraw that finds the transport "already off"
+    # returns success while the row stays on — leaving it in every friend's subscription,
+    # which is the half of criterion 3 this function exists to make expressible. One
+    # column, so nothing else this session has pending is touched. ``purpose`` is not
+    # re-read: it is written once, when the row is created, and no service moves it.
+    await session.refresh(node_transport, ["enabled"])
 
     # A hop end is not an offer to friends, and switching one off is not a delivery
     # change — it is half a tunnel that stops completing a handshake while both ends
@@ -888,13 +1082,27 @@ async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> 
 async def set_node_state(
     session: AsyncSession, *, node_id: str, state: NodeState, detail: str | None = None
 ) -> Node:
-    """Move a node between states, recording why when it is not good news.
+    """Move a node between states, recording why whenever the node is not serving.
 
-    The only way state changes. Centralised so that "degraded" always carries a
-    reason for the operator — a node sitting in degraded with no explanation is a
-    node nobody fixes.
+    The only way state changes. Centralised so that a node out of service always carries
+    a reason for the operator — a degraded node with no explanation is a node nobody
+    fixes, and a retired one with no explanation is a host nobody remembers.
+
+    Both questions below — may this transition happen, and is it a change at all — are
+    asked of the row rather than of the copy this session is holding. ``_node_to_write``
+    says what that is worth; it is the difference between this function moving a node and
+    this function saying it did.
     """
-    node = await get_node(session, node_id)
+    # BEFORE the row is read, because nothing about this value needs the node and a
+    # refusal that had already taken a write lock's worth of work is a refusal that ran
+    # for nothing. Both surfaces come through here, so a reason that cannot be stored is
+    # answered with a sentence on either instead of arriving at the database and coming
+    # back as an opaque 500 — ``STATE_DETAIL_MAX_LENGTH`` is the column's own width, and
+    # the two must not drift.
+    if detail is not None and len(detail) > STATE_DETAIL_MAX_LENGTH:
+        raise DomainError(STATE_DETAIL_TOO_LONG)
+
+    node = await _node_to_write(session, node_id, "state", "state_detail")
 
     # A no-op is allowed and does nothing, so a retry after a failed apply is safe.
     #
@@ -918,9 +1126,26 @@ async def set_node_state(
     changed = state != node.state
 
     node.state = state
-    # ``==`` for the same reason as above: a caller handing this the raw string a route
-    # parsed would otherwise silently drop the operator's explanation on the floor.
-    node.state_detail = detail if state == NodeState.DEGRADED else None
+    # KEPT FOR EVERY STATE BUT ``active`` — M23, round 4. This read
+    # ``if state == NodeState.DEGRADED``, and an operator who retired a node with *"host
+    # was returned to the provider"* got a 200 and a NULL column, with nothing anywhere
+    # saying the sentence had been dropped.
+    #
+    # Retirement is where it costs most: the state is terminal, the record outlives the
+    # host it describes, and the whole reason the row is kept rather than deleted is so
+    # the operator can see later what the fleet used to be. A ``draft`` is the same
+    # question one state earlier — *"parked, rebuilding the host"* is what tells them, a
+    # week later, whether that host is coming back.
+    #
+    # ``active`` is the exception and it is not symmetry: this column answers WHY A NODE
+    # IS NOT SERVING, and a node that serves has no such reason. Clearing it there is also
+    # what stops a stale push failure being read under a healthy row — the same clearing
+    # ``apply_node`` does on its success path, for the same reason.
+    #
+    # ``==``/``!=`` rather than ``is``, for the reason the comparison above gives: a
+    # caller handing this the raw string a route parsed would otherwise silently drop the
+    # operator's explanation on the floor.
+    node.state_detail = detail if state != NodeState.ACTIVE else None
 
     if changed:
         # THE LINE THIS TABLE'S SHAPE WAS WRITTEN AGAINST. The state is recorded and
@@ -974,6 +1199,15 @@ async def set_node_state(
                 await friends.grant_everywhere(session, friend)
 
     await session.commit()
-    logger.info("node %s state -> %s", node.id, state)
+    # Which of the two happened, rather than one line for both. A no-op is a legitimate
+    # outcome here and always was, but it is not a state change — and "node X state ->
+    # active" printed for a node that was already active is how a write that never
+    # happened reads as work in the one record a person goes looking at afterwards. The
+    # two siblings above already log only what they wrote; this is the same honesty with
+    # the no-op said out loud, because the no-op is the branch that went wrong.
+    if changed:
+        logger.info("node %s state -> %s", node.id, state)
+    else:
+        logger.info("node %s was already %s; nothing was written", node.id, state)
 
     return node

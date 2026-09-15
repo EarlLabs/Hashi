@@ -93,3 +93,48 @@ between a correct verdict and a false regression report.
 that cannot be skipped, and a scenario that generates a project name should
 register that name for cleanup at session end regardless of outcome. Three
 independent leak sites suggest the pattern, not the sites, is what needs fixing.
+
+---
+
+## A fourth hazard: a mutation that is "caught" by bytecode nobody wrote — 2026-09-14
+
+**This one does not make a green gate red. It makes a red mutation look caught,
+which is worse: every red-first proof taken this way is worth nothing and reads
+as evidence.**
+
+### What happens
+
+`.pyc` invalidation is by **source mtime and size**, and the mtime is stored
+with **one-second** resolution. A mutation run does this:
+
+1. edit `edge/…/x.py` — one operator, one constant, usually the **same length**;
+2. run the test, watch it fail, and call the mutation caught;
+3. restore the file — **within the same second**, because both edits are scripted.
+
+The restored file now has the size it started with and an mtime whose whole
+second is unchanged, so the interpreter accepts the `.pyc` written in step 2 as
+current. **The next run executes the MUTATED bytecode from a tree whose source is
+correct.** A test that only passes because the mutation is still in force reads
+as a pass, and the next mutation "fails" for a reason that is two edits old.
+
+It was found because a mutation of one digit stayed in effect across a restore
+and the following test failed against source that no longer contained it.
+
+### What to do about it
+
+- **Run every mutation with `PYTHONDONTWRITEBYTECODE=1`.** No `.pyc` is written,
+  so nothing can be reused. It costs a few hundred milliseconds per run and it is
+  the whole fix.
+- If a mutation result ever looks impossible, `find . -name __pycache__ -prune
+  -exec rm -rf {} +` and measure again before believing either answer.
+- **Never restore with `git checkout -- edge/`** (or `control/`, or any path a
+  step is working in). It reverts the step's own uncommitted work along with the
+  mutation, silently, and the loss looks exactly like a mutation that "did not
+  change anything". Copy the files aside before mutating and copy them back —
+  a snapshot of the tree, not a checkout of the branch.
+
+### What it invalidates
+
+Any red-first or mutation claim made in this run **without** that environment
+variable is unproven rather than wrong: the mutation may well have been caught,
+and nothing in the transcript can now tell which. Re-measure rather than re-argue.

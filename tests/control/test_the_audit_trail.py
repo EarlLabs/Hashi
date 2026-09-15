@@ -850,7 +850,10 @@ class _FakeHost:
             }
             return CommandResult(exit_status=0, stdout="", stderr="")
         if "docker inspect" in command:
-            lines = [f"{name}|{digest}|true" for name, digest in self.digests.items()]
+            # Four fields since M22 — service, digest, running, RESTARTING. Nothing this
+            # fake runs crash-loops; the state itself is the subject of
+            # ``tests/control/test_a_probe_says_what_it_checked.py``.
+            lines = [f"{name}|{digest}|true|false" for name, digest in self.digests.items()]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
         if "docker version" in command:
             return CommandResult(exit_status=0, stdout="27.1.1\n", stderr="")

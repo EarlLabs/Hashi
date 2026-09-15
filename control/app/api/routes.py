@@ -42,6 +42,13 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
     The panel builds its "enable a transport" form from this, which is what lets a
     new protocol appear in the UI with no change to the panel — criterion 4's
     "selectable in the panel without modifying the control plane's core".
+
+    EVERY transport, including one the registry has retired, because this endpoint
+    answers "what does this image ship" and a list that silently dropped a package would
+    leave an operator reading a node's existing row against an inventory that does not
+    contain it. Which of them may be PROPOSED is the ``retired`` flag's answer, so a
+    chooser built from this list filters on a declaration rather than on a name — the
+    same rule the HTML forms follow.
     """
     listed = []
     for name, meta in sorted(discover().items()):
@@ -56,7 +63,15 @@ async def list_transports() -> list[schemas.TransportMetaResponse]:
                 # a stable order rather than a set's iteration order.
                 subscription_formats=sorted(str(f) for f in meta.subscription_formats),
                 blocked_by_inspection=meta.blocked_by_inspection,
-                hop_capable=meta.hop_capable,
+                # The derived answer and not the raw permission — see the field's own
+                # note in ``schemas``. A caller builds a hop form out of this, and the
+                # permission alone said yes to transports whose renderer refuses them.
+                hop_capable=meta.hop_expressible,
+                # The retirement, passed through in both halves — M20. A caller building
+                # a chooser reads the flag; a caller showing a person why an option is
+                # missing reads the sentence, which is the transport's own.
+                retired=meta.retired is not None,
+                retired_because=meta.retired.reason if meta.retired else None,
                 # Required fields the operator must fill in: everything the model
                 # requires minus everything we mint for them. Shared with the panel's
                 # rotation form so the two screens cannot drift apart.
@@ -161,6 +176,12 @@ async def apply_node(node_id: str, session: AsyncSession = Depends(session_depen
     A node with no transports enabled is answered 409 ``nothing_to_apply`` instead —
     M18.1. Nothing is dialled, nothing is pushed and the node's state is untouched: it
     is not a failure, it is a node that has nothing to serve yet.
+
+    A node the state machine will not let serve is answered 409 ``node_cannot_serve``,
+    on the same terms and for a different reason: applying a node is what puts it into
+    service, and ``retired -> active`` is the transition ``NodeState.allowed_from``
+    refuses. This endpoint wrote the column itself and so used to answer 200 and leave a
+    retired node active — see ``apply.apply_node``, which now asks the machine first.
     """
     applied = await apply.apply_node(session, node_id=node_id)
     return schemas.ApplyResponse(node_id=node_id, transports_applied=sorted(applied))
@@ -213,11 +234,17 @@ async def friend_subscription(
 
 @router.post("/friends/{friend_id}/revoke", response_model=schemas.RevocationResponse)
 async def revoke_friend(friend_id: str, session: AsyncSession = Depends(session_dependency)):
-    """Withdraw access everywhere, and report honestly if a node could not be reached."""
+    """Withdraw access everywhere, and report honestly if a node could not be reached.
+
+    ``complete`` carries ``outcome.confirmed`` and not ``outcome.complete`` — M23, round
+    8. The schema says why; the short version is that the field an integration polls was
+    true on the retry that changed nothing, which is the one moment it must not be.
+    """
     outcome = await revocation.revoke_friend(session, friend_id=friend_id)
     return schemas.RevocationResponse(
         friend_id=outcome.friend_id,
-        complete=outcome.complete,
+        complete=outcome.confirmed,
+        withdrew=outcome.withdrew,
         nodes_updated=outcome.nodes_updated,
         nodes_failed=outcome.nodes_failed,
         summary=outcome.summary(),

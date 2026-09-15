@@ -1,15 +1,16 @@
 """A protocol the censor identifies, presented honestly — backlog item 28.
 
 WHAT: what the panel and the operator API say about a transport that declares itself
-      identified on the wire, and what the hop form refuses to offer.
+      identified on the wire, what the hop form refuses to offer, and — since M20 —
+      what neither of them proposes once a transport declares itself retired.
 WHY:  the charter ships plain WireGuard first-class AND says it is protocol-blocked from
       Russia. Both halves are true and the second one is only useful if it reaches the
       owner at the moment they are choosing. A panel that lists it beside the obfuscated
       transports with no distinction is a panel that will hand a friend in Russia a
       protocol that cannot come up — and the friend reports it as "hashi is broken",
       which is the most expensive bug report this project can generate.
-HOW:  read the Transports screen, the establish-hop dialog and /api/transports as the
-      operator, against the booted stack.
+HOW:  read the Transports screen, the establish-hop dialog, the enable dialog and
+      /api/transports as the operator, against the booted stack.
       The declaration itself lives in `edge` and is asserted there; this is about whether
       the screen tells the truth.
 
@@ -18,9 +19,17 @@ that plain WireGuard is blocked from a Russian mobile network is a charter state
 a field observation, never a test result.
 """
 
+import uuid
+
 import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
+
+
+@pytest.fixture
+def unique() -> str:
+    """A suffix per test. The stand is one warm fleet and a node name is unique in it."""
+    return uuid.uuid4().hex[:8]
 
 
 @pytest.fixture
@@ -126,6 +135,80 @@ async def test_the_hop_dialog_does_not_offer_a_blocked_protocol(operator) -> Non
             f"the hop form offers {name}, which the renderer refuses — the operator "
             "would fill in a whole form to be told no"
         )
+
+
+# --- and one it declares it has stopped being (M20) ----------------------------
+
+
+async def _a_node(operator, name: str) -> str:
+    """One draft node, so the enable dialog has something to be about.
+
+    Its own helper rather than a shared one: pytest runs this suite with
+    ``--import-mode=importlib``, under which importing across scenario modules is not
+    reliable, and the stand is one fleet — so the name carries the scenario's own prefix
+    and the address is out of the documentation range like every other file here.
+    """
+    created = await operator.post(
+        "/api/nodes",
+        json={"name": name, "address": "192.0.2.99", "location_label": "Retiredland"},
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+async def test_the_api_reports_which_transports_are_retired_and_why(operator) -> None:
+    """The declaration, read out of the IMAGE rather than out of the source tree.
+
+    The registry discovers packages at runtime, so what this repository declares and what
+    the shipped image ships are two questions — the reason
+    ``tests/e2e/edge/test_shipped_image_discovers_transports.py`` exists at all. A
+    retirement that held on a laptop and not in the container would be a protocol the
+    panel goes on offering to the only operator who matters.
+    """
+    entries = await listed(operator)
+    assert entries, "no transports discovered"
+    for entry in entries.values():
+        assert isinstance(entry["retired"], bool), entry
+        # The reason travels with the flag or neither is worth having: a chooser that
+        # drops an option has to be able to say why it is gone.
+        assert bool(entry["retired_because"]) is entry["retired"], entry
+
+
+async def test_the_enable_dialog_does_not_offer_a_retired_protocol(
+    operator, unique: str
+) -> None:
+    """The owner's own words, on the booted stack: *"the admin panel do not even should
+    show this protocol, for me in suggestions"*.
+
+    Asserted on the form's own ``<option>`` values, for the same reason the hop half
+    above is: a screen that merely stops mentioning a protocol in one of the three places
+    it names it proves nothing about what the chooser will offer.
+
+    Skips loudly on an image that retires nothing, rather than passing over an empty set.
+    """
+    entries = await listed(operator)
+    retired = sorted(name for name, entry in entries.items() if entry["retired"])
+    if not retired:
+        pytest.skip(
+            "this image retires no transport, so the enable dialog has nothing it could "
+            "wrongly offer"
+        )
+
+    node_id = await _a_node(operator, f"retired-{unique}")
+    dialog = await operator.get(f"/panel/nodes/{node_id}/transports")
+    assert dialog.status_code == 200, dialog.text
+
+    offered = _options_of(dialog.text, "enable-transport_name")
+    assert offered, "the enable dialog rendered no transport select"
+    for name in retired:
+        assert name not in offered, (
+            f"the enable dialog still offers {name}, which the registry declares retired"
+        )
+    # The row is still ON the capability table, which is the other half: the operator
+    # has a node running it and has to be able to find out what happened.
+    screen = await operator.get("/panel/transports")
+    for name in retired:
+        assert name in screen.text, f"{name} vanished from the capability table"
 
 
 def _options_of(html: str, select_id: str) -> list[str]:

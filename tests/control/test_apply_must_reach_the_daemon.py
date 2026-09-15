@@ -35,6 +35,7 @@ import yaml
 
 from control.app.models import NodeState
 from edge.bootstrap import node_stack
+from edge.health import listening
 
 from .conftest import GENERATED_SSH_KEY
 
@@ -71,7 +72,15 @@ class _FakeHost:
 
     learned_host_key = None
 
-    def __init__(self, *, recreates: bool = True) -> None:
+    def __init__(self, *, recreates: bool = True, sockets: str | None = None) -> None:
+        # The node's listening table, as ``ss`` prints it, or ``None`` for a host that
+        # does not have the tool. ``None`` is the DEFAULT on purpose: this file is M1's
+        # and its subject is what the daemon loaded, not what it bound. A host that
+        # cannot be asked reports its ports as unchecked, which is the honest answer and
+        # leaves every assertion here about the question it was written for. M22's own
+        # control-level scenarios are in
+        # ``tests/control/test_a_probe_says_what_it_checked.py``.
+        self.sockets = sockets
         self.files: dict[str, str] = {}
         # service name -> the definition it was created from, and the digest label on it
         self.containers: dict[str, dict] = {}
@@ -96,11 +105,20 @@ class _FakeHost:
             return CommandResult(exit_status=0, stdout="", stderr="")
 
         if "docker inspect" in command:
+            # Four fields since M22 — service, digest, running, RESTARTING. Nothing this
+            # fake runs crash-loops: a container it created either exists and is up or was
+            # never created, which is the only rule of Docker this file models.
             lines = [
-                f"{service}|{container['digest']}|true"
+                f"{service}|{container['digest']}|true|false"
                 for service, container in self.containers.items()
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
+
+        if command == listening.LISTENING_SOCKETS:
+            if self.sockets is None:
+                # What a shell answers for a command that is not on the host.
+                return CommandResult(exit_status=127, stdout="", stderr="ss: not found")
+            return CommandResult(exit_status=0, stdout=self.sockets, stderr="")
 
         if "docker compose ps --services" in command:
             # The PRE-M1 question — "which services are up" — still answerable, and
@@ -394,3 +412,129 @@ async def test_a_revoked_friend_leaves_the_running_daemon_too(
         "the revocation rewrote the file and left the same process running, so the "
         "revoked friend is still being authorised by the daemon"
     )
+
+
+async def test_a_revocation_over_a_stale_daemon_says_the_push_landed(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """M23, measured on the owner's leaf: the node WAS reached, and was told it was not.
+
+    The host here takes the file and never recreates the container — the same state the
+    test above asserts an apply refuses to call success. On the walk that state arrived
+    through a revocation instead, and the banner said *"could not be reached — apply it
+    again once it can be"* about a node whose peer count had just gone 2 → 1 on disk.
+    Every word of that is wrong in the direction that matters: the operator is sent to
+    wait for a host that is answering, while the process on it goes on authorising the
+    person they just withdrew.
+
+    So the kind is asserted as well as the sentence. The kind is what the banner is
+    composed from — a node's own message may quote its private key and can never be
+    printed — so a right sentence over a wrong kind would be a coincidence of this
+    fleet rather than a property.
+
+    Red against the previous commit: ``why_not_updated`` had no arm for this, so the
+    failure fell through to ``UNREACHED`` and both assertions below fail.
+    """
+    from control.app.services import revocation
+    from control.app.services.apply import NotUpdated
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+
+    # The friend first, so the container the host starts is one that authorises them —
+    # from that point the host is frozen on it and the withdrawal cannot reach the
+    # process, which is the state this test is about.
+    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+
+    outcome = await revocation.revoke_friend(session, friend_id=friend_id)
+
+    assert outcome.why_failed == {node_id: NotUpdated.NOT_SERVING}, outcome.why_failed
+    summary = outcome.summary()
+    assert "was reached and its configuration WAS replaced on it" in summary, summary
+    assert "could not be reached" not in summary, summary
+
+
+async def test_a_push_that_landed_says_what_is_still_on_the_host(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The banner names the key material the failure left behind — M23, round 4.
+
+    Round 6 made ``_record_failure`` delete what the apply minted on its way into
+    service, because an apply that fails must grant nobody, and it named the cost out
+    loud: on the one failure where the bytes actually landed, the host is left
+    authorising peers this database no longer holds. The walk measured exactly that —
+    two ``[Peer]`` blocks on the node against zero credential rows here — and checked
+    the bounds, which hold: a successful retry overwrites the file, each further failure
+    replaces one orphan generation with the next, and an apply that mints nothing leaves
+    nothing.
+
+    What was missing is not a mechanism, it is a sentence. The operator was told the
+    daemon did not come up and nothing at all about what is on that host meanwhile — and
+    the exposure is the window in which the daemon later starts on its own and serves
+    peers the panel can neither list nor withdraw.
+
+    The node is parked and the user added while it is parked, because that is the only
+    way an apply has anybody left to grant: a user added to a serving node already holds
+    their credential, and the fan-out into service skips them.
+    """
+    from sqlalchemy import func, select
+
+    from control.app.models import Credential
+    from control.app.services import apply, nodes
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+    # One successful apply first, so the container exists and is frozen on that
+    # definition. Everything after this reaches the host's disk and not its process.
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    parked = await client.post(
+        f"/api/nodes/{node_id}/state",
+        json={"state": "draft", "detail": "parked, rebuilding the host"},
+    )
+    assert parked.status_code == 200, parked.text
+    await client.post("/api/friends", json={"nickname": "kolya"})
+
+    response = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert response.status_code == 502, response.text
+    message = response.json()["error"]["message"]
+    assert "still running an older configuration" in message, message
+    assert apply.ORPHANED_ON_THE_HOST in message, message
+    # The premise of that sentence, in the database: the grant is gone, and the file the
+    # host took carries it.
+    session.expire_all()
+    held = await session.execute(select(func.count()).select_from(Credential))
+    assert held.scalar_one() == 0, "the failed apply left the grant it minted behind"
+    # And it is on the BANNER and not on the row. ``state_detail`` is 500 characters that
+    # already carry however many transports did not come up, and a warning cut off
+    # mid-clause by that ceiling is worse than one read once where the operator is
+    # looking.
+    node = await nodes.get_node(session, node_id)
+    assert apply.ORPHANED_ON_THE_HOST not in node.state_detail, node.state_detail
+
+
+async def test_a_re_apply_that_minted_nothing_says_nothing_about_orphans(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The half that keeps the sentence above worth reading.
+
+    A node that was already serving grants nobody on a re-apply, so a failure deletes
+    nothing and leaves no orphan. Saying it anyway would be a warning about a state that
+    is not there, which is how a real warning stops being read.
+    """
+    from control.app.services import apply
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    # Added while the node is serving, so they already hold their credential and the
+    # apply below has nobody to grant.
+    await client.post("/api/friends", json={"nickname": "kolya"})
+
+    response = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert response.status_code == 502, response.text
+    message = response.json()["error"]["message"]
+    assert "still running an older configuration" in message, message
+    assert apply.ORPHANED_ON_THE_HOST not in message, message

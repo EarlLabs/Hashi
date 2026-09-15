@@ -29,9 +29,11 @@ WHY:  M3, and then M16 — the same failure asked twice, because the first answe
       resolver — exactly as a real entry node does — so "the exit is the leaf's" and "the
       lookup left by the leaf" are discriminating claims and not properties of the
       topology.
-HOW:  two networks the scenario creates and destroys, with docker choosing their subnets
-      so nothing on the host can collide. The hop runs over the first; the destination,
-      the resolver and the friend sit on the second, which BOTH nodes can reach. The exit
+HOW:  two networks the scenario creates and destroys. The hop runs over the first, whose
+      subnet is docker's own choice so that nothing on the host can collide; the
+      destination, the resolver and the friend sit on the second, which BOTH nodes can
+      reach and which is addressed in ``THE_INTERNET`` — reserved, and globally routable,
+      because since M23's tenth round a friend's proxy refuses what is not. The exit
       measurement is made from inside the entry container with its own ``nc``, bound to
       the address the entry's config says its way out is (``relay.exit_via``) — the
       kernel path the field proof measured on the live host. The lookup measurement needs
@@ -103,7 +105,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from edge import relay
 from edge.bootstrap import node_stack
-from edge.egress import Egress
+from edge.egress import NOT_THE_INTERNET, Egress
 from edge.node import Credential, NodeView
 from edge.registry import SubscriptionFormat, discover, profile
 
@@ -198,6 +200,30 @@ LOOKUP_COUNTERS = "lookups"
 # and nothing else's; on a node both are operator data (``params.port``).
 FRIEND_PORT = 1080
 PROXY_PORT = 8443
+
+# The range the "internet" of this scenario is addressed in, and the ONE address range
+# this file writes down. Everything else still comes from the subnet docker chose.
+#
+# It has to be written down, and M23's tenth round is why. A friend's proxy now REFUSES
+# every destination off the public internet (``edge.egress.NOT_THE_INTERNET``) and, since
+# the same round, resolves a name before it decides — so a destination inside docker's own
+# pool, which is RFC 1918 and therefore squarely inside that list, is a destination a
+# friend can no longer reach. Left as it was, this scenario would go on passing for the
+# wrong reason for exactly as long as it took somebody to notice: the friend's half asks
+# for a NAME, and at the routing strategy this file's configs used to carry, a name was
+# never compared against an address at all.
+#
+# So the stand's internet became genuinely globally-routable addressing, which is what it
+# always claimed to be. ``192.88.99.0/24`` is the deprecated 6to4 relay anycast block: it
+# is reserved, so it is nobody's host and no traffic can leave for it; it is GLOBAL by the
+# standard library's own answer, which the guard below holds it to; and it is the same
+# stand-in ``tests/edge`` already uses for the word.
+#
+# This is not the hardcoded address ``CLAUDE.md`` forbids, by the same argument
+# ``NOT_THE_INTERNET`` carries: it names nothing of any node, it is a registry value
+# identical everywhere, and no node this fleet can register is reachable at one of these
+# addresses. It is a property of the instrument, never of the product.
+THE_INTERNET = "192.88.99.0/24"
 
 # How long a userspace proxy is given to load its config and bind. Xray reports "started"
 # in well under a second on an idle engine; this is generous.
@@ -311,21 +337,37 @@ class Fleet:
         self.containers: list[str] = []
         self.networks: list[str] = []
 
-    def network(self, purpose: str) -> tuple[str, ipaddress.IPv4Network]:
-        """Create one network and report the subnet DOCKER chose for it.
+    def network(
+        self, purpose: str, subnet: str | None = None
+    ) -> tuple[str, ipaddress.IPv4Network]:
+        """Create one network and report the subnet it ended up with.
 
-        Docker picks it from its own free pool, so this cannot collide with a network
-        that already exists on the machine — and no address range is written down here.
+        Docker picks it from its own free pool unless a subnet is named, which means a
+        network created here cannot collide with one that already exists on the machine,
+        and no address range has to be written down.
+
+        ``subnet`` is named for exactly one of the two networks below — see
+        ``THE_INTERNET``, and read its reasoning before removing the argument. The cost of
+        naming one is real and is accepted rather than unnoticed: two runs of this file at
+        the same time would both ask for that range and the second would fail here, loudly
+        and with docker's own message, instead of quietly sharing a bridge.
         """
         name = f"hashi-m5-{purpose}-{self.tag}"
-        created = run(["docker", "network", "create", name])
-        assert created.returncode == 0, created.stderr
+        created = run(
+            ["docker", "network", "create", *(["--subnet", subnet] if subnet else []), name]
+        )
+        where = subnet or "the pool docker chooses from"
+        assert created.returncode == 0, (
+            f"could not create the {purpose} network on {where}:\n"
+            f"{created.stderr.strip()}\nA named range is in use by something else on this "
+            "machine — another run of this scenario, or a route that already exists."
+        )
         self.networks.append(name)
-        subnet = run(
+        reported = run(
             ["docker", "network", "inspect", "-f", "{{(index .IPAM.Config 0).Subnet}}", name]
         )
-        assert subnet.returncode == 0, subnet.stderr
-        return name, ipaddress.ip_network(subnet.stdout.strip())
+        assert reported.returncode == 0, reported.stderr
+        return name, ipaddress.ip_network(reported.stdout.strip())
 
     def start(self, purpose: str, arguments: list[str]) -> str:
         name = f"hashi-m5-{purpose}-{self.tag}"
@@ -401,8 +443,11 @@ def measured(request, engine, tmp_path_factory, hop_tunnel) -> dict:
     directory = tmp_path_factory.mktemp("hop")
     fleet = Fleet()
     try:
+        # The transit link keeps docker's own pool: it is the path the hop itself runs
+        # over, carried by a kernel tunnel no routing rule of ours is anywhere near. The
+        # other one is where a friend's traffic goes, so it has to BE the internet.
         transit, transit_subnet = fleet.network("transit")
-        internet, internet_subnet = fleet.network("internet")
+        internet, internet_subnet = fleet.network("internet", THE_INTERNET)
         addresses = {
             "entry_transit": str(transit_subnet[11]),
             "leaf_transit": str(transit_subnet[12]),
@@ -638,6 +683,35 @@ def test_there_is_a_hop_capable_transport_to_measure() -> None:
     )
 
 
+def test_the_internet_in_this_scenario_is_actually_the_internet() -> None:
+    """The assumption the friend half rests on since M23's tenth round, held not assumed.
+
+    A friend's proxy refuses every destination in ``NOT_THE_INTERNET`` and, since the same
+    round, resolves a NAME to an address before it decides — so if this scenario's
+    "internet" were addressed out of docker's own pool, which is RFC 1918, the friend
+    would be refused by the product and every assertion about the lookup would be about a
+    request that never happened. That is not hypothetical: it is what this file did until
+    that round, and it passed, because a name was never compared against an address.
+
+    Asserted against the same list the proxy refuses rather than against ``is_global``
+    alone, so a range added to that list which happened to cover this one turns this file
+    red here — with a sentence — instead of turning it red four fixtures later with a
+    friend who cannot reach anything.
+    """
+    internet = ipaddress.ip_network(THE_INTERNET)
+
+    assert internet.is_global, (
+        f"{THE_INTERNET} is not globally routable, so a friend's proxy is entitled to "
+        "refuse everything this scenario calls the internet"
+    )
+    for refused in NOT_THE_INTERNET:
+        assert not internet.overlaps(ipaddress.ip_network(refused)), (
+            f"this scenario's internet ({THE_INTERNET}) is inside {refused}, which every "
+            "friend-facing config this project renders refuses. Nothing below measures "
+            "what it claims to"
+        )
+
+
 # ── M16: and where was the name looked up? ────────────────────────────────────────────
 
 
@@ -784,18 +858,30 @@ def zero_lookup_counters(image, capabilities, resolver: str) -> None:
     in_the_resolvers_namespace(image, capabilities, resolver, f"iptables -Z {LOOKUP_COUNTERS}")
 
 
-def without_the_outbounds_domain_strategy(config: str) -> tuple[str, int]:
-    """The product's config with ONE key removed, and how many times it was there.
+def without_the_keys_that_resolve_a_name_here(config: str) -> tuple[str, int]:
+    """The product's config with every ``domainStrategy`` removed, and how many there were.
 
-    The mutation the negative half is built on, and the key is chosen because it is the
-    one that does nothing visible. ``sendThrough`` still binds, the ``dns`` object is
-    still in the file, the routing rule still names the hop — and with this key gone the
-    outbound never consults any of it: it hands the name to the host's resolver and dials
-    the address that comes back. Everything a person could look at still says the lookup
-    goes through the hop.
+    The mutation the negative half is built on, and the key is chosen because it is the one
+    that does nothing visible. ``sendThrough`` still binds, the ``dns`` object is still in
+    the file naming the node record's own resolver, the routing rule still sends the
+    resolver's queries through the hop — and with this key gone nothing ever consults any
+    of it: the name is handed to the HOST's resolver and the address that comes back is
+    dialled through the hop exactly as before. Everything a person could look at still says
+    the lookup goes through the hop.
+
+    IT IS BOTH COPIES OF THAT KEY SINCE M23'S TENTH ROUND, and the change is a measurement
+    rather than a tidy-up. The outbound's ``settings.domainStrategy`` used to be the only
+    thing that made this file's own resolver be asked. That round added
+    ``routing.domainStrategy`` — so that a refusal written about ADDRESSES is not walked
+    past by a NAME — and it resolves through the same ``dns`` object one step earlier.
+    Measured against the pinned Xray: with only the outbound's key removed the node
+    record's resolver is STILL asked, by routing, and this fixture's counters could no
+    longer tell the leaking config from the product's. Removing both restores the
+    comparison the scenario was written to make, and the removal is still invisible from
+    every seat but the resolver's.
 
     The count comes back so the caller can refuse to believe a mutation that mutated
-    nothing. A template change that renamed or moved this key would otherwise leave the
+    nothing. A template change that renamed or moved these keys would otherwise leave the
     negative half passing about a config identical to the positive one.
     """
     document = json.loads(config)
@@ -804,6 +890,9 @@ def without_the_outbounds_domain_strategy(config: str) -> tuple[str, int]:
         if "domainStrategy" in outbound.get("settings", {}):
             del outbound["settings"]["domainStrategy"]
             removed += 1
+    if "domainStrategy" in document.get("routing", {}):
+        del document["routing"]["domainStrategy"]
+        removed += 1
     return json.dumps(document, indent=2), removed
 
 
@@ -1024,7 +1113,7 @@ def looked_up(request, measured, material_a_config_names) -> dict:
     time.sleep(PROXY_SECONDS)
     install_lookup_counters(*counting, resolver, sources)
 
-    mutated_config, mutations = without_the_outbounds_domain_strategy(proxy_config)
+    mutated_config, mutations = without_the_keys_that_resolve_a_name_here(proxy_config)
     runs = {}
     for half, config in (("product", proxy_config), ("mutated", mutated_config)):
         # In the ENTRY's own network namespace, which is where a node's proxy runs: under
@@ -1148,14 +1237,20 @@ def test_the_mutation_actually_removed_something(looked_up) -> None:
     """Without this, a template change turns the negative half green by doing nothing.
 
     ``domainStrategy`` renamed, moved into another object or dropped from the template
-    would leave ``without_the_outbounds_domain_strategy`` returning the config unchanged
-    — and a "mutated" run identical to the product one would then pass the test above
-    only when the product itself had already broken.
+    would leave ``without_the_keys_that_resolve_a_name_here`` returning the config
+    unchanged — and a "mutated" run identical to the product one would then pass the test
+    above only when the product itself had already broken.
+
+    TWO and not one since M23's tenth round: the rendered config now says where a name is
+    resolved in two places, and a mutation that found only one of them leaves the other
+    still sending the query to the node record's resolver — which is measured, and is
+    exactly the state in which the counters below stop discriminating.
     """
-    assert looked_up["mutations"] > 0, (
-        "the negative half removed nothing from the rendered config, so it did not test "
-        "a mutation. The key this scenario removes is no longer where it was; find where "
-        f"the outbound now says how it resolves a name:\n{looked_up['config']}"
+    assert looked_up["mutations"] > 1, (
+        "the negative half did not remove BOTH places this config says how a name is "
+        f"resolved (it found {looked_up['mutations']}), so it did not test the mutation "
+        "it claims to. Find where the outbound and the routing section now say it:\n"
+        f"{looked_up['config']}"
     )
 
 

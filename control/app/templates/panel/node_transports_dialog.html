@@ -9,8 +9,8 @@
   for putting this here rather than beside the chips in the table is written down.
 
   NOTHING HERE NAMES A PROTOCOL, A PORT OR A HOST, and it cannot: `transports` is what
-  this image ships that a client could receive, `tuning` is every box each of them
-  declares it needs, and both arrive from services/transports.py, which reads them out
+  this image ships that a client could receive, `tuning` is every box each of them lets
+  an operator answer, and both arrive from services/transports.py, which reads them out
   of the transport's own model. A new package under edge/transports/ therefore gets a
   working enable form with no edit here — charter criterion 4 in one file.
 
@@ -37,11 +37,19 @@
   136px, which is right for twenty-four short numeric knobs and wrong for a form whose
   boxes hold a hostname or a filesystem path.
 
-  Deliberately NOT marked `required` in the markup, although every one of these is
-  required by the transport. A browser refuses to submit a form with an empty required
-  field it cannot focus, and a field inside a HIDDEN group is exactly that — choosing
-  one transport would make the form silently unsubmittable because another group's boxes
-  are empty. The server refuses per box at 422 instead.
+  Deliberately NOT marked `required` in the markup, although most of these are required
+  by the transport. A browser refuses to submit a form with an empty required field it
+  cannot focus, and a field inside a HIDDEN group is exactly that — choosing one
+  transport would make the form silently unsubmittable because another group's boxes are
+  empty. The server refuses per box at 422 instead, and only for the boxes whose
+  transport declares no default for them.
+
+  MOST, not all, since M23: this list is every field an operator MAY supply rather than
+  only the ones they MUST, so a box here can be one the transport defaults. What says
+  which is the PLACEHOLDER, and that is the mechanism M9 built for exactly this — a
+  declared default is shown in the empty box, so leaving it alone visibly produces that
+  value, while a box with no default shows the shape it will accept instead. See
+  services/transports.py's `tuning_field`.
 #}
 {% set field = group ~ "-" ~ parameter.name %}
 <div class="param-field">
@@ -177,9 +185,12 @@
       <div class="field">
         <label for="enable-transport_name">enable a transport</label>
         {# `data-transport-select` is what static/app.js watches to show the matching
-           group of boxes. The list is what this image ships that a client can receive —
-           services/transports.py; nothing here knows one protocol from another.
-           NOTHING IS SUBTRACTED from it, and that changed with M15: a node may run a
+           group of boxes. The list is what this image ships that a client can receive,
+           MINUS what the registry declares retired — services/transports.py's
+           `offerable_transports`; nothing here knows one protocol from another, and a
+           transport retired later leaves this chooser with nothing to edit in this file.
+           That subtraction arrived with M20 and is the only one: NOTHING IS SUBTRACTED
+           FOR WHAT THIS NODE ALREADY RUNS, and that changed with M15 — a node may run a
            second instance of a protocol it already has, which is what the runbook asks
            for on a box that both serves users and carries a hop. Whether this particular
            second one is legal is services/placement.py's single answer, and it arrives
@@ -194,9 +205,10 @@
           {% endfor %}
         </select>
         <div class="field-hint" id="enable-transport_name-hint">Only what this image
-          ships and can hand to a user's client. Something already on this node can be
-          added again — it is refused only if it wants a listening port the node is
-          already using.</div>
+          ships, can hand to a user's client, and still offers. One that is in the image
+          and missing here has been retired: the Transports screen says so on its row,
+          with the reason. Something already on this node can be added again — it is
+          refused only if it wants a listening port the node is already using.</div>
         {% if errors.get('transport_name') %}
         <div class="field-error" id="enable-transport_name-error" role="alert">{{ errors['transport_name'] }}</div>
         {% endif %}
@@ -259,14 +271,49 @@
         {% if name in pools %}
         {{ box(name, pools[name], values, errors) }}
         {% endif %}
+        {#
+          WHAT ENABLING THIS ONE DOES — M20's acceptance, round 2. It was a single
+          sentence in the footer below, said unchanged for every protocol on this dialog,
+          and it promised every active user's link: true of a transport that rides in the
+          link and false of one whose configuration is a file, which is what this node's
+          own serving protocol is. Read at the MOMENT OF DECISION, which is why it is in
+          the group with the boxes rather than under the button.
+
+          Composed in services/console.py from the transport's own declaration, like every
+          other sentence on this screen, so this file still names no protocol and cannot
+          tell one from another. Inside the group, so the operator reads the sentence for
+          the protocol they chose — a group is hidden with its own boxes.
+        #}
+        <p class="text-muted section-note">{{ enabling[name] }}</p>
       </div>
       {% endfor %}
 
       <div class="dialog-body">
         Key material is minted here and stored encrypted — never type a key into this
-        panel, and none of these boxes will ever ask you for one. Enabling puts this
-        protocol into every active user's link at their next refresh and asks nothing of
-        anybody; the host itself serves nothing new until you apply the node.
+        panel, and none of these boxes will ever ask you for one. The host itself serves
+        nothing new until you apply the node.
+      </div>
+      {#
+        WHAT APPLY DOES NOT DO — M23, round 2, measured on the real leaf. A transport was
+        enabled on a port the host's firewall did not allow; the node read active and in
+        sync, the probe read "is listening", and the client sent twelve kilobytes and
+        received nothing. Apply writes configuration files and restarts containers. It
+        runs no firewall command, and it cannot: the account it logs in as is deliberately
+        unprivileged, and the provider's own firewall is not on the host at all.
+
+        So the sentence is here, at the moment the number is chosen, rather than as a
+        check this panel cannot make — nothing in this control plane knows which ports a
+        host was prepared with, and a refusal based on a guess would turn away a port that
+        is open. It names no port, no protocol and no host: which number is a property of
+        the box above, and which layer-4 protocol is the transport's own declaration.
+      #}
+      <div class="dialog-body">
+        Nothing here opens a port. The number you give is one the host must already
+        allow — <span class="mono">scripts/node-bootstrap.sh --port</span> is what opens
+        it on the host, and the provider's own firewall is a second place it can be shut.
+        A port nobody opened looks exactly like a working transport from this panel: the
+        container comes up, a probe finds something holding the port, and the user's
+        client times out.
       </div>
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>

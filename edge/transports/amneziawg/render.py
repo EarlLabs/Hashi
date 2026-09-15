@@ -16,7 +16,7 @@ cannot reach a friend", but "it reaches them as a file, and here it is".
 import ipaddress
 from collections.abc import Mapping, Sequence
 
-from edge.egress import Egress, wg_quick_egress
+from edge.egress import CLIENT_ROUTES, Egress, client_resolvers, wg_quick_egress
 from edge.node import Credential, NodeView
 from edge.registry import ClientConfig, ClientEntry
 from edge.templating import environment_for
@@ -77,7 +77,17 @@ def render_server(
     refused rather than rendered, which is ``wg_quick_egress``'s decision and not a branch
     here.
     """
-    plan = wg_quick_egress(egress, str(params["tunnel_address"]), exit_via)
+    plan = wg_quick_egress(
+        egress,
+        str(params["tunnel_address"]),
+        exit_via,
+        # What a FRIEND's own file tells their device to ask, so this node's rules can let
+        # exactly that through and nothing else that is not on the internet — M23. The
+        # same two sources ``render_client_config`` reads, passed to one function
+        # (``egress.client_resolvers``) so the file and the firewall cannot disagree.
+        client_dns=[str(entry) for entry in params.get("client_dns", ())],
+        node_resolver=node.resolver,
+    )
 
     peers = []
     seen_routes: set[str] = set()
@@ -115,6 +125,24 @@ def render_server(
                 # on a node, and it must not become a record of who is on the far end.
                 "label": f"peer-{credential.subject[:8]}",
                 "public_key": secrets["peer_public_key"],
+                # THIS PEER's pre-shared key, which is what a pre-shared key is: an
+                # attribute of a pair. Rendering the node's own for every peer — which is
+                # what this file did until M23 — put one symmetric key in every friend's
+                # config on the node, so one leaked file exposed the layer protecting
+                # everyone else's handshake and revoking that friend rotated nothing.
+                #
+                # The fallback has two consumers and neither is a friend issued today.
+                # One is the ENTRY-TO-LEAF HOP: its peer is a node, its pre-shared key is
+                # node-scoped and declared ``shared_between_peers``, and ``relay.py``
+                # synthesises the peer from parameters alone — so the hop renders the
+                # bytes it always rendered and this line is why. The other is a
+                # credential minted before the per-pair declaration existed: that
+                # friend's device already holds a file naming the node's key, and
+                # refusing here would cut them off at the next apply rather than at the
+                # next issue. ``render_client_config`` refuses for them instead, which
+                # stops the shared key being handed out again.
+                "preshared_key": secrets.get("peer_preshared_key")
+                or params["preshared_key"],
                 "allowed_ips": route,
                 # Present only on the end that DIALS. On a node-to-node hop exactly
                 # one end can dial — the other is behind a carrier NAT — so this is
@@ -199,6 +227,20 @@ def render_client_config(
             "scope; a credential minted without it is the bug to fix, not this render."
         )
 
+    preshared_key = secrets.get("peer_preshared_key")
+    if not preshared_key:
+        # Named rather than filled in from the node's own key. That fallback is what
+        # ``render_server`` still does for this credential — deliberately, so the file
+        # this friend already holds keeps working — but handing the shared key out AGAIN
+        # is the defect itself, and a download is the moment to stop doing it. M23.
+        raise MissingPeerMaterial(
+            f"this credential carries no 'peer_preshared_key', so no {META.name} config "
+            "can be built for it. The transport declares that material at CLIENT scope "
+            "because a pre-shared key belongs to a PAIR; a credential minted before that "
+            "declaration carries the node's own key, which is shared with every other "
+            "friend on it. Rotate this credential's material rather than reissuing that."
+        )
+
     # The friend's own address when they have one, falling back to the single address in
     # params for the point-to-point case — the same rule, and the same reason, as
     # render_server's peer loop.
@@ -206,7 +248,24 @@ def render_client_config(
 
     content = _TEMPLATES.get_template("client.j2").render(
         params=params,
-        peer={"private_key": private_key, "tunnel_address": tunnel_address},
+        peer={
+            "private_key": private_key,
+            "tunnel_address": tunnel_address,
+            "preshared_key": preshared_key,
+        },
+        # Which resolver this device is told to ask, decided in one place shared by both
+        # members of this family — ``edge/egress.py``, beside the node's own lookup
+        # policy, because it is the same question asked one consumer further out.
+        resolvers=client_resolvers(
+            [str(entry) for entry in params.get("client_dns", ())],
+            node.resolver,
+            str(params["tunnel_address"]),
+        ),
+        # Which addresses this device sends into the tunnel, decided in the same
+        # place as the resolver above and for the same reason — it is the node's own
+        # egress policy, read from the friend's end. See ``CLIENT_ROUTES``: the IPv6
+        # half names a family this node cannot carry, on purpose.
+        routes=CLIENT_ROUTES,
         endpoint=_endpoint(node.address, params["port"]),
     )
     return ClientConfig(

@@ -1,10 +1,18 @@
 """What `control` may know about plain WireGuard.
 
-Three declarations carry the charter's three constraints on this protocol, and each is
-a field the code reads rather than a sentence a reader might not: ``hop_capable``,
-``blocked_by_inspection``, and a ``config_format`` of its own so the pinned data-plane
-image and the upstream checker travel with the transport rather than being borrowed
-from its obfuscated cousin.
+Four declarations carry the constraints on this protocol, and each is a field the code
+reads rather than a sentence a reader might not: ``hop_capable``,
+``blocked_by_inspection``, a ``config_format`` of its own so the pinned data-plane image
+and the upstream checker travel with the transport rather than being borrowed from its
+obfuscated cousin — and, since M20, ``retired``, which is why the panel no longer offers
+this one at all.
+
+**It is still here, and that is deliberate.** The rendered config is correct and this
+package is the second member of the WireGuard family; having two is what proves the
+charter's rule that transports are data, because a family with one member cannot catch
+`control` learning its name. What stopped is being suggested, and nothing else: a node
+that already runs it renders exactly the bytes it rendered before, and the friend whose
+device holds that configuration keeps it.
 """
 
 from edge.registry import (
@@ -14,6 +22,7 @@ from edge.registry import (
     KeySpec,
     Layer4,
     PeerAddress,
+    Retirement,
     SubscriptionFormat,
     TransportMeta,
 )
@@ -68,6 +77,28 @@ META = TransportMeta(
             scope=KeyScope.CLIENT,
             public_name="peer_public_key",
         ),
+        # WireGuard's pre-shared key is a property of a PAIR, and until M23 this transport
+        # declared only the node-scoped one above — so every friend on a node was handed
+        # the identical value. Read off the real leaf: two PresharedKey lines in the node's
+        # config, one distinct value. One friend's leaked file therefore exposed the
+        # symmetric layer protecting every other friend's handshake on that node, and
+        # revoking that friend rotated nothing.
+        #
+        # The same shape M17 gave the tunnel address one field over: CLIENT scope means
+        # "one per consumer", so `control` mints it per (friend, node, transport) with no
+        # knowledge of what it is for, and dropping that row is what makes a revocation
+        # total.
+        #
+        # The node-scoped key above stays rather than being deleted, and on this transport
+        # it now has exactly one job: it is what ``render_server`` falls back to for a
+        # credential minted before this declaration existed, so a node whose friends hold
+        # older files keeps authorising them until they are re-issued. Removing it would
+        # cut those friends off at the next apply.
+        KeySpec(
+            name="peer_preshared_key",
+            kind=KeyKind.SYMMETRIC_32_BASE64,
+            scope=KeyScope.CLIENT,
+        ),
         # The contract requires a client-scoped identity under the name "subject".
         KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
     ),
@@ -92,4 +123,24 @@ META = TransportMeta(
     # return path, which ``render_server`` refuses rather than renders. This transport is
     # never on a hop (``hop_capable`` is False), so its consumers are always people.
     peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
+    # THE DECLARATION THAT RETIRES IT — M20, and the only one of the four that was
+    # measured rather than reasoned about. The two rule sets were read off a live node
+    # on 2026-09-13 and again during the field run before that; the plan carries both
+    # readings. It is a fact about ONE PINNED IMAGE and not about this code, so the way
+    # out is an image on the other backend, or rules rendered per backend — either of
+    # which deletes these lines and nothing else.
+    #
+    # Written here rather than in the panel because the panel may not know this
+    # protocol's name, and because a reason kept in `control` would be a reason the next
+    # retired transport has to write again somewhere else.
+    retired=Retirement(
+        reason=(
+            "on the hosts this project prepares, a user's handshake completes and "
+            "nothing is carried. Its pinned data plane writes forwarding rules on one "
+            "netfilter backend while the firewall this project's own bootstrap enables "
+            "writes its default-deny policy on the other, and both are traversed — so "
+            "the accept never front-runs the drop, and neither end reports anything. "
+            "Measured twice on a live node."
+        )
+    ),
 )

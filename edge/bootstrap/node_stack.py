@@ -362,15 +362,29 @@ CONFIG_DIGEST_LABEL = "io.hashi.config-digest"
 # config it runs, without parsing container names.
 COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
 
-# One line per container: service, digest it was created with, whether it is running.
+# One line per container: service, digest it was created with, whether it is running,
+# and whether it is RESTARTING.
 #
 # ``|`` rather than whitespace because both middle fields can be empty (a container
 # from before this label existed) or contain a space (Go templates print a missing map
 # key as ``<no value>``), and either would silently shift the columns.
+#
+# THE FOURTH FIELD IS M22, and the reason it has to be there is measured rather than
+# reasoned: Docker reports ``Running: true`` for the whole of a restart backoff. A
+# container that exits the instant it starts and is restarted for ever therefore answers
+# this format ``<service>|<digest>|true`` — up, on the digest we pushed, and serving
+# nothing. Measured on engine 29.4.0 on 2026-09-14: a container exiting 23 immediately
+# reads ``Status=restarting Running=true Restarting=true`` between every attempt, which
+# is exactly the state a real node was in when the panel said it was serving.
+#
+# ``.State.Restarting`` rather than ``.State.Status`` — the same fact, and a boolean this
+# code already knows how to read, where ``Status`` is a vocabulary of seven words whose
+# membership is the engine's to change.
 _INSPECT_FORMAT = (
     f'{{{{index .Config.Labels "{COMPOSE_SERVICE_LABEL}"}}}}'
     f'|{{{{index .Config.Labels "{CONFIG_DIGEST_LABEL}"}}}}'
     f"|{{{{.State.Running}}}}"
+    f"|{{{{.State.Restarting}}}}"
 )
 
 # What a Go template prints for a label a container does not carry.
@@ -608,6 +622,77 @@ async def restart(connection: NodeConnection) -> None:
     await connection.run(f"cd {NODE_ROOT} && docker compose up -d --remove-orphans")
 
 
+@dataclass(frozen=True)
+class RunningContainers:
+    """One reading of what a node's compose project has up, in two halves.
+
+    Two halves because ``up`` has two meanings on a node and only one of them serves
+    anybody. ``loaded`` is a container that is running and staying running; ``restarting``
+    is one the engine is bringing back after it died, which Docker also calls running and
+    which carries nothing — M22, and the state a real node was in while the panel reported
+    it was serving.
+
+    They are kept apart rather than folded into "not up" for the reason ``drifted`` and
+    ``stale`` are kept apart: the faults have different repairs. Nothing there is a
+    transport that was never pushed or a container somebody stopped; a crash loop is a
+    config the daemon will not accept, and the container's own output on the node says
+    which.
+    """
+
+    # Service name → the config digest that container was CREATED with. Running, and
+    # not in a restart loop.
+    loaded: dict[str, str]
+
+    # Service names whose container is being restarted after dying. Sorted.
+    restarting: tuple[str, ...]
+
+
+async def running_containers(connection: NodeConnection) -> RunningContainers:
+    """What this node's compose project is running, and what it is merely retrying.
+
+    The single reading both questions come from: one ``docker inspect`` over the whole
+    project, split by what it says about each container. Asking twice would be two
+    commands and two moments, and a container crossing between them would be reported in
+    both halves or in neither.
+
+    See ``loaded_digests`` for why the digest is read from the container's own label, and
+    ``_INSPECT_FORMAT`` for why a restart loop cannot be told from a healthy container by
+    ``.State.Running`` alone.
+    """
+    # ``ps -q | xargs docker inspect`` rather than ``compose ps --format json``: the
+    # JSON that Compose emits has changed shape between versions (an array, then one
+    # object per line) and its ``Labels`` field is a flattened string. ``docker
+    # inspect --format`` is a stable interface, and ``-r`` keeps a node with no
+    # containers from running ``docker inspect`` with no arguments, which is an error
+    # rather than an empty answer.
+    result = await connection.run(
+        f"cd {NODE_ROOT} && docker compose ps -q | "
+        f"xargs -r docker inspect --format '{_INSPECT_FORMAT}'",
+        check=False,
+    )
+
+    loaded: dict[str, str] = {}
+    restarting: set[str] = set()
+    for line in result.stdout.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) != 4:
+            continue
+        service, digest, running, is_restarting = fields
+        # Not everything under this compose project has to be one of ours, and a
+        # container that is present but not running is reported by its absence here —
+        # the caller's "did it come up" answer, unchanged from before M1.
+        if service in ("", _NO_LABEL):
+            continue
+        # Restarting FIRST, because the engine says both at once. A container in a
+        # restart backoff is ``Running: true`` as well, so testing ``running`` first
+        # would put every crash loop straight back into ``loaded`` and change nothing.
+        if is_restarting == "true":
+            restarting.add(service)
+        elif running == "true":
+            loaded[service] = "" if digest == _NO_LABEL else digest
+    return RunningContainers(loaded=loaded, restarting=tuple(sorted(restarting)))
+
+
 async def loaded_digests(connection: NodeConnection) -> dict[str, str]:
     """Which config each RUNNING container was started from: service name → digest.
 
@@ -640,29 +725,13 @@ async def loaded_digests(connection: NodeConnection) -> dict[str, str]:
     A running container with no digest label — one created before M1 — comes back with
     an empty digest rather than being omitted. It is up, and it is provably not on the
     config we would push, which is exactly what a caller comparing digests concludes.
-    """
-    # ``ps -q | xargs docker inspect`` rather than ``compose ps --format json``: the
-    # JSON that Compose emits has changed shape between versions (an array, then one
-    # object per line) and its ``Labels`` field is a flattened string. ``docker
-    # inspect --format`` is a stable interface, and ``-r`` keeps a node with no
-    # containers from running ``docker inspect`` with no arguments, which is an error
-    # rather than an empty answer.
-    result = await connection.run(
-        f"cd {NODE_ROOT} && docker compose ps -q | "
-        f"xargs -r docker inspect --format '{_INSPECT_FORMAT}'",
-        check=False,
-    )
 
-    loaded: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        fields = line.strip().split("|")
-        if len(fields) != 3:
-            continue
-        service, digest, running = fields
-        # Not everything under this compose project has to be one of ours, and a
-        # container that is present but not running is reported by its absence here —
-        # the caller's "did it come up" answer, unchanged from before M1.
-        if service in ("", _NO_LABEL) or running != "true":
-            continue
-        loaded[service] = "" if digest == _NO_LABEL else digest
-    return loaded
+    A CRASH-LOOPING CONTAINER IS NOT IN HERE — M22, and it used to be. See
+    ``RunningContainers``: the engine calls a container in a restart backoff running, so
+    a daemon that has never once started successfully answered this function with the
+    digest we pushed. ``apply`` reads that answer as "it came up" and the probe reads it
+    as "it is serving"; both were wrong about the same node. What such a container is now
+    is ``RunningContainers.restarting``, which a caller wanting the distinction asks for
+    by calling ``running_containers`` instead of this.
+    """
+    return (await running_containers(connection)).loaded

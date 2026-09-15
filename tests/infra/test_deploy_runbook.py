@@ -23,7 +23,11 @@ import pytest
 
 from control.app.api.routes import router as api_router
 from control.app.services.placement import TUNNEL_TAKEN, claim
-from control.app.services.transports import hop_transports
+from control.app.services.transports import (
+    hop_transports,
+    offerable_transports,
+    retired_transports,
+)
 from edge.bootstrap.node_stack import EXTENSION
 from edge.egress import NO_RESOLVER, ResolverMissing
 from edge.registry import discover, profile
@@ -457,6 +461,26 @@ def _flat(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _prose_paragraphs(text: str) -> list[str]:
+    """Every blank-line-delimited block of ``text``, with each TABLE ROW dropped first.
+
+    The tables are dropped because a check over the whole document cannot otherwise tell
+    prose from the cell it is supposed to be explaining — which is how the retirement
+    check below spent its first round passing on the table row five lines above it, and
+    on two pre-existing sentences about a node record's ``retired`` state that have
+    nothing to do with a transport. Every row, not only the capability table's: a second
+    table answering for the first is the same defect with a different address.
+
+    Per PARAGRAPH rather than over the remainder in one piece, for the same reason: the
+    claim is that some paragraph both names the transport and says what happened to it,
+    and a document-wide search is satisfied by two unrelated sentences in two sections.
+    """
+    prose = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("|")
+    )
+    return [_flat(block).strip() for block in re.split(r"\n\s*\n", prose) if block.strip()]
+
+
 def _numbered_steps(body: str) -> list[str]:
     """Each numbered instruction in a section, with its continuation lines.
 
@@ -586,20 +610,82 @@ def test_the_table_agrees_with_the_panel_about_which_transport_can_carry_a_hop(
         )
 
 
-def test_the_table_offers_friends_only_a_transport_they_could_receive(
+def test_the_table_offers_friends_only_a_transport_the_panel_proposes(
     capability_table: dict[str, tuple[str, str, str]],
 ) -> None:
-    """The column for a node with no hop, against the rule that governs it.
+    """The column for a node with no hop, against the form an operator actually meets.
 
-    ``nodes.enable_transport`` refuses a transport that declares no format a friend's
-    client can consume, so a yes here for such a transport is advice the panel rejects.
+    IT USED TO ASK THE DECLARED DELIVERY FORMATS — whether a friend's client could
+    consume this transport at all, which is what ``nodes.enable_transport`` refuses on.
+    That was the whole answer until M20, when a transport measured to carry nothing on the
+    hosts this runbook prepares was retired from the enable dialog. Its formats are
+    unchanged and it is still installed, so the old question still answers "yes" for it
+    and the runbook would have gone on recommending a protocol no form offers.
+
+    ``offerable_transports`` is the panel's own answer and is therefore the honest one for
+    a column of advice: a yes here for a transport the dialog does not list sends an
+    operator hunting for a missing option, which is exactly the failure the hop column's
+    sibling check exists to prevent.
     """
-    installed = discover()
+    offered = set(offerable_transports())
     for name, (_, without_hop, _) in capability_table.items():
-        expected = "yes" if installed[name].subscription_formats else "no"
+        expected = "yes" if name in offered else "no"
         assert _answer(without_hop) == expected, (
             f"the runbook says {name} is {_answer(without_hop)!r} for the friends of a "
-            f"node with no hop, and its declared delivery formats say {expected!r}"
+            f"node with no hop, and the panel's enable dialog says {expected!r}"
+        )
+
+
+def test_the_table_says_why_a_transport_it_no_longer_recommends_is_not_offered(
+    runbook: str, capability_table: dict[str, tuple[str, str, str]]
+) -> None:
+    """A "no" an operator cannot act on is a cell that will be argued with.
+
+    The registry carries a reason for every retirement precisely so that nothing has to
+    write one down twice — so the runbook has to say the transport is retired where the
+    operator meets the row, and the paragraphs around the table have to say what that
+    means for the node they are standing in front of. Checked as prose rather than word
+    for word: the sentence on the panel is the transport's own and this file is a
+    different audience.
+
+    THE SECOND HALF OF THIS TEST COULD NOT FAIL UNTIL REVIEW FOUND IT, and the shape is
+    worth keeping written down. It searched the whole document for the word "retired",
+    which the cell asserted three lines above it already guarantees, and which two
+    pre-existing sentences about setting a NODE RECORD to ``retired`` supply as well —
+    so deleting the only paragraph that explains a retirement to an operator left the
+    suite green. It now asks for the conjunction instead: one paragraph, outside every
+    table, that both NAMES the transport and says it is retired. Nothing else in this
+    document can satisfy that, which is the property the old assertion was missing.
+
+    The two have to be in the SAME paragraph deliberately. An explanation whose subject
+    is in one paragraph and whose verdict is in another is one an operator searching this
+    file for either word does not find whole, which is the failure the cell points at
+    them to avoid.
+    """
+    retired = set(retired_transports())
+    marked = retired & set(capability_table)
+    if not marked:
+        pytest.skip("this image retires no transport, so no cell can mark one")
+
+    paragraphs = _prose_paragraphs(runbook)
+    for name in marked:
+        _, without_hop, _ = capability_table[name]
+        assert "retired" in without_hop.lower(), (
+            f"the runbook tells an operator not to give {name} to friends on a node with "
+            "no hop and does not say it has been retired, so the only way to find out is "
+            "to go looking for it on a form that no longer has it"
+        )
+        explained = [
+            block
+            for block in paragraphs
+            if re.search(rf"`{re.escape(name)}`", block) and "retire" in block.lower()
+        ]
+        assert explained, (
+            f"the capability table marks {name} retired and no paragraph outside the "
+            "tables both names it and says so, so the cell is a verdict with no appeal "
+            "— and the operator's only way to find out what happened to a protocol they "
+            "know this image ships is to go looking for it on a form that no longer "
+            "has it"
         )
 
 
@@ -630,6 +716,37 @@ def test_every_hop_the_runbook_builds_is_over_a_transport_that_can_carry_one(
     assert named <= offered, (
         f"the runbook builds a hop over {sorted(named - offered)}, which the panel's hop "
         "form does not offer"
+    )
+
+
+def test_no_shape_tells_an_operator_to_enable_a_retired_transport(
+    shapes: dict[str, str]
+) -> None:
+    """The steps an operator actually types from, against the panel they type them into.
+
+    The capability table is reference and the shapes are instructions, and an operator
+    following Shape A at 3am reads the second — so a retired transport named there is a
+    protocol they will look for on a dialog that does not list it, and then enable over
+    the API because the runbook said to. The table being right is not enough.
+
+    Over every backticked name in the shape, rather than over one instruction's phrasing:
+    the runbook writes "Enable a transport: `x`" in one shape and "Enable a
+    **friend-facing** transport on E — `x`" in another, and a check tied to either
+    sentence would be a check that a paraphrase turns green.
+    """
+    retired = set(retired_transports())
+    if not retired:
+        pytest.skip("this image retires no transport, so no shape can recommend one")
+
+    named = {
+        (letter, name)
+        for letter, body in shapes.items()
+        for name in retired
+        if re.search(rf"`{re.escape(name)}`", body)
+    }
+    assert not named, (
+        f"a deployment shape tells an operator to use a retired transport: {sorted(named)}. "
+        "The panel does not offer it, so following that step means going round the panel."
     )
 
 

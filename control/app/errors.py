@@ -55,6 +55,32 @@ class NotDeliverable(DomainError):
     code = "not_deliverable"
 
 
+class TransportRetired(DomainError):
+    """A transport the registry has withdrawn cannot be enabled on anything — M20.
+
+    Its own type, and the only refusal in this file that is about the PROTOCOL rather
+    than about the request: the transport is installed, its parameters are fine and it
+    would serialise into a friend's configuration perfectly. What is wrong with it is
+    that it does not work on the hosts this project prepares — a handshake that completes
+    and carries nothing — which is the silent failure the charter calls the worst kind,
+    and minting fresh material for it would hand a friend a dead tunnel with nothing on
+    their device saying so.
+
+    422 rather than 400, and the same status the console's own form answers with: the
+    request was well-formed and was understood, and the reason it cannot be carried out
+    is a property of what it names. One fact, one status, one sentence, whichever surface
+    asked — see ``transports.NO_LONGER_OFFERED``, which both of them format.
+
+    It refuses the CREATION and nothing else. A row already on a node keeps rendering,
+    keeps serving the people granted on it and can still be withdrawn or removed; that
+    asymmetry is the whole of done-when 3 and is asserted rather than described (see
+    ``tests/control/test_a_retired_transport_is_not_offered.py``).
+    """
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "transport_retired"
+
+
 class HopEndRefused(DomainError):
     """One end of a hop was refused by the transport's own model, field by field.
 
@@ -145,6 +171,77 @@ class NothingToApply(Conflict):
     code = "nothing_to_apply"
 
 
+class NodeCannotServe(Conflict):
+    """A node the state machine will not let serve again was asked to do something.
+
+    ``NothingToApply``'s sibling on the same endpoint, and the one refusal here that is
+    about the node's STATE rather than about what it runs. An apply is what puts a node
+    into service: it ends by writing ``active``, and since M23 it hands every active
+    friend a credential on the way in. On a ``retired`` node that is the transition
+    ``NodeState.allowed_from`` exists to refuse — the row is how an operator records that
+    a host is gone, sold on or seized, and bringing it back would put an address that may
+    now answer for a stranger into every friend's subscription and mint key material for
+    everybody on it.
+
+    The state endpoint has refused that move since backlog item 17; ``apply`` wrote the
+    column itself and so never asked. This type is what the asking answers with.
+
+    ``Conflict`` rather than ``NodeOperationFailed`` for ``NothingToApply``'s reason,
+    and it is the same fact here: nothing is dialled, nothing is pushed, nobody is
+    granted anything, and the node's state is left exactly as the operator set it —
+    which is what the raise being above everything ``apply_node`` writes buys.
+
+    Its own code so a script can tell this from the node having nothing enabled: the two
+    are both 409s on one endpoint and the operator's next move differs completely.
+    Deliberately NOT named for ``retired``, because what refuses is the machine rather
+    than a literal state — see ``apply.cannot_serve_again``, which asks it rather than
+    restating it.
+
+    SINCE M23's ROUND 12 IT IS ALSO THE PROBE'S REFUSAL, and one type for the two is the
+    decision rather than an economy. The walk found the buttons disagreeing about one
+    address: apply turned away because the address "may now answer for somebody else",
+    and the probe beside it on the same row opened an SSH session to it. Both doors now
+    ask one predicate and raise this — the machine's answer is one answer — while the
+    MESSAGE differs, because what each button would have done differs. The second is
+    ``apply.CANNOT_BE_DIALLED``, which is where the cost of the probe yielding rather
+    than the apply is written down.
+    """
+
+    code = "node_cannot_serve"
+
+
+class NodeNotInService(Conflict):
+    """A FAN-OUT reached a node that is not serving, and a fan-out never puts one there.
+
+    ``NodeCannotServe``'s sibling and not its subclass, because the two refuse different
+    things. That one is the state machine: ``retired`` may not serve again whoever asks.
+    This one is about WHO ASKED — an apply is what puts a node into service, and the only
+    caller entitled to that is an operator who pressed apply on that node. A revocation
+    and a rotation reach ``apply_many`` as a consequence of something done to a PERSON,
+    and round 4's walk measured what that cost: withdrawing one user's access took a
+    ``draft`` node back into service, minted key material on it for a different user who
+    had never been near it, and ran ``docker compose up`` on a host the operator had
+    parked to rebuild it. Every one of those was legal — ``draft -> active`` is in the
+    machine, and it is supposed to be — and not one of them was asked for.
+
+    What it costs, named rather than hidden: the node is not re-pushed, so a host that is
+    out of service goes on running whatever file it was last given, which may still
+    authorise somebody just withdrawn. That is the same fact a retired node has carried
+    since round 7, and it is the fan-out's caller's job to say so — see
+    ``revocation.RevocationOutcome.summary``, which reports such a node as NOT updated.
+    Nobody is routed onto a node that is not serving, so nothing new arrives there; what
+    is already there is the operator's to end by applying the node themselves.
+
+    ``Conflict`` for ``NodeCannotServe``'s reason, and the same facts hold: nothing is
+    dialled, nothing is pushed, nobody is granted anything, and the node's state is left
+    exactly as the operator set it. Its own code so a script can tell a node that is
+    merely parked from one that is written off — the first comes back with an apply and
+    the second never does.
+    """
+
+    code = "node_not_in_service"
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 
@@ -160,6 +257,26 @@ class ConfigRefused(NodeOperationFailed):
     a caller telling the operator what to do next has to be able to tell the two apart
     without reading the message — which may quote an upstream checker's output. Same status
     and code as its parent: to the API it is still a node operation that failed.
+    """
+
+
+class ConfigNotServing(NodeOperationFailed):
+    """The configuration reached the host and the host is not running it — M23.
+
+    The third fact in this family, and it is neither of the other two. ``ConfigRefused``
+    means nothing was written; a bare ``NodeOperationFailed`` out of the push covers a
+    node that could not be reached at all. This one is the node that WAS reached, whose
+    files WERE replaced, and whose daemon then did not come back on them — a container
+    that never started, or one still running the configuration it was started with
+    before.
+
+    Its own type because the revocation fan-out has to tell the operator what to do about
+    it and must not find out by reading the message (``apply.NotUpdated``). Without it,
+    the walk on the owner's real leaf was told *"could not be reached — apply it again
+    once it can be"* about a node whose peer count had just gone 2 → 1 on disk: the push
+    landed, the restart is what failed, and the sentence sent the operator to debug the
+    wrong half. Same status and code as its parent: to the API it is still a node
+    operation that failed.
     """
 
 

@@ -217,6 +217,28 @@ def test_mismatched_preshared_keys_are_refused(
         relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
 
 
+def test_both_ends_of_a_hop_still_carry_the_one_key_they_agree_on(
+    entry_node, leaf_node, amneziawg_params
+) -> None:
+    """M23 gave every friend a pre-shared key of their own; a hop must not get two.
+
+    The peer at each end of a hop is a NODE, and its pre-shared key is declared at node
+    scope and ``shared_between_peers`` precisely because two independently minted values
+    are two valid files and a handshake that never completes — the refusal above exists
+    for that. ``relay`` synthesises each end's peer from parameters alone and gives it no
+    per-pair material, so the renderer's fallback is what keeps this true. Asserted here
+    because the owner's live hop runs these bytes and nothing else would notice them
+    changing.
+    """
+    entry, leaf = ends(entry_node, leaf_node, amneziawg_params)
+
+    entry_config, leaf_config = relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
+
+    shared = f"PresharedKey = {amneziawg_params['preshared_key']}"
+    assert shared in directives(entry_config)
+    assert shared in directives(leaf_config)
+
+
 def test_an_ipv6_endpoint_is_bracketed(leaf_node, entry_node, amneziawg_params) -> None:
     """Otherwise the daemon reads the last group of the address as the port."""
     leaf_v6 = NodeView(
@@ -278,5 +300,56 @@ def test_the_hop_transport_this_module_uses_is_actually_hop_capable() -> None:
     If the transport these scenarios are written against ever declared itself unusable
     on a hop, the refusal above would fire first and every assertion in this file would
     be testing that refusal instead of the rendering it claims to test.
+
+    Both halves, since M20's acceptance: ``hop_expressible`` is the permission AND the
+    ability, and a transport that lost either would take every scenario here with it.
     """
-    assert profile(HOP_TRANSPORT).meta.hop_capable
+    assert profile(HOP_TRANSPORT).meta.hop_expressible
+
+
+# --- the other half of that question: CAN a hop be built out of this? ------------
+
+# Permitted on a hop and shaped like nothing that could be one — the gap M20's
+# acceptance walk fell into. Derived from the two declarations rather than named, so a
+# future package lands in this list by declaring, never by being listed here.
+PERMITTED_BUT_UNSHAPED = sorted(
+    name
+    for name, meta in discover().items()
+    if meta.hop_capable and meta.peer_address is None
+)
+
+
+@pytest.mark.parametrize("name", PERMITTED_BUT_UNSHAPED)
+def test_a_transport_with_no_address_of_its_own_is_refused_and_not_a_crash(
+    name: str, entry_node, leaf_node, request
+) -> None:
+    """The refusal that was a ``KeyError``, and why the difference is the whole point.
+
+    ``hop_capable`` is a permission — it defaults to True and says only that this
+    protocol is not identified at the border it would cross. It is not the ability, and
+    a transport that has simply never been shaped like a hop end declares nothing at all
+    about being one: the two VLESS packages sailed past the check above and reached the
+    tunnel-address reads, where a parameter they had never declared came back as
+    ``KeyError: 'tunnel_address'``. `control` turns ``HopNotRenderable`` into a 400 that
+    names the reason and lets everything else become a 500, so that gap reached the
+    operator as a crash on a path ``GET /api/transports`` advertised as capable.
+
+    What is asserted is therefore the TYPE as much as the sentence: anything other than
+    ``HopNotRenderable`` here is a 500 one zone over.
+
+    Parametrised over the registry, and an empty list means no such transport ships
+    rather than that the rule went untested.
+    """
+    validated = profile(name).validate(
+        request.getfixturevalue("transport_fixture")(name, "params")
+    )
+    entry = relay.HopEnd(node=entry_node, params=validated)
+    leaf = relay.HopEnd(node=leaf_node, params=validated)
+
+    with pytest.raises(relay.HopNotRenderable) as refused:
+        relay.render_hop(name, entry=entry, leaf=leaf)
+
+    message = str(refused.value)
+    assert name in message
+    # It has to say WHY, or the operator reads a refusal they cannot act on.
+    assert "address" in message and "hop" in message

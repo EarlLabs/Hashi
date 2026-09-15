@@ -120,22 +120,35 @@
                         hx-get="/panel/nodes/{{ node.id }}/state"
                         hx-target="#dialog-slot" hx-swap="innerHTML">set state</button>
                 {#
-                  M16's. The one edit a node record admits after registration: where this
-                  node's lookups go through its hop. Its own dialog, like the state, because
-                  it is about the node rather than about anything it runs.
+                  M16's. The first of the two edits a node record admits after
+                  registration: where this node's lookups go, through its hop and in the
+                  configuration file its users hold. Its own dialog, like the state,
+                  because it is about the node rather than about anything it runs.
                 #}
                 <button class="btn btn-secondary" type="button"
                         hx-get="/panel/nodes/{{ node.id }}/resolver"
                         hx-target="#dialog-slot" hx-swap="innerHTML">resolver</button>
+                {#
+                  M23's, and the second edit a node record admits. Its own dialog beside
+                  the resolver's for the same reason: it is about the node rather than
+                  about anything it runs. Shown on every row rather than only on a node
+                  with no key — a key that has to be replaced is the same action, and a
+                  control that appears only in a failure state is one nobody can find
+                  when they need it.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/ssh-key"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">ssh key</button>
               </span>
             </td>
           </tr>
           {% if node.state_detail %}
           {#
-            Why a node is degraded is the one thing that must not be hidden: an
-            unexplained degraded node is a node nobody fixes. Its own row rather than a
-            second line in the state cell — the text comes from a remote host, can be
-            long, and a status cell may never be allowed to break (app.css).
+            Why a node is not serving is the one thing that must not be hidden: an
+            unexplained degraded node is a node nobody fixes, and since M23's round 4 a
+            parked or retired one carries the operator's own note here too. Its own row
+            rather than a second line in the state cell — the text can come from a remote
+            host, can be long, and a status cell may never be allowed to break (app.css).
           #}
           <tr class="row-detail">
             <td class="text-muted wraps" colspan="7">why: {{ node.state_detail }}</td>

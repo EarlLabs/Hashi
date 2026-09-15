@@ -141,9 +141,38 @@ class TransportMetaResponse(BaseModel):
     # backlog item 28's constraint, whose declaration half lives in `edge`.
     blocked_by_inspection: bool
 
-    # Whether it may carry an entry-to-leaf hop. Listed for the same reason: the hop form
-    # should not offer an option the renderer will refuse.
+    # Whether an entry-to-leaf hop can actually be BUILT out of it. Listed for the same
+    # reason as the field above: the hop form should not offer an option the renderer
+    # will refuse.
+    #
+    # IT CARRIES ``hop_expressible``, NOT THE RAW ``hop_capable`` DECLARATION — M20's
+    # acceptance, and the distinction is what that walk fell into. The raw one is a
+    # charter constraint that defaults to True ("this protocol is not identified at the
+    # border the hop crosses"), so a transport that was never shaped like a hop end says
+    # nothing and reads as able: both VLESS transports were advertised here as capable
+    # and answered ``POST /api/hops`` with a 500. The name stays because it is the
+    # question a caller asks — may I build a hop out of this — and the value is now the
+    # answer to it. The border half of the story is already a field of its own,
+    # ``blocked_by_inspection``, so nothing is hidden by not surfacing the permission.
     hop_capable: bool
+
+    # Whether the registry has withdrawn this transport from every list a chooser is
+    # built from — M20. Surfaced here because this endpoint is what a script or a second
+    # front end builds an "enable a transport" form out of, and a declaration the HTML
+    # honours while the JSON does not is a retirement that only holds where somebody
+    # remembered it.
+    #
+    # It says nothing about whether the transport can be enabled: a retired one still
+    # renders, still mints material, and is still accepted by
+    # ``POST /api/nodes/{id}/transports`` for an operator who names it outright. What
+    # stopped is being proposed.
+    retired: bool
+
+    # Why, in the transport's own words, and ``None`` when it is not retired. Carried
+    # rather than composed here for the reason every other sentence in this response is
+    # the transport's: `control` cannot know what is wrong with a protocol it is built
+    # not to recognise.
+    retired_because: str | None
 
     # The parameters an operator must supply, i.e. everything the transport's model
     # requires that is not generated for them. Lets the panel build a form without
@@ -181,7 +210,39 @@ class RevocationResponse(BaseModel):
     """The outcome of a revocation, including the uncomfortable case."""
 
     friend_id: str
+
+    # ``RevocationOutcome.confirmed``, NOT ``RevocationOutcome.complete`` — M23, round 8,
+    # and it is the same finding as the panel's one surface over. This field is what an
+    # integration polls, and retrying after a partial failure is exactly what an
+    # integration does: the second call reported ``complete: true`` with the fleet
+    # unchanged between the two, because the service's ``complete`` answers "did every
+    # AFFECTED node accept" and a revocation deletes the credential rows that say which
+    # nodes were affected. With none left, nothing can fail and the answer is vacuously
+    # true. The panel already refused to reassure on it (``panel/routes.py``); this field
+    # went on saying it.
+    #
+    # So what is serialised is the pair a caller may act on: this call withdrew access AND
+    # every node it affected accepted the new configuration. FALSE ON A SECOND CALL, and
+    # that is the honest direction rather than an inconvenience — once the rows are gone
+    # this control plane cannot tell a revocation that was pushed everywhere from one
+    # whose push failed, so "the credential is gone from every node" is not a claim it is
+    # in a position to make twice. ``withdrew``, ``nodes_failed`` and ``summary`` are what
+    # separate "nothing to do" from "a node kept it": a caller that retried and got
+    # ``complete: false`` with ``withdrew: false`` has not found a new failure, it has
+    # reached the end of what this endpoint can settle, and the rest is a probe and an
+    # apply of the node.
+    #
+    # The NAME is kept deliberately, exactly as ``HealthResponse.running`` kept its name
+    # when M22 took crash-looping containers out of it: a field that has been lying is
+    # corrected where a caller already reads it, rather than renamed into one they would
+    # not notice had gone.
     complete: bool
+
+    # Whether THIS call withdrew anything — M23. The half of the pair above that says
+    # which kind of "not complete" this is: false here means the access was already
+    # withdrawn before the call, so nothing was pushed and nothing about this call can
+    # confirm that any node stopped serving it. ``summary`` says the same in words.
+    withdrew: bool
     nodes_updated: list[str]
     nodes_failed: dict[str, str]
     summary: str
@@ -199,6 +260,15 @@ class HealthResponse(BaseModel):
     reachable: bool
     healthy: bool
     running: list[str]
+    # Transports whose container the engine is restarting after it died — M22. Its own
+    # field rather than an absence from ``running``, because the repairs differ: nothing
+    # running is a transport never pushed, a crash loop is a configuration the daemon
+    # will not accept and applying the same one again changes nothing.
+    #
+    # ``running`` used to include these. Docker reports ``Running: true`` throughout a
+    # restart backoff, so a daemon that had never once started was listed as running and
+    # the panel said the node was serving it.
+    restarting: list[str]
     missing: list[str]
     drifted: list[str]
     # Transports whose container is up on a configuration we did not just push —
@@ -207,7 +277,29 @@ class HealthResponse(BaseModel):
     # reported ``drifted: []`` while its daemon had never read the file it was reporting
     # about.
     stale: list[str]
+    # Transports whose container is running and something holds the port it was given —
+    # and, beside it, those whose port nothing holds. M22, and the strongest thing this
+    # probe can say: what it establishes is that the port is bound on the node, never
+    # that our container bound it and never that anything reached it from outside.
+    #
+    # A running transport in NEITHER list is one whose port could not be asked about —
+    # no port on the row, or a node whose socket table could not be read. That is a third
+    # answer on purpose: reporting it as "nothing is listening" would be a confident
+    # statement about something nobody measured.
+    listening: list[str]
+    not_listening: list[str]
     detail: str | None
+
+    @property
+    def unchecked_ports(self) -> list[str]:
+        """Running transports whose port this probe could not ask about.
+
+        Derived rather than a fourth list, and derived the same way
+        ``edge.health.probe.NodeHealth.unchecked_ports`` derives it — a stored copy would
+        be a fourth place for the three to disagree. Not a serialised field: an API
+        consumer holds the same three lists and can take the same difference.
+        """
+        return sorted(set(self.running) - set(self.listening) - set(self.not_listening))
 
 
 class ParamsReplace(BaseModel):
@@ -299,8 +391,9 @@ class NodeStateChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state: str
-    # Only meaningful when moving to `degraded`; the service clears it otherwise, so a
-    # node cannot sit in `active` carrying a stale complaint.
+    # Kept on every state but `active`, which the service clears it on — M23, round 4.
+    # A node cannot sit in `active` carrying a stale complaint, and a retired one no
+    # longer loses the note the operator wrote about the host that is gone.
     detail: str | None = Field(default=None, max_length=500)
 
 

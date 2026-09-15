@@ -49,6 +49,7 @@ from control.app.services import (
     rotation,
     subscriptions,
 )
+from control.app.services import transports as transports_service
 from edge.addressing import host_of, pool
 from edge.registry import ConfigFormat, discover, profile
 
@@ -113,8 +114,65 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(params=POOL_TRANSPORTS)
-def pool_transport(request) -> str:
+def pool_transport(request, nothing_retired) -> str:
+    """One member of the family, in a fleet where nothing is retired — M20's acceptance.
+
+    ``nothing_retired`` is taken HERE rather than by forty test signatures, and it is the
+    fixture's own claim: a test handed a family member is a test about what that transport
+    DOES, and retirement says nothing about that. ``nodes.enable_transport`` refuses to
+    create a row for a retired transport since M20's acceptance, so without this every
+    test below would have run over the one member that is not retired — and a family whose
+    second member is never exercised is the exact gap M17 added these parameters to close.
+
+    The tests that are about the PANEL's own offering take ``offered_pool_transport``
+    below instead, and do not lift anything.
+    """
     return request.param
+
+
+# The same list, minus every transport the panel no longer OFFERS — M20. The dialog
+# renders a group of boxes per offered transport and none for a retired one, so a test
+# submitting that form for a retired transport would be filling in a form nobody can
+# reach: the claim it makes ("this box is answered under itself") is about a screen that
+# no longer has the box.
+#
+# The API half above keeps the whole family, and that split is the milestone rather than
+# a compromise: retirement subtracts a protocol from what may be CHOSEN and nothing from
+# what it does, so everything that is about the transport's behaviour stays parametrised
+# over both members — through ``nothing_retired``, since M20's acceptance also made
+# creating such a row a refusal — and the only tests that narrow are the ones that SUBMIT
+# THE ENABLE DIALOG. Not every panel test — the replace-parameters dialog is a console
+# screen too and stays on the whole family, because it is about a row that already exists
+# and ``_params_form`` gates its boxes on ``key.installed`` rather than on what is
+# offered. ``transports.offerable_transports`` is asked rather than a name, so a transport
+# retired later moves between these two lists on its own.
+OFFERED_POOL_TRANSPORTS = [
+    name for name in POOL_TRANSPORTS if name in transports_service.offerable_transports()
+]
+
+
+@pytest.fixture(params=OFFERED_POOL_TRANSPORTS)
+def offered_pool_transport(request) -> str:
+    return request.param
+
+
+def test_the_panel_half_of_this_file_still_has_a_transport_to_run_over() -> None:
+    """Non-vacuity for every test below that submits the enable dialog.
+
+    An image that retired every pool transport would make those tests vanish into an
+    empty parameter set — which pytest reports as a skip, in a suite nobody reads to the
+    end. Asserted once, out loud, rather than discovered as a missing test count.
+    """
+    assert OFFERED_POOL_TRANSPORTS, (
+        "every transport that hands out addresses has been retired, so the panel tests "
+        "below run over nothing at all"
+    )
+    withheld = set(POOL_TRANSPORTS) - set(OFFERED_POOL_TRANSPORTS)
+    assert withheld <= set(transports_service.retired_transports()), (
+        f"{sorted(withheld)} hands out addresses and is not offered by the panel, and "
+        "the registry does not say it is retired — so the dialog is hiding a transport "
+        "for some other reason, which is the reason to go and find"
+    )
 
 
 async def a_node(client, *, name: str, address: str) -> str:
@@ -1077,15 +1135,13 @@ async def test_a_resize_is_audited_as_a_replacement_and_nothing_else(
 
     session.expire_all()
     added = [entry for entry in await audit_rows(session) if entry not in before]
-    # ONE entry about the transport. The other entry this leaves is the node going
-    # ``degraded``: the push that follows every replacement cannot land on a test node
-    # with no host behind it, and that is a fact about the fixture rather than about the
-    # resize — asserted here rather than filtered away, so a resize that started writing
-    # something else about the node turns this red.
-    assert added == [
-        ("params-replaced", "audited", pool_transport),
-        ("node-state-changed", "audited", "degraded"),
-    ], added
+    # ONE entry, and exactly one since M23's round 4. This used to leave a second — the
+    # node going ``degraded``, because the push that follows every replacement was
+    # attempted against a fixture with no host behind it. The fan-out refuses a node that
+    # is not in service before it dials anything now, so a draft node is left exactly as
+    # the operator had it and writes nothing about itself. Asserted whole rather than
+    # filtered, so a resize that starts writing something else about the node turns red.
+    assert added == [("params-replaced", "audited", pool_transport)], added
 
 
 async def test_a_resize_below_what_the_row_already_hands_out_is_refused(
@@ -1443,7 +1499,7 @@ def field_errors(response) -> dict[str, str]:
 
 
 async def test_the_panel_refuses_an_empty_pool_box_under_the_box(
-    client, session, pool_transport: str
+    client, session, offered_pool_transport: str
 ) -> None:
     """Nothing defaults the size, and the console says so where the number goes.
 
@@ -1456,13 +1512,13 @@ async def test_the_panel_refuses_an_empty_pool_box_under_the_box(
 
     refused = await client.post(
         f"/panel/nodes/{node_id}/transports",
-        data=enable_form(pool_transport, pool_size=""),
+        data=enable_form(offered_pool_transport, pool_size=""),
         headers=HTMX,
     )
 
     assert refused.status_code == 422, refused.text
     errors = field_errors(refused)
-    assert errors.get(f"{pool_transport}-{addresses.POOL_BOX}") == panel_routes.NO_DEFAULT
+    assert errors.get(f"{offered_pool_transport}-{addresses.POOL_BOX}") == panel_routes.NO_DEFAULT
     session.expire_all()
     assert (
         await session.execute(
@@ -1472,7 +1528,7 @@ async def test_the_panel_refuses_an_empty_pool_box_under_the_box(
 
 
 async def test_the_panel_refuses_a_pool_box_that_is_not_a_count(
-    client, session, pool_transport: str
+    client, session, offered_pool_transport: str
 ) -> None:
     """Text where a count goes is a refusal, not a 500 and not a silent zero.
 
@@ -1485,24 +1541,24 @@ async def test_the_panel_refuses_a_pool_box_that_is_not_a_count(
 
     refused = await client.post(
         f"/panel/nodes/{node_id}/transports",
-        data=enable_form(pool_transport, pool_size="lots"),
+        data=enable_form(offered_pool_transport, pool_size="lots"),
         headers=HTMX,
     )
 
     assert refused.status_code == 422, refused.text
     errors = field_errors(refused)
     assert (
-        errors.get(f"{pool_transport}-{addresses.POOL_BOX}")
+        errors.get(f"{offered_pool_transport}-{addresses.POOL_BOX}")
         == panel_routes.POOL_NOT_A_NUMBER
     )
-    assert "lots" not in errors[f"{pool_transport}-{addresses.POOL_BOX}"]
+    assert "lots" not in errors[f"{offered_pool_transport}-{addresses.POOL_BOX}"]
     # And it is still in the box: a refused form this operator has to retype is one they
     # retype wrongly.
     assert 'value="lots"' in refused.text
 
 
 async def test_a_refused_box_is_also_stated_where_the_dialog_reopens(
-    client, session, pool_transport: str
+    client, session, offered_pool_transport: str
 ) -> None:
     """A refusal below the fold is a refusal nobody reads — M17.2's acceptance.
 
@@ -1521,11 +1577,11 @@ async def test_a_refused_box_is_also_stated_where_the_dialog_reopens(
     """
     node_id = await a_node(client, name="panel-top", address="192.0.2.62")
     # A list for the refusal to be pushed below, which is the condition of the finding.
-    assert (await enable_pool(client, node_id, pool_transport)).status_code == 201
+    assert (await enable_pool(client, node_id, offered_pool_transport)).status_code == 201
 
     refused = await client.post(
         f"/panel/nodes/{node_id}/transports",
-        data=enable_form(pool_transport, pool_size=""),
+        data=enable_form(offered_pool_transport, pool_size=""),
         headers=HTMX,
     )
 
@@ -1538,7 +1594,7 @@ async def test_a_refused_box_is_also_stated_where_the_dialog_reopens(
     # …and the sentence itself has NOT moved up here: it is still under the box, which is
     # the only place it can be corrected from.
     assert (
-        field_errors(refused)[f"{pool_transport}-{addresses.POOL_BOX}"]
+        field_errors(refused)[f"{offered_pool_transport}-{addresses.POOL_BOX}"]
         == panel_routes.NO_DEFAULT
     )
     # The box is marked, which is what ``app.js`` focuses and what a screen reader reads.
@@ -1546,7 +1602,7 @@ async def test_a_refused_box_is_also_stated_where_the_dialog_reopens(
 
 
 async def test_a_value_too_long_for_a_box_is_refused_without_being_repeated(
-    client, session, pool_transport: str
+    client, session, offered_pool_transport: str
 ) -> None:
     """A thousand characters pasted into an address box came back as a thousand — M16, M17.
 
@@ -1560,10 +1616,10 @@ async def test_a_value_too_long_for_a_box_is_refused_without_being_repeated(
     different one. An ``<input>`` does not grow with its value; a sentence does.
     """
     node_id = await a_node(client, name="panel-long", address="192.0.2.63")
-    spec = addresses.spec_for(pool_transport)
+    spec = addresses.spec_for(offered_pool_transport)
     huge = "9" * 1000
-    typed = enable_form(pool_transport)
-    typed[f"{pool_transport}-{spec.name}"] = huge
+    typed = enable_form(offered_pool_transport)
+    typed[f"{offered_pool_transport}-{spec.name}"] = huge
 
     refused = await client.post(
         f"/panel/nodes/{node_id}/transports", data=typed, headers=HTMX
@@ -1571,7 +1627,7 @@ async def test_a_value_too_long_for_a_box_is_refused_without_being_repeated(
 
     assert refused.status_code == 422, refused.text
     assert (
-        field_errors(refused)[f"{pool_transport}-{spec.name}"]
+        field_errors(refused)[f"{offered_pool_transport}-{spec.name}"]
         == panel_routes.VALUE_TOO_LONG
     )
     assert huge not in _text_of(refused), "the refusal repeated the value"
@@ -1585,7 +1641,7 @@ async def test_a_value_too_long_for_a_box_is_refused_without_being_repeated(
 
 
 async def test_the_size_typed_in_the_panel_is_the_size_the_row_is_given(
-    client, session, pool_transport: str
+    client, session, offered_pool_transport: str
 ) -> None:
     """The box reaches the column, and two users on the row get two addresses.
 
@@ -1598,7 +1654,7 @@ async def test_the_size_typed_in_the_panel_is_the_size_the_row_is_given(
 
     enabled = await client.post(
         f"/panel/nodes/{node_id}/transports",
-        data=enable_form(pool_transport, pool_size="7"),
+        data=enable_form(offered_pool_transport, pool_size="7"),
         headers=HTMX,
     )
 
@@ -1614,7 +1670,7 @@ async def test_the_size_typed_in_the_panel_is_the_size_the_row_is_given(
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
     for nickname in ("ann", "bob"):
         assert (await add_user(client, nickname)).status_code == 201
-    routes = routes_in(await as_the_node_sees_it(session, node_id, pool_transport))
+    routes = routes_in(await as_the_node_sees_it(session, node_id, offered_pool_transport))
     assert len(set(routes)) == 2, "the panel's own row hands two users one address"
 
 
@@ -1640,6 +1696,15 @@ async def test_the_console_offers_a_pool_box_only_where_there_is_a_pool(
 
     There is no resize action anywhere in this console — this box is the whole surface,
     which is what "no new action and no new endpoint" means from the operator's side.
+
+    OVER THE WHOLE FAMILY, unlike the enable-dialog tests below it, and that is M20's
+    own split rather than an oversight: the row here is made through the API and the
+    dialog asked about is the REPLACE-parameters one, which is about a row that already
+    exists. ``_params_form`` gates its boxes on ``key.installed`` and never on what the
+    panel offers, so a retired transport's row still opens it — which is the milestone's
+    "a row already enabled on a node still renders", on the one screen an operator would
+    reach for to change it. Narrowed to the offered transports, this test would stop
+    covering exactly the case the retirement had to not break.
     """
     node_id = await a_node(client, name="dialog-pool", address="192.0.2.76")
     enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
@@ -2030,6 +2095,19 @@ async def test_the_enable_dialog_says_how_many_users_will_each_take_an_address(
     assert "2 active users each take an address" in dialog.text
     # And the placeholder still offers the same floor, from the same count.
     assert 'placeholder="2 or more"' in dialog.text
+
+
+def test_the_first_run_sentence_names_the_screen_the_size_is_raised_on() -> None:
+    """M23, round 2: it named the control without naming where the control is.
+
+    "Under replace params" is a button on a dialog on a screen this sentence never named,
+    read by the operator least able to guess it — the one with no users yet, sizing their
+    first pool. Every sibling sentence in this module names the screen; this one did not.
+    """
+    said = console.pool_takers(0)
+
+    assert "Keys & configs" in said, said
+    assert "replace params" in said, said
 
 
 async def test_a_transport_whose_pool_is_short_is_not_offered_at_all(

@@ -1,0 +1,29 @@
+{#
+  AN ANSWER THAT IS NOT A FAILURE, stated as persistently as one — M22.3.
+
+  Same slot as the failure banner, same lifetime, same scroll-into-view (static/app.js
+  watches the slot, not what is in it). What differs is the weight and the word: the
+  quieter `.banner` frame described in app.css, and a label that says what happened
+  rather than that something went wrong.
+
+  IT EXISTS BECAUSE A SUCCESSFUL PROBE WAS INVISIBLE. Acceptance pressed probe four
+  times, waiting 2, 3, 4 and 8 seconds, and never once saw an answer — while every
+  FAILING probe's banner was there at the same waits. The success was a toast, and a
+  toast is cleared after 2200ms (UI-PATTERNS §8), which is shorter than the time it
+  takes to look. An oracle nobody can read is not an oracle.
+
+  NOT a general licence to answer in a banner. A toast is right for a mutation: the
+  operator did the thing, the thing is done, and the confirmation does not need to
+  survive the next click. A PROBE is not a mutation — it changes nothing, and its answer
+  IS the reason the button was pressed. That is the whole distinction, and the route's
+  docstring (panel/routes.py, probe_node) is where it is argued rather than here.
+
+  `role="status"` rather than `role="alert"`: this is not an interruption, and a screen
+  reader should hear it after what it was already saying rather than instead of it.
+#}
+<div hx-swap-oob="innerHTML:#banner-slot">
+  <div class="banner" role="status">
+    <span class="banner-label">checked</span>
+    <span>{{ notice }}</span>
+  </div>
+</div>

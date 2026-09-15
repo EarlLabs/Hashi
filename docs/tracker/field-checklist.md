@@ -713,3 +713,74 @@ you can go and fix.
 *Why a hash and not a diff: the file holds private key material. A hash tells you
 whether it changed without putting any of it on your screen or in your
 scrollback.*
+
+---
+
+## From M23 — a friend's IPv6, and the one premise nothing in this run measured
+
+### 21. Does the client actually TAKE the `::/0` route it is given?
+
+**Nothing was built for this and nothing should be. It is an observation, and it
+is on the list because it is the one assumption under the IPv6 decision that no
+test on this machine can settle.**
+
+A friend's file routes **every** address into the tunnel, v6 included, because
+the alternative — narrowing the route to IPv4 — sends their v6 traffic out of
+their own connection, from their own address, in the country the topology exists
+to leave. Slow beats leaking, and the file says so where a friend reads it.
+
+**The unmeasured part:** whether a client honours a v6 route on an interface that
+has **no v6 address**. The Apple and Android apps build their v6 settings from the
+v6 addresses in `Address =`, of which a node has none to give. A client that
+silently declines the route does not fail loudly — it simply keeps sending v6
+traffic the old way, and **the friend's IPv6 is already leaving by their own
+connection today**, before any of this.
+
+**How to tell, on a device you hold:**
+
+1. With the tunnel **down**, confirm the device has working IPv6 at all — any
+   address it can already reach over v6 will do. If it has none, this question
+   does not arise for that device and the answer is not evidence either way.
+2. Bring the tunnel **up** and look at what the client installed:
+   - Linux: `ip -6 route show` — is there a default route on the tunnel interface?
+   - iOS/macOS/Android: the app's own connection details, which list the routes it
+     took. A client that declined shows no v6 route at all.
+3. Reach the same v6 destination again. **Times out or fails over to v4** means
+   the route was taken and the node has nowhere to send it — which is the decided,
+   documented behaviour. **Succeeds at full speed** means the route was declined
+   and that traffic never entered the tunnel.
+
+**What to do with the answer: write it here, and nothing else.** If a real client
+declines the route, that is a finding about a client and a question for the owner
+— it may be an argument for giving nodes a v6 address, which is a milestone, not
+a patch. Do not narrow `AllowedIPs` because a device was slow.
+
+### 22. The device class the IPv6 premise was not measured on
+
+Round 2 of M23 measured this on a client with **no global IPv6 address**: the
+`::/0` route **is** taken (`ip -6 route get <AAAA>` resolves to the tunnel), so
+**nothing leaks by the client's own connection**, and IPv4-first sorting connects
+ordinary traffic in **~0.31 s**. The 30-second stall appears only when an app is
+*forced* to v6 (`curl -6`).
+
+**Unmeasured, and it is the case that matters:** a friend whose device has
+**working global IPv6 of its own**. RFC 6724 then prefers the AAAA, so every
+dual-stack connection *starts* on the family the node discards — and the wait
+becomes the default path rather than an edge case.
+
+**To tell:** with the tunnel **down**, confirm the device reaches a v6-only
+destination. Bring the tunnel up, then:
+
+```sh
+curl -sv https://<a dual-stack host> 2>&1 | head -20
+```
+
+Read **which family it connected on** and **how long the first byte took**.
+
+- Connects on IPv4 quickly → the cost is as measured, and nothing needs doing.
+- Waits → that is an argument for a node that can carry IPv6, which is **a
+  milestone and not a patch**.
+
+**Do not narrow `AllowedIPs` as a fix.** Dropping `::/0` sends the friend's IPv6
+out their own connection, showing their real address to every site that has one —
+which is the failure this product exists to prevent, traded for a faster one.

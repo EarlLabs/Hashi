@@ -93,12 +93,29 @@ def _check(transport_name: str, entry: HopEnd, leaf: HopEnd) -> None:
     # blocked there produces two nodes each holding a valid configuration file and no
     # tunnel between them — with nothing in any log to say why, because there is nothing
     # wrong with either file. Backlog item 28.
-    if not profile(transport_name).meta.hop_capable:
+    meta = profile(transport_name).meta
+    if not meta.hop_capable:
         raise HopNotRenderable(
             f"transport {transport_name!r} declares that it cannot carry an "
             "entry-to-leaf hop. That hop crosses a border where this protocol is "
             "identified and blocked, so both ends would be configured correctly and no "
             "tunnel would ever come up. Use an obfuscated transport for the hop."
+        )
+
+    # The other half of ``hop_expressible``, and the half nothing used to ask — so a
+    # transport that is merely PERMITTED on a hop reached the address reads below and
+    # left the operator a ``KeyError`` on a parameter it had never declared. A hop is two
+    # ends of one tunnel network, each with an address of its own; ``peer_address`` is
+    # where a transport says it hands its consumers one, and a transport that says
+    # nothing there has nothing to put at either end of this tunnel. Refused by the
+    # declaration, like everything else here — no protocol is recognised.
+    if meta.peer_address is None:
+        raise HopNotRenderable(
+            f"transport {transport_name!r} declares no address of its own for each "
+            "consumer, and a hop is two ends of one tunnel network that each need one: "
+            "each end authorises the other by its address, and the entry's way out is a "
+            "route from its own. There is nothing to put in any of those places here. "
+            "Use a transport that gives each consumer an address."
         )
 
     if entry.node.id == leaf.node.id:
@@ -178,7 +195,14 @@ def render_hop(
 
     * the LEAF forwards what arrives over the hop and masquerades it out of its own
       route. That is the exit — the foreign address a friend's traffic is supposed to
-      appear from, and the whole point of the topology;
+      appear from, and the whole point of the topology. ``Egress.RELAY`` and not
+      ``LOCAL`` since M23's fifth walk, and the distinction is the whole of that
+      finding's fix: a friend's own tunnel may reach the internet and nothing else this
+      node is attached to, while what arrives over a hop is another NODE's traffic —
+      including its own lookups, which M16 lets a record point at a private resolver on
+      this side. One value asked to mean both would either leave a friend reaching the
+      entry or take the hop's own lookups away. It renders exactly the bytes this end
+      has always rendered;
     * the ENTRY does the opposite. It masquerades nothing: a packet arriving over this
       hop is a reply for a connection the entry's own proxy opened, and nothing of a
       friend's may leave the entry by the entry's own route. What it renders instead is
@@ -203,7 +227,7 @@ def render_hop(
         ),
         # The leaf waits. Giving it an endpoint would have it dial a Russian address
         # that is behind carrier NAT, and the tunnel would come up only by luck.
-        render(leaf.node, leaf.params, [_peer(entry, endpoint=None)], egress=Egress.LOCAL),
+        render(leaf.node, leaf.params, [_peer(entry, endpoint=None)], egress=Egress.RELAY),
     )
 
 

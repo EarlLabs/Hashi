@@ -25,6 +25,7 @@ over SFTP instead, to a file created 0600 before the bytes land in it.
 """
 
 import asyncio
+import errno
 import logging
 import socket
 from dataclasses import dataclass
@@ -66,6 +67,29 @@ _WHY_NO_SESSION: tuple[tuple[type[BaseException], str], ...] = (
         "the node refused the key this control plane holds for it",
     ),
 )
+
+# The one cause an operator can act on that has no exception class of its own — M23,
+# round 4, measured on a node registered with an address nothing routes to. ``could not
+# establish an SSH session (OSError)`` was what the operator read — on the banner, in the
+# node row's ``why:`` cell and in the probe — beside a neighbouring case that reads *"the
+# node did not answer within 5s"*, which is what made this one stand out as the leak it is.
+#
+# Python gives ECONNREFUSED, ETIMEDOUT and their siblings a subclass each and gives these
+# two nothing, so the table above cannot reach them by type and the fallback below is the
+# only arm left. The errno IS the diagnosis: the network answered, and what it said was
+# that there is no way to this address from here.
+#
+# BOTH, AND ONE SENTENCE FOR BOTH, on this file's own rule that the list carries one entry
+# per cause an operator has a DIFFERENT next action for. ``EHOSTUNREACH`` is "that host,
+# on a network we can reach" and ``ENETUNREACH`` is "that network"; the operator checks
+# the same two things either way — the address on the record, and whether the host is up.
+#
+# NOTHING WIDER. An errno this control plane has no sentence for still falls through and
+# still names its class, because the fallback exists so that an unknown cause is readable
+# rather than silent, and a sentence invented for an errno nobody has met would be a guess
+# printed with the confidence of a diagnosis.
+_WHY_NO_ROUTE: frozenset[int] = frozenset({errno.EHOSTUNREACH, errno.ENETUNREACH})
+_NO_ROUTE = "there is no route to this node's address from this control plane"
 
 # Every recognised cause reads as a whole sentence, so the fallback does too — with the
 # class in brackets at the end, since an unrecognised failure has nothing else to offer
@@ -128,10 +152,22 @@ class NodeUnreachable(Exception):
 
 
 def _why_no_session(exc: BaseException) -> str:
-    """The reason a connect failed, in the words an operator can act on."""
+    """The reason a connect failed, in the words an operator can act on.
+
+    By TYPE first and by ``errno`` second, which is the order the two are specific in: a
+    type that is on the list above says what it means whatever errno it carries, and the
+    errno arm exists only for the causes Python gives no type to at all. Reading the errno
+    off anything, rather than off ``OSError`` alone, because ``asyncssh.Error`` wrappers
+    carry one too and the number means the same thing wherever it came from.
+
+    The number is never shown, only consulted: the text beside it is the C library's, and
+    that text can name the address it failed on.
+    """
     for kind, reason in _WHY_NO_SESSION:
         if isinstance(exc, kind):
             return reason
+    if getattr(exc, "errno", None) in _WHY_NO_ROUTE:
+        return _NO_ROUTE
     return _NO_SESSION_UNKNOWN.format(name=type(exc).__name__)
 
 

@@ -9,16 +9,20 @@ WHAT: ``operator_params(name)`` — the fields a transport requires that `contro
       ``replaceable_params(name, current)``, the same question for a transport that is
       already enabled somewhere and is being retyped rather than filled in. M9.5 adds
       ``offerable_transports()`` and ``operator_tuning(name)``: which transports a
-      person can be handed at all, and what the box for each of their required fields
-      should say — and lifts ``supplied_params(name)`` out of ``hop_parameters``, since
-      "every field an operator may supply" is now asked by the enable route too.
+      person can be handed at all, and what the box for each of their fields should say
+      — and lifts ``supplied_params(name)`` out of ``hop_parameters``, since "every field
+      an operator may supply" is now asked by the enable route too. M23 makes that set
+      the answer for all THREE forms: see ``operator_tuning`` for why a parameter the
+      transport defaults now gets a box everywhere instead of nowhere.
 WHY:  two screens need exactly this list and must not disagree: the "enable a
       transport" form (item 7) and the "replace parameters" form (item 24). When the
       two were computed separately, a transport could offer a field on one screen and
       not the other, and the operator would read that as a bug in the protocol.
-HOW:  required fields of the transport's own model, minus every name the transport
-      declared as key material — including the public counterpart of a secret, which
-      is derived and never typed.
+HOW:  fields of the transport's own model, minus every name the transport declared as
+      key material — including the public counterpart of a secret, which is derived and
+      never typed. ``operator_params`` narrows that to the REQUIRED ones and is still
+      what the JSON API publishes under that name; the three forms draw a box for the
+      wider set.
 
       ``hop_tuning`` adds one thing on top of that list, and it is the whole of M9's
       "an empty box visibly means use the default": what each box should SAY before
@@ -27,6 +31,16 @@ HOW:  required fields of the transport's own model, minus every name the transpo
       declares none, the shape it says it will accept. See ``tuning_field`` for the
       order those are tried in, and for the one case where the answer comes from
       ``TransportMeta`` rather than from the field.
+
+      M20 adds ``retired_transports()`` and subtracts its answer from both lists above.
+      A transport the registry declares retired is not proposed by any form here — the
+      owner's instruction, after one was measured twice on a live node completing a
+      handshake and carrying nothing. M20's ACCEPTANCE made it a refusal as well as a
+      subtraction: ``nodes.enable_transport`` reads the same declaration and will not
+      create a row on any route, because the thing being minted is a complete credential
+      for a tunnel that carries nothing and the friend holding it has no way to notice.
+      What retirement still does not touch is a row that EXISTS — it keeps rendering,
+      keeps serving the people granted on it, and can still be withdrawn or removed.
 
       Nothing here names a protocol. The answer comes from the transport's own
       declaration, so a new package under ``edge/transports/`` gets working forms with
@@ -183,38 +197,101 @@ class TuningField:
 def hop_transports() -> list[str]:
     """Every installed transport that may carry an entry→leaf hop, sorted.
 
-    Two conditions, and neither implies the other. A hop's configuration is consumed as
-    a FILE by a node rather than as a link by a phone, which is what
-    ``subscription_expressible`` being false has always meant here — offering the URI
-    ones would invite the operator to build a tunnel out of a friend-facing link. And
-    since item 28 a transport may declare that it cannot carry a hop AT ALL, which is a
-    charter constraint rather than a capability: the hop crosses the border by
-    definition, so a protocol-blocked transport there would leave both ends configured
-    correctly and no tunnel between them. Plain WireGuard is a config file too, so the
-    first condition alone would have offered it and the renderer would have refused it
-    after the operator had filled in a form.
+    Two conditions, and neither implies the other. The first is ``hop_expressible``,
+    which is the renderer's own answer asked where the renderer lives: `control` must not
+    re-derive "can a hop be built out of this" from the fields it is derived from, or the
+    form and ``edge.relay`` eventually disagree about one transport and the operator
+    meets that as a refusal after filling in twenty-two boxes.
+
+    THIS USED TO READ ``not subscription_expressible and hop_capable`` — M20's
+    acceptance. Both clauses were proxies. The second is a permission rather than an
+    ability (see ``TransportMeta.hop_expressible``), and the first stood in for it: a
+    hop's configuration is consumed as a FILE by a node rather than as a link by a phone,
+    so "not a URI" happened to exclude exactly the transports with no address of their
+    own. It excluded them for the wrong reason and only by luck — the same pair of
+    proxies on the JSON side advertised both VLESS transports as hop-capable and answered
+    ``POST /api/hops`` with a 500. Nothing in the offered list changes: the set is the
+    same one today, arrived at by asking the question instead of two things near it.
 
     Note the overlap this allows, and which is correct: a transport can be on this list
     AND offerable to friends.
+
+    A THIRD CONDITION SINCE M20, and it is the same shape as the other two: a transport
+    the registry declares retired is not proposed here either. No transport this image
+    ships is both hop-expressible and retired today, so this is the declaration holding a
+    door shut rather than one already closed — but a chooser that had to be REMEMBERED
+    when the next transport is retired is a chooser that will not be.
     """
     return sorted(
         meta.name
         for meta in discover().values()
-        if not meta.subscription_expressible and meta.hop_capable
+        if meta.hop_expressible and meta.retired is None
     )
+
+
+# What a request naming a transport the registry has withdrawn is answered with — M20,
+# and since M20's acceptance it is the answer on EVERY surface rather than on the two
+# panel forms alone. It lives here, beside the function that supplies half of it, because
+# three callers now format it and a sentence kept in any one of them would be a sentence
+# the other two have to be remembered to match: the enable service refuses with it, and
+# the enable and establish-hop forms answer with it before they compose a complaint about
+# boxes that were never drawn.
+#
+# The reason is the TRANSPORT's, carried by ``retired_transports()`` below. Nothing in
+# `control` knows what is wrong with a protocol, and a sentence written here would be one
+# more thing to rewrite the next time a transport has to be retired.
+#
+# It says what is still true as well as what is refused, and that half is load-bearing:
+# an operator who reaches this has a node running the transport already, or has just read
+# the Transports screen, and the thing they most need to know is that neither their node
+# nor their users have changed. Enabling is refused; serving is not.
+#
+# NO WORD OF IT IS TRANSLATED at the console's boundary (``panel/wording.py``) — it names
+# no ``friend`` and gives no directions — so an API caller and an operator read the same
+# sentence character for character, which is the point of there being one.
+NO_LONGER_OFFERED = (
+    "nothing was enabled — {name} is no longer offered here: {reason} A node already "
+    "running it keeps serving it, and nobody's configuration has changed."
+)
+
+
+def retired_transports() -> dict[str, str]:
+    """Every installed transport the registry has withdrawn from this panel, and why.
+
+    THE ONE PLACE `control` ASKS THAT QUESTION — M20, and the same rule the three
+    declarations before it follow: the panel reads a field, never a name. A transport
+    found unusable is retired by one line in its own ``meta.py``, and every form in this
+    zone empties itself of it with no edit here, in any route, or in any template.
+
+    The reason comes back with the name because the two are useless apart. A package in
+    the tree that nothing offers is a puzzle, and the only file that can answer it is the
+    transport's own — `control` passes the sentence through and never composes one, being
+    built not to recognise the protocol the sentence is about. It is read by the enable
+    SERVICE, which refuses to create a row and has to say why on every route at once; by
+    the two panel forms, which say it before composing a complaint about boxes they never
+    drew; and by the Transports screen, which has to say why a row an operator can see is
+    not on the dialog.
+    """
+    return {
+        meta.name: meta.retired.reason
+        for meta in discover().values()
+        if meta.retired is not None
+    }
 
 
 def hop_parameters(transport_name: str) -> list[str]:
     """Every field of ``transport_name`` an operator may supply, sorted.
 
     ``operator_params`` minus its ``is_required`` filter, and the difference is the
-    whole point rather than a nuance. That filter is right for its own two callers —
-    the enable and rotate forms ask what an operator MUST supply — and wrong here: a
-    field with a declared default is by definition not required, so filtering on it
-    would drop exactly the parameters whose box can honestly promise something. The
-    dialog would then show no box at all for a field the transport defaults, and adding
-    a default to a transport field would make its box vanish rather than gain a
-    placeholder.
+    whole point rather than a nuance: a field with a declared default is by definition
+    not required, so filtering on it would drop exactly the parameters whose box can
+    honestly promise something. The dialog would then show no box at all for a field the
+    transport defaults, and adding a default to a transport field would make its box
+    vanish rather than gain a placeholder.
+
+    This dialog got that right first and the other two got it wrong until M23 — which is
+    why all three now read this same set, and why the sentence that used to stand here
+    calling the ``is_required`` filter "right for its own two callers" is gone.
 
     Still minus every name the transport declares as key material, including the public
     counterpart of a secret: those are minted, never typed, and a hop must not become
@@ -383,6 +460,20 @@ def replaceable_params(
     renders it. ``placeholder`` is the value the row currently holds; a field with no
     value stored gets an empty box rather than a suggestion, because the one thing this
     placeholder means is "this is what you are replacing".
+
+    THE LIST IS ``supplied_params`` SINCE M23, and the widening is the fix rather than a
+    tidy-up. It was ``operator_params``, which filters on ``is_required`` — so a field
+    the transport DEFAULTS had no box on this form and none on the enable form either,
+    and the only way to answer one was the JSON API. The field that made that concrete is
+    the one a friend's resolver is written from: the walk on the real leaf found no
+    setting in this panel that gives a person working DNS, and the reason was this
+    filter rather than the renderer. See ``operator_tuning`` for the whole judgement.
+
+    What the subtraction still guarantees is unchanged. ``supplied_params`` removes
+    exactly what ``operator_params`` removed — everything the transport declares as key
+    material and every public counterpart of one — so **no box on this form can exist for
+    a minted value** for the same structural reason as before; only the ``is_required``
+    filter went.
     """
     fields = profile(transport_name).params_model.model_fields
     return tuple(
@@ -391,7 +482,7 @@ def replaceable_params(
             placeholder=_as_typed(current.get(name)),
             hint=(fields[name].description or "").strip(),
         )
-        for name in operator_params(transport_name)
+        for name in sorted(supplied_params(transport_name))
     )
 
 
@@ -427,9 +518,32 @@ def offerable_transports() -> list[str]:
     "may a person be handed this", and a transport can honestly be on both lists or on
     neither. Nothing here names a protocol; both answers come from what each transport
     declares about itself.
+
+    SECOND CONDITION SINCE M20: a transport the registry declares retired is not offered,
+    whatever it can serialise — *"the admin panel do not even should show this protocol,
+    for me in suggestions"*. It is subtracted HERE rather than only where the dialog is
+    built, because this list is also what the enable route reads a submission against:
+    a form that stopped rendering a transport's boxes while the route went on reading
+    them would accept a submission it could not have produced, and then have nowhere to
+    put the refusal — every sentence on that dialog is shown under the box it is about,
+    and there would be no box.
+
+    What this does NOT do by itself is refuse the operation — ``nodes.enable_transport``
+    does that, since M20's acceptance, reading the same declaration so that a caller who
+    names a retired transport outright is answered rather than obeyed. This list and that
+    refusal are two halves of one rule and neither implies the other: a form must not
+    propose an action whose only outcome is a refusal, and an operation must not mint a
+    live credential for a protocol that carries nothing.
+
+    Neither half touches a row that already exists. It keeps rendering and keeps serving,
+    which is what the owner's own leaf depends on, and the tests that exercise both
+    members of the WireGuard family lift the retirement in a fabricated fleet rather than
+    stopping at one member (``tests/control/conftest.py``, ``nothing_retired``).
     """
     return sorted(
-        meta.name for meta in discover().values() if meta.subscription_formats
+        meta.name
+        for meta in discover().values()
+        if meta.subscription_formats and meta.retired is None
     )
 
 
@@ -443,27 +557,42 @@ def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
     fields are the operator's, nor with the hop dialog about what a box may promise.
 
     ``TuningField`` and NOT ``ParamBox``, and the difference is the reason M9.4 refused
-    to reuse it the other way round: on this form an empty box is REFUSED, exactly as on
-    the hop dialog, because nothing is in place yet to keep. Every field here is required
-    by construction — ``operator_params`` filters on it — so ``required`` is true of all
-    of them, and the placeholder can only ever be the shape the field will accept.
+    to reuse it the other way round: on this form an empty box is REFUSED when the
+    transport declares no default for it, exactly as on the hop dialog, because nothing
+    is in place yet to keep. ``required`` is what says which of the two a box is, and the
+    enable route reads it — a box the transport defaults is left empty on purpose and
+    must not be refused.
 
-    What follows from ``operator_params``, stated rather than discovered: a parameter the
-    transport DEFAULTS gets no BOX here, the same as on the form this replaced — an
-    operator filling this dialog in cannot set one. It is not narrower than what the
-    route accepts, and that difference is deliberate: ``POST /panel/nodes/{id}/
-    transports`` reads every field of ``supplied_params``, so a submission that answers a
-    defaulted parameter is honoured rather than dropped.
+    THE LIST IS ``supplied_params`` SINCE M23, AND THAT IS THE M23 FIX. It was
+    ``operator_params``, which filters on ``is_required``, so a parameter the transport
+    DEFAULTS got no box here and none on the replace form either. The paragraph that
+    stood here called that "not narrower than what the route accepts … deliberate",
+    because ``POST /panel/nodes/{id}/transports`` has always read every field of
+    ``supplied_params``. The real-host walk measured what the asymmetry cost: the one
+    defaulted field any shipped transport has is the one a friend's ``DNS`` line is
+    written from, so **there was no setting in this panel that gave a person working
+    DNS** — the route would have honoured it and no form would draw the box.
 
-    Do not read this as parity with ``replaceable_params``, whose narrowing IS the
-    accepted set — and that narrowing is now PERMANENT. It was parity with the
-    pre-redesign form until M9.6 deleted it, which is the moment M9's carry-over asked a
-    later reader to notice: a parameter the transport defaults can no longer be replaced
-    from the panel at all. ``POST /api/transports/{id}/params`` still changes either.
+    The alternative was to drop the default in ``edge`` and let ``operator_params`` find
+    the field on its own. That is the wrong half to move: a required ``client_dns``
+    invalidates every params row already stored on the owner's live nodes, and a row
+    whose stored parameters no longer validate cannot be rotated, retyped or re-rendered
+    — the repair would be unreachable from the product. Widening the form costs a box
+    that may be left empty; narrowing the model costs the fleet.
+
+    What the widening does NOT relax is the one rule this form exists under.
+    ``supplied_params`` subtracts exactly what ``operator_params`` subtracted — every
+    name the transport declares as key material and every public counterpart of one — so
+    enabling, which is the moment material is minted, still cannot draw a box for any of
+    it.
+
+    A box only says something useful if the field declares a ``description``; a defaulted
+    field that declares none arrives with an empty hint and a placeholder showing its
+    default, which is the same defect ``tuning_field`` names for a required one.
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields
     return tuple(
         tuning_field(name, fields[name], transport.meta.port_range)
-        for name in operator_params(transport_name)
+        for name in sorted(supplied_params(transport_name))
     )
