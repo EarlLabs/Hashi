@@ -1,7 +1,7 @@
 """What the control plane pushes to an entry node that has a hop — M3.
 
 WHAT: that a friend-facing transport on a node with a hop is rendered to leave through
-      that hop, and that a node without one is rendered exactly as it always was.
+      that hop, and that a node without one is rendered to leave by its own route.
 WHY:  this is the charter's core claim and the failure it hides is invisible. Before M3
       the entry's config had one hardcoded outbound and the node dialled the internet
       itself: the friend connects, pages load, the panel shows two active nodes and a
@@ -30,7 +30,7 @@ import pytest
 from control.app.errors import NodeOperationFailed
 from control.app.models import NodeState
 from control.app.services import apply, nodes, relay
-from edge.egress import Egress
+from edge.egress import NOT_THE_INTERNET, Egress
 
 HOP_TRANSPORT = "amneziawg"
 FRIEND_TRANSPORT = "vless-reality"
@@ -41,6 +41,11 @@ LEAF_TUNNEL = "10.44.0.2/24"
 
 # The resolver an entry node's record names — M16. RFC 5737 documentation address.
 RESOLVER = "192.0.2.53"
+
+# The two outbounds a proxy's config carries, named once so the assertions below read as
+# sentences. ``direct`` is this node's own route; ``refused`` opens nothing at all.
+BY_THE_NODES_OWN_ROUTE = "direct"
+REFUSED = "refused"
 
 
 @pytest.fixture
@@ -151,6 +156,17 @@ async def test_a_node_with_no_hop_still_exits_directly(
     Registered with no resolver on purpose: a node without a hop needs none (M16), because
     its lookups and its exit already leave by the same route — so it carries no ``dns``
     object at all, and is not refused for the missing value.
+
+    "Directly" is asserted as three facts and not as an absence, which is what M23's tenth
+    round changed here. It used to read ``"routing" not in config``, and that was a true
+    statement of the bytes standing in for a claim about the exit — which the bytes stopped
+    making the moment such a node had anything to refuse. A proxy on a leaf now carries a
+    routing section, and a friend on it may reach the internet and NOT the entry at the far
+    end of that node's hop, its provider's LAN or its metadata service. So: the rule that
+    carries a friend is the LAST one, it names an outbound that binds no source address,
+    and the only rule read before it is the refusal. Nothing below it means nothing else
+    can decide; no ``sendThrough`` means the node's own route; and both together are what
+    "exits directly" is.
     """
     entry_id = await entry_node_serving_friends(
         client, session, reality_params, resolver=None
@@ -158,9 +174,16 @@ async def test_a_node_with_no_hop_still_exits_directly(
 
     config = await friend_config(session, entry_id)
 
-    assert [outbound["protocol"] for outbound in config["outbounds"]] == ["freedom"]
-    assert "sendThrough" not in config["outbounds"][0]
-    assert "routing" not in config
+    outbounds = {outbound["tag"]: outbound for outbound in config["outbounds"]}
+    assert outbounds[BY_THE_NODES_OWN_ROUTE]["protocol"] == "freedom"
+    assert outbounds[REFUSED]["protocol"] == "blackhole"
+    for outbound in config["outbounds"]:
+        assert "sendThrough" not in outbound, outbound
+
+    rules = config["routing"]["rules"]
+    assert [rule["outboundTag"] for rule in rules] == [REFUSED, BY_THE_NODES_OWN_ROUTE]
+    assert tuple(rules[0]["ip"]) == NOT_THE_INTERNET
+    assert "ip" not in rules[1], rules[1]
     assert "dns" not in config
 
 
