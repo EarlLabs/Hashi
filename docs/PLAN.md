@@ -2119,7 +2119,7 @@ configuration onto a device.
 
 ---
 
-## → M23 — Walk the whole platform on the real hosts, and loop until nothing blocks · asked for by the owner 2026-09-13
+## ✅ M23 — Walk the whole platform on the real hosts, and loop until nothing blocks · asked for by the owner 2026-09-13 · done 2026-09-15 (acceptance: good — 9 walks, 14 fix rounds, round 9 clean)
 
 **Approved by the owner in conversation on 2026-09-13**, in these words: *"create
 another one milestone that would verify all features of the platform on real
