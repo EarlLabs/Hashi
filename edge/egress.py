@@ -222,8 +222,20 @@ _CARRY = (
 #
 # WHAT IS DELIBERATELY NOT HERE, so the next walk reads it instead of re-finding it:
 # ``::/96``, the IPv4-COMPATIBLE prefix, which looks like the NAT64 case and is not.
-# Measured against the pinned Xray as a live proxy, with responders on a container's own
-# loopback: ``[::ffff:192.88.99.9]`` reached the host at ``192.88.99.9`` — folded — while
+#
+# THE DECISIVE TEST IS NOT WHETHER A RESPONDER BOUND TO ``::7f00:1`` ANSWERS — M23's
+# eighth round, which confirmed the decision below and stated it better than the
+# measurement did. It is whether ``::7f00:1`` reaches what ``127.0.0.1`` IS SERVING. It
+# does not. A node this product sets up carries ``::1`` on ``lo`` and nothing else, so
+# there is no interface for that address to arrive on and no daemon of ours listening
+# there: it is a separate address, not a second spelling of one. ``64:ff9b::7f00:1`` is a
+# spelling, because a translator on the path rewrites it into the four bytes at the end —
+# which is the whole difference between the two, and the reason one is derived above and
+# the other is absent.
+#
+# The measurement is what that argument was first reached through, and it stands:
+# against the pinned Xray as a live proxy, with responders on a container's own
+# loopback, ``[::ffff:192.88.99.9]`` reached the host at ``192.88.99.9`` — folded — while
 # ``[::c058:6309]`` and ``[64:ff9b::c058:6309]`` both timed out, so neither is folded by
 # the daemon and both are dialled as literal IPv6. The difference between the two is what
 # the NETWORK does with them: RFC 6052 makes the NAT64 prefix mandatory for a translator,
@@ -478,12 +490,19 @@ def _friend_rules(
     IT IS NOT CLOSED HERE BECAUSE THE RULE THAT CLOSES IT IS NOT THIS SHAPE. It would be an
     INPUT rule naming the node's own tunnel address and the port sshd answers on — a port
     this module may not name (``CLAUDE.md``) and a fact it is not given, since the node's
-    SSH port is operator data on a record `control` holds. And it must NOT be mirrored onto
-    the entry's end of a hop, where the leaf's replies arrive addressed to the tunnel: a
-    rule written once and rendered by both ends would take the hop down. That is a decision
-    about two roles and a value neither of them currently carries, which is a milestone and
-    not a line — the same judgement round nine made about the mirror above, and the same
-    shape M22 was proposed in.
+    SSH port is operator data on a record `control` holds. That is a decision about a value
+    neither end currently carries, which is a milestone and not a line — the same judgement
+    round nine made about the mirror above, and the same shape M22 was proposed in.
+
+    WHAT IS NOT A REASON, corrected by round 8 rather than deleted, because it was written
+    here as one: that such a rule could not tell a leaf from an entry. It can. This function
+    renders one friend-facing interface's own rules and a hop end renders ``_hop_rules``
+    instead — the split is already per role, decided by ``control`` at apply time, and every
+    rule written here lives and dies with the interface it is rendered for. So the mirroring
+    this docstring used to name as a second blocker — the rule reaching the entry's end of
+    a hop, where the leaf's replies arrive addressed to the tunnel — cannot happen from
+    here at all. The residual is therefore closable; what it is waiting on is the port and
+    the chain named in the paragraph above, and on nothing about roles.
     """
     return (
         *_forward(
