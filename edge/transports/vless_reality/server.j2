@@ -43,6 +43,47 @@
   purpose: it would attach the asker's network to every query. And `log.dnsLog` is written
   out as `false` wherever the resolver is in use: with it on, every name looked up would go
   to the container log, the one record the charter says must not exist.
+
+  And M23's ninth round, which is the same finding as the kernel tunnels' but on the other
+  side of the topology: not where a friend's traffic LEAVES, but WHAT THEY MAY ASK THIS
+  NODE TO DIAL. `sendThrough` binds the address a connection is opened from and says
+  nothing about the address it is opened to, so a friend on an entry node could hand this
+  proxy the leaf's own address on the hop and be answered by its SSH daemon — an RFC 1918
+  address nothing on the open internet can reach, reached from the one address the leaf's
+  peer entry authorises. No packet of theirs is forwarded by this node's kernel, so no
+  firewall rule this project renders is anywhere on that path: the policy has to live in
+  the thing that opens the connection, which is this file. The FIRST routing rule refuses
+  every destination IANA's special-purpose registry says is not on the public internet —
+  `edge.egress.NOT_THE_INTERNET`, the same list a kernel tunnel drops and never a second
+  copy of it — and first is load-bearing, because Xray takes the first rule that matches
+  and the rule below it matches everything from this inbound.
+
+  Two things it deliberately does not refuse, and each would be silently broken by a wider
+  rule:
+    - THE RESOLVER'S OWN QUERIES. They arrive tagged `lookup` and the refusal names `in`,
+      so a node record pointing at a private resolver on the far side of the hop goes on
+      working — which is the whole of M16, and M16 is why the record is allowed to name a
+      private one at all. Scoped by WHOSE connection it is rather than by an address and a
+      port, so unlike an address exception it can never open a hole for an address a
+      friend's own device could hold.
+    - THE HOP ITSELF. What carries this node's traffic abroad is another transport's
+      interface and another process; the entry dials the leaf through the kernel and never
+      through this file, so nothing here can take it away.
+
+  It refuses by dropping rather than by answering. `blackhole` with `response.type: none`
+  sends nothing to the destination and writes nothing back, which is the same choice the
+  kernel rules made in preferring DROP to REJECT: an answer is a signal, and a signal is
+  how a fleet is enumerated. The refusal outbound carries `sendThrough` like the one
+  beside it — it dials nothing, but a file in which EVERY outbound is bound to the hop
+  cannot grow one that is not, and that invariant is what M3 is asserted as.
+
+  WHAT IT DOES NOT CLOSE, written here because the file reads as though it does: the rule
+  matches an ADDRESS. Routing is left at Xray's default (`AsIs`), so a friend who asks for
+  a NAME that resolves into one of these ranges is still dialled — the destination is
+  a name, not an address, at the moment the rules are read. Closing that needs
+  `routing.domainStrategy: "IpOnDemand"`, which resolves every destination before it
+  routes; `IpIfNonMatch` would not, because the rule below already matches. That is a
+  decision with its own blast radius and it is not made here.
 #}
 {
   "log": {
@@ -98,6 +139,16 @@
       {
         "type": "field",
         "inboundTag": ["in"],
+        "ip": [
+{% for destination in refused %}
+          {{ destination | tojson }}{{ "," if not loop.last }}
+{% endfor %}
+        ],
+        "outboundTag": "refused"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["in"],
         "outboundTag": "hop"
       },
       {
@@ -114,6 +165,16 @@
       "sendThrough": {{ exit_origin | tojson }},
       "settings": {
         "domainStrategy": "UseIPv4"
+      }
+    },
+    {
+      "tag": "refused",
+      "protocol": "blackhole",
+      "sendThrough": {{ exit_origin | tojson }},
+      "settings": {
+        "response": {
+          "type": "none"
+        }
       }
     }
   ]

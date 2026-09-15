@@ -9,7 +9,7 @@ result the second transport was built to demonstrate.
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import Egress, exit_origin, lookup_resolver
+from edge.egress import NOT_THE_INTERNET, Egress, exit_origin, lookup_resolver
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -47,6 +47,12 @@ def render_server(
     reasoning unchanged: a friend's client sends a NAME, the outbound resolves it before it
     dials, and under a hop that lookup goes through the hop to the resolver on the node's
     record (``node.resolver``) — or the node is refused, never given the host's resolver.
+
+    M23's ninth round is the first transport's reasoning unchanged too: a proxy dials
+    whatever it is asked for, so under a hop this config refuses every destination off the
+    public internet (``NOT_THE_INTERNET``) for the friend-facing inbound alone. The list is
+    ``edge.egress``'s one copy, shared with the kernel tunnels that drop the same ranges;
+    the rule expressing it is this package's, in its own template.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
@@ -58,6 +64,13 @@ def render_server(
         # Where the names in those connections are looked up — M16. ``None`` with no hop;
         # refused, never defaulted, on a node with one. See ``edge/egress.py``.
         resolver=lookup_resolver(egress, node.resolver),
+        # What a friend may NOT ask this node to dial — M23's ninth round, and the mirror
+        # of the finding a kernel tunnel closed in its own firewall rules. ``edge.egress``
+        # owns the list and both kinds of data plane read that one copy; what differs is
+        # only how each expresses it, which is why the rule itself is in this package's
+        # template and the list is not. See the template's header for why the node's own
+        # lookups are not refused with it.
+        refused=NOT_THE_INTERNET,
         ws_path=ws_path(str(params["ws_path_secret"])),
         clients=[
             # Opaque subject only — see the note in the first transport's renderer.

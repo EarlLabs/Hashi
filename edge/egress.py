@@ -191,9 +191,16 @@ _CARRY = (
     "-i %i -o %i -j DROP",
 )
 
-# What a FRIEND's tunnel may not reach: every destination IANA's special-purpose registry
+# What a FRIEND's traffic may not reach: every destination IANA's special-purpose registry
 # says is not on the public internet. Their traffic is here to reach the internet, and
 # the walk that found this measured the cost of the difference.
+#
+# TWO CONSUMERS AND ONE LIST, which is the reason it is a constant here and not a rule.
+# A kernel tunnel drops these in the FORWARD chain (``_friend_rules``); a proxy, which
+# forwards no packet at all, refuses them in its own outbound routing — each transport
+# package shapes the rule its data plane speaks, and both read this. A second copy is how
+# the two answers drift, and only one of them would be under the test below that holds the
+# ranges against the standard library.
 #
 # M23, round 5, on the owner's real leaf: a friend opened TCP to ``10.90.0.1`` — the
 # Russian entry node's address on the hop — and was answered by its SSH daemon, 104 ms
@@ -279,11 +286,14 @@ def _relay_rules(network: str) -> tuple[tuple[str, str, str], ...]:
     resolver on this side of the hop. The narrow rule a friend's tunnel gets would take
     that away, and the owner's live hop renders from this line.
 
-    What it therefore does NOT close is the mirror of the finding: a friend served by the
-    ENTRY, whose proxy will dial whatever it is asked for, can be sent to an address on
-    this node's own private neighbourhood. That is a policy for the thing that opens the
-    connection — the proxy's outbound routing — and it is recorded rather than half-built
-    here, because a rule at this end cannot tell that packet from the hop's own traffic.
+    What it therefore does not close, and could not, is the mirror of the finding: a friend
+    served by the ENTRY, whose proxy will dial whatever it is asked for, can be sent to an
+    address on this node's own private neighbourhood. A rule at this end cannot tell that
+    packet from the hop's own traffic — it arrives over the same tunnel, from the same
+    peer — so the refusal belongs to the thing that OPENS the connection. Round nine
+    recorded it rather than half-building it here; it is built now, in each proxy
+    package's own template, off ``NOT_THE_INTERNET`` above, and scoped to the friend's
+    inbound so the lookups this function protects stay protected there too.
     """
     return (*_forward(_CARRY), _masquerade(network))
 

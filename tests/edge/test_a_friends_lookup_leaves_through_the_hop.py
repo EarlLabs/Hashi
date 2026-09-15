@@ -96,6 +96,14 @@ def test_the_lookup_is_asked_of_the_resolver_on_the_nodes_record(
     assert hop_config(name, node, request)["dns"]["servers"] == [node.resolver]
 
 
+# Xray's outbound that opens no connection at all. Since M23's ninth round a config with
+# a hop carries one, to refuse the destinations a friend's traffic may not reach — see
+# ``tests/edge/test_a_proxy_dials_the_internet_and_not_its_own_neighbourhood.py``. It is
+# named here because the assertion below is about outbounds that RESOLVE a name, and this
+# one resolves nothing because it dials nothing.
+REACHES_NOTHING = "blackhole"
+
+
 @pytest.mark.parametrize("name", PROXIES)
 def test_the_outbound_resolves_through_it_rather_than_through_the_host(
     name: str, node, request
@@ -104,10 +112,18 @@ def test_the_outbound_resolves_through_it_rather_than_through_the_host(
 
     Without it the outbound is ``AsIs``: it hands the NAME to the host's resolver and the
     ``dns`` object is never consulted — which is the config M3 shipped, with a resolver
-    pasted on top. Checked on every outbound, because the one without it is the one a
-    friend's names leak through.
+    pasted on top. Checked on every outbound that opens one, because the one without it is
+    the one a friend's names leak through.
+
+    The blackhole is excluded and its exclusion is asserted rather than skipped past: it
+    dials nothing, so a resolution strategy on it would be a key that reads as a decision
+    and decides nothing. Written as a partition so a THIRD kind of outbound arriving is
+    held to the strategy rather than quietly waved through.
     """
     for outbound in hop_config(name, node, request)["outbounds"]:
+        if outbound["protocol"] == REACHES_NOTHING:
+            assert "domainStrategy" not in outbound.get("settings", {}), outbound
+            continue
         assert outbound.get("settings", {}).get("domainStrategy") == "UseIPv4", outbound
 
 

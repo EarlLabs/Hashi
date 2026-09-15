@@ -15,7 +15,7 @@ HOW:  the server config comes from ``server.j2``; the client entry is a URI this
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import Egress, exit_origin, lookup_resolver
+from edge.egress import NOT_THE_INTERNET, Egress, exit_origin, lookup_resolver
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -61,6 +61,15 @@ def render_server(
     config also carries the resolver on the node's record (``node.resolver``) and routes
     the lookup out through the same outbound as the traffic; a node with a hop and no
     resolver is refused rather than rendered with the host's (``edge/egress.py``).
+
+    And M23's ninth round is the part NEITHER of them reaches: where a friend's traffic may
+    GO. Both of those settings are about this node's own side of a connection, and a proxy
+    dials whatever it is asked for — so a friend on an entry node could name the leaf's
+    address on the hop and be answered by its SSH daemon, having reached it from the one
+    address that leaf's peer entry trusts. Nothing this node forwards is on that path, so
+    the refusal is a routing rule here and not a firewall rule anywhere: under a hop the
+    config refuses every destination off the public internet (``NOT_THE_INTERNET``) for
+    the friend-facing inbound alone, which is what leaves M16's own lookups untouched.
     """
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
@@ -73,6 +82,13 @@ def render_server(
         # ``sendThrough`` cannot reach: it binds the connection, not the lookup before it.
         # ``None`` with no hop; refused, never defaulted, on a node with one.
         resolver=lookup_resolver(egress, node.resolver),
+        # What a friend may NOT ask this node to dial — M23's ninth round, and the mirror
+        # of the finding a kernel tunnel closed in its own firewall rules. ``edge.egress``
+        # owns the list and both kinds of data plane read that one copy; what differs is
+        # only how each expresses it, which is why the rule itself is in this package's
+        # template and the list is not. See the template's header for why the node's own
+        # lookups are not refused with it.
+        refused=NOT_THE_INTERNET,
         clients=[
             # `email` in an Xray client entry is a label, and Xray uses it in
             # statistics and log lines. It gets the friend's OPAQUE subject, never
