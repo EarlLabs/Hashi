@@ -20,6 +20,7 @@ No host and no network: the one socket here is this process talking to itself, a
 addresses below are loopback and a name reserved by RFC 2606 for exactly this.
 """
 
+import errno
 import socket
 from types import SimpleNamespace
 
@@ -110,6 +111,39 @@ async def test_every_cause_an_operator_can_act_on_is_named_as_itself(
         assert name not in said, f"the operator is reading a class name: {said}"
 
 
+@pytest.mark.parametrize("code", [errno.EHOSTUNREACH, errno.ENETUNREACH])
+async def test_a_node_nothing_can_route_to_is_named_as_itself(monkeypatch, code) -> None:
+    """The cause Python gives no class to — M23, round 4, measured on a real record.
+
+    A node registered with an address nothing routes to raises a bare ``OSError``: the
+    errno carries the whole diagnosis and the type carries none of it, so the fallback
+    below was the arm that answered and the operator read ``(OSError)`` on the banner, in
+    the node row and in the probe. Both errnos, because the operator's next move is the
+    same for each and this list carries one sentence per next move.
+
+    Injected at ``asyncssh.connect`` for the reason the parametrised test above gives: a
+    kernel that refuses a connection is reproducible on loopback, and one that has no
+    route to it is not.
+    """
+    async def refusing(*_args, **_kwargs):
+        raise OSError(code, "No route to host")
+
+    monkeypatch.setattr(asyncssh, "connect", refusing)
+    target = NodeTarget(host=LOOPBACK, port=22, username="node", connect_timeout=5)
+
+    with pytest.raises(NodeUnreachable) as caught:
+        async with NodeConnection(target):
+            pass
+
+    said = str(caught.value)
+    assert "no route to this node's address" in said, said
+    for name in CLASS_NAMES:
+        assert name not in said, f"the operator is reading a class name: {said}"
+    # Not the errno or the C library's text for it either: that text is written by the
+    # layer that knows the address, and it is a place one can travel.
+    assert str(code) not in said and "No route to host" not in said, said
+
+
 async def test_an_unrecognised_failure_still_reads_as_a_sentence(monkeypatch) -> None:
     """The fallback, and the one place a class name is allowed to survive.
 
@@ -117,9 +151,14 @@ async def test_an_unrecognised_failure_still_reads_as_a_sentence(monkeypatch) ->
     so the type is kept — in brackets, at the end of a sentence, rather than as the
     sentence. The line between "we know what this means" and "we do not" has to be
     visible on the screen, because the second kind is the one that goes to the log.
+
+    An errno rather than an exotic class, and deliberately one that is NOT on the
+    no-route list: narrowing that list is what round 4 did, and this proves the narrowing
+    did not swallow the arm it was carved out of. An errno nobody has met still reaches
+    the operator as a readable sentence rather than as a guess.
     """
     async def refusing(*_args, **_kwargs):
-        raise OSError(113, "No route to host")
+        raise OSError(errno.EIO, "Input/output error")
 
     monkeypatch.setattr(asyncssh, "connect", refusing)
     target = NodeTarget(host=LOOPBACK, port=22, username="node", connect_timeout=5)
@@ -131,7 +170,7 @@ async def test_an_unrecognised_failure_still_reads_as_a_sentence(monkeypatch) ->
     said = str(caught.value)
     assert said == "could not establish an SSH session (OSError)", said
     # Not the errno text either, which is where an address can travel.
-    assert "113" not in said and "No route to host" not in said, said
+    assert str(errno.EIO) not in said and "Input/output error" not in said, said
 
 
 class _Answering:
