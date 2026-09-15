@@ -754,3 +754,33 @@ connection today**, before any of this.
 declines the route, that is a finding about a client and a question for the owner
 — it may be an argument for giving nodes a v6 address, which is a milestone, not
 a patch. Do not narrow `AllowedIPs` because a device was slow.
+
+### 22. The device class the IPv6 premise was not measured on
+
+Round 2 of M23 measured this on a client with **no global IPv6 address**: the
+`::/0` route **is** taken (`ip -6 route get <AAAA>` resolves to the tunnel), so
+**nothing leaks by the client's own connection**, and IPv4-first sorting connects
+ordinary traffic in **~0.31 s**. The 30-second stall appears only when an app is
+*forced* to v6 (`curl -6`).
+
+**Unmeasured, and it is the case that matters:** a friend whose device has
+**working global IPv6 of its own**. RFC 6724 then prefers the AAAA, so every
+dual-stack connection *starts* on the family the node discards — and the wait
+becomes the default path rather than an edge case.
+
+**To tell:** with the tunnel **down**, confirm the device reaches a v6-only
+destination. Bring the tunnel up, then:
+
+```sh
+curl -sv https://<a dual-stack host> 2>&1 | head -20
+```
+
+Read **which family it connected on** and **how long the first byte took**.
+
+- Connects on IPv4 quickly → the cost is as measured, and nothing needs doing.
+- Waits → that is an argument for a node that can carry IPv6, which is **a
+  milestone and not a patch**.
+
+**Do not narrow `AllowedIPs` as a fix.** Dropping `::/0` sends the friend's IPv6
+out their own connection, showing their real address to every site that has one —
+which is the failure this product exists to prevent, traded for a faster one.
