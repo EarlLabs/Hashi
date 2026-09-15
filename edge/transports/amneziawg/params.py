@@ -27,6 +27,19 @@ MAGIC_HEADER_HINT = (
     "differ from each other."
 )
 
+# The four, IN DECLARATION ORDER, which is the order Pydantic validates them in and
+# therefore the order the distinctness rule reads them in. A tuple rather than something
+# derived from the model because the validator below is applied at class-body time, when
+# ``model_fields`` does not exist yet — so the one thing that could drift is this list
+# against the fields themselves, and ``tests/edge/test_a_repeated_obfuscation_header_
+# names_the_one_it_repeats.py`` compares the two rather than trusting them to agree.
+MAGIC_HEADERS = (
+    "init_packet_magic_header",
+    "response_packet_magic_header",
+    "underload_packet_magic_header",
+    "transport_packet_magic_header",
+)
+
 
 class Params(BaseModel):
     """AmneziaWG parameters for one node's end of a hop."""
@@ -218,19 +231,44 @@ class Params(BaseModel):
             raise ValueError("junk_packet_max_size is below junk_packet_min_size")
         return value
 
-    @field_validator("transport_packet_magic_header")
+    @field_validator(*MAGIC_HEADERS[1:])
     @classmethod
     def _magic_headers_are_distinct(cls, value: int, info) -> int:
-        headers = [
-            info.data.get("init_packet_magic_header"),
-            info.data.get("response_packet_magic_header"),
-            info.data.get("underload_packet_magic_header"),
-            value,
-        ]
-        present = [header for header in headers if header is not None]
-        if len(set(present)) != len(present):
+        """No header may repeat one declared before it, and the refusal names which.
+
+        ON EVERY HEADER BUT THE FIRST, which is the whole of M23 round 3's small
+        finding. It used to sit on ``transport_packet_magic_header`` alone and compare
+        all four there — correct about WHETHER the set collides and useless about
+        WHICH pair does, because Pydantic attributes an error to the field whose
+        validator raised it. An operator who typed the same number into the init and
+        response boxes was sent to the transport box, which was the one value they had
+        got right; the walk provoked all three pairs and read the same field name back
+        every time.
+
+        Pydantic validates fields in declaration order, so ``info.data`` holds the
+        headers ABOVE this one and none below. Running here therefore lands the refusal
+        on the later of the two boxes — the one the operator reached most recently —
+        and the sentence names the earlier one, so both ends of the collision are on
+        screen. ``MAGIC_HEADERS[1:]`` is every header but the first, which is the one
+        with nothing above it to repeat.
+
+        THE VALUE IS NOT QUOTED. A field's own refusal is rendered by surfaces that did
+        not choose to render it (``control.errors.ParamsRefused``), and these four
+        numbers are this node's fingerprint rather than a detail — naming the two boxes
+        says everything the operator needs and echoes nothing back.
+        """
+        repeated = next(
+            (
+                earlier
+                for earlier in MAGIC_HEADERS[: MAGIC_HEADERS.index(info.field_name)]
+                if info.data.get(earlier) == value
+            ),
+            None,
+        )
+        if repeated is not None:
             raise ValueError(
-                "the four magic headers must be distinct — two equal values make two "
-                "message types indistinguishable and the tunnel never comes up"
+                f"this repeats {repeated} — the four magic headers must be distinct, "
+                "because two equal values make two message types indistinguishable and "
+                "the tunnel never comes up"
             )
         return value
