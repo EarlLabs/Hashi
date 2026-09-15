@@ -201,6 +201,38 @@ class NodeCannotServe(Conflict):
     code = "node_cannot_serve"
 
 
+class NodeNotInService(Conflict):
+    """A FAN-OUT reached a node that is not serving, and a fan-out never puts one there.
+
+    ``NodeCannotServe``'s sibling and not its subclass, because the two refuse different
+    things. That one is the state machine: ``retired`` may not serve again whoever asks.
+    This one is about WHO ASKED — an apply is what puts a node into service, and the only
+    caller entitled to that is an operator who pressed apply on that node. A revocation
+    and a rotation reach ``apply_many`` as a consequence of something done to a PERSON,
+    and round 4's walk measured what that cost: withdrawing one user's access took a
+    ``draft`` node back into service, minted key material on it for a different user who
+    had never been near it, and ran ``docker compose up`` on a host the operator had
+    parked to rebuild it. Every one of those was legal — ``draft -> active`` is in the
+    machine, and it is supposed to be — and not one of them was asked for.
+
+    What it costs, named rather than hidden: the node is not re-pushed, so a host that is
+    out of service goes on running whatever file it was last given, which may still
+    authorise somebody just withdrawn. That is the same fact a retired node has carried
+    since round 7, and it is the fan-out's caller's job to say so — see
+    ``revocation.RevocationOutcome.summary``, which reports such a node as NOT updated.
+    Nobody is routed onto a node that is not serving, so nothing new arrives there; what
+    is already there is the operator's to end by applying the node themselves.
+
+    ``Conflict`` for ``NodeCannotServe``'s reason, and the same facts hold: nothing is
+    dialled, nothing is pushed, nobody is granted anything, and the node's state is left
+    exactly as the operator set it. Its own code so a script can tell a node that is
+    merely parked from one that is written off — the first comes back with an apply and
+    the second never does.
+    """
+
+    code = "node_not_in_service"
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 

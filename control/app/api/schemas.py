@@ -365,8 +365,9 @@ class NodeStateChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state: str
-    # Only meaningful when moving to `degraded`; the service clears it otherwise, so a
-    # node cannot sit in `active` carrying a stale complaint.
+    # Kept on every state but `active`, which the service clears it on — M23, round 4.
+    # A node cannot sit in `active` carrying a stale complaint, and a retired one no
+    # longer loses the note the operator wrote about the host that is gone.
     detail: str | None = Field(default=None, max_length=500)
 
 

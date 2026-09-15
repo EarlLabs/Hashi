@@ -453,3 +453,88 @@ async def test_a_revocation_over_a_stale_daemon_says_the_push_landed(
     summary = outcome.summary()
     assert "was reached and its configuration WAS replaced on it" in summary, summary
     assert "could not be reached" not in summary, summary
+
+
+async def test_a_push_that_landed_says_what_is_still_on_the_host(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The banner names the key material the failure left behind — M23, round 4.
+
+    Round 6 made ``_record_failure`` delete what the apply minted on its way into
+    service, because an apply that fails must grant nobody, and it named the cost out
+    loud: on the one failure where the bytes actually landed, the host is left
+    authorising peers this database no longer holds. The walk measured exactly that —
+    two ``[Peer]`` blocks on the node against zero credential rows here — and checked
+    the bounds, which hold: a successful retry overwrites the file, each further failure
+    replaces one orphan generation with the next, and an apply that mints nothing leaves
+    nothing.
+
+    What was missing is not a mechanism, it is a sentence. The operator was told the
+    daemon did not come up and nothing at all about what is on that host meanwhile — and
+    the exposure is the window in which the daemon later starts on its own and serves
+    peers the panel can neither list nor withdraw.
+
+    The node is parked and the user added while it is parked, because that is the only
+    way an apply has anybody left to grant: a user added to a serving node already holds
+    their credential, and the fan-out into service skips them.
+    """
+    from sqlalchemy import func, select
+
+    from control.app.models import Credential
+    from control.app.services import apply, nodes
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+    # One successful apply first, so the container exists and is frozen on that
+    # definition. Everything after this reaches the host's disk and not its process.
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    parked = await client.post(
+        f"/api/nodes/{node_id}/state",
+        json={"state": "draft", "detail": "parked, rebuilding the host"},
+    )
+    assert parked.status_code == 200, parked.text
+    await client.post("/api/friends", json={"nickname": "kolya"})
+
+    response = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert response.status_code == 502, response.text
+    message = response.json()["error"]["message"]
+    assert "still running an older configuration" in message, message
+    assert apply.ORPHANED_ON_THE_HOST in message, message
+    # The premise of that sentence, in the database: the grant is gone, and the file the
+    # host took carries it.
+    session.expire_all()
+    held = await session.execute(select(func.count()).select_from(Credential))
+    assert held.scalar_one() == 0, "the failed apply left the grant it minted behind"
+    # And it is on the BANNER and not on the row. ``state_detail`` is 500 characters that
+    # already carry however many transports did not come up, and a warning cut off
+    # mid-clause by that ceiling is worse than one read once where the operator is
+    # looking.
+    node = await nodes.get_node(session, node_id)
+    assert apply.ORPHANED_ON_THE_HOST not in node.state_detail, node.state_detail
+
+
+async def test_a_re_apply_that_minted_nothing_says_nothing_about_orphans(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """The half that keeps the sentence above worth reading.
+
+    A node that was already serving grants nobody on a re-apply, so a failure deletes
+    nothing and leaves no orphan. Saying it anyway would be a warning about a state that
+    is not there, which is how a real warning stops being read.
+    """
+    from control.app.services import apply
+
+    host_for(monkeypatch, _FakeHost(recreates=False))
+    node_id = await a_node_with_a_transport(client, session, reality_params)
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    # Added while the node is serving, so they already hold their credential and the
+    # apply below has nobody to grant.
+    await client.post("/api/friends", json={"nickname": "kolya"})
+
+    response = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert response.status_code == 502, response.text
+    message = response.json()["error"]["message"]
+    assert "still running an older configuration" in message, message
+    assert apply.ORPHANED_ON_THE_HOST not in message, message

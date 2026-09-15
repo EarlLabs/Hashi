@@ -39,6 +39,7 @@ from control.app.errors import (
     Conflict,
     DomainError,
     NodeCannotServe,
+    NodeNotInService,
     NodeOperationFailed,
     NothingToApply,
 )
@@ -302,6 +303,84 @@ CANNOT_SERVE_AGAIN = (
     "answer for somebody else into every friend's subscription and hand every active "
     "friend key material on it. Nothing was pushed, nobody was granted anything and "
     f"nothing about this node was changed. {REGISTER_IT_AGAIN}"
+)
+
+# What a FAN-OUT is refused with on a node that is not serving — M23, round 4, and it is
+# the same defect class as the refusal above, one state over and one door over.
+#
+# Round 7 closed ``retired`` on this path by asking the state machine. ``draft`` is not
+# the machine's to refuse and must not be: ``draft -> active`` is the first apply every
+# node has, and it is exactly what the operator presses. What the walk measured is that
+# NOBODY PRESSED IT. A node was parked in ``draft`` to rebuild its host; a new user was
+# added while it was parked and granted nothing on it, correctly; and then one unrelated
+# user was revoked. The revocation's fan-out applied the parked node — which took it into
+# service, minted material on it for the user who had never been near it, and ran
+# ``docker compose up`` on the host being rebuilt. The whole of what the operator saw was
+# ``olga revoked — link is dead``.
+#
+# So the line is drawn at the DOOR rather than at the state. A revocation and a rotation
+# reach ``apply_many`` as a consequence of an operation whose subject is somebody's
+# access or one transport's material — never this node's place in the fleet, which is
+# the thing being decided. An apply aimed at a node is the operator's own button and
+# still takes a draft or a degraded node into service, which is the retry every failed
+# apply depends on. ``apply_node`` takes the flag; the fan-out is the only caller that
+# sets it.
+#
+# THE COST IS REAL AND IS SAID OUT LOUD, in this sentence and in the fan-out's own report:
+# a node that is not serving is NOT re-pushed, so its host goes on running whatever file
+# it was last given — which for a revocation may still authorise the person just
+# withdrawn. Pushing anyway was weighed and refused: it restarts a daemon on a host the
+# operator has taken out of service, and it is a change to a machine nobody aimed at. The
+# containing fact is that nobody is routed onto a node that is not serving, so what is
+# there stops growing; ending it is an apply the operator makes themselves.
+#
+# The direction is its own clause for the reason the six above it are: this sentence
+# travels in a ``RevocationOutcome`` and a ``RotationOutcome``, both of which are answered
+# to an API caller, and naming a screen is the one thing those must not do.
+APPLY_IT_YOURSELF = (
+    "Apply that node itself once its host is ready — that is what puts it back into "
+    "service, and what replaces the file on it."
+)
+NOT_IN_SERVICE_TO_PUSH = (
+    "this node is {state}, so it serves nobody and nothing was pushed to it: applying a "
+    "node is what puts it into service, and only an apply of this node itself may decide "
+    "that. Nothing was dialled, nobody was granted anything and nothing about this node "
+    "was changed — and whatever its host was last given is still running there, "
+    "untouched by this and now out of step with what this control plane holds. "
+    f"{APPLY_IT_YOURSELF}"
+)
+
+# What the operator is told about the HOST when a push lands and the daemon does not come
+# back on it — M23, round 4, and it is a sentence rather than a redesign on purpose.
+#
+# ``_record_failure`` deletes the credentials an apply minted on its way into service,
+# because a failed apply must grant nobody. On the one failure where the bytes actually
+# reached the host, that leaves the file on it authorising peers this database no longer
+# holds: the walk counted two ``[Peer]`` blocks on the node against zero credential rows
+# here. Round 6 named that cost when it wrote the deletion, and round 4's walk checked the
+# bounds and found them to hold — a successful retry overwrites the file, each further
+# failure replaces one orphan generation with the next so at most one is ever on disk, and
+# an apply that minted nothing leaves nothing.
+#
+# So what is missing is not a mechanism, it is a sentence. The operator is already being
+# told the daemon did not come up; they are not being told what is on that host meanwhile,
+# and the exposure is the window in which that daemon later starts on its own — by a
+# reboot, by somebody on the host — and serves peers the panel cannot list or revoke.
+#
+# ONLY WHEN THIS APPLY ACTUALLY MINTED SOMETHING. A re-apply of a node that was already
+# serving grants nobody, deletes nothing and leaves no orphan, and saying this over it
+# would be a warning about a state that is not there — which is how a real warning stops
+# being read.
+#
+# It names no user and no host. What it says is what this control plane knows: a grant
+# happened, it was undone, and the file that landed is older than the database again.
+ORPHANED_ON_THE_HOST = (
+    "This apply was also what put the node into service, so it granted every active "
+    "friend an address on it before rendering — and that grant was undone when this "
+    "failed, because an apply that fails must grant nobody. The file that DID land still "
+    "carries them. Nobody is routed onto a degraded node and the next successful apply "
+    "rewrites that file whole, but until one does, a daemon that comes up on that host "
+    "serves peers this control plane can no longer list or withdraw."
 )
 
 
@@ -837,7 +916,9 @@ async def _take_into_service(
     return granted
 
 
-async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
+async def apply_node(
+    session: AsyncSession, *, node_id: str, only_if_serving: bool = False
+) -> dict[str, str]:
     """Render, validate, push and verify one node. Returns what was applied.
 
     Marks the node degraded on any failure after the first byte is written, and
@@ -846,6 +927,12 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
     A node the state machine will not let serve is refused before any of that — see the
     guard below, which is the only thing standing between this function's own write of
     ``node.state`` and ``NodeState.allowed_from``.
+
+    ``only_if_serving`` is the SECOND guard and it is about the caller rather than the
+    node: set by ``apply_many`` and by nothing else, it refuses a node that is not already
+    serving instead of taking it into service. The operator's own apply button leaves it
+    false, because taking a node into service is exactly what that button is for. See
+    ``NOT_IN_SERVICE_TO_PUSH`` for the walk that made the distinction necessary.
     """
     node = await nodes.get_node(session, node_id)
 
@@ -894,6 +981,19 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
         node.state
     ):
         raise NodeCannotServe(CANNOT_SERVE_AGAIN.format(state=node.state))
+
+    # AND THE DOOR'S OWN ANSWER, asked second and on the same fresh read. The machine's
+    # refusal above is about the node and comes first so that a ``retired`` node keeps the
+    # sentence written for it — a host that is gone and a host that is being rebuilt are
+    # two different next actions, and both reach a fan-out through the same credential
+    # rows that outlive a node going out of service.
+    #
+    # Everything this refuses is legal and stays legal from the operator's own button. A
+    # node that is ALREADY serving is unaffected whatever this flag says, which is the
+    # whole of its blast radius: ``becoming_serving`` below is false for it, nothing is
+    # minted, and the write of ``active`` at the end is the no-op it has always been.
+    if only_if_serving and node.state not in NodeState.serving():
+        raise NodeNotInService(NOT_IN_SERVICE_TO_PUSH.format(state=node.state))
 
     node_settings = settings()
 
@@ -1069,9 +1169,19 @@ async def apply_node(session: AsyncSession, *, node_id: str) -> dict[str, str]:
         # no kind for "the push landed and the daemon did not come back on it": it fell
         # through to UNREACHED and told the operator the node could not be reached, about
         # a host whose file had just been replaced.
-        raise ConfigNotServing(
+        #
+        # ``ORPHANED_ON_THE_HOST`` joins it when this apply minted material — round 4. It
+        # is deliberately on the RAISED sentence and not in ``detail``: ``detail`` becomes
+        # ``state_detail``, which is 500 characters and already carries however many
+        # transport names did not come up, and a warning cut off mid-clause by that
+        # ceiling is worse than one the operator read once on the banner they are
+        # looking at.
+        not_serving = (
             f"configuration was applied but the node is not serving it — marked "
             f"degraded: {detail}"
+        )
+        raise ConfigNotServing(
+            f"{not_serving} {ORPHANED_ON_THE_HOST}" if granted else not_serving
         )
 
     now = datetime.datetime.now(datetime.UTC)
@@ -1181,6 +1291,13 @@ class NotUpdated(enum.StrEnum):
     # running the file that authorises the withdrawn credential.
     NOT_SERVING = "not-serving"
 
+    # The node is not serving anyone and the operation that reached it was not aimed at
+    # this node — M23, round 4. Nothing was pushed, deliberately: a fan-out does not put a
+    # node into service. Its own kind because the operator's next move is unlike all three
+    # above — nothing is wrong with the record and nothing is wrong with the push, and
+    # what is needed is a decision they have not made yet about a host they parked.
+    OUT_OF_SERVICE = "out-of-service"
+
     # Everything else: the host could not be reached, the push or its verification failed,
     # or something unexpected happened. The one kind a retry can fix.
     UNREACHED = "unreached"
@@ -1217,6 +1334,13 @@ def why_not_updated(exc: BaseException) -> NotUpdated:
     # them to press apply and read why, which is where that sentence is.
     if isinstance(exc, ConfigRefused | NothingToApply | NodeCannotServe):
         return NotUpdated.REFUSED
+    # Its own kind rather than REFUSED, and the difference is the whole of the operator's
+    # next move — M23, round 4. REFUSED says "retrying will not change that", which is
+    # true of a retired node and false of a parked one: an apply on a draft or degraded
+    # node is precisely what completes this, and it is a button they can press today.
+    # Checked after the three above only because these types are siblings, not relatives.
+    if isinstance(exc, NodeNotInService):
+        return NotUpdated.OUT_OF_SERVICE
     # Checked after ``ConfigRefused`` only because the two are siblings rather than
     # related; neither is an instance of the other. ``apply_node`` raises this one past
     # every connection arm, so reaching it means the push landed — M23.
@@ -1235,11 +1359,22 @@ async def apply_many(
     leave a revoked friend live on nodes that were perfectly reachable, which is the
     exact failure criterion 6 forbids. Failures are collected and reported, each as its
     message and its kind (``NodeNotUpdated``).
+
+    A node that is NOT SERVING is not attempted at all and is reported as not updated —
+    M23, round 4. This function is reached from an operation aimed at a person or at one
+    transport's material, and putting a node back into service is neither; see
+    ``NOT_IN_SERVICE_TO_PUSH`` for what that was measured to cost and for what refusing
+    it costs in return.
     """
     outcomes: dict[str, NodeNotUpdated | None] = {}
     for node_id in dict.fromkeys(nt.node_id for nt in node_transports):
         try:
-            await apply_node(session, node_id=node_id)
+            # ``only_if_serving`` — M23, round 4, and this call is the only place it is
+            # ever set. A fan-out is a consequence of an operation aimed at somebody's
+            # access or at one transport's material, and it must not decide that a node
+            # the operator took out of service is back in it. A node that IS serving is
+            # applied here exactly as it always was.
+            await apply_node(session, node_id=node_id, only_if_serving=True)
             outcomes[node_id] = None
         except DomainError as exc:
             # Recorded, not raised: the caller needs the whole picture to tell the

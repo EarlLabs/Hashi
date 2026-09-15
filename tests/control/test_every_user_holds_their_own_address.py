@@ -1135,15 +1135,13 @@ async def test_a_resize_is_audited_as_a_replacement_and_nothing_else(
 
     session.expire_all()
     added = [entry for entry in await audit_rows(session) if entry not in before]
-    # ONE entry about the transport. The other entry this leaves is the node going
-    # ``degraded``: the push that follows every replacement cannot land on a test node
-    # with no host behind it, and that is a fact about the fixture rather than about the
-    # resize — asserted here rather than filtered away, so a resize that started writing
-    # something else about the node turns this red.
-    assert added == [
-        ("params-replaced", "audited", pool_transport),
-        ("node-state-changed", "audited", "degraded"),
-    ], added
+    # ONE entry, and exactly one since M23's round 4. This used to leave a second — the
+    # node going ``degraded``, because the push that follows every replacement was
+    # attempted against a fixture with no host behind it. The fan-out refuses a node that
+    # is not in service before it dials anything now, so a draft node is left exactly as
+    # the operator had it and writes nothing about itself. Asserted whole rather than
+    # filtered, so a resize that starts writing something else about the node turns red.
+    assert added == [("params-replaced", "audited", pool_transport)], added
 
 
 async def test_a_resize_below_what_the_row_already_hands_out_is_refused(

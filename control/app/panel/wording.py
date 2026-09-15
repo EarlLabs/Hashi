@@ -116,6 +116,15 @@ _THE_CONSOLES_DIRECTIONS: dict[str, str] = {
         f'If that host is genuinely back, register it again with "add node" on '
         f"{apply.WHERE_TO_RETRY} and apply that one."
     ),
+    # The seventh — M23, round 4. The refusal a FAN-OUT gives on a node that is not
+    # serving, which is the one direction here that names the button the operator did not
+    # press: they pressed revoke or rotate, and what completes it is apply, on a screen
+    # they are not looking at. An API caller has neither.
+    apply.APPLY_IT_YOURSELF: (
+        f'Apply that node itself from {apply.WHERE_TO_RETRY} with "apply" once its host '
+        "is ready — that is what puts it back into service, and what replaces the file "
+        "on it."
+    ),
 }
 
 

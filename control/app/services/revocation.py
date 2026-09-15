@@ -45,6 +45,13 @@ _WHY_NOT_UPDATED: dict[NotUpdated, str] = {
         "file that carries this credential. Retrying will not change that on its own: "
         "apply it from {where} and read what did not come up"
     ),
+    NotUpdated.OUT_OF_SERVICE: (
+        "{node} is not in service, so nothing was pushed to it — and nothing about this "
+        "press put it back into service, which is a decision only an apply of that node "
+        "makes. It is serving nobody by this control plane's records, but whatever its "
+        "host was last given is still running there and may still authorise this "
+        "credential: apply it from {where} once its host is ready, and that is what ends it"
+    ),
     NotUpdated.UNREACHED: (
         "{node} could not be reached — apply it again from {where} once it can be"
     ),

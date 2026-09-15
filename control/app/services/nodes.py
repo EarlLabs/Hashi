@@ -1052,11 +1052,11 @@ async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> 
 async def set_node_state(
     session: AsyncSession, *, node_id: str, state: NodeState, detail: str | None = None
 ) -> Node:
-    """Move a node between states, recording why when it is not good news.
+    """Move a node between states, recording why whenever the node is not serving.
 
-    The only way state changes. Centralised so that "degraded" always carries a
-    reason for the operator — a node sitting in degraded with no explanation is a
-    node nobody fixes.
+    The only way state changes. Centralised so that a node out of service always carries
+    a reason for the operator — a degraded node with no explanation is a node nobody
+    fixes, and a retired one with no explanation is a host nobody remembers.
 
     Both questions below — may this transition happen, and is it a change at all — are
     asked of the row rather than of the copy this session is holding. ``_node_to_write``
@@ -1087,9 +1087,26 @@ async def set_node_state(
     changed = state != node.state
 
     node.state = state
-    # ``==`` for the same reason as above: a caller handing this the raw string a route
-    # parsed would otherwise silently drop the operator's explanation on the floor.
-    node.state_detail = detail if state == NodeState.DEGRADED else None
+    # KEPT FOR EVERY STATE BUT ``active`` — M23, round 4. This read
+    # ``if state == NodeState.DEGRADED``, and an operator who retired a node with *"host
+    # was returned to the provider"* got a 200 and a NULL column, with nothing anywhere
+    # saying the sentence had been dropped.
+    #
+    # Retirement is where it costs most: the state is terminal, the record outlives the
+    # host it describes, and the whole reason the row is kept rather than deleted is so
+    # the operator can see later what the fleet used to be. A ``draft`` is the same
+    # question one state earlier — *"parked, rebuilding the host"* is what tells them, a
+    # week later, whether that host is coming back.
+    #
+    # ``active`` is the exception and it is not symmetry: this column answers WHY A NODE
+    # IS NOT SERVING, and a node that serves has no such reason. Clearing it there is also
+    # what stops a stale push failure being read under a healthy row — the same clearing
+    # ``apply_node`` does on its success path, for the same reason.
+    #
+    # ``==``/``!=`` rather than ``is``, for the reason the comparison above gives: a
+    # caller handing this the raw string a route parsed would otherwise silently drop the
+    # operator's explanation on the floor.
+    node.state_detail = detail if state != NodeState.ACTIVE else None
 
     if changed:
         # THE LINE THIS TABLE'S SHAPE WAS WRITTEN AGAINST. The state is recorded and

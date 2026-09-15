@@ -144,10 +144,11 @@
           </tr>
           {% if node.state_detail %}
           {#
-            Why a node is degraded is the one thing that must not be hidden: an
-            unexplained degraded node is a node nobody fixes. Its own row rather than a
-            second line in the state cell — the text comes from a remote host, can be
-            long, and a status cell may never be allowed to break (app.css).
+            Why a node is not serving is the one thing that must not be hidden: an
+            unexplained degraded node is a node nobody fixes, and since M23's round 4 a
+            parked or retired one carries the operator's own note here too. Its own row
+            rather than a second line in the state cell — the text can come from a remote
+            host, can be long, and a status cell may never be allowed to break (app.css).
           #}
           <tr class="row-detail">
             <td class="text-muted wraps" colspan="7">why: {{ node.state_detail }}</td>
