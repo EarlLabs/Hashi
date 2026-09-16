@@ -26,9 +26,14 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import DomainError, HopEndRefused, NotFound
+from control.app.errors import (
+    DomainError,
+    HopEndRefused,
+    NoExitThroughTheHop,
+    NotFound,
+)
 from control.app.models import AuditAction, Node, NodeTransport, TransportPurpose
-from control.app.services import audit, keymaterial, nodes, placement
+from control.app.services import audit, keymaterial, nodes, placement, transports
 from edge import relay as edge_relay
 from edge.registry import KeyScope, discover, profile
 
@@ -100,6 +105,36 @@ async def exit_through_hop(session: AsyncSession, node: Node) -> str | None:
     return edge_relay.exit_via(
         edge_relay.HopEnd(node=nodes.node_view(node), params=nodes.render_params(ends[0]))
     )
+
+
+async def dials_a_hop(session: AsyncSession, node_id: str) -> bool:
+    """Whether this node's own way out is a hop — M25.
+
+    ``exit_through_hop``'s question without its answer, and deliberately not that
+    function: this is asked at a DOOR, before anything is minted, where the address is
+    not wanted and the work of getting it is a liability. That one renders the end's
+    parameters, which decrypts this node's stored material, and refuses out loud when a
+    node holds two entry ends — both right where it is called from (an apply, which needs
+    the address and must not proceed on a node with two ways out) and both wrong here,
+    where the caller only needs to know whether there is one.
+
+    Read from the row's EXISTENCE and not from ``enabled``, which is the same decision
+    ``exit_through_hop`` documents: a hop end switched off is a hop that is down, not a
+    node that has got its direct exit back. A door that consulted the flag would let the
+    combination in through a switched-off hop and find it again the moment the operator
+    switched the hop back on — at the apply, which is where this refusal exists to stop
+    the operator ending up.
+
+    The LEAF end of a hop is not a way out and is not counted: that node's friends leave
+    by its own route, which is route B and is untouched by any of this.
+    """
+    result = await session.execute(
+        select(NodeTransport.id)
+        .where(NodeTransport.node_id == node_id)
+        .where(NodeTransport.purpose == TransportPurpose.RELAY_ENTRY)
+        .limit(1)
+    )
+    return result.first() is not None
 
 
 def hop_view(node_transport: NodeTransport) -> edge_relay.HopEnd:
@@ -358,6 +393,34 @@ async def establish_hop(
 
     entry_node = await nodes.get_node(session, entry_node_id)
     leaf_node = await nodes.get_node(session, leaf_node_id)
+
+    # THE SECOND DOOR — M25, and the same rule as ``nodes._enable``'s approached from the
+    # other side. Giving a node a hop is giving its friends ``Egress.HOP``, so every
+    # transport it already offers them has to be one that can honour it; a kernel tunnel
+    # cannot, and the node's next apply would refuse to render the row it has been serving
+    # from. Refused here rather than there, before either end is minted or written, so the
+    # operator's fleet is exactly as it was and no material exists to be thrown away.
+    #
+    # Only the ENTRY node is asked. The leaf's friends exit by the leaf's own route
+    # exactly as they always have — that is route B, and nine field walks are built on it.
+    #
+    # Every friend-facing row on it, switched on or not, for ``dials_a_hop``'s reason: a
+    # row that is off can be switched back on from this panel, and that surface has no
+    # node to refuse about. Sorted by the transport's name so a node offering two
+    # unrenderable rows names the same one every time rather than whichever the database
+    # returned first.
+    #
+    # A row naming a transport this image no longer ships is skipped, not refused: it
+    # renders nothing whatever this node's topology is, so it is not this refusal's
+    # subject and a sentence about the hop would send the operator after the wrong thing.
+    for offer in await nodes.friend_facing_on(session, entry_node.id):
+        offered = installed.get(offer.transport_name)
+        if offered is not None and not offered.serves_friends_through_a_hop:
+            raise NoExitThroughTheHop(
+                transports.NO_HOP_OVER_WHAT_IT_OFFERS.format(
+                    node=entry_node.name, name=offer.transport_name
+                )
+            )
 
     # What used to stand here was a refusal when either node already had a row for this
     # transport, whatever that row was FOR — so a node offering AmneziaWG to friends

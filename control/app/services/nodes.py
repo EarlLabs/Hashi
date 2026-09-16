@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.errors import (
     Conflict,
     DomainError,
+    NoExitThroughTheHop,
     NotDeliverable,
     NotFound,
     ParamsRefused,
@@ -172,6 +173,35 @@ async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
     return list(result.scalars().unique())
 
 
+async def friend_facing_on(session: AsyncSession, node_id: str) -> list[NodeTransport]:
+    """Every transport ONE node offers its friends, switched on or not — M25.
+
+    ``serving_transports``' neighbour and deliberately not a narrowing of it: that one
+    answers "what may a friend be routed onto" for the whole fleet and filters on the
+    node's state and on ``enabled``, because a friend in a draft node's configuration is
+    the failure it exists to prevent. This one answers "what has this node been set up to
+    offer people", which is a question about the NODE rather than about any friend — so
+    neither filter belongs, and both would make it lie to its one caller.
+
+    ``enabled`` in particular: a row that is switched off is still a row this panel can
+    switch back on, and the surface that does it (``set_transport_enabled``) is about one
+    row and knows nothing about the node's topology. Counting it here is what keeps the
+    combination M25 refuses unreachable, rather than reachable by turning something off
+    and on again.
+
+    Ordered by the transport's name so a caller that reports one of them reports the same
+    one every time; the row's own id breaks a tie between two instances of one transport,
+    which M15 allows.
+    """
+    result = await session.execute(
+        select(NodeTransport)
+        .where(NodeTransport.node_id == node_id)
+        .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
+        .order_by(NodeTransport.transport_name, NodeTransport.id)
+    )
+    return list(result.scalars().unique())
+
+
 def node_view(node: Node) -> NodeView:
     """Project a database row into the pure value object ``edge`` renders from.
 
@@ -210,6 +240,13 @@ def node_view(node: Node) -> NodeView:
 # them because the call graph says nothing reaches them, and note they deliberately still
 # say NONE rather than mirroring what ``render_hop`` does. A guard's job is to be safe,
 # and this one cannot supply the address the entry's real policy needs.
+#
+# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(FRIENDS, True)`` says a
+# friend's traffic leaves through the hop, and only a transport that re-originates can
+# express that; ``_enable`` and ``relay.establish_hop`` refuse to create the pairing with
+# one that cannot, so the row is still reached by every node that legitimately holds it
+# and no longer by one whose renderer would refuse. The table is unchanged: what may not
+# exist is the combination, not the policy.
 _EGRESS: dict[tuple[str, bool], Egress] = {
     # (purpose, this node has a hop it dials)
     (TransportPurpose.FRIENDS, False): Egress.LOCAL,
@@ -631,6 +668,40 @@ async def _enable(
         )
 
     node = await get_node(session, node_id)
+
+    # THE COMBINATION THAT CANNOT BE RENDERED — M25, found by the walk that proved route
+    # A carries. This node's friends leave through its hop and nowhere else
+    # (``_EGRESS`` above), and only a transport that terminates their connection and
+    # re-originates it can express that; a kernel tunnel hands what it decrypts to this
+    # node's routing table, where a friend's packets match no source route of the hop's
+    # and leave by the node's own way out. ``edge`` refuses to render it, correctly and
+    # fail-closed — and until this refusal existed the panel said yes three times before
+    # that: the row was written, every active friend was granted a credential on it, and
+    # the delivery endpoint handed one of them a complete, importable configuration file
+    # for a node that can never be applied.
+    #
+    # Here rather than on a route, exactly as the retirement above: both routes and any
+    # future caller get the same answer, and the answer arrives before anything is minted.
+    # It is after ``get_node`` because it is a question about THIS NODE and there is
+    # nothing to ask until the node is known to exist.
+    #
+    # The transport's declaration is read first and the database only if it says no —
+    # most enables are of a transport that can do this, and that answer costs no query.
+    # Asked of ``edge``'s own derived property, so this module still knows no protocol and
+    # no family: a package declares what its data plane does (``registry.Datapath``).
+    #
+    # It says nothing about a node with NO hop, which is every leaf and every single box:
+    # there the same transport renders a local exit and is exactly right, which is what
+    # nine of M23's walks were carried on.
+    if not meta.serves_friends_through_a_hop:
+        # Deferred for the cycle ``enable_and_grant`` names below: ``relay`` imports this
+        # module for ``node_view`` and ``render_params``.
+        from control.app.services import relay  # noqa: PLC0415
+
+        if await relay.dials_a_hop(session, node.id):
+            raise NoExitThroughTheHop(
+                transports.NO_EXIT_THROUGH_THE_HOP.format(name=transport_name)
+            )
 
     transport = profile(transport_name)
     minted = keymaterial.mint(meta.key_material, KeyScope.NODE)

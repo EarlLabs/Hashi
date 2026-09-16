@@ -242,6 +242,42 @@ class NodeNotInService(Conflict):
     code = "node_not_in_service"
 
 
+class NoExitThroughTheHop(Conflict):
+    """A node's friends would have been put on a transport that cannot reach its hop.
+
+    M25. A node that dials a hop gives its friends ``Egress.HOP`` — out through the hop
+    and nowhere else — and only a transport that terminates their connection and
+    re-originates it can honour that (``TransportMeta.serves_friends_through_a_hop``). A
+    kernel tunnel hands what it decrypts to the node's own routing table, and the only way
+    out this project renders for a hop is a source route from the node's own address,
+    which a friend's packets do not carry. ``edge`` refuses to render it; this is the same
+    refusal moved to the two doors that create the combination, so that nothing is minted
+    and nothing is delivered in between.
+
+    ``Conflict`` rather than ``TransportRetired``'s 422, and the difference is what is
+    wrong. A retired transport is refused for a property of the PROTOCOL, wherever it is
+    named; this one is refused for how what was asked for meets what the node already has
+    — the same transport is correct on a node with no hop, and this node's other
+    transports are correct beside the hop. That is "the request contradicts something that
+    already exists", which is what 409 says and 422 does not.
+
+    Its own code so a script can tell it from every other 409 this API answers with: those
+    are a port already bound, a pool too small or the node state machine, and the move
+    that fixes each is different. The operator's move here is to choose the other kind of
+    transport, or to take one of the two rows away — which is what the message says, in
+    ``edge``'s own words about why (``transports.NO_EXIT_THROUGH_THE_HOP`` and
+    ``transports.NO_HOP_OVER_WHAT_IT_OFFERS``).
+
+    It refuses the CREATION and nothing else — ``TransportRetired``'s own asymmetry, and
+    the same reason. A node already carrying both rows keeps every row it has, renders
+    every config it could render before, and serves everyone it was serving; what it could
+    not do before and still cannot is render the friend-facing one, which is where the
+    operator meets it and where the sentence has always been.
+    """
+
+    code = "no_exit_through_the_hop"
+
+
 class NodeOperationFailed(DomainError):
     """A node operation failed or half-succeeded; the node is now degraded."""
 

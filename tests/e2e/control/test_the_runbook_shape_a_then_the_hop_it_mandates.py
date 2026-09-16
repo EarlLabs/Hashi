@@ -2,7 +2,8 @@
 
 WHAT: one box registered as its own node, the transport the runbook names for friends
       enabled on it, and then the entry→leaf hop the runbook requires — over the SAME
-      transport, which is what the runbook says to use for it.
+      transport, which is what the runbook says to use for it. The box becomes the end of
+      that hop which WAITS, because since M25 it is the only end it can be.
 WHY:  this is the sequence that was refused in the field with
       ``409 'amneziawg' is already configured on node 'entry-ru'`` (M15). The old rule
       was one ``NodeTransport`` row per ``(node, transport_name)`` whatever the row was
@@ -11,10 +12,19 @@ WHY:  this is the sequence that was refused in the field with
       nothing anywhere saying so. Every existing scenario reached for a THIRD node to
       sidestep it, which is how a product-level contradiction stayed invisible to a
       green suite.
+
+      M25 added the other half of the same story, from the field again: the box may carry
+      both rows, and the node that DIALS the hop may not — its users' packets would be
+      handed to its own routing table, which has no way to send them through the hop.
+      That was accepted at both doors and refused at the apply, after a user had been
+      handed a configuration file for it; it is refused at the doors now, and this
+      scenario walks both sides so the runbook's advice and the product cannot drift
+      apart again.
 HOW:  the runbook's own order, over HTTP, as an operator following it would: register,
-      offer, register the leaf, hop. Then the two refusals that DO survive — one port
-      per node — and the one guarantee that must survive two rows of one transport on
-      one node: the hop end still reaches no friend.
+      offer, register the other box, hop. Then the two refusals that DO survive — one
+      port per node, and no users on a kernel tunnel behind a hop — and the one guarantee
+      that must survive two rows of one transport on one node: the hop end still reaches
+      no friend.
 
 Boundary: real control + postgres. No node exists, so nothing here proves a tunnel comes
 up; what is proven is that the control plane accepts the configuration the runbook asks
@@ -127,15 +137,20 @@ async def test_the_box_the_runbook_describes_can_also_carry_the_hop_it_requires(
     The assertion that was red before M15 is the status code — this answered 409 with
     *"'amneziawg' is already configured on node ..."*, and there was no way back from it
     short of editing the database by hand.
+
+    The box is the end that WAITS, which is what an operator growing out of Shape A
+    actually has: the box they already run abroad keeps its users and becomes the far end
+    of the hop a new Russian entry dials. Making it the DIALLING end is the other half of
+    this file — refused, and asserted two tests down.
     """
-    entry_id, friend_row = await shape_a_box(operator, unique)
-    leaf_id = await a_node(operator, f"leaf-{unique}", "192.0.2.31", f"Leafland-{unique}")
+    box_id, friend_row = await shape_a_box(operator, unique)
+    entry_id = await a_node(operator, f"ru-{unique}", "192.0.2.41", f"Entryland-{unique}")
 
     established = await operator.post(
         "/api/hops",
         json={
             "entry_node_id": entry_id,
-            "leaf_node_id": leaf_id,
+            "leaf_node_id": box_id,
             "transport_name": RUNBOOK_TRANSPORT,
             "entry_params": side("10.61.0.1/24", "10.61.0.2/24", HOP_PORT),
             "leaf_params": side("10.61.0.2/24", "10.61.0.1/24", HOP_PORT),
@@ -144,14 +159,51 @@ async def test_the_box_the_runbook_describes_can_also_carry_the_hop_it_requires(
 
     assert established.status_code == 201, established.text
     hop = established.json()
-    assert hop["entry"]["node_id"] == entry_id
-    assert hop["entry"]["transport_name"] == RUNBOOK_TRANSPORT
+    assert hop["leaf"]["node_id"] == box_id
+    assert hop["leaf"]["transport_name"] == RUNBOOK_TRANSPORT
 
-    # And it is a real pair rather than half a hop: the leaf end exists and points back.
-    assert hop["leaf"] is not None, hop
-    assert hop["leaf"]["node_id"] == leaf_id
+    # And it is a real pair rather than half a hop: the entry end exists and points back.
+    assert hop["entry"] is not None, hop
+    assert hop["entry"]["node_id"] == entry_id
     # The friend-facing row this box already had is untouched and is still its own row.
-    assert hop["entry"]["id"] != friend_row
+    assert hop["leaf"]["id"] != friend_row
+
+
+async def test_the_same_box_is_refused_the_hop_it_would_dial(
+    operator, unique: str
+) -> None:
+    """The other order, and the one the runbook used to recommend — M25.
+
+    A box already offering its users a kernel tunnel cannot become the end that DIALS: on
+    such a node a user's traffic must leave through the hop, and a data plane whose
+    packets the node's own kernel routes has no way to put somebody else's there. It was
+    taken without a word until M25, and the apply refused it afterwards — with a user
+    already holding a configuration file for it.
+
+    Both facts are asserted, because the second is the one the walk measured: the answer
+    is a refusal, and the fleet is exactly as it was.
+    """
+    box_id, _ = await shape_a_box(operator, unique)
+    far_id = await a_node(operator, f"far-{unique}", "192.0.2.42", f"Farland-{unique}")
+
+    refused = await operator.post(
+        "/api/hops",
+        json={
+            "entry_node_id": box_id,
+            "leaf_node_id": far_id,
+            "transport_name": RUNBOOK_TRANSPORT,
+            "entry_params": side("10.67.0.1/24", "10.67.0.2/24", HOP_PORT),
+            "leaf_params": side("10.67.0.2/24", "10.67.0.1/24", HOP_PORT),
+        },
+    )
+
+    assert refused.status_code == 409, refused.text
+    body = refused.json()["error"]
+    assert body["code"] == "no_exit_through_the_hop"
+    assert RUNBOOK_TRANSPORT in body["message"], body["message"]
+    # Scoped to this run's own node, because the stand is shared by every scenario in it.
+    hops = (await operator.get("/api/hops")).json()
+    assert not [hop for hop in hops if hop["entry"]["node_id"] == box_id]
 
 
 async def test_the_two_rows_on_one_node_take_two_names(operator, unique: str) -> None:
@@ -162,14 +214,14 @@ async def test_the_two_rows_on_one_node_take_two_names(operator, unique: str) ->
     node already in the field has ``/opt/hashi/conf/<transport>.conf`` on disk, and a
     scheme that renamed it would take the interface down under a running daemon.
     """
-    entry_id, _ = await shape_a_box(operator, unique)
-    leaf_id = await a_node(operator, f"leaf2-{unique}", "192.0.2.32", f"Leafland-{unique}")
+    box_id, _ = await shape_a_box(operator, unique)
+    entry_id = await a_node(operator, f"ru2-{unique}", "192.0.2.43", f"Entryland-{unique}")
 
     established = await operator.post(
         "/api/hops",
         json={
             "entry_node_id": entry_id,
-            "leaf_node_id": leaf_id,
+            "leaf_node_id": box_id,
             "transport_name": RUNBOOK_TRANSPORT,
             "entry_params": side("10.62.0.1/24", "10.62.0.2/24", HOP_PORT),
             "leaf_params": side("10.62.0.2/24", "10.62.0.1/24", HOP_PORT),
@@ -179,12 +231,12 @@ async def test_the_two_rows_on_one_node_take_two_names(operator, unique: str) ->
 
     entry_end = established.json()["entry"]
     leaf_end = established.json()["leaf"]
-    assert entry_end["config_name"] != RUNBOOK_TRANSPORT, (
+    assert leaf_end["config_name"] != RUNBOOK_TRANSPORT, (
         "the hop end took the name the friend-facing row already holds on this node"
     )
-    # The leaf is a fresh node and runs one of this transport, so it keeps the plain
+    # The entry is a fresh node and runs one of this transport, so it keeps the plain
     # name — the difference is per node, never fleet-wide.
-    assert leaf_end["config_name"] == RUNBOOK_TRANSPORT
+    assert entry_end["config_name"] == RUNBOOK_TRANSPORT
 
 
 async def test_two_transports_on_one_node_may_not_share_a_port(
@@ -226,14 +278,14 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
     entry↔leaf tunnel — which is why this is asserted here and not left to the scenario
     that proves it for two different nodes.
     """
-    entry_id, _ = await shape_a_box(operator, unique)
-    leaf_id = await a_node(operator, f"leaf3-{unique}", "192.0.2.33", f"Leafland-{unique}")
+    box_id, _ = await shape_a_box(operator, unique)
+    entry_id = await a_node(operator, f"ru3-{unique}", "192.0.2.44", f"Entryland-{unique}")
 
     established = await operator.post(
         "/api/hops",
         json={
             "entry_node_id": entry_id,
-            "leaf_node_id": leaf_id,
+            "leaf_node_id": box_id,
             "transport_name": RUNBOOK_TRANSPORT,
             "entry_params": side("10.64.0.1/24", "10.64.0.2/24", HOP_PORT),
             "leaf_params": side("10.64.0.2/24", "10.64.0.1/24", HOP_PORT),
@@ -241,7 +293,7 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
     )
     assert established.status_code == 201, established.text
 
-    for node_id in (entry_id, leaf_id):
+    for node_id in (entry_id, box_id):
         assert (
             await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
         ).status_code == 200

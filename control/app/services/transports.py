@@ -42,6 +42,12 @@ HOW:  fields of the transport's own model, minus every name the transport declar
       What retirement still does not touch is a row that EXISTS — it keeps rendering,
       keeps serving the people granted on it, and can still be withdrawn or removed.
 
+      M25 adds the two sentences a door refuses with when a transport and a node's
+      topology cannot stand together — friends on a kernel tunnel, on a node whose way
+      out is a hop. They live here for ``NO_LONGER_OFFERED``'s reason and carry
+      ``edge``'s own explanation of why, so that what a door refuses and what a render
+      refuses are one rule rather than two that have to be kept in step.
+
       Nothing here names a protocol. The answer comes from the transport's own
       declaration, so a new package under ``edge/transports/`` gets working forms with
       no edit to this file. ONE field name appears, and it is the hop contract's
@@ -55,7 +61,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 from pydantic.fields import FieldInfo
 
-from edge.registry import discover, profile
+from edge.registry import NOT_THROUGH_A_HOP, discover, profile
 
 # Container annotations a comma-separated form field should become. ``str`` is a
 # Sequence too, which is exactly the confusion this tuple exists to avoid.
@@ -252,6 +258,45 @@ def hop_transports() -> list[str]:
 NO_LONGER_OFFERED = (
     "nothing was enabled — {name} is no longer offered here: {reason} A node already "
     "running it keeps serving it, and nobody's configuration has changed."
+)
+
+
+# The two doors that would otherwise build a node whose friends have no way out — M25,
+# found by the walk that proved route A carries. A node dialling a hop gives its friends
+# ``Egress.HOP``, and only a transport that re-originates can honour that for somebody
+# else's packets (``TransportMeta.serves_friends_through_a_hop``); the panel accepted the
+# other kind at both doors, granted every friend a credential on it, handed one of them a
+# complete configuration file, and left the refusal to the apply.
+#
+# TWO SENTENCES FOR ONE RULE, because they are the same mistake made from two ends and
+# the operator is standing somewhere different in each. The transport is what is being
+# added in the first; the hop is, in the second. They share the reason — ``edge``'s own,
+# so the rule a door refuses by and the rule a render refuses by are one rule said once
+# (``registry.NOT_THROUGH_A_HOP``) — and each writes its own remedy, because "take the
+# hop away" is advice only where there is one.
+#
+# Each opens by saying that nothing happened, for ``NO_LONGER_OFFERED``'s reason: the
+# operator's first question on meeting a refusal is what state their fleet is in now.
+# Neither names a port, an address or a country, and neither is translated at the
+# console's boundary beyond ``friends`` becoming ``users`` — an API caller and an operator
+# read the same fact.
+#
+# THE TRANSPORT AND THE NODE ARE QUOTED, which is ``services.placement``'s idiom on the
+# same two doors and is load-bearing on one of them: a node's name is the operator's own
+# text, and the console translates this sentence on its way to the page
+# (``panel/wording.py``). Quoted values are protected there, so a node somebody called
+# ``friends-ru`` is printed as they named it instead of being rewritten to ``users-ru``.
+NO_EXIT_THROUGH_THE_HOP = (
+    "nothing was enabled — this node's traffic leaves through a hop, and {name!r} cannot "
+    "carry a friend's out through one: " + NOT_THROUGH_A_HOP + " Offer this node's "
+    "friends a transport that terminates their connection and re-originates it, or "
+    "dissolve the hop."
+)
+NO_HOP_OVER_WHAT_IT_OFFERS = (
+    "no hop was established — node {node!r} already offers {name!r} to its friends, and "
+    "it cannot carry their traffic out through a hop: " + NOT_THROUGH_A_HOP + " Give that "
+    "node's friends a transport that terminates their connection and re-originates it "
+    "first — or remove that transport from it — and then build the hop."
 )
 
 
