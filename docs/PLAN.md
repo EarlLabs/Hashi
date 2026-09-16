@@ -2176,19 +2176,27 @@ nothing has been pushed to it and there is nothing to probe.
 
 ### What this milestone must settle, before it writes code
 
-**Which end moves.** There are two honest answers and they are very different
-pieces of work:
+**Which end moves — SETTLED BY THE OWNER, 2026-09-16.** In their words:
 
-1. **The script goes further** — it registers the node with the control plane and
-   applies it, so a bare host really does reach serving traffic in one command.
-   That needs the script to hold a control-plane credential and reach the panel's
-   API, which is a new direction of travel (**today the control plane dials nodes;
-   a node never dials the control plane** — `CLAUDE.md`'s topology rule) and must
-   not become a second path that can create nodes.
-2. **The charter says what is true** — two scripts prepare hosts, the panel brings
-   them into service, and "one script" means one per host rather than one per
-   fleet. Cheaper, and possibly more honest, but it is the owner's requirement
-   being narrowed and only the owner can narrow it.
+> *"if the scheme is that I run only one script on the leaf and then add its
+> output to the panel it's also okay."*
+
+**So the charter narrows to what is true, and the scripts do not change.** One
+script **per host**, which ends by printing what the operator types into the
+panel; registering, offering a transport and applying stay panel actions.
+
+**The rejected alternative, and why** — so it is not re-proposed: making the
+script register and apply the node itself would need it to hold a control-plane
+credential and dial the panel's API. **Today the control plane dials nodes and a
+node never dials the control plane** (`CLAUDE.md`'s topology rule). Such a script
+would put a control-plane credential on every host the fleet has ever prepared,
+and be a **second path that can bring a node into existence**. Rejected on that,
+not on effort.
+
+**What the narrowing costs, stated rather than hidden:** a node is one command
+**and three panel actions**; an entry→leaf hop is twice that plus establishing
+the hop. Criterion 2's *"replace a node in ten minutes"* still holds — it is just
+not one command.
 
 **M26.1 — walk it and find out what is actually required.** Take a bare host and
 follow only what the product tells you. Count the commands, count the screens,
@@ -2196,9 +2204,15 @@ and record where the script's promise and the charter's claim diverge. **Do not
 assume the gap is where it looks — the runbook's Shape A/B/C flows may already
 close some of it.**
 
-**M26.2 — make one end tell the truth.** Whichever the owner picks, the claim and
-the behaviour must agree, and `docs/deploy/runbook.md` must describe what an
-operator actually does.
+**M26.2 — make the charter tell the truth.** `docs/product/charter.md`'s *"from a
+bare host to serving traffic"* and its *"the node answers a health probe"* promise
+must say what the script actually delivers — and `docs/deploy/runbook.md` must
+describe what an operator actually does, end to end, including the hop.
+
+**The script's own closing lines are the seam** (`ready: …` and `register it in
+the panel with ssh_user …`). They are quoted in the runbook and pinned by
+`tests/infra/test_deploy_runbook.py`, so the page and the script cannot drift —
+**keep that property.**
 
 **M26.3 — the charter's other three "one script" promises, tested not assumed.**
 *Idempotent* (running it twice changes nothing the second time — M19's acceptance
