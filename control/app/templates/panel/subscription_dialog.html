@@ -27,6 +27,19 @@
       credential, not a link to one. It keeps working when nodes or protocols change,
       which is why they never re-add anything.
     </div>
+    {% if material_doubt %}
+    {#
+      AND WHAT IT WILL NOT CARRY YET — M26's first acceptance walk, said at the moment
+      the link is handed over because that is the moment the promise is made. The walk
+      fetched exactly this URL and got a file that was correct in every field for a node
+      that had never been told the user existed.
+
+      The same sentence as the Users screen's standing note, from the same constant in
+      services/console.py: this dialog is opened from three places and none of them may
+      make a different claim about the same fleet.
+    #}
+    <div class="dialog-body text-muted">{{ material_doubt }}</div>
+    {% endif %}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
       <button class="btn btn-primary" type="button"

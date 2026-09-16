@@ -270,6 +270,15 @@ async def _friends_context(session: AsyncSession) -> dict:
     return {
         "friends": await console.friend_rows(session),
         "serving": len(await nodes.serving_transports(session)),
+        # What adding a user does NOT do — M26's first acceptance walk. The walk added a
+        # friend, opened their link and got a correct configuration file for a node that
+        # held no peer for them; only a second apply made it true, and no screen said so.
+        # The note beside it is about a withdrawal that cannot be confirmed, which is the
+        # other direction, and is why an operator who had just added somebody read nothing
+        # that was about them.
+        "material_doubt": console.material_doubt(
+            await console.nodes_missing_what_they_would_be_given(session)
+        ),
         # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
         # services/console.py from the Nodes screen's own two readings, and ``None`` on a
         # fleet where every host is confirmed, so the table carries no standing warning.
@@ -2715,6 +2724,14 @@ async def create_friend(
             "url": await console.subscription_url(
                 session, request.app.state.settings.public_base_url, friend
             ),
+            # THE SENTENCE THAT HAD TO BE HERE — M26's first acceptance walk. This is the
+            # exchange that hands over a link for a user nobody has pushed yet, so it is
+            # the exchange that has to say what that link will not carry until the nodes
+            # are applied. Asked AFTER the friend was created, so the nodes it names are
+            # the ones now holding nothing for them.
+            "material_doubt": console.material_doubt(
+                await console.nodes_missing_what_they_would_be_given(session)
+            ),
         },
     )
 
@@ -2738,6 +2755,13 @@ async def friend_subscription(
             "friend": friend,
             "url": await console.subscription_url(
                 session, request.app.state.settings.public_base_url, friend
+            ),
+            # Read fresh here, like everything else in this dialog: a link shown an hour
+            # after the user was added is a link to a fleet that has moved since, and the
+            # question "does every serving host hold what we would give it" has to be
+            # answered now rather than remembered from the exchange that created them.
+            "material_doubt": console.material_doubt(
+                await console.nodes_missing_what_they_would_be_given(session)
             ),
         },
     )

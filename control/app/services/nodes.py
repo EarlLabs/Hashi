@@ -12,6 +12,7 @@ HOW:  every transport-specific decision is delegated. Parameters are validated b
       assert that for the whole zone.
 """
 
+import datetime
 import json
 import logging
 
@@ -81,6 +82,41 @@ STATE_DETAIL_TOO_LONG = (
     f"the reason for this state must be {STATE_DETAIL_MAX_LENGTH} characters or fewer. "
     "Nothing was changed and nothing was clipped — shorten it and set the state again."
 )
+
+# The width of ``Node.last_probe_finding``, stated where the value is written — the same
+# pairing ``STATE_DETAIL_MAX_LENGTH`` above is half of. TRIMMED rather than refused, which
+# is the opposite of the rule one constant up and is deliberate: that value is text an
+# operator typed and may correct, this one is a sentence this control plane composed about
+# a host, and refusing to record a finding because it ran long would throw away the
+# measurement M26 exists to keep. The sentences that can reach this length are the ones
+# that list several faults, and their first clause is the one the operator acts on.
+PROBE_FINDING_MAX_LENGTH = 1000
+
+
+async def record_probe(
+    session: AsyncSession, node: Node, *, finding: str | None
+) -> Node:
+    """Keep what the last probe of this host found — M26's first acceptance walk.
+
+    ``finding`` is the sentence the operator read, or ``None`` when that probe found
+    nothing wrong. Both are recorded: a probe that found nothing is still a probe, and
+    "asked a minute ago and it was fine" is a different fact from "never asked", which is
+    what every node reads before anyone presses the button.
+
+    THE ONE WRITE IN THIS ZONE THAT IS NOT AN OPERATOR'S CHANGE, and it is not audited for
+    exactly that reason: the audit trail records what the operator did to the fleet
+    (decision 8), and a probe changes nothing about it. What this records is what a host
+    answered, which is the other kind of fact and lives on the node's own row.
+
+    Nothing about a person can reach this: the argument is composed from a
+    ``HealthResponse``, whose every field is a container name or a transport name, and
+    ``edge.health.listening`` refuses to ask anything about a peer.
+    """
+    node.last_probe_at = datetime.datetime.now(datetime.UTC)
+    node.last_probe_finding = finding[:PROBE_FINDING_MAX_LENGTH] if finding else None
+    await session.commit()
+    return node
+
 
 # What an operator is told when the text in the SSH key box is not a key this control
 # plane can load. One sentence, used by the form that accepts a key and by the push path

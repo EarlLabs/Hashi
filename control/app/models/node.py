@@ -195,6 +195,48 @@ class Node(Base, TimestampMixin):
     # diagnostics only — never anything about traffic or users.
     state_detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # --- what the last probe of this host found — M26, the first acceptance walk ----
+    #
+    # The walk stopped the friend-facing daemon on a leaf and pressed probe. The probe
+    # was RIGHT — *"failed  leaf-acc answered but is not serving — not running:
+    # amneziawg."* — and one reload later the row read ``active`` beside ``in sync``
+    # again, with nothing anywhere on the console saying otherwise, while that node was
+    # still in every user's link and a friend's ping was 100% loss. A measurement that is
+    # taken, is correct and is then discarded is worse than one never taken: the operator
+    # saw the truth once and the product overwrote it with a reassurance.
+    #
+    # So the finding is a column. Two of them, because "when" and "what" are different
+    # questions and a reader has to be able to tell a fault found a minute ago from one
+    # found last week:
+    #
+    # * ``last_probe_at`` is when this host was last asked. NULL means never — which is
+    #   the honest state of every node the operator has not probed, and the limit of what
+    #   the Overview's counters may claim.
+    # * ``last_probe_finding`` is what that probe found, in the words the operator read
+    #   on the banner (``services/console.health_summary``, composed once so the banner
+    #   and the row cannot come to different accounts of one answer). NULL beside a
+    #   timestamp means that probe found nothing wrong.
+    #
+    # BOTH ARE CLEARED BY A SUCCESSFUL APPLY (``services/apply``), and that is the whole
+    # of what makes this a reading rather than a stain: an apply verifies the daemon came
+    # back on the configuration it just pushed, which is strictly more than the probe
+    # establishes, so a finding about the configuration before it is not a finding about
+    # the host afterwards. The node then reads "not probed since it was last applied",
+    # which is true and is the state a fresh node is in.
+    #
+    # NOTHING HERE IS ABOUT A PERSON, and it is the same rule ``state_detail`` above
+    # keeps: the probe reads containers and a socket table, and ``edge.health.listening``
+    # refuses to ask whether any peer completed a handshake. There is no code path that
+    # could put a user, an address or a count of either into this column.
+    last_probe_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Wider than ``state_detail`` because it holds a composed sentence rather than one
+    # reason: a probe that finds a crash loop, a silent port and a stale container says
+    # all three, and a warning cut off mid-clause is worse than a short one. Truncated at
+    # this width where it is written rather than trusted to fit.
+    last_probe_finding: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
     # --- how `control` reaches this node over SSH ----------------------------
     # Control dials the node; the node never dials us (core invariants §1).
     ssh_host: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -353,6 +353,13 @@ class NodeRow:
     # measurement of the people on it; this is a measurement of US — whether what the
     # node was last given still matches what we would give it now.
     drift: str
+    # What the last probe of this host found, as the row says it — or ``None`` when the
+    # last probe found nothing wrong and when nobody has probed at all. M26's first
+    # acceptance walk: the finding used to live as long as the banner carrying it, so a
+    # dead daemon was a green row one reload later. ``drift`` beside it is the other
+    # question and stays the other question — that one is about what WE have pushed and
+    # needs no network; this one is what the HOST last said, and only a press gets it.
+    probe: str | None = None
     # What this node runs. A configuration fact and nothing else: it moves when the
     # OPERATOR enables or withdraws a protocol and never when a friend connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
@@ -797,6 +804,16 @@ class Overview:
     stats: list[Stat]
     nodes: list[NodeRow]
     friends: list[FriendRow]
+    # What the four counts above do not know — M26's first acceptance walk. Up to two
+    # sentences, empty on a fleet this panel has nothing to correct about, and composed
+    # from the rows beside them so the cards and the warning cannot disagree.
+    doubts: list[str]
+    # And the standing limit of the counts, said whatever the fleet looks like. Carried on
+    # the value object rather than written into the template for the same reason every
+    # other sentence here is: a screen may not compose its own account of what it knows.
+    # No default, like every field above it: this screen is built in one place, and a
+    # default here would be a second place the sentence could come from.
+    limit: str
 
 
 async def drift_of(session: AsyncSession, node: Node) -> str:
@@ -866,6 +883,39 @@ async def drift_of(session: AsyncSession, node: Node) -> str:
     return f"{behind} / {len(rendered)} drifted"
 
 
+# How a kept probe finding is said on the row it survives on — M26's first acceptance
+# walk. The finding itself is the sentence the operator read when they pressed the button
+# (``health_summary``, recorded by ``services/health``); what this adds is WHEN, because a
+# fault found four minutes ago and one found last Tuesday are different facts and the row
+# is read long after the banner is gone.
+#
+# It says "probe" rather than "why", which is the word the row's other detail line uses
+# for ``state_detail``: those two are different in kind and a reader has to be able to
+# tell them apart without knowing this codebase. ``state_detail`` is what THIS control
+# plane last failed to do to the host; this is what the HOST last said about itself.
+PROBE_FINDING = "probe, {when} UTC — {finding}"
+
+
+def probe_note(node: Node) -> str | None:
+    """What the last probe of this node found, or ``None`` when there is nothing to say.
+
+    ``None`` covers two different states on purpose, because neither is a finding: a node
+    nobody has probed, and a node whose last probe found nothing wrong. What tells those
+    two apart is the FLEET reading below — a row carrying no note is not making a claim,
+    and the screens that would otherwise be read as making one say so themselves.
+
+    Composed here rather than in the template for the reason every sentence in this module
+    is: the Nodes screen and the Overview say this about the same host, and a template
+    that wrote its own version of it would be the second account of one answer.
+    """
+    if node.last_probe_at is None or not node.last_probe_finding:
+        return None
+    return PROBE_FINDING.format(
+        when=_in_utc(node.last_probe_at).strftime("%d %b %Y %H:%M"),
+        finding=node.last_probe_finding,
+    )
+
+
 async def node_rows(session: AsyncSession) -> list[NodeRow]:
     """Every node, with its drift cell computed.
 
@@ -884,6 +934,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
             state=str(node.state),
             state_detail=node.state_detail,
             drift=await drift_of(session, node),
+            probe=probe_note(node),
             transports=tuple(
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
@@ -1077,6 +1128,142 @@ def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
         )
         if names
     )
+
+
+# WHAT ADDING A USER DOES NOT DO — M26's first acceptance walk, and the finding is the
+# shape this project keeps producing: every signal green and nothing carried.
+#
+# The walk added a friend and fetched their configuration file. It was complete and
+# correct — the node's real public key, an address out of that row's pool — while on the
+# host the rendered config held ZERO peer blocks and the daemon listed none. A friend's
+# client would have handshaked into nothing. Only a SECOND apply, three minutes later, put
+# the peer on the node and made the traffic flow.
+#
+# Adding a user changes what this panel WOULD push and touches no host, which is correct
+# and is the whole of the defect: nowhere the operator was standing said so. The Users
+# screen's other standing note is about access that was WITHDRAWN and cannot be confirmed
+# gone — the exact opposite direction — so a reader who had just pressed "add user" had no
+# reason to read it as being about them.
+#
+# It is said on the Users screen and again in the dialog that hands the link over, because
+# that dialog is the moment the false promise is delivered. ONE CONSTANT for both, so the
+# screen and the dialog cannot come to different accounts of one fact.
+#
+# It names the nodes, like every other sentence on these screens that asks the operator to
+# go and do something, and it ends where the press is.
+MATERIAL_NOT_ON = (
+    "A user added here is not on {nodes} yet: {this} not running the configuration this "
+    "panel would give {it}, and adding a user changes only what this panel would push. "
+    "So anyone added or granted since {it} was last applied has no credential on {it} — "
+    "their link carries {it}, their client would find nothing of theirs there, and "
+    "nothing about the link itself would look wrong. Apply {it} on the Nodes screen."
+)
+
+# The same reading on the Overview, where what it has to correct is a COUNTER rather than
+# a link. Same list, different sentence, for the reason M23 split its two: the operator's
+# next move is the same press, but what they are reading it against is not.
+FLEET_NOT_PUSHED = (
+    "Not yet pushed to {nodes}: {this} not running the configuration this panel would "
+    "give {it}, so something has changed here since {it} was last applied. The counts "
+    "above are counts of configuration, so {it} is still in them and still in every "
+    "user's link. Apply {it} on the Nodes screen."
+)
+
+# And what the last probe found, on the screen whose subtitle promises to say whether the
+# nodes are running what they were told to — M26's first acceptance walk, the other half
+# of the same finding. The walk stopped a daemon, probed, read the correct answer, and
+# then watched the Overview go on reporting "nodes active 2 … transports serving 2" while
+# the friend's ping was 100% loss.
+#
+# It does not repeat the finding itself. The finding is on the node's own row, where probe
+# and apply are, and a full diagnosis in a banner on another screen is a second copy of a
+# sentence that can be 1000 characters long.
+FLEET_NOT_SERVING = (
+    "The last probe of {nodes} found {it} not serving what this panel gave {it}, and "
+    "nothing has been applied to {it} since. The counts above are counts of "
+    "configuration, so {it} is still in them and still in every user's link. The finding "
+    "is on the Nodes screen, under that row."
+)
+
+# The standing limit of all four counters, said once and always — not a warning and not a
+# reading of any particular fleet. It is here because the two sentences above only appear
+# when this panel KNOWS something is wrong, and a screen that is silent the rest of the
+# time would be read as having checked. Nothing on this screen dials a host: the counters
+# are configuration, and the only thing that measures a host is the button on the Nodes
+# screen.
+COUNTERS_COUNT_CONFIGURATION = (
+    "These four count configuration — what is registered, enabled and in service. "
+    "Nothing on this screen dials a host, so none of them moves when a daemon stops. "
+    "What a host is actually running is measured only when you press probe on the Nodes "
+    "screen, and what that found is kept until the next apply."
+)
+
+
+async def nodes_missing_what_they_would_be_given(session: AsyncSession) -> list[str]:
+    """Serving nodes whose host does not hold the configuration this panel would push.
+
+    THE SUPERSET OF "a user was added and nobody applied", which is what M26's walk found,
+    and it is deliberately not narrowed to that: a granted credential, a withdrawn one, a
+    resized pool and a changed parameter are the same fact about the same host, and a list
+    that tracked only one of them would go quiet on the others.
+
+    ``in sync`` and ``nothing enabled`` are the two readings that are NOT this. The first
+    is the host holding exactly what we would give it; the second is a node with nothing
+    switched on, which has nothing to be behind about — and listing it would put a
+    standing warning on a first-run panel, which is the one place it means nothing.
+
+    Serving only. A draft or degraded node is not in anybody's link, so a user's material
+    missing from it is not a promise being made to anyone — and the Users screen's other
+    note is already about exactly those hosts, from the other direction.
+
+    One render per node, like ``node_rows`` and ``unconfirmed_nodes``, and the Users screen
+    now pays for two passes over a fleet this product sizes at a handful of hosts. It
+    touches no network either way; the alternative is caching a reading that has to be
+    true at the moment it is read.
+    """
+    behind = []
+    for node in await nodes.list_nodes(session):
+        if not node.is_serving():
+            continue
+        if await drift_of(session, node) in (IN_SYNC, NOTHING_ENABLED):
+            continue
+        behind.append(node.name)
+    return behind
+
+
+def material_doubt(behind: Sequence[str]) -> str | None:
+    """What a link handed over now cannot promise, or ``None`` when it can.
+
+    ``None`` on a fleet holding everything we would give it, so neither the Users screen
+    nor the subscription dialog carries a standing warning — the same rule
+    ``withdrawal_doubt`` keeps, and for the same reason.
+    """
+    return _about(list(behind), MATERIAL_NOT_ON) if behind else None
+
+
+def fleet_doubt(rows: Sequence[NodeRow]) -> list[str]:
+    """What the Overview's counters do not know, as the sentences that say so.
+
+    Composed from the rows the screen is already showing rather than from a second reading
+    of the fleet: the cards, the node preview and these sentences are then one answer seen
+    three ways, and there is no arrangement of them in which the preview says a node is
+    behind and the sentence under the cards does not.
+
+    Up to two, in the order an operator acts on them: a host that was MEASURED not serving
+    is worse news than one that is merely behind, and it is the one the walk watched the
+    product forget.
+    """
+    found = [row.name for row in rows if row.probe]
+    behind = [
+        row.name
+        for row in rows
+        if row.state in NodeState.serving() and row.drift not in (IN_SYNC, NOTHING_ENABLED)
+    ]
+    return [
+        _about(names, sentence)
+        for names, sentence in ((found, FLEET_NOT_SERVING), (behind, FLEET_NOT_PUSHED))
+        if names
+    ]
 
 
 async def friend_rows(session: AsyncSession) -> list[FriendRow]:
@@ -1965,6 +2152,8 @@ async def overview(session: AsyncSession) -> Overview:
     offerable = transports.offerable_transports()
 
     return Overview(
+        doubts=fleet_doubt(rows),
+        limit=COUNTERS_COUNT_CONFIGURATION,
         stats=[
             Stat(
                 kicker="nodes active",

@@ -47,6 +47,29 @@
       </span>
     </div>
     {% endif %}
+    {% if material_doubt %}
+    {#
+      WHAT ADDING A USER DID NOT DO — M26's first acceptance walk. The walk added a
+      friend, opened their link, and got a complete, correct, importable configuration
+      for a node that held no peer for them: the file was right, the node had never
+      heard of them, and their client would have handshaked into nothing. A second
+      apply, three minutes later, is what made it true.
+
+      A NOTICE in the same frame as the two around it, and a SEPARATE sentence from the
+      withdrawal note below rather than a clause added to it: that one is about access
+      taken away and not confirmed gone, which is the opposite direction, and an
+      operator who has just pressed "add user" has no reason to read it as being about
+      them. That is the whole finding.
+
+      Composed in services/console.py from the Nodes screen's own drift readings, and
+      the same sentence is in the dialog that hands the link over — one constant, so the
+      screen and the dialog cannot disagree about one fact.
+    #}
+    <div class="banner" role="status">
+      <span class="banner-label">note</span>
+      <span>{{ material_doubt }}</span>
+    </div>
+    {% endif %}
     {% if withdrawal_doubt %}
     {#
       What a withdrawal on this screen cannot promise — M23, round 2. The walk revoked

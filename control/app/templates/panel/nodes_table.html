@@ -154,6 +154,24 @@
             <td class="text-muted wraps" colspan="7">why: {{ node.state_detail }}</td>
           </tr>
           {% endif %}
+          {% if node.probe %}
+          {#
+            WHAT THE LAST PROBE FOUND, AND IT OUTLIVES THE BANNER — M26's first
+            acceptance walk. The walk stopped a leaf's daemon, pressed probe, read the
+            correct finding, reloaded once, and the row was green again with the finding
+            gone from the product entirely: a measurement taken, correct, and discarded.
+
+            Its own row rather than a cell, for the same two reasons the line above it
+            has one — the text comes from a remote host and can be long, and a status
+            cell may never break (app.css). The word is `probe` and not `why`, because
+            these two are different in kind: `why` is what this control plane last failed
+            to do to the host, and this is what the host last said about itself. Composed
+            in services/console.py (`probe_note`), never here.
+          #}
+          <tr class="row-detail">
+            <td class="text-muted wraps" colspan="7">{{ node.probe }}</td>
+          </tr>
+          {% endif %}
           {% endfor %}
         </tbody>
       </table>

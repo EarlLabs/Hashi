@@ -32,6 +32,36 @@
       {% endfor %}
     </div>
 
+    {#
+      WHAT THE FOUR COUNTS DO NOT KNOW — M26's first acceptance walk, and the screen
+      whose own subtitle promises to say "whether the nodes are running what you told
+      them to". The walk stopped a node's friend-facing daemon, probed it, read the
+      correct finding, and then read "nodes active 2 … transports serving 2" here while
+      the friend's ping was 100% loss.
+
+      A NOTICE and not a failure banner: nothing went wrong in the request that drew
+      this screen, and the failure slot above belongs to the action the operator just
+      took. Same frame as the Users screen's standing notes, which are the same kind of
+      sentence about the same fleet.
+
+      Composed in services/console.py, one per thing this panel knows and is not
+      showing in a number — never here, and never by counting anything in this file.
+    #}
+    {% for doubt in overview.doubts %}
+    <div class="banner" role="status">
+      <span class="banner-label">note</span>
+      <span>{{ doubt }}</span>
+    </div>
+    {% endfor %}
+
+    {#
+      And the standing limit of all four, whatever the fleet looks like. It is here
+      rather than only in the notes above because a screen that is silent while it has
+      nothing to correct reads as a screen that checked — and nothing on this one dials
+      a host.
+    #}
+    <p class="text-muted section-note">{{ overview.limit }}</p>
+
     {% if not overview.nodes and not overview.friends %}
     {#
       The first thing a new operator ever sees. It says what to do next rather than

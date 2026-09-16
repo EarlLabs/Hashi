@@ -1289,6 +1289,21 @@ async def apply_node(
     node.state = NodeState.ACTIVE
     node.state_detail = None
 
+    # AND THE LAST PROBE'S FINDING GOES WITH IT — M26's first acceptance walk, and it is
+    # the same line of reasoning as the one above rather than a new one. Step 5 verified
+    # the daemon came back ON THIS CONFIGURATION, which is strictly more than a probe
+    # establishes, so a finding about what this host was running before is not a finding
+    # about what it is running now — and leaving it would put a stale fault on the row of
+    # a node that has just been proven, which is the reassurance-shaped defect pointed
+    # the other way.
+    #
+    # The timestamp is cleared with it rather than kept. What it would otherwise mean is
+    # "probed at 10:31, and the answer has since been thrown away", which is not a
+    # reading; the honest state of a freshly applied host is that nobody has asked it
+    # anything since, and that is what NULL says on every screen reporting this.
+    node.last_probe_at = None
+    node.last_probe_finding = None
+
     if becoming_serving:
         # RECORDED THE WAY ``set_node_state`` RECORDS IT — M23, round 3. A node going into
         # service is an audited event wherever it is reached from, and reached from this

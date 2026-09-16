@@ -10,6 +10,16 @@ HOW:  renders through the same function the apply path uses, so "drifted" means 
       running PROCESS was started from, which is a different question and was the one
       nothing asked until M1.
 
+      AND WHAT IT FOUND IS KEPT — M26's first acceptance walk. Until then a probe's
+      answer lived exactly as long as the banner carrying it: the walk stopped a leaf's
+      friend-facing daemon, read the correct finding, reloaded once and saw ``active``
+      beside ``in sync`` again on a node whose users were carrying nothing. So every
+      probe that reaches a host writes what it found onto that host's own row
+      (``nodes.record_probe``), in the words the operator read — and a successful apply
+      is what clears it, because an apply verifies the daemon came back on the
+      configuration it just pushed and a finding about the one before it is not a
+      finding about the host afterwards.
+
       AND WHERE EACH CONFIG SHOULD ANSWER — M22, the same division of labour one field
       over. The port is the operator's own parameter and the protocols are the
       transport's own declaration, so `control` resolves both and passes them in;
@@ -25,7 +35,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
 from control.app.errors import NodeCannotServe
-from control.app.services import apply, nodes
+
+# ``console`` for one function: the sentence a probe's answer becomes. It is composed
+# there because the banner, the notice and now the node's own row must not come to three
+# accounts of one answer, and this module is where the answer is produced — so the
+# dependency points from the measurement to the wording rather than the other way, and
+# nothing in ``console`` imports this module back.
+from control.app.services import apply, console, nodes
 from edge.bootstrap import NodeConnection, NodeUnreachable
 from edge.health import probe
 
@@ -69,7 +85,7 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
                 connection, expected=expected, transports=placed, listeners=listeners
             )
     except NodeUnreachable as exc:
-        return schemas.HealthResponse(
+        unreachable = schemas.HealthResponse(
             node_id=node.id,
             reachable=False,
             healthy=False,
@@ -87,8 +103,16 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
             not_listening=[],
             detail=str(exc),
         )
+        # A node that could not be dialled is a finding as much as a crash loop is —
+        # what it is NOT is a report about containers nobody looked at, and the empty
+        # lists above are what keeps those two apart. The sentence recorded says the
+        # host could not be reached and names the reason the SSH layer gave.
+        await nodes.record_probe(
+            session, node, finding=console.health_summary(node.name, unreachable)
+        )
+        return unreachable
 
-    return schemas.HealthResponse(
+    answer = schemas.HealthResponse(
         node_id=node.id,
         reachable=health.reachable,
         healthy=health.healthy,
@@ -101,3 +125,12 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
         not_listening=health.not_listening,
         detail=health.detail,
     )
+    # ``None`` on a healthy answer, and the timestamp is written either way: a probe that
+    # found nothing wrong is the reading that makes "never probed" a distinguishable
+    # third state on the screens that report this.
+    await nodes.record_probe(
+        session,
+        node,
+        finding=None if answer.healthy else console.health_summary(node.name, answer),
+    )
+    return answer
