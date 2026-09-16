@@ -647,7 +647,15 @@ fi
 # the middle of ours. The check fails in the safe direction on purpose — a missing or
 # unreadable config leaves this empty, empty is not "off", and the command runs. There is
 # no arrangement of this file in which logging stays on because a probe failed.
-UFW_LOGLEVEL="$(as_root grep -m1 '^LOGLEVEL=' /etc/ufw/ufw.conf 2>/dev/null | cut -d= -f2 || true)"
+# READ TWICE FROM ONE PLACE, so the answer before the write and the answer after it are
+# the same question asked twice rather than two readings that could drift. It is ufw's own
+# config file and not the live rule table, because the table says nothing at all while the
+# firewall is inactive — which is the state this host is in at this point in the run.
+ufw_loglevel() {
+  as_root grep -m1 '^LOGLEVEL=' /etc/ufw/ufw.conf 2>/dev/null | cut -d= -f2 || true
+}
+
+UFW_LOGLEVEL="$(ufw_loglevel)"
 if [ "${UFW_LOGLEVEL}" = "off" ]; then
   say "ufw logging was already off"
 else
@@ -669,6 +677,26 @@ fi
 # has nothing to purge from anywhere. A host that already did needs the operator, not a
 # script (docs/tracker/M11/field-inventory.md).
 as_root sh -c 'rm -f /var/log/ufw.log /var/log/ufw.log.*'
+
+# READ BACK BEFORE THE CLAIM, AND BEFORE THE FIREWALL COMES UP — M26's first acceptance
+# walk. The line below was printed the instant the command returned, so on a host whose
+# `ufw logging off` silently did nothing it was printed and was false: the run went on to
+# bring the firewall up — which starts writing source addresses — and refused in section 6,
+# afterwards. The end state was honest and the scroll was not, and this is the one line in
+# the run about the record the charter forbids at any level.
+#
+# So the same source is read a second time and the claim is made only if it is true. It is
+# not the same check as section 6's: that one asks the RUNNING firewall, which answers
+# nothing at all while ufw is inactive — which is exactly the state this host is in here.
+# Both stay, because they ask two different things, and this is the one that can still stop
+# the firewall coming up at all.
+if [ "$(ufw_loglevel)" != "off" ]; then
+  fail "ufw would not switch its logging off — /etc/ufw/ufw.conf still does not read
+  LOGLEVEL=off. That is a connection log, source addresses written to disk, and the charter
+  forbids it at any level, so this run stops BEFORE bringing the firewall up rather than
+  after: nothing here has started writing one. The control plane's key is already
+  authorised in ${KEYS_FILE} and this refusal does not remove it."
+fi
 say "ufw logging is off; the log file it may have had is gone (syslog and the journal may
     still hold older copies — this script cannot reach those)"
 
@@ -829,7 +857,24 @@ fi
 # the pipe early can leave the pipeline reporting ufw's SIGPIPE rather than grep's answer,
 # and the firewall would then never come up on the one host that needs it to.
 if as_root ufw status | grep -q '^Status: inactive'; then
-  as_root ufw --force enable >/dev/null
+  # ANSWERED IN THIS SCRIPT'S OWN WORDS WHEN IT FAILS — M26's first acceptance walk. With
+  # `iptables-restore` sabotaged, this line ended the run on ufw's raw `ERROR: problem
+  # running ufw-init` and exit 1, with no `node-bootstrap: ` sentence anywhere: `set -e`
+  # took the run out from under the script. Nothing false was claimed — the "firewall up"
+  # line is further down — and the operator was still left with no sentence saying what
+  # state the host was in, over a run this page promises always starts one.
+  #
+  # Captured like every other ufw call in this file, so ufw's own words are reported
+  # INSIDE the sentence rather than beside it: what it prints here names the rules files
+  # it could not load, which is the only clue to why, and discarding it would leave a
+  # refusal nobody can act on.
+  brought_up=$(
+    as_root ufw --force enable 2>&1
+  ) || fail "the firewall would not come up: ${brought_up}
+  The host is otherwise prepared and it is EXPOSED — every port it has is open until this
+  is fixed. Logging is already off, so nothing has been recorded. The control plane's key
+  is already authorised in ${KEYS_FILE} and this refusal does not remove it; fix the
+  firewall on this host and run this again before the node carries anyone's traffic."
   say "the firewall is now up"
 else
   say "the firewall was already up — its existing rules were kept"

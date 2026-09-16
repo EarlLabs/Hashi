@@ -80,11 +80,18 @@ that does not resolve to that box means it retries forever while serving nothing
 
 ### What every box must already have
 
-Docker, and SSH. That is the entire list for a node — **hashi does not install a
-container runtime for you**; it runs `docker version`, and if that fails it stops and
-says so (`edge/bootstrap/node_stack.py`). You do not need to collect SSH host keys: the
-first successful connect learns the node's host key and pins it from then on, so a later
-connection cannot be silently intercepted.
+**A node:** docker, and SSH. That is the entire list — **hashi does not install a
+container runtime for you** when it drives a node; it runs `docker version`, and if that
+fails it stops and says so (`edge/bootstrap/node_stack.py`). You do not need to collect
+SSH host keys: the first successful connect learns the node's host key and pins it from
+then on, so a later connection cannot be silently intercepted.
+
+**The control-plane box needs three more things, and a genuinely bare one has none of
+them:** a container runtime with the compose plugin, `git` — the stack is built from a
+clone of this repository, not from a published image — and `make`, because every command
+in the block below is a Make target. An acceptance walk on a bare host found all three
+missing and the runbook listing none of them, which is two extra commands before the
+first line of that block and an error message for each one you meet instead.
 
 **On a node, do neither of those by hand.** `scripts/node-bootstrap.sh` installs the
 runtime, authorises the key and brings the firewall up in one run that asks no questions,
@@ -326,7 +333,12 @@ sitting on the host, run `./scripts/node-bootstrap.sh` with the same arguments.
 | `--ssh-port N` | only when the script cannot work the management port out for itself. |
 
 Progress lines start `==> `. A refusal exits **1** and starts `node-bootstrap: `; an
-argument it does not recognise exits **2** and prints the usage. It refuses rather than
+argument it does not recognise exits **2** and prints the usage. **Both of those are the
+script's own codes, and `make` does not pass them on**: GNU make exits **2** whenever a
+recipe fails, whatever the recipe returned, so through `make node-bootstrap` a refusal and
+a typo are the same number. Read the sentence rather than the code — that is what the
+sentence is for — or run the `ssh … < scripts/node-bootstrap.sh` line above directly, where
+the codes are the script's. It refuses rather than
 guessing, and these are the refusals worth knowing about before you start — each one is a
 mistake you want stopped here rather than found on a node that says it is ready:
 
@@ -557,6 +569,13 @@ One VPS abroad, carrying the control plane and one node at the same time.
 
 ### Bring up the control plane
 
+**This is 13 commands on 11 lines, and `panel-bootstrap.sh` is one of them.** It is the
+honest one — it refuses to invent your secret key, it verifies the control plane answers
+before it claims success, and a second run changes nothing — but it is a step inside this
+block and not the whole of it, and the charter's *one script per host* is about nodes
+before it is about this box. On a host that is genuinely bare, two more come first: the
+docker install line above, and your package manager's `git` and `make`.
+
 ```bash
 git clone <this repo> /opt/hashi-control && cd /opt/hashi-control
 cp .env.example .env && "${EDITOR:-vi}" .env        # see the table above
@@ -615,11 +634,19 @@ public hostname (*Reaching the panel*):
    up from `peer_tunnel_address`. Size it for the fleet you expect rather than for
    today's: the number is a ceiling, raising it later is a resize, and the box says how
    many people it is being measured against.
-3. **Apply.**
+3. **Apply.** The node is serving at this point and nobody is on it yet.
 4. **Add a friend**, open their subscription link, load it into a stock client. The
    WireGuard family is a config *file* rather than a URI, so it is the
    `?format=client-config-file` form of that link that carries it — the plain link is
    empty on a box that offers only `amneziawg`, and empty is not an error.
+5. **Apply again.** This is the step an acceptance walk had to work out for itself, and
+   the one that costs a friend an evening: adding a user changes what the panel *would*
+   push and touches no host. Their configuration file is complete and correct the moment
+   it is issued — their own address, the node's real public key — while the node holds no
+   peer for them and their client handshakes into nothing. The panel says so now: the
+   Users screen and the dialog that hands the link over both name the nodes that are not
+   running what this panel would give them. **Any change to who may use a node — a user
+   added, a user revoked, a pool resized — is an apply, on every node that serves them.**
 
 **Not Reality on this box.** Caddy holds 443/TCP for the panel, and Reality's whole
 camouflage is *being* on 443. Its declared range is `(443, 65535)`, so 8443 validates —
@@ -686,7 +713,13 @@ node. Nothing is contested and nothing is co-located.
 
 1. Bootstrap the control plane on **C** (the Shape A control-plane block, unchanged).
 2. Prepare **E** and **L** with *Preparing a leaf* above — one script run each — and
-   register both as nodes. Both `ssh_host` values are real remote addresses this time; the
+   register both as nodes. **Choose the hop's UDP port before you run either script**, and
+   pass it as a `--port` on **L**: the leaf is the end that listens, `node-bootstrap.sh`
+   is what opens the port in its firewall, and step 4 is where the form asks you for that
+   number. An acceptance walk did it in the printed order, reached the hop form with a
+   port nothing had opened, and had to run the script on the leaf a second time — safe,
+   purely additive, and a third command in a two-command procedure. Nothing in the product
+   warns you, because the script is not told which role the host will be registered in. Both `ssh_host` values are real remote addresses this time; the
    control container needs outbound SSH to each. Give **E** a `resolver` as you register
    it (*A node that dials a hop needs a resolver*).
 3. Enable **`vless-reality` on E, port 443** — free here, because the panel is on another
@@ -694,10 +727,13 @@ node. Nothing is contested and nothing is co-located.
    convenient here: E dials a hop, and that is the only kind of friend-facing transport
    such a node can render at all (*The one combination that will not render*).
 4. Build the hop: entry = E, leaf = L, transport = `amneziawg`.
-5. Apply both nodes. Add friends. Their subscription contains E and never L: a hop is
-   never granted to a friend and never appears in a subscription, because a friend
-   holding the entry↔leaf tunnel would route straight past the entry the topology exists
-   to hide behind.
+5. Apply both nodes. Until you do, the hop exists only in the database.
+6. Add friends. Their subscription contains E and never L: a hop is never granted to a
+   friend and never appears in a subscription, because a friend holding the entry↔leaf
+   tunnel would route straight past the entry the topology exists to hide behind.
+7. **Apply E again**, for the reason Shape A's step 5 gives: a user added since the last
+   apply is a change no host has been told about, and their link is complete and correct
+   before any node has heard of them.
 
 Where to put box C is a real decision, not a formality. Outside Russia, it is out of
 seizure range but the delivery endpoint may be unreachable from a Russian network under
@@ -883,6 +919,16 @@ Every cell in it is checked against the code by `tests/infra/test_deploy_runbook
 against the renderers for the first column, the panel's own enable dialog for the second,
 and its hop form for the third. A fifth transport, a retirement, or a change to what one
 of these can do turns that suite red rather than leaving this table quietly wrong.
+
+**A wg-quick-family config needs a resolver tool on a plain Linux client.** The file this
+project generates carries a `DNS =` line, and `awg-quick`/`wg-quick` implement that line by
+shelling out to `resolvconf` — so on a Linux box without it the tunnel does not come up at
+all, on an error about a missing command rather than about DNS. Stock GUI clients on
+phones and desktops resolve it themselves and are unaffected; it is the operator testing
+from a shell who meets this, which is exactly who is told to *"load it into a stock
+client"*. Install `resolvconf` (or `openresolv`) on that machine. Nothing on the node
+changes, and the node's own `resolver` field is a different thing entirely — that one is
+for a node that dials a hop, below.
 
 **The two families are delivered differently, and you find that out before your friends
 do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family

@@ -1232,3 +1232,115 @@ def test_no_paragraph_states_the_kernel_tunnel_rule_without_naming_which_end(
             "with and never says which end of the hop that is true of — on a leaf it is "
             f"supported and is what the growth path depends on: {paragraph}"
         )
+
+
+# --- M26's first acceptance walk: what a shape leaves out ---------------------
+
+
+def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str]) -> None:
+    """The step the walk had to work out for itself, in the pages it worked from.
+
+    It added a friend and fetched their configuration file: complete, correct, importable
+    — the node's real public key, an address out of that row's pool — while the node held
+    no peer for them and their client would have handshaked into nothing. A second apply,
+    three minutes later, is what made it true.
+
+    Both shapes that add users read *"Apply … Add friends"*, in that order, which is the
+    right order for a node and the wrong one for a person. So a shape whose steps add a
+    user has to apply AFTER it, and this asserts the order rather than the presence of the
+    word: an apply above the add-user step is the version the walk followed.
+    """
+    for letter, body in shapes.items():
+        steps = _numbered_steps(body)
+        adding = [
+            index
+            for index, step in enumerate(steps)
+            if re.search(r"add (?:a )?(?:friend|user)", step, re.I)
+        ]
+        if not adding:
+            continue
+        applying = [
+            index
+            for index, step in enumerate(steps)
+            if re.search(r"\bapply\b", step, re.I)
+        ]
+        assert any(index > adding[0] for index in applying), (
+            f"Shape {letter} adds a user and never applies afterwards, so the friend it "
+            "hands a link to is on no node until the operator works that out themselves"
+        )
+
+
+def test_the_leaf_section_says_the_exit_codes_do_not_survive_make(
+    leaf_section: str,
+) -> None:
+    """The walk ran the documented invocation and got make's own code for both.
+
+    Run directly, a refusal exits 1 and a bad argument exits 2, exactly as this page says.
+    Run as ``make node-bootstrap`` — which is what the page tells the operator to type —
+    both come back as 2, because GNU make exits 2 whenever a recipe fails. The codes are
+    right and the sentence around them was not.
+    """
+    said = _flat(leaf_section)
+    assert "make" in said and re.search(r"does not pass them on", said, re.I), (
+        "the section gives two exit codes and does not say that the invocation it "
+        "documents collapses both into make's own"
+    )
+
+
+def test_the_control_plane_block_says_how_many_commands_it_is(runbook: str) -> None:
+    """M26's first walk, its first medium: the control plane is not brought up by one
+    script.
+
+    The claim is checked against the block itself rather than believed: the number the
+    prose states must be the number of commands in the fence under it, so neither can be
+    edited without the other. ``&&`` counts as two, because it is two — the walk counted
+    what it typed.
+    """
+    section = re.search(
+        r"^### Bring up the control plane\n((?:.*\n)*?)^### ", runbook, re.M
+    )
+    assert section, "the runbook no longer has a control-plane block to count"
+    body = section.group(1)
+
+    claimed = re.search(r"\*\*This is (\d+) commands on (\d+) lines", body)
+    assert claimed, (
+        "the control-plane block does not say how many commands it is, so an operator "
+        "reads 'one script' and meets a dozen"
+    )
+    fence = re.search(r"```bash\n((?:.*\n)*?)```", body)
+    assert fence, "the control-plane section no longer has a command block"
+    lines = [
+        line.split("#")[0].strip()
+        for line in fence.group(1).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    commands = sum(len(line.split("&&")) for line in lines)
+
+    assert (int(claimed.group(2)), int(claimed.group(1))) == (len(lines), commands), (
+        f"the block is {len(lines)} lines and {commands} commands, and the page claims "
+        f"{claimed.group(2)} and {claimed.group(1)}"
+    )
+    assert "panel-bootstrap.sh` is one of them" in _flat(body), (
+        "the page does not say which of those commands the charter's second script is"
+    )
+
+
+def test_the_prerequisites_name_what_the_control_plane_box_needs(runbook: str) -> None:
+    """A genuinely bare host had none of them, and this section listed none of them.
+
+    The walk needed a container runtime, ``git`` and ``make`` before the first line of
+    that block, and met each one as an error message instead of as a line on this page.
+    """
+    section = re.search(
+        r"^### What every box must already have\n((?:.*\n)*?)(?=^#{2,3} )", runbook, re.M
+    )
+    assert section, "the runbook no longer says what a box must already have"
+    said = _flat(section.group(1))
+    for needed in ("git", "make"):
+        assert re.search(rf"`{needed}`", said), (
+            f"the prerequisites do not name {needed}, which the control-plane block needs "
+            "before its first command"
+        )
+    assert re.search(r"control.plane box", said, re.I), (
+        "the section answers for a node only, and the control-plane box is not a node"
+    )

@@ -143,13 +143,14 @@ component hardcodes a country or a provider.
   hosters are now obliged to terminate clients running bypass infrastructure.
 - **Public URL**: required for the delivery endpoint and the panel (behind auth).
 
-**Everything is deployed by one script.** Owner's requirement, 2026-08-02. Two
-of them, and no third path:
+**One script per host.** Owner's requirement, 2026-08-02, narrowed on 2026-09-16 to
+what ships — see *What the scripts actually deliver*, below, which is a measurement
+rather than an aspiration. Two scripts, and no third path:
 
 | Script | Brings up | Run when |
 |---|---|---|
-| node bootstrap | one leaf or one entry node, from a bare host to serving traffic | a node is added or replaced |
-| panel bootstrap | the control plane, its database and the delivery endpoint | first install, a move, a rebuild from backup |
+| node bootstrap | one leaf or one entry node, from a bare host to a host the control plane can drive — it ends by printing `register it in the panel with ssh_user <user> and ssh_port <port>`, and registering it is yours | a node is added or replaced |
+| panel bootstrap | the control plane, its database and the delivery endpoint, from an env file that is already filled in | first install, a move, a rebuild from backup |
 
 What "one script" has to mean, or it is not worth having:
 
@@ -158,12 +159,52 @@ What "one script" has to mean, or it is not worth having:
   procedure someone follows carefully at 3am.
 - **No interactive questions.** Every input arrives as a node record or an
   environment file, so the same run works from the panel and from a shell.
-- **Verifies before reporting success.** It ends by checking the daemon accepts
-  its own config and the node answers a health probe — a script that reports
-  success on a host that is not serving is worse than one that fails.
+- **Verifies before reporting success**, and each script verifies what it can
+  actually reach. The panel script ends by asking the control plane it just
+  installed for `/healthz` and for a delivery route, from inside the compose
+  network, and refuses if neither answers. The node script has no daemon to ask:
+  when it finishes, `/opt/hashi` is empty and nothing has been pushed there. So it
+  ends by checking the things it did — docker answers, the key is in a file sshd
+  will really consult for that account, the firewall is up with logging off, and
+  the kernel will forward — and it says what it did **not** check. A script that
+  reports success on a host that is not serving is worse than one that fails; so is
+  one that claims a check it never made.
 - **The panel's script never generates the secret key on the host it installs.**
   If the panel sits on the entry node inside Russia, the key that encrypts every
   node credential must arrive from outside it — see the topology note above.
+
+### What the scripts actually deliver
+
+Measured by an independent acceptance walk on bare hosts, 2026-09-16, and written
+down here because the sentence above used to promise *"from a bare host to serving
+traffic"* and the walk measured three panel actions between those two states. What
+is narrowed is this page, not the product: the scripts were already honest, and
+**registering a node, offering it a transport and applying stay panel actions** —
+deliberately, because a script that registered and applied a node itself would have
+to hold a control-plane credential on every host the fleet has ever prepared and
+dial the panel from a node, which the topology forbids (`CLAUDE.md`: control dials
+nodes, a node never dials control).
+
+| From | Commands | Panel actions |
+|---|---|---|
+| bare host → a node **serving** | 1 | 3 — add node, enable a transport, apply |
+| bare host → **a friend's packets moving** | 1 | 5 — those 3, then add the user, then **apply again** |
+| two bare hosts → an established **entry→leaf hop** | 2 | 6 — register ×2, a friend-facing transport on the entry, establish the hop, apply ×2 |
+| bare host → **the control plane** | 13, of which `panel-bootstrap.sh` is one | 0 |
+
+The control plane is the row to read twice: **it is not brought up by one script.**
+`panel-bootstrap.sh` is one honest step inside a block of about thirteen commands —
+clone, fill in the env file, open four ports with logging off first, enable the
+firewall, run the script, publish the ports, check the answer — and on a genuinely
+bare host a container runtime, `make` and `git` come before all of them.
+`docs/deploy/runbook.md` is that block, and criterion 2's *"replace a node in ten
+minutes"* is unaffected: replacing a node is the first row, which is one command and
+three presses.
+
+**The fifth row is the one that surprised the walk**, and it is why *apply again* is
+in bold: adding a user changes what the panel would push and touches no host, so the
+friend's link is complete and correct before any node has heard of them. The panel
+says so since 2026-09-16 (`docs/decisions.md`); the sequence itself is unchanged.
 
 ## Backups
 

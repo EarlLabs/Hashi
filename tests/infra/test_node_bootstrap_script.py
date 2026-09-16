@@ -2130,3 +2130,208 @@ def test_it_reads_kernel_settings_and_writes_none(script: str) -> None:
     assert re.search(r"not tune the kernel", script, re.I), (
         "the header no longer states the boundary the reads above stay inside"
     )
+
+
+# --- M26's first acceptance walk: two refusals inside the firewall step -------
+#
+# Both are RUN rather than read, for the reason the sshd section above gives: each one is
+# a failure arm, and an arm that is written, is correct and can never fire reads exactly
+# like one that works. The walk found both by sabotaging a host — a ``ufw`` that silently
+# ignored ``logging off``, and an ``iptables-restore`` that could not load a rule set —
+# and what these run is the script's own block, lifted out of the file, with ``ufw`` and
+# ``grep`` answering the way those hosts answered.
+
+
+def block_in(script: str, first: str, last: str) -> str:
+    """The script's own lines from one anchored line to another, inclusive.
+
+    ``function_in`` above lifts a function; these two arms are not functions, so they are
+    lifted by their first and last line. Both anchors are matched at the start of a line
+    and the extraction fails loudly rather than silently returning less, because a block
+    that has been reshaped is exactly the case where a test must not quietly pass.
+    """
+    found = re.search(
+        rf"^{re.escape(first)}$\n(?:.*\n)*?^{re.escape(last)}$", script, re.M
+    )
+    assert found, f"the script no longer has a block from {first!r} to {last!r}"
+    return found.group(0) + "\n"
+
+
+def run_a_fragment(
+    script: str, fragment: str, tmp_path: pathlib.Path, stubs: dict[str, str]
+) -> subprocess.CompletedProcess:
+    """One lifted block, run with the script's OWN ``say`` and ``fail``.
+
+    ``as_root`` is a passthrough here, which is the whole of what makes this safe to run:
+    every command in these two blocks is a ``ufw`` or a ``grep``, and both are stubbed on
+    the run's PATH. Nothing outside ``tmp_path`` is read and nothing is written at all.
+
+    ``say`` and ``fail`` are lifted from the script rather than written here, so the
+    ``node-bootstrap: `` prefix these tests assert on is the script's own — that prefix is
+    quoted in docs/deploy/runbook.md as the way every refusal starts, and a test carrying
+    its own copy could not notice it changing.
+    """
+    helpers = [
+        re.search(r"^say\(\).*$", script, re.M),
+        re.search(r"^fail\(\).*$", script, re.M),
+    ]
+    for helper in helpers:
+        assert helper, "the script no longer defines say() and fail() on one line each"
+    prelude = "\n".join(
+        [
+            "set -euo pipefail",
+            *(helper.group(0) for helper in helpers),
+            'as_root() { "$@"; }',
+            'KEYS_FILE="/root/.ssh/authorized_keys"',
+            # The script's own reader for ufw's logging level, lifted rather than
+            # rewritten: what it reads is a root-owned absolute path, so the stub goes
+            # under it on the PATH and the parsing stays the script's.
+            function_in(script, "ufw_loglevel"),
+            "",
+        ]
+    )
+    path = tmp_path / "fragment.sh"
+    path.write_text(prelude + fragment)
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir(exist_ok=True)
+    for name, text in stubs.items():
+        (stub_dir / name).write_text(text)
+        (stub_dir / name).chmod(0o755)
+    return subprocess.run(
+        ["bash", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "HOME": str(tmp_path),
+        },
+    )
+
+
+# The read-back M26 added, by its first and last line: the guard that refuses, and the
+# line that may only be printed once the guard has passed.
+THE_LOGGING_CLAIM = (
+    """if [ "$(ufw_loglevel)" != "off" ]; then""",
+    """    still hold older copies — this script cannot reach those)\"""",
+)
+
+# The firewall-enable arm, by the same two anchors.
+THE_ENABLE_ARM = (
+    """if as_root ufw status | grep -q '^Status: inactive'; then""",
+    "fi",
+)
+
+
+def a_grep_answering(level: str) -> dict[str, str]:
+    """A ``grep`` that answers as a host whose ufw config holds this logging level.
+
+    Stubbed from outside like ``sshd`` above, and for the same reason: the block reads
+    ``/etc/ufw/ufw.conf``, which is a root-owned absolute path on the machine running this
+    suite, and a script carrying a switch to read somewhere else would be a script with a
+    test in it.
+    """
+    return {"grep": f"#!/bin/sh\nprintf 'LOGLEVEL={level}\\n'\n"}
+
+
+def test_a_ufw_that_ignores_logging_off_is_refused_before_the_firewall_comes_up(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M26's first walk, its first low — and it is the line about the forbidden record.
+
+    The walk ran with a ``ufw`` stub that silently no-opped ``logging off``. The line
+    saying logging was off printed anyway, because it was printed the instant the command
+    returned; the run then brought the firewall UP — which is what starts writing source
+    addresses — and refused in section 6, afterwards. The end state was honest and the
+    scroll was not.
+
+    So the claim is made only after the state is read back, and the refusal is here rather
+    than after the firewall comes up: nothing on this host has begun writing a connection
+    log at the moment it fires.
+    """
+    refused = run_a_fragment(
+        script, block_in(script, *THE_LOGGING_CLAIM), tmp_path, a_grep_answering("full")
+    )
+
+    assert refused.returncode == 1, refused.stdout
+    assert refused.stderr.startswith("node-bootstrap: "), refused.stderr
+    assert "ufw logging is off" not in refused.stdout, (
+        "the run claims logging is off over a host whose configuration says it is not"
+    )
+    assert "LOGLEVEL=off" in " ".join(refused.stderr.split()), refused.stderr
+
+
+def test_a_host_whose_logging_really_is_off_is_told_so(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The accept direction. Without it the check above could refuse every host."""
+    accepted = run_a_fragment(
+        script, block_in(script, *THE_LOGGING_CLAIM), tmp_path, a_grep_answering("off")
+    )
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert "ufw logging is off" in accepted.stdout, accepted.stdout
+
+
+def test_a_firewall_that_will_not_come_up_still_starts_a_node_bootstrap_sentence(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M26's first walk, its second medium, and the promise it broke.
+
+    With ``iptables-restore`` sabotaged, ``ufw --force enable`` failed and the run ended on
+    ufw's own raw ``ERROR: problem running ufw-init`` and exit 1 — with no
+    ``node-bootstrap: `` sentence anywhere. Nothing false was claimed; the operator was
+    simply left with no sentence saying what state their host was in, over a page that
+    promises every refusal exits 1 and starts with those words.
+
+    ufw's own output has to survive INTO that sentence: what it prints here names the
+    rules files it could not load, which is the only clue to why.
+    """
+    refused = run_a_fragment(
+        script,
+        block_in(script, *THE_ENABLE_ARM),
+        tmp_path,
+        {
+            "ufw": (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  status) printf 'Status: inactive\\n' ;;\n"
+                "  *) printf 'ERROR: problem running ufw-init\\n' >&2; exit 1 ;;\n"
+                "esac\n"
+            )
+        },
+    )
+
+    assert refused.returncode == 1, refused.stdout
+    assert refused.stderr.startswith("node-bootstrap: "), refused.stderr
+    said = " ".join(refused.stderr.split())
+    assert "problem running ufw-init" in said, said
+    assert "EXPOSED" in said, "the refusal does not say what state the host is left in"
+    assert "the firewall is now up" not in refused.stdout, refused.stdout
+
+
+def test_a_firewall_that_comes_up_says_so_and_nothing_else(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """The accept direction, and that ufw's own words stay out of the run's output."""
+    brought_up = run_a_fragment(
+        script,
+        block_in(script, *THE_ENABLE_ARM),
+        tmp_path,
+        {
+            "ufw": (
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  status) printf 'Status: inactive\\n' ;;\n"
+                "  *) printf 'Firewall is active and enabled on system startup\\n' ;;\n"
+                "esac\n"
+            )
+        },
+    )
+
+    assert brought_up.returncode == 0, brought_up.stderr
+    assert "==> the firewall is now up" in brought_up.stdout, brought_up.stdout
+    assert "Firewall is active" not in brought_up.stdout, (
+        "ufw's own sentence is in the middle of a run whose lines all start `==> `"
+    )
