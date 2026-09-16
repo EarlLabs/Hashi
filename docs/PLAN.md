@@ -2050,7 +2050,7 @@ changed.
 
 ---
 
-## → M25 — Prove route A carries: friend → entry → hop → leaf → internet · asked for by the owner 2026-09-16
+## ✅ M25 — Prove route A carries: friend → entry → hop → leaf → internet · asked for by the owner 2026-09-16 · done 2026-09-16 (acceptance: good — 2 walks, route A carries)
 
 **Approved by the owner on 2026-09-16.** M23 proved **route B** — a friend dialling
 a leaf directly — on real hardware, nine times. **Route A, the charter's actual
