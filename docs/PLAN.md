@@ -2050,6 +2050,90 @@ changed.
 
 ---
 
+## → M25 — Prove route A carries: friend → entry → hop → leaf → internet · asked for by the owner 2026-09-16
+
+**Approved by the owner on 2026-09-16.** M23 proved **route B** — a friend dialling
+a leaf directly — on real hardware, nine times. **Route A, the charter's actual
+design, has never been observed carrying a packet end to end.**
+
+### The two routes, and why only one is proven
+
+`control` picks the policy from one table (`nodes._EGRESS`):
+
+| row | node has a hop? | policy |
+|---|---|---|
+| friend-facing | **no** | `Egress.LOCAL` — exit out of this node's own route |
+| friend-facing | **yes** | `Egress.HOP` — exit through the hop, **never** locally |
+
+So the same transport renders differently depending on the node it sits on.
+
+**Route B (proven, nine walks):** friend → leaf → internet, exit `45.151.69.107`,
+25 MB each way, two friends concurrently.
+
+**Route A (unproven):** friend → **entry** → hop → **leaf** → internet. The
+charter's whole point: a friend inside Russia reaches a *Russian* address when
+foreign ones are blocked, and the hop out is obfuscated.
+
+**What is known about route A today:** the owner's live hop carries real traffic —
+its counters moved at every one of M23's nine walks. **What is not known: whether
+a friend's traffic actually traverses it**, because the Russian entry refuses this
+machine's key and no friend-facing transport has ever been applied to it.
+
+### Why this is testable without the entry
+
+**Build the shape, not the host.** A throwaway "entry" with a friend-facing row
+(`Egress.HOP`) and a hop of its own, whose far end is a **second, throwaway** hop
+interface on the leaf (its own port, its own network — the live hop's `/30` holds
+two addresses and both are taken). A friend container dials the throwaway entry.
+
+That exercises every part of route A that is the product's: the source-routing an
+entry renders, a real obfuscated hop over the real internet, and `Egress.RELAY` at
+the far end. **What it does not exercise is the real Russian host's own
+conditions** — its `rp_filter`, its provider's filtering, and whether a friend in
+Russia can reach it at all. Those stay field observations.
+
+### M25.1 — A friend behind an entry reaches the internet at the leaf's address
+
+The measurement that settles route A. From inside the friend's tunnel, the
+address the outside world sees must be **the leaf's**, and the packets must have
+crossed the hop to get there.
+
+### M25.2 — An entry must never exit on its own route
+
+**The charter's core claim, and the one that hurts if it is wrong.** `Egress.HOP`
+exists so that a friend's traffic leaves through the hop *and nowhere else*. If an
+entry leaks locally, **a friend's traffic surfaces in Russia** — the exact
+outcome the fleet exists to prevent, arrived at silently.
+
+Prove it two ways: the exit address is the leaf's and never the entry's, **and**
+the entry's own rules carry no route to the internet for that tunnel.
+
+### M25.3 — The hop's far end treats entry traffic as an entry's, not a friend's
+
+M23's ninth walk closed a hole by making a friend reach **only** the internet
+(`NOT_THE_INTERNET` refused). `Egress.RELAY` is a separate value precisely so that
+what arrives over a hop is **not** narrowed the same way — an entry's own lookups
+go through it. **Confirm the hop still carries what it is meant to** and that the
+distinction is real rather than asserted.
+
+**Done when**
+- [ ] A friend behind an entry reaches the internet, and the exit address is the
+      **leaf's**.
+- [ ] The traffic provably crossed the hop — the hop's own counters move for it.
+- [ ] An entry **never** exits on its own route, shown by address and by rule.
+- [ ] The far end of a hop still carries what a hop is for, unnarrowed.
+- [ ] Nothing on either live host is changed, and the owner's hop is untouched.
+
+acceptance: yes
+Stand a friend behind an entry that dials a hop. They reach the internet, they
+come out at the leaf, and nothing they send leaves by the entry's own route.
+
+**Not in scope, by the owner's instruction (2026-09-16):** DNS. M16's resolver
+question and the entry's own lookups are the owner's hosting concern and are not
+this milestone's subject.
+
+---
+
 ## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day
 
 **Not started.**
