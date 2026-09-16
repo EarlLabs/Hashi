@@ -604,7 +604,8 @@ public hostname (*Reaching the panel*):
 2. **Enable a transport: `amneziawg` on UDP 51820.** Right here it is the right choice,
    because this box dials no hop. Its plain cousin is not offered — see *What to give an
    entry node's friends instead* for what was measured. Read *The one combination that
-   will not render* before you make it the entry end of one. The form asks one more
+   will not render* before you make it the entry end of one: once this box dials a hop,
+   this row is what the hop form refuses. The form asks one more
    thing for this family — **how many users this row may hand an address to**, counted
    up from `peer_tunnel_address`. Size it for the fleet you expect rather than for
    today's: the number is a ceiling, raising it later is a resize, and the box says how
@@ -646,8 +647,8 @@ Everything from Shape A applies to box E, plus:
    not render without one (*A node that dials a hop needs a resolver*, below).
 3. Enable a **friend-facing** transport on E — `vless-reality` unless you have a reason
    for the other one. E dials a hop, so it must be a transport the table in *The one
-   combination that will not render* (below) marks yes for a node with a hop; a kernel
-   tunnel here is accepted by the panel and refused at apply.
+   combination that will not render* (below) marks yes for a node with a hop; the panel
+   refuses a kernel tunnel here, in whichever order you build the two.
 4. Build the hop from the panel's hop form: entry = E, leaf = L, transport =
    `amneziawg`. The entry dials the leaf, always — E sits behind a Russian carrier NAT
    and cannot be dialled — so L listens and E reaches out.
@@ -708,12 +709,31 @@ both.
 runbook used to produce exactly that: `amneziawg` for box E's friends, because Shape A
 names it, and `amneziawg` for the hop E dials, because the hop requires it.
 
-The panel now takes both rows. Two instances of one transport on one node are ordinary —
-they collide on a **listening port**, on a **config name** and, for the WireGuard family,
-on their **tunnel ranges**, which may not overlap (*Rules that are not optional*, below).
-Give the hop a range of its own and two `amneziawg` rows on two ports share none of the
-three. What refuses is the **apply**, on the entry, with this in a banner on the Nodes
-screen:
+**The panel refuses it at both doors, before anything is written.** Enable such a
+transport for the users of a node that already dials a hop and the dialog answers *nothing
+was enabled — this node's traffic leaves through a hop, and `amneziawg` cannot carry a
+user's out through one …*; build a hop from a node that already offers one to its users and
+the hop form answers *no hop was established — `<node>` already offers `amneziawg` to its
+users …*. Both name the two ways out: give that node's users a transport that terminates
+their connection and re-originates it, or take the other row away. Nothing is enabled,
+nobody is granted anything, and no user is handed a file.
+
+That refusal is M25's, and it is worth knowing what it replaced. Until then the panel took
+both rows without a word, granted every user a credential on the new one, and handed one of
+them a complete, importable configuration file over their own subscription link — for a
+node whose apply then refused to render it. Three yeses and a no, in that order, with the
+no arriving last.
+
+Two instances of one transport on one node are otherwise ordinary — they collide on a
+**listening port**, on a **config name** and, for the WireGuard family, on their **tunnel
+ranges**, which may not overlap (*Rules that are not optional*, below). On a **leaf** they
+are exactly right: give the hop a range of its own and two `amneziawg` rows on two ports
+share none of the three. It is the node that DIALS the hop that may not also hand one to
+its users.
+
+**If a node is already in that state, the apply is still what refuses it** — a fleet built
+before this refusal existed, or a database edited by hand. It arrives as a banner on the
+Nodes screen:
 
 > `amneziawg could not be rendered for this node — EgressNotRenderable:` … *A tunnel whose
 > packets this node's kernel routes cannot send them out through a different interface, so
@@ -728,7 +748,7 @@ as it was. An entry that was already `active` therefore **stays active and stays
 user's link**, serving whatever its last successful apply left on the host — an operator
 scanning the Nodes screen for something red finds nothing. Read the banner, and treat a
 node whose apply you cannot complete as one that is serving a configuration you did not
-choose.
+choose. The way out is the one the doors name: take one of the two rows away.
 
 **That is a refusal, not a defect.** A wg-quick-family tunnel hands a friend's decrypted
 packets to the entry's own routing table, and the only route this project renders for a
@@ -771,7 +791,7 @@ Every transport this image ships, and what each one may be asked to do:
 |---|---|---|---|
 | `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — a hop is two ends of one tunnel network that each need an address of their own, and this transport hands its consumers none: it identifies them by their material |
 | `vless-ws-tls` | yes, once a certificate and key are on the node | yes, on the same condition | no, for the same reason |
-| `amneziawg` | no — the panel accepts the row and the apply refuses it | yes | yes, and today it is the only one |
+| `amneziawg` | no — the panel refuses it at both doors, and an apply refuses a node already in that state | yes | yes, and today it is the only one |
 | `wireguard` | no — the same refusal, for the same reason | no — retired: the panel does not offer it, and a row enabled before that carries no traffic on a host this runbook prepared | no — it is protocol-blocked where this matters, and the form will not offer it |
 
 Every cell in it is checked against the code by `tests/infra/test_deploy_runbook.py` —
