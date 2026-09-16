@@ -655,9 +655,22 @@ ufw_loglevel() {
   as_root grep -m1 '^LOGLEVEL=' /etc/ufw/ufw.conf 2>/dev/null | cut -d= -f2 || true
 }
 
+# WHAT IS SAID HERE IS WHAT WAS READ, AND NOT WHAT IT IMPLIES — M26's second acceptance
+# walk. Both lines in this step used to state that logging was OFF. On a host whose
+# /etc/ufw/ufw.conf said LOGLEVEL=off while the RUNNING firewall reported `Logging: on
+# (low)`, the run therefore printed two false statements — "ufw logging was already off"
+# and "ufw logging is off; the log file it may have had is gone" — and only then, in
+# section 6, asked the firewall itself and refused correctly. The end state was honest and
+# the scroll was not, about the one record the charter forbids at any level.
+#
+# Two sources, and they can disagree: ufw's config file is the only one that answers while
+# the firewall is INACTIVE, which is the state this host is in here, and the running
+# firewall is the only one that answers for what is actually being written. So this step
+# says what the config file says, names the file, and says that the daemon itself is asked
+# once it is up. The claim that logging is off is made in section 6 and nowhere else.
 UFW_LOGLEVEL="$(ufw_loglevel)"
 if [ "${UFW_LOGLEVEL}" = "off" ]; then
-  say "ufw logging was already off"
+  say "/etc/ufw/ufw.conf already reads LOGLEVEL=off"
 else
   # Discarded like every other ufw call in this file — M19's acceptance. This was the one
   # that still put ufw's own sentence into the middle of a run whose lines all start
@@ -697,8 +710,9 @@ if [ "$(ufw_loglevel)" != "off" ]; then
   after: nothing here has started writing one. The control plane's key is already
   authorised in ${KEYS_FILE} and this refusal does not remove it."
 fi
-say "ufw logging is off; the log file it may have had is gone (syslog and the journal may
-    still hold older copies — this script cannot reach those)"
+say "/etc/ufw/ufw.conf reads LOGLEVEL=off and the log file it may have had is gone — the
+    running firewall is asked separately once it is up (syslog and the journal may still
+    hold older copies of anything it wrote before; this script cannot reach those)"
 
 # Which port SSH actually arrives on, worked out rather than assumed. A literal here would
 # be a port this fleet could not move away from, and — worse — a wrong guess enables a
@@ -1091,11 +1105,17 @@ as_root ufw status verbose | grep -q 'Status: active' || fail \
   firewall before this node carries anyone's traffic. The control plane's key is already
   authorised in ${KEYS_FILE} and this refusal does not remove it."
 
+# THE ONE PLACE THIS RUN CLAIMS LOGGING IS OFF, and it claims it of the firewall that is
+# now running rather than of a file — M26's second acceptance walk, which met a ufw whose
+# `logging off` silently no-ops. The step above says only what it read out of
+# /etc/ufw/ufw.conf, because that file is all there is to read while ufw is inactive, and
+# a host where the two disagree is exactly the host this refusal is for.
 as_root ufw status verbose | grep -qi 'Logging: off' || fail \
   "ufw is logging. That is a connection log — source addresses, written to disk — and the
   charter forbids it at any level. Run 'ufw logging off' and this script again before
   this host is used. The control plane's key is already authorised in ${KEYS_FILE} and
   this refusal does not remove it."
+say "the running firewall was asked and it is not logging"
 
 # --- still section 6: the kernel this node's traffic depends on ---------------
 #

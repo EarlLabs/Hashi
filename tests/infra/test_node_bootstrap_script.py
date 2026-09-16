@@ -2214,7 +2214,18 @@ def run_a_fragment(
 # line that may only be printed once the guard has passed.
 THE_LOGGING_CLAIM = (
     """if [ "$(ufw_loglevel)" != "off" ]; then""",
-    """    still hold older copies — this script cannot reach those)\"""",
+    """    hold older copies of anything it wrote before; this script cannot reach those)\"""",
+)
+
+# The arm above it — the one that reads ufw's config file and, when it has to, runs
+# ``ufw logging off``. Lifted separately from the claim block because the two lines the
+# operator reads are one in each, and M26's second walk found both of them false on one
+# host. The ``rm`` of ufw's own log file sits BETWEEN them and is deliberately in
+# neither: ``as_root`` is a passthrough in this harness, and a fragment that ran that
+# line would be a test suite deleting a file outside ``tmp_path``.
+THE_LOGGING_READ = (
+    """UFW_LOGLEVEL="$(ufw_loglevel)\"""",
+    """fi""",
 )
 
 # The firewall-enable arm, by the same two anchors.
@@ -2256,7 +2267,7 @@ def test_a_ufw_that_ignores_logging_off_is_refused_before_the_firewall_comes_up(
 
     assert refused.returncode == 1, refused.stdout
     assert refused.stderr.startswith("node-bootstrap: "), refused.stderr
-    assert "ufw logging is off" not in refused.stdout, (
+    assert "reads LOGLEVEL=off" not in refused.stdout, (
         "the run claims logging is off over a host whose configuration says it is not"
     )
     assert "LOGLEVEL=off" in " ".join(refused.stderr.split()), refused.stderr
@@ -2271,7 +2282,61 @@ def test_a_host_whose_logging_really_is_off_is_told_so(
     )
 
     assert accepted.returncode == 0, accepted.stderr
-    assert "ufw logging is off" in accepted.stdout, accepted.stdout
+    assert "reads LOGLEVEL=off" in accepted.stdout, accepted.stdout
+
+
+def test_the_logging_step_states_what_it_read_and_not_what_it_implies(
+    script: str, tmp_path: pathlib.Path
+) -> None:
+    """M26's SECOND acceptance walk — and round 1's own fix is what made it two lies.
+
+    The walk ran against a ufw whose ``logging off`` silently no-ops and whose ``status
+    verbose`` reports ``Logging: on (low)``, on a host whose ``/etc/ufw/ufw.conf``
+    already read ``LOGLEVEL=off``. The run printed *"==> ufw logging was already off"*
+    AND *"==> ufw logging is off; the log file it may have had is gone"* — and only then
+    asked the running firewall and refused correctly. The end state was honest and the
+    scroll was not, about the one record the charter forbids at any level.
+
+    Two sources that can disagree, so each line names the one it read. The config file is
+    all there is to read while ufw is inactive, which is the state this step runs in; the
+    running firewall is asked in section 6, and the test below holds the claim to being
+    made there and nowhere earlier.
+    """
+    said = run_a_fragment(
+        script, block_in(script, *THE_LOGGING_READ), tmp_path, a_grep_answering("off")
+    )
+
+    assert said.returncode == 0, said.stderr
+    assert "/etc/ufw/ufw.conf" in said.stdout, (
+        "the line about the record the charter forbids does not say what it read"
+    )
+    assert not re.search(r"ufw logging (is|was)", said.stdout), (
+        f"a line about ufw's logging state claims more than the file it read says: "
+        f"{said.stdout!r}"
+    )
+
+
+def test_nothing_claims_the_firewall_is_not_logging_before_the_firewall_is_asked(
+    script: str,
+) -> None:
+    """The ordering, held on the script's own text — the other half of the test above.
+
+    A fragment can only prove the lines it runs. What has to be true of the whole run is
+    that no ``say`` anywhere above the live check makes a claim about ufw's logging
+    STATE: the two sources disagree on exactly the host this matters for, and the earlier
+    one cannot see what is being written.
+    """
+    asked = script.index("""grep -qi 'Logging: off'""")
+    claimed = script.index("the running firewall was asked and it is not logging")
+
+    assert claimed > asked, (
+        "the run claims the firewall is not logging before it asks the firewall"
+    )
+    for said in re.finditer(r'^say "(.*)$', script[:asked], re.M):
+        assert not re.search(r"logging (is|was) (already )?off", said.group(1)), (
+            f"a line printed before the firewall is asked claims its logging is off: "
+            f"{said.group(1)!r}"
+        )
 
 
 def test_a_firewall_that_will_not_come_up_still_starts_a_node_bootstrap_sentence(

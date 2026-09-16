@@ -206,7 +206,13 @@ def test_the_leaf_section_quotes_the_script_rather_than_paraphrasing_it(
         # a host somebody already prepared
         "docker is already installed — left exactly as it is",
         "the control plane's key is already authorised for",
-        "ufw logging was already off",
+        # M26's second walk: the step says what it READ out of ufw's config file, because
+        # that file is all there is to read while the firewall is inactive — and the claim
+        # that the firewall is not logging is made once, after the firewall itself is
+        # asked. Both lines are quoted here because an operator matches a terminal against
+        # this page, and this is the run's one subject the charter forbids at any level.
+        "/etc/ufw/ufw.conf already reads LOGLEVEL=off",
+        "the running firewall was asked and it is not logging",
         "was already open",
         "incoming was already denied by default",
         "the firewall was already up — its existing rules were kept",

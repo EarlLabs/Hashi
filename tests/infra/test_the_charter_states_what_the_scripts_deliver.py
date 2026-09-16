@@ -158,3 +158,56 @@ def test_the_charter_counts_what_the_walk_counted(deployment: str) -> None:
         "the charter still reads as though the control plane were one script; it is 13 "
         "commands, of which the script is one"
     )
+
+
+def test_no_success_criterion_says_the_panel_bootstraps_a_node(charter: str) -> None:
+    """M26's SECOND acceptance walk, one screen above the section written to fix this.
+
+    Criterion 2 read *"when I destroy it and bootstrap a replacement FROM THE PANEL"*.
+    The panel bootstraps nothing: ``scripts/node-bootstrap.sh`` is run over SSH from the
+    machine holding the fleet's key pair, and it ends by printing what the operator then
+    types into the panel. Round 1 narrowed the deployment section and left the criterion
+    that section references standing, so the page corrected itself and went on
+    overstating the product two hundred lines higher up.
+
+    Asserted over the SUCCESS CRITERIA, not the whole file, because the rest of the page
+    may quote the old wording to say it was wrong — which is exactly what the criterion
+    does now.
+    """
+    criteria = re.search(r"^## Success criteria$(?:.*\n)*?(?=^## )", charter, re.M)
+    assert criteria, "the charter no longer has a success-criteria section"
+
+    for line in criteria.group(0).splitlines():
+        if line.lstrip().startswith(("This used to read", ">")):
+            # The correction's own account of what it corrected. It has to be able to
+            # quote the sentence it retired, or the page cannot say what changed.
+            continue
+        assert "bootstrap a replacement from the panel" not in line, (
+            f"a success criterion says the panel bootstraps a node, and it does not: "
+            f"{line.strip()!r}"
+        )
+
+
+def test_the_criterion_names_the_script_that_does_the_bootstrapping(charter: str) -> None:
+    """The accept direction: replacing the false claim with nothing would be worse.
+
+    An operator reading criterion 2 has to be able to find out what to actually run, and
+    the answer is a file in this repository — so the criterion names it, and this test
+    fails if that file is ever renamed without the charter following.
+    """
+    criteria = re.search(r"^## Success criteria$(?:.*\n)*?(?=^## )", charter, re.M)
+    assert criteria
+    replaceable = re.search(
+        r"^2\. \*\*A node is replaceable in ten minutes\.\*\*(?:.*\n)*?(?=^\d\. )",
+        criteria.group(0),
+        re.M,
+    )
+    assert replaceable, "the charter no longer states criterion 2 in the expected shape"
+
+    named = flat(replaceable.group(0))
+    assert "scripts/node-bootstrap.sh" in named, (
+        "criterion 2 no longer says what an operator runs to replace a node"
+    )
+    assert NODE_SCRIPT.exists(), (
+        "the charter names a bootstrap script this repository does not ship"
+    )
