@@ -850,10 +850,15 @@ class _FakeHost:
             }
             return CommandResult(exit_status=0, stdout="", stderr="")
         if "docker inspect" in command:
-            # Four fields since M22 — service, digest, running, RESTARTING. Nothing this
-            # fake runs crash-loops; the state itself is the subject of
-            # ``tests/control/test_a_probe_says_what_it_checked.py``.
-            lines = [f"{name}|{digest}|true|false" for name, digest in self.digests.items()]
+            # Five fields since M26's second acceptance walk — service, digest, running,
+            # RESTARTING, and which LIFE of the container was read. Nothing this fake
+            # crash-loops, so the token is constant per service; the states themselves are
+            # the subject of ``tests/control/test_a_probe_says_what_it_checked.py`` and
+            # ``tests/control/test_an_applys_own_check_waits_for_the_daemon.py``.
+            lines = [
+                f"{name}|{digest}|true|false|one-life"
+                for name, digest in self.digests.items()
+            ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
         if "docker version" in command:
             return CommandResult(exit_status=0, stdout="27.1.1\n", stderr="")

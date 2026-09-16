@@ -25,6 +25,14 @@
   A GROUP PER HOP-CAPABLE TRANSPORT is rendered and all but the chosen one is hidden.
   The hiding is presentation only (static/app.js); the server filters the submitted
   fields to the chosen transport's own list, so the form works with the script dead.
+
+  SOME BOXES ARRIVE ANSWERED — M26's second acceptance walk, which ran out of action
+  budget in this dialog and never established its hop. A parameter the transport declares
+  both ends must carry IDENTICALLY is drawn once per hop and written into both ends
+  (services/transports.py, panel/routes.py). Nothing here decides which: `parameter.minted`
+  is the answer, so this file still names no protocol and no field. Those values are not
+  defaults — a default is one value every hop borrows, which is the fingerprint the
+  charter's shared-decoy rule is about.
 #}
 {% macro tuning_box(prefix, parameter, values, errors) %}
 {#
@@ -46,6 +54,16 @@
          autocomplete="off" spellcheck="false"
          {% if parameter.hint or errors.get(field) %}aria-describedby="{% if parameter.hint %}hop-{{ field }}-hint{% endif %}{% if parameter.hint and errors.get(field) %} {% endif %}{% if errors.get(field) %}hop-{{ field }}-error{% endif %}"{% endif %}
          {% if errors.get(field) %}aria-invalid="true"{% endif %}>
+  {% if parameter.minted %}
+  {#
+    A box that arrived answered. It says so, because a number an operator did not type
+    and cannot account for is one they will either clear or distrust — and the one thing
+    they must not do is copy it into the other end by hand, which is what the pair of
+    boxes used to require of them.
+  #}
+  <div class="field-hint">Drawn for this hop and written into both ends. Change it if you
+    like — change it at both ends, or the tunnel comes up and carries nothing.</div>
+  {% endif %}
   {% if parameter.hint %}
   <div class="field-hint" id="hop-{{ field }}-hint">{{ parameter.hint }}</div>
   {% endif %}
@@ -154,17 +172,37 @@
         where that has to be said.
       #}
       {% set must_fill = tuning[name] | selectattr("required") | list %}
+      {% set already = tuning[name] | selectattr("minted") | list %}
       <details class="disclosure" data-transport-group="{{ name }}"
                {% if name != shown %}hidden{% endif %}
                {% if open_tuning and values.get('transport_name') == name %}open{% endif %}>
         <summary>advanced tuning — {{ tuning[name] | length }} parameters per end,
-          {{ must_fill | length }} of them required by this transport</summary>
+          {{ must_fill | length }} of them required by this transport{% if already %},
+          {{ already | length }} already drawn for both ends{% endif %}</summary>
         <p class="text-muted section-note">
           Each box shows what this transport declares for it — the value it uses when
           the box is left empty, or the range it will accept when it declares no
           default. A box with no default behind it is refused when it is left empty,
           not filled in. Key material is generated for both ends and the value the two
           must share is minted once for both. Never type a key here.
+        </p>
+        {% if already %}
+        <p class="text-muted section-note">
+          {{ already | length }} of these arrived answered: this transport declares that
+          both ends must carry them identically, and a pair that disagrees is refused —
+          two valid files, two daemons that start, and no packet. They are drawn for
+          this hop alone, never shared with another, and you can still type your own
+          into both ends.
+        </p>
+        {% endif %}
+        <p class="text-muted section-note">
+          The rest are empty because nothing here can know them and no value should be
+          borrowed. A port and the two tunnel addresses belong to these hosts and to
+          whatever else is already on them — a shared one is a value the fleet cannot
+          rotate away from, and two tunnels whose ranges meet hand somebody another
+          person's address. An MTU belongs to the path this hop crosses. The junk-packet
+          sizes have to hold together as a pair, so a number drawn here could arrive
+          already refused.
         </p>
         <div class="grid-2">
           {% for side in sides %}
@@ -191,7 +229,8 @@
         {% else %}
         Open advanced tuning before you submit. A parameter the chosen transport
         declares no default for is refused when its box is left empty, rather than
-        filled in — the summary above says how many of them there are. Both ends are
+        filled in — the summary above says how many of them there are, and how many
+        arrived already drawn for both ends. Both ends are
         then written together, and the hop exists only in the database until you apply
         both nodes. Nothing reaches a user through it before that, and no user has to
         do anything when it does.

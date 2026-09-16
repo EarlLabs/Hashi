@@ -105,11 +105,15 @@ class _FakeHost:
             return CommandResult(exit_status=0, stdout="", stderr="")
 
         if "docker inspect" in command:
-            # Four fields since M22 — service, digest, running, RESTARTING. Nothing this
-            # fake runs crash-loops: a container it created either exists and is up or was
-            # never created, which is the only rule of Docker this file models.
+            # Five fields since M26's second acceptance walk — service, digest, running,
+            # RESTARTING, and a token for which LIFE of the container this reading looked
+            # at. Nothing this fake runs crash-loops: a container it created either
+            # exists, is up and stays up, or was never created, which is the only rule of
+            # Docker this file models. The token is therefore constant per service — a
+            # fake that invented a new one on every read would model a permanent crash
+            # loop, and the apply's settle check would refuse every node here.
             lines = [
-                f"{service}|{container['digest']}|true|false"
+                f"{service}|{container['digest']}|true|false|one-life"
                 for service, container in self.containers.items()
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")

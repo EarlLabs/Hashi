@@ -48,6 +48,12 @@ HOW:  fields of the transport's own model, minus every name the transport declar
       ``edge``'s own explanation of why, so that what a door refuses and what a render
       refuses are one rule rather than two that have to be kept in step.
 
+      M26's second acceptance walk adds ``minted_hop_values(name)``: a value drawn, per
+      hop, for every parameter the transport declares both ends must carry IDENTICALLY.
+      It is the one thing in this module that is not a reading — see the function for
+      why a minted value is not a default, and why the walk's budget running out inside
+      those boxes made it necessary.
+
       Nothing here names a protocol. The answer comes from the transport's own
       declaration, so a new package under ``edge/transports/`` gets working forms with
       no edit to this file. ONE field name appears, and it is the hop contract's
@@ -55,6 +61,7 @@ HOW:  fields of the transport's own model, minus every name the transport declar
 """
 
 import dataclasses
+import secrets
 import types
 import typing
 from collections.abc import Iterable, Mapping, Sequence
@@ -193,6 +200,12 @@ class TuningField:
     placeholder: str
     hint: str
     default: str | None
+
+    # Whether the establish-hop dialog arrives with a value already in this box, drawn
+    # for this hop and written into BOTH ends — M26's second acceptance walk. It is not
+    # a default and ``required`` below is unaffected: clearing the box still refuses the
+    # hop. See ``minted_hop_values``.
+    minted: bool = False
 
     @property
     def required(self) -> bool:
@@ -396,10 +409,131 @@ def hop_tuning(transport_name: str) -> tuple[TuningField, ...]:
     """
     transport = profile(transport_name)
     fields = transport.params_model.model_fields
+    # WHICH names arrive filled in — the question, never the values. ``hop_tuning`` runs
+    # on every render of this dialog including the refusals, and a function that drew a
+    # fresh set of numbers each time would be four boxes whose contents changed under the
+    # operator between one refusal and the next. The values are drawn once, by the route,
+    # and put in the form's ``values``.
+    minted = set(mintable_hop_params(transport_name))
     return tuple(
-        tuning_field(name, fields[name], transport.meta.port_range)
+        dataclasses.replace(
+            tuning_field(name, fields[name], transport.meta.port_range),
+            # Marked here rather than inside ``tuning_field``, which is shared with the
+            # two node-level forms and has no hop to speak of. What the flag says is
+            # that this box arrives filled in, not that it has a default — the
+            # distinction the dialog then has to carry to the operator.
+            minted=name in minted,
+        )
         for name in hop_parameters(transport_name)
     )
+
+
+def mintable_hop_params(transport_name: str) -> tuple[str, ...]:
+    """Which of a transport's matched parameters this module can draw a value for.
+
+    Split from the drawing itself because the two questions are asked at different
+    moments and only one of them may be random: the dialog asks WHICH boxes arrive
+    filled in every time it renders, and asks for the VALUES once, when it is opened
+    empty. Deriving them separately would let the two disagree — a box marked as
+    minted with nothing in it is worse than either.
+
+    A matched parameter this cannot draw for is one that is not an integer or declares
+    no bounds to draw inside. It is absent here and its box is empty, which is the
+    behaviour every box on this form had before.
+    """
+    transport = profile(transport_name)
+    fields = transport.params_model.model_fields
+    mintable = []
+    for name in transport.meta.hop_matched_params:
+        info = fields.get(name)
+        if info is None or info.annotation is not int:
+            continue
+        low, high = _numeric_bounds(info)
+        if low is None or high is None:
+            continue
+        mintable.append(name)
+    return tuple(mintable)
+
+
+def minted_hop_values(transport_name: str) -> dict[str, str]:
+    """One value per parameter both ends of a hop must carry identically, drawn now.
+
+    M26's SECOND ACCEPTANCE WALK, and the finding is not that the boxes are tedious. The
+    walk prepared two bare hosts with one command each, registered both, enabled a
+    friend-facing transport on the entry — and then ran out of action budget inside this
+    form, which wanted eleven parameters per end. The fourth "done when" of the milestone
+    was not reached because of an empty box, so the emptiness is the finding.
+
+    **A MINTED VALUE IS NOT A DEFAULT, and the difference is the whole argument.** A
+    default is one value every node borrows, which is what ``CLAUDE.md`` forbids for a
+    Reality decoy and what ``docs/decisions.md`` (2026-09-10) refused for every box on
+    these forms: a value the fleet shares is the signature the fleet is enumerable by.
+    What this draws is a fresh value PER HOP, from this process's CSPRNG, written into
+    both ends of that hop and nowhere else — which is what key material already does one
+    field over, and for the same reason.
+
+    WHY ONLY THE MATCHED ONES. ``TransportMeta.hop_matched_params`` is the transport's
+    own declaration of which parameters mean nothing unless they are identical at both
+    ends. ``edge.relay`` refuses a pair that disagrees (M26, round 1) — which means the
+    product was asking an operator to type four numbers into two forms by hand and then
+    refusing them for the typo it had invited. Round 1 fixed the refusal; this is the
+    other half.
+
+    Everything else on the form is left empty deliberately and the dialog says so. A port
+    and an address are properties of the host and of the other hops on it, an MTU is a
+    property of the path, and the junk-packet knobs carry a cross-field rule this
+    function has no way to honour — ``junk_packet_max_size`` may not be below
+    ``junk_packet_min_size``, and a generic draw within two independent ranges would
+    produce a form that arrives already refused, which is worse than an empty box.
+
+    THE DRAW FAILS SAFE at every step. A parameter that is not an integer, or declares no
+    bounds to draw inside, or whose draw keeps colliding with one already made, is simply
+    absent from this answer — so its box is empty and the transport's own validation
+    refuses it, exactly as before. Nothing here invents a range: an unbounded field is
+    one `control` has no business choosing a width for, which is why ``tests/edge/
+    test_relay.py`` holds a transport that declares a parameter matched to declaring
+    its bounds as well.
+    """
+    fields = profile(transport_name).params_model.model_fields
+    minted: dict[str, str] = {}
+    drawn: set[int] = set()
+    for name in mintable_hop_params(transport_name):
+        low, high = _numeric_bounds(fields[name])
+        if low is None or high is None:  # pragma: no cover - mintable_hop_params said so
+            continue
+        value = _draw_apart_from(low, high, drawn)
+        if value is None:
+            continue
+        drawn.add(value)
+        minted[name] = str(value)
+    return minted
+
+
+# How many times a draw may collide with one already made before the box is left empty.
+# A range this project meets is 32 bits wide and four values are drawn from it, so a
+# single collision is already improbable and sixteen is a ceiling on a loop rather than a
+# tuned number — what it is really for is a transport whose declared range is smaller
+# than its matched set, where no amount of drawing can succeed.
+_DRAW_ATTEMPTS = 16
+
+
+def _draw_apart_from(low: int, high: int, already: set[int]) -> int | None:
+    """A value in ``low``–``high`` that is not one of ``already``, or ``None``.
+
+    Distinct from the others because a matched set whose members collide is the one shape
+    a transport can refuse — AmneziaWG's four magic headers must differ from each other,
+    or two message types become indistinguishable and the tunnel never comes up. A form
+    that arrived carrying two equal numbers would be a form pre-refused by the very rule
+    it was trying to spare the operator.
+
+    ``secrets`` rather than ``random``: these values are a node's fingerprint, and a
+    predictable one is an enumerable one.
+    """
+    for _ in range(_DRAW_ATTEMPTS):
+        value = low + secrets.randbelow(high - low + 1)
+        if value not in already:
+            return value
+    return None
 
 
 def tuning_field(name: str, info: FieldInfo, port_range: tuple[int, int]) -> TuningField:
@@ -469,12 +603,16 @@ def _declared_default(info: FieldInfo) -> str | None:
     return str(value)
 
 
-def _declared_bounds(info: FieldInfo) -> str | None:
-    """A field's declared range as ``low–high``, or the half of it that exists.
+def _numeric_bounds(info: FieldInfo) -> tuple[int | None, int | None]:
+    """A field's declared range as the two numbers, either of which may be missing.
 
     Read off the constraint objects by attribute rather than by importing the library
     that defines them: Pydantic is free to carry its own constraint types here, and a
     duck-typed read keeps working when it does.
+
+    Exclusive bounds are converted to inclusive ones, so every caller reads one shape.
+    That matters to the drawing above more than to the sentence below: a value drawn at
+    a ``gt`` bound would be the one value the field refuses.
     """
     low = high = None
     for constraint in info.metadata:
@@ -486,6 +624,12 @@ def _declared_bounds(info: FieldInfo) -> str | None:
             value = getattr(constraint, attribute, None)
             if value is not None:
                 high = value if attribute == "le" else value - 1
+    return low, high
+
+
+def _declared_bounds(info: FieldInfo) -> str | None:
+    """A field's declared range as ``low–high``, or the half of it that exists."""
+    low, high = _numeric_bounds(info)
     if low is not None and high is not None:
         return f"{low}–{high}"
     if low is not None:

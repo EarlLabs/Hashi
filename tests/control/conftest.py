@@ -118,7 +118,22 @@ async def clean_database() -> None:
 
 
 @pytest.fixture
-async def settings(clean_database, operator_password_hash: str) -> Settings:
+def settle_window() -> tuple[float, float]:
+    """How long an apply watches a restarted daemon, and how far apart its readings are.
+
+    Tiny by default, because almost every test here applies to a node that comes straight
+    up and pays this window for nothing. A file whose subject IS the watching overrides
+    this fixture with a window wide enough to model a container that takes a moment —
+    which is the point of it being a fixture: the numbers live where the scenario is, and
+    the assertions read them off the settings object rather than repeating them.
+    """
+    return (0.02, 0.4)
+
+
+@pytest.fixture
+async def settings(
+    clean_database, operator_password_hash: str, settle_window: tuple[float, float]
+) -> Settings:
     return Settings(
         secret_key=TEST_SECRET_KEY,
         database_url=DATABASE_URL,
@@ -134,6 +149,14 @@ async def settings(clean_database, operator_password_hash: str) -> Settings:
         # and the whole suite stops costing minutes — the default of five is a field
         # value, chosen for a lossy link, and nothing here is on a link at all.
         node_connect_timeout=1,
+        # The settle window an apply watches a restarted daemon for — M26's second walk.
+        # Off its declared default for ``node_connect_timeout``'s first reason and for one
+        # of its own: every apply in this suite would otherwise pay two real seconds, and
+        # a value the suite never moves is a value no test can prove is read. It comes
+        # from a fixture rather than from a literal here so the file that is ABOUT the
+        # settling can widen it — see ``settle_window``.
+        node_settle_interval=settle_window[0],
+        node_settle_timeout=settle_window[1],
         # Moved off its declared default (30) for a different reason than the ceiling
         # above — that one is about the suite's cost, this one is what makes two claims
         # provable. Two screens STATE this window, the Settings row and the audit log's
@@ -398,17 +421,28 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def restart(connection) -> None:
         return None
 
-    async def loaded_digests(connection) -> dict[str, str]:
+    async def running_containers(connection) -> node_stack.RunningContainers:
         # A node whose restart DID take: every container comes back on the config it
-        # was just handed. ``digest_of`` is the real one, so this is the value
-        # production would compare against.
-        return dict(connection.placed)
+        # was just handed, and stays. ``digest_of`` is the real one, so this is the
+        # value production would compare against.
+        #
+        # ``started`` is one token per service, CONSTANT for the life of this double —
+        # M26's second walk. The apply's check now confirms a container only when two
+        # readings an interval apart saw the same life of it, so a double that invented
+        # a fresh token each call would model a node in a permanent crash loop and every
+        # apply in this suite would fail. A node that is genuinely staying up is what
+        # this double has always stood for.
+        return node_stack.RunningContainers(
+            loaded=dict(connection.placed),
+            restarting=(),
+            started={name: "one-life" for name in connection.placed},
+        )
 
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)
     pinned(monkeypatch, node_stack, "restart", restart)
-    pinned(monkeypatch, node_stack, "loaded_digests", loaded_digests)
+    pinned(monkeypatch, node_stack, "running_containers", running_containers)
 
 
 def _bound_loopback_socket() -> socket.socket:

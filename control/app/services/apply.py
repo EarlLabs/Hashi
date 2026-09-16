@@ -14,8 +14,10 @@ HOW:  the order is the contract, and every step exists because skipping it produ
          reject, because it restarts into a crash loop and the node is down;
       3. place the config and the compose file;
       4. restart;
-      5. verify the daemon came back ON THIS CONFIG — not merely that a container
-         exists, which is what M1 proved says nothing (see ``loaded_digests``);
+      5. verify the daemon came back ON THIS CONFIG and STAYED up — not merely that a
+         container exists, which is what M1 proved says nothing, and not one sample of
+         it either, which is what M26's second acceptance walk proved says nothing (see
+         ``services/serving``);
       6. record the digest, so drift is detectable afterwards.
 
       Any failure from step 3 onward marks the node DEGRADED, never active — core
@@ -51,7 +53,7 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, nodes, placement, relay
+from control.app.services import addresses, audit, nodes, placement, relay, serving
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
@@ -1152,13 +1154,37 @@ async def apply_node(
             # serves nothing, and one that was never recreated satisfies it while
             # serving the PREVIOUS config, which is the fault M1 measured in the field.
             #
-            # ``loaded_digests`` answers with the digest each running container was
-            # created with, so the comparison below is against what the process was
-            # started from rather than against what is on disk beside it. Without it
-            # this function wrote an ``applied_digest`` recording a state the node was
-            # not in — and a revoked friend stayed connected.
-            loaded = await node_stack.loaded_digests(connection)
-            not_running = sorted(set(configs) - set(loaded))
+            # The reading answers with the digest each running container was created
+            # with, so the comparison below is against what the process was started from
+            # rather than against what is on disk beside it. Without it this function
+            # wrote an ``applied_digest`` recording a state the node was not in — and a
+            # revoked friend stayed connected.
+            #
+            # AND IT IS WATCHED RATHER THAN SAMPLED — M26's second acceptance walk, and
+            # it is the same fault one layer in. This line used to look ONCE, straight
+            # after the restart above, at a container in the first second of its first
+            # start: running, not yet restarting, and in a crash loop by the time the
+            # operator read the row. The walk saw that twice, and saw the same check fire
+            # the other way on a leaf whose container came up a moment later — degraded,
+            # while that friend's ping was 0% loss. ``services/serving`` is the whole of
+            # the fix: two readings an interval apart, comparable because each says which
+            # LIFE of the container it looked at, bounded by a ceiling, and nothing
+            # confirmed that was not observed staying up. See that module for why a
+            # longer sleep would not have been an answer.
+            settled = await serving.confirm_serving(
+                connection,
+                expected=configs,
+                interval=node_settings.node_settle_interval,
+                timeout=node_settings.node_settle_timeout,
+            )
+            loaded = settled.staying_up
+            # A crash loop and a container that was never created are both "it did not
+            # come up" to the operator, and they are one clause below because the repair
+            # they need is the same one: read what the container itself printed on the
+            # node. The two are kept apart in ``Settled`` because the probe tells them
+            # apart and the two surfaces must not come to different vocabularies for one
+            # host — this is where they meet, not where they are decided.
+            not_running = sorted(set(settled.restarting) | set(settled.absent))
             stale = sorted(
                 name
                 for name, config in configs.items()
@@ -1289,18 +1315,32 @@ async def apply_node(
     node.state = NodeState.ACTIVE
     node.state_detail = None
 
-    # AND THE LAST PROBE'S FINDING GOES WITH IT — M26's first acceptance walk, and it is
-    # the same line of reasoning as the one above rather than a new one. Step 5 verified
-    # the daemon came back ON THIS CONFIGURATION, which is strictly more than a probe
-    # establishes, so a finding about what this host was running before is not a finding
-    # about what it is running now — and leaving it would put a stale fault on the row of
-    # a node that has just been proven, which is the reassurance-shaped defect pointed
-    # the other way.
+    # AND THE LAST PROBE'S FINDING GOES WITH IT — M26's first acceptance walk, on a
+    # premise that walk 2 broke and that is restated here rather than left standing.
     #
-    # The timestamp is cleared with it rather than kept. What it would otherwise mean is
-    # "probed at 10:31, and the answer has since been thrown away", which is not a
-    # reading; the honest state of a freshly applied host is that nobody has asked it
-    # anything since, and that is what NULL says on every screen reporting this.
+    # WHAT ROUND 1 SAID, AND WHY IT WAS WRONG: "a successful apply clears the finding,
+    # because step 5 verifies the daemon came back on the config it just pushed —
+    # strictly more than a probe establishes." It is not strictly more. Step 5 does not
+    # ask what is holding a port, which a probe does; and until walk 2 it did not
+    # establish even its own half, because it concluded from one sample of a container
+    # in the first second of its first start. So an apply deleted a true finding while
+    # measuring nothing, and the row went green over a host in a crash loop.
+    #
+    # WHAT IS TRUE, AND IS WHY THIS LINE STAYS: an apply REPLACES every process the
+    # finding was about. The containers are recreated, so a probe's answer about the
+    # daemons that were running before it is not an answer about the ones running now —
+    # it is obsolete rather than contradicted, and keeping it would put a fault on the
+    # row of a node whose fault has just been rebuilt away. What walk 2 required is that
+    # the replacement be watched rather than glanced at, which is step 5 above: nothing
+    # reaches this line unless every placed config was observed staying up.
+    #
+    # The timestamp is cleared with it rather than set to now, and that is the whole of
+    # what keeps this honest. An apply is not a probe: it watched containers and it asked
+    # no host what is listening on a port. Writing a time here would say "asked at 13:05
+    # and nothing was wrong", which claims the narrower check as the wider one — so the
+    # row says what is true instead, that nobody has probed this host since it was
+    # applied. ``console.COUNTERS_COUNT_CONFIGURATION`` is the sentence that tells the
+    # operator so.
     node.last_probe_at = None
     node.last_probe_finding = None
 

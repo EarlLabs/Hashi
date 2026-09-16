@@ -79,6 +79,11 @@ class _FakeHost:
                 f"{service}"
                 f"|{definitions[service]['labels'][node_stack.CONFIG_DIGEST_LABEL]}"
                 f"|true|false"
+                # Which LIFE of the container this reading looked at — M26's second walk.
+                # Constant per service here: this fake's containers do not crash-loop,
+                # and an apply's settle check confirms only a container it saw staying up
+                # across two readings.
+                f"|one-life"
                 for service in self.services
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
@@ -255,11 +260,22 @@ async def test_a_later_probe_that_finds_nothing_clears_it(
 async def test_a_successful_apply_clears_it(
     client, session, reality_params, host
 ) -> None:
-    """The second thing that genuinely unsays a finding, and the stronger of the two.
+    """The second thing that unsays a finding, and NOT the stronger of the two.
 
-    An apply verifies the daemon came back on the configuration it just pushed, which is
-    more than the probe establishes — so keeping a finding about the configuration before
-    it would leave a stale fault on the row of a node that has just been proven.
+    THE SENTENCE THAT STOOD HERE WAS WRONG, and M26's second acceptance walk is what
+    proved it: *"an apply verifies the daemon came back on the configuration it just
+    pushed, which is more than the probe establishes."* It is not more — an apply asks no
+    host what is holding a port, which a probe does — and until that walk it did not
+    establish even its own half, because it concluded from one sample of a container in
+    its first second. The walk watched an apply delete a true finding and report nothing
+    while the container sat in a crash loop and the friend's ping was 100% loss.
+
+    What is true, and is why this test still asserts a clear: an apply REPLACES every
+    process the finding was about, and since walk 2 it refuses unless it has watched the
+    replacements stay up (``tests/control/test_an_applys_own_check_waits_for_the_
+    daemon.py``). A finding about processes that no longer exist is obsolete rather than
+    contradicted. The timestamp goes with it precisely because an apply is not a probe:
+    the row reads "never probed", which is what it is.
     """
     node_id = await an_applied_node(client, reality_params)
     await client.get(f"/api/nodes/{node_id}/health")
@@ -274,6 +290,56 @@ async def test_a_successful_apply_clears_it(
     assert node.last_probe_at is None, (
         "a freshly applied node reads as probed, over an answer that was thrown away"
     )
+
+
+async def test_an_apply_that_could_not_confirm_the_daemon_clears_nothing(
+    client, session, reality_params, host, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The half of the rule above that walk 2 had to be run twice to find.
+
+    A finding may be replaced by a measurement and by nothing else. An apply that pushed
+    and could NOT then watch the daemon stay up has measured a failure, not a success —
+    so it leaves what the probe found exactly where it was, and puts its own reason on
+    the row beside it. Without this, "an apply clears the finding" is a licence for any
+    apply at all to erase a true reading, which is the defect the walk filed.
+    """
+    node_id = await an_applied_node(client, reality_params)
+    await client.get(f"/api/nodes/{node_id}/health")
+
+    node = await nodes.get_node(session, node_id)
+    await session.refresh(node)
+    found = node.last_probe_finding
+    assert found, "the probe recorded nothing, so this test proves nothing"
+
+    # The host stops answering with any container at all: the push lands and the daemon
+    # does not come back on it, which is the failure the settle check reports.
+    host.services = []
+    monkeypatch.setattr(host, "run", _pushes_but_never_comes_up(host))
+
+    applied = await client.post(f"/api/nodes/{node_id}/apply")
+    assert applied.status_code != 200, applied.text
+
+    session.expire_all()
+    node = await nodes.get_node(session, node_id)
+
+    assert node.last_probe_finding == found, (
+        "an apply that could not confirm the daemon deleted a true probe finding"
+    )
+    assert node.state_detail, "the failed apply left no reason of its own on the row"
+
+
+def _pushes_but_never_comes_up(host):
+    """The fake's own shell, with ``docker inspect`` answering for no container."""
+    real = host.run
+
+    async def run(command: str, *, check: bool = True):
+        from edge.bootstrap.ssh import CommandResult
+
+        if "docker inspect" in command:
+            return CommandResult(exit_status=0, stdout="", stderr="")
+        return await real(command, check=check)
+
+    return run
 
 
 async def test_no_finding_records_anything_about_a_person(

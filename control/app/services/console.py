@@ -1195,7 +1195,10 @@ COUNTERS_COUNT_CONFIGURATION = (
     "These four count configuration — what is registered, enabled and in service. "
     "Nothing on this screen dials a host, so none of them moves when a daemon stops. "
     "What a host is actually running is measured only when you press probe on the Nodes "
-    "screen, and what that found is kept until the next apply."
+    "screen, and what that found is kept until a later probe finds otherwise — or until "
+    "an apply, which rebuilds the very containers the finding was about and refuses "
+    "unless it watches them stay up. An apply is not a probe: it clears the finding and "
+    "leaves the row reading as never probed, because that is what it is."
 )
 
 

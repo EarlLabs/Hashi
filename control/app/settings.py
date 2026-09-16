@@ -95,6 +95,25 @@ class Settings(BaseSettings):
     # test suite lowers it, which is how it stays honest that the value is used.
     node_connect_timeout: int = 5
 
+    # How long an apply watches the daemon it just restarted before believing it, and
+    # how far apart the readings are — both in seconds. M26's second acceptance walk.
+    #
+    # An apply used to look ONCE, straight after `docker compose up -d`, and a container
+    # sampled in the first second of its first start is running and not yet restarting.
+    # The walk read a node as serving while its container was in a crash loop, and read
+    # another as degraded while its friend's ping was 0% loss. Both readings were true
+    # about the instant they were taken and meant nothing about the node.
+    #
+    # Settings rather than constants for ``node_connect_timeout``'s reason: they are what
+    # a real fleet can force us to raise — a node pulling an image over a slow link takes
+    # longer to come back than a container on a laptop — and because the test suite lowers
+    # them, which is how it stays honest that the values are used. Twenty seconds is the
+    # window the walk itself watched before it concluded the panel was lying; two seconds
+    # is long enough that a container which dies on its own configuration has died inside
+    # it, and short enough that a healthy apply costs one of them.
+    node_settle_timeout: float = 20.0
+    node_settle_interval: float = 2.0
+
     # How long the audit trail keeps an entry, in days. Thirty rather than ninety or
     # forever: what the trail answers — did I do this, what did I change before it
     # broke — decays in days, while the risk it carries grows with every day it is

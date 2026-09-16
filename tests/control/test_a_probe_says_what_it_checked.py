@@ -146,6 +146,11 @@ class _FakeHost:
                 f"|{definitions[service]['labels'][node_stack.CONFIG_DIGEST_LABEL]}"
                 f"|true"
                 f"|{'true' if service in self.restarting else 'false'}"
+                # Which LIFE of the container this reading looked at — M26's second walk.
+                # Constant per service: a container this fake models either stays up or
+                # crash-loops for the whole run, and an apply's settle check confirms only
+                # a container it saw as one life across two readings.
+                f"|one-life"
                 for service in self.services
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")

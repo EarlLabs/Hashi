@@ -1233,6 +1233,30 @@ def _in_the_pages_words(boxes: tuple) -> tuple:
     )
 
 
+def _minted_for_both_ends(installed: list[str]) -> dict[str, str]:
+    """The boxes this dialog opens with already answered, keyed as the form keys them.
+
+    ONE draw per transport, written into EVERY side — which is the whole point: the
+    parameters this covers are the ones that mean nothing unless the two ends agree, and
+    a value drawn twice would be two ends that do not. ``HOP_SIDES`` is where the ends
+    are named, so adding a third would carry the same value without an edit here.
+
+    Every hop-capable transport is drawn for, not only the one on screen, because the
+    dialog renders a group per transport and the operator picks afterwards. Two
+    transports declaring a parameter of the same name would share one value in this
+    mapping — the form has always keyed its boxes by side and field name rather than by
+    transport, and only the chosen transport's fields are read on submit, so the sharing
+    reaches nothing. It is noted because the day a second hop-capable transport ships is
+    the day somebody reads this and wonders.
+    """
+    minted = {}
+    for name in installed:
+        for field, value in transports.minted_hop_values(name).items():
+            for side in HOP_SIDES:
+                minted[f"{side['prefix']}-{field}"] = value
+    return minted
+
+
 async def _hop_form(
     session: AsyncSession,
     values: dict | None = None,
@@ -1257,6 +1281,14 @@ async def _hop_form(
     add-node dialog, which drops the private key. There is no key in this form to drop:
     a hop's material is minted at both ends and the value the two must share is minted
     once for both, so the panel never asks for one.
+
+    AND SOME OF THE BOXES ARRIVE FILLED IN — M26's second acceptance walk, which ran out
+    of action budget inside this dialog. A parameter the transport declares both ends
+    must carry IDENTICALLY is one the operator was being asked to type into two boxes by
+    hand, with ``edge.relay`` refusing the pair if a digit differed. It is drawn once per
+    hop instead and written into both ends. Only on FIRST PAINT: a refusal re-renders
+    whatever was submitted, because replacing the operator's own numbers while telling
+    them one of their boxes is wrong is the shape of a form nobody trusts.
     """
     installed = transports.hop_transports()
     return {
@@ -1266,7 +1298,7 @@ async def _hop_form(
             name: _in_the_pages_words(transports.hop_tuning(name)) for name in installed
         },
         "sides": HOP_SIDES,
-        "values": values or {},
+        "values": _minted_for_both_ends(installed) if values is None else values,
         "errors": errors or {},
         # A refusal the transport or the hop renderer composed, about the pair rather
         # than about one box. Shown inside the dialog because that is where the
