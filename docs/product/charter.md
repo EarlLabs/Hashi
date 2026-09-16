@@ -80,9 +80,19 @@ does **not** require is that any given transport survive DPI today.
 
 2. **A node is replaceable in ten minutes.**
    *Given* a leaf node has been blocked,
-   *when* I destroy it and bootstrap a replacement from the panel,
+   *when* I destroy it, run `scripts/node-bootstrap.sh` against a fresh host from
+   the machine holding the fleet's key pair, and register, enable and apply it in
+   the panel,
    *then* it is serving traffic in under 10 minutes and **no user changes
    anything** — their subscription simply resolves to the new node.
+
+   This used to read *"bootstrap a replacement from the panel"*. **The panel
+   bootstraps nothing** — corrected 2026-09-16, by the second acceptance walk, which
+   found the overstatement one screen above the section written to remove exactly
+   it. The script is run over SSH from the operator's own machine, and it ends by
+   printing what to type into the panel; *What the scripts actually deliver* below
+   is the measurement. The ten minutes are unaffected: it is one command and three
+   presses.
 
 3. **A protocol is swappable without touching users.**
    *Given* a transport that ships with hashi (e.g. AmneziaWG) is not enabled,

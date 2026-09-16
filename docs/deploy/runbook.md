@@ -444,13 +444,22 @@ that is serving.
 ```
 ==> created /opt/hashi, empty and owned by <user>
 ==> sshd reads <the account's ~/.ssh/authorized_keys>, so a key installed there is one it will consult
+==> the running firewall was asked and it is not logging
 ==> ready: docker <version>, key authorised, firewall up, logging off
 ==> register it in the panel with ssh_user <user> and ssh_port <port>
 ==> no hashi code and no hashi state was installed here — /opt/hashi is an empty directory owned by <user>, and the control plane fills it on your first apply
 ```
 
-Take the `ssh_user` and `ssh_port` from that second line — it names the port this session
-actually arrived on, which is the one port known to work from outside. Then, in the panel:
+**Two of those lines are about the same thing said twice, deliberately.** Earlier in the
+run the script reports what `/etc/ufw/ufw.conf` says, because while ufw is inactive that
+file is the only thing there is to read. It claims the firewall is not logging only after
+asking the running firewall, and it refuses if the answer is anything else — the two can
+disagree, and a ufw that silently ignores `ufw logging off` is exactly that host. This is
+the one record the charter forbids at any level, so the run says what it read rather than
+what it assumes.
+
+Take the `ssh_user` and `ssh_port` from the `register it in the panel` line — it names the
+port this session actually arrived on, which is the one port known to work from outside. Then, in the panel:
 **Add node** with those values and the contents of `~/.ssh/hashi-node` as the private key,
 enable the transport on the port you opened, and **Apply**. Nothing before the apply has
 told the fleet this host exists: the script writes nothing to the control database, and a
@@ -465,7 +474,7 @@ or a first run on a host with a past, reports rather than changes:
 ```
 ==> docker is already installed — left exactly as it is
 ==> the control plane's key is already authorised for <user>
-==> ufw logging was already off
+==> /etc/ufw/ufw.conf already reads LOGLEVEL=off
 ==> <port>/<proto> was already open
 ==> incoming was already denied by default
 ==> the firewall was already up — its existing rules were kept
@@ -920,15 +929,32 @@ against the renderers for the first column, the panel's own enable dialog for th
 and its hop form for the third. A fifth transport, a retirement, or a change to what one
 of these can do turns that suite red rather than leaving this table quietly wrong.
 
-**A wg-quick-family config needs a resolver tool on a plain Linux client.** The file this
-project generates carries a `DNS =` line, and `awg-quick`/`wg-quick` implement that line by
-shelling out to `resolvconf` — so on a Linux box without it the tunnel does not come up at
-all, on an error about a missing command rather than about DNS. Stock GUI clients on
-phones and desktops resolve it themselves and are unaffected; it is the operator testing
-from a shell who meets this, which is exactly who is told to *"load it into a stock
-client"*. Install `resolvconf` (or `openresolv`) on that machine. Nothing on the node
-changes, and the node's own `resolver` field is a different thing entirely — that one is
-for a node that dials a hop, below.
+**A wg-quick-family config needs a resolver tool on a plain Linux client, and what it does
+without one looks like the node's fault.** The file this project generates carries a
+`DNS =` line, and `awg-quick`/`wg-quick` implement that line by shelling out to
+`resolvconf`. On a Linux box without it the run **brings the interface up and then deletes
+it again**, which is `awg-quick`'s own error path and not a failure on the node:
+
+```
+[#] ip link add awg0 type amneziawg
+[#] ...
+[#] resolvconf -a awg0 -m 0 -x
+/usr/bin/awg-quick: line NNN: resolvconf: command not found
+[#] ip link del awg0
+```
+
+The last line an operator reads is about a program they have never heard of, after a
+tunnel that appeared to work for a second. **Install `resolvconf` or `openresolv` on that
+machine and run it again** — on Debian and Ubuntu that is `apt install openresolv`. Two
+things it is not: nothing on the node changes and nothing on the node is wrong, and the
+node's own `resolver` field is a different thing entirely — that one is for a node that
+dials a hop, below. Stock GUI clients on phones and desktops resolve names themselves and
+never touch `resolvconf`; it is the operator testing from a shell who meets this, which is
+exactly who this page tells to *"load it into a stock client"*.
+
+**Do not answer it by deleting the `DNS =` line.** That line is what sends a friend's
+lookups through the tunnel; without it their device keeps asking a resolver it can no
+longer reach, and the tunnel that looked fixed resolves no names at all.
 
 **The two families are delivered differently, and you find that out before your friends
 do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
