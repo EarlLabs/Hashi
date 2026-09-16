@@ -107,6 +107,22 @@ META = TransportMeta(
     # existing is not the same as the endpoint handing it over, and this declaration
     # does not pretend otherwise.
     subscription_formats=frozenset({SubscriptionFormat.CLIENT_CONFIG_FILE}),
+    # The four magic headers, and nothing else — M26's first acceptance walk. They
+    # replace WireGuard's fixed message-type constants, so two ends that disagree about
+    # them cannot recognise each other's message types: both files are valid, both daemons
+    # start, and the handshake never completes.
+    #
+    # The junk-packet knobs are deliberately NOT here even though they look like the same
+    # kind of value. Junk is prepended by whichever end is sending, and the receiver skips
+    # whatever arrives — so two ends may legitimately send different amounts, and refusing
+    # that would refuse a working hop. Matching is a claim about the wire format, not a
+    # tidiness rule, and only these four make it.
+    hop_matched_params=(
+        "init_packet_magic_header",
+        "response_packet_magic_header",
+        "underload_packet_magic_header",
+        "transport_packet_magic_header",
+    ),
     # Each consumer holds an address of its own, and the interface's own address says
     # how much room there is for them. A kernel tunnel authorises and routes by address
     # — AllowedIPs is both lists at once — so two consumers on one address is a silent

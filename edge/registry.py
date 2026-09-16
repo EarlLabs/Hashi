@@ -478,6 +478,24 @@ class TransportMeta:
     # rather than opt in to being usable.
     hop_capable: bool = True
 
+    # Which of this transport's PARAMETERS both ends of a hop must carry identically —
+    # M26's first acceptance walk, and the same shape as ``KeySpec.shared_between_peers``
+    # one field over: that one says which minted MATERIAL is symmetric, and this says
+    # which operator-typed values are.
+    #
+    # Declared by the package rather than known here, because what has to match is a fact
+    # about a protocol's wire format and this module recognises none. Empty by default:
+    # most parameters are properly per-end — a port, an address, an MTU — and a transport
+    # that needs none of this should not have to say so.
+    #
+    # It exists because the walk counted the boxes. Establishing one hop is 22 empty
+    # fields, 11 per end, and four of them per end are values that must be typed
+    # identically at both ends by hand or the tunnel comes up and carries nothing: two
+    # valid configuration files, a daemon happy at each end, and no packet ever arriving.
+    # That is the failure this project keeps producing, so it is refused before either end
+    # is written (``edge.relay``) rather than left to be discovered on a live node.
+    hop_matched_params: tuple[str, ...] = ()
+
     # Whether this protocol is known to be identified and blocked by networks that
     # inspect traffic — a fixed, trivially fingerprinted wire format with no camouflage.
     #

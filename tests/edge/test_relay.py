@@ -239,6 +239,60 @@ def test_both_ends_of_a_hop_still_carry_the_one_key_they_agree_on(
     assert shared in directives(leaf_config)
 
 
+# Every transport in this image that declares parameters both ends must carry
+# identically. Parametrised off the registry rather than written down, so a fifth
+# transport arriving with such a declaration is covered by arriving — and an empty list
+# means no shipped transport makes the claim, not that the rule went untested.
+MATCHED_PARAMS = sorted(
+    (name, field)
+    for name, meta in discover().items()
+    for field in meta.hop_matched_params
+)
+
+
+@pytest.mark.parametrize("name,field", MATCHED_PARAMS, ids=lambda value: str(value))
+def test_two_ends_disagreeing_about_a_matched_parameter_are_refused(
+    name: str, field: str, entry_node, leaf_node, amneziawg_params
+) -> None:
+    """M26's first acceptance walk, and the same silent failure as the key above.
+
+    Establishing one hop is 22 empty boxes, 11 per end, and four of them per end are
+    values that mean nothing unless they are identical at both ends — obfuscation magic
+    headers, typed by hand twice, with the panel's own note telling the operator not to
+    copy them out of the protocol's documentation. Get one digit wrong on one end and
+    both files are valid, both daemons start, and the tunnel carries nothing.
+
+    The value is moved by ONE, deliberately: what is refused is the two ends disagreeing,
+    not a value being out of range, and a wildly different number would be refused by the
+    transport's own model before this check was reached.
+    """
+    if name != HOP_TRANSPORT:  # pragma: no cover - one hop-capable transport ships today
+        pytest.skip(f"{name} is not the transport these fixtures are built for")
+
+    entry, leaf = ends(
+        entry_node, leaf_node, amneziawg_params, **{field: amneziawg_params[field] + 1}
+    )
+
+    with pytest.raises(relay.HopNotRenderable) as refused:
+        relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
+
+    assert field in str(refused.value), (
+        "the refusal does not name the box to correct, and there are four of them that "
+        "look alike"
+    )
+
+
+def test_two_ends_that_agree_about_every_matched_parameter_render(
+    entry_node, leaf_node, amneziawg_params
+) -> None:
+    """The accept direction, without which the refusal above could refuse every hop."""
+    entry, leaf = ends(entry_node, leaf_node, amneziawg_params)
+
+    entry_config, leaf_config = relay.render_hop(HOP_TRANSPORT, entry=entry, leaf=leaf)
+
+    assert entry_config and leaf_config
+
+
 def test_an_ipv6_endpoint_is_bracketed(leaf_node, entry_node, amneziawg_params) -> None:
     """Otherwise the daemon reads the last group of the address as the port."""
     leaf_v6 = NodeView(

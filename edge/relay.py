@@ -145,6 +145,31 @@ def _check(transport_name: str, entry: HopEnd, leaf: HopEnd) -> None:
             "never complete"
         )
 
+    # And the operator-typed values this transport says both ends must carry identically
+    # — M26's first acceptance walk, the same argument as the pre-shared key above and
+    # the reason that one is not alone here any more. The walk typed 22 boxes to
+    # establish one hop, four of them per end being values that mean nothing unless they
+    # are the same at both ends; nothing checked, and the failure that mistake produces
+    # is two valid files and a tunnel that carries nothing.
+    #
+    # Read off the transport's own declaration, never off a name: this module recognises
+    # no protocol, and a transport that declares none of these is not asked about any.
+    # Every one that differs is named, because an operator retyping one number at a time
+    # is exactly how this mistake is made in the first place.
+    mismatched = sorted(
+        field
+        for field in meta.hop_matched_params
+        if entry.params.get(field) != leaf.params.get(field)
+    )
+    if mismatched:
+        raise HopNotRenderable(
+            "the two ends disagree about "
+            + ", ".join(mismatched)
+            + ", which this transport says must be identical at both ends of a hop — "
+            "each end would be configured correctly and neither would recognise the "
+            "other"
+        )
+
     if not profile(transport_name).meta.family:
         raise HopNotRenderable(f"transport {transport_name!r} declares no family")
 
