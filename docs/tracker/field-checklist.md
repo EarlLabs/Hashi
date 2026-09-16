@@ -784,3 +784,63 @@ Read **which family it connected on** and **how long the first byte took**.
 **Do not narrow `AllowedIPs` as a fix.** Dropping `::/0` sends the friend's IPv6
 out their own connection, showing their real address to every site that has one —
 which is the failure this product exists to prevent, traded for a faster one.
+
+## From M25 — route A carries, and the half of a hop flap nobody has settled
+
+### 23. Bring the hop down the way it really fails, and watch a friend come back
+
+**Route A itself is proven.** A friend behind an entry reached the internet at the
+leaf's address, over a real obfuscated hop, and the entry never exited on its
+own route. That half is done and is not on this list.
+
+**What is not settled is recovery.** Both walks killed the hop and watched a
+friend go dark — twice in round 1, once in round 2 — and that half is solid:
+traffic stops, and it does not fall back to leaving by the entry's own way out,
+which is the failure the whole topology exists to prevent. Then the hop was
+brought back, **one** fetch was made through it, and it came back empty. One
+observation is not a result either way, and the gesture underneath it was wrong
+for the question: `ip link set <hop> down` and `up` on a userspace device is the
+host **administratively withdrawing its own interface**, so the route goes with
+it and the entry's own stack answers immediately. A hop does not fail like that.
+It fails with the interface still up, the route still installed, and the packets
+going into a hole — the leaf's address blocked, its provider down, or its data
+plane dead.
+
+**So the question this leaves open is the one an operator meets at 3am:** after
+the far end comes back, does a friend's traffic resume **on its own**, or does
+somebody have to apply the entry?
+
+**Do this with a friend's device you hold, and on no live host you are not
+willing to interrupt. Do not record anything you see.**
+
+1. **Baseline.** Inside the friend's tunnel, reach the internet and confirm the
+   exit address is the leaf's. That is the state you are asking about the
+   recovery of; without it the rest measures nothing.
+2. **Break the far end, not the near one.** On the **leaf**, make the hop's
+   listening port stop answering — drop it at the leaf's firewall, or stop the
+   leaf's hop container. Leave the **entry** completely alone: its interface
+   stays up, its route stays installed, and nothing is applied to it. That
+   difference is the whole point of doing this again.
+3. **Confirm the dark half still holds.** From the friend's device, traffic
+   stops — and the exit address is **nothing**, never the entry's. A fallback
+   here is a finding that outranks everything else on this page, and stops the
+   test: it means a friend in Russia surfaced in Russia.
+4. **Put the far end back** and start a clock. **Touch nothing on the entry** —
+   no apply, no restart, no ssh. From the friend's device, retry every thirty
+   seconds and write down whether traffic resumes and how long it took.
+5. **If it has not resumed after a few minutes,** then apply the entry from the
+   panel and see whether that is what fixes it. Which of the two it was is the
+   answer, and it is the thing the run could not tell.
+
+**Read the hop's own interface if you want to watch it, never a friend-facing
+one.** A hop has exactly one peer and it is a node, so its byte counters name
+nobody; a friend-facing interface lists every device's endpoint, and that is the
+one record this project may not produce. Look, do not save.
+
+**What to do with the answer: write it here.** Resumes on its own is the product
+working, and worth stating because nothing in the repository can claim it.
+Needs an apply is a defect worth a milestone — the hop is the one part of route
+A that fails without anybody pressing anything, so recovery that needs an
+operator is recovery that happens when the operator wakes up. Either way, this
+is a field observation on real hardware and no test run may be reported as
+covering it.
