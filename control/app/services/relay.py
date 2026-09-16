@@ -413,13 +413,23 @@ async def establish_hop(
     # A row naming a transport this image no longer ships is skipped, not refused: it
     # renders nothing whatever this node's topology is, so it is not this refusal's
     # subject and a sentence about the hop would send the operator after the wrong thing.
+    #
+    # WHICH SENTENCE is decided by the row's own ``enabled``, and only the sentence —
+    # both states are refused, for the reason above. An operator who withdrew the
+    # transport has been told by this panel that it is out of every user's link, so
+    # answering them with "already offers" is this panel disagreeing with itself about
+    # the row they are looking at; the withdrawn sentence says what is true of it and why
+    # a row nobody is being served on still stands in the way (M25's second walk).
     for offer in await nodes.friend_facing_on(session, entry_node.id):
         offered = installed.get(offer.transport_name)
         if offered is not None and not offered.serves_friends_through_a_hop:
+            refusal = (
+                transports.NO_HOP_OVER_WHAT_IT_OFFERS
+                if offer.enabled
+                else transports.NO_HOP_OVER_WHAT_IT_HOLDS
+            )
             raise NoExitThroughTheHop(
-                transports.NO_HOP_OVER_WHAT_IT_OFFERS.format(
-                    node=entry_node.name, name=offer.transport_name
-                )
+                refusal.format(node=entry_node.name, name=offer.transport_name)
             )
 
     # What used to stand here was a refusal when either node already had a row for this

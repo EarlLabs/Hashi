@@ -265,8 +265,10 @@ class NoExitThroughTheHop(Conflict):
     are a port already bound, a pool too small or the node state machine, and the move
     that fixes each is different. The operator's move here is to choose the other kind of
     transport, or to take one of the two rows away — which is what the message says, in
-    ``edge``'s own words about why (``transports.NO_EXIT_THROUGH_THE_HOP`` and
-    ``transports.NO_HOP_OVER_WHAT_IT_OFFERS``).
+    ``edge``'s own words about why (``transports.NO_EXIT_THROUGH_THE_HOP``,
+    ``transports.NO_HOP_OVER_WHAT_IT_OFFERS`` and — for a friend-facing row the operator
+    has withdrawn rather than offered, which this refusal counts and which the other two
+    sentences would describe wrongly — ``transports.NO_HOP_OVER_WHAT_IT_HOLDS``).
 
     It refuses the CREATION and nothing else — ``TransportRetired``'s own asymmetry, and
     the same reason. A node already carrying both rows keeps every row it has, renders

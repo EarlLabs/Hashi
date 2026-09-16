@@ -275,6 +275,25 @@ NO_LONGER_OFFERED = (
 # (``registry.NOT_THROUGH_A_HOP``) — and each writes its own remedy, because "take the
 # hop away" is advice only where there is one.
 #
+# AND THREE, because the hop door counts a row that is SWITCHED OFF and one sentence
+# could not describe both — M25's second walk. ``nodes.friend_facing_on`` returns every
+# friend-facing row on the entry, offered or withdrawn, and deliberately so: nothing
+# refuses ``set_transport_enabled``, so a withdrawn row is one press from being back in
+# every user's link and a hop built beside it would be the combination nothing renders.
+# What the operator read was "already offers" — on a row the withdraw screen had just
+# told them was out of every user's link at their next refresh, which is the panel
+# contradicting itself about the same row on two screens. So the state the row is in
+# picks the sentence, ``services.apply``'s idiom for the same axis
+# (``NOTHING_TO_APPLY_YET`` against ``NOTHING_LEFT_TO_APPLY``): each says only what is
+# true of the row in front of the operator, and the withdrawn one has to carry the
+# reason it counts at all, because an operator who withdrew a transport reasonably
+# believes they have already taken it away.
+#
+# THE REMEDIES DIFFER TOO, and that is not decoration. On an offered row the removal has
+# to be sequenced — its users are connecting on it, so they are given the other kind of
+# transport first — while a withdrawn row serves nobody and removal is the only move
+# left: offering it again is refused by nothing, so leaving it is leaving the trap.
+#
 # Each opens by saying that nothing happened, for ``NO_LONGER_OFFERED``'s reason: the
 # operator's first question on meeting a refusal is what state their fleet is in now.
 # Neither names a port, an address or a country, and neither is translated at the
@@ -297,6 +316,15 @@ NO_HOP_OVER_WHAT_IT_OFFERS = (
     "it cannot carry their traffic out through a hop: " + NOT_THROUGH_A_HOP + " Give that "
     "node's friends a transport that terminates their connection and re-originates it "
     "first — or remove that transport from it — and then build the hop."
+)
+NO_HOP_OVER_WHAT_IT_HOLDS = (
+    "no hop was established — node {node!r} holds a withdrawn {name!r} row for its "
+    "friends, and it cannot carry their traffic out through a hop: "
+    + NOT_THROUGH_A_HOP
+    + " Withdrawn is not gone: the row keeps its port, its config name and its tunnel "
+    "range, and offering it again is one press and is refused by nothing — which would "
+    "put this node straight back into the state that cannot be rendered. Remove that row "
+    "from the node, and then build the hop."
 )
 
 

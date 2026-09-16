@@ -307,6 +307,9 @@ async def test_a_node_already_offering_a_kernel_tunnel_refuses_the_hop(
     assert kernel_tunnel in body["message"], body["message"]
     assert "entry-3" in body["message"], body["message"]
     assert "no hop was established" in body["message"], body["message"]
+    # The OFFERED half of the pair, pinned against its withdrawn twin below: this row is
+    # in every user's link right now, and "already offers" is only true while it is.
+    assert "already offers" in body["message"], body["message"]
 
 
 async def test_the_hop_refusal_writes_neither_end(
@@ -346,6 +349,14 @@ async def test_an_offer_that_is_switched_off_still_refuses_the_hop(
     about. So this door counts every offer the node holds rather than the ones that are
     live, which is the same reading ``exit_through_hop`` takes of a hop end for the same
     reason: what can be switched on again is part of what this node is.
+
+    AND IT SAYS SO IN THE ROW'S OWN STATE — M25's second walk. The refusal was the offered
+    sentence, so a panel that had just told the operator this transport was out of every
+    user's link at their next refresh answered them, on the next screen, that the node
+    "already offers" it. Both screens are about the same row and only one of them could be
+    right. The withdrawn sentence says the row is withdrawn and then says why a row
+    serving nobody still stands in the way, which is the question the offered one never
+    has to answer.
     """
     entry = await a_node(client, "entry-5", "192.0.2.28", resolver=RESOLVER)
     leaf = await a_node(client, "leaf-5", "192.0.2.29")
@@ -357,7 +368,11 @@ async def test_an_offer_that_is_switched_off_still_refuses_the_hop(
     refused = await hop(client, entry, leaf, HOP_TRANSPORTS[0])
 
     assert refused.status_code == 409, refused.text
+    message = refused.json()["error"]["message"]
     assert refused.json()["error"]["code"] == "no_exit_through_the_hop"
+    assert "no hop was established" in message, message
+    assert "withdrawn" in message, message
+    assert "already offers" not in message, message
 
 
 # --- what must still work -----------------------------------------------------
