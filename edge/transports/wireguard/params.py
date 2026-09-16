@@ -28,7 +28,21 @@ class Params(BaseModel):
     # The tunnel's own address range. A private range, operator-chosen and never
     # defaulted: two tunnels on one host must not collide.
     tunnel_address: str = Field(description="this node's tunnel address, e.g. 10.x.y.1/24")
-    peer_tunnel_address: str = Field(description="the address given to a peer")
+    # What the value IS and what it looks like, since M25 — the same widening its
+    # obfuscated cousin's field carries and for the same measured reason: the box is
+    # empty (required, no default, no bounds to show a range from), so a sentence that
+    # said only what the value meant left an operator with nothing to type and a refusal
+    # that named the box. The example is a shape rather than an address, like
+    # ``tunnel_address``'s above.
+    peer_tunnel_address: str = Field(
+        description=(
+            "the address given to a peer: on a hop the single far end's, and when this "
+            "transport is offered to friends the FIRST of the pool, which counts up from "
+            "it one per person. An address with its prefix, in the same range as this "
+            "node's own tunnel address and never that address itself — e.g. 10.x.y.2/24 "
+            "where this node is 10.x.y.1/24."
+        )
+    )
 
     # Node-scoped material from META.key_material.
     private_key: str = Field(repr=False)

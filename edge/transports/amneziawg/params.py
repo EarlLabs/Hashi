@@ -55,10 +55,22 @@ class Params(BaseModel):
     # enable dialog both show it: on a hop this is the single far end's address, and on
     # a transport offered to friends it is the FIRST address given out — the pool starts
     # here and runs as far as the operator sized it.
+    #
+    # IT ALSO SAYS WHAT THE VALUE LOOKS LIKE, since M25. The field is required, declares
+    # no default, and has no bounds for a placeholder to show — so the box beside it is
+    # empty, and the sentence under it explained what the value MEANT to a reader who
+    # already knew what to type. The walk met it on the enable dialog with nothing to
+    # type, got the refusal, and learned only which box it was about. The example is a
+    # SHAPE and not an address, exactly as ``tunnel_address``'s is: a real range written
+    # here is a range every node would borrow, and two tunnels whose ranges meet hand two
+    # people the same address.
     peer_tunnel_address: str = Field(
         description=(
-            "the far end's tunnel address on a hop; the first address given out when "
-            "this transport is offered to friends"
+            "the far end's tunnel address on a hop; the FIRST address given out when "
+            "this transport is offered to friends, the pool counting up from it one per "
+            "person. An address with its prefix, in the same range as this end's own "
+            "tunnel address and never that address itself — e.g. 10.x.y.2/24 where this "
+            "end is 10.x.y.1/24."
         )
     )
 

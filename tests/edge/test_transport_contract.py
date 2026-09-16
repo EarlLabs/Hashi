@@ -11,6 +11,8 @@ HOW:  pure imports and pure calls. No Docker, no database, no upstream binary
       (that is ``test_upstream_validation.py``).
 """
 
+import ast
+import inspect
 import json
 from dataclasses import replace
 
@@ -23,6 +25,7 @@ from edge.registry import (
     ClientEntry,
     ConfigFormat,
     ContractViolation,
+    Datapath,
     FormatNotDeclared,
     KeyKind,
     KeyScope,
@@ -642,3 +645,73 @@ def test_each_config_format_has_a_data_plane_that_can_run_it(name: str) -> None:
         f"{name} renders {meta.config_format!r} and nothing is pinned to run it"
     )
     assert DATA_PLANES[meta.config_format].image
+
+
+# --- what a transport does with what it decrypts, as a contract field (M25) -----
+
+def _egress_expression(transport_name: str) -> str:
+    """Which of ``edge.egress``'s two expressions this transport's renderer calls.
+
+    Read off the render module's imports rather than off the declaration, because the
+    declaration is the thing under test. The two are one fact seen from two sides: a
+    package that calls ``wg_quick_egress`` hands what it decrypts to the node's kernel,
+    and one that calls ``exit_origin`` terminates the consumer's connection and opens its
+    own from the address the policy names.
+
+    PARSED RATHER THAN SCANNED. Both WireGuard-family render modules explain at length
+    why they are not the other kind, and both name the other function while doing it — so
+    a substring search over the source reads a docstring as an import and reports the
+    opposite answer with total confidence.
+    """
+    tree = ast.parse(inspect.getsource(profile(transport_name).profile))
+    imported = {
+        alias.name
+        for statement in ast.walk(tree)
+        if isinstance(statement, ast.ImportFrom) and statement.module == "edge.egress"
+        for alias in statement.names
+    }
+    kernel = "wg_quick_egress" in imported
+    re_originating = "exit_origin" in imported
+    assert kernel != re_originating, (
+        f"{transport_name}'s renderer imports neither of edge.egress's two expressions "
+        f"of one policy, or both — it imports {sorted(imported)} — so there is no fact "
+        "for its declaration to be checked against"
+    )
+    return Datapath.KERNEL_ROUTED if kernel else Datapath.RE_ORIGINATING
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_the_declared_datapath_is_the_one_the_renderer_expresses(name: str) -> None:
+    """A package's ``datapath`` against what its own render module actually does — M25.
+
+    This is the assertion that makes the declaration worth reading. `control` refuses two
+    operations on the strength of it — offering this transport to the friends of a node
+    that dials a hop, and giving such a node a hop — and a package whose declaration
+    disagreed with its renderer would move that refusal onto the wrong transport in
+    whichever direction it lied: a kernel tunnel claiming to re-originate is accepted at
+    every door and refused at the apply, which is the exact defect the field found, and a
+    proxy claiming the opposite is refused an arrangement that has been measured carrying
+    traffic.
+
+    The default is the restrictive answer, so a package that simply forgets fails only in
+    the safe direction — and fails HERE, at once, rather than on an operator's dialog.
+    """
+    assert discover()[name].datapath == _egress_expression(name), (
+        f"{name} declares datapath={discover()[name].datapath!r} and its renderer "
+        f"expresses {_egress_expression(name)!r}"
+    )
+
+
+@pytest.mark.parametrize("name", INSTALLED)
+def test_only_a_re_originating_transport_may_carry_friends_through_a_hop(name: str) -> None:
+    """The derived answer `control` reads, pinned to the declaration it comes from.
+
+    Derived in ``edge`` and asked there by both doors, so that neither service holds an
+    opinion about what a data plane can do. Asserted rather than assumed because the
+    property is what two refusals are written against, and a property that quietly became
+    ``True`` for everything would take both of them off without failing anything else.
+    """
+    meta = discover()[name]
+    assert meta.serves_friends_through_a_hop == (
+        meta.datapath is Datapath.RE_ORIGINATING
+    )

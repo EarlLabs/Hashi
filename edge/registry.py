@@ -25,7 +25,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened seven times since, each deliberately, each recorded
+      **It has been widened eight times since, each deliberately, each recorded
       where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
       own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
       now declares the SET of subscription shapes it serialises into rather than a
@@ -61,7 +61,18 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       render the same bytes. Optional, defaulting to ``None``, so not one existing
       ``META`` changes.
 
-      None of the seven was a branch on a protocol; each replaced one with a
+      ``Datapath`` came with M25, and is the one that was already load-bearing before it
+      was written down: ``egress.py`` has expressed the same split as two functions since
+      M14, and nothing declared which of them a transport uses — so `control` accepted a
+      kernel tunnel for the friends of a node that dials a hop, granted every friend a
+      credential on it, handed one of them a complete configuration file, and only the
+      apply refused. The same shape as ``PeerAddress`` and ``Retirement``, then: a
+      property of one package, derived four surfaces away by everything that needed it,
+      until the field measured what that cost. Defaulted to the answer that costs a
+      refusal rather than to the one that costs a friend a dead tunnel, so no existing
+      ``META`` is made wrong by it and the two that re-originate say so out loud.
+
+      None of the eight was a branch on a protocol; each replaced one with a
       vocabulary or a property. None was free either, and a reader deserves to know
       the contract has moved and why rather than to discover it from a diff.
 """
@@ -217,6 +228,74 @@ class Layer4(StrEnum):
 
     TCP = "tcp"
     UDP = "udp"
+
+
+class Datapath(StrEnum):
+    """How a transport's data plane moves what it decrypts, and therefore whose traffic
+    it can send out through a hop.
+
+    The only respect in which `control` has to know: a node that dials one gives its
+    friends ``Egress.HOP``, and one kind of data plane can honour that for somebody
+    else's packets while the other cannot.
+
+    M25, measured on the owner's real Amsterdam leaf. A node that dials a hop gives its
+    friends ``Egress.HOP`` — out through the hop and nowhere else — and the two data
+    planes this image ships obey that in two incompatible ways. One hands what it
+    decrypts to the node's own kernel, and the only way out a kernel tunnel can express
+    is a SOURCE ROUTE from the node's own address (``egress.wg_quick_egress``): a
+    friend's packets do not carry that address, so they match no such rule and leave by
+    the node's own route instead. The other terminates the friend's connection and opens
+    its own, which it binds to that same address (``egress.exit_origin``) — and that one
+    works, which is what M25's walk proved end to end.
+
+    So it is a property OF THE TRANSPORT, declared here, and never a family or a name
+    compared in `control` — the rule the whole of this module exists to keep. `control`
+    reads one derived answer, ``TransportMeta.serves_friends_through_a_hop``, and refuses
+    both doors that would otherwise produce a node whose configuration cannot be rendered:
+    enabling such a transport for friends on a node that dials a hop, and giving a hop to
+    a node that already offers one.
+
+    Two members and not a boolean, because these are two KINDS of data plane rather than
+    one capability a transport does or does not have — and the answer a reader needs from
+    a ``meta.py`` is what the thing IS, not which of two refusals it escapes. It is also
+    the split ``edge/egress.py`` is already written around: its two expressions of one
+    policy are exactly these two members, one function each.
+    """
+
+    # The node's kernel routes what this tunnel decrypts. It cannot carry a friend's
+    # traffic out through a hop — see the class docstring, and ``wg_quick_egress``, which
+    # refuses to render exactly that rather than emitting a file whose tunnel comes up
+    # and whose traffic surfaces in the country the hop exists to leave.
+    #
+    # THE DEFAULT, and fail-closed on purpose. A package that says nothing is held to the
+    # answer that costs a refusal an operator can read, rather than to the one that is
+    # accepted at three surfaces and refused at the apply — which is the defect this
+    # declaration was added to close, so defaulting to the other member would rebuild it
+    # for the next transport. A proxy declares itself; a forgetful one is told to.
+    KERNEL_ROUTED = "kernel-routed"
+
+    # The transport terminates the consumer's connection and opens its own, which it can
+    # bind to whatever address the policy names. That is what makes a hop expressible for
+    # somebody else's traffic, and it is also what makes the hop fail CLOSED: while the
+    # hop is down the new connection cannot be opened at all.
+    RE_ORIGINATING = "re-originating"
+
+
+# Why a kernel-routed data plane cannot be a friend's way into a hop, in the words an
+# operator reads. Declared beside the vocabulary it explains rather than written in
+# `control`, for ``Retirement.reason``'s reason: the fact is about a DATA PLANE, `control`
+# has no way to know it, and the sentence a render refuses with
+# (``egress.wg_quick_egress``) and the sentence a door refuses with have to be one rule
+# said once. Each door composes its own remedy around it — "take the hop away" is advice
+# only where a hop already exists.
+#
+# It names no protocol and no node, so both doors and both surfaces can print it whole.
+NOT_THROUGH_A_HOP = (
+    "its data plane hands what it decrypts to this node's own kernel, and the way out "
+    "through a hop is a source route from the node's OWN address — a friend's packets do "
+    "not carry it, so they would leave by the node's own route instead: an exit in the "
+    "country the hop exists to leave, with every screen green."
+)
 
 
 class KeyScope(StrEnum):
@@ -421,6 +500,16 @@ class TransportMeta:
     # no shipped ``META`` had to change when this field arrived.
     peer_address: PeerAddress | None = None
 
+    # What this transport's data plane does with the traffic it decrypts, and therefore
+    # whether a friend on it can be carried out through their node's hop — see
+    # ``Datapath``, including why the default is the restrictive member.
+    #
+    # Declared rather than inferred, and that is M25's whole finding: the fact existed
+    # already — it is which of ``egress.py``'s two expressions a renderer calls — and
+    # `control` had no way to ask, so it accepted the one combination that cannot be
+    # rendered and found out at the apply, three surfaces and one delivered file later.
+    datapath: Datapath = Datapath.KERNEL_ROUTED
+
     # Whether this transport has been withdrawn from every list `control` builds when it
     # asks an operator to choose a transport — and, if so, why. See ``Retirement``.
     #
@@ -486,6 +575,30 @@ class TransportMeta:
         it, and ``GET /api/transports`` reports it.
         """
         return self.hop_capable and self.peer_address is not None
+
+    @property
+    def serves_friends_through_a_hop(self) -> bool:
+        """Whether friends on a node whose own way out is a HOP may be offered this.
+
+        Derived here, once, for ``hop_expressible``'s reason and with a sharper edge: the
+        two surfaces that need it are two different services in `control`, and the
+        combination they are asked about is one neither of them can render — so each
+        deriving it again from ``datapath`` is each of them holding an opinion about what
+        a data plane can do. They read this instead, and the opinion stays in this file.
+
+        NOT the same question as ``hop_expressible``, and the difference is whose traffic
+        is being asked about. That one is "can this transport BE the hop" — two ends of
+        one tunnel network, each with an address of its own — and the WireGuard family is
+        the only thing in this image that can. This one is "can a friend's traffic be
+        carried THROUGH a hop by this transport", and the answer is the exact opposite
+        pair: the proxies can, the kernel tunnels cannot. A transport can be either, both
+        or neither, which is why they are two properties and not one.
+
+        Says nothing about a node with NO hop. There every shipped transport exits by the
+        node's own route, which is what a leaf and a single box have always done and must
+        keep doing — the caller pairs this answer with its own node's topology.
+        """
+        return self.datapath is Datapath.RE_ORIGINATING
 
     def clamp_port(self, port: int) -> int:
         """Raise unless ``port`` is inside this transport's declared range."""

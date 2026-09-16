@@ -9,6 +9,7 @@ other transport.
 
 from edge.registry import (
     ConfigFormat,
+    Datapath,
     KeyKind,
     KeyScope,
     KeySpec,
@@ -114,4 +115,16 @@ META = TransportMeta(
     # the transport is offered to friends instead, it is as long as the operator sizes
     # it. The renderer cannot tell the two apart and does not need to.
     peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
+    # A kernel tunnel: wg-quick hands what this interface decrypts to the host's routing
+    # table, which is why ``render_server`` expresses its egress through
+    # ``egress.wg_quick_egress`` and not through ``exit_origin``. Stated out loud rather
+    # than left to the default, because it is the declaration that decides one real
+    # answer for an operator — friends on a node that dials a hop may not be on this
+    # transport (M25), and a reader who meets that refusal deserves to find the fact in
+    # the package it is about.
+    #
+    # It says nothing about the HOP ITSELF, which this transport carries and is today the
+    # only one that can: there the tunnel being configured IS the way out, so the source
+    # route is from its own address and there is nobody else's traffic in it.
+    datapath=Datapath.KERNEL_ROUTED,
 )

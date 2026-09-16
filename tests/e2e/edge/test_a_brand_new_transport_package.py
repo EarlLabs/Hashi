@@ -59,6 +59,7 @@ def _package_files() -> dict[str, str]:
 
             from edge.registry import (
                 ConfigFormat,
+                Datapath,
                 KeyKind,
                 KeyScope,
                 KeySpec,
@@ -84,6 +85,13 @@ def _package_files() -> dict[str, str]:
                     KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
                 ),
                 subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
+                # M25: this renderer terminates the consumer's connection and opens its
+                # own (it calls ``egress.exit_origin`` below), so it says so — which is
+                # what lets a node that dials a hop offer it to friends. One more line in
+                # the same file, which is the whole of what the eighth widening costs an
+                # author; a package that leaves it out is held to the restrictive answer
+                # rather than being accepted and refused at an apply.
+                datapath=Datapath.RE_ORIGINATING,
             )
             '''
         ).lstrip(),

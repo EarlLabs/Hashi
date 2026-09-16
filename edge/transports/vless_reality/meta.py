@@ -10,6 +10,7 @@ HOW:  one module-level ``META``. ``edge.registry.discover()`` imports exactly th
 
 from edge.registry import (
     ConfigFormat,
+    Datapath,
     KeyKind,
     KeyScope,
     KeySpec,
@@ -66,4 +67,11 @@ META = TransportMeta(
     # second format becomes the norm this transport's answer is a decision on the
     # record instead of whatever the default happened to be.
     subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
+    # Xray forwards no packet in the kernel: it accepts the friend's connection and opens
+    # its own, which is why ``render_server`` expresses its egress through
+    # ``egress.exit_origin`` — an address the new connection is BOUND to — and not through
+    # ``wg_quick_egress``. That is what makes this transport the one a node with a hop can
+    # offer its friends (M25, proven end to end on a real leaf), and it fails closed: with
+    # the hop down the connection cannot be opened from that address at all.
+    datapath=Datapath.RE_ORIGINATING,
 )

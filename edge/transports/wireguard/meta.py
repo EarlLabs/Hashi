@@ -17,6 +17,7 @@ device holds that configuration keeps it.
 
 from edge.registry import (
     ConfigFormat,
+    Datapath,
     KeyKind,
     KeyScope,
     KeySpec,
@@ -123,6 +124,13 @@ META = TransportMeta(
     # return path, which ``render_server`` refuses rather than renders. This transport is
     # never on a hop (``hop_capable`` is False), so its consumers are always people.
     peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
+    # The same kernel data plane as its obfuscated cousin, and the same consequence: its
+    # ``render_server`` expresses egress through ``egress.wg_quick_egress``, so friends on
+    # a node that dials a hop may not be on this transport either (M25). Declared here as
+    # well as there, rather than shared between the two: a family is two packages that
+    # agree separately, and a fact stated once for both would be the branch on a family
+    # this contract exists to prevent.
+    datapath=Datapath.KERNEL_ROUTED,
     # THE DECLARATION THAT RETIRES IT — M20, and the only one of the four that was
     # measured rather than reasoned about. The two rule sets were read off a live node
     # on 2026-09-13 and again during the field run before that; the plan carries both

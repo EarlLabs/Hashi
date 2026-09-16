@@ -7,6 +7,7 @@ so it cost `control` zero lines, which is the fourth criterion in one sentence.
 
 from edge.registry import (
     ConfigFormat,
+    Datapath,
     KeyKind,
     KeyScope,
     KeySpec,
@@ -38,4 +39,10 @@ META = TransportMeta(
     ),
     # A VLESS URI, same as Reality's — one format, and only that one.
     subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
+    # Xray again, so the same data plane as Reality's and the same consequence: the
+    # connection is terminated here and a new one is opened from the address the egress
+    # policy names (``egress.exit_origin``), which is what lets a node that dials a hop
+    # offer this to its friends at all (M25). Declared per package rather than per family:
+    # what a transport does with a friend's packets is its own answer.
+    datapath=Datapath.RE_ORIGINATING,
 )
