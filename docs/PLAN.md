@@ -2134,6 +2134,98 @@ this milestone's subject.
 
 ---
 
+## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16
+
+**Approved by the owner on 2026-09-16**, who asked whether a leaf and an entry
+can be deployed by one command, and — being told the answer was probably no —
+asked for a milestone that **tests it by acceptance and loops until it is ready**.
+
+### The gap, as far as it is known before the walk
+
+`docs/product/charter.md` (owner's requirement, 2026-08-02) says:
+
+| script | charter says it brings up |
+|---|---|
+| node bootstrap | one leaf or one entry node, **from a bare host to serving traffic** |
+| panel bootstrap | the control plane, its database and the delivery endpoint |
+
+and that "one script" must mean, among other things:
+
+> **Verifies before reporting success.** It ends by checking the daemon accepts
+> its own config and **the node answers a health probe** — a script that reports
+> success on a host that is not serving is worse than one that fails.
+
+**What `scripts/node-bootstrap.sh` actually does** is prepare a host — docker, the
+control plane's key, the firewall, and since M19 the kernel preconditions and a
+real `sshd -T` check. **It ends by telling the operator to register the node**:
+
+```
+==> ready: docker <v>, key authorised, firewall up, logging off
+==> register it in the panel with ssh_user root and ssh_port 22
+```
+
+**The script is honest. The charter overstates it.** A bare host reaches *serving
+traffic* only after: run the script → register the node → offer it a transport →
+apply. One command and three panel actions. **For an entry→leaf hop, twice that,
+plus establishing the hop.**
+
+**And the script's verification is not the one the charter names:** it checks
+docker answers, the key is one sshd will consult, and the kernel will forward. It
+does **not** check that the node answers a health probe, because at that point
+nothing has been pushed to it and there is nothing to probe.
+
+### What this milestone must settle, before it writes code
+
+**Which end moves.** There are two honest answers and they are very different
+pieces of work:
+
+1. **The script goes further** — it registers the node with the control plane and
+   applies it, so a bare host really does reach serving traffic in one command.
+   That needs the script to hold a control-plane credential and reach the panel's
+   API, which is a new direction of travel (**today the control plane dials nodes;
+   a node never dials the control plane** — `CLAUDE.md`'s topology rule) and must
+   not become a second path that can create nodes.
+2. **The charter says what is true** — two scripts prepare hosts, the panel brings
+   them into service, and "one script" means one per host rather than one per
+   fleet. Cheaper, and possibly more honest, but it is the owner's requirement
+   being narrowed and only the owner can narrow it.
+
+**M26.1 — walk it and find out what is actually required.** Take a bare host and
+follow only what the product tells you. Count the commands, count the screens,
+and record where the script's promise and the charter's claim diverge. **Do not
+assume the gap is where it looks — the runbook's Shape A/B/C flows may already
+close some of it.**
+
+**M26.2 — make one end tell the truth.** Whichever the owner picks, the claim and
+the behaviour must agree, and `docs/deploy/runbook.md` must describe what an
+operator actually does.
+
+**M26.3 — the charter's other three "one script" promises, tested not assumed.**
+*Idempotent* (running it twice changes nothing the second time — M19's acceptance
+proved this for the node script; the panel script is unproven), *no interactive
+questions*, and *verifies before reporting success*.
+
+**Done when**
+- [ ] What it takes to go from a bare host to a node serving traffic is written
+      down accurately, and an operator following it gets there.
+- [ ] The charter and the scripts agree about what "one script" delivers.
+- [ ] Both scripts are proven idempotent, non-interactive, and honest about
+      success — by running them, not by reading them.
+- [ ] The hop case is covered: what it takes to go from two bare hosts to a
+      working entry→leaf hop.
+
+acceptance: yes
+Take a bare host. Using only what the product tells you, get it to the point
+where a friend's traffic flows through it. Count what you had to do, and say
+whether the charter's sentence is true.
+
+**How this milestone runs, by the owner's instruction (2026-09-16):** tested by an
+independent acceptance walk, and **fixed in a loop — walk, record every finding,
+fix them all, walk again — until a walk comes back with nothing blocking**, the
+way M23 was run.
+
+---
+
 ## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day
 
 **Not started.**
