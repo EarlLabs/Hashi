@@ -38,7 +38,20 @@ class Params(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    port: int = Field(description="the port Xray listens on, inside META.port_range")
+    # THE RANGE IS SAID, NOT NAMED — M26's third acceptance walk. This description is
+    # rendered verbatim under the box an operator types into (``control``'s tuning hint),
+    # and it read *"inside META.port_range"*: an internal symbol quoted at a person, with
+    # the numbers it stands for never shown anywhere on the form. The bounds are
+    # interpolated from the same declaration the validator below enforces, so they cannot
+    # drift from it and no port is written into this file by hand — which is the rule
+    # ``CLAUDE.md`` states and the reason the symbol was there in the first place.
+    port: int = Field(
+        description=(
+            f"the port Xray listens on — {META.port_range[0]} to {META.port_range[1]}. "
+            "Pick the one least conspicuous on this host; a fleet listening on one "
+            "number is a fleet that can be enumerated by probing it."
+        )
+    )
 
     # The site whose TLS handshake this node borrows. NO DEFAULT, and there must
     # never be one: a shared decoy means every hashi node presents the same
