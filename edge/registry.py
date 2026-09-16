@@ -25,7 +25,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       that needs an edit here is a contract failure to raise with the architect,
       not a special case to add.
 
-      **It has been widened eight times since, each deliberately, each recorded
+      **It has been widened nine times since, each deliberately, each recorded
       where it happened.** ``ConfigFormat`` came with the WireGuard family (see its
       own docstring). ``SubscriptionFormat`` came with backlog item 26: a transport
       now declares the SET of subscription shapes it serialises into rather than a
@@ -72,13 +72,25 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       refusal rather than to the one that costs a friend a dead tunnel, so no existing
       ``META`` is made wrong by it and the two that re-originate say so out loud.
 
-      None of the eight was a branch on a protocol; each replaced one with a
+      ``ServingQuestion`` came with M26's FOURTH acceptance walk, and it is the one
+      that admits a limit rather than adding a capability. Three rounds had each
+      replaced one proxy for "is this node serving" with a slightly better proxy —
+      the container exists, it is staying up, its port is held — and the walk defeated
+      the third with ``nc -u -l`` on the port, and then WITHOUT contriving anything, by
+      removing a peer from the real daemon: the exact shape of a wrong peer key. Every
+      one of those questions is generic, and a generic question cannot tell our data
+      plane from anything else holding a number. So a transport declares the question
+      to ask and judges the answer, and the health code that runs it recognises no
+      protocol. Optional, defaulting to ``None``, so no existing ``META`` is made wrong
+      and a transport with nothing better to offer than its port says so.
+
+      None of the nine was a branch on a protocol; each replaced one with a
       vocabulary or a property. None was free either, and a reader deserves to know
       the contract has moved and why rather than to discover it from a diff.
 """
 
 import importlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import ModuleType
@@ -419,6 +431,103 @@ class Retirement:
 
 
 @dataclass(frozen=True)
+class ServingAnswer:
+    """What one node said when a transport's own serving question was put to it.
+
+    Two fields and nothing else, because a transport judging this must not be able to
+    learn anything about the host it is judging: which node this was, what its address
+    is and which operator pressed the button are all absent by construction.
+
+    ``output`` is the command's standard output only. Its standard error is never
+    collected — a daemon's diagnostics can quote an address, and this value is handed to
+    code in a transport package, so the narrower reading is the one that travels.
+    """
+
+    exit_status: int
+    output: str
+
+
+@dataclass(frozen=True)
+class ServingQuestion:
+    """How to ask ONE transport whether it is SERVING, and how to read the answer — M26.
+
+    The contract's ninth widening, and it is the one the fourth acceptance walk forced.
+    Everything before it asked a GENERIC question about a SPECIFIC daemon and was
+    satisfied by the wrong answer: does the container exist (a crash loop says yes), is
+    it staying up (the node's own supervisor keeps a data plane that did nothing up for
+    ever), is the port held. The walk replaced ``awg-quick`` with ``nc -u -l`` and the
+    panel reported a node serving; then it removed one peer from the REAL daemon — the
+    shape of an ordinary wrong key — and the panel reported the same thing, over a hop
+    at 100% packet loss.
+
+    Each of those was a real improvement and each was still a proxy, because the question
+    they ask cannot tell our data plane from anything else holding a number. **Only the
+    transport knows what serving means for it**: a wg-family transport is serving when
+    its interface exists and holds the peers that were rendered into its config, and an
+    Xray transport's answer is a different sentence entirely. So the transport declares
+    the question and judges the answer, and the code that runs it recognises no protocol
+    — which is what keeps ``CLAUDE.md``'s "no ``if transport ==`` outside a transport's
+    own package" true while the check gets sharper.
+
+    OPTIONAL, and the default of ``None`` is an honest answer rather than an oversight: a
+    transport that cannot be asked anything better than "is your port held" declares
+    nothing here, and every surface then says exactly what it established for it and no
+    more. What a package must not do is declare a question whose yes means less than it
+    reads as — see ``confirms``.
+
+    NOTHING HERE MAY ASK WHO CONNECTED. The command a package declares is run on a node
+    by this project's own health code, and the charter's no-logging rule covers it like
+    everything else: a question whose answer is a list of peers WITH their endpoints or
+    their handshake times is a connection record whatever is then done with the bytes.
+    The shipped questions ask for the authorisation list this control plane itself
+    pushed, which is the same set of facts the database already holds and says nothing
+    about who reached the node. ``_check_declaration`` cannot check that for you; the
+    reviewer of a new package can, and this paragraph is what they hold it against.
+    """
+
+    # The argv to run INSIDE the container this placed config runs in. Two substitutions
+    # are offered and both are facts the caller has about any config whatever its
+    # protocol: ``{name}`` is the name the config is placed under — its compose service,
+    # and for the wg-quick family its interface — and ``{config}`` is the path the config
+    # was written to.
+    #
+    # An argv rather than a shell line, for ``DataPlane.command``'s reason one file over:
+    # a string handed to a shell is a program no reader of this declaration can see, and
+    # the images this project runs are not all guaranteed to ship one.
+    command: tuple[str, ...]
+
+    # The pure function that reads one answer. It is handed the ``ServingAnswer`` and the
+    # configuration this control plane rendered for that placed config, and answers:
+    #
+    #   True  — this transport is serving what we gave it;
+    #   False — it is not, and the operator should be told;
+    #   None  — this answer establishes nothing either way.
+    #
+    # THREE ANSWERS, like every other reading in this codebase that a host can refuse to
+    # give (``edge.health.listening.bound_ports``, ``NodeHealth.unchecked_ports``). The
+    # third is not a courtesy: collapsing "could not be established" into "not serving"
+    # would mark a whole fleet broken on the day an image drops a tool, which is this
+    # milestone's own defect pointed the other way.
+    #
+    # Pure, and it has to be: it runs in this zone, where there is no database, no
+    # network and no clock. It is given the answer and the config, and everything it
+    # needs to decide is in those two strings.
+    reads: Callable[[ServingAnswer, str], bool | None]
+
+    # What a YES establishes, in the operator's words and in this package's own voice —
+    # because what was established is a fact about a protocol and the console has no way
+    # to know it. It is read on the probe's own sentence, so it is a clause and not a
+    # paragraph: *"its interface is up and holds every peer this control plane
+    # authorised"*.
+    confirms: str
+
+    # And what a NO means, for the same reason and in the same voice. Two fields rather
+    # than one negated at the surface: "not (its interface is up and holds every peer)"
+    # is a sentence no operator should have to parse at three in the morning, and the two
+    # faults it covers have the same repair only by accident.
+    refutes: str
+
+@dataclass(frozen=True)
 class TransportMeta:
     """What the control plane may know about a transport without knowing which."""
 
@@ -541,6 +650,17 @@ class TransportMeta:
     # untouched — a fleet does not break because a protocol stopped being recommended.
     # `control` reads it once per chooser; see ``control/app/services/transports.py``.
     retired: Retirement | None = None
+
+    # How to ask this transport whether it is actually SERVING, and how to read what
+    # comes back — M26's fourth acceptance walk. See ``ServingQuestion``.
+    #
+    # Optional and defaulting to ``None`` for ``retired``'s reason, and the default is a
+    # statement rather than a gap: a transport that declares nothing here is one nothing
+    # stronger than "something holds its port" is ever claimed about, on every surface
+    # that reports it. A package that CAN be asked a sharper question and does not
+    # declare it is not caught by anything here — there is no way to check that a
+    # question exists — which is why the walk that found the hole is named in the type.
+    serving_question: ServingQuestion | None = None
 
     @property
     def subscription_expressible(self) -> bool:
@@ -957,6 +1077,33 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
             "stops offering a package that is still in the tree, and nothing on disk "
             "says why."
         )
+
+    # A question with no command, or one whose answer nothing reads, is a declaration
+    # that obliges nothing — and this one is read by the two surfaces that decide whether
+    # a node is serving, so a package that half-declares it would have both of them quietly
+    # fall back to the port reading it was written to replace.
+    if meta.serving_question is not None:
+        question = meta.serving_question
+        if not question.command or not all(question.command):
+            raise ContractViolation(
+                f"transport {meta.name!r} declares how its serving is judged and gives no "
+                "command to run on the node. Declare the argv, or declare no question at "
+                "all — the panel then says only that something holds its port, which is "
+                "true and is the weaker claim."
+            )
+        if not callable(question.reads):
+            raise ContractViolation(
+                f"transport {meta.name!r} declares a serving question whose answer nothing "
+                f"reads. {question.reads!r} is not callable, so the node would be asked and "
+                "its answer thrown away."
+            )
+        if not question.confirms.strip() or not question.refutes.strip():
+            raise ContractViolation(
+                f"transport {meta.name!r} declares a serving question and does not say what "
+                "its yes and its no MEAN. Both are read by an operator on the probe's own "
+                "sentence, and a check whose result is a bare word is the shape of reading "
+                "this walk found the panel over-claiming from."
+            )
 
     # The one implication between the two declarations item 28 added. A package with both
     # True compiles and reads plausibly and hands the fleet a hop that cannot come up.

@@ -18,6 +18,7 @@ from edge.registry import (
     SubscriptionFormat,
     TransportMeta,
 )
+from edge.transports.amneziawg import serving
 
 META = TransportMeta(
     name="amneziawg",
@@ -143,4 +144,14 @@ META = TransportMeta(
     # only one that can: there the tunnel being configured IS the way out, so the source
     # route is from its own address and there is nobody else's traffic in it.
     datapath=Datapath.KERNEL_ROUTED,
+    # WHAT SERVING MEANS FOR THIS PROTOCOL, asked of the node and judged here — M26's
+    # fourth acceptance walk. ``awg show <interface> peers``, compared against the peers
+    # the configuration we pushed authorises; see ``serving.py`` for why that subcommand
+    # and not the one an operator would type, and for what the walk did to earn it.
+    #
+    # Declared rather than inferred, like every other line in this file: the code that
+    # runs this command recognises no protocol, so a transport that can be asked a
+    # sharper question than "is your port held" says so here and one that cannot says
+    # nothing.
+    serving_question=serving.QUESTION,
 )

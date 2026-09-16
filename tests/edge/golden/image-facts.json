@@ -8,6 +8,7 @@
       "entrypoint": [],
       "resolves": {
         "/bin/sh": true,
+        "awg": true,
         "awg-quick": true,
         "ip": true,
         "iptables": true
@@ -23,6 +24,7 @@
         "/entrypoint.sh": true,
         "ip": true,
         "iptables": true,
+        "wg": true,
         "wg-quick": true
       }
     },

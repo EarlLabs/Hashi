@@ -253,7 +253,13 @@ DATA_PLANES = {
         # would not have caught a future pin without ``iproute2``. It was left because
         # the failure is LOUD rather than silent, and it is declared now because
         # "loud" is a property of the day it happens, not a reason not to say so.
-        executables=("wg-quick", "iptables", "ip"),
+        #
+        # ``wg`` is the tool ``wg-quick`` itself shells out to (``wg setconf``), so it has
+        # always been invoked here and was as undeclared as ``ip`` was until M19. It is
+        # ALSO what this transport's serving question runs (``transports/wireguard/
+        # serving.py``, M26's fourth walk) — declared once, in the field whose whole job
+        # is holding a name against the image that has to ship it.
+        executables=("wg-quick", "wg", "iptables", "ip"),
         # ``wg-quick up /opt/hashi/conf/wireguard.conf`` brings up an interface named
         # ``wireguard`` — the config's own stem. So the transport's name reaches the
         # node's network namespace and has to be legal there.
@@ -274,7 +280,10 @@ DATA_PLANES = {
         # the config are run by this tool, out of the file, and nothing about ``command``
         # would ever reveal them. ``ip`` is the one the hop needs — ``ip rule`` and
         # ``ip route`` under ``Egress.HOP`` — and this is the family that carries a hop.
-        executables=("awg-quick", "iptables", "ip"),
+        #
+        # ``awg`` for the two reasons its plain cousin's ``wg`` is there: ``awg-quick``
+        # shells out to it, and it is what this transport's serving question runs.
+        executables=("awg-quick", "awg", "iptables", "ip"),
         # Same rule, same tool lineage — see the note on the format above.
         interface_from_config_filename=True,
         # A tunnel device cannot be created without these two, and nothing else is

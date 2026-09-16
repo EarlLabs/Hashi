@@ -2,5 +2,6 @@
 
 from edge.health.listening import Listener
 from edge.health.probe import NodeHealth, probe
+from edge.health.serving import ServingCheck
 
-__all__ = ["Listener", "NodeHealth", "probe"]
+__all__ = ["Listener", "NodeHealth", "ServingCheck", "probe"]

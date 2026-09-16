@@ -27,6 +27,7 @@ from edge.registry import (
     SubscriptionFormat,
     TransportMeta,
 )
+from edge.transports.wireguard import serving
 
 META = TransportMeta(
     name="wireguard",
@@ -151,4 +152,14 @@ META = TransportMeta(
             "Measured twice on a live node."
         )
     ),
+    # WHAT SERVING MEANS FOR THIS PROTOCOL, asked of the node and judged here — M26's
+    # fourth acceptance walk. ``wg show <interface> peers``, compared against the peers
+    # the configuration we pushed authorises; see ``serving.py`` for why that subcommand
+    # and not the one an operator would type, and for what the walk did to earn it.
+    #
+    # Declared rather than inferred, like every other line in this file: the code that
+    # runs this command recognises no protocol, so a transport that can be asked a
+    # sharper question than "is your port held" says so here and one that cannot says
+    # nothing.
+    serving_question=serving.QUESTION,
 )

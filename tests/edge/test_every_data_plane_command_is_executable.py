@@ -186,6 +186,32 @@ def test_an_image_with_an_entrypoint_prepends_it() -> None:
 
 
 @pytest.mark.parametrize("transport_name", sorted(discover()))
+def test_a_declared_serving_question_runs_a_binary_its_image_ships(transport_name: str) -> None:
+    """M26's fourth walk: the question a transport declares is run INSIDE its container.
+
+    So it is the same class of assumption ``DataPlane.command`` was, and the same one M2
+    was broken by — with a quieter failure. A binary that is not in the image answers 127,
+    which ``edge.health.serving`` correctly reads as "nobody could ask": no error, no red
+    row, and a check that silently establishes nothing about every node in the fleet.
+
+    Asked of the transport's declaration and answered from the recorded image facts, so a
+    package added later is held to it without anyone remembering this file exists.
+    """
+    meta = discover()[transport_name]
+    if meta.serving_question is None:
+        return
+
+    image = DATA_PLANES[meta.config_format].image
+    binary = meta.serving_question.command[0]
+
+    assert resolves(facts_for(image), image, binary), (
+        f"transport {transport_name!r} asks its node a question that starts with "
+        f"{binary!r}, which {image!r} does not ship. The node would answer 127 and the "
+        "panel would report that nobody could ask — for ever, and quietly."
+    )
+
+
+@pytest.mark.parametrize("transport_name", sorted(discover()))
 def test_every_transport_can_be_placed_on_a_node(transport_name: str) -> None:
     """No transport in the registry has a name its own data plane would refuse.
 

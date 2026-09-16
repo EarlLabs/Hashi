@@ -42,10 +42,31 @@ HOW:  every field of ``NodeHealth`` is about the NODE. There is deliberately no
         header has the argument in full. Nothing downstream may claim it, which is why
         the console's sentence states what was checked rather than that the node works.
 
-      No transport declares anything new for this. ``listens_on`` already exists, already
+      No transport declares anything new for those. ``listens_on`` already exists, already
       says which protocols a transport binds, and is already read by `control` for the
       port-collision rule — so all four packages are probed by one pair of commands and
       nothing anywhere compares a transport's name to a literal.
+
+      AND A FIFTH ANSWER SINCE M26's FOURTH ACCEPTANCE WALK, which is where the third one
+      above ran out. The walk replaced a leaf's ``awg-quick`` with ``nc -u -l`` on the
+      same port: container up, port held, probe green, hop at 100% packet loss. Then it
+      did it again WITHOUT contriving anything — the real daemon, its peer removed, which
+      is the exact shape of a wrong peer key — and got the same green sentence. A
+      question about a SOCKET can be answered by anything holding the number, so no
+      amount of sharpening it reaches the fault.
+
+      * **The transport's own question**, declared by the transport and judged by it
+        (``TransportMeta.serving_question``, ``edge.health.serving``). For a wg-family
+        transport that is: the interface exists and holds the peers that were rendered
+        into its config. For another family it is a different sentence entirely, which is
+        the whole reason it is not asked here — this file recognises no protocol, and the
+        two things it does with the declaration are run an argv and call a function.
+
+      The refusal above still stands and is not weakened by it: the shipped questions ask
+      a daemon for the AUTHORISATION LIST this control plane pushed, never for who
+      reached it. A transport that declared a question whose answer is a handshake table
+      would be a package breaking the charter's no-logging rule in its own file, which is
+      where a reviewer can see it.
 """
 
 import logging
@@ -55,6 +76,7 @@ from dataclasses import dataclass, field
 from edge.bootstrap.node_stack import config_path_of, digest_of, running_containers
 from edge.bootstrap.ssh import NodeConnection, NodeUnreachable
 from edge.health.listening import Listener, bound_ports, is_answering
+from edge.health.serving import ServingCheck, ask
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +134,13 @@ class NodeHealth:
 
     # Transport names whose container is running AND whose port something holds — M22.
     #
-    # The strongest thing this probe can say, and it is still narrower than "it works":
-    # what it establishes is that the port is bound on the node, not that our container
-    # is what bound it and not that anything can reach it from outside. See
-    # ``edge.health.listening``.
+    # NARROWER THAN IT READS, and M26's fourth walk measured exactly how much: what this
+    # establishes is that the port is bound on the node — not that our container bound
+    # it, not that the thing that bound it is carrying anything, and not that anyone can
+    # reach it from outside. The walk satisfied it with ``nc``. It is kept because it is
+    # cheap, because it is the only answer available for a transport that declares no
+    # question of its own, and because it fails in the safe direction; what it is no
+    # longer asked to do is stand in for ``serving`` below. See ``edge.health.listening``.
     listening: list[str] = field(default_factory=list)
 
     # Transport names whose container is running and whose port NOTHING holds.
@@ -124,8 +149,53 @@ class NodeHealth:
     # and carries nobody, and no reading of the container can see it.
     not_listening: list[str] = field(default_factory=list)
 
+    # Transport names whose own serving question was put to the node and answered YES —
+    # M26's fourth acceptance walk, and the strongest thing anything in this file says.
+    #
+    # It is not a stronger version of ``listening``: it is a different question, asked of
+    # the transport rather than of the socket. What the walk proved is that the socket
+    # question cannot be made strong enough — ``nc -u -l`` on the port satisfies it, and
+    # so does the real data plane with its peer removed, which is what an ordinary wrong
+    # key produces. Only the transport knows what serving means for it, so it declares
+    # the question and reads the answer (``TransportMeta.serving_question``).
+    #
+    # Empty for every transport that declares no such question, which is honest rather
+    # than a gap: those are reported exactly as far as the port reading goes and no
+    # further, and the sentence the operator reads says which of the two it got.
+    serving: list[str] = field(default_factory=list)
+
+    # Transport names whose own serving question was put to the node and answered NO.
+    #
+    # The walk's two hosts, and the reason this field exists at all: a container that is
+    # up, a port that is held, and a protocol that is carrying nothing. Its own field
+    # rather than folded into ``not_listening`` because the two are different readings
+    # with different words — one says nothing holds the number, the other says the thing
+    # holding it is not doing the job — and an operator who is told the wrong one goes
+    # and looks at the wrong thing.
+    not_serving: list[str] = field(default_factory=list)
+
     # Operator-facing reason when the node is not healthy.
     detail: str | None = None
+
+    @property
+    def unchecked_serving(self) -> list[str]:
+        """Running transports whose own serving question was not answered.
+
+        Derived for ``unchecked_ports``' reason — it is exactly "everything running that
+        is in neither answer", and a second stored list is a second place for the three
+        to disagree.
+
+        THREE WAYS IN, and two of them are not faults. A transport that declares no
+        serving question at all is here, permanently and correctly: there is nothing
+        sharper to ask it than whether its port is held, and the surfaces say so. A
+        transport that declares one whose command could not be run on this node — an
+        image without the tool, an engine that would not exec it — is here too, and that
+        is the "nobody could ask" answer this codebase refuses to collapse into "not
+        serving". And a transport whose reader declined to judge its own answer is here
+        as well, which is the escape hatch a package has when a node says something it
+        does not recognise.
+        """
+        return sorted(set(self.running) - set(self.serving) - set(self.not_serving))
 
     @property
     def unchecked_ports(self) -> list[str]:
@@ -160,6 +230,7 @@ class NodeHealth:
             and not self.drifted
             and not self.stale
             and not self.not_listening
+            and not self.not_serving
         )
 
 
@@ -169,6 +240,7 @@ async def probe(
     expected: dict[str, str],
     transports: dict[str, str] | None = None,
     listeners: Mapping[str, Listener] | None = None,
+    serving_checks: Mapping[str, ServingCheck] | None = None,
 ) -> NodeHealth:
     """Probe one node.
 
@@ -190,6 +262,12 @@ async def probe(
     port question and gets exactly the behaviour it always had, with every running
     transport reported under ``unchecked_ports`` rather than silently as listening —
     "nobody asked" is never rendered as an answer.
+
+    ``serving_checks`` is each placed config's OWN question — M26's fourth walk. Passed
+    in for the same reason again: which transport rendered which config is a fact about a
+    database row, and the config the question is judged against is the caller's own
+    render. A caller that passes nothing asks no transport anything, and every running
+    transport is then reported under ``unchecked_serving`` — never as serving.
     """
     try:
         # The digest each running container was CREATED with, not merely which services
@@ -227,6 +305,26 @@ async def probe(
             target = health.listening if is_answering(bound, listener) else health.not_listening
             target.append(config_name)
 
+    # And each running transport's OWN question — M26's fourth walk. Asked of the
+    # RUNNING ones only: a container that is not up has already been reported by the
+    # reading that says so, and exec-ing into it would turn one fault into two sentences
+    # about one host.
+    #
+    # After the two readings above rather than before them, because it is the most
+    # expensive of the three — one command per config — and because a node that is not
+    # running the container at all has nothing to be asked.
+    for config_name, answered in (
+        await ask(connection, checks=serving_checks, about=health.running)
+        if serving_checks
+        else {}
+    ).items():
+        if answered is None:
+            # The question could not be put, or the transport declined to read its own
+            # answer. Neither is a finding, and neither may be rendered as one — it
+            # surfaces as ``unchecked_serving``.
+            continue
+        (health.serving if answered else health.not_serving).append(config_name)
+
     for config_name, config in expected.items():
         wanted = digest_of(config)
 
@@ -258,6 +356,8 @@ async def probe(
     health.stale.sort()
     health.listening.sort()
     health.not_listening.sort()
+    health.serving.sort()
+    health.not_serving.sort()
 
     if not health.healthy:
         # Crash-looping first: it is the loudest fault and the one that explains the rest.
@@ -271,6 +371,17 @@ async def probe(
                 f"not running: {', '.join(health.missing)}" if health.missing else "",
                 f"nothing listening on the port for: {', '.join(health.not_listening)}"
                 if health.not_listening
+                else "",
+                # The transport's own answer about itself, in its own clause — M26's
+                # fourth walk. It is not a stronger way of saying the clause above: that
+                # one is about a number nobody holds, and this one is about a daemon that
+                # holds it and is not doing the job, which is the fault an ordinary wrong
+                # peer key produces. The sentence the operator reads on the panel adds
+                # what the transport says a NO means; this one names which transports, so
+                # it fits a row and a banner.
+                f"up and not serving what we gave them, by their own check: "
+                f"{', '.join(health.not_serving)}"
+                if health.not_serving
                 else "",
                 f"configuration drifted: {', '.join(health.drifted)}" if health.drifted else "",
                 f"still running an older configuration: {', '.join(health.stale)}"
