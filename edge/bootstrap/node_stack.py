@@ -17,7 +17,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 from edge.bootstrap.ssh import NodeConnection
@@ -380,15 +380,36 @@ COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
 # ``.State.Restarting`` rather than ``.State.Status`` — the same fact, and a boolean this
 # code already knows how to read, where ``Status`` is a vocabulary of seven words whose
 # membership is the engine's to change.
+#
+# THE FIFTH FIELD IS M26's SECOND ACCEPTANCE WALK, and it is what makes one reading
+# comparable with the next. Every field above describes an INSTANT: the walk pressed
+# apply on a host whose data plane could not start, the container was sampled in the
+# first second of its first start — running, not yet restarting — and the panel reported
+# a node that was in a crash loop by the time the operator read the row. A second reading
+# does not fix that on its own, because a container that runs for a second and dies looks
+# identical in two readings taken either side of one of its lives.
+#
+# ``.State.StartedAt`` is the engine's own timestamp for THIS life of the container, and
+# it is used here as an opaque token and never as a time: two readings carrying the same
+# token are the same life, and a different token is a restart between them. Nothing
+# compares it to a clock, ours or the node's — which is the comparison ``loaded_digests``
+# rejects below, and rejects for the same reason it would be wrong here.
 _INSPECT_FORMAT = (
     f'{{{{index .Config.Labels "{COMPOSE_SERVICE_LABEL}"}}}}'
     f'|{{{{index .Config.Labels "{CONFIG_DIGEST_LABEL}"}}}}'
     f"|{{{{.State.Running}}}}"
     f"|{{{{.State.Restarting}}}}"
+    f"|{{{{.State.StartedAt}}}}"
 )
 
 # What a Go template prints for a label a container does not carry.
 _NO_LABEL = "<no value>"
+
+# How many fields ``_INSPECT_FORMAT`` prints. Derived from the format itself rather than
+# written down beside it: a line with any other number of fields is not a reading this
+# code understands, and it is dropped — which reports the container as absent, the
+# direction that refuses rather than reassures.
+_INSPECT_FIELDS = _INSPECT_FORMAT.count("|") + 1
 
 
 class UnrunnableTransport(Exception):
@@ -646,6 +667,25 @@ class RunningContainers:
     # Service names whose container is being restarted after dying. Sorted.
     restarting: tuple[str, ...]
 
+    # Service name → an opaque token for THIS life of that container — M26's second
+    # acceptance walk. Every service the reading saw is in here, running or restarting
+    # alike, and the only thing a caller may do with the value is compare it with the
+    # same service's token in another reading: equal means the container has not
+    # restarted between the two, different means it has.
+    #
+    # It exists because both fields above are instants. A container sampled in the first
+    # second of its first start is running and not restarting, and a container sampled
+    # between two lives of a crash loop can read the same way — so "is it staying up" is
+    # not a question one reading can answer, and two readings can only answer it if they
+    # can be told apart. See ``_INSPECT_FORMAT``.
+    #
+    # NEVER PARSED AND NEVER COMPARED TO A CLOCK. It is a timestamp today and this type
+    # promises nothing of the sort; a caller that read it as a time would be comparing a
+    # node's clock with ours, which is the reasoning ``loaded_digests`` already rejects.
+    # A service whose token is empty — an engine that printed nothing for it — is one no
+    # two readings may be said to agree about, and every caller here treats it as such.
+    started: dict[str, str] = field(default_factory=dict)
+
 
 async def running_containers(connection: NodeConnection) -> RunningContainers:
     """What this node's compose project is running, and what it is merely retrying.
@@ -657,7 +697,9 @@ async def running_containers(connection: NodeConnection) -> RunningContainers:
 
     See ``loaded_digests`` for why the digest is read from the container's own label, and
     ``_INSPECT_FORMAT`` for why a restart loop cannot be told from a healthy container by
-    ``.State.Running`` alone.
+    ``.State.Running`` alone — and why every reading also carries a token per service
+    saying which LIFE of that container it looked at, which is the only thing that makes
+    two of these readings comparable.
     """
     # ``ps -q | xargs docker inspect`` rather than ``compose ps --format json``: the
     # JSON that Compose emits has changed shape between versions (an array, then one
@@ -673,11 +715,12 @@ async def running_containers(connection: NodeConnection) -> RunningContainers:
 
     loaded: dict[str, str] = {}
     restarting: set[str] = set()
+    started: dict[str, str] = {}
     for line in result.stdout.splitlines():
         fields = line.strip().split("|")
-        if len(fields) != 4:
+        if len(fields) != _INSPECT_FIELDS:
             continue
-        service, digest, running, is_restarting = fields
+        service, digest, running, is_restarting, started_at = fields
         # Not everything under this compose project has to be one of ours, and a
         # container that is present but not running is reported by its absence here —
         # the caller's "did it come up" answer, unchanged from before M1.
@@ -690,7 +733,14 @@ async def running_containers(connection: NodeConnection) -> RunningContainers:
             restarting.add(service)
         elif running == "true":
             loaded[service] = "" if digest == _NO_LABEL else digest
-    return RunningContainers(loaded=loaded, restarting=tuple(sorted(restarting)))
+        # Recorded for every service this reading saw, in either list or in neither —
+        # a container stopped by hand is in neither, which is the answer it has always
+        # had, and a caller watching one settle still has to be able to see that the
+        # thing it is watching has not moved.
+        started[service] = "" if started_at == _NO_LABEL else started_at
+    return RunningContainers(
+        loaded=loaded, restarting=tuple(sorted(restarting)), started=started
+    )
 
 
 async def loaded_digests(connection: NodeConnection) -> dict[str, str]:

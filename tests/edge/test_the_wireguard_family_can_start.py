@@ -324,7 +324,7 @@ class _FakeNode:
             # Four fields since M22: service, digest, running, restarting. Nothing here
             # crash-loops, so the last is always false.
             lines = [
-                f"{service}|{digest}|true|false"
+                f"{service}|{digest}|true|false|2026-01-01T00:00:00.000000000Z"
                 for service, digest in self.containers.items()
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")

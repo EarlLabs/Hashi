@@ -282,6 +282,42 @@ def test_two_ends_disagreeing_about_a_matched_parameter_are_refused(
     )
 
 
+@pytest.mark.parametrize("name,field", MATCHED_PARAMS, ids=lambda value: str(value))
+def test_a_matched_parameter_declares_a_range_something_can_mint_inside(
+    name: str, field: str
+) -> None:
+    """M26's second acceptance walk — the other half of the refusal above.
+
+    Refusing two ends that disagree is right and it is only half the answer: the walk
+    ran out of budget inside the form that asks for these values, because a matched
+    parameter is one an operator has to type identically into two boxes by hand, which
+    is the very mistake the refusal exists to catch. The form can mint the pair instead
+    — but only for a parameter whose own declaration says what a legal value is.
+
+    So a transport that declares a parameter matched declares its bounds as well. A
+    floor with no ceiling is not enough: there is no such thing as a random value in an
+    unbounded range, and `control` must never be the place that decides how wide a
+    protocol's field is.
+    """
+    info = profile(name).params_model.model_fields[field]
+    bounds = {
+        attribute: getattr(constraint, attribute)
+        for constraint in info.metadata
+        for attribute in ("ge", "gt", "le", "lt")
+        if getattr(constraint, attribute, None) is not None
+    }
+
+    assert info.annotation is int, (
+        f"{name}.{field} is declared matched between two ends but is not a number, so "
+        "nothing can mint a pair for it"
+    )
+    assert bounds.keys() & {"ge", "gt"}, f"{name}.{field} declares no lower bound"
+    assert bounds.keys() & {"le", "lt"}, (
+        f"{name}.{field} declares no upper bound, so a form cannot draw a value inside "
+        "its range and the operator is back to typing it into two boxes by hand"
+    )
+
+
 def test_two_ends_that_agree_about_every_matched_parameter_render(
     entry_node, leaf_node, amneziawg_params
 ) -> None:

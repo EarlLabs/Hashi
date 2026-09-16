@@ -95,12 +95,14 @@ class _FakeNode:
         restarting: tuple[str, ...] = (),
         sockets: str = SSH_ONLY,
         ss_fails: bool = False,
+        started: dict[str, str] | None = None,
     ) -> None:
         self.containers = containers
         self.files = files or {}
         self.restarting = restarting
         self.sockets = sockets
         self.ss_fails = ss_fails
+        self.started = started or {}
         self.commands: list[str] = []
 
     async def run(self, command: str, *, check: bool = True) -> CommandResult:
@@ -108,7 +110,14 @@ class _FakeNode:
 
         if "docker inspect" in command:
             lines = [
-                f"{service}|{digest}|true|{'true' if service in self.restarting else 'false'}"
+                f"{service}|{digest}|true"
+                f"|{'true' if service in self.restarting else 'false'}"
+                # The fifth field: which LIFE of this container the reading looked at
+                # (``node_stack._INSPECT_FORMAT``). A fake host's containers never
+                # restart, so one token per service for the whole run is what that
+                # models — and it has to be there, or every reading of this fake would
+                # be one no caller may compare with the next.
+                f"|{self.started.get(service, '2026-01-01T00:00:00.000000000Z')}"
                 for service, digest in self.containers.items()
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
@@ -355,6 +364,49 @@ def test_the_container_command_asks_whether_a_container_is_restarting() -> None:
     assert ".State.Restarting" in node_stack._INSPECT_FORMAT, (
         "the container reading no longer asks whether a container is restarting, so "
         "every crash loop is back to reporting itself as running"
+    )
+
+
+def test_the_container_command_asks_which_life_of_the_container_it_read() -> None:
+    """M26's second acceptance walk, at the same seam as the fourth field above.
+
+    Every other field here is an INSTANT, and the walk proved an instant is not enough:
+    a container sampled in the first second of its first start reads exactly like one
+    that will keep running, and the panel reported a crash loop as serving. What makes a
+    second reading mean anything is being able to tell whether it looked at the same life
+    of the container, and that is this field. Drop it and every settle loop above
+    ``running_containers`` silently concludes on one sample again.
+    """
+    assert ".State.StartedAt" in node_stack._INSPECT_FORMAT, (
+        "the container reading no longer says which life of a container it looked at, "
+        "so two readings of a crash loop cannot be told from one container staying up"
+    )
+
+
+async def test_a_container_that_restarted_between_two_readings_says_so() -> None:
+    """Two readings, and the fact that is only visible across both of them.
+
+    The accept case is in the same test rather than beside it, because the claim is a
+    comparison: a token that never changes would pass an "it changed" assertion never,
+    and a token that changed every reading would pass it always. Both directions here.
+    """
+    node = _FakeNode(
+        containers={TRANSPORT: node_stack.digest_of(A_CONFIG)},
+        started={TRANSPORT: "2026-09-16T12:57:03.111111111Z"},
+    )
+
+    first = await node_stack.running_containers(node)
+    same_life = await node_stack.running_containers(node)
+
+    assert first.started[TRANSPORT] == same_life.started[TRANSPORT], (
+        "a container nobody restarted reads as a different life on the second look"
+    )
+
+    node.started[TRANSPORT] = "2026-09-16T12:57:09.222222222Z"
+    after_a_restart = await node_stack.running_containers(node)
+
+    assert first.started[TRANSPORT] != after_a_restart.started[TRANSPORT], (
+        "a container that restarted between two readings reads as one that never did"
     )
 
 

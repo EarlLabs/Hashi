@@ -27,6 +27,13 @@ MAGIC_HEADER_HINT = (
     "differ from each other."
 )
 
+# The widest value one of them can hold. It is the protocol's own field width — the four
+# headers replace WireGuard's 32-bit message-type constants — and it is declared so that
+# the boxes have a RANGE rather than a floor: a form that can read the range is a form
+# that can mint a value inside it, which is what M26's second acceptance walk asked for
+# after its budget ran out typing these four numbers into two ends by hand.
+MAGIC_HEADER_MAX = 2**32 - 1
+
 # The four, IN DECLARATION ORDER, which is the order Pydantic validates them in and
 # therefore the order the distinctness rule reads them in. A tuple rather than something
 # derived from the model because the validator below is applied at class-body time, when
@@ -132,10 +139,18 @@ class Params(BaseModel):
     # The example values are deliberately NOT quoted here. Naming them would put the
     # very set a node must not use into this file, where the next operator reads it as
     # the suggestion the field is careful not to make.
-    init_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
-    response_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
-    underload_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
-    transport_packet_magic_header: int = Field(ge=1, description=MAGIC_HEADER_HINT)
+    init_packet_magic_header: int = Field(
+        ge=1, le=MAGIC_HEADER_MAX, description=MAGIC_HEADER_HINT
+    )
+    response_packet_magic_header: int = Field(
+        ge=1, le=MAGIC_HEADER_MAX, description=MAGIC_HEADER_HINT
+    )
+    underload_packet_magic_header: int = Field(
+        ge=1, le=MAGIC_HEADER_MAX, description=MAGIC_HEADER_HINT
+    )
+    transport_packet_magic_header: int = Field(
+        ge=1, le=MAGIC_HEADER_MAX, description=MAGIC_HEADER_HINT
+    )
 
     @field_validator("port")
     @classmethod

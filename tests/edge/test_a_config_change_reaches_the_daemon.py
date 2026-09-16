@@ -70,12 +70,16 @@ class _FakeNode:
         self.commands.append(command)
 
         if "docker inspect" in command:
-            # Four fields since M22 — service, digest, running, RESTARTING. Nothing in
-            # this file crash-loops, so the last is always false; the state itself is
-            # modelled where it is the subject, in
-            # ``test_a_transport_that_is_not_serving_is_not_reported_as_serving.py``.
+            # Five fields since M26's second acceptance walk — service, digest, running,
+            # RESTARTING, and a token for which life of the container this reading looked
+            # at. Nothing in this file crash-loops, so the fourth is always false and the
+            # fifth never changes; both states are modelled where they are the subject,
+            # in ``test_a_transport_that_is_not_serving_is_not_reported_as_serving.py``
+            # and in ``tests/control/test_an_applys_own_check_waits_for_the_daemon.py``.
             lines = [
-                f"{service}|{digest}|{'false' if service in self.stopped else 'true'}|false"
+                f"{service}|{digest}"
+                f"|{'false' if service in self.stopped else 'true'}"
+                f"|false|2026-01-01T00:00:00.000000000Z"
                 for service, digest in self.containers.items()
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
