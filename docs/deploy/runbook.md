@@ -24,6 +24,11 @@ Every command below is idempotent — re-running is always safe.
 start, the SSH push works and a client accepts the link. Shape C is the right shape to
 actually live in.
 
+**And a shape is not a choice you make once.** Going from the box you started with to the
+charter's topology has a section of its own — *Growing out of Shape A*, below — because
+the obvious way to read Shape B as a migration is the way that destroys every credential
+your friends are connecting on today.
+
 None of the three proves the charter's first success criterion. "Survives a mobile
 whitelist shutdown" is a field observation on a real Russian network, made with your own
 phone. No test in this repository claims it and none ever will.
@@ -703,6 +708,86 @@ both.
 
 ---
 
+## Growing out of Shape A — the box you have becomes the leaf
+
+**This is the move most operators actually make, and Shape B read literally is not it.**
+You ran Shape A because this page calls it the right first run: one box abroad, carrying
+the control plane and a node, with `amneziawg` for your friends. Months later you rent a
+Russian box, and the charter's topology becomes buildable for the first time. The shapes
+above are a choice between three fresh builds; this is the one migration between them,
+and it is written down because the obvious reading of it is expensive.
+
+**Do not make the box you already have the entry.** Giving a hop to a node that already
+offers its friends a kernel tunnel is refused at the hop form — *no hop was established —
+`E` already offers `amneziawg` to its users …* — and correctly, because that node could
+never render again (*The one combination that will not render*, below). The refusal names
+two ways out, and **the one you will reach for is the one that costs you every friend on
+that box.** Removal is what destroys material, and the panel says so before you confirm:
+
+> `amneziawg` removed from `E` — *out of every user's link at their next refresh, and the
+> material minted for it is gone with it.*
+
+Every friend on that box then loses the credential their device is connecting on, and the
+repair is to reach all of them with a new configuration — over whatever channel you have,
+on the day you have just taken their working one away.
+
+**So point the move the other way.** The box you already have becomes the **leaf**. The
+box you just rented becomes the **entry**. The tunnel your friends are connecting on is on
+the box that does not move, so nothing they hold has to change and nobody is cut off at
+any point of this.
+
+| | before | after |
+|---|---|---|
+| the box you have, abroad | control plane, and `amneziawg` for your friends | both of those, unchanged, **plus the leaf end of the hop** |
+| the box you rent, in Russia | — | the entry: a friend-facing VLESS transport, and it dials the hop |
+
+**A leaf carrying both is supported, not a workaround.** A leaf's friends exit by the
+leaf's own route — that is route B, and a hop landing on the same box does not touch it —
+so one node holds `amneziawg` for its friends and `amneziawg` for the leaf end of the hop,
+both enabled, and every user on the first row goes on connecting. Two rows on one node
+need two ports and two ranges of their own (*Rules that are not optional*, below); nothing
+else about them collides, and neither has to be taken away for the other to exist.
+
+1. **Prepare the new box** with *Preparing a leaf* above — the script is the same
+   whichever end a node turns out to be — and register it. Give it a `resolver` as you
+   register it: it is about to dial a hop, and such a node does not render without one
+   (*A node that dials a hop needs a resolver*, below).
+2. **Enable a friend-facing transport on it** — `vless-reality` unless you have a reason
+   for the other one, with a `decoy_host` of your own choosing and never a shared one.
+   This box dials a hop, so it is the one node in your fleet whose friends may not be on
+   a kernel tunnel. Reality has the HTTPS port to itself here, unlike Shape A's box: the
+   panel is not on this machine.
+3. **Build the hop** from the panel's hop form: entry = the box you rented, leaf = the
+   box you already have, transport = `amneziawg`. The entry dials and the leaf listens,
+   so the hop's UDP port is opened on the firewall of the box you have been running for
+   months, not on the new one.
+4. **Apply both nodes.** Until you do, the hop exists only in the database.
+5. **Nothing your friends already hold stops working.** Enabling that transport granted
+   every active friend material on it, so the new entry is in every subscription at the
+   next refresh — on the *plain* link, since the VLESS pair is a URI list while the
+   `amneziawg` they are connecting on is a config file (*The one combination that will
+   not render*, below). The tunnel on their device is untouched. Taking the new way up
+   is them loading that link into a client that speaks VLESS, once, at their own pace.
+
+**When you want everybody behind the entry, withdraw the leaf's friend-facing row —
+do not remove it.** Withdrawing takes it out of every user's link at their next refresh,
+leaves every credential minted, and is one press to undo if the new path disappoints you;
+apply the leaf afterwards, or the host goes on serving what it was last given. Two things
+to have done first: watched a friend's traffic actually come out of the entry, and given
+everyone still on the old tunnel time to load the new link, because this is the press that
+takes their working route away. Removal is the irreversible one and there is no reason at
+all to reach for it on this path.
+
+**What this costs, and it is not what Shape B costs.** Your control plane stays on the box
+abroad, so `HASHI_SECRET_KEY` never travels to Russia and Shape B's charter problem never
+arises. What you take on instead is the other half of that same decision: your delivery
+endpoint is now outside Russia, and a friend inside it may be unable to refresh their
+subscription at exactly the moment a whitelist shutdown makes them need to — the choice
+set out at the end of *Shape C*, above. The third box buys you out of both, and this path
+leaves you one rental from it: move the control plane and neither node moves.
+
+---
+
 ## The one combination that will not render
 
 **On a node that dials a hop, friends may not be on a kernel tunnel.** Following this
@@ -946,9 +1031,16 @@ place, and its configuration does not change.
   still holds all three, because freeing them would move the collision to the moment
   somebody switches it back on; removing the row is the only thing that gives them
   back.
-- **A friend-facing kernel tunnel and a hop still cannot share a node**, which is a
-  different rule and the one that bites — *The one combination that will not render*,
-  above.
+- **A friend-facing kernel tunnel and the hop a node DIALS still cannot share that
+  node**, which is a different rule and the one that bites — *The one combination that
+  will not render*, above. **Which end of the hop it is decides the answer**, so this
+  rule is never absolute: on the **leaf** end the same two rows are ordinary and
+  supported. A leaf's friends exit by the leaf's own route, a hop landing there does not
+  change that, and one box carries `amneziawg` for its friends and `amneziawg` for the
+  leaf end of the hop with both enabled — two ports and two ranges apart, exactly as the
+  rule above requires. It is the node that dials the hop that may not also hand one to
+  its friends. That asymmetry is what makes *Growing out of Shape A*, above, possible at
+  all.
 - **A WireGuard-family row is told how many users it may serve, and the number is a
   ceiling.** AmneziaWG and plain WireGuard give every user their own address inside the
   tunnel, drawn from a pool that starts at the row's `peer_tunnel_address` and is as long

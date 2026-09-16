@@ -22,6 +22,7 @@ import re
 import pytest
 
 from control.app.api.routes import router as api_router
+from control.app.services import console, relay
 from control.app.services.placement import TUNNEL_TAKEN, claim
 from control.app.services.transports import (
     hop_transports,
@@ -1057,3 +1058,177 @@ def test_the_account_change_section_does_not_instruct_a_step_with_no_surface(
         "exact act the bootstrap script now performs, and the one its own comment says it "
         "exists to remove"
     )
+
+
+# --- M25's second walk: the growth path, and the page that was missing ----------------
+#
+# The runbook offered A, B and C as a one-time choice and described no move between them.
+# The move an operator makes is Shape A and then a Russian box — and Shape B, read as a
+# migration, points the existing box at the entry position, which the hop form refuses.
+# Of the two ways out that refusal names, removal is the one an operator reaches for, and
+# removal is what destroys every friend's material on that box. So the page has to name
+# the other move: the box you have becomes the LEAF, and the new box becomes the entry.
+#
+# Everything below asks the code the same question the section answers, for this file's
+# usual reason — a page of advice about what the panel will accept is worth nothing if
+# the panel has stopped accepting it.
+
+
+@pytest.fixture(scope="module")
+def growth_section(runbook: str) -> str:
+    """The section that takes an operator from one box to the charter's topology."""
+    section = re.search(
+        r"^## Growing out of Shape A — [^\n]*\n(?:.*\n)*?(?=^## |^---$)", runbook, re.M
+    )
+    assert section, (
+        "the runbook describes three shapes and no move between them — so an operator who "
+        "ran Shape A and then rented a Russian box has only Shape B to read, and following "
+        "it destroys every credential their friends are connecting on"
+    )
+    return section.group(0)
+
+
+def _nodes_whose_offers_the_hop_form_asks_about() -> set[str]:
+    """Which of ``establish_hop``'s two nodes is checked for friend-facing rows.
+
+    By ``ast`` over the function's own source, the same reading ``_claim_refusals`` takes
+    of ``placement.claim``: the question is which node that refusal is about, which is a
+    property of the code rather than of a database with two rows in it.
+    """
+    tree = ast.parse(inspect.getsource(relay.establish_hop))
+    return {
+        ast.unparse(argument)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "friend_facing_on"
+        for argument in node.args[1:]
+    }
+
+
+def test_the_growth_path_sends_the_box_that_already_serves_friends_to_the_leaf_end(
+    growth_section: str,
+) -> None:
+    """The whole point of the section, and the one claim it cannot be wrong about.
+
+    An operator's first box serves friends on a kernel tunnel. It can keep doing that as
+    the LEAF end of a hop and cannot as the entry end, and the asymmetry is not a
+    convention — ``establish_hop`` asks only the entry node what it offers its friends,
+    because the leaf's friends exit by the leaf's own route however many hops land on it.
+    If that refusal ever grew to ask the leaf as well, this advice would start costing an
+    operator the credentials it exists to save, and it would do so silently.
+    """
+    assert _nodes_whose_offers_the_hop_form_asks_about() == {"entry_node.id"}, (
+        "relay.establish_hop no longer refuses on the ENTRY node's offers alone. The "
+        "runbook's growth path tells an operator their existing friend-facing transport "
+        "survives on the leaf end — check that is still true before touching this test"
+    )
+    flat = _flat(growth_section)
+    assert "becomes the **leaf**" in flat, (
+        "the growth path does not say plainly which box becomes the leaf, which is the "
+        "one instruction it exists to give"
+    )
+    assert "becomes the **entry**" in flat, (
+        "the growth path does not say plainly which box becomes the entry"
+    )
+
+
+def test_the_growth_path_quotes_what_removing_a_transport_destroys(
+    growth_section: str,
+) -> None:
+    """Why the other way out of the refusal is the expensive one, in the panel's words.
+
+    The refusal an operator meets offers two remedies and this page has to say which of
+    them costs what. Quoted from ``console.removal_summary`` and checked against it — the
+    clause up to its first full stop, which is everything the dialog says about what
+    removal took and carries no node and no transport of its own. An operator who reads
+    "remove that transport" and does it has destroyed every friend's material on that
+    box, and this is the sentence that has to be in front of them first.
+    """
+    summary = _flat(
+        console.removal_summary("<node>", "<transport>", nothing_left_enabled=False)
+    )
+    cost = summary.split("— ", 1)[1].split(". ")[0]
+
+    assert cost in _flat(re.sub(r"^[ \t]*> ?", "", growth_section, flags=re.M)), (
+        "the growth path's quotation of what removal destroys is not what the panel says "
+        f"any more — the remove dialog now reads {cost!r}"
+    )
+
+
+def test_the_growth_path_builds_a_hop_the_panel_would_actually_accept(
+    growth_section: str, capability_table: dict[str, tuple[str, str, str]]
+) -> None:
+    """The new entry node, against the three forms the operator types it into.
+
+    Same three questions ``test_no_shape_that_builds_a_hop_offers_its_friends_a_kernel_
+    tunnel`` and its neighbours ask of a shape, asked here because this section is a
+    fourth set of instructions and inherits none of them: the hop form offers only
+    ``hop_transports()``, a node that dials a hop can render only a friend-facing
+    transport the table marks yes, and such a node does not render at all without a
+    resolver. A migration that ends in a refusal is worse than no migration — the
+    operator has already rented the box.
+    """
+    flat = _flat(growth_section)
+
+    carriers = set(re.findall(HOP_FIELD, growth_section))
+    assert carriers, "the growth path never builds a hop, so it does not reach route A"
+    assert carriers <= set(hop_transports()), (
+        f"the growth path builds a hop over {sorted(carriers - set(hop_transports()))}, "
+        "which the panel's hop form does not offer"
+    )
+
+    steps = [step for step in _numbered_steps(growth_section) if "friend-facing" in step]
+    assert steps, (
+        "the growth path never says to enable a friend-facing transport on the new entry, "
+        "so it produces an entry node nobody can dial"
+    )
+    for step in steps:
+        for name in _transport_names(step):
+            assert _answer(capability_table[name][0]) == "yes", (
+                f"the growth path names {name} where it tells an operator what to give the "
+                f"friends of the node that dials the hop: {step.strip()!r}"
+            )
+
+    assert RESOLVER_SECTION in flat, (
+        "the growth path registers a node that dials a hop and never says it needs a "
+        "resolver, so the first apply refuses"
+    )
+    assert "The one combination that will not render" in flat, (
+        "the growth path does not point at the section that says which friend-facing "
+        "transport the node it creates can render"
+    )
+
+
+def test_no_paragraph_states_the_kernel_tunnel_rule_without_naming_which_end(
+    runbook: str,
+) -> None:
+    """The rule is true of ONE end, and *Rules that are not optional* said it absolutely.
+
+    ``A friend-facing kernel tunnel and a hop still cannot share a node`` sat two bullets
+    below a paragraph of this same page explaining that on a leaf they are exactly right,
+    and it sat where an operator goes to look a rule up. The product's answer is the
+    narrower one — ``establish_hop`` asks only the entry node what it offers its friends
+    — so an operator who believes the absolute version takes a transport away from a leaf
+    that could have kept it, and takes every credential on it with them.
+
+    Per paragraph, and over the whole document rather than over that section, for the
+    reason the collision check above gives: the claim is the kind that gets restated
+    somewhere else, and the restatement is what an operator reads first.
+
+    ``dial`` or ``entry`` because those are the two ways this page names the end that
+    cannot: a node that DIALS a hop, or the ENTRY of one. A paragraph that says neither
+    is making the absolute claim, whatever words it makes it in.
+
+    THE VERB, WORD-BOUNDED, and that is not fussiness — ``\\bdial`` also matches
+    ``dialog``, which the pool bullet four lines below this rule happens to contain. The
+    check passed on the absolute sentence it was written to catch.
+    """
+    for paragraph in _prose_paragraphs(runbook):
+        if "kernel tunnel" not in paragraph:
+            continue
+        assert re.search(r"\b(?:dials?|dialling|dialled|entry)\b", paragraph, re.I), (
+            "a paragraph says what a friend-facing kernel tunnel may not share a node "
+            "with and never says which end of the hop that is true of — on a leaf it is "
+            f"supported and is what the growth path depends on: {paragraph}"
+        )
