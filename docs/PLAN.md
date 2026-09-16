@@ -55,6 +55,106 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
+**Run stopped by the owner on 2026-09-16, on quota.** Nothing is half-applied:
+the tree is clean, the gate is green, and every agent was stopped. What follows
+is where to pick it up.
+
+**24 of 26 milestones closed.** M26 is open but its question is answered; M24 is
+not started.
+
+### M26 — the owner's question is settled; one code path is not
+
+The owner asked whether a leaf and an entry can be deployed by one command. **They
+cannot, and the scheme the owner accepted instead is exactly what ships:** one
+script per host, ending by printing what the operator types into the panel.
+
+**Measured independently three times, and now matching the charter's own table:**
+
+| from | commands | panel actions |
+|---|---|---|
+| bare host → node serving | 1 | 3 — add node, enable transport, apply |
+| bare host → a friend's packets moving | 1 | 5 — those three, add the user, apply again |
+| two bare hosts → an established entry→leaf hop | 2 | 6 |
+| bare host → the control plane | 13 (14 on a truly bare box) | 0 |
+
+**Walk 3 carried a friend across a hop built this way** — hop `established`, both
+ends handshaking, a stock client built from the subscription URL alone fetching
+`http=200`, the leaf's MASQUERADE counter moving 0 → 2 packets. The charter's
+overstatements (*"from a bare host to serving traffic"*, *"the node answers a
+health probe"*) are gone, and criterion 2 no longer claims a replacement is
+bootstrapped from the panel.
+
+**Four walks, three fix rounds landed and pushed.** Closed and re-verified by a
+later independent walk: the charter's two overstatements; a friend added but not
+applied (now announced on all four surfaces, the claim true, all four silent
+after the apply); a probe finding erased by a page reload; the apply's check
+racing in both directions; the apply measuring container liveness instead of
+serving; the hop form's unanswerable boxes; a dialog whose submit shared its
+label with the button that opened it; `node-bootstrap.sh` claiming ufw logging
+was off before the check that could contradict it.
+
+### What is still open in M26 — walk 4's findings, unfixed
+
+Fix round 4 was stopped part-way. `36d6b1b` on `develop` is its **edge** half — a
+transport declares how to ask whether it is serving — committed, green, and with
+no caller yet. Its control half was discarded rather than left half-applied.
+
+1. **blocker — "the port is held" is not "the node is serving."** The check asks
+   whether the port number is held, never by what. Proven twice: `nc` squatting
+   on the port (apply → success at 100% packet loss), and — **with nothing
+   contrived** — the real daemon up with **the peer removed**, which is exactly a
+   node with a wrong peer key or endpoint. Device present, right daemon, right
+   port, `peers=[]`, 100% loss, **apply → success, probe → green.** An ordinary
+   typo produces a node that passes every check the product has and carries
+   nothing. *The fix `36d6b1b` starts: only the transport knows what serving
+   means for its own protocol — a wg-family node is serving when its interface
+   holds the peers that were rendered into its config.*
+2. **blocker — a condemned node empties every friend's link.** A ~20-second false
+   red on the entry made `GET /sub/{token}` return **nothing at all**, while on
+   that host Xray was listening, the tunnel daemon held its port and the hop
+   handshake was 27 seconds old. **A slow VPS silently takes every friend
+   offline.** Rule to build on: a health verdict may warn the operator, it may
+   never be why a friend's link comes back empty.
+3. **high — an apply that could not take the reading says the same words as one
+   that took it and passed.** With `ss` removed from the host, the success line
+   was byte-identical to the healthy run. The state is right (it clears nothing);
+   only the sentence lies. The probe is honest in the same case.
+4. **medium — a verdict never improves on its own.** The apply waits ~20 seconds,
+   hard; 35 seconds after a refusal the node was serving at 0% loss and the panel
+   still read `degraded`. Nothing re-measures until a human presses probe.
+5. **low** — the Users screen warns about withdrawn access with zero revoked
+   friends (M23's note firing on any behind-node; three walks have tripped on
+   it). **low** — 14 hand-typed numbers per hop remain, `port` the one new
+   candidate for a defensible default.
+
+**The outer edge of the waiting window was never tested** — a container down
+*past* the window that then recovers. Nobody knows what it does.
+
+### The defect class this milestone kept producing
+
+Every M26 blocker was one shape: **the panel claiming a node was fine when it was
+carrying nothing.** Four forms, each subtler — an erased measurement, a race, the
+wrong quantity, and the right quantity asked of the wrong thing. Three of the
+four fixes were themselves correct and insufficient. This is the project's
+signature defect (**a verification that cannot fail**, ~17 occurrences) and this
+code path is where it lives.
+
+### Also open
+
+- **M24** — the panel never shows `?format=client-config-file`, so an operator
+  following the panel hands a WireGuard-family friend a link that returns an
+  empty document. Not started. Its open design question: one link that answers by
+  what the node serves, or one URL per shape. *The first keeps "one link, every
+  serving node" true and quietly makes a subscription token polymorphic.*
+- **M16.3** — seven resolver acceptance findings, recorded as carry-over, never
+  dispatched.
+
+### The live fleet was never written to
+
+Across 15 walks in M23, M25 and M26, no agent wrote a file under `/opt/hashi/conf`
+on either live host, restarted a container there, or ran an apply against them.
+The owner's hop was baselined before and after every walk and moved every time.
+
 One host, rented and live: **Amsterdam, NL — 45.151.69.107**, AS216139 Iron
 Hosting Centre, Ubuntu 22.04, 1 vCPU, 957 Mi RAM. Runbook **Shape A**: control
 plane, panel, delivery endpoint and one node on the same box.
@@ -2134,7 +2234,7 @@ this milestone's subject.
 
 ---
 
-## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16
+## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL, run stopped 2026-09-16 — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); the serving check is not finished, see "Where things stand"
 
 **Approved by the owner on 2026-09-16**, who asked whether a leaf and an entry
 can be deployed by one command, and — being told the answer was probably no —
