@@ -1180,7 +1180,8 @@ FLEET_NOT_PUSHED = (
 # sentence that can be 1000 characters long.
 FLEET_NOT_SERVING = (
     "The last probe of {nodes} found {it} not serving what this panel gave {it}, and "
-    "nothing has been applied to {it} since. The counts above are counts of "
+    "nothing has contradicted that since — files may well have been pushed to {it} in "
+    "the meantime, and pushing is not measuring. The counts above are counts of "
     "configuration, so {it} is still in them and still in every user's link. The finding "
     "is on the Nodes screen, under that row."
 )
@@ -1196,9 +1197,12 @@ COUNTERS_COUNT_CONFIGURATION = (
     "Nothing on this screen dials a host, so none of them moves when a daemon stops. "
     "What a host is actually running is measured only when you press probe on the Nodes "
     "screen, and what that found is kept until a later probe finds otherwise — or until "
-    "an apply, which rebuilds the very containers the finding was about and refuses "
-    "unless it watches them stay up. An apply is not a probe: it clears the finding and "
-    "leaves the row reading as never probed, because that is what it is."
+    "an apply that took the same reading and got a different answer: it rebuilds the "
+    "containers the finding was about, watches them stay up and asks the node what is "
+    "holding their ports. An apply that could not ask — no port on the row, or a host "
+    "that would not give up its socket table — clears nothing and says so by leaving the "
+    "finding where it is. An apply is not a probe either way: where it does clear one, "
+    "the row goes back to reading as never probed, because that is what it is."
 )
 
 

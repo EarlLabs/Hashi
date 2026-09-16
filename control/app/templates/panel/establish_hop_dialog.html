@@ -236,9 +236,17 @@
         do anything when it does.
         {% endif %}
       </div>
+      {#
+        "write both ends", NOT "establish hop" — the Hops screen's own button is called
+        "establish hop" and is what opened this, and this is the tallest form in the
+        panel, so the one most likely to be submitted by a press aimed at a name rather
+        than at a position. It is also the more honest of the two sentences: this press
+        writes two rows and establishes nothing until both nodes are applied, which is
+        what the paragraph above it says.
+      #}
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
-        <button class="btn btn-primary" type="submit">establish hop</button>
+        <button class="btn btn-primary" type="submit">write both ends</button>
       </div>
     </form>
     {% include "panel/corners.html" %}

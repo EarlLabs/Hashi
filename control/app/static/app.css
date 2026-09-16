@@ -501,6 +501,30 @@
   overflow-y: auto;
 }
 
+/* AND THE BUTTONS STAY ON SCREEN — M26's third acceptance walk, which could not submit
+   the add-node form in a 1440x900 window. The two rules above cap the height and let the
+   box scroll, which keeps the dialog on the page; what they do not do is keep its ACTIONS
+   in view, so the operator meets a form whose only visible control is the last field they
+   filled in. On a tall form that is indistinguishable from a form that does not submit.
+
+   Sticky rather than a fixed footer: the actions stay in the flow, so nothing is layered
+   over the last field, and `bottom: 0` pins them to the scrolling box's own edge. The
+   background is the dialog's (not transparent — .dialog is transparent in the blueprint
+   layer, and content scrolling under these buttons would print through them), and the
+   hairline above separates them from whatever is passing behind.
+
+   Both tall dialogs, by their two classes rather than by .dialog itself: a short dialog
+   never scrolls, and sticking its actions would draw a rule across a box that has no
+   fold to be below. */
+.dialog-wide .dialog-actions,
+.dialog-hop .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-divider);
+  padding-top: var(--space-3);
+}
+
 /* UI-PATTERNS §6 — progressive disclosure. The summary is the label that states the
    COST of opening it, so it reads as a heading rather than as a link, and the rule
    above it separates the three decisions from the knobs. */

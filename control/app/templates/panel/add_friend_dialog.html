@@ -92,9 +92,16 @@
         They get one subscription URL covering every serving node. Nothing else is
         stored about them.
       </div>
+      {#
+        "issue subscription", NOT "add user" — the header's own primary is called "add
+        user" and opens this dialog, and one name for two buttons on one page is what cost
+        M26's third walk an action budget on the Nodes screen. It also says what the press
+        actually does to the mesh (UI-PATTERNS §13): this person gets one subscription URL
+        covering every serving node, which is the sentence directly above it.
+      #}
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
-        <button class="btn btn-primary" type="submit">add user</button>
+        <button class="btn btn-primary" type="submit">issue subscription</button>
       </div>
     </form>
     {% endif %}

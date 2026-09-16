@@ -1099,6 +1099,21 @@ async def apply_node(
     # ``enabled_transports``, and it stays for the probe, which reaches the same answer
     # from a route that has no rows.
     placed = {row.config_name: row.transport_name for row in enabled}
+
+    # AND WHERE EACH OF THEM SHOULD BE ANSWERING — M26's third acceptance walk. The same
+    # expectation the probe is given (``placed_listeners``), resolved from the same two
+    # sources: the port off the operator's own row, the protocols off the transport's
+    # declaration. It is read here, before the connection, because it is a database
+    # question and the block below is not the place to ask one.
+    #
+    # WHY AN APPLY ASKS IT AT ALL, when walk 2 decided it would not: the walk that
+    # followed replaced a leaf's image with one whose data plane exits 0 doing nothing,
+    # and the node's own compose command then holds the container up for ever. Container
+    # liveness did not degrade as a signal there — it stopped being a signal about
+    # serving at all, and the apply cleared a true probe finding on the strength of it.
+    # See ``services/serving`` for the whole of that argument.
+    listeners = await placed_listeners(session, node)
+
     for config_name, config in configs.items():
         # The FORMAT comes from the transport's own declaration, so the right checker
         # runs without this module knowing which protocol it is looking at.
@@ -1171,9 +1186,18 @@ async def apply_node(
             # LIFE of the container it looked at, bounded by a ceiling, and nothing
             # confirmed that was not observed staying up. See that module for why a
             # longer sleep would not have been an answer.
+            #
+            # AND IT ASKS THE SOCKET QUESTION — M26's THIRD acceptance walk, which is
+            # where that fix turned out to be half of one. A container staying up says
+            # nothing about a node serving: the compose command this file generates keeps
+            # the container alive for as long as the data plane's ``up`` returned 0,
+            # whatever it did, so a data plane that does nothing successfully is up for
+            # ever. The walk built exactly that image and the apply reported success over
+            # a host with no tunnel device and 100% loss across its hop.
             settled = await serving.confirm_serving(
                 connection,
                 expected=configs,
+                listeners=listeners,
                 interval=node_settings.node_settle_interval,
                 timeout=node_settings.node_settle_timeout,
             )
@@ -1185,11 +1209,23 @@ async def apply_node(
             # apart and the two surfaces must not come to different vocabularies for one
             # host — this is where they meet, not where they are decided.
             not_running = sorted(set(settled.restarting) | set(settled.absent))
+            # Its own clause, and in the probe's own words: a container that is up and
+            # holds nothing sends the operator somewhere else entirely from one that will
+            # not start. The third socket answer — nobody could ask — is deliberately NOT
+            # here: a host without ``ss`` still applies, and what it costs is written at
+            # the clearing of the probe finding below, which is the claim it actually
+            # undermines.
+            not_listening = list(settled.not_listening)
             stale = sorted(
                 name
                 for name, config in configs.items()
                 if name in loaded and loaded[name] != node_stack.digest_of(config)
             )
+            # What this apply may say it re-measured for itself. Read inside the
+            # connection block because it is a property of the readings just taken, and
+            # used far below, where the last probe's finding is either contradicted or
+            # left standing.
+            unchecked_ports = list(settled.unchecked)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
         await _record_failure(session, node, str(exc), granted)
@@ -1233,16 +1269,25 @@ async def apply_node(
             f"the node could not be configured and has been marked degraded: {reason}"
         ) from exc
 
-    if not_running or stale:
-        # Two different faults, named separately because they send the operator to
+    if not_running or not_listening or stale:
+        # Three different faults, named separately because they send the operator to
         # different places: a container that never came up is a config the daemon
-        # rejected, and one still on an older config is a definition Compose did not
-        # consider changed. Both leave the node degraded — core invariants §4, and the
-        # loud failure M1's second "done when" asks for.
+        # rejected, one that is up holding nothing is a daemon that started and bound
+        # nothing, and one still on an older config is a definition Compose did not
+        # consider changed. All three leave the node degraded — core invariants §4, and
+        # the loud failure M1's second "done when" asks for.
+        #
+        # The middle clause is the probe's own sentence, word for word (``edge.health.
+        # probe``): two surfaces reporting one fault about one host must not teach the
+        # operator two vocabularies for it, and this is the fault M26's third walk
+        # watched the apply report as success.
         detail = "pushed, but " + "; ".join(
             part
             for part in (
                 f"these did not come up: {', '.join(not_running)}" if not_running else "",
+                f"nothing listening on the port for: {', '.join(not_listening)}"
+                if not_listening
+                else "",
                 f"still running an older configuration: {', '.join(stale)}" if stale else "",
             )
             if part
@@ -1315,34 +1360,49 @@ async def apply_node(
     node.state = NodeState.ACTIVE
     node.state_detail = None
 
-    # AND THE LAST PROBE'S FINDING GOES WITH IT — M26's first acceptance walk, on a
-    # premise that walk 2 broke and that is restated here rather than left standing.
+    # AND THE LAST PROBE'S FINDING GOES WITH IT — but only where this apply actually
+    # contradicted it. Three walks have argued about this line and the rule it now
+    # follows is the third one's, stated once here because every future change to it will
+    # be tempted by the same shortcut:
     #
-    # WHAT ROUND 1 SAID, AND WHY IT WAS WRONG: "a successful apply clears the finding,
+    #     AN APPLY MAY ONLY CLEAR A FINDING IT HAS CONTRADICTED, WITH A MEASUREMENT OF
+    #     THE SAME KIND.
+    #
+    # WHAT WALK 1 SAID, AND WHY IT WAS WRONG: "a successful apply clears the finding,
     # because step 5 verifies the daemon came back on the config it just pushed —
-    # strictly more than a probe establishes." It is not strictly more. Step 5 does not
-    # ask what is holding a port, which a probe does; and until walk 2 it did not
-    # establish even its own half, because it concluded from one sample of a container
-    # in the first second of its first start. So an apply deleted a true finding while
-    # measuring nothing, and the row went green over a host in a crash loop.
+    # strictly more than a probe establishes." It was not strictly more: it concluded
+    # from one sample of a container in the first second of its first start, so walk 2
+    # watched an apply delete a true finding while measuring nothing.
     #
-    # WHAT IS TRUE, AND IS WHY THIS LINE STAYS: an apply REPLACES every process the
-    # finding was about. The containers are recreated, so a probe's answer about the
-    # daemons that were running before it is not an answer about the ones running now —
-    # it is obsolete rather than contradicted, and keeping it would put a fault on the
-    # row of a node whose fault has just been rebuilt away. What walk 2 required is that
-    # the replacement be watched rather than glanced at, which is step 5 above: nothing
-    # reaches this line unless every placed config was observed staying up.
+    # WHAT WALK 2 SAID, AND WHY THAT WAS WRONG TOO: that watching the containers stay up
+    # made the finding obsolete rather than contradicted, and that re-asking the socket
+    # question would widen an apply's failure surface for a reading with a "nobody could
+    # ask" third state. Walk 3 falsified it in one press. The compose command this file
+    # generates supervises a data plane with ``sleep 86400``, so a container whose ``up``
+    # returned 0 having done nothing stays up for ever: a container holding a port and a
+    # container holding nothing are not merely hard to tell apart by liveness, they are
+    # INDISTINGUISHABLE to it, permanently. The apply cleared a probe finding that said
+    # "nothing listening on the port for: amneziawg" over a host whose hop was at 100%
+    # loss, and deleted it again on the next press.
     #
-    # The timestamp is cleared with it rather than set to now, and that is the whole of
-    # what keeps this honest. An apply is not a probe: it watched containers and it asked
-    # no host what is listening on a port. Writing a time here would say "asked at 13:05
-    # and nothing was wrong", which claims the narrower check as the wider one — so the
-    # row says what is true instead, that nobody has probed this host since it was
-    # applied. ``console.COUNTERS_COUNT_CONFIGURATION`` is the sentence that tells the
-    # operator so.
-    node.last_probe_at = None
-    node.last_probe_finding = None
+    # SO THE READING IS TAKEN. ``settled.unchecked`` is every placed config this apply
+    # could not ask the port question about — no port on the row, no protocols declared,
+    # or a socket table the node would not give up. The third state is handled rather
+    # than used as a reason to skip the reading: a reading that could not be taken is not
+    # a confirmation, so the finding stands and the row goes on saying so. The apply
+    # itself still succeeds — refusing a host for a missing tool is the failure surface
+    # walk 2 was right to refuse to widen.
+    #
+    # The timestamp is cleared rather than set to now even when everything was checked,
+    # and that is what keeps the row honest. An apply is not a probe: it asks nothing
+    # about the file on disk, and a time written here would read as "probed at 13:05 and
+    # nothing was wrong". The row says what is true instead — that nobody has probed this
+    # host since it was applied. ``console.COUNTERS_COUNT_CONFIGURATION`` is the sentence
+    # that tells the operator which of the two clears a finding and what each one
+    # establishes.
+    if not unchecked_ports:
+        node.last_probe_at = None
+        node.last_probe_finding = None
 
     if becoming_serving:
         # RECORDED THE WAY ``set_node_state`` RECORDS IT — M23, round 3. A node going into

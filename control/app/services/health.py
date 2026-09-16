@@ -15,10 +15,14 @@ HOW:  renders through the same function the apply path uses, so "drifted" means 
       friend-facing daemon, read the correct finding, reloaded once and saw ``active``
       beside ``in sync`` again on a node whose users were carrying nothing. So every
       probe that reaches a host writes what it found onto that host's own row
-      (``nodes.record_probe``), in the words the operator read — and a successful apply
-      is what clears it, because an apply verifies the daemon came back on the
-      configuration it just pushed and a finding about the one before it is not a
-      finding about the host afterwards.
+      (``nodes.record_probe``), in the words the operator read.
+
+      WHAT CLEARS IT is a later probe — or an apply that took the same reading and got a
+      different answer, which since M26's THIRD walk means one that watched the new
+      containers stay up AND asked the node what is holding their ports. An apply that
+      could not ask clears nothing. The rule and the two walks that produced it are at
+      the clearing itself (``apply.apply_node``): an apply may only clear a finding it
+      has contradicted, with a measurement of the same kind.
 
       AND WHERE EACH CONFIG SHOULD ANSWER — M22, the same division of labour one field
       over. The port is the operator's own parameter and the protocols are the

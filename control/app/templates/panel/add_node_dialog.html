@@ -154,9 +154,21 @@
         apply that configuration, and put it into service — and no user has to do
         anything when you do.
       </div>
+      {#
+        "register node", NOT "add node" — M26's third acceptance walk, and the reason is
+        not tidiness. The button that OPENS this dialog is called "add node" and sits on
+        the screen behind it; a walker and a screen reader alike address a control by its
+        role and its name, so two buttons sharing one name on one page means pressing the
+        submit re-opens the form. The walk lost an action budget to exactly that, and walk
+        2 had lost the hop to the same class of problem one dialog over.
+
+        The verb is the product's own: scripts/node-bootstrap.sh ends by telling the
+        operator to "register it in the panel", which is the sentence they are acting on
+        when they arrive here. UI-PATTERNS §13 — lowercase for actions.
+      #}
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
-        <button class="btn btn-primary" type="submit">add node</button>
+        <button class="btn btn-primary" type="submit">register node</button>
       </div>
     </form>
     {% include "panel/corners.html" %}

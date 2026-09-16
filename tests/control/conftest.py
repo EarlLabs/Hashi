@@ -38,7 +38,8 @@ from control.app.models import Base
 from control.app.services import transports as transports_service
 from control.app.settings import Settings
 from edge.bootstrap import NodeConnection, node_stack
-from edge.registry import discover
+from edge.health import listening
+from edge.registry import Layer4, discover
 
 # Where the tests find a database. Defaults to the dev stack's published Postgres, so
 # a developer who ran `make up-dev` needs no extra configuration. Override with
@@ -355,6 +356,29 @@ def pinned(monkeypatch: pytest.MonkeyPatch, module, name: str, double) -> None:
     monkeypatch.setattr(module, name, double)
 
 
+class _AllPorts(frozenset):
+    """A set of port numbers that contains every one of them.
+
+    Used only by ``accepting_nodes`` below, and it exists because
+    ``edge.health.listening.is_answering`` asks ``port in bound.get(protocol)`` — so
+    "this node holds whatever it was given" has to be expressible as a container rather
+    than as a special case inside the double.
+    """
+
+    def __contains__(self, _item) -> bool:
+        return True
+
+
+class _EveryProtocol(dict):
+    """``bound_ports``' answer for a node holding every port on every protocol."""
+
+    def get(self, _key, _default=None) -> _AllPorts:
+        return _AllPorts()
+
+
+_EVERY_PORT_HELD = _EveryProtocol()
+
+
 class AcceptingNode:
     """A node that accepts every step of an apply.
 
@@ -438,6 +462,23 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
             started={name: "one-life" for name in connection.placed},
         )
 
+    async def bound_ports(connection) -> dict[Layer4, frozenset[int]] | None:
+        # AND THE SOCKET HALF OF THE SAME "everything works" — M26's third acceptance
+        # walk, which taught an apply to ask what is holding each placed config's port.
+        # Without this the double has no ``run`` for ``ss`` to reach and every apply in
+        # the suite dies inside the settle loop.
+        #
+        # It answers "held", for every port on every protocol, because that is what this
+        # double has always stood for: a node where every step of an apply works. The
+        # alternative answers are both wrong for it — ``None`` would make every test here
+        # run against a host whose socket table cannot be read, which is a real state with
+        # real consequences (an apply that clears no finding), and a table with particular
+        # numbers in it would need this fixture to know each row's port, which it has no
+        # route to. A test about a host that is NOT serving builds its own fake and says
+        # so in its own file.
+        return _EVERY_PORT_HELD
+
+    pinned(monkeypatch, listening, "bound_ports", bound_ports)
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)

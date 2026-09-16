@@ -19,11 +19,18 @@
       material is deleted from each of them. This cannot be undone — restoring access
       means adding them again and handing over a new link.
     </div>
+    {#
+      "delete their key material", NOT "revoke" — M26's third acceptance walk. The row
+      button that opened this dialog is called "revoke" and the table behind it is still
+      on the page, so one name addresses two buttons; the walk lost an action budget to
+      that pair on the Nodes screen. This one also names the irreversible half, which is
+      what the paragraph above it is about.
+    #}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"
               hx-post="/panel/friends/{{ friend.id }}/revoke"
-              hx-target="#dialog-slot" hx-swap="innerHTML">revoke</button>
+              hx-target="#dialog-slot" hx-swap="innerHTML">delete their key material</button>
     </div>
     {% include "panel/corners.html" %}
   </div>

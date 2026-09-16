@@ -2,8 +2,13 @@
 
 WHAT: that an apply refuses a node whose container is crash-looping however that crash
       loop happens to be sampled, that it does NOT refuse one whose container took a
-      moment to come up, that it waits no longer than the ceiling it is given, and that
-      neither answer is a coin toss.
+      moment to come up, that it waits no longer than the ceiling it is given, that a
+      container still down when the ceiling runs out is refused and can still be applied
+      once it is up, and that none of these answers is a coin toss.
+
+      What the apply does with the SOCKET half of the same wait is one file over
+      (``test_an_apply_measures_serving_and_not_liveness.py``, M26's third walk); this
+      one is the container half and keeps to it.
 WHY:  the second acceptance walk pressed probe on a leaf whose data plane could not
       start and got the truth — *"r2leaf answered but is not serving — not running:
       amneziawg."* Then it pressed apply. Twenty seconds later, and still at sixty-five,
@@ -33,6 +38,7 @@ HOW:  against a fake host at the SHELL — the real compose render, the real ``d
       not conclude from one look.
 """
 
+import asyncio
 import itertools
 import time
 
@@ -51,12 +57,23 @@ NODE_ADDRESS = "192.0.2.41"
 
 TRANSPORT = "vless-reality"
 
-# A node's listening table with nothing on the transport's port. The subject of this file
-# is what the CONTAINER is doing, and an apply asks no port question at all — so the fake
-# answers the one command the probe adds, and answers it the same way throughout.
+# A node's listening table, with only the session we arrived over on it.
+#
+# EVERY HOST IN THIS FILE HOLDS ITS PORT, and that is a rule rather than a convenience —
+# M26's third walk taught an apply to refuse a container that is up and holds nothing, so
+# a fake here that held nothing could be refused for its SOCKET while the file believed it
+# was proving something about its CONTAINER. Reverting the life-token comparison would
+# then leave every test in this file green. The socket question's own scenarios are in
+# ``test_an_apply_measures_serving_and_not_liveness.py``; here the port is held so that
+# the container is the only thing that can fail.
 SSH_ONLY = """Netid State  Recv-Q Send-Q    Local Address:Port  Peer Address:PortProcess
 tcp   LISTEN 0      4096            0.0.0.0:22         0.0.0.0:*
 """
+
+
+def bound(port: int) -> str:
+    """The same table with the transport's own socket on it — a host that is serving."""
+    return SSH_ONLY + f"tcp   LISTEN 0      4096            0.0.0.0:{port}      0.0.0.0:*\n"
 
 
 @pytest.fixture
@@ -118,11 +135,33 @@ class _FakeHost:
 
     learned_host_key = None
 
-    def __init__(self, behaviour: str, *, comes_up_after: float = 0.0) -> None:
+    def __init__(
+        self,
+        behaviour: str,
+        *,
+        sockets: str,
+        comes_up_after: float = 0.0,
+        keeps_its_clock: bool = False,
+    ) -> None:
         self.files: dict[str, str] = {}
         self.behaviours: dict[str, _Behaviour] = {}
         self._kind = behaviour
         self._comes_up_after = comes_up_after
+        # What ``ss`` prints here. A separate knob from the behaviour above, because the
+        # two questions an apply now asks are separate questions about one host: a
+        # container can stay up holding nothing, and a container that never starts holds
+        # nothing either.
+        # What ``ss`` prints here, and it has no default: see ``SSH_ONLY`` above. A test
+        # that did not say what this host is holding would not know which of the two
+        # questions its refusal came from.
+        self.sockets = sockets
+        # Whether a second ``docker compose up -d`` starts this container's clock again.
+        # It does by default, which is what Compose does to a service whose definition
+        # changed. A host that KEEPS its clock is one whose data plane is slow for a
+        # reason that outlives one apply — an image being pulled, a kernel module being
+        # loaded — and it is the only way to model a container that is still down when
+        # the ceiling runs out and up by the time the operator presses again.
+        self.keeps_its_clock = keeps_its_clock
         self.readings = 0
 
     async def __aenter__(self):
@@ -139,6 +178,8 @@ class _FakeHost:
             # here — the moment the apply restarted it, which is the moment the check
             # under test used to conclude from.
             for service in yaml.safe_load(self.files[node_stack.COMPOSE_PATH])["services"]:
+                if self.keeps_its_clock and service in self.behaviours:
+                    continue
                 self.behaviours[service] = _Behaviour(
                     self._kind, comes_up_after=self._comes_up_after
                 )
@@ -155,7 +196,7 @@ class _FakeHost:
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
 
         if command == listening.LISTENING_SOCKETS:
-            return CommandResult(exit_status=0, stdout=SSH_ONLY, stderr="")
+            return CommandResult(exit_status=0, stdout=self.sockets, stderr="")
 
         if "docker version" in command:
             return CommandResult(exit_status=0, stdout="27.1.1\n", stderr="")
@@ -215,7 +256,10 @@ async def test_a_container_that_never_stays_up_is_never_reported_as_serving(
     Red against the previous commit for the reason the walk found it: the check sampled
     once, saw ``running``, and reported a node in a crash loop as serving.
     """
-    host_for(monkeypatch, _FakeHost("silent-crash-loop"))
+    host_for(
+        monkeypatch,
+        _FakeHost("silent-crash-loop", sockets=bound(reality_params["port"])),
+    )
     node_id = await a_node_with_a_transport(client, reality_params)
 
     applied = await client.post(f"/api/nodes/{node_id}/apply")
@@ -227,6 +271,11 @@ async def test_a_container_that_never_stays_up_is_never_reported_as_serving(
     await session.refresh(node)
     assert str(node.state) == "degraded", node.state
     assert TRANSPORT in (node.state_detail or ""), node.state_detail
+    # THE FAULT AND NOT MERELY A FAULT. This host holds its port, so the only thing that
+    # can refuse it is the container — and naming the clause is what stops this test from
+    # passing on a product that has lost the life-token comparison and is refusing the
+    # node for a socket instead.
+    assert "did not come up" in (node.state_detail or ""), node.state_detail
 
 
 async def test_what_the_walk_saw_the_row_say_is_not_what_it_says_now(
@@ -238,8 +287,15 @@ async def test_what_the_walk_saw_the_row_say_is_not_what_it_says_now(
     pressed apply — and read ``active / in sync`` with the sub-line gone and the Overview
     silent, for at least sixty-five seconds. The product may now say several things about
     this host; ``in sync`` and nothing else is not one of them.
+
+    THE ONE HOST IN THIS FILE THAT HOLDS NOTHING, and it is the realistic pairing rather
+    than an exception: a daemon that will not start binds no port either, which is what
+    gives the probe in the middle of this something to find. It still cannot mask the
+    life-token comparison, because the clause asserted below is the CONTAINER's — a
+    settle check that believed this container would refuse the node for its socket and
+    say so in different words.
     """
-    host_for(monkeypatch, _FakeHost("silent-crash-loop"))
+    host_for(monkeypatch, _FakeHost("silent-crash-loop", sockets=SSH_ONLY))
     node_id = await a_node_with_a_transport(client, reality_params)
     await client.post(f"/api/nodes/{node_id}/apply")
 
@@ -252,7 +308,10 @@ async def test_what_the_walk_saw_the_row_say_is_not_what_it_says_now(
     assert row.state != "active", (
         "the row reads active over a host whose container has never stayed up"
     )
-    assert row.state_detail, "the row says the node is not serving and does not say why"
+    assert row.state_detail and "did not come up" in row.state_detail, (
+        "the row does not say why the node is not serving, or says the wrong why: this "
+        "host holds its port and its container is what never stayed up"
+    )
     assert console.fleet_doubt(rows), (
         "the Overview counts this node and says nothing at all about it"
     )
@@ -267,7 +326,10 @@ async def test_the_wait_has_a_ceiling_and_it_is_the_one_in_settings(
     returned instantly would prove the check is not waiting, and one that ran for a
     minute would prove the ceiling is not a ceiling.
     """
-    host_for(monkeypatch, _FakeHost("silent-crash-loop"))
+    host_for(
+        monkeypatch,
+        _FakeHost("silent-crash-loop", sockets=bound(reality_params["port"])),
+    )
     node_id = await a_node_with_a_transport(client, reality_params)
 
     began = time.monotonic()
@@ -301,7 +363,10 @@ async def test_a_container_that_takes_a_moment_is_not_called_degraded(
     well inside the ceiling.
     """
     delay = settings.node_settle_timeout / 3
-    host_for(monkeypatch, _FakeHost("slow", comes_up_after=delay))
+    host_for(
+        monkeypatch,
+        _FakeHost("slow", sockets=bound(reality_params["port"]), comes_up_after=delay),
+    )
     node_id = await a_node_with_a_transport(client, reality_params)
 
     applied = await client.post(f"/api/nodes/{node_id}/apply")
@@ -321,7 +386,9 @@ async def test_a_node_that_comes_straight_up_costs_one_interval(
     One interval, because two readings are what makes a pair — not the ceiling, which is
     what a check that always waited it out would cost every operator on every press.
     """
-    host = host_for(monkeypatch, _FakeHost("stays-up"))
+    host = host_for(
+        monkeypatch, _FakeHost("stays-up", sockets=bound(reality_params["port"]))
+    )
     node_id = await a_node_with_a_transport(client, reality_params)
 
     began = time.monotonic()
@@ -340,6 +407,75 @@ async def test_a_node_that_comes_straight_up_costs_one_interval(
     )
 
 
+async def test_a_node_starved_past_the_ceiling_is_refused_and_can_then_be_applied(
+    client, session, reality_params, monkeypatch, settings
+) -> None:
+    """THE EDGE OF THE WINDOW, which M26's third walk tried to reach and could not.
+
+    The walk starved the watcher on purpose — a container down for longer than the
+    ceiling, then recovering — and ran out of budget before it could, so it filed that
+    nobody knows what this window does at its edge. This is that host, built where the
+    edge is known: ``comes_up_after`` is past ``node_settle_timeout``, so the container
+    is still being restarted when the wait ends.
+
+    Both halves matter and they pull opposite ways.
+
+    * The apply REFUSES, because the ceiling running out is not evidence of anything. A
+      settle loop that concluded "well, nothing was obviously wrong" at the edge would be
+      the walk-2 defect rebuilt inside the fix for it.
+    * And the refusal is NOT A VERDICT ON THE HOST. The same host, pressed again once its
+      data plane is up, applies and goes active — so an operator whose node is slow for a
+      reason that outlives one press (an image being pulled) is told to press again
+      rather than being locked out of their own node.
+    """
+    starved = settings.node_settle_timeout * 1.5
+    host = host_for(
+        monkeypatch,
+        _FakeHost(
+            "slow",
+            sockets=bound(reality_params["port"]),
+            comes_up_after=starved,
+            keeps_its_clock=True,
+        ),
+    )
+    node_id = await a_node_with_a_transport(client, reality_params)
+
+    began = time.monotonic()
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+    elapsed = time.monotonic() - began
+
+    assert refused.status_code != 200, (
+        "an apply reported success about a container still being restarted when its "
+        "ceiling ran out — the wait ending is being read as an answer"
+    )
+    assert elapsed < starved, (
+        f"the apply waited {elapsed:.2f}s for a container that comes up at "
+        f"{starved:.2f}s, so the ceiling is not bounding the starved case"
+    )
+    node = await nodes.get_node(session, node_id)
+    await session.refresh(node)
+    assert str(node.state) == "degraded", node.state
+    # AND FOR THE RIGHT REASON. The clause matters here more than anywhere else in this
+    # file: a settle loop that read the ceiling running out as "everything is fine" would
+    # hand this container's empty digest to the staleness comparison instead, and the
+    # apply would still fail — on a sentence about an older configuration, about a
+    # container that has never started once.
+    assert "did not come up" in (node.state_detail or ""), node.state_detail
+
+    # The far side of the edge: the container is up now, and nothing about the refusal
+    # above may stop the next press from succeeding.
+    behaviour = next(iter(host.behaviours.values()))
+    await asyncio.sleep(max(0.0, starved - (time.monotonic() - behaviour.started_at)))
+
+    applied = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert applied.status_code == 200, applied.text
+    session.expire_all()
+    node = await nodes.get_node(session, node_id)
+    assert str(node.state) == "active", node.state
+    assert node.state_detail is None, node.state_detail
+
+
 # --- the reading itself, asked directly ---------------------------------------------
 
 
@@ -353,7 +489,7 @@ async def test_a_ceiling_shorter_than_one_interval_confirms_nothing(
     A settle loop that answered "all good" when it had no time to look would be this
     project's signature defect rebuilt inside its own fix.
     """
-    host = _FakeHost("stays-up")
+    host = _FakeHost("stays-up", sockets=SSH_ONLY)
     await host.write_file(
         node_stack.COMPOSE_PATH,
         yaml.safe_dump(
@@ -363,7 +499,7 @@ async def test_a_ceiling_shorter_than_one_interval_confirms_nothing(
     await host.run("cd /opt/hashi && docker compose up -d")
 
     settled = await serving.confirm_serving(
-        host, expected=[TRANSPORT], interval=0.05, timeout=0.0
+        host, expected=[TRANSPORT], listeners={}, interval=0.05, timeout=0.0
     )
 
     assert settled.staying_up == {}, (

@@ -104,16 +104,33 @@ class _FakeHost:
 
 
 @pytest.fixture
-def host(monkeypatch: pytest.MonkeyPatch):
+def host(monkeypatch: pytest.MonkeyPatch, reality_params):
     """One fake host, reached by both the apply that places configs and the probe.
 
     Returned so a test can change what it answers mid-run, which is the whole scenario:
     the same host serving, then not.
+
+    IT STARTS OUT SERVING — its container is up and its port is held — and that is a
+    correction from M26's THIRD walk rather than set dressing. This file used to apply
+    its node to a host holding nothing, because an apply asked no port question; the walk
+    found that an apply which does not ask cannot tell a daemon from a ``sleep``, so one
+    now refuses such a host. A test whose ``given`` is a host in the state the product
+    refuses would be proving nothing about the state it is written for.
     """
-    fake = _FakeHost()
+    fake = _FakeHost(sockets=bound(reality_params["port"]))
     for module in (apply, health):
         monkeypatch.setattr(module, "NodeConnection", lambda target: fake)
     return fake
+
+
+def stops_serving(host) -> None:
+    """The walk's own break: the daemon goes and nothing holds the port any more.
+
+    Named rather than assigned in place at six call sites, because what it models is the
+    premise of every finding in this file — the host was serving when it was applied and
+    is not serving when it is probed.
+    """
+    host.sockets = SSH_ONLY
 
 
 async def an_applied_node(client, reality_params, *, name: str = "leaf-acc") -> str:
@@ -166,6 +183,7 @@ async def test_what_the_probe_found_is_still_there_after_a_reload(
     exactly what the walk read one reload after a correct answer.
     """
     node_id = await an_applied_node(client, reality_params)
+    stops_serving(host)
 
     probed = await client.post(f"/panel/nodes/{node_id}/probe")
     assert probed.status_code == 200, probed.text
@@ -191,6 +209,7 @@ async def test_the_overview_says_what_its_counters_do_not_know(
     What changes is that the screen no longer says only that.
     """
     node_id = await an_applied_node(client, reality_params)
+    stops_serving(host)
     await client.get(f"/api/nodes/{node_id}/health")
 
     body = await client.get("/panel/overview/body")
@@ -240,6 +259,7 @@ async def test_a_later_probe_that_finds_nothing_clears_it(
     the product would trade one permanent wrong answer for another.
     """
     node_id = await an_applied_node(client, reality_params)
+    stops_serving(host)
     await client.get(f"/api/nodes/{node_id}/health")
 
     host.sockets = bound(reality_params["port"])
@@ -257,34 +277,43 @@ async def test_a_later_probe_that_finds_nothing_clears_it(
     assert console.probe_note(node) is None
 
 
-async def test_a_successful_apply_clears_it(
+async def test_an_apply_that_re_measured_and_found_otherwise_clears_it(
     client, session, reality_params, host
 ) -> None:
-    """The second thing that unsays a finding, and NOT the stronger of the two.
+    """The second thing that unsays a finding, and it took three walks to state.
 
-    THE SENTENCE THAT STOOD HERE WAS WRONG, and M26's second acceptance walk is what
-    proved it: *"an apply verifies the daemon came back on the configuration it just
-    pushed, which is more than the probe establishes."* It is not more — an apply asks no
-    host what is holding a port, which a probe does — and until that walk it did not
-    establish even its own half, because it concluded from one sample of a container in
-    its first second. The walk watched an apply delete a true finding and report nothing
-    while the container sat in a crash loop and the friend's ping was 100% loss.
+    WALK 1 SAID an apply clears the finding because it verifies more than a probe does.
+    WALK 2 PROVED that false — an apply asks no host what is holding a port, and until
+    that walk it concluded from one sample of a container in its first second — and
+    settled on "an apply replaces the processes the finding was about, so the finding is
+    obsolete". WALK 3 PROVED THAT FALSE TOO: replacing a process that then serves nothing
+    does not unsay a finding about serving nothing, and the walk watched exactly that
+    apply report success.
 
-    What is true, and is why this test still asserts a clear: an apply REPLACES every
-    process the finding was about, and since walk 2 it refuses unless it has watched the
-    replacements stay up (``tests/control/test_an_applys_own_check_waits_for_the_
-    daemon.py``). A finding about processes that no longer exist is obsolete rather than
-    contradicted. The timestamp goes with it precisely because an apply is not a probe:
-    the row reads "never probed", which is what it is.
+    So the rule this asserts is the third one: an apply clears a finding only when it
+    took the SAME READING and got a different answer. Here the operator fixed the host —
+    its port is held again — and the apply that follows watches the containers stay up
+    AND finds the port held, which is a contradiction of the finding rather than a
+    replacement of its subject.
+
+    The timestamp still goes with it, because an apply is still not a probe: the row
+    reads "never probed", which is what it is.
     """
     node_id = await an_applied_node(client, reality_params)
+    stops_serving(host)
     await client.get(f"/api/nodes/{node_id}/health")
-
-    applied = await client.post(f"/api/nodes/{node_id}/apply")
-    assert applied.status_code == 200, applied.text
 
     node = await nodes.get_node(session, node_id)
     await session.refresh(node)
+    assert node.last_probe_finding, "the probe recorded nothing, so this proves nothing"
+
+    # The operator repairs the host: the daemon comes back and holds its port again.
+    host.sockets = bound(reality_params["port"])
+    applied = await client.post(f"/api/nodes/{node_id}/apply")
+    assert applied.status_code == 200, applied.text
+
+    session.expire_all()
+    node = await nodes.get_node(session, node_id)
 
     assert node.last_probe_finding is None
     assert node.last_probe_at is None, (
@@ -304,6 +333,7 @@ async def test_an_apply_that_could_not_confirm_the_daemon_clears_nothing(
     apply at all to erase a true reading, which is the defect the walk filed.
     """
     node_id = await an_applied_node(client, reality_params)
+    stops_serving(host)
     await client.get(f"/api/nodes/{node_id}/health")
 
     node = await nodes.get_node(session, node_id)
@@ -349,6 +379,7 @@ async def test_no_finding_records_anything_about_a_person(
     click — the probe's own answers are already held to this, and this is the first of
     them that is written down."""
     node_id = await an_applied_node(client, reality_params)
+    stops_serving(host)
     await client.get(f"/api/nodes/{node_id}/health")
 
     node = await nodes.get_node(session, node_id)

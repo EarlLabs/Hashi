@@ -25,11 +25,17 @@
       the network it arrived on. That is deliberate; it is also what a user sees as
       the node having stopped working.
     </div>
+    {#
+      "dissolve both ends", NOT "tear down" — the Hops row button that opened this is
+      called "tear down" and its table is still on the page behind the dialog, so one
+      name addresses two buttons (M26's third walk, on the Nodes screen's own pair). The
+      words are the sentence above it: both ends go, always.
+    #}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"
               hx-post="/panel/hops/{{ hop.id }}/dissolve"
-              hx-target="#dialog-slot" hx-swap="innerHTML">tear down</button>
+              hx-target="#dialog-slot" hx-swap="innerHTML">dissolve both ends</button>
     </div>
     {% include "panel/corners.html" %}
   </div>
