@@ -126,15 +126,18 @@ acceptance:
   stand:
     up: "scripts/acceptance/stand.sh up"
     down: "scripts/acceptance/stand.sh down"
-  # MCP hands, not a command: aikit's own bin/drive needs Playwright, which is not
-  # a dependency of this project and adding one is an architect decision (CLAUDE.md).
-  # The acceptance agent already carries these tools, so this key only says which
-  # of them reach the product — it does not have to spend budget finding them.
+  # This project's own driver, not aikit's bin/drive: bin/drive attaches to a
+  # Chromium over CDP, and the browser here is only reachable from inside the
+  # stand's compose network. Naming the driver is also what keeps the agent from
+  # spending budget hunting for hands it already has.
   #
-  # These hands do NOT write files the way a driver does. The capture is therefore
-  # a deliberate step: screenshot into `.acceptance/<milestone>/<name>.png` and
-  # report that exact name, because the gate opens that directory and a capture
-  # that is not on disk did not happen.
+  # The driver DOES write its own captures — every verb screenshots to
+  # `.acceptance/<milestone>/<name>.png` on the host, and `--name` chooses the name
+  # the report cites. The gate opens that directory, so a capture that is not on
+  # disk did not happen; cite the name the driver wrote, not one you meant to.
+  # (Corrected 2026-09-22: this preamble still described the MCP hands, which
+  # `kind: command` stopped being on 2026-09-08. The paragraph below is the change
+  # it was describing.)
   #
   # CHANGED 2026-09-08. The MCP hands drove the operator's own Chrome, which is
   # exactly what an unattended overnight run does not have. The driver below needs
@@ -164,13 +167,16 @@ acceptance:
     kind: command
     use: "scripts/acceptance/query.py"
   browser:
-    # `local` first: the hands above drive the operator's own Chrome, nothing
-    # attaches over CDP, and the project's 54100–54299 loopback block is untouched.
-    # An unattended run on a host with no operator and no Chrome uses the fallback
-    # instead — 9222 is outside this project's published block on purpose, because
-    # it belongs to the acceptance stand and not to the product.
-    mode: local
-    cdp: "http://127.0.0.1:9222"
+    # `project`, corrected 2026-09-22. This block only ever mattered to aikit's own
+    # bin/drive, which attaches to a Chromium over CDP; `hands` above names this
+    # project's driver instead, and that driver launches its browser INSIDE the
+    # stand's own container and talks to it over a socket there. So nothing
+    # attaches over CDP and no operator Chrome is involved — which is what `local`
+    # and a `cdp:` address claimed, both of them left behind by the change of
+    # 2026-09-08 that moved the hands into the stand. A comment describing an
+    # arrangement the file no longer uses is worse than no comment: the next reader
+    # goes looking for port 9222.
+    mode: project
   # Addresses and human-facing notes ONLY — never a file path, never a module
   # name. If a reader could learn from this block WHICH FILES changed, the
   # acceptance phase is worth less. The stand is plain HTTP on purpose (the e2e
@@ -191,6 +197,121 @@ acceptance:
   # such path is already gitignored, so nothing TRACKED moves. Each entry here is a
   # place the tripwire stops watching — if a run ever trips the gate on a file
   # nobody edited, `verdict tree --show` names it before anything is added here.
+  tripwire_ignore: []
+
+# The security audit — `/aikit:security-audit`. ADDED 2026-09-22, with the move to
+# aikit 0.5.0, which is the release that introduced it. Standalone on purpose: it
+# is not part of autopilot, it does not run on a milestone, and it never fixes
+# anything. A hunter attacks the stand below through the plugin's scope-fenced
+# `bin/probe`; a refuter replays each proof of concept against a stand rebuilt
+# from nothing and tries to disprove it; a mechanical gate keeps only what
+# replays.
+#
+# WHY this project wants it. Its authentication is two things and both of them are
+# unusual: one operator with no users table, and a 32-byte token in a URL PATH that
+# is the entire credential for `/sub/{token}`. Nothing in `make verify` tries to
+# cross either boundary — the e2e scenarios check that the product works, which is
+# a different question from whether it can be made to misbehave.
+security:
+  # gray, chosen by the owner on 2026-09-22. The hunter is given the route table,
+  # the roles and how tokens are shaped, and attacks the running stand with them.
+  # black would spend a meaningful part of its budget rediscovering four surfaces
+  # that are written down in one page; white would let it read its way to a
+  # conclusion instead of proving one, and the proof is the whole product here.
+  box: gray
+  # Required for gray, and DRAFT until the owner approves it — its own STATUS line
+  # says so. The rule the plugin enforces: a finding that leans on an unapproved
+  # premise is a ranked line for the owner, not something that gets to block.
+  threat_model: docs/security/threat-model.md
+  # NO `scan:` KEY, deliberately. gitleaks, osv-scanner and semgrep are none of
+  # them installed here, and adding one is an architect decision (CLAUDE.md), not
+  # something an init decides on the owner's behalf. An absent key means "no
+  # deterministic pre-pass ran", which is true. A key pointing at a command that is
+  # not on PATH would mean "a pass ran and found nothing", which is a lie, and the
+  # gate would print it under "Scanners" as though it were a result.
+  scope:
+    # The fence. One origin: the stand, on the e2e half of this project's
+    # 54100–54299 loopback block. `bin/probe` checks every request against this
+    # BEFORE a socket opens, so "only attack the stand" is a program and not a
+    # sentence in a prompt.
+    targets: ["http://127.0.0.1:54200"]
+    # FALSE, and it stays false while the only target is loopback — probe needs no
+    # attestation to reach 127.0.0.1. Setting it true is the owner stating IN
+    # WRITING that they own a non-loopback address and may attack it. No agent may
+    # set it. The real fleet's nodes are never a target of this: they are rented
+    # hosts in other people's datacentres, and the charter's whole threat model is
+    # about not drawing attention to them.
+    authorized: false
+  # The ACCEPTANCE stand with the audit's identities seeded on top — not a second
+  # stack. scripts/security/stand.sh delegates `up` and `down` to
+  # scripts/acceptance/stand.sh and adds seed.py; it also turns the browser off,
+  # since the audit speaks HTTP through probe and never opens a page.
+  #
+  # WHY the identities are seeded there and not in the acceptance stand: acceptance
+  # walks an EMPTY control plane on purpose, because the awkward first-time steps
+  # are where its findings are. The audit needs the opposite — several identities
+  # live at once, because an authorization boundary cannot be tested from one side.
+  stand:
+    up: "scripts/security/stand.sh up"
+    down: "scripts/security/stand.sh down"
+  # The identities the hunter keeps live at once. Neither of this project's
+  # credentials is a header, so every `auth` here is a command:
+  #
+  #   - the operator's credential is a SIGNED COOKIE. Only probe's own jar can hold
+  #     it, so the command hands over the username and password and names the probe
+  #     verb that turns them into a session. probe installs a no-redirect handler, so
+  #     the 303 to /panel/ IS the successful login and the Set-Cookie on it is the
+  #     session; a refusal is 401, with one generic message for a wrong username and
+  #     a wrong password alike. (Corrected 2026-09-22: this said a 200 meant failure.
+  #     It does not — 200 is what a client that FOLLOWS the redirect sees on success,
+  #     which is how scripts/security/seed.py rejected its own first login.)
+  #   - a friend's credential is a PATH SEGMENT. There is nothing to pin with
+  #     `probe auth` at all — the token goes in the URL, which is exactly the
+  #     property under audit.
+  #
+  # And why a command rather than a literal token: a token is 32 random bytes minted
+  # by the control plane, so every `stand up` mints different ones. The refuter runs
+  # these AFTER its own fresh stand and gets that stand's tokens, which is what lets
+  # it re-send a proof whose original bytes no longer exist.
+  roles:
+    - name: anon
+    - name: operator
+      auth: "login:scripts/security/role.sh operator"
+    - name: friend_a
+      auth: "login:scripts/security/role.sh friend_a"
+    - name: friend_b
+      auth: "login:scripts/security/role.sh friend_b"
+    # A fourth identity the owner did not name, seeded because the boundary it
+    # tests is a charter promise: "revocation is total" means a revoked token's
+    # answer must be indistinguishable from a token that was never issued. That is
+    # a comparison between two requests, so both sides have to exist before the
+    # hunt starts — a hunter that revokes someone mid-run has spent budget and
+    # still cannot replay the pair. Threat model §3.4.
+    - name: friend_revoked
+      auth: "login:scripts/security/role.sh friend_revoked"
+  # The SAME read-only role acceptance reads through, reused rather than rebuilt:
+  # `acceptance_ro` holds SELECT and nothing else, granted by the stand. It is what
+  # tells *exploitable* from *looks exploitable* — the endpoint returned another
+  # person's entry, but did that row really belong to them? A response cannot
+  # answer that, and it is usually the thing in question.
+  truth:
+    kind: command
+    use: "scripts/acceptance/query.py"
+  # Enforced inside probe: a spent budget makes the next request fail with "could
+  # not", never trail off silently. Sized for this surface rather than copied — four
+  # surfaces and roughly sixty routes, five identities, and the interesting work is
+  # the same route tried as each of them.
+  budget:
+    requests: 800
+    minutes: 45
+  # Rounds are spent on a DEFECTIVE report — a finding with no replayable proof, a
+  # missing "could not reach" line — and not on hunting more. Finding bugs is the
+  # success case, not a reason to loop.
+  rounds: 2
+  # Empty, for the same reason acceptance's is: a run writes only to .acceptance/
+  # and to docker, and both are already gitignored, so nothing TRACKED moves. Every
+  # entry here is a place the tripwire stops watching — if a run ever trips the gate
+  # on a file nobody edited, `verdict tree --show` names it before anything is added.
   tripwire_ignore: []
 
 git:
