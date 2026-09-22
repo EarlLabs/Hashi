@@ -212,3 +212,80 @@ they are quoted or asserted elsewhere:
 - The WireGuard/AmneziaWG `Params` field descriptions (panel- and API-visible):
   "the resolver a **USER**'s device is told to use inside the tunnel", "the
   first address given out when this transport is offered to **users**".
+
+## M29.2b — `edge`'s e2e scenarios renamed (the zone is now complete)
+
+**`tests/e2e/edge/**` carries no *friend*.** With M29.2, the whole `edge` zone as
+`CLAUDE.md`'s table defines it is in the new vocabulary.
+
+1. **Renamed, beyond the four constants the plan named.** The file (`git mv`,
+   history follows — git records `R091`), the four constants —
+   `NO_FRIEND_HERE` → `NO_USER_HERE`, `FRIEND_TRANSPORTS` → `USER_TRANSPORTS`,
+   `FRIEND_PORT` → `USER_PORT`, `FRIEND_ATTEMPTS` → `USER_ATTEMPTS` — **and two
+   the measurement missed**: the test
+   `test_the_friend_still_reaches_the_name_they_asked_for` →
+   `test_the_user_still_reaches_the_name_they_asked_for`, and the address-map key
+   `addresses["friend"]` → `addresses["user"]`. **A later grep for identifiers
+   should count test names and dict keys, not only `SCREAMING_CASE`.**
+
+2. **M29.2's item 5 is closed.** The path citation at
+   `tests/edge/test_a_tunnel_carries_traffic_off_the_node.py:583` moved with the
+   file, in the same commit, as item 5 required. `edge/health/listening.py:36`
+   ("``/proc/net/tcp`` and friends" — English for "and similar files") remains
+   the **only** deliberate keep left in the whole `edge` zone. Nothing after this
+   may "finish" it.
+
+3. **A second stale path reference, found and fixed.** The `vless-reality` excuse
+   inside `NO_USER_HERE` cited a `tests/edge/` file M29.2 had already renamed. It
+   is a string in an assertion message, so nothing was ever red about it. **Any
+   step that renames a test file must grep the tree for its old name as a
+   STRING**, not only as an import.
+
+4. **`tests/e2e/` is linted by no Makefile target.** `make test-edge` runs
+   `ruff check edge tests/edge` and `pytest tests/edge` (Makefile:93); neither
+   half reaches `tests/e2e/edge`. It carries **7 pre-existing ruff errors**
+   (4 `E501`, 3 `F541`) in
+   `test_a_crash_looping_container_is_not_reported_as_running.py` and
+   `test_the_serving_check_meets_the_real_daemon.py`, present at M29's baseline
+   and confirmed by the reviewer. Out of M29's scope; widening a lint target is
+   an owner/architect call. Carried over.
+
+5. **Style: word-in-place, no reflow.** M29.2's convention, followed here. A
+   `friend` → `user` swap leaves some lines four characters short of their
+   neighbours; that is accepted deliberately, because reflowing a paragraph turns
+   a vocabulary diff into a rewrite nobody can review. **Every later step does the
+   same.**
+
+6. **`FRIEND_PORT` exists twice, and they are different constants.** This step's
+   was `FRIEND_PORT = 1080` (a proxy port). `tests/control/test_what_collides_on_one_node.py`
+   and `tests/e2e/control/test_the_runbook_shape_a_then_the_hop_it_mandates.py`
+   each define their own module-local `FRIEND_PORT = 51820`, a WireGuard port.
+   Those are M29.4's and are unrelated to this one.
+
+### How to test what M29.2b built
+
+Its zone gate is `make test-edge` — which **does not execute a single line of what
+this step changed**, and saying so is the point. What was established instead, and
+what a later step should re-run rather than re-derive:
+
+```sh
+.venv/bin/python -m ruff check tests/e2e/edge/test_a_user_exits_at_the_leaf_and_not_at_the_entry.py
+.venv/bin/python -m pytest tests/e2e/edge --collect-only -q        # 94 tests, every module imports
+.venv/bin/python -m pytest tests/e2e/edge/test_a_user_exits_at_the_leaf_and_not_at_the_entry.py \
+  ::test_every_proxy_transport_is_measured_or_excused -q           # no Docker, 0.05s
+```
+
+`test_every_proxy_transport_is_measured_or_excused` is the cheap proof that a
+constant rename in that file did not break its wiring: it asserts
+`PROXY_TRANSPORTS - USER_TRANSPORTS - NO_USER_HERE` is empty, so a half-renamed
+constant turns it red in fifty milliseconds without a docker engine. Collection
+also pins the parametrisation ids (`[vless-ws-tls-amneziawg]`), which is how you
+tell `USER_TRANSPORTS` still derives the same list rather than an empty one.
+
+These scenarios cannot RUN green until M29.4 migrates `control`'s callers —
+item 2 of M29.2 above is still the accurate picture of the tree.
+
+### Wording a person will see
+
+None. Every string this step touched is a test assertion message or a docstring;
+nothing here reaches an operator, a panel screen or an API response.

@@ -42,3 +42,21 @@ to cover that slice before M29.7 runs.
   is where an agent would actually look. M29.7 owns that file with the owner's
   sanction and should add the one line. Until then discoverability rests on the
   `docs/decisions.md` row and the step notes.
+
+## From M29.2b, review round 1 — Low, and it is not M29's
+
+**`tests/e2e/` is linted by no Makefile target.** `make test-edge` runs
+`ruff check edge tests/edge` and `pytest tests/edge` (Makefile:93); `tests/e2e/`
+appears in neither half, and the same is true of the other zones' targets. So the
+e2e scenarios — which are real Python and are the only tests that prove the
+product works end to end — have been unlinted since they were written.
+
+Measured consequence today: **7 ruff errors** (4×`E501`, 3×`F541`) in
+`tests/e2e/edge/test_a_crash_looping_container_is_not_reported_as_running.py` and
+`tests/e2e/edge/test_the_serving_check_meets_the_real_daemon.py`. Both files are
+untouched by M29 and both errors pre-date its baseline — confirmed independently
+by the reviewer.
+
+**Left open because** widening a lint target changes what the gate means for every
+future change, which is an owner/architect call and not something a rename
+milestone gets to decide. **Not a blocker for anything in M29.**
