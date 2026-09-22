@@ -289,3 +289,96 @@ item 2 of M29.2 above is still the accurate picture of the tree.
 
 None. Every string this step touched is a test assertion message or a docstring;
 nothing here reaches an operator, a panel screen or an API response.
+
+## M29.3 — `control`: the table, the columns, and the migration both ways
+
+**The schema is `users` and it reverses exactly.** `make test-control` green with a
+real database: 910 passed, 2 skipped (the baseline `wireguard declares it cannot
+carry a hop` pair), ruff clean. Reviewer reproduced every proof independently.
+
+1. **The migration is `0008_the_person_who_uses_hashi_is_a_user.py`, revision `0008`
+   on top of `0007`, and it is RENAMES ONLY.** No row is read or written, no column
+   changes type, width, nullability or default, and no encrypted column is opened —
+   so it needs no `HASHI_SECRET_KEY` (which is what lets M29.5 rehearse it against a
+   copy of real data without one), it cannot fail on data, and a subscription token
+   already on somebody's phone is byte-identical on both sides of it.
+
+2. **Two classes of name, renamed two different ways, and do not "simplify" this.**
+   What `0001` named itself — the table, both `friend_id` columns,
+   `ix_subscriptions_friend_id`, `ix_credentials_friend_id`,
+   `uq_friend_node_transport` — is renamed unguarded: a database missing one is not
+   one this chain produced, and stopping is correct. The four names POSTGRES chose
+   (`friends_pkey`, `friends_nickname_key`, `subscriptions_friend_id_fkey`,
+   `credentials_friend_id_fkey`) go through `_rename_constraint_if_present`, because
+   `ALTER TABLE … RENAME CONSTRAINT` has no `IF EXISTS`, nothing in this repository
+   reads those names, and an unguarded miss would abort the `alembic upgrade head`
+   that `deploy/docker/entrypoint.sh` runs on **every boot**.
+
+3. **The model is `control/app/models/user.py`, class `User`** (git mv, history
+   follows). The persistence names moved with it: `Credential.user_id`,
+   `Subscription.user_id`, the `user` relationship (`subscription.user`,
+   `row.user.is_active`), `select(User)`.
+
+4. **M29.3 STOPS at the persistence layer, and the residue is deliberate.**
+   `services/friends.py` reads `async def get_friend(session, friend_id: str) ->
+   User` — old module, old function, old parameter, new type — and the same in
+   `subscriptions.py`, `console.py`, `delivery.py`. **The ORM attribute is `user_id`
+   while the API field, the route path parameter and `RevocationOutcome.friend_id`
+   are still `friend_id`**, so a query written by copying a neighbouring line picks
+   the wrong one half the time and fails at attribute access rather than at review.
+   M29.4 closes it; build nothing on the mixed state.
+
+5. **M29.2's seam is closed.** All five measured sites, plus a sixth the measurement
+   missed (a docstring at `test_both_doors_refuse_a_friend_with_no_way_out.py:25`),
+   now call `TransportMeta.serves_users_through_a_hop`. `tests/control` collects
+   again; item 2 of the M29.2 section no longer describes the tree.
+
+6. **`tests/control/test_both_doors_refuse_a_friend_with_no_way_out.py` was NOT
+   renamed as a file**, deliberately: its whole body still says *friend*, so the name
+   moves with its contents in M29.4, along with the other `tests/control/test_a_friend_*.py`.
+
+### How to test what M29.3 built
+
+`make test-control` **skips ~670 tests when no Postgres answers**, so a green run is
+not evidence on its own — **check the skip count.** Bring a database up matching
+`tests/control/conftest.py`'s `DEFAULT_URL` exactly; do NOT use `make up-dev`,
+because conftest hardcodes `hashi:replace-me@127.0.0.1:54132` while `up-dev` takes
+its credentials from `.env`, which no agent may read:
+
+```sh
+docker run -d --name hashi-db -p 127.0.0.1:54132:5432 \
+  -e POSTGRES_USER=hashi -e POSTGRES_PASSWORD=replace-me -e POSTGRES_DB=hashi \
+  postgres:16.4-alpine
+```
+
+**If that database already existed before M29.3, drop its schema first.** The
+`empty_database` and `clean_database` fixtures clear tables through
+`Base.metadata.drop_all`, which now knows `users` and not `friends` — a leftover
+`friends` table from a pre-M29 run survives and makes `0001` fail with
+`relation "friends" already exists`. `psql -c 'DROP SCHEMA public CASCADE; CREATE
+SCHEMA public;'`. This will bite every developer once.
+
+The cheap proof — 13 seconds, no app stack: `pytest tests/control/test_migrations.py -q`
+(7 passed). The one that reads best in a review, needing only `alembic` and `pg_dump`:
+
+```sh
+alembic -c control/alembic.ini upgrade 0007 && pg_dump --schema-only > at0007.sql
+alembic -c control/alembic.ini upgrade head
+alembic -c control/alembic.ini downgrade 0007 && pg_dump --schema-only > back.sql
+diff at0007.sql back.sql      # empty — the round trip restores the schema exactly
+```
+
+`test_the_rename_to_users_goes_forward_and_back_without_moving_a_token` is the
+regression that matters and the one a later step extends rather than rewrites: the
+pre-existing `test_the_migration_can_be_reversed` unwinds an EMPTY database, which a
+rename passes trivially, so the new test puts a subscription in and compares its
+`token` and `token_digest` byte for byte at head, at `0007`, and at head again.
+Seeded through raw SQL, in the shape the two 0006 downgrade tests already use,
+because the models describe HEAD and the test has to speak to both sides of one
+migration.
+
+### Wording a person will see
+
+None. Every string this step touched is a comment, a docstring or a migration
+header; the migration logs only Alembic's own revision line and **prints no row, no
+nickname and no token**. The operator- and API-facing wording is M29.4's.

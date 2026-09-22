@@ -60,3 +60,19 @@ by the reviewer.
 **Left open because** widening a lint target changes what the gate means for every
 future change, which is an owner/architect call and not something a rename
 milestone gets to decide. **Not a blocker for anything in M29.**
+
+## From M29.3 — a flake nobody could reproduce, Low
+
+`tests/control/test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly`
+failed **once**, during the builder's first full run, on `node.state == DEGRADED`
+while the captured log showed the service had already set `degraded` — the shape of
+a stale identity-map read. It then passed alone, passed with every alphabetically
+preceding file, passed in the final full run, and passed five more times in
+isolation for the reviewer.
+
+**Left open because** neither agent could reproduce it and a test that cannot be
+made to fail cannot be fixed with confidence. Recorded rather than dropped because
+the tree has **no `pytest-randomly`**, so ordering is stable — which means a
+failure that appears once and then vanishes is not explained by shuffling, and that
+is the unsettling part. If it returns, the first place to look is session identity
+rather than the assertion.
