@@ -73,11 +73,11 @@ script per host, ending by printing what the operator types into the panel.
 | from | commands | panel actions |
 |---|---|---|
 | bare host → node serving | 1 | 3 — add node, enable transport, apply |
-| bare host → a friend's packets moving | 1 | 5 — those three, add the user, apply again |
+| bare host → a user's packets moving | 1 | 5 — those three, add the user, apply again |
 | two bare hosts → an established entry→leaf hop | 2 | 6 |
 | bare host → the control plane | 13 (14 on a truly bare box) | 0 |
 
-**Walk 3 carried a friend across a hop built this way** — hop `established`, both
+**Walk 3 carried a user across a hop built this way** — hop `established`, both
 ends handshaking, a stock client built from the subscription URL alone fetching
 `http=200`, the leaf's MASQUERADE counter moving 0 → 2 packets. The charter's
 overstatements (*"from a bare host to serving traffic"*, *"the node answers a
@@ -85,7 +85,7 @@ health probe"*) are gone, and criterion 2 no longer claims a replacement is
 bootstrapped from the panel.
 
 **Four walks, three fix rounds landed and pushed.** Closed and re-verified by a
-later independent walk: the charter's two overstatements; a friend added but not
+later independent walk: the charter's two overstatements; a user added but not
 applied (now announced on all four surfaces, the claim true, all four silent
 after the apply); a probe finding erased by a page reload; the apply's check
 racing in both directions; the apply measuring container liveness instead of
@@ -109,12 +109,12 @@ no caller yet. Its control half was discarded rather than left half-applied.
    nothing. *The fix `36d6b1b` starts: only the transport knows what serving
    means for its own protocol — a wg-family node is serving when its interface
    holds the peers that were rendered into its config.*
-2. **blocker — a condemned node empties every friend's link.** A ~20-second false
+2. **blocker — a condemned node empties every user's link.** A ~20-second false
    red on the entry made `GET /sub/{token}` return **nothing at all**, while on
    that host Xray was listening, the tunnel daemon held its port and the hop
-   handshake was 27 seconds old. **A slow VPS silently takes every friend
+   handshake was 27 seconds old. **A slow VPS silently takes every user
    offline.** Rule to build on: a health verdict may warn the operator, it may
-   never be why a friend's link comes back empty.
+   never be why a user's link comes back empty.
 3. **high — an apply that could not take the reading says the same words as one
    that took it and passed.** With `ss` removed from the host, the success line
    was byte-identical to the healthy run. The state is right (it clears nothing);
@@ -123,7 +123,7 @@ no caller yet. Its control half was discarded rather than left half-applied.
    hard; 35 seconds after a refusal the node was serving at 0% loss and the panel
    still read `degraded`. Nothing re-measures until a human presses probe.
 5. **low** — the Users screen warns about withdrawn access with zero revoked
-   friends (M23's note firing on any behind-node; three walks have tripped on
+   users (M23's note firing on any behind-node; three walks have tripped on
    it). **low** — 14 hand-typed numbers per hop remain, `port` the one new
    candidate for a defensible default.
 
@@ -142,7 +142,7 @@ code path is where it lives.
 ### Also open
 
 - **M24** — the panel never shows `?format=client-config-file`, so an operator
-  following the panel hands a WireGuard-family friend a link that returns an
+  following the panel hands a WireGuard-family user a link that returns an
   empty document. Not started. Its open design question: one link that answers by
   what the node serves, or one URL per shape. *The first keeps "one link, every
   serving node" true and quietly makes a subscription token polymorphic.*
@@ -160,7 +160,7 @@ Hosting Centre, Ubuntu 22.04, 1 vCPU, 957 Mi RAM. Runbook **Shape A**: control
 plane, panel, delivery endpoint and one node on the same box.
 
 **Works, verified over the public internet:** `panel-bootstrap.sh` → Let's Encrypt
-certificate → panel login → register node → enable transport → `apply` → friend →
+certificate → panel login → register node → enable transport → `apply` → user →
 subscription → a real client connects and carries traffic. Operator auth fails
 closed (401 unauthenticated). The API returns public keys and withholds private
 and preshared ones.
@@ -175,7 +175,7 @@ established this.
 **leaf** and exits traffic. A second host — 3.9 Gi RAM, in Russia — is the
 **entry**, and carries the control plane and the panel as well. That moves the
 control plane off the 957 Mi box, which had 463 Mi free while running control,
-Postgres, Caddy and a node together. It also puts every node key and every friend
+Postgres, Caddy and a node together. It also puts every node key and every user
 credential on a Russian host: deliberate, and the reason M7 stops being optional.
 
 **Does not work:** everything in M1–M3 below. The pattern is worth stating once,

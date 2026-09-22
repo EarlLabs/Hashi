@@ -29,18 +29,18 @@ Ordered by what it costs a real person, not by how interesting the bug is.
    "something writes it down after all". A request path containing a
    subscription token that lands in an access log is exactly this, and it is the
    highest-severity thing the audit can find: every other asset costs the owner
-   money or time, this one can cost a friend their safety.
+   money or time, this one can cost a user their safety.
 2. **Node credentials.** SSH keys and transport key material, held encrypted in
    the control plane's database (`control/app/crypto.py`). Reading them is full
    control of the fleet.
 3. **Subscription tokens.** 32 bytes of urlsafe entropy, and the *only*
-   authentication on `/sub/{token}`. A leak of one is one friend deanonymised to
+   authentication on `/sub/{token}`. A leak of one is one user deanonymised to
    whoever holds it; a way to enumerate them is all of them.
 4. **The operator session.** Cookie `hashi_operator`, signed, `SameSite=Lax`,
    `HttpOnly`, `Secure` whenever the deployment is https. It reaches every asset
    above.
 5. **The fleet's own shape** — which addresses, which countries, which decoy
-   destinations. Not secret from the owner's friends, but an enumerable fleet is
+   destinations. Not secret from the owner's users, but an enumerable fleet is
    a blockable fleet, which is the charter's whole threat.
 
 ## 2. The surfaces the hunter is told about
@@ -72,7 +72,7 @@ A crossing of any of these is a finding. This is the list the audit is for.
 1. **anon → operator.** No `/panel/**` or `/api/**` route answers anything but a
    401 or a redirect to the login page without a valid session. Fail closed: a
    malformed, expired or wrong-key-signed cookie denies, never falls through.
-2. **friend A → friend B.** Holding A's token yields A's configuration and
+2. **user A → user B.** Holding A's token yields A's configuration and
    nothing of B's — not B's entries, not B's nickname, not the fact that B
    exists.
 3. **token holder → the fleet.** `/sub/{token}` tells its holder about their own

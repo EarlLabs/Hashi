@@ -39,7 +39,7 @@ HOW:  every developer and reviewer pre-reads this file. Keep it short — a
 - **The subscription is the only contract with a user.** Any change to what a
   user connects to — new node, new protocol, rotated key, retired country — must
   be expressible as a new subscription render, with no action on their device.
-  A feature that requires friends to re-import a config has failed the charter.
+  A feature that requires users to re-import a config has failed the charter.
 
 ## 2. Ownership
 
@@ -52,7 +52,7 @@ HOW:  every developer and reviewer pre-reads this file. Keep it short — a
 - **Database schema changes go through Alembic migrations**, owned by `control`.
   *Why: this database holds node credentials and user identities that exist
   nowhere else. `create_all` on a changed model silently diverges from a live
-  database, and the failure mode is "every friend is locked out".*
+  database, and the failure mode is "every user is locked out".*
 
 ## 3. Data and state
 

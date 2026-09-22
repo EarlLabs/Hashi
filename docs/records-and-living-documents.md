@@ -39,8 +39,9 @@ Two corollaries that are easy to get wrong:
   add something new that says so — `docs/decisions.md` has done this repeatedly
   (see its rows marked *Correction to the row above*). Never by editing.
 - **A living document can be old and still living.** Nobody has touched
-  `docs/product/backlog.md` in weeks; it is still a statement about what is
-  wanted now, so it moves.
+  `docs/product/backlog.md` in weeks; its roadmap is still a statement about what
+  is wanted now, so it moves. Its decision journal does not — one file, two
+  classes, see below.
 
 ---
 
@@ -54,9 +55,11 @@ Two corollaries that are easy to get wrong:
 | `docs/PLAN.md` — `## Decisions needed from you` | **record** | nothing. It is a question list with the owner's dated answers under it; rewording an answer falsifies what they were asked. Its decision 9 of 2026-09-08 is the one M29 reverses — see below. |
 | `docs/PLAN.md` — `## Where the field run left the plan, 2026-09-09` | **record** | nothing. A dated retrospective. |
 | `docs/PLAN.md` — every `## →` (open) milestone, and `## What this plan does not cover` | living | reword. Both are statements about work not yet done. |
-| `docs/product/charter.md` | living | reword, including the one-liner's *"~30–50 friends"* (owner-settled, 2026-09-22). |
+| `docs/PLAN.md` — `## Where things stand` | living | reword. Classified here by the test, 2026-09-22: it says what is open *now* and is rewritten whenever that changes. See below. |
+| `docs/product/charter.md` | living | reword, including the one-liner's *"~30–50 friends"* (owner-settled, 2026-09-22). The same sentence is copied into `project.json` and `deploy/warden/warden.py`; all three move together. |
 | `docs/deploy/runbook.md` | living | reword. It is followed at 3am; it must match the panel the operator is looking at. |
-| `docs/product/backlog.md` | living | reword. Not on the owner's enumerated list — classified here by the test. |
+| `docs/product/backlog.md` — everything above `## Журнал решений` | living | reword the prose. **Not the `id` column** — see below. Not on the owner's enumerated list; classified here by the test. |
+| `docs/product/backlog.md` — `## Журнал решений` | **record** | nothing. A dated decision journal in the same `\| Дата \| Решение \| Причина \|` shape as `docs/decisions.md`, and the file's own header says its entries are *«реальная история решений … не переписаны задним числом»*. |
 | `docs/security/threat-model.md` | living | reword the vocabulary. The *threats* are not this milestone's to restate. |
 | `README.md`, `CLAUDE.md` | living | reword. `CLAUDE.md` is owner/architect territory: propose, do not help yourself. |
 | `.claude/**` (workflow, rulebooks, invariants) | living | reword. These instruct the next agent, so a stale noun here reproduces itself in new code. Same owner/architect caveat. |
@@ -76,6 +79,41 @@ of 2026-09-22. Reword it and the repository loses the fact that it was ever
 decided the other way, which is the one thing a future reader most needs in order
 not to decide it back. The reversal is recorded in `docs/decisions.md`; the
 question and its original answer stay as they were typed.
+
+The fourth section, `## Where things stand`, was in neither list until 2026-09-22
+and is the one the test settles cleanly. It opens on a date — *"Run stopped by
+the owner on 2026-09-16"* — which is what made it look like the dated pair above,
+but a date at the top is not what makes a record: the section says which
+milestones are open, which findings are unfixed and what the next person picks
+up, and it is rewritten every time that changes. It is living, and it moves.
+
+### The backlog is half record and half living document too, and for the same reason
+
+`docs/product/backlog.md` was classified whole, and it is two documents in one
+file. Everything above `## Журнал решений` — the roadmap tables, the statuses,
+the per-item prose — says what is wanted now. The journal is a dated
+`| Дата | Решение | Причина |` table, the same instrument as `docs/decisions.md`,
+and the file's own header says in so many words that the entries above and below
+it are the real history of decisions taken by a fleet composition that no longer
+exists and were **not rewritten after the fact**. A journal row is a record; the
+one dated `2026-08-01 (ohno-6)` contains the old word inside a recorded decision
+and keeps it.
+
+One thing above the journal does not move either: **the `id` column.** A backlog
+id is a key, not prose. `control-node-and-friend-records` is the heading of
+`docs/research/product-owner-ohno-4/research.md` §3 item 7, and this file's own
+"Как читать этот файл" says the goal and acceptance text there is **frozen** and
+is the contract for what *done* means. Rewording the key in the living half while
+the frozen half keeps it leaves the backlog pointing at an item that does not
+exist, which is worse than the stale noun. This is the *mention versus use*
+distinction: a use of the word for the person who uses hashi moves, a mention of
+something's name does not. The two ids affected (`control-node-and-friend-records`,
+`control-per-friend-tunnel-address`) both name work already `done`.
+
+The Russian noun *друг* is not this line's business and was not swept with the
+English one: the milestone headings in that file quote the frozen acceptance
+criteria verbatim, so a word swap there falsifies a quotation. Renaming the
+Russian vocabulary is its own decision and the owner's.
 
 ### The one conflict, recorded rather than resolved
 
@@ -138,6 +176,11 @@ git diff <baseline> -- docs/decisions.md | grep -E '^-[^-]'
 #    any kind, which is what lets one file be half record and half living.
 SLICE='/^## /{k = /^## ✅|^## Decisions needed from you|^## Where the field run left the plan/} k'
 diff <(git show <baseline>:docs/PLAN.md | awk "$SLICE") <(awk "$SLICE" docs/PLAN.md)
+
+# 3. The backlog's decision journal is byte-identical. Must print nothing. Same
+#    awk idiom, one heading, because the same file is half record and half not.
+JOURNAL='/^## /{k = /^## Журнал решений/} k'
+diff <(git show <baseline>:docs/product/backlog.md | awk "$JOURNAL") <(awk "$JOURNAL" docs/product/backlog.md)
 ```
 
 Check 1 catches a `sed -i` that ran one directory too wide, and catches a deleted
@@ -149,6 +192,11 @@ baseline, that half is 26 sections and 151 of the file's 212 occurrences of the
 old word — nearly three quarters of what a careless `sed` over `docs/PLAN.md`
 would have changed.
 
-Both pass trivially on a tree where nothing happened, which is the point — run
-them at the start of a step as well, so a failure at the end is known to be
+Check 3 is check 2 again on a second file that turned out to have the same shape,
+and it was added on 2026-09-22 when `docs/product/backlog.md` was split. One
+heading, 1 of the file's 8 occurrences of the old word — small, and it is the
+kind of row that only one person ever notices is missing.
+
+All three pass trivially on a tree where nothing happened, which is the point —
+run them at the start of a step as well, so a failure at the end is known to be
 yours.
