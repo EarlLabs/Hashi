@@ -6,7 +6,7 @@ WHY:  Caddy sees every subscription request before the control plane does, and
       loggers can leak it and BOTH are silenced in the Caddyfile: the per-site
       one, and the DEFAULT one — which handles every request that matches no
       site block (a scan by IP, another name pointing here) plus every
-      http.log.error, including the 502s a friend sees while the control plane
+      http.log.error, including the 502s a user sees while the control plane
       restarts. The control-plane half of this rule is pinned separately in
       tests/e2e/control/; either log alone is enough to burn someone.
 HOW:  drives requests from INSIDE the caddy container, because Caddy is

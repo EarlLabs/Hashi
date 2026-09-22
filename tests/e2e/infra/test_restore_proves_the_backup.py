@@ -210,10 +210,10 @@ def as_operator(port: int):
 
 
 def a_fleet(client: httpx.Client) -> dict:
-    """One node with a transport, and one friend holding a subscription.
+    """One node with a transport, and one user holding a subscription.
 
     Deliberately the smallest fleet that exercises all three encrypted kinds: node-scoped
-    transport secrets, a friend's client-scoped material, and the subscription token's
+    transport secrets, a user's client-scoped material, and the subscription token's
     keyed digest.
     """
     node = client.post(
@@ -234,14 +234,14 @@ def a_fleet(client: httpx.Client) -> dict:
     assert enabled.status_code == 201, enabled.text
     assert client.post(f"/api/nodes/{node_id}/state", json={"state": "active"}).status_code == 200
 
-    friend = client.post("/api/friends", json={"nickname": "restored-friend"})
-    assert friend.status_code == 201, friend.text
-    friend_id = friend.json()["id"]
-    url = client.get(f"/api/friends/{friend_id}/subscription").json()["url"]
+    user = client.post("/api/friends", json={"nickname": "restored-user"})
+    assert user.status_code == 201, user.text
+    user_id = user.json()["id"]
+    url = client.get(f"/api/friends/{user_id}/subscription").json()["url"]
 
     return {
         "node_id": node_id,
-        "friend_id": friend_id,
+        "user_id": user_id,
         "token": url.rsplit("/", 1)[-1],
         "transport_id": enabled.json()["id"],
         "params": enabled.json()["params"],
@@ -268,7 +268,7 @@ def dumped(tmp_path_factory):
     try:
         with as_operator(SOURCE_PORT) as client:
             fleet = a_fleet(client)
-            # Read what the friend receives BEFORE the dump, so the assertion after the
+            # Read what the user receives BEFORE the dump, so the assertion after the
             # restore is about the same bytes rather than about a shape.
             subscription = client.get(f"/sub/{fleet['token']}")
             assert subscription.status_code == 200
@@ -308,11 +308,11 @@ def restore_into(dump: pathlib.Path, path: pathlib.Path, project: str):
 # --- S1: the restore carries the fleet ----------------------------------------
 
 def test_a_clean_stack_restored_from_a_dump_carries_the_whole_fleet(dumped, tmp_path) -> None:
-    """S1. Friends, nodes, enabled transports — and the secrets still decrypt.
+    """S1. Users, nodes, enabled transports — and the secrets still decrypt.
 
     The last one is the point of the whole file. A dump that restores every row and then
     cannot decrypt any of them is not a restored fleet: it is a database that looks right
-    and serves nobody. So the assertion is not "the friend row exists" but "the friend's
+    and serves nobody. So the assertion is not "the user row exists" but "the user's
     own subscription link still resolves to the same configuration".
     """
     dump, fleet = dumped
@@ -328,20 +328,20 @@ def test_a_clean_stack_restored_from_a_dump_carries_the_whole_fleet(dumped, tmp_
             assert [node["id"] for node in nodes] == [fleet["node_id"]], nodes
             assert nodes[0]["state"] == "active", "a restored node came back out of service"
 
-            friends = client.get("/api/friends").json()
-            assert [friend["id"] for friend in friends] == [fleet["friend_id"]], friends
+            users = client.get("/api/friends").json()
+            assert [user["id"] for user in users] == [fleet["user_id"]], users
 
             # The node-scoped material: present, and the non-secret half unchanged.
             assert nodes[0]["location_label"] == "Restoreland"
 
-        # THE assertion. Anonymous, exactly as the friend's client fetches it, with the
+        # THE assertion. Anonymous, exactly as the user's client fetches it, with the
         # link they already hold — and byte for byte what it was before the dump. This is
         # only possible if every encrypted value decrypted with the restored key AND the
         # token's keyed digest still matches.
         with api(TARGET_PORT) as anonymous:
             after = anonymous.get(f"/sub/{fleet['token']}")
             assert after.status_code == 200, (
-                "the friend's link does not resolve after a restore — their access did "
+                "the user's link does not resolve after a restore — their access did "
                 "not survive"
             )
             assert after.text == fleet["subscription"], (
@@ -386,7 +386,7 @@ def test_the_same_dump_with_a_different_key_yields_no_secrets_and_says_so(
         # The rows arrived — read straight from Postgres, because the API cannot tell us:
         # it refuses, which is the other half of this scenario.
         assert rows_in(project, path, "nodes") == 1
-        assert rows_in(project, path, "friends") == 1
+        assert rows_in(project, path, "users") == 1
 
         # And what is stored is ciphertext. A Fernet token begins `gAAAA`; a plaintext JSON
         # object would begin `{`. This is the assertion that would fail if encryption at
@@ -401,7 +401,7 @@ def test_the_same_dump_with_a_different_key_yields_no_secrets_and_says_so(
             # Every read that touches an encrypted column refuses, and names the setting.
             for endpoint in (
                 "/api/nodes",
-                f"/api/friends/{fleet['friend_id']}/subscription",
+                f"/api/friends/{fleet['user_id']}/subscription",
             ):
                 response = client.get(endpoint)
                 assert response.status_code == 409, (
@@ -421,7 +421,7 @@ def test_the_same_dump_with_a_different_key_yields_no_secrets_and_says_so(
                 for leak in ("gAAAA", "BEGIN", "192.0.2.60", fleet["token"]):
                     assert leak not in response.text, f"the refusal leaked {leak!r}"
 
-        # The friend's own link is dead rather than serving something wrong. A 404, because
+        # The user's own link is dead rather than serving something wrong. A 404, because
         # the token's lookup digest is derived from the key too — so the subscription
         # cannot even be found, which is the correct answer rather than an error.
         with api(TARGET_PORT + 2) as anonymous:
@@ -435,7 +435,7 @@ def test_the_same_dump_with_a_different_key_yields_no_secrets_and_says_so(
 def test_a_restore_that_fails_halfway_leaves_the_database_untouched(dumped, tmp_path) -> None:
     """S3. All or nothing — which today is asserted only against the script's text.
 
-    A half-applied restore is the worst outcome available: some friends back, some gone,
+    A half-applied restore is the worst outcome available: some users back, some gone,
     some nodes carrying credentials that no longer exist, and an operator with no way to
     tell which. ``--single-transaction`` and ``ON_ERROR_STOP`` are what prevent it, and
     this is the assertion that proves they are doing it rather than merely being written
@@ -452,9 +452,9 @@ def test_a_restore_that_fails_halfway_leaves_the_database_untouched(dumped, tmp_
 
     damaged = tmp_path / "damaged.sql.gz"
     text = gzip.decompress(dump.read_bytes()).decode()
-    # Cut after the friends table's data and append a statement Postgres must reject.
-    marker = text.rfind("COPY public.friends")
-    assert marker != -1, "the dump does not contain the friends table, so this is vacuous"
+    # Cut after the users table's data and append a statement Postgres must reject.
+    marker = text.rfind("COPY public.users")
+    assert marker != -1, "the dump does not contain the users table, so this is vacuous"
     cut = text.find("\n\n", marker)
     damaged.write_bytes(
         gzip.compress(
@@ -470,7 +470,7 @@ def test_a_restore_that_fails_halfway_leaves_the_database_untouched(dumped, tmp_
 
         with as_operator(TARGET_PORT + 4) as client:
             # Nothing arrived. The stack was installed and empty, and it is still empty —
-            # not "one node and no friends", which is what a non-transactional restore
+            # not "one node and no users", which is what a non-transactional restore
             # would have left.
             assert client.get("/api/nodes").json() == []
             assert client.get("/api/friends").json() == []

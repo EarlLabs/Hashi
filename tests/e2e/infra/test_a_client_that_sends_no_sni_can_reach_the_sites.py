@@ -24,7 +24,7 @@ HOW:  from inside the CONTROL container, because it is the only container in the
       names one.
 
 Boundary: real caddy + control + postgres. Nothing stubbed, nothing external.
-          NOT covered: whether a friend's stock client TRUSTS what it is served. An
+          NOT covered: whether a user's stock client TRUSTS what it is served. An
           internal-CA certificate is refused by every stock client, which is a fact
           about certificates rather than about SNI — see the runbook, "Reaching the
           panel", on why HASHI_PUBLIC_HOST must be a name with a real record.
@@ -117,7 +117,7 @@ def test_the_console_answers_a_client_that_sent_no_sni(exec_in) -> None:
 def test_the_delivery_endpoint_answers_a_client_that_sent_no_sni(exec_in) -> None:
     """The same question of the public listener, and it had the same answer.
 
-    A friend's client dials the delivery hostname and sends SNI, so this is not the
+    A user's client dials the delivery hostname and sends SNI, so this is not the
     normal path — but a client that dials an address does not, and the owner's own
     first host had no DNS record at all. The handshake must not be the thing that
     fails: a certificate a client declines to TRUST is a different, visible problem
@@ -125,7 +125,7 @@ def test_the_delivery_endpoint_answers_a_client_that_sent_no_sni(exec_in) -> Non
     """
     answer = without_sni(exec_in, "443", PUBLIC, "/sub/short")
     assert "HANDSHAKE-FAILED" not in answer, (
-        "the delivery endpoint refused a client that sent no SNI — a friend whose "
+        "the delivery endpoint refused a client that sent no SNI — a user whose "
         "client dials an address gets no subscription at all:\n" + answer
     )
     assert " 422 " in answer.splitlines()[0], (

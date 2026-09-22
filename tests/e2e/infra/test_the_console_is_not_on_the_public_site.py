@@ -11,7 +11,7 @@ WHY:  M7's first two "done when" bullets are field observations the owner makes
       private.
 
       The second scenario is the one that would be forgotten. Splitting a site is a
-      cheap way to break ``/sub/{token}``, and breaking it strands every friend at
+      cheap way to break ``/sub/{token}``, and breaking it strands every user at
       the exact moment a node was blocked and they are refreshing their config.
 HOW:  requests are made from INSIDE the caddy container, because Caddy is
       deliberately unpublished — the base stack exposes it to a real deployment,
@@ -73,7 +73,7 @@ def ask(exec_in, url: str, host_header: str | None = None) -> str:
 def test_the_public_name_does_not_serve_the_console(exec_in) -> None:
     """The first "done when", to the extent a single machine can settle it.
 
-    Every console path, asked of the site block that answers the name a friend uses.
+    Every console path, asked of the site block that answers the name a user uses.
     A 404 is the right answer and it is the same answer a mistyped URL gets: nothing
     in it says the console exists somewhere else.
     """
@@ -123,7 +123,7 @@ def test_the_console_site_does_not_also_serve_subscriptions(exec_in) -> None:
     """The split cuts both ways.
 
     The delivery endpoint on the console's port would be a subscription URL that
-    only works from inside the management tunnel — which is the one place a friend
+    only works from inside the management tunnel — which is the one place a user
     can never be. Refused here so it cannot be handed out by accident.
     """
     answer = ask(exec_in, f"https://{PRIVATE}/sub/short")
@@ -155,7 +155,7 @@ def test_the_public_listener_does_not_hand_out_the_console_s_address(exec_in) ->
 def test_the_public_name_still_redirects_plain_http_to_https(exec_in) -> None:
     """Disabling the automatic redirects must not have taken the public one with it.
 
-    A friend who types the delivery hostname without a scheme, or a client that
+    A user who types the delivery hostname without a scheme, or a client that
     follows an old http link, has to arrive somewhere. This is the redirect the
     Caddyfile writes out by hand precisely because the global switch is off.
     """
