@@ -204,7 +204,7 @@ def test_every_purpose_has_a_decided_egress_policy() -> None:
 
 def test_only_a_user_facing_row_exits_locally() -> None:
     """The table, stated as the property it exists for."""
-    assert nodes.egress_for(NodeTransport(purpose=TransportPurpose.FRIENDS)) is Egress.LOCAL
+    assert nodes.egress_for(NodeTransport(purpose=TransportPurpose.USERS)) is Egress.LOCAL
     for purpose in TransportPurpose.relays():
         assert nodes.egress_for(NodeTransport(purpose=purpose)) is Egress.NONE
 

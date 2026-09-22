@@ -47,8 +47,8 @@ PERMITTED_COLUMNS = {"id", "at", "action", "first_label", "second_label"}
 # duplication is the point: a thirteenth action has to be written down twice, once in
 # the enum and once here, and the second time is where somebody asks what it records.
 PERMITTED_ACTIONS = {
-    "friend-added",
-    "friend-revoked",
+    "user-added",
+    "user-revoked",
     "node-added",
     "node-state-changed",
     "node-applied",

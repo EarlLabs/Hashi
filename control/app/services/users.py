@@ -115,7 +115,7 @@ async def create_user(session: AsyncSession, *, nickname: str) -> User:
     # trail cannot name somebody the database does not have. The label is the nickname
     # the operator just chose, copied whole — never the subscription URL, which is the
     # one artefact of this operation that must never reach a durable record.
-    audit.record(session, AuditAction.FRIEND_ADDED, first_label=user.nickname)
+    audit.record(session, AuditAction.USER_ADDED, first_label=user.nickname)
 
     await session.commit()
     logger.info("user created: %s", user.id)
@@ -147,7 +147,7 @@ async def grant_on(
     one that cannot answer this case.
 
     THE ROWS ARE THE CALLER'S RESPONSIBILITY and there is one rule about them:
-    user-facing only. ``serving_transports`` filters ``purpose == FRIENDS`` because a
+    user-facing only. ``serving_transports`` filters ``purpose == USERS`` because a
     user handed a hop end would be routed straight past the entry node the topology
     exists to hide behind, and that rule does not stop being true because the rows arrived
     from somewhere else. Nothing here re-filters, deliberately — a second copy of the rule

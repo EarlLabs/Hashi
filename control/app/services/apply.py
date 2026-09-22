@@ -950,7 +950,7 @@ async def _take_into_service(
     Does NOT commit: the caller owns the transaction that carries the applied digests, the
     audit entries and this.
     """
-    user_facing = [row for row in rows if row.purpose == TransportPurpose.FRIENDS]
+    user_facing = [row for row in rows if row.purpose == TransportPurpose.USERS]
 
     # Refused before anything is minted, before anything is rendered and before the node is
     # dialled, which is what makes ``POOL_SHORT_TO_APPLY``'s own sentence true about the

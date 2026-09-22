@@ -192,7 +192,7 @@ async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
         # User-facing rows only. An entry↔leaf hop (item 16) is a transport enabled
         # on a node and would otherwise qualify — and a user handed the hop would be
         # routed straight past the entry node the whole topology exists to hide behind.
-        .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
+        .where(NodeTransport.purpose == TransportPurpose.USERS)
         .where(Node.state.in_(NodeState.serving()))
         # The row's own id last, so the order is TOTAL — M17. Two instances of one
         # transport on one node (which M15 permits) tied on every other key, and the
@@ -232,7 +232,7 @@ async def user_facing_on(session: AsyncSession, node_id: str) -> list[NodeTransp
     result = await session.execute(
         select(NodeTransport)
         .where(NodeTransport.node_id == node_id)
-        .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
+        .where(NodeTransport.purpose == TransportPurpose.USERS)
         .order_by(NodeTransport.transport_name, NodeTransport.id)
     )
     return list(result.scalars().unique())
@@ -277,7 +277,7 @@ def node_view(node: Node) -> NodeView:
 # say NONE rather than mirroring what ``render_hop`` does. A guard's job is to be safe,
 # and this one cannot supply the address the entry's real policy needs.
 #
-# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(FRIENDS, True)`` says a
+# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(USERS, True)`` says a
 # user's traffic leaves through the hop, and only a transport that re-originates can
 # express that; ``_enable`` and ``relay.establish_hop`` refuse to create the pairing with
 # one that cannot, so the row is still reached by every node that legitimately holds it
@@ -285,8 +285,8 @@ def node_view(node: Node) -> NodeView:
 # exist is the combination, not the policy.
 _EGRESS: dict[tuple[str, bool], Egress] = {
     # (purpose, this node has a hop it dials)
-    (TransportPurpose.FRIENDS, False): Egress.LOCAL,
-    (TransportPurpose.FRIENDS, True): Egress.HOP,
+    (TransportPurpose.USERS, False): Egress.LOCAL,
+    (TransportPurpose.USERS, True): Egress.HOP,
     (TransportPurpose.RELAY_ENTRY, False): Egress.NONE,
     (TransportPurpose.RELAY_ENTRY, True): Egress.NONE,
     (TransportPurpose.RELAY_LEAF, False): Egress.NONE,
@@ -1026,7 +1026,7 @@ async def set_transport_enabled(
     # A hop end is not an offer to users, and switching one off is not a delivery
     # change — it is half a tunnel that stops completing a handshake while both ends
     # still look configured. Refused by pointing at the operation that removes both.
-    if node_transport.purpose != TransportPurpose.FRIENDS:
+    if node_transport.purpose != TransportPurpose.USERS:
         # The id is substituted rather than left as a placeholder, for the reason
         # ``REMOVE_IS_FOR_AN_OFFER`` gives: an envelope naming ``{node_transport_id}``
         # literally is one the script reading it has to decode.
@@ -1153,7 +1153,7 @@ async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> 
     """
     node_transport = await get_node_transport(session, node_transport_id)
 
-    if node_transport.purpose != TransportPurpose.FRIENDS:
+    if node_transport.purpose != TransportPurpose.USERS:
         raise Conflict(
             REMOVE_IS_FOR_AN_OFFER.format(node_transport_id=node_transport_id)
         )

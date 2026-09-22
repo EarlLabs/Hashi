@@ -210,7 +210,7 @@ async def test_nothing_about_the_node_is_recorded_as_having_happened(
     await revocation.revoke_user(session, user_id=olga)
 
     session.expire_all()
-    assert await actions(session) == [*before, AuditAction.FRIEND_REVOKED]
+    assert await actions(session) == [*before, AuditAction.USER_REVOKED]
 
 
 async def test_a_rotation_does_not_take_a_node_out_of_service_back_into_it(

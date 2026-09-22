@@ -249,7 +249,7 @@ async def revoke_user(session: AsyncSession, *, user_id: str) -> RevocationOutco
     # only be answered once.
     withdrawing = await users.claim_withdrawal(session, user_id=user_id)
     if withdrawing:
-        audit.record(session, AuditAction.FRIEND_REVOKED, first_label=user.nickname)
+        audit.record(session, AuditAction.USER_REVOKED, first_label=user.nickname)
 
     affected = await users.revoke(session, user_id=user_id)
 

@@ -260,6 +260,184 @@ async def test_the_rename_to_users_goes_forward_and_back_without_moving_a_token(
     assert [tuple(row) for row in held] == [("nadia", "a-token", "a-digest")]
 
 
+async def test_the_stored_words_go_forward_and_back_with_every_other_row_untouched(
+    empty_database,
+) -> None:
+    """0009 rewrites two columns' VALUES both ways, and rewrites nothing else.
+
+    The migration above renames names; this one is the only one in M29 that writes to
+    rows, so a schema comparison cannot see whether it worked. The rows are therefore
+    seeded BEFORE the upgrade, at 0008, in the old vocabulary — which is the only way to
+    watch an ``UPDATE`` move them — and read back at head and again after the downgrade.
+
+    Three kinds of row are planted on purpose, because two of them are what the
+    migration must NOT touch: a value the rename covers (``friends``, ``friend-added``,
+    ``friend-revoked``), a value from the same column's other members (``relay-entry``,
+    ``node-added``), and a value nothing ever declared. The last one is the case the
+    migration's header decides rather than discovers: it is left exactly as found,
+    because refusing on it would abort the ``alembic upgrade head`` the entrypoint runs
+    on every boot over a row the application already cannot read back.
+
+    The empty-table case is covered by the three tests around this one — the fixture
+    hands over a database with no tables at all — so it is not re-staged here.
+
+    Raw SQL for the reason the test above gives: the models describe HEAD and this has
+    to speak to both sides of one migration. Nothing here opens an encrypted column, so
+    no secret box is needed, which is what lets M29.5 rehearse it without a key.
+    """
+    assert run_alembic("upgrade", "0008").returncode == 0
+
+    engine = create_async_engine(DATABASE_URL)
+
+    async def rows(query: str) -> list[tuple]:
+        async with engine.connect() as connection:
+            return [tuple(row) for row in (await connection.execute(text(query))).all()]
+
+    async def purposes() -> list[tuple]:
+        return await rows(
+            "SELECT id, purpose FROM node_transports ORDER BY id"
+        )
+
+    async def actions() -> list[tuple]:
+        return await rows("SELECT id, action FROM audit_entries ORDER BY id")
+
+    async def default_for(table: str, column: str) -> str | None:
+        found = await rows(
+            "SELECT column_default, data_type FROM information_schema.columns "
+            f"WHERE table_name = '{table}' AND column_name = '{column}'"
+        )
+        # Neither column is a Postgres native ENUM and 0009 depends on that: ``purpose``
+        # is VARCHAR(16) from 0002 and ``action`` is VARCHAR(32) from 0003, read back
+        # through ``EnumText``, which is Python-side only. A native type would need
+        # ``ALTER TYPE ... RENAME VALUE`` instead of an ``UPDATE``.
+        assert found[0][1] == "character varying", found
+        return found[0][0]
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO nodes (id, name, address, location_label, state) "
+                "VALUES ('node-9', 'the-word', '192.0.2.9', 'Testland', 'active')"
+            )
+        )
+        for row_id, purpose in (
+            ("row-a", "friends"),
+            ("row-b", "relay-entry"),
+            ("row-c", "not-a-purpose"),
+        ):
+            await connection.execute(
+                text(
+                    "INSERT INTO node_transports "
+                    "(id, node_id, transport_name, config_name, params, secrets, "
+                    " purpose, enabled) "
+                    "VALUES (:id, 'node-9', 'a-transport', :config_name, '{}', '{}', "
+                    " :purpose, true)"
+                ),
+                # One config name per row: ``uq_node_transport_config_name`` is what
+                # stops two rows writing the same file on one host.
+                {"id": row_id, "config_name": row_id, "purpose": purpose},
+            )
+        for row_id, action in (
+            ("entry-a", "friend-added"),
+            ("entry-b", "friend-revoked"),
+            ("entry-c", "node-added"),
+            ("entry-d", "not-an-action"),
+        ):
+            await connection.execute(
+                text("INSERT INTO audit_entries (id, action) VALUES (:id, :action)"),
+                {"id": row_id, "action": action},
+            )
+
+    at_0008_purposes = await purposes()
+    at_0008_actions = await actions()
+    assert at_0008_purposes == [
+        ("row-a", "friends"),
+        ("row-b", "relay-entry"),
+        ("row-c", "not-a-purpose"),
+    ]
+    assert await default_for("node_transports", "purpose") == "'friends'::character varying"
+
+    assert run_alembic("upgrade", "head").returncode == 0
+
+    assert await purposes() == [
+        ("row-a", "users"),
+        ("row-b", "relay-entry"),
+        ("row-c", "not-a-purpose"),
+    ]
+    assert await actions() == [
+        ("entry-a", "user-added"),
+        ("entry-b", "user-revoked"),
+        ("entry-c", "node-added"),
+        ("entry-d", "not-an-action"),
+    ]
+    # The default moves with the values, or a row inserted without an explicit purpose
+    # by anything other than this application arrives holding a retired word.
+    assert await default_for("node_transports", "purpose") == "'users'::character varying"
+
+    backed_out = run_alembic("downgrade", "0008")
+    assert backed_out.returncode == 0, (
+        f"stdout:\n{backed_out.stdout}\nstderr:\n{backed_out.stderr}"
+    )
+
+    # Byte for byte what was seeded, including the two kinds of row the migration was
+    # never allowed to move. This is the assertion that makes "reversible" a fact.
+    assert await purposes() == at_0008_purposes
+    assert await actions() == at_0008_actions
+    assert await default_for("node_transports", "purpose") == "'friends'::character varying"
+
+    # And forward once more, because an operator who backs out is expected to deploy
+    # again — the second upgrade must land on the same values as the first.
+    assert run_alembic("upgrade", "head").returncode == 0
+    assert await purposes() == [
+        ("row-a", "users"),
+        ("row-b", "relay-entry"),
+        ("row-c", "not-a-purpose"),
+    ]
+    assert await actions() == [
+        ("entry-a", "user-added"),
+        ("entry-b", "user-revoked"),
+        ("entry-c", "node-added"),
+        ("entry-d", "not-an-action"),
+    ]
+
+    await engine.dispose()
+
+
+async def test_the_data_migration_names_no_row_in_what_it_prints(empty_database) -> None:
+    """0009 touches the audit table, so its output is checked for a person's name.
+
+    The trail is the one table in this product that could become a record of who used
+    the service, and a data migration over it is exactly where a well-meant ``logger``
+    call lands. The migration prints Alembic's own revision line and nothing else; this
+    plants labels a person would recognise and asserts none of them, and no row count
+    from that table, reaches stdout or stderr on the way through or on the way back.
+    """
+    assert run_alembic("upgrade", "0008").returncode == 0
+
+    engine = create_async_engine(DATABASE_URL)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO audit_entries (id, action, first_label) "
+                "VALUES ('entry-1', 'friend-added', 'polina')"
+            )
+        )
+    await engine.dispose()
+
+    forward = run_alembic("upgrade", "head")
+    assert forward.returncode == 0, f"{forward.stdout}\n{forward.stderr}"
+    backward = run_alembic("downgrade", "0008")
+    assert backward.returncode == 0, f"{backward.stdout}\n{backward.stderr}"
+
+    for result in (forward, backward):
+        printed = result.stdout + result.stderr
+        assert "polina" not in printed, printed
+        assert "entry-1" not in printed, printed
+        # The revision is named — that is Alembic's line, and it is the only thing here
+        # that should identify anything.
+        assert "0009" in printed, printed
+
+
 async def test_upgrade_is_idempotent(empty_database) -> None:
     """Running it twice must be a no-op, because the entrypoint runs it on every boot.
 
@@ -303,7 +481,7 @@ async def test_the_downgrade_refuses_while_a_pool_is_in_use(empty_database) -> N
                 "(id, node_id, transport_name, config_name, params, secrets, purpose, "
                 " enabled, pool_size) "
                 "VALUES ('row-1', 'node-1', 'a-transport', 'a-transport', '{}', '{}', "
-                "'friends', true, 4)"
+                "'users', true, 4)"
             )
         )
         await connection.execute(
@@ -372,7 +550,7 @@ async def test_the_downgrade_still_works_where_no_pool_is_in_use(empty_database)
                 "(id, node_id, transport_name, config_name, params, secrets, purpose, "
                 " enabled, pool_size) "
                 "VALUES ('row-2', 'node-2', 'a-transport', 'a-transport', '{}', '{}', "
-                "'friends', true, 4)"
+                "'users', true, 4)"
             )
         )
     await engine.dispose()

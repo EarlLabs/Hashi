@@ -252,7 +252,7 @@ async def test_adding_a_user_records_the_nickname_and_nothing_else(
     token = url.rsplit("/", 1)[-1]
 
     entries = await trail(session)
-    assert [entry.action for entry in entries] == [AuditAction.FRIEND_ADDED]
+    assert [entry.action for entry in entries] == [AuditAction.USER_ADDED]
     assert entries[0].first_label == "kolya"
     assert entries[0].second_label is None
     for entry in entries:
@@ -276,7 +276,7 @@ async def test_revoking_records_the_nickname_once(client, session) -> None:
     await revocation.revoke_user(session, user_id=user_id)
     await revocation.revoke_user(session, user_id=user_id)
 
-    revoked = await entries_for(session, AuditAction.FRIEND_REVOKED)
+    revoked = await entries_for(session, AuditAction.USER_REVOKED)
     assert len(revoked) == 1, "a second revocation changed nothing and recorded nothing"
     assert revoked[0].first_label == "kolya"
     assert revoked[0].second_label is None
@@ -287,7 +287,7 @@ async def test_a_revocation_that_never_happened_records_nothing(client, session)
     with pytest.raises(NotFound):
         await revocation.revoke_user(session, user_id="no-such-user")
     await session.rollback()
-    assert await entries_for(session, AuditAction.FRIEND_REVOKED) == []
+    assert await entries_for(session, AuditAction.USER_REVOKED) == []
 
 
 async def test_a_node_a_transport_and_a_state_are_recorded_by_their_own_names(
@@ -671,7 +671,7 @@ async def test_fetching_a_subscription_writes_nothing_to_the_trail(
     The e2e scenario of the same name is the named deliverable and runs this against
     the real stack; this is its fast twin, and it is the one that runs on every commit.
     Asserted as "the trail did not grow at all", because a row saying only
-    ``friend-added`` against a time would still be a record that somebody fetched their
+    ``user-added`` against a time would still be a record that somebody fetched their
     subscription at that moment.
     """
     node_id = await a_node(client)

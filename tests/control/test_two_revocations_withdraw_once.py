@@ -67,7 +67,7 @@ async def withdrawn_at(session, user_id: str):
 async def revocations_recorded(session) -> int:
     """How many times the trail says this operator withdrew somebody's access."""
     entries = await session.execute(
-        select(AuditEntry.action).where(AuditEntry.action == AuditAction.FRIEND_REVOKED)
+        select(AuditEntry.action).where(AuditEntry.action == AuditAction.USER_REVOKED)
     )
     return len(list(entries.scalars().all()))
 

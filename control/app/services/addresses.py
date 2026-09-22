@@ -510,7 +510,7 @@ async def shortfalls_among(
 
     short: list[Shortfall] = []
     for row in rows:
-        if row.purpose != TransportPurpose.FRIENDS:
+        if row.purpose != TransportPurpose.USERS:
             continue
         if spec_for(row.transport_name) is None:
             continue

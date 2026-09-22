@@ -5337,8 +5337,8 @@ AUDIT_SURFACES = ("/panel/audit",)
 TRAIL_NODE = "leaf-ams-1"
 TRAIL_TRANSPORT = "vless-reality"
 EVENT_SENTENCES = {
-    AuditAction.FRIEND_ADDED: f"user {TRAIL_NODE} added",
-    AuditAction.FRIEND_REVOKED: f"user {TRAIL_NODE} revoked — link is dead",
+    AuditAction.USER_ADDED: f"user {TRAIL_NODE} added",
+    AuditAction.USER_REVOKED: f"user {TRAIL_NODE} revoked — link is dead",
     AuditAction.NODE_ADDED: f"node {TRAIL_NODE} added",
     AuditAction.NODE_STATE_CHANGED: f"{TRAIL_NODE} is now {TRAIL_TRANSPORT}",
     AuditAction.NODE_APPLIED: f"config applied to {TRAIL_NODE}",

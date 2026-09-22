@@ -37,8 +37,8 @@ OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 # them may appear on the screen — the sentence is rendered, and a machine key in front
 # of the operator is the design's own failure mode.
 STORED_KEYS = (
-    "friend-added",
-    "friend-revoked",
+    "user-added",
+    "user-revoked",
     "node-added",
     "node-state-changed",
     "node-applied",

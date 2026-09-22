@@ -337,7 +337,7 @@ def test_a_user_facing_row_on_a_node_with_a_hop_exits_through_it() -> None:
     """
     from control.app.models import NodeTransport, TransportPurpose
 
-    users = NodeTransport(purpose=TransportPurpose.FRIENDS)
+    users = NodeTransport(purpose=TransportPurpose.USERS)
     assert nodes.egress_for(users, ENTRY_EXIT_ADDRESS) is Egress.HOP
     assert nodes.egress_for(users, None) is Egress.LOCAL
     assert nodes.egress_for(NodeTransport(purpose="something-later"), ENTRY_EXIT_ADDRESS) is (

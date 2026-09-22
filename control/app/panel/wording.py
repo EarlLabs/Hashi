@@ -187,8 +187,8 @@ def _as_the_panel_says(match: re.Match[str]) -> str:
 # Nothing in here is a country, an address, a port or a transport's name: every varying
 # word arrives as a label, which is a value the operator or the registry already chose.
 _EVENTS: dict[AuditAction, str] = {
-    AuditAction.FRIEND_ADDED: "user {first} added",
-    AuditAction.FRIEND_REVOKED: "user {first} revoked — link is dead",
+    AuditAction.USER_ADDED: "user {first} added",
+    AuditAction.USER_REVOKED: "user {first} revoked — link is dead",
     AuditAction.NODE_ADDED: "node {first} added",
     AuditAction.NODE_STATE_CHANGED: "{first} is now {second}",
     AuditAction.NODE_APPLIED: "config applied to {first}",

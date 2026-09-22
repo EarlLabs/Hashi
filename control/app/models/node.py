@@ -131,7 +131,7 @@ class TransportPurpose(enum.StrEnum):
     """
 
     # The default, and what every existing row is: a transport users connect to.
-    FRIENDS = "friends"
+    USERS = "users"
 
     # This end of a node-to-node hop, on the node that DIALS.
     RELAY_ENTRY = "relay-entry"
@@ -370,7 +370,7 @@ class NodeTransport(Base, TimestampMixin):
     # builds a subscription filters on it, and a NULL there would be a user routed
     # onto an entry↔leaf tunnel.
     purpose: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=TransportPurpose.FRIENDS, index=True
+        String(16), nullable=False, default=TransportPurpose.USERS, index=True
     )
 
     # The other end of the hop, when this row is one end of one. Self-referential and

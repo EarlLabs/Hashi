@@ -939,7 +939,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
                     offered=row.enabled,
-                    for_users=row.purpose == TransportPurpose.FRIENDS,
+                    for_users=row.purpose == TransportPurpose.USERS,
                 )
                 # Sorted by name: this is a relationship load, and a column that
                 # reshuffles itself between reloads reads as the fleet changing.
@@ -1396,7 +1396,7 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             node=node.name,
             transport=placed_as(row.transport_name, row.config_name),
             offered=row.enabled,
-            for_users=row.purpose == TransportPurpose.FRIENDS,
+            for_users=row.purpose == TransportPurpose.USERS,
             standing=_standing(
                 row.purpose,
                 row.enabled,
@@ -1498,7 +1498,7 @@ def _standing(
     link" claims nothing about having been in one, so it is true of both kinds and stays
     one sentence.
     """
-    if purpose != TransportPurpose.FRIENDS:
+    if purpose != TransportPurpose.USERS:
         return OFFER_HOP_END
     if enabled:
         return OFFER_IN_EVERY_LINK if deliverable else OFFER_NOT_IN_THE_LINK
@@ -1724,7 +1724,7 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
             fingerprint = (
                 keymaterial.fingerprint(meta.key_material, row.params) if meta else None
             )
-            for_users = row.purpose == TransportPurpose.FRIENDS
+            for_users = row.purpose == TransportPurpose.USERS
             rows.append(
                 KeyRow(
                     id=row.id,
@@ -2146,7 +2146,7 @@ async def overview(session: AsyncSession) -> Overview:
     serving = {
         row.transport_name
         for row in await nodes.serving_transports(session)
-        if row.purpose == TransportPurpose.FRIENDS
+        if row.purpose == TransportPurpose.USERS
     }
     installed = discover()
     # What the panel would let the operator enable today — services/transports.py's own

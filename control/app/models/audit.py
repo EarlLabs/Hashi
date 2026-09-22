@@ -49,15 +49,20 @@ class AuditAction(enum.StrEnum):
     The values are machine keys and are what lands in the database. The sentence an
     operator reads is composed at render time — see the panel's wording module — so
     these never have to be readable prose and must never be edited casually: a value
-    whose text changed would orphan every row already written with the old one.
+    whose text changed would orphan every row already written with the old one. Two of
+    them did change, once, in M29: ``friend-added`` and ``friend-revoked`` became
+    ``user-added`` and ``user-revoked`` because an operator reads them on the audit
+    screen and the product now has one word for the person. That cost a data migration
+    (``0009``) rewriting every existing row, reversible both ways — which is the price
+    the paragraph above is warning about, paid deliberately and not casually.
 
     Only changes that COMMITTED are in this list. There is no login, no probe, no
     failure and no refusal: a probe changes nothing, and a refusal's text can come
     from a remote host while this table has nowhere safe to put it.
     """
 
-    FRIEND_ADDED = "friend-added"
-    FRIEND_REVOKED = "friend-revoked"
+    USER_ADDED = "user-added"
+    USER_REVOKED = "user-revoked"
     NODE_ADDED = "node-added"
     NODE_STATE_CHANGED = "node-state-changed"
     NODE_APPLIED = "node-applied"
