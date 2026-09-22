@@ -154,25 +154,25 @@ def login(client: urllib.request.OpenerDirector, jar: http.cookiejar.CookieJar) 
         )
     if not any(cookie.name == SESSION_COOKIE for cookie in jar):
         fail(f"login answered {status} and set no {SESSION_COOKIE} cookie — no session")
-    guarded, raw = call(client, "GET", "/api/friends")
+    guarded, raw = call(client, "GET", "/api/users")
     if guarded != 200:
         fail(
-            f"the session does not open /api/friends: {guarded} {raw[:200]!r}. The "
+            f"the session does not open /api/users: {guarded} {raw[:200]!r}. The "
             f"cookie exists and the app will not accept it."
         )
 
 
-def create_friend(client: urllib.request.OpenerDirector, nickname: str) -> str:
-    status, raw = call(client, "POST", "/api/friends", json_body={"nickname": nickname})
+def create_user(client: urllib.request.OpenerDirector, nickname: str) -> str:
+    status, raw = call(client, "POST", "/api/users", json_body={"nickname": nickname})
     if status != 201:
         fail(f"creating {nickname} returned {status}: {raw[:400]!r}")
     return str(json.loads(raw)["id"])
 
 
-def token_of(client: urllib.request.OpenerDirector, friend_id: str) -> str:
-    status, raw = call(client, "GET", f"/api/friends/{friend_id}/subscription")
+def token_of(client: urllib.request.OpenerDirector, user_id: str) -> str:
+    status, raw = call(client, "GET", f"/api/users/{user_id}/subscription")
     if status != 200:
-        fail(f"no subscription for {friend_id}: {status} {raw[:400]!r}")
+        fail(f"no subscription for {user_id}: {status} {raw[:400]!r}")
     # The response carries a full URL built from the stand's configured public base,
     # which is not necessarily the address the agent reaches it on. The TOKEN is what
     # is wanted, so take the last path segment and let the agent compose the URL from
@@ -180,14 +180,14 @@ def token_of(client: urllib.request.OpenerDirector, friend_id: str) -> str:
     url = str(json.loads(raw)["url"])
     token = urllib.parse.urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
     if len(token) < 16:
-        fail(f"{friend_id}'s subscription URL does not end in a token: {url!r}")
+        fail(f"{user_id}'s subscription URL does not end in a token: {url!r}")
     return token
 
 
-def revoke(client: urllib.request.OpenerDirector, friend_id: str) -> None:
-    status, raw = call(client, "POST", f"/api/friends/{friend_id}/revoke")
+def revoke(client: urllib.request.OpenerDirector, user_id: str) -> None:
+    status, raw = call(client, "POST", f"/api/users/{user_id}/revoke")
     if status != 200:
-        fail(f"revoking {friend_id} returned {status}: {raw[:400]!r}")
+        fail(f"revoking {user_id} returned {status}: {raw[:400]!r}")
 
 
 def main() -> int:
@@ -205,11 +205,13 @@ def main() -> int:
     }
 
     for key, nickname in FRIENDS:
-        friend_id = create_friend(client, nickname)
-        token = token_of(client, friend_id)
+        user_id = create_user(client, nickname)
+        token = token_of(client, user_id)
         roles[key] = {
             "kind": "path-token",
-            "friend_id": friend_id,
+            # The roles-file key stays `friend_id`: scripts/security/role.sh reads it by
+            # that name, and renaming the file's schema is not this step's to take.
+            "friend_id": user_id,
             "nickname": nickname,
             "token": token,
             "path": f"/sub/{token}",

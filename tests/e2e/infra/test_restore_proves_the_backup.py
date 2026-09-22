@@ -234,10 +234,10 @@ def a_fleet(client: httpx.Client) -> dict:
     assert enabled.status_code == 201, enabled.text
     assert client.post(f"/api/nodes/{node_id}/state", json={"state": "active"}).status_code == 200
 
-    user = client.post("/api/friends", json={"nickname": "restored-user"})
+    user = client.post("/api/users", json={"nickname": "restored-user"})
     assert user.status_code == 201, user.text
     user_id = user.json()["id"]
-    url = client.get(f"/api/friends/{user_id}/subscription").json()["url"]
+    url = client.get(f"/api/users/{user_id}/subscription").json()["url"]
 
     return {
         "node_id": node_id,
@@ -328,7 +328,7 @@ def test_a_clean_stack_restored_from_a_dump_carries_the_whole_fleet(dumped, tmp_
             assert [node["id"] for node in nodes] == [fleet["node_id"]], nodes
             assert nodes[0]["state"] == "active", "a restored node came back out of service"
 
-            users = client.get("/api/friends").json()
+            users = client.get("/api/users").json()
             assert [user["id"] for user in users] == [fleet["user_id"]], users
 
             # The node-scoped material: present, and the non-secret half unchanged.
@@ -401,7 +401,7 @@ def test_the_same_dump_with_a_different_key_yields_no_secrets_and_says_so(
             # Every read that touches an encrypted column refuses, and names the setting.
             for endpoint in (
                 "/api/nodes",
-                f"/api/friends/{fleet['user_id']}/subscription",
+                f"/api/users/{fleet['user_id']}/subscription",
             ):
                 response = client.get(endpoint)
                 assert response.status_code == 409, (
@@ -473,7 +473,7 @@ def test_a_restore_that_fails_halfway_leaves_the_database_untouched(dumped, tmp_
             # not "one node and no users", which is what a non-transactional restore
             # would have left.
             assert client.get("/api/nodes").json() == []
-            assert client.get("/api/friends").json() == []
+            assert client.get("/api/users").json() == []
 
         with api(TARGET_PORT + 4) as anonymous:
             assert anonymous.get(f"/sub/{fleet['token']}").status_code == 404
