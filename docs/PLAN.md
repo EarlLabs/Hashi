@@ -2468,6 +2468,24 @@ milestone must not add a second irreversible act to it.
 
 Gate: `make test-control`.
 
+### M29.3b — `infra`: the scenario that counts rows in a table that no longer exists · added mid-run 2026-09-22
+
+`tests/e2e/infra/test_restore_proves_the_backup.py:389` asserts
+`rows_in(project, path, "friends") == 1`. M29.3 renamed that table, so the
+scenario is broken — confirmed by the reviewer, not merely predicted.
+
+It is one word. It gets its own step because it is the **`infra`** zone and M29.3
+is `control`: `CLAUDE.md` says cross-zone work stays in separate tasks and never in
+one diff, so the step that broke it was right not to reach over and fix it. That
+rule is the reason this exists, and it is worth one step rather than one exception.
+
+Whether the scenario should assert on a table name at all — rather than on what the
+restore actually restored — is a fair question, but it is not this milestone's.
+Change the word, keep the scenario's shape.
+
+Gate: `make test-infra`. It is red for a second, unrelated reason until M29.7
+(the runbook quotes an `edge` string M29.2 reworded), so read which test fails.
+
 ### M29.4 — `control`: the API and the panel, broken cleanly
 
 `FriendCreate` / `FriendResponse` (`api/schemas.py:183,189`), `FriendRow`
@@ -2479,6 +2497,38 @@ The eight panel templates that already say `users` stop being a lie about the co
 underneath them at this step, which is the whole premise of the milestone.
 
 Gate: `make test-control`.
+
+### M29.4b — `control`: the transport purpose a person reads is still the old word · added mid-run 2026-09-22
+
+`TransportPurpose.FRIENDS = "friends"` (`control/app/models/node.py:114,134`) is a
+persisted column **value**, not a name — the Python default and `server_default` for
+`node_transports.purpose`. M29.3 could not take it: a rename there is a **data**
+migration touching every existing row, and `0008` is renames-only on purpose.
+
+It is in scope because of the milestone's first "Done when": *one word for the
+concept everywhere a person can read it — screens, API, code*. This value is
+returned by the API and shown in the panel, so a person reads it. Leaving it means
+closing M29 against a checklist it does not meet, which is the same error M29.2b
+was added to correct.
+
+Two things to get right:
+
+- **The identifier and the value both move**, `TransportPurpose.FRIENDS` → `USERS`
+  and `"friends"` → `"users"`, and every `purpose == "friends"` comparison with
+  them.
+- **It is a data migration and therefore reversible in both directions**, on top of
+  `0008`. `UPDATE … SET purpose='users' WHERE purpose='friends'` going forward and
+  the exact inverse coming back, with the enum's own type updated if Postgres holds
+  it as one. M29's plan text is explicit that this milestone must not add a second
+  irreversible act to a product that cannot delete a node record.
+
+**This is the one step in M29 that writes to rows rather than renaming names.** It
+carries the risk the rest of the milestone deliberately does not, which is why it
+is a step of its own and why M29.5 rehearses it against a copy of real data along
+with `0008`.
+
+Gate: `make test-control`, with a real database — a green run whose ~670
+database-backed tests were skipped proves nothing about a data migration.
 
 ### M29.5 — Run the migration forward and back against a copy of real data
 
