@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """hashi — seed the identities the security audit attacks as.
 
-WHAT: creates the audit's three friends on the disposable stand — two live and
+WHAT: creates the audit's three users on the disposable stand — two live and
       one revoked — and writes their subscription tokens to a roles file that
       ``role.sh`` reads.
 
-WHY:  the audit's highest-value boundary is "friend A's token must not reach
-      friend B's configuration", and a single identity cannot test it. The
+WHY:  the audit's highest-value boundary is "user A's token must not reach
+      user B's configuration", and a single identity cannot test it. The
       acceptance stand deliberately seeds NOTHING (its whole value is that every
       awkward first-time step is still ahead of the agent), so the audit's
       identities are seeded here, on top of it, rather than by changing what
       acceptance walks.
 
-WHY a revoked friend too. ``docs/security/threat-model.md`` §3.4: a revoked
+WHY a revoked user too. ``docs/security/threat-model.md`` §3.4: a revoked
       token's answer must be indistinguishable from a token that was never
       issued. That is a comparison between two requests, so both sides have to
       exist before the hunt starts — a hunter that revokes someone mid-run has
@@ -58,7 +58,7 @@ BASE = f"http://{API_HOST}:{API_PORT}"
 
 # The stand's fixed operator credentials, printed by scripts/acceptance/stand.sh.
 # Obviously fake and committed on the same grounds as deploy/e2e.env: they guard a
-# stack with no real nodes and no real friends, whose volume is destroyed on the
+# stack with no real nodes and no real users, whose volume is destroyed on the
 # way out. Nothing here may ever be copied into .env.
 OPERATOR_USER = os.environ.get("HASHI_OPERATOR_USERNAME", "owner")
 OPERATOR_PASSWORD = os.environ.get("HASHI_OPERATOR_PASSWORD", "e2e-operator-password")
@@ -72,10 +72,10 @@ ROLES_FILE = pathlib.Path(
 # The nicknames are recognisable on purpose. Someone reading the stand's database
 # while debugging should be able to tell an audit fixture from a real record at a
 # glance — on the stand there are no real records, and the habit is still right.
-FRIENDS = [
-    ("friend_a", "audit-friend-a"),
-    ("friend_b", "audit-friend-b"),
-    ("friend_revoked", "audit-friend-revoked"),
+USERS = [
+    ("user_a", "audit-user-a"),
+    ("user_b", "audit-user-b"),
+    ("user_revoked", "audit-user-revoked"),
 ]
 
 
@@ -204,14 +204,16 @@ def main() -> int:
         },
     }
 
-    for key, nickname in FRIENDS:
+    for key, nickname in USERS:
         user_id = create_user(client, nickname)
         token = token_of(client, user_id)
         roles[key] = {
             "kind": "path-token",
-            # The roles-file key stays `friend_id`: scripts/security/role.sh reads it by
-            # that name, and renaming the file's schema is not this step's to take.
-            "friend_id": user_id,
+            # The roles file is a two-file contract: scripts/security/role.sh reads
+            # this key by name, so it moves only when that script moves with it — and a
+            # roles file left over from an older stand still carries the old key, which
+            # is why every `stand.sh up` re-seeds rather than reusing one.
+            "user_id": user_id,
             "nickname": nickname,
             "token": token,
             "path": f"/sub/{token}",
@@ -219,8 +221,8 @@ def main() -> int:
 
     # Revoked LAST and after its token was read: the token has to be known in order
     # to ask what a revoked one answers, which is the whole point of §3.4.
-    revoke(client, roles["friend_revoked"]["friend_id"])
-    roles["friend_revoked"]["revoked"] = "true"
+    revoke(client, roles["user_revoked"]["user_id"])
+    roles["user_revoked"]["revoked"] = "true"
 
     ROLES_FILE.parent.mkdir(parents=True, exist_ok=True)
     # 0600 on a file holding three bearer credentials, and the mode is set before the
@@ -232,8 +234,8 @@ def main() -> int:
     # Counts and names only. A token never goes to stdout from here — `role.sh` is
     # the one thing that prints one, to the one agent that asked for it.
     print(
-        f"[seed] {len(FRIENDS)} friends seeded "
-        f"({', '.join(nickname for _, nickname in FRIENDS)}), one of them revoked"
+        f"[seed] {len(USERS)} users seeded "
+        f"({', '.join(nickname for _, nickname in USERS)}), one of them revoked"
     )
     print(f"[seed] credentials in {ROLES_FILE} (0600, gitignored) — read them with role.sh")
     return 0

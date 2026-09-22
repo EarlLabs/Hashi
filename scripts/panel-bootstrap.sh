@@ -82,19 +82,19 @@ has_value() {
 
 # THE refusal. Everything else in this script is about uptime; this is about a person.
 #
-# HASHI_SECRET_KEY decrypts every friend's credentials and every node's private key. If
+# HASHI_SECRET_KEY decrypts every user's credentials and every node's private key. If
 # the panel is installed on the Russian entry node — which the topology allows and the
 # charter anticipates — then a key generated on that host lives on the machine most
 # likely to be seized, next to the data it opens. So it must arrive from outside, and
 # the only safe behaviour when it is absent is to stop.
 #
 # Generating one here would be worse than useless: the stack would come up, the owner
-# would see a working panel, and the key protecting their friends' access would exist
+# would see a working panel, and the key protecting their users' access would exist
 # only on the host they are least able to trust — with nobody having decided that.
 if ! has_value HASHI_SECRET_KEY; then
   fail "HASHI_SECRET_KEY is not set in ${ENV_FILE}.
 
-  This script does NOT generate it, on purpose. That key decrypts every friend's
+  This script does NOT generate it, on purpose. That key decrypts every user's
   credentials and every node's private key. If this host is the Russian entry node, a
   key generated here would sit on the machine most likely to be seized, beside the data
   it opens — and nobody would have decided that.
@@ -199,7 +199,7 @@ say "env file ${ENV_FILE} has every required key and no unescaped \$"
 # The charter forbids connection logs at any level, and `ufw enable` — which the runbook
 # tells an operator to run — turns logging on by default. On the fleet's own leaf that had
 # collected source addresses within minutes (docs/decisions.md, decision 5). This host is
-# the one friends dial for their subscriptions, so its firewall log is a list of who asked
+# the one users dial for their subscriptions, so its firewall log is a list of who asked
 # for a config and when.
 #
 # Checked, never changed. `scripts/node-bootstrap.sh` owns turning it off, because that
@@ -234,7 +234,7 @@ else
 
   The firewall writes a source address for every packet it refuses. That is a connection
   log, and the charter forbids one at any level — it is the one record that can hurt a
-  real person, and this host is the one friends dial for their subscriptions.
+  real person, and this host is the one users dial for their subscriptions.
 
   Turn it off and run this again; a second run is safe:
 
@@ -310,7 +310,7 @@ status, body = get('/healthz')
 if status != 200 or 'ok' not in body:
     sys.exit(1)
 
-# The delivery endpoint, which is the only route a friend ever touches. A 404 for a
+# The delivery endpoint, which is the only route a user ever touches. A 404 for a
 # token that cannot exist is the correct answer and proves the route is wired — a live
 # process with an unrouted /sub is a panel that looks up and delivers nothing.
 # Deliberately not a real token: this probe must never carry a credential.

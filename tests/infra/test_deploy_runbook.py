@@ -1095,7 +1095,7 @@ def growth_section(runbook: str) -> str:
 
 
 def _nodes_whose_offers_the_hop_form_asks_about() -> set[str]:
-    """Which of ``establish_hop``'s two nodes is checked for friend-facing rows.
+    """Which of ``establish_hop``'s two nodes is checked for user-facing rows.
 
     By ``ast`` over the function's own source, the same reading ``_claim_refusals`` takes
     of ``placement.claim``: the question is which node that refusal is about, which is a
@@ -1107,20 +1107,20 @@ def _nodes_whose_offers_the_hop_form_asks_about() -> set[str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "friend_facing_on"
+        and node.func.attr == "user_facing_on"
         for argument in node.args[1:]
     }
 
 
-def test_the_growth_path_sends_the_box_that_already_serves_friends_to_the_leaf_end(
+def test_the_growth_path_sends_the_box_that_already_serves_users_to_the_leaf_end(
     growth_section: str,
 ) -> None:
     """The whole point of the section, and the one claim it cannot be wrong about.
 
-    An operator's first box serves friends on a kernel tunnel. It can keep doing that as
+    An operator's first box serves users on a kernel tunnel. It can keep doing that as
     the LEAF end of a hop and cannot as the entry end, and the asymmetry is not a
-    convention — ``establish_hop`` asks only the entry node what it offers its friends,
-    because the leaf's friends exit by the leaf's own route however many hops land on it.
+    convention — ``establish_hop`` asks only the entry node what it offers its users,
+    because the leaf's users exit by the leaf's own route however many hops land on it.
     If that refusal ever grew to ask the leaf as well, this advice would start costing an
     operator the credentials it exists to save, and it would do so silently.
     """

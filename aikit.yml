@@ -277,18 +277,18 @@ security:
     - name: anon
     - name: operator
       auth: "login:scripts/security/role.sh operator"
-    - name: friend_a
-      auth: "login:scripts/security/role.sh friend_a"
-    - name: friend_b
-      auth: "login:scripts/security/role.sh friend_b"
+    - name: user_a
+      auth: "login:scripts/security/role.sh user_a"
+    - name: user_b
+      auth: "login:scripts/security/role.sh user_b"
     # A fourth identity the owner did not name, seeded because the boundary it
     # tests is a charter promise: "revocation is total" means a revoked token's
     # answer must be indistinguishable from a token that was never issued. That is
     # a comparison between two requests, so both sides have to exist before the
     # hunt starts — a hunter that revokes someone mid-run has spent budget and
     # still cannot replay the pair. Threat model §3.4.
-    - name: friend_revoked
-      auth: "login:scripts/security/role.sh friend_revoked"
+    - name: user_revoked
+      auth: "login:scripts/security/role.sh user_revoked"
   # The SAME read-only role acceptance reads through, reused rather than rebuilt:
   # `acceptance_ro` holds SELECT and nothing else, granted by the stand. It is what
   # tells *exploitable* from *looks exploitable* — the endpoint returned another

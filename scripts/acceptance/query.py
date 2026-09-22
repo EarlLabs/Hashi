@@ -5,7 +5,7 @@ WHAT: one ``SELECT`` against the disposable e2e stack, printed as rows an agent
       can paste into its report as evidence. ``--tables`` lists what it can see.
 
 WHY:  without this, the finding class **works, but lies** cannot be told apart
-      from **works**. The panel said the friend was revoked and the row still
+      from **works**. The panel said the user was revoked and the row still
       carries the credential; the button said "applied" and the node's digest
       never moved — that last one is exactly M1 in ``docs/PLAN.md``, a bug whose
       whole failure mode was "the screen looked right". An acceptance agent with
@@ -73,7 +73,7 @@ DATABASE = os.environ.get("ACCEPTANCE_DB_NAME", "hashi")
 ROLE = os.environ.get("ACCEPTANCE_DB_ROLE", "acceptance_ro")
 # The stand's own throwaway credential, mirroring stand.sh. Committed on the same
 # grounds as deploy/e2e.env: it guards a stack with no real nodes and no real
-# friends in it. Nothing here may ever be copied into .env.
+# users in it. Nothing here may ever be copied into .env.
 PASSWORD = os.environ.get("ACCEPTANCE_DB_PASSWORD", "acceptance-ro-not-a-real-password")
 
 # Rejected as whole words, so a column named `updated_at` is not mistaken for an

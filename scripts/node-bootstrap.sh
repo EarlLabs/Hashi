@@ -117,7 +117,7 @@
 #      Section 6 reads them and neither is written; which sysctls a host carries stays
 #      with whoever owns the host.
 #   F. IT PROVES NOTHING ABOUT REACHABILITY. The verification at the end asks THIS HOST
-#      questions; it never sends a packet anywhere. Whether a friend inside Russia can
+#      questions; it never sends a packet anywhere. Whether a user inside Russia can
 #      reach this node is a field observation on a real network, and no run of this script
 #      is evidence for it.
 #   G. THE KEY CHECK ASKS SSHD ABOUT THIS ACCOUNT, AND STILL NOT ABOUT THIS CONNECTION.
@@ -1205,7 +1205,7 @@ kernel_preconditions() {
     breaks an ENTRY node: the replies coming back over the hop arrive on the hop's own
     interface, the kernel decides they should not have, and drops them before anything on
     this host sees them. The tunnel still handshakes, both ends still look up, and a
-    friend carries nothing — logged nowhere, because nothing here may log it. This run
+    user carries nothing — logged nowhere, because nothing here may log it. This run
     does not refuse it, because nothing tells this script which role you will register
     this host in. If it is an entry, set both to 2 (loose), or to 0, before you do:
     'sysctl -w net.ipv4.conf.all.rp_filter=2' and the same in a file under /etc/sysctl.d/

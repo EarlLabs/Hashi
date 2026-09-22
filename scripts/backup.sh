@@ -2,7 +2,7 @@
 # WHAT: dump and restore the control database — backlog item 22.
 # WHY:  the control database is the single source of truth (core invariants §3): a node
 #       holds nothing that cannot be regenerated from it. That cuts both ways. Losing a
-#       node is nothing; losing this database is losing every friend's access and every
+#       node is nothing; losing this database is losing every user's access and every
 #       node's credentials at once, with no way to rebuild them.
 #
 #       The dump is USELESS WITHOUT HASHI_SECRET_KEY, and that is the design (§3,
@@ -72,7 +72,7 @@ command_dump() {
     pg_dump --username="${user}" --dbname="${name}" --clean --if-exists --format=plain \
     | gzip -9 > "${output}"
 
-  # 0600: this file contains every node's encrypted credentials and every friend's
+  # 0600: this file contains every node's encrypted credentials and every user's
   # encrypted token. Encrypted is not the same as safe to leave world-readable.
   chmod 600 "${output}"
 
@@ -107,7 +107,7 @@ command_restore() {
     echo "  env file: ${ENV_FILE}" >&2
     echo "  compose project: ${COMPOSE_PROJECT_NAME:-<default: the directory name>}" >&2
     echo "  database: ${name}" >&2
-    echo "This REPLACES its contents. Every current node, friend and credential is" >&2
+    echo "This REPLACES its contents. Every current node, user and credential is" >&2
     echo "overwritten by the dump." >&2
     printf "Type the database name to confirm: " >&2
     read -r answer
@@ -124,7 +124,7 @@ command_restore() {
 
   echo "restored." >&2
   echo "Restart the control plane so it reconnects: make down && make up" >&2
-  echo "If friends cannot connect afterwards, HASHI_SECRET_KEY does not match the" >&2
+  echo "If users cannot connect afterwards, HASHI_SECRET_KEY does not match the" >&2
   echo "one this dump was written with — the app will say so loudly on first use." >&2
 }
 
