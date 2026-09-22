@@ -58,7 +58,7 @@ Two corollaries that are easy to get wrong:
 | `docs/PLAN.md` — `## Where things stand` | living | reword. Classified here by the test, 2026-09-22: it says what is open *now* and is rewritten whenever that changes. See below. |
 | `docs/product/charter.md` | living | reword, including the one-liner's *"~30–50 friends"* (owner-settled, 2026-09-22). The same sentence is copied into `project.json` and `deploy/warden/warden.py`; all three move together. |
 | `docs/deploy/runbook.md` | living | reword. It is followed at 3am; it must match the panel the operator is looking at. |
-| `docs/product/backlog.md` — everything above `## Журнал решений` | living | reword the prose. **Not the `id` column** — see below. Not on the owner's enumerated list; classified here by the test. |
+| `docs/product/backlog.md` — everything above `## Журнал решений` | living | reword, ids included — they are the file's own *«изменяемое состояние»*. The one exception is an id that is also a heading in the frozen `research.md` §3; see below. Not on the owner's enumerated list; classified here by the test. |
 | `docs/product/backlog.md` — `## Журнал решений` | **record** | nothing. A dated decision journal in the same `\| Дата \| Решение \| Причина \|` shape as `docs/decisions.md`, and the file's own header says its entries are *«реальная история решений … не переписаны задним числом»*. |
 | `docs/security/threat-model.md` | living | reword the vocabulary. The *threats* are not this milestone's to restate. |
 | `README.md`, `CLAUDE.md` | living | reword. `CLAUDE.md` is owner/architect territory: propose, do not help yourself. |
@@ -99,21 +99,41 @@ exists and were **not rewritten after the fact**. A journal row is a record; the
 one dated `2026-08-01 (ohno-6)` contains the old word inside a recorded decision
 and keeps it.
 
-One thing above the journal does not move either: **the `id` column.** A backlog
-id is a key, not prose. `control-node-and-friend-records` is the heading of
-`docs/research/product-owner-ohno-4/research.md` §3 item 7, and this file's own
-"Как читать этот файл" says the goal and acceptance text there is **frozen** and
-is the contract for what *done* means. Rewording the key in the living half while
-the frozen half keeps it leaves the backlog pointing at an item that does not
-exist, which is worse than the stale noun. This is the *mention versus use*
-distinction: a use of the word for the person who uses hashi moves, a mention of
-something's name does not. The two ids affected (`control-node-and-friend-records`,
-`control-per-friend-tunnel-address`) both name work already `done`.
+**An id in the `id` column moves, unless it is a key into the frozen research
+document.** The backlog's own "Как читать этот файл" draws that line itself: the
+ids, zones, dependencies and statuses here are *«изменяемое состояние»*, while
+the goal and acceptance **text** in `docs/research/product-owner-ohno-4/research.md`
+§3 is **frozen** and is the contract for what *done* means. So an id that is also
+a heading in that frozen §3 is a key held at both ends, and rewording the end that
+may move leaves the backlog pointing at an item that does not exist — worse than
+the stale noun. That is *mention versus use*: a use of the word for the person who
+uses hashi moves, a mention of something's name does not.
 
-The Russian noun *друг* is not this line's business and was not swept with the
-English one: the milestone headings in that file quote the frozen acceptance
-criteria verbatim, so a word swap there falsifies a quotation. Renaming the
-Russian vocabulary is its own decision and the owner's.
+Exactly one id met that test in M29: **`control-node-and-friend-records`**
+(item 7), which is the heading of `research.md` §3 item 7 at line 1026. It keeps
+the old word. **`control-per-friend-tunnel-address`** (item 33) looked like the
+same case and is not: it appears nowhere in `research.md`, because it is one of
+the rows the backlog itself files under *«Заведено во время исполнения очереди»*
+— raised during execution, after the frozen document was written, and referenced
+by nothing else in the tree. It is ordinary mutable state, and it was renamed to
+`control-per-user-tunnel-address`. The rule is the frozen counterpart, not the
+`done` status and not the fact that something is written in code font.
+
+**The Russian noun *друг* was left alone, and only part of it has a line-based
+reason.** Two or three sites genuinely may not move: the milestone heading
+`## M2 — «Я могу выдать другу ссылку и отобрать её»` is a verbatim quotation of the
+frozen criterion at `research.md:382` and `:809`, the roadmap table above it carries
+the same sentence in short form, and a word swap inside a quotation falsifies what
+the contract says. The remaining ten or so are ordinary retrospective prose,
+several of them in the very *«Заведено во время исполнения очереди»* section that
+postdates the frozen document — and one of them, item 33's note, now reads
+*"AmneziaWG как user-facing транспорт … для одного друга на узел"*, with the
+English word swept and the Russian one beside it left. There is no record/living
+argument for those ten. They were left because **the owner settled an English
+word, and whether that decision reaches a second document's Russian vocabulary is
+a question nobody has put to them.** Deciding it inside a step, in either
+direction, would be a step deciding product vocabulary on its own initiative. It
+is the owner's, and it is open.
 
 ### The one conflict, recorded rather than resolved
 

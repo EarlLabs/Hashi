@@ -345,7 +345,7 @@ delivery-эндпоинт отдаёт per-client конфиг-файлы за �
 
 | # | id | Зона | depends_on | Статус |
 |---|---|---|---|---|
-| 33 | `control-per-friend-tunnel-address` | `control` | 27 | `done` |
+| 33 | `control-per-user-tunnel-address` | `control` | 27 | `done` |
 | 34 | `control-one-transport-two-purposes-on-one-node` | `control` | 27 | `done` |
 | 35 | `infra-env-file-dollar-interpolation` | `infra` | — | `queued` |
 
