@@ -165,3 +165,54 @@ would catch it.
 angles. The fix is small and belongs to whoever next touches the migration tests:
 add `compare_metadata` after the final `upgrade head`, either in M29.6's file or in
 `test_migrations.py`'s own round-trip test.
+
+## From the real-host walk, 2026-09-22 — four things that are not M29's
+
+**1. `POST /api/nodes/{id}/state` answers 500 on an invalid state value. Medium.**
+Sending `{"state":"serving"}` — a word the runbook and the panel both use in prose —
+returns `{"error":{"code":"internal_error","message":"internal error"}}` with a full
+traceback in the container log ending `ValueError: 'serving' is not a valid NodeState`
+at `control/app/api/routes.py:151`. Pydantic validates the body's shape but not the
+enum, and the raw `NodeState(payload.state)` raises. **A caller's typo reads as a
+server fault**; the right answer is a 422 naming the four valid states. **Present at
+baseline `1b60280` and unchanged at HEAD** — not M29's.
+
+**2. A stale rendered config held real key material on a test host. Worth a decision.**
+`/opt/hashi` on the foreign host, dated 9 September, still contained a
+`wireguard.conf` holding a node private key and a peer's pre-shared key for a transport
+no longer enabled. The walk removed it during teardown. **This is the case the runbook
+itself calls out** — a rendered config whose transport was retired, which nothing
+regenerates and nothing cleans up. It is a class, not an incident: any node that ever
+had a transport removed may be carrying one.
+
+**3. `make verify` and an acceptance stand cannot run concurrently.** The stand's
+browser container joins the `hashi-e2e` compose project, so `tests/e2e/infra/test_stack_boots.py`
+sees a fourth service and fails with `unexpected set of running services: ['browser',
+'caddy', 'control', 'db']`. Not a product defect — but it cost a full gate run before it
+was understood, and nothing warns about it.
+
+**4. Two rough edges in the acceptance driver.** `scripts/acceptance/drive.py` has no
+`select` verb, so a native `<select>` cannot be operated by `fill` or `click` — the walk
+worked around it with focus plus keystrokes. And `fill 'textbox=tunnel_address'` matched
+`peer_tunnel_address` first, because the matching is a substring. Both cost actions out
+of a budget.
+
+## From M29.9's review — a candidate, deliberately not taken
+
+**The runbook's upgrade section is pinned by no test, which is how a wrong rollback
+procedure survived a review round and a real host found it.** The reviewer recommends
+*against* a string-match test: the valuable invariant is a runtime fact — *the old image
+has no downgrade path from head* — and pinning that honestly means a `tests/e2e/infra`
+rehearsal that builds the old image, attempts the upgrade, and asserts the crash-loop
+and the Caddy dependency failure. A string match would go red when the prose improves
+and would defend almost nothing. **Left as a candidate for a future milestone.**
+
+## From stand acceptance, round 1 — one "works, but awkward"
+
+**The subscription URL the panel hands the operator returns an empty 200 when fetched
+as-is, if the node's only transport is a config-file shape.** The bare URL serves the
+URI-list shape, which is empty; the same URL with `?format=client-config-file` returns
+the correct config. An operator pasting the link into a browser to check it before
+sending sees a blank page and no word about why. The panel explains the "ask for that
+shape" rule on the Transports screen, but **the link dialog itself does not warn that
+the bare link will look dead.** Not an M29 defect — a line for the owner.

@@ -1246,3 +1246,87 @@ breaking.
 - **The backlog and the runbook both say `user-facing`** where they said
   *friend-facing*. Two `tests/infra` step filters key off the runbook's exact
   hyphenated string.
+
+## M29.9 — two things the real-host walk disproved
+
+**`make verify` green: exit 0** — control `219 passed / 697 skipped`, edge `911 / 3`,
+infra `241 passed`, e2e `192 passed`. One documentation file changed. Every technical
+claim added to the page was re-checked by the reviewer against the actual compose
+files, templates, entrypoint and migration tree.
+
+1. **The rollback order M29.7 wrote is backwards. The correct one: downgrade under the
+   NEW image → `docker compose stop control` → swap the tree → `make up-panel`.** The
+   pre-M29 image ships `0001`–`0007` and nothing else (`git ls-tree 1b60280 --
+   control/migrations/versions`), so it has **no downgrade path from `0009`**. M29.5
+   item 7 is right that `deploy/docker/entrypoint.sh` upgrades to head unconditionally
+   on every boot; the inference *"therefore roll the image back first"* does not follow.
+   **The restart trap is a reason to `stop` the container, not a reason to roll the
+   image back.** Step 3's `upgrade head` on the old image is a no-op because that
+   image's head IS `0007`.
+
+   Two mechanics the reviewer confirmed make the procedure sound: `restart:
+   unless-stopped` is respected after a deliberate `stop`, which closes the only window
+   where the schema could be carried forward again; and `make up-panel` always passes
+   `--build` (`Makefile:161`), so swapping the tree genuinely produces the old image
+   rather than reusing a cached one.
+
+2. **Taking the other order costs the delivery endpoint, and there is no recovery in
+   place.** Measured on a real host: control crash-loops on `Can't locate revision
+   identified by '0009'` under `restart: unless-stopped`; `make up-panel` exits
+   `dependency failed to start: container hashi-control-1 is unhealthy`; **Caddy never
+   starts at all** — it has `depends_on: control: condition: service_healthy`, so it
+   sits in `Created` and `/sub/*` refuses every connection for every user for the whole
+   of that state; and `docker compose exec` answers `Container … is restarting`, so the
+   runbook's own recovery commands are unavailable. Getting out means putting the new
+   image back and starting the correct order from step 1.
+
+3. **"Nothing on anybody's device changes" was true of the URL and false of the file.**
+   URL, token, status, headers and the `v1-uri-list` body are byte-identical (344 bytes
+   both times); a WireGuard-family zip goes 2077 → 2075 bytes, differing in **one `#`
+   comment** that M29 reworded in `edge/transports/{wireguard,amneziawg}/client.j2`. All
+   17 non-comment lines identical — private key, address, MTU, `Jc`/`Jmin`/`Jmax`,
+   `H1`–`H4`, peer key, preshared key, `AllowedIPs`, endpoint, keepalive.
+
+4. **A comment is enough to trip drift, so the whole WireGuard-family fleet reads as
+   drifted immediately after the upgrade — and again after a downgrade.** Drift is
+   `applied_digest != digest_of(rendered)` (`control/app/services/console.py:874`), a
+   byte comparison. The Overview shows the not-pushed banner and the Nodes row counts
+   it. **It is indistinguishable on screen from a real configuration change**, and it
+   lands exactly when an operator is watching for trouble. VLESS-only nodes are
+   unaffected. **Any later milestone that reworks rendered prose — even a comment —
+   ships a fleet-wide re-apply with it and owes the runbook a line.**
+
+5. **No `tests/infra` test pins either corrected passage, and that is how a wrong
+   procedure survived a review.** The suite slices the runbook by `^## ` headings and
+   pins only `_flat(NO_RESOLVER)`, `TUNNEL_TAKEN`'s tail, `console.removal_summary`'s
+   cost clause and the `user-facing` step filters — all in other sections. The reviewer
+   recommends **not** adding a string-match test here: the valuable invariant is a
+   runtime fact ("the old image has no downgrade path from head"), and pinning that
+   properly is a `tests/e2e/infra` rehearsal, not a string match against prose. Carried
+   over as a candidate, not done here.
+
+### How to test what M29.9 built
+
+```sh
+make test-infra    # 241 passed, ~4s
+make verify        # the gate, ~8 min — and NO acceptance stand may be up
+# plus the FOUR record checks from docs/records-and-living-documents.md § "Proving it"
+```
+
+**`make verify` and an acceptance stand cannot run at the same time**: the stand's
+browser container joins the same compose project and shows up as a fourth service,
+failing `test_stack_boots`. Check `docker compose ls` before starting the gate. This
+cost the acceptance walk a full run before it was understood.
+
+### Wording a person will see
+
+- **The narrowed claim:** *"Nobody has to be sent a new link and nobody has to touch
+  their device."* — then what is byte-identical (URL, token, `/sub/{token}`, the VLESS
+  document) and what is not (one `#` comment in a WireGuard-family config, every
+  functional line identical).
+- **The rollback order:** *"The order is the whole of it: downgrade under the NEW image,
+  stop the container, and only then put the old tree back."* and *"**Do not roll the
+  image back first.**"*
+- **A heading a later step must not reword casually**, because the section's opening
+  paragraph cross-references it: *"Every WireGuard-family node reads as drifted, and
+  none of them has changed"*.
