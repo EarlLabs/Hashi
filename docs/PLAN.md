@@ -2330,7 +2330,7 @@ questions*, and *verifies before reporting success*.
 
 acceptance: yes
 Take a bare host. Using only what the product tells you, get it to the point
-where a friend's traffic flows through it. Count what you had to do, and say
+where a user's traffic flows through it. Count what you had to do, and say
 whether the charter's sentence is true.
 
 **How this milestone runs, by the owner's instruction (2026-09-16):** tested by an
@@ -2699,7 +2699,7 @@ confirm the panel still works.
 
 Today none of the three exists. `scripts/backup.sh` dumps and restores, by hand,
 to a file beside the repository — `make backup`, `make restore FROM=…`. There is no
-schedule, nothing leaves the host, and the one machine that holds every friend's
+schedule, nothing leaves the host, and the one machine that holds every user's
 access and every node's credentials is also the only machine holding its own backup.
 
 ### The finding that shapes this milestone, measured before it was planned
@@ -2711,12 +2711,12 @@ columns* (`EncryptedText`, `control/app/models/base.py:86`) —
 | encrypted | in the clear |
 |---|---|
 | node `ssh_private_key`, node_transport `secrets` | node `address`, `ssh_port`, `ssh_host_key` |
-| friend `token`, `subject`, `secrets`, `tunnel_address` | `transport_name`, ports, states, every timestamp |
+| user `token`, `subject`, `secrets`, `tunnel_address` | `transport_name`, ports, states, every timestamp |
 
 **So a reader of the bucket who never obtains `HASHI_SECRET_KEY` still gets a map of
-the fleet**: every node's real address — including the leaf addresses a friend is
+the fleet**: every node's real address — including the leaf addresses a user is
 never shown, which is the one thing the entry/leaf topology exists to hide — plus
-how many friends there are and when each arrived.
+how many users there are and when each arrived.
 
 `scripts/backup.sh:82` prints *"this dump is encrypted with HASHI_SECRET_KEY"*. That
 sentence is false as written and is how this was nearly planned wrong: an operator
@@ -2770,9 +2770,9 @@ the one thing that is wrong today rather than merely missing.
 
 `age`, the recipient from configuration, before anything leaves the machine.
 Without this, a reader of the bucket who never obtains `HASHI_SECRET_KEY` still
-gets every node's real address — **including the leaf addresses a friend is never
+gets every node's real address — **including the leaf addresses a user is never
 shown, which is the one thing the entry/leaf topology exists to hide** — plus how
-many friends there are and when each arrived.
+many users there are and when each arrived.
 
 `age` is a new dependency on the control-plane host and therefore an **architect
 decision** (`CLAUDE.md`). Confirm it before adding it; if it is refused, stop and
@@ -2868,7 +2868,7 @@ as one.
       that does not land is visible where the owner already looks.
 - [ ] On a machine that has never run this project, one command — given the key and
       read credentials for the bucket — produces a control plane serving the same
-      friends and driving the same nodes as the one that was lost.
+      users and driving the same nodes as the one that was lost.
 - [ ] What a reader of the bucket learns **without** `HASHI_SECRET_KEY` is written
       down, and is either nothing or a recorded decision in `docs/decisions.md`.
 - [ ] An attacker holding the control-plane box cannot destroy the backup history.
@@ -2877,11 +2877,11 @@ as one.
 - [ ] The restore has been **performed** on a bare host, not described.
 
 acceptance: yes
-Take a fleet with at least one node and one friend, both working. Destroy the
+Take a fleet with at least one node and one user, both working. Destroy the
 control-plane box — do not stop it gracefully, take it away. On a genuinely bare
 machine, with nothing but the repository, `HASHI_SECRET_KEY` and read credentials
 for the bucket, run the one command. Then: log into the panel, apply the existing
-node, and confirm the existing friend's subscription still works on the device it
+node, and confirm the existing user's subscription still works on the device it
 was already on. The walk fails if the operator had to read anything other than the
 command to get there.
 
@@ -2894,7 +2894,7 @@ command to get there.
 ### The coupling, stated plainly
 
 `deploy/caddy/Caddyfile` serves the public site and the private site as two blocks
-in **one** Caddy container, on **one** box. So `/sub/*` — the endpoint a friend
+in **one** Caddy container, on **one** box. So `/sub/*` — the endpoint a user
 refreshes a config from — lives wherever the panel and the database live. The
 runbook admits it in one sentence at the end of *Shape C*: *"today you choose one
 location for both."*
@@ -2904,8 +2904,8 @@ location for both."*
 
 | | wants to be | why |
 |---|---|---|
-| `/sub/{token}` | **inside Russia** | its entire purpose is being reachable at the moment a node was blocked and a friend needs a new config. A whitelist shutdown is exactly when it is needed and exactly when a foreign address is unreachable |
-| `HASHI_SECRET_KEY` | **outside Russia** | it decrypts every friend's credential and every node's private key, and `scripts/panel-bootstrap.sh:94` requires it in the env file on the host it installs |
+| `/sub/{token}` | **inside Russia** | its entire purpose is being reachable at the moment a node was blocked and a user needs a new config. A whitelist shutdown is exactly when it is needed and exactly when a foreign address is unreachable |
+| `HASHI_SECRET_KEY` | **outside Russia** | it decrypts every user's credential and every node's private key, and `scripts/panel-bootstrap.sh:94` requires it in the env file on the host it installs |
 
 Today the operator picks one and pays for the other:
 
@@ -3068,7 +3068,7 @@ two machines, so they are a real-host walk and are reported as one — the stand
 show the feature is absent when co-located, and cannot show a border.
 
 **Done when**
-- [ ] With the control plane's box unreachable from Russia, a friend inside Russia
+- [ ] With the control plane's box unreachable from Russia, a user inside Russia
       fetches a refreshed subscription and connects on it.
 - [ ] **All four arrangements in the table above install by one procedure**, and the
       co-located ones need no second domain, no second certificate and no additional
@@ -3078,7 +3078,7 @@ show the feature is absent when co-located, and cannot show a border.
       every host that can serve delivery, not only on the control plane's.
 - [ ] What a seized delivery host yields is written down and is no wider than it is
       today, or the widening is a recorded decision in `docs/decisions.md`.
-- [ ] How the delivery endpoint is moved, and what friends have to be told when it
+- [ ] How the delivery endpoint is moved, and what users have to be told when it
       moves, is decided and written down rather than left implied.
 - [ ] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
       for both"* **and its three-shape structure**, because neither is true any more.
@@ -3087,7 +3087,7 @@ acceptance: yes
 Walk it on the two arrangements that differ, not only on the one that motivated it.
 
 1. **Three boxes.** Control plane on its own box; block that box at the firewall so
-   it is unreachable from the entry's network. Then, as a friend: refresh a
+   it is unreachable from the entry's network. Then, as a user: refresh a
    subscription and connect on what comes back.
 2. **Control plane on the entry.** Install the same way, from the same procedure.
    Confirm that nothing extra was configured, that no second name or certificate
@@ -3117,7 +3117,7 @@ valid `awg-probe-1.conf` with `[Interface]`, `PrivateKey`, `Address`, `MTU`.
 
 **So the route exists. What is missing is that no screen ever shows it.**
 `control/app/api/routes.py:225` composes `{public_base_url}/sub/{token}` — the
-plain shape only. An operator following the panel hands a friend a link that, for
+plain shape only. An operator following the panel hands a user a link that, for
 a node serving only WireGuard-family transports, returns an empty document.
 
 ### Both sentences the product shows are wrong, in opposite directions
@@ -3138,14 +3138,14 @@ would have been green either way.*
 
 ### What the milestone has to decide, before it writes code
 
-1. **What URL does the operator get handed?** The plain one, with the friend
+1. **What URL does the operator get handed?** The plain one, with the user
    expected to know about `?format=`? One URL per shape? One URL that answers
    correctly based on what the node actually serves? The last sounds obviously
    right and is the one that quietly changes what a token means.
 2. **What does "one link, every serving node" mean when a node serves both
    families?** A base64 URI list and a zip archive are not the same kind of
    document, and the subscription promise is currently written as if they were.
-3. **What does the friend do with a `.conf`?** A URI pastes into a client. A file
+3. **What does the user do with a `.conf`?** A URI pastes into a client. A file
    has to be imported. Whatever is shown must match the client the runbook tells
    people to install.
 4. **Bearer-token rules are inherited, not re-decided.** `/sub/{token}` is a
@@ -3155,14 +3155,14 @@ would have been green either way.*
    history, a bookmark or a chat log.
 
 **Done when**
-- [ ] An operator following only what the panel shows can give a friend on a
+- [ ] An operator following only what the panel shows can give a user on a
       WireGuard-family-only node something that works.
 - [ ] Every sentence the panel says about what a link contains is true for every
       combination of enabled transports.
 - [ ] No new surface records a token, an address, or who fetched what.
 
 acceptance: yes
-Take a friend on a node serving only `amneziawg`. Follow exactly what the panel
+Take a user on a node serving only `amneziawg`. Follow exactly what the panel
 hands the operator — nothing learned from the source — and get a working
 configuration onto a device.
 

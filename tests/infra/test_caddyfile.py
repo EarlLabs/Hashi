@@ -31,7 +31,7 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CADDYFILE = REPO / "deploy" / "caddy" / "Caddyfile"
 
-# The delivery endpoint, which is the only thing a friend ever asks this proxy for.
+# The delivery endpoint, which is the only thing a user ever asks this proxy for.
 PUBLIC_PATHS = {"/sub/*"}
 # The console: the panel, the API it drives, and the panel's own assets.
 PRIVATE_PATHS = {"/panel/*", "/api/*", "/static/*"}
@@ -131,8 +131,8 @@ def test_the_global_block_discards_the_default_logger(blocks: list[Block]) -> No
     """The logger that catches everything no site block matched.
 
     A scan by IP, another name pointing at this host, and every ``http.log.error`` —
-    including the 502s a friend sees while the control plane restarts, which is
-    exactly when a friend is refreshing a subscription. All of it lands on stderr
+    including the 502s a user sees while the control plane restarts, which is
+    exactly when a user is refreshing a subscription. All of it lands on stderr
     with the full URI unless this is here.
     """
     globals_ = [block for block in blocks if block.is_global]
@@ -183,10 +183,10 @@ def test_the_public_site_serves_the_delivery_endpoint_and_nothing_else(
 ) -> None:
     """`/sub/{token}` stays public; the panel does not.
 
-    The first half of M7's "done when". A friend refreshes their config from inside
+    The first half of M7's "done when". A user refreshes their config from inside
     Russia at the exact moment a node was blocked, so this route cannot move — and
     everything else on that name has to stop answering, because the console holds
-    every node key and every friend credential.
+    every node key and every user credential.
     """
     public = site_by_paths.get(frozenset(PUBLIC_PATHS))
     assert public is not None, (
@@ -258,7 +258,7 @@ def test_automatic_redirects_are_off_so_port_80_cannot_leak_the_console(
     )
     assert any("redir" in site.body for site in blocks if not site.is_global), (
         "redirects are disabled globally and nothing redirects the public name to "
-        "https, so a friend typing http:// reaches nothing"
+        "https, so a user typing http:// reaches nothing"
     )
 
 

@@ -1,6 +1,6 @@
 # hashi — project conventions
 
-A self-hosted multi-protocol VPN for the owner and ~30–50 friends, built to keep
+A self-hosted multi-protocol VPN for the owner and ~30–50 users, built to keep
 working from Russia. A Russian **entry node** fronts foreign **leaf nodes**; both
 nodes and protocols are data, replaceable in minutes without a user touching
 their device.
@@ -11,8 +11,8 @@ How the agent fleet coordinates: `.claude/workflow.md`.
 ## Architecture (who talks to whom)
 
 ```
-friend's client ──subscription URL──► control plane (delivery endpoint,
-                                        reachable from inside Russia)
+user's client ──subscription URL──► control plane (delivery endpoint,
+                                      reachable from inside Russia)
 owner ──admin panel──► control plane ──SSH──► entry node (RU)  ──obfuscated──►
                             │                                     leaf nodes (abroad)
                             └── renders configs with `edge` (a pure library)

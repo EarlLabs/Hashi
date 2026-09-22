@@ -96,7 +96,7 @@ def test_it_asks_no_questions(script: str) -> None:
 def test_it_never_generates_the_secret_key(script: str) -> None:
     """THE rule. It may TELL the operator how to make one; it may not make one.
 
-    ``HASHI_SECRET_KEY`` decrypts every friend's credentials and every node's private
+    ``HASHI_SECRET_KEY`` decrypts every user's credentials and every node's private
     key. Generated on the host being installed — which may be the Russian entry node — it
     would sit on the machine most likely to be seized, beside the data it opens.
 
@@ -194,7 +194,7 @@ def test_it_probes_the_running_plane_rather_than_declaring_victory(script: str) 
     """The charter's third requirement: it verifies BEFORE it reports success.
 
     Both questions matter. ``/healthz`` proves the process is serving; the 404 on the
-    delivery route proves the route a friend uses is actually wired — a live process with
+    delivery route proves the route a user uses is actually wired — a live process with
     an unrouted ``/sub`` is a panel that looks up and delivers nothing.
     """
     assert "/healthz" in script
@@ -335,7 +335,7 @@ def test_it_refuses_a_host_whose_firewall_is_recording_connections(
 
     ``ufw enable`` turns logging on by default and writes a source address for every
     refused packet — 5840 bytes of it within minutes on the fleet's own leaf
-    (docs/decisions.md, decision 5). This host is the one friends dial for a subscription,
+    (docs/decisions.md, decision 5). This host is the one users dial for a subscription,
     so its firewall log is a list of who asked for a config and when.
 
     Checked, never changed: turning it off belongs to ``scripts/node-bootstrap.sh``, which

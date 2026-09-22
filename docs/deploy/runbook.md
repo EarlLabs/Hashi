@@ -17,7 +17,7 @@ Every command below is idempotent — re-running is always safe.
 | | Boxes | What it proves | What it costs you |
 |---|---|---|---|
 | **A — one box** | 1 abroad | the whole pipeline: panel → SSH push → subscription link → a stock client connects | nothing about the Russian topology, and Reality cannot have port 443 |
-| **B — two boxes** | 1 in RU (entry + control plane), 1 abroad (leaf) | the charter's real topology: friends dial the entry, traffic leaves from the leaf | your panel and your friend-facing transport fight over 443, and `HASHI_SECRET_KEY` ends up on the host most likely to be seized |
+| **B — two boxes** | 1 in RU (entry + control plane), 1 abroad (leaf) | the charter's real topology: users dial the entry, traffic leaves from the leaf | your panel and your user-facing transport fight over 443, and `HASHI_SECRET_KEY` ends up on the host most likely to be seized |
 | **C — three boxes** | control plane, entry in RU, leaf abroad | the same, with no compromise | one more rental |
 
 **Shape A is the right first run.** It is the cheapest way to find out whether the images
@@ -27,7 +27,7 @@ actually live in.
 **And a shape is not a choice you make once.** Going from the box you started with to the
 charter's topology has a section of its own — *Growing out of Shape A*, below — because
 the obvious way to read Shape B as a migration is the way that destroys every credential
-your friends are connecting on today.
+your users are connecting on today.
 
 None of the three proves the charter's first success criterion. "Survives a mobile
 whitelist shutdown" is a field observation on a real Russian network, made with your own
@@ -64,7 +64,7 @@ Both secrets are generated here and nowhere else, and that is not a style prefer
   operator, a lockout is a denial-of-service against the one person who needs the panel
   during an emergency). Length is the whole defence. Use far more than twelve.
 - `panel-bootstrap.sh` **refuses to generate `HASHI_SECRET_KEY` on the host it
-  installs.** That key decrypts every friend's credential and every node's private key.
+  installs.** That key decrypts every user's credential and every node's private key.
   If the panel sits on the Russian entry node, a key generated there would live on the
   machine most likely to be seized, beside the data it opens.
 
@@ -170,11 +170,11 @@ one container:
 
 | site | serves | reachable from |
 |---|---|---|
-| public — `HASHI_PUBLIC_HOST` on 80/443 | `/sub/*`, and a redirect to https | anywhere, which is the point: a friend refreshes their config from inside Russia at the moment a node was blocked |
+| public — `HASHI_PUBLIC_HOST` on 80/443 | `/sub/*`, and a redirect to https | anywhere, which is the point: a user refreshes their config from inside Russia at the moment a node was blocked |
 | private — `HASHI_PRIVATE_HOST` on `HASHI_PRIVATE_PORT` | `/panel/*`, `/api/*`, `/static/*` | the management tunnel, and loopback |
 
 Everything a site does not serve is `404`, with no body and nothing that says the other
-site exists. The console holds every node key and every friend credential, and there is
+site exists. The console holds every node key and every user credential, and there is
 deliberately **no lockout on repeated failed logins** (`control/app/auth.py`, and it is a
 recorded decision rather than an oversight) — so on a public address, password length was
 the entire defence. This is what replaces it.
@@ -204,7 +204,7 @@ Two consequences worth knowing, neither of them a reason to change the value:
   click through TLS warnings on the one surface that must never be impersonated.
 - **`HASHI_PUBLIC_HOST` must be a name with a real DNS record, never a bare address.** A
   public CA cannot issue for an IP, so Caddy falls back to its own CA and every stock
-  client refuses the certificate — `/sub/{token}` then fails for every friend while
+  client refuses the certificate — `/sub/{token}` then fails for every user while
   nothing on the host looks wrong. That is a fact about certificates rather than about
   SNI, and no setting here repairs it.
 
@@ -562,7 +562,7 @@ open the whole time.
   daemon, the clock and the kernel are all still yours. "Ready" here means ready to be
   driven by the control plane, and nothing wider.
 - **It proves nothing about reachability.** Its checks ask *this host* questions and never
-  send a packet anywhere. Whether a friend inside Russia can reach this node is a field
+  send a packet anywhere. Whether a user inside Russia can reach this node is a field
   observation on a real network, and no run of this script is evidence for it.
 - **Its ufw log sweep is not a cleanup.** On a host that had already logged, rsyslog,
   `kern.log` and the kernel journal hold the same lines, and nothing done on the host
@@ -636,7 +636,7 @@ public hostname (*Reaching the panel*):
    `~/.ssh/hashi-node`.
 2. **Enable a transport: `amneziawg` on UDP 51820.** Right here it is the right choice,
    because this box dials no hop. Its plain cousin is not offered — see *What to give an
-   entry node's friends instead* for what was measured. Read *The one combination that
+   entry node's users instead* for what was measured. Read *The one combination that
    will not render* before you make it the entry end of one: once this box dials a hop,
    this row is what the hop form refuses. The form asks one more
    thing for this family — **how many users this row may hand an address to**, counted
@@ -644,12 +644,12 @@ public hostname (*Reaching the panel*):
    today's: the number is a ceiling, raising it later is a resize, and the box says how
    many people it is being measured against.
 3. **Apply.** The node is serving at this point and nobody is on it yet.
-4. **Add a friend**, open their subscription link, load it into a stock client. The
+4. **Add a user**, open their subscription link, load it into a stock client. The
    WireGuard family is a config *file* rather than a URI, so it is the
    `?format=client-config-file` form of that link that carries it — the plain link is
    empty on a box that offers only `amneziawg`, and empty is not an error.
 5. **Apply again.** This is the step an acceptance walk had to work out for itself, and
-   the one that costs a friend an evening: adding a user changes what the panel *would*
+   the one that costs a user an evening: adding a user changes what the panel *would*
    push and touches no host. Their configuration file is complete and correct the moment
    it is issued — their own address, the node's real public key — while the node holds no
    peer for them and their client handshakes into nothing. The panel says so now: the
@@ -676,7 +676,7 @@ Two data-plane containers on one host, in two compose projects (`hashi` and
 ## Shape B — two boxes
 
 Box **E** in Russia: control plane **and** entry node. Box **L** abroad: leaf node.
-Friends only ever hold E's address; a blocked leaf is replaced by re-pointing one hop,
+Users only ever hold E's address; a blocked leaf is replaced by re-pointing one hop,
 with nobody touching their device.
 
 Everything from Shape A applies to box E, plus:
@@ -686,7 +686,7 @@ Everything from Shape A applies to box E, plus:
    (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
    from E). Give **E** a `resolver` as you register it: E dials a hop, and such a node does
    not render without one (*A node that dials a hop needs a resolver*, below).
-3. Enable a **friend-facing** transport on E — `vless-reality` unless you have a reason
+3. Enable a **user-facing** transport on E — `vless-reality` unless you have a reason
    for the other one. E dials a hop, so it must be a transport the table in *The one
    combination that will not render* (below) marks yes for a node with a hop; the panel
    refuses a kernel tunnel here, in whichever order you build the two.
@@ -698,7 +698,7 @@ Everything from Shape A applies to box E, plus:
 ### The two things shape B costs you
 
 **Port 443 is contested.** Caddy owns 443/TCP on box E for the panel, so the
-friend-facing transport on E cannot be Reality on 443. Either put Reality on another
+user-facing transport on E cannot be Reality on 443. Either put Reality on another
 port and accept the fingerprint cost, or move to shape C.
 
 **Your secret key sits in Russia.** The charter's condition for putting the database and
@@ -717,7 +717,7 @@ node. Nothing is contested and nothing is co-located.
 | Box | Runs | Inbound | Outbound |
 |---|---|---|---|
 | **C** control plane | Postgres, control, Caddy | 22/tcp, 80/tcp, 443/tcp | 22/tcp to E and L |
-| **E** entry (RU) | one friend-facing transport, one hop end (dials) | 22/tcp from C, the friend port | the hop's UDP port to L |
+| **E** entry (RU) | one user-facing transport, one hop end (dials) | 22/tcp from C, the user port | the hop's UDP port to L |
 | **L** leaf (abroad) | one hop end (listens) | 22/tcp from C, the hop's UDP port from E | — |
 
 1. Bootstrap the control plane on **C** (the Shape A control-plane block, unchanged).
@@ -733,12 +733,12 @@ node. Nothing is contested and nothing is co-located.
    it (*A node that dials a hop needs a resolver*).
 3. Enable **`vless-reality` on E, port 443** — free here, because the panel is on another
    box. Give it a `decoy_host` of your own choosing. A VLESS transport is not merely
-   convenient here: E dials a hop, and that is the only kind of friend-facing transport
+   convenient here: E dials a hop, and that is the only kind of user-facing transport
    such a node can render at all (*The one combination that will not render*).
 4. Build the hop: entry = E, leaf = L, transport = `amneziawg`.
 5. Apply both nodes. Until you do, the hop exists only in the database.
-6. Add friends. Their subscription contains E and never L: a hop is never granted to a
-   friend and never appears in a subscription, because a friend holding the entry↔leaf
+6. Add users. Their subscription contains E and never L: a hop is never granted to a
+   user and never appears in a subscription, because a user holding the entry↔leaf
    tunnel would route straight past the entry the topology exists to hide behind.
 7. **Apply E again**, for the reason Shape A's step 5 gives: a user added since the last
    apply is a change no host has been told about, and their link is complete and correct
@@ -746,7 +746,7 @@ node. Nothing is contested and nothing is co-located.
 
 Where to put box C is a real decision, not a formality. Outside Russia, it is out of
 seizure range but the delivery endpoint may be unreachable from a Russian network under
-whitelist mode — exactly when a friend needs to refresh a config. Inside Russia, it is
+whitelist mode — exactly when a user needs to refresh a config. Inside Russia, it is
 reachable but carries the problem described under shape B. The repository serves the
 panel and the delivery endpoint from one Caddy site, so today you choose one location for
 both.
@@ -757,38 +757,38 @@ both.
 
 **This is the move most operators actually make, and Shape B read literally is not it.**
 You ran Shape A because this page calls it the right first run: one box abroad, carrying
-the control plane and a node, with `amneziawg` for your friends. Months later you rent a
+the control plane and a node, with `amneziawg` for your users. Months later you rent a
 Russian box, and the charter's topology becomes buildable for the first time. The shapes
 above are a choice between three fresh builds; this is the one migration between them,
 and it is written down because the obvious reading of it is expensive.
 
 **Do not make the box you already have the entry.** Giving a hop to a node that already
-offers its friends a kernel tunnel is refused at the hop form — *no hop was established —
+offers its users a kernel tunnel is refused at the hop form — *no hop was established —
 `E` already offers `amneziawg` to its users …* — and correctly, because that node could
 never render again (*The one combination that will not render*, below). The refusal names
-two ways out, and **the one you will reach for is the one that costs you every friend on
+two ways out, and **the one you will reach for is the one that costs you every user on
 that box.** Removal is what destroys material, and the panel says so before you confirm:
 
 > `amneziawg` removed from `E` — *out of every user's link at their next refresh, and the
 > material minted for it is gone with it.*
 
-Every friend on that box then loses the credential their device is connecting on, and the
+Every user on that box then loses the credential their device is connecting on, and the
 repair is to reach all of them with a new configuration — over whatever channel you have,
 on the day you have just taken their working one away.
 
 **So point the move the other way.** The box you already have becomes the **leaf**. The
-box you just rented becomes the **entry**. The tunnel your friends are connecting on is on
+box you just rented becomes the **entry**. The tunnel your users are connecting on is on
 the box that does not move, so nothing they hold has to change and nobody is cut off at
 any point of this.
 
 | | before | after |
 |---|---|---|
-| the box you have, abroad | control plane, and `amneziawg` for your friends | both of those, unchanged, **plus the leaf end of the hop** |
-| the box you rent, in Russia | — | the entry: a friend-facing VLESS transport, and it dials the hop |
+| the box you have, abroad | control plane, and `amneziawg` for your users | both of those, unchanged, **plus the leaf end of the hop** |
+| the box you rent, in Russia | — | the entry: a user-facing VLESS transport, and it dials the hop |
 
-**A leaf carrying both is supported, not a workaround.** A leaf's friends exit by the
+**A leaf carrying both is supported, not a workaround.** A leaf's users exit by the
 leaf's own route — that is route B, and a hop landing on the same box does not touch it —
-so one node holds `amneziawg` for its friends and `amneziawg` for the leaf end of the hop,
+so one node holds `amneziawg` for its users and `amneziawg` for the leaf end of the hop,
 both enabled, and every user on the first row goes on connecting. Two rows on one node
 need two ports and two ranges of their own (*Rules that are not optional*, below); nothing
 else about them collides, and neither has to be taken away for the other to exist.
@@ -797,9 +797,9 @@ else about them collides, and neither has to be taken away for the other to exis
    whichever end a node turns out to be — and register it. Give it a `resolver` as you
    register it: it is about to dial a hop, and such a node does not render without one
    (*A node that dials a hop needs a resolver*, below).
-2. **Enable a friend-facing transport on it** — `vless-reality` unless you have a reason
+2. **Enable a user-facing transport on it** — `vless-reality` unless you have a reason
    for the other one, with a `decoy_host` of your own choosing and never a shared one.
-   This box dials a hop, so it is the one node in your fleet whose friends may not be on
+   This box dials a hop, so it is the one node in your fleet whose users may not be on
    a kernel tunnel. Reality has the HTTPS port to itself here, unlike Shape A's box: the
    panel is not on this machine.
 3. **Build the hop** from the panel's hop form: entry = the box you rented, leaf = the
@@ -807,18 +807,18 @@ else about them collides, and neither has to be taken away for the other to exis
    so the hop's UDP port is opened on the firewall of the box you have been running for
    months, not on the new one.
 4. **Apply both nodes.** Until you do, the hop exists only in the database.
-5. **Nothing your friends already hold stops working.** Enabling that transport granted
-   every active friend material on it, so the new entry is in every subscription at the
+5. **Nothing your users already hold stops working.** Enabling that transport granted
+   every active user material on it, so the new entry is in every subscription at the
    next refresh — on the *plain* link, since the VLESS pair is a URI list while the
    `amneziawg` they are connecting on is a config file (*The one combination that will
    not render*, below). The tunnel on their device is untouched. Taking the new way up
    is them loading that link into a client that speaks VLESS, once, at their own pace.
 
-**When you want everybody behind the entry, withdraw the leaf's friend-facing row —
+**When you want everybody behind the entry, withdraw the leaf's user-facing row —
 do not remove it.** Withdrawing takes it out of every user's link at their next refresh,
 leaves every credential minted, and is one press to undo if the new path disappoints you;
 apply the leaf afterwards, or the host goes on serving what it was last given. Two things
-to have done first: watched a friend's traffic actually come out of the entry, and given
+to have done first: watched a user's traffic actually come out of the entry, and given
 everyone still on the old tunnel time to load the new link, because this is the press that
 takes their working route away. Removal is the irreversible one and there is no reason at
 all to reach for it on this path.
@@ -826,7 +826,7 @@ all to reach for it on this path.
 **What this costs, and it is not what Shape B costs.** Your control plane stays on the box
 abroad, so `HASHI_SECRET_KEY` never travels to Russia and Shape B's charter problem never
 arises. What you take on instead is the other half of that same decision: your delivery
-endpoint is now outside Russia, and a friend inside it may be unable to refresh their
+endpoint is now outside Russia, and a user inside it may be unable to refresh their
 subscription at exactly the moment a whitelist shutdown makes them need to — the choice
 set out at the end of *Shape C*, above. The third box buys you out of both, and this path
 leaves you one rental from it: move the control plane and neither node moves.
@@ -835,8 +835,8 @@ leaves you one rental from it: move the control plane and neither node moves.
 
 ## The one combination that will not render
 
-**On a node that dials a hop, friends may not be on a kernel tunnel.** Following this
-runbook used to produce exactly that: `amneziawg` for box E's friends, because Shape A
+**On a node that dials a hop, users may not be on a kernel tunnel.** Following this
+runbook used to produce exactly that: `amneziawg` for box E's users, because Shape A
 names it, and `amneziawg` for the hop E dials, because the hop requires it.
 
 **The panel refuses it at both doors, before anything is written.** Enable such a
@@ -868,7 +868,7 @@ Nodes screen:
 > `amneziawg could not be rendered for this node — EgressNotRenderable:` … *A tunnel whose
 > packets this node's kernel routes cannot send them out through a different interface, so
 > they would leave by the node's own route instead — which is the silent failure the hop
-> exists to prevent. Give this node's friends a transport that terminates their connection
+> exists to prevent. Give this node's users a transport that terminates their connection
 > and re-originates it, or take the hop away.*
 
 **That banner is the only signal you get, and the node does not go `degraded`.** The
@@ -880,18 +880,18 @@ scanning the Nodes screen for something red finds nothing. Read the banner, and 
 node whose apply you cannot complete as one that is serving a configuration you did not
 choose. The way out is the one the doors name: take one of the two rows away.
 
-**That is a refusal, not a defect.** A wg-quick-family tunnel hands a friend's decrypted
+**That is a refusal, not a defect.** A wg-quick-family tunnel hands a user's decrypted
 packets to the entry's own routing table, and the only route this project renders for a
-hop is source-based, from the hop interface's own address. A friend's packets never match
+hop is source-based, from the hop interface's own address. A user's packets never match
 it, so they would leave by the entry's own route — an exit in the country the hop exists
 to leave, with every screen green. Refusing beats that (`docs/decisions.md`, decision 3).
-The **leaf** end of the same hop renders fine; it is the friend-facing side on the entry
+The **leaf** end of the same hop renders fine; it is the user-facing side on the entry
 that cannot.
 
-**What to give an entry node's friends instead.** A transport whose data plane
+**What to give an entry node's users instead.** A transport whose data plane
 *terminates* the connection and originates a new one, which is what the refusal asks for.
 In this image that is the VLESS pair, `vless-reality` and `vless-ws-tls`. Both are Xray,
-which forwards no packet in the kernel: it accepts the friend's connection and opens its
+which forwards no packet in the kernel: it accepts the user's connection and opens its
 own, and on a node with a hop that new connection is bound to the hop's near address. So
 it can only reach the internet through the hop, and while the hop is down it cannot be
 opened at all — fail closed, as a property of the rendered file rather than a rule someone
@@ -903,7 +903,7 @@ handshake, so give it a `decoy_host` of your own choosing and never a shared one
 nothing in this project puts them there — so it is the right answer only on a host where
 you already terminate TLS for a name you own.
 
-`amneziawg` stays exactly right for friends on a node with **no** hop: Shape A's single
+`amneziawg` stays exactly right for users on a node with **no** hop: Shape A's single
 box, and a leaf. There the same row renders a local exit, which is the shape a real client
 was measured carrying traffic on.
 
@@ -917,7 +917,7 @@ on the row, with the reason; the enable dialog simply does not list it.
 
 Every transport this image ships, and what each one may be asked to do:
 
-| transport | friends on a node with a hop | friends on a node with no hop | the entry→leaf hop |
+| transport | users on a node with a hop | users on a node with no hop | the entry→leaf hop |
 |---|---|---|---|
 | `vless-reality` | yes — Xray terminates the connection and originates its own | yes | no — a hop is two ends of one tunnel network that each need an address of their own, and this transport hands its consumers none: it identifies them by their material |
 | `vless-ws-tls` | yes, once a certificate and key are on the node | yes, on the same condition | no, for the same reason |
@@ -952,21 +952,21 @@ dials a hop, below. Stock GUI clients on phones and desktops resolve names thems
 never touch `resolvconf`; it is the operator testing from a shell who meets this, which is
 exactly who this page tells to *"load it into a stock client"*.
 
-**Do not answer it by deleting the `DNS =` line.** That line is what sends a friend's
+**Do not answer it by deleting the `DNS =` line.** That line is what sends a user's
 lookups through the tunnel; without it their device keeps asking a resolver it can no
 longer reach, and the tunnel that looked fixed resolves no names at all.
 
-**The two families are delivered differently, and you find that out before your friends
+**The two families are delivered differently, and you find that out before your users
 do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
-is a config file: the same token, `?format=client-config-file`, an archive. A friend whose
+is a config file: the same token, `?format=client-config-file`, an archive. A user whose
 node offers only AmneziaWG and whose client opens the plain link gets an empty document
 rather than an error — so hand them the `?format=` URL, and expect the plain link to carry
-entries again once that node's friends are on a VLESS transport.
+entries again once that node's users are on a VLESS transport.
 
 ### If you already built it the other way
 
 The way out is in the panel, and it is **removal** rather than withdrawal. Withdrawing the
-friend-facing `amneziawg` does stop the apply failing — a withdrawn row is not rendered at
+user-facing `amneziawg` does stop the apply failing — a withdrawn row is not rendered at
 all — but it leaves the row on the node still holding its listening port, its config name
 and its tunnel range, its users' material still minted for a transport that node can no
 longer render, and a trap for whoever offers it again: the same apply fails the same way.
@@ -976,11 +976,11 @@ Removing it takes the row, the material, the port, the name and the range.
    second one created carries a config name of its own — it reads `amneziawg
    (amneziawg-2)` — so the two cannot be confused. The hop end is the row whose standing
    begins *one end of a hop*, and it is drawn with no buttons at all.
-2. **remove** the friend-facing one, and read the dialog before you confirm: removal
+2. **remove** the user-facing one, and read the dialog before you confirm: removal
    destroys the material every user holds on that row and frees its port, its config name
    and its tunnel range, and it is the only action that does any of the three. `withdraw`
    beside it is the reversible one, and it is not what gets you out of this.
-3. **Enable a VLESS transport** for friends on that node, on a port nothing else there
+3. **Enable a VLESS transport** for users on that node, on a port nothing else there
    listens on.
 4. **Apply the node.** Removal does not push: until you apply, the host is still running
    the container the panel has stopped showing.
@@ -1005,7 +1005,7 @@ rm /opt/hashi/conf/THE_CONFIG_NAME.THE_EXTENSION # the name the panel showed on 
 `.conf`, because wg-quick takes the interface name from the file name and loads nothing
 else; the VLESS pair is written `.json`, because Xray reads JSON. So the file this
 section's own advice leaves behind — the `amneziawg` you removed — is a `.conf`, and the
-next one you orphan, once that node's friends are on a VLESS transport, is a `.json`
+next one you orphan, once that node's users are on a VLESS transport, is a `.json`
 holding that transport's node key, its secret path and every user's id. Both are the same
 kind of residue and both are covered by this exception. `ls` first, and go by the config
 name the row carried.
@@ -1023,10 +1023,10 @@ tunnel to an exit that is no longer configured.
 
 ## A node that dials a hop needs a resolver
 
-**On a node that dials a hop, a friend's destination names are looked up through the hop,
+**On a node that dials a hop, a user's destination names are looked up through the hop,
 at a resolver named on the node's record — never by the host's own.** Before this, the exit
 had moved abroad and the lookups had not: the proxy asked the entry host's resolver, inside
-the network the hop exists to leave, one query per site a friend visited
+the network the hop exists to leave, one query per site a user visited
 (`docs/decisions.md`, 2026-09-09). Whichever resolver you name still sees the names — from
 the far end of the hop rather than from the entry's network, which is the exposure that
 decision accepts knowingly.
@@ -1036,14 +1036,14 @@ in a banner on the Nodes screen:
 
 > `vless-reality could not be rendered for this node — ResolverMissing:` *this node's
 > traffic leaves through a hop, and its record names no resolver for the destinations its
-> friends ask for. Without one they would be looked up by this host's own resolver — on
+> users ask for. Without one they would be looked up by this host's own resolver — on
 > the near side of the hop, inside the network the hop exists to leave — while the traffic
 > itself exits at the far end. Nothing is rendered until the node has one: an IPv4 address
 > the far end of the hop can reach.*
 
 Like the refusal above, it happens while the configuration is being rendered, so the node
 does not go `degraded`: an entry that was already `active` **stays active on whatever its
-last successful apply left** — its friends' lookups still going to the host's resolver — and
+last successful apply left** — its users' lookups still going to the host's resolver — and
 a user you revoke **keeps working there**, because a revocation's re-push is a render too.
 The revocation's banner says so, naming the node.
 
@@ -1068,6 +1068,84 @@ place, and its configuration does not change.
 
 ---
 
+## Upgrading an install that predates the rename
+
+**The person who uses hashi is a `user`. They used to be a `friend`** — in the API, in
+the panel's routes and in the database — **and this release moves all three at once.**
+Nothing on anybody's device changes: a subscription URL issued before this is
+byte-identical after it, `/sub/{token}` is untouched, and no token is reissued. What
+does change is what you can call from a script. **Anything scripted against the old
+paths stops working** the day this lands. There is no alias, no redirect and no
+deprecation window — the old paths answer `404`.
+
+| was | is |
+|---|---|
+| `GET` / `POST /api/friends` | `GET` / `POST /api/users` |
+| `GET /api/friends/{friend_id}/subscription` | `GET /api/users/{user_id}/subscription` |
+| `POST /api/friends/{friend_id}/revoke` | `POST /api/users/{user_id}/revoke` |
+| `/panel/friends`, `/panel/friends/table`, `/panel/friends/new` | `/panel/users`, `/panel/users/table`, `/panel/users/new` |
+| `/panel/friends/{friend_id}/subscription` | `/panel/users/{user_id}/subscription` |
+| `/panel/friends/{friend_id}/revoke` | `/panel/users/{user_id}/revoke` |
+
+**And one field moved inside a body that still parses.** A revocation now answers
+`user_id` where it answered `friend_id`. A consumer reading the old key gets `None`
+rather than an error — nothing raises, nothing is logged, and whatever it was going to do
+with that id it now does to nobody. That is worse than a `404`, because a `404` is
+visible. Grep your own tooling for `friend_id` before you deploy rather than after.
+
+### The two migrations, and how to go back
+
+The container applies them itself: `deploy/docker/entrypoint.sh` runs `alembic upgrade
+head` on every start, so bringing the new image up **is** the upgrade. Two revisions land.
+
+- **`0008` renames, and only renames.** The table `friends` becomes `users`, both
+  `friend_id` columns become `user_id`, and the indexes and constraints that carried the
+  old name follow. No row is read or written and no encrypted column is opened, so it
+  cannot fail on data and it cannot touch a token.
+- **`0009` rewrites two stored words an operator reads back.** A transport's `purpose`
+  goes `friends` → `users`, and two audit actions go `friend-added` / `friend-revoked` →
+  `user-added` / `user-revoked`. Any other value in either column is left exactly as
+  found. **`purpose` is handed back verbatim by the API**, so a consumer matching on the
+  literal `friends` silently matches nothing from here on.
+
+Both reverse exactly, and the round trip has been run against a copy of real data. To go
+back, on the control-plane box:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml exec control sh
+# --env-file is not optional: without it every ${VAR} becomes an empty string and
+# nothing says so.
+
+# inside the container. alembic.ini ships inside the installed package, which is how
+# the entrypoint finds it too — there is no checkout in that image to point at.
+INI=$(python -c 'import control, pathlib; print(pathlib.Path(control.__file__).parent / "alembic.ini")')
+alembic -c "$INI" downgrade 0007
+alembic -c "$INI" current
+```
+
+**A schema rollback does not survive a restart, and this is the part that surprises
+people.** That `alembic upgrade head` in the entrypoint is unconditional and runs on
+*every* boot, so a database rolled back to `0007` under the new image is carried forward
+again by the next `compose up`, the next `restart` and the next reboot of the host —
+with nothing to read but two lines in the container log. **Roll the image back first,
+then the schema**, in that order, and check `select version_num from alembic_version`
+afterwards rather than assuming.
+
+Ask the same question *before* you upgrade. Because that upgrade is unconditional and
+silent, a control plane sits at whatever revision its image last carried — this project's
+own was **seven revisions behind** its repository when it was measured, having been up
+since long before these two existed. The jump one container start makes is from what
+`alembic_version` actually says to head, which may be a good deal more than the two
+migrations above.
+
+**Take a backup first** (*Backups*, below), and keep `HASHI_SECRET_KEY` where the dump is
+not. A restore under the wrong key is not a broken migration and must not be read as one:
+every screen that loads a user or a node answers *"The data is intact; the key is wrong.
+Nothing has been changed."*, while a migration fault fails at the driver first, on an
+undefined table or column.
+
+---
+
 ## Rules that are not optional
 
 - **Never plain WireGuard on the entry→leaf hop.** That hop crosses the border by
@@ -1075,7 +1153,7 @@ place, and its configuration does not change.
   1. Use AmneziaWG or another obfuscated transport. This one is enforced rather than
   advised: the hop form offers only the transports that can carry a hop at all, which
   in this image is `amneziawg` and nothing else.
-- **Never present plain WireGuard to a friend as something that works from a Russian
+- **Never present plain WireGuard to a user as something that works from a Russian
   mobile network.** TSPU protocol-blocks it. It works everywhere else.
 - **A decoy host is chosen per node and never shared.** There is no project default and
   there must never be one — if every node borrows the same handshake, the fleet becomes
@@ -1098,20 +1176,20 @@ place, and its configuration does not change.
   Overlapping is not only the same range typed twice: a range you widen on one row
   swallows the narrower one beside it, and that is the pair written by accident. This
   is the rule that meets you when you follow Shape A and then the hop it mandates on
-  the same box — friends and hop are two `amneziawg` rows on that node, and they need
+  the same box — users and hop are two `amneziawg` rows on that node, and they need
   two ranges as much as they need two ports. Nothing else collides. A **disabled** row
   still holds all three, because freeing them would move the collision to the moment
   somebody switches it back on; removing the row is the only thing that gives them
   back.
-- **A friend-facing kernel tunnel and the hop a node DIALS still cannot share that
+- **A user-facing kernel tunnel and the hop a node DIALS still cannot share that
   node**, which is a different rule and the one that bites — *The one combination that
   will not render*, above. **Which end of the hop it is decides the answer**, so this
   rule is never absolute: on the **leaf** end the same two rows are ordinary and
-  supported. A leaf's friends exit by the leaf's own route, a hop landing there does not
-  change that, and one box carries `amneziawg` for its friends and `amneziawg` for the
+  supported. A leaf's users exit by the leaf's own route, a hop landing there does not
+  change that, and one box carries `amneziawg` for its users and `amneziawg` for the
   leaf end of the hop with both enabled — two ports and two ranges apart, exactly as the
   rule above requires. It is the node that dials the hop that may not also hand one to
-  its friends. That asymmetry is what makes *Growing out of Shape A*, above, possible at
+  its users. That asymmetry is what makes *Growing out of Shape A*, above, possible at
   all.
 - **A WireGuard-family row is told how many users it may serve, and the number is a
   ceiling.** AmneziaWG and plain WireGuard give every user their own address inside the
@@ -1125,7 +1203,7 @@ place, and its configuration does not change.
   the serving state. Resize on **Keys & configs → replace params**; there is no other
   action for it. VLESS transports identify each user by their own material and have no
   pool at all.
-  *Until M17 these rows minted one shared address, so the second friend on a node
+  *Until M17 these rows minted one shared address, so the second user on a node
   collided on `AllowedIPs` and the render refused, loudly — backlog item 33. A row
   enabled before that upgrade has no size, hands out exactly the one address it renders
   today, and is repaired by replacing its parameters with a size: the address the working

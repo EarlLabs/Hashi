@@ -257,8 +257,8 @@ def test_the_host_config_has_no_forwarding_and_no_nat(generated) -> None:
 def test_a_device_is_routed_to_the_panel_host_and_not_to_the_internet(generated) -> None:
     """The client's ``AllowedIPs`` is the host's tunnel address, never a default route.
 
-    The same field, the opposite answer from a friend's exit config, because the
-    consumer is different: a friend wants everything to leave through the node, and
+    The same field, the opposite answer from a user's exit config, because the
+    consumer is different: a user wants everything to leave through the node, and
     the owner wants exactly one host reachable. A default route here would send the
     owner's whole internet into a host with no forwarding — which fails silently.
     """

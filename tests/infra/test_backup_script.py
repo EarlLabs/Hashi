@@ -48,7 +48,7 @@ def test_it_fails_the_whole_run_on_any_error(script: str) -> None:
 
 
 def test_the_dump_is_not_world_readable(script: str) -> None:
-    """It holds every node's credentials and every friend's token, encrypted.
+    """It holds every node's credentials and every user's token, encrypted.
 
     Encrypted at rest is not a reason to leave the file readable by every account on
     the host — it is one layer, and the charter's threat model includes a host that is
@@ -72,7 +72,7 @@ def test_a_restore_is_all_or_nothing(script: str) -> None:
     """``ON_ERROR_STOP`` and ``--single-transaction``.
 
     Without both, a failed restore leaves a half-populated database that looks
-    restored: some friends back, some not, and no error anywhere.
+    restored: some users back, some not, and no error anywhere.
     """
     assert "ON_ERROR_STOP=on" in script
     assert "--single-transaction" in script
