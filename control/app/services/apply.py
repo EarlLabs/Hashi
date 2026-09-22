@@ -545,7 +545,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             # A revoked friend's rows are deleted rather than flagged, so this is a
             # belt-and-braces filter rather than the mechanism — see
             # services/friends.py:revoke for why deletion is the real guarantee.
-            if row.friend.is_active
+            if row.user.is_active
         ]
         # Sorted so the rendered config is byte-stable regardless of row order,
         # which is what makes the applied digest a drift signal rather than noise.

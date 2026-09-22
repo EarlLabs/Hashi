@@ -1,9 +1,9 @@
-"""Friends, their subscription tokens, and their per-node credentials.
+"""Users, their subscription tokens, and their per-node credentials.
 
-WHAT: ``Friend`` (a person the operator gave access to), ``Subscription`` (the one
+WHAT: ``User`` (a person the operator gave access to), ``Subscription`` (the one
       URL they hold) and ``Credential`` (their material on one node × transport).
 WHY:  the three-table split is what makes the charter's sixth criterion —
-      revocation is total — expressible rather than aspirational. A friend's access
+      revocation is total — expressible rather than aspirational. A user's access
       is not one secret in one place: it is one credential per node per transport,
       so revoking has a definite meaning ("every row, and re-render every node
       those rows were on") and a definite test.
@@ -22,10 +22,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from control.app.models.base import Base, EncryptedText, TimestampMixin, new_id
 
 
-class Friend(Base, TimestampMixin):
+class User(Base, TimestampMixin):
     """One person with access. Identified by a nickname the operator chose."""
 
-    __tablename__ = "friends"
+    __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
 
@@ -42,10 +42,10 @@ class Friend(Base, TimestampMixin):
     )
 
     subscriptions: Mapped[list[Subscription]] = relationship(
-        back_populates="friend", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
     credentials: Mapped[list[Credential]] = relationship(
-        back_populates="friend", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
 
     @property
@@ -54,13 +54,13 @@ class Friend(Base, TimestampMixin):
 
 
 class Subscription(Base, TimestampMixin):
-    """The single URL a friend holds — the only artefact they ever receive."""
+    """The single URL a user holds — the only artefact they ever receive."""
 
     __tablename__ = "subscriptions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    friend_id: Mapped[str] = mapped_column(
-        ForeignKey("friends.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # The bearer credential, in the URL path. Indexed and unique because every
@@ -72,7 +72,7 @@ class Subscription(Base, TimestampMixin):
     # the user chose and reused elsewhere, it is 32+ bytes of our own entropy, so
     # the offline-cracking risk a hash defends against does not exist. Meanwhile
     # storing it in clear is what lets the operator re-display a subscription URL
-    # to a friend who lost it, without re-issuing and breaking their client.
+    # to a user who lost it, without re-issuing and breaking their client.
     # Confidentiality comes from the row being unreachable without operator auth,
     # and from the column being unreadable in a dump — which is why it is
     # EncryptedText and why lookup goes through a separate indexed digest.
@@ -87,26 +87,26 @@ class Subscription(Base, TimestampMixin):
         String(64), unique=True, nullable=False, index=True
     )
 
-    # Revoking one subscription without revoking the friend is a real operation:
-    # a friend whose phone was taken gets a new URL, not a new identity.
+    # Revoking one subscription without revoking the user is a real operation:
+    # a user whose phone was taken gets a new URL, not a new identity.
     revoked_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
-    friend: Mapped[Friend] = relationship(back_populates="subscriptions", lazy="joined")
+    user: Mapped[User] = relationship(back_populates="subscriptions", lazy="joined")
 
     @property
     def is_active(self) -> bool:
-        """Live only if neither the subscription nor the friend was revoked."""
-        return self.revoked_at is None and self.friend.revoked_at is None
+        """Live only if neither the subscription nor the user was revoked."""
+        return self.revoked_at is None and self.user.revoked_at is None
 
 
 class Credential(Base, TimestampMixin):
-    """One friend's material for one node × one transport."""
+    """One user's material for one node × one transport."""
 
     __tablename__ = "credentials"
     __table_args__ = (
-        UniqueConstraint("friend_id", "node_transport_id", name="uq_friend_node_transport"),
+        UniqueConstraint("user_id", "node_transport_id", name="uq_user_node_transport"),
         # ONE ADDRESS PER PERSON INSIDE ONE TUNNEL — M17, and this is the rule the
         # database holds rather than a service remembering it. On a WireGuard server
         # ``AllowedIPs`` is simultaneously the authorisation list and the routing table,
@@ -139,14 +139,14 @@ class Credential(Base, TimestampMixin):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    friend_id: Mapped[str] = mapped_column(
-        ForeignKey("friends.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     node_transport_id: Mapped[str] = mapped_column(
         ForeignKey("node_transports.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    # The transport's opaque identity for this friend on this node — a VLESS UUID,
+    # The transport's opaque identity for this user on this node — a VLESS UUID,
     # for instance. `control` never interprets it. Encrypted because possessing it
     # IS access: it is the credential the node authenticates.
     subject: Mapped[str] = mapped_column(EncryptedText(512), nullable=False)
@@ -194,7 +194,7 @@ class Credential(Base, TimestampMixin):
     # address, which is the small private range every one of them is in.
     tunnel_address_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    friend: Mapped[Friend] = relationship(back_populates="credentials", lazy="joined")
+    user: Mapped[User] = relationship(back_populates="credentials", lazy="joined")
     node_transport: Mapped[NodeTransport] = relationship(  # noqa: F821
         back_populates="credentials", lazy="joined"
     )

@@ -58,7 +58,7 @@ def record(
     so they are written here and asserted by the zone's tests:
 
     * **A label is a value read off an inventory row, copied whole** — ``Node.name``,
-      ``Friend.nickname``, a transport name, a ``NodeState`` — and never composed from
+      ``User.nickname``, a transport name, a ``NodeState`` — and never composed from
       one. ``f"{node.name}: {node.state_detail}"`` satisfies every other rule on this
       table and is exactly the hole this closes: ``state_detail`` is 500 characters of
       free text that can carry a remote host's words, and it sits one attribute away

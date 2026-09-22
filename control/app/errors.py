@@ -247,7 +247,7 @@ class NoExitThroughTheHop(Conflict):
 
     M25. A node that dials a hop gives its friends ``Egress.HOP`` — out through the hop
     and nowhere else — and only a transport that terminates their connection and
-    re-originates it can honour that (``TransportMeta.serves_friends_through_a_hop``). A
+    re-originates it can honour that (``TransportMeta.serves_users_through_a_hop``). A
     kernel tunnel hands what it decrypts to the node's own routing table, and the only way
     out this project renders for a hop is a source route from the node's own address,
     which a friend's packets do not carry. ``edge`` refuses to render it; this is the same

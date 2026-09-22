@@ -22,7 +22,7 @@ HOW:  real Postgres, real encryption, the real services, through the same API an
       what it refuses, and what it has written when it refuses.
 
       Every transport question is asked of the registry —
-      ``TransportMeta.serves_friends_through_a_hop``, which is derived from what a package
+      ``TransportMeta.serves_users_through_a_hop``, which is derived from what a package
       declares its data plane does — so nothing here names a protocol and a transport
       added later is covered by arriving rather than by being listed.
 """
@@ -45,12 +45,12 @@ from edge.registry import discover, profile
 KERNEL_TUNNELS = sorted(
     name
     for name, meta in discover().items()
-    if not meta.serves_friends_through_a_hop and meta.subscription_formats
+    if not meta.serves_users_through_a_hop and meta.subscription_formats
 )
 RE_ORIGINATING = sorted(
     name
     for name, meta in discover().items()
-    if meta.serves_friends_through_a_hop and meta.subscription_formats
+    if meta.serves_users_through_a_hop and meta.subscription_formats
 )
 
 # The transport the hop itself is built over, asked of the declaration for the same
@@ -202,7 +202,7 @@ def test_this_image_ships_both_kinds_of_data_plane() -> None:
     difference is for the declaration to stop telling them apart — at which point one of
     these lists empties and a file guarded by a skip reports itself as inapplicable
     instead of as broken. That was measured while writing this: forcing
-    ``serves_friends_through_a_hop`` to ``True`` turned every test here from red to
+    ``serves_users_through_a_hop`` to ``True`` turned every test here from red to
     skipped.
 
     So the premise fails loudly, and the parametrised tests below empty out beside it.
@@ -454,7 +454,7 @@ async def test_the_hop_itself_is_built_over_a_kernel_tunnel_and_always_was(
 ) -> None:
     """The one thing this image's kernel tunnel is uniquely able to do.
 
-    ``hop_expressible`` and ``serves_friends_through_a_hop`` are opposite answers about
+    ``hop_expressible`` and ``serves_users_through_a_hop`` are opposite answers about
     the same transport, and this is the half that would be lost by conflating them: the
     hop is two ends of one tunnel network, each holding an address of its own, and a
     userspace proxy has no second end to agree with. The owner's live hop is this row.
@@ -465,7 +465,7 @@ async def test_the_hop_itself_is_built_over_a_kernel_tunnel_and_always_was(
     established = await hop(client, entry, leaf, HOP_TRANSPORTS[0])
 
     assert established.status_code == 201, established.text
-    assert not discover()[HOP_TRANSPORTS[0]].serves_friends_through_a_hop
+    assert not discover()[HOP_TRANSPORTS[0]].serves_users_through_a_hop
     ends = await nodes.friend_facing_on(session, entry)
     assert ends == [], "a hop end was written as something friends are offered"
 

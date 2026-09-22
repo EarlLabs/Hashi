@@ -422,7 +422,7 @@ async def establish_hop(
     # a row nobody is being served on still stands in the way (M25's second walk).
     for offer in await nodes.friend_facing_on(session, entry_node.id):
         offered = installed.get(offer.transport_name)
-        if offered is not None and not offered.serves_friends_through_a_hop:
+        if offered is not None and not offered.serves_users_through_a_hop:
             refusal = (
                 transports.NO_HOP_OVER_WHAT_IT_OFFERS
                 if offer.enabled

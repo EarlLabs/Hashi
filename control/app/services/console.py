@@ -47,12 +47,12 @@ from control.app.errors import NotFound
 from control.app.models import (
     AuditAction,
     Credential,
-    Friend,
     Node,
     NodeState,
     NodeTransport,
     Subscription,
     TransportPurpose,
+    User,
 )
 from control.app.services import (
     addresses,
@@ -2329,7 +2329,7 @@ def _plural(count: int, noun: str, tail: str) -> str:
 
 
 async def subscription_url(
-    session: AsyncSession, base_url: str, friend: Friend
+    session: AsyncSession, base_url: str, friend: User
 ) -> str | None:
     """The one URL a friend holds, or ``None`` if they have no live subscription.
 
@@ -2345,7 +2345,7 @@ async def subscription_url(
     MissingGreenlet crash. The same trap is documented in services/friends.py.
     """
     result = await session.execute(
-        select(Subscription).where(Subscription.friend_id == friend.id)
+        select(Subscription).where(Subscription.user_id == friend.id)
     )
     live = [row for row in result.scalars().unique() if row.is_active]
     return f"{base_url}/sub/{live[0].token}" if live else None

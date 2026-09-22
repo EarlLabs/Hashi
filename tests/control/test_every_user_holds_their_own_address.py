@@ -33,10 +33,10 @@ from control.app.errors import Conflict, NodeOperationFailed
 from control.app.models import (
     AuditEntry,
     Credential,
-    Friend,
     NodeState,
     NodeTransport,
     TransportPurpose,
+    User,
 )
 from control.app.models.base import secret_box
 from control.app.panel import routes as panel_routes
@@ -284,7 +284,7 @@ async def test_the_address_a_device_holds_is_the_one_its_node_routes(
     held = set()
     for nickname in ("cara", "dima"):
         friend = (
-            await session.execute(select(Friend).where(Friend.nickname == nickname))
+            await session.execute(select(User).where(User.nickname == nickname))
         ).scalars().one()
         files = await subscriptions.config_files_for(session, friend)
         assert len(files) == 1, files
@@ -341,7 +341,7 @@ async def test_a_row_enabled_before_this_milestone_renders_the_same_bytes(
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
     assert (await add_user(client, "solo")).status_code == 201
     solo = (
-        await session.execute(select(Friend).where(Friend.nickname == "solo"))
+        await session.execute(select(User).where(User.nickname == "solo"))
     ).scalars().one()
 
     async def both_files() -> str:
@@ -409,7 +409,7 @@ async def test_a_row_from_before_this_milestone_with_two_users_still_refuses(
 
     # And nothing of that third person exists.
     assert (
-        await session.execute(select(Friend).where(Friend.nickname == "third"))
+        await session.execute(select(User).where(User.nickname == "third"))
     ).scalars().first() is None
 
 
@@ -495,7 +495,7 @@ async def test_adding_a_user_a_pool_cannot_hold_writes_nothing(
 
     session.expire_all()
     assert (
-        await session.execute(select(Friend).where(Friend.nickname == "one-too-many"))
+        await session.execute(select(User).where(User.nickname == "one-too-many"))
     ).scalars().first() is None
     assert len(
         (await session.execute(select(Credential))).scalars().unique().all()
@@ -641,12 +641,12 @@ async def test_two_changes_reaching_one_address_end_in_a_refusal(
         if box.address_digest(row.id, address) not in stale
     )
     async for other in app.state.database.session():
-        rival = Friend(nickname="rival")
+        rival = User(nickname="rival")
         other.add(rival)
         await other.flush()
         other.add(
             Credential(
-                friend_id=rival.id,
+                user_id=rival.id,
                 node_transport_id=row_id,
                 subject="rival-subject",
                 secrets=json.dumps({}),
@@ -678,7 +678,7 @@ async def test_two_changes_reaching_one_address_end_in_a_refusal(
     ).scalars().all()
     assert len(digests) == len(set(digests)), "two credentials hold one address"
     assert (
-        await session.execute(select(Friend).where(Friend.nickname == "second"))
+        await session.execute(select(User).where(User.nickname == "second"))
     ).scalars().first() is None, "the losing change was committed after all"
 
 
@@ -728,7 +728,7 @@ async def test_revoking_a_user_frees_their_address_for_the_next_one(
     both = set(routes_in(await as_the_node_sees_it(session, node_id, pool_transport)))
 
     ann = (
-        await session.execute(select(Friend).where(Friend.nickname == "ann"))
+        await session.execute(select(User).where(User.nickname == "ann"))
     ).scalars().one()
     await friends.revoke(session, friend_id=ann.id)
 
@@ -915,7 +915,7 @@ async def test_a_node_with_two_users_on_one_tunnel_renders_through_a_revocation(
         assert (await add_user(client, nickname)).status_code == 201
 
     cara = (
-        await session.execute(select(Friend).where(Friend.nickname == "cara"))
+        await session.execute(select(User).where(User.nickname == "cara"))
     ).scalars().one()
     affected = await friends.revoke(session, friend_id=cara.id)
     assert affected, "the revocation found nothing to re-push"
@@ -975,7 +975,7 @@ async def test_a_row_from_before_pools_is_sized_without_moving_the_address_in_us
         # below expires every object in this session to make sure it is reading the
         # database rather than what it had in hand.
         early = (
-            await session.execute(select(Friend).where(Friend.nickname == "early"))
+            await session.execute(select(User).where(User.nickname == "early"))
         ).scalars().one()
         return "\n".join(
             config.content
@@ -1402,12 +1402,12 @@ async def test_a_resize_that_loses_a_race_for_an_address_is_a_refusal(
     # Taken by somebody else first, committed from a session of its own — so the
     # allocator's read is genuinely against data another transaction wrote.
     async for other in app.state.database.session():
-        rival = Friend(nickname="rival")
+        rival = User(nickname="rival")
         other.add(rival)
         await other.flush()
         other.add(
             Credential(
-                friend_id=rival.id,
+                user_id=rival.id,
                 node_transport_id=row_id,
                 subject="rival-subject",
                 secrets=json.dumps({}),
@@ -2376,7 +2376,7 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     assert refused.status_code == 422, refused.text
     session.expire_all()
     assert (
-        await session.execute(select(Friend).where(Friend.nickname == "bob"))
+        await session.execute(select(User).where(User.nickname == "bob"))
     ).scalars().first() is None
 
 

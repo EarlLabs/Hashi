@@ -14,7 +14,7 @@ HOW:  the shape IS the guarantee, so it is deliberately too narrow to hold anyth
       without anyone deciding to add one, so there is nowhere for such a value to go.
       ``action`` is an enum through ``EnumText``, so a value nobody declared fails at
       the write; the two label columns are 64 characters wide, which is exactly the
-      width of the inventory values they may hold (``Node.name``, ``Friend.nickname``,
+      width of the inventory values they may hold (``Node.name``, ``User.nickname``,
       a transport name, a ``NodeState``) and nowhere near ``Node.state_detail``'s 500.
 
       Rows are append-only: written once by the service that made the change, read by

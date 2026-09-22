@@ -52,10 +52,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.errors import Conflict
 from control.app.models import (
     Credential,
-    Friend,
     Node,
     NodeTransport,
     TransportPurpose,
+    User,
 )
 from edge.addressing import carriage_problem, host_of, pool
 from edge.node import Credential as EdgeCredential
@@ -399,7 +399,7 @@ async def stranded_by(
 
     THE ADDRESS COLUMN AND NOT THE ROW, because a ``select(Credential)`` here would
     decrypt every holder's key material and subject as well (both are ``EncryptedText``,
-    and ``Credential.friend`` / ``.node_transport`` are joined eagerly) to read one
+    and ``Credential.user`` / ``.node_transport`` are joined eagerly) to read one
     address. The module header makes a point of ``held_digests`` being the one query that
     could otherwise decrypt every address on a row; this is the second, and it decrypts
     addresses and nothing else.
@@ -480,7 +480,7 @@ async def fleet_size(session: AsyncSession, *, extra: int = 0) -> int:
     """
     return (
         await session.execute(
-            select(func.count()).select_from(Friend).where(Friend.revoked_at.is_(None))
+            select(func.count()).select_from(User).where(User.revoked_at.is_(None))
         )
     ).scalar_one() + extra
 

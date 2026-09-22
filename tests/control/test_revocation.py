@@ -197,7 +197,7 @@ async def test_revoking_one_friend_leaves_the_others_credentials_intact(
 
     surviving = (
         await session.execute(
-            select(Credential.id).where(Credential.friend_id == other_id)
+            select(Credential.id).where(Credential.user_id == other_id)
         )
     ).scalars().all()
     assert len(surviving) == 3, "the other friend did not start with a full set"
@@ -206,7 +206,7 @@ async def test_revoking_one_friend_leaves_the_others_credentials_intact(
 
     after = (
         await session.execute(
-            select(Credential.id).where(Credential.friend_id == other_id)
+            select(Credential.id).where(Credential.user_id == other_id)
         )
     ).scalars().all()
     assert set(after) == set(surviving), (
@@ -214,7 +214,7 @@ async def test_revoking_one_friend_leaves_the_others_credentials_intact(
     )
     assert not (
         await session.execute(
-            select(Credential.id).where(Credential.friend_id == friend_id)
+            select(Credential.id).where(Credential.user_id == friend_id)
         )
     ).scalars().all()
 

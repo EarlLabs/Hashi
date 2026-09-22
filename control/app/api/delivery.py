@@ -93,7 +93,7 @@ async def deliver_subscription(
         # to avoid.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    friend = subscription.friend
+    friend = subscription.user
 
     if subscription_format is SubscriptionFormat.CLIENT_CONFIG_FILE:
         configs = await subscriptions.config_files_for(session, friend)

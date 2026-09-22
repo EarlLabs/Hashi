@@ -277,7 +277,7 @@ NO_LONGER_OFFERED = (
 # The two doors that would otherwise build a node whose friends have no way out — M25,
 # found by the walk that proved route A carries. A node dialling a hop gives its friends
 # ``Egress.HOP``, and only a transport that re-originates can honour that for somebody
-# else's packets (``TransportMeta.serves_friends_through_a_hop``); the panel accepted the
+# else's packets (``TransportMeta.serves_users_through_a_hop``); the panel accepted the
 # other kind at both doors, granted every friend a credential on it, handed one of them a
 # complete configuration file, and left the refusal to the apply.
 #

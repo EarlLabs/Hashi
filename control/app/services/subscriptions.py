@@ -32,7 +32,7 @@ from urllib.parse import quote
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.models import Credential, Friend, Subscription
+from control.app.models import Credential, Subscription, User
 from control.app.services import addresses, keymaterial, nodes
 from edge.egress import EgressNotRenderable
 from edge.node import Credential as EdgeCredential
@@ -94,7 +94,7 @@ def token_digest(token: str) -> str:
     return secret_box().digest(token)
 
 
-def issue(session: AsyncSession, friend: Friend) -> Subscription:
+def issue(session: AsyncSession, friend: User) -> Subscription:
     """Mint a fresh subscription for a friend. Does not commit.
 
     The digest is derived through the bound secret box rather than from a key passed
@@ -103,7 +103,7 @@ def issue(session: AsyncSession, friend: Friend) -> Subscription:
     """
     token = secrets_module.token_urlsafe(TOKEN_BYTES)
     subscription = Subscription(
-        friend_id=friend.id,
+        user_id=friend.id,
         token=token,
         token_digest=token_digest(token),
     )
@@ -148,7 +148,7 @@ def compose_label(entry: ClientEntry) -> str:
     return entry.display_label or entry.country_label
 
 
-async def entries_for(session: AsyncSession, friend: Friend) -> list[ClientEntry]:
+async def entries_for(session: AsyncSession, friend: User) -> list[ClientEntry]:
     """Every client entry this friend should currently receive.
 
     Built from their credentials, so a revoked friend yields nothing (their rows are
@@ -158,7 +158,7 @@ async def entries_for(session: AsyncSession, friend: Friend) -> list[ClientEntry
     serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
 
     result = await session.execute(
-        select(Credential).where(Credential.friend_id == friend.id)
+        select(Credential).where(Credential.user_id == friend.id)
     )
 
     rendered: list[ClientEntry] = []
@@ -192,7 +192,7 @@ async def entries_for(session: AsyncSession, friend: Friend) -> list[ClientEntry
     return rendered
 
 
-async def config_files_for(session: AsyncSession, friend: Friend) -> list[ClientConfig]:
+async def config_files_for(session: AsyncSession, friend: User) -> list[ClientConfig]:
     """Every configuration FILE this friend should currently receive — item 27.
 
     The second representation, and `control`'s whole half of it: ask each transport
@@ -216,7 +216,7 @@ async def config_files_for(session: AsyncSession, friend: Friend) -> list[Client
     serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
 
     result = await session.execute(
-        select(Credential).where(Credential.friend_id == friend.id)
+        select(Credential).where(Credential.user_id == friend.id)
     )
 
     produced: list[ClientConfig] = []
@@ -366,7 +366,7 @@ def archive_of(configs: Sequence[ClientConfig]) -> bytes:
     return buffer.getvalue()
 
 
-async def render(session: AsyncSession, friend: Friend) -> str:
+async def render(session: AsyncSession, friend: User) -> str:
     """The subscription document, exactly as a client receives it.
 
     Base64 of newline-joined URIs — charter amendment A. Standard base64 with

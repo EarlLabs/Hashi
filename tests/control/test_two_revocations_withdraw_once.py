@@ -27,7 +27,7 @@ HOW:  two sessions against one real Postgres, which is what a race here is. The 
 
 from sqlalchemy import select
 
-from control.app.models import AuditAction, AuditEntry, Friend, NodeState
+from control.app.models import AuditAction, AuditEntry, NodeState, User
 from control.app.services import friends, nodes, revocation
 
 # RFC 5737 documentation address, as everywhere in this zone. Never dialled: the node
@@ -60,7 +60,7 @@ async def a_friend_on_a_node(client, session, reality_params) -> str:
 async def withdrawn_at(session, friend_id: str):
     """The withdrawal time as the database holds it, whatever this session is holding."""
     return (
-        await session.execute(select(Friend.revoked_at).where(Friend.id == friend_id))
+        await session.execute(select(User.revoked_at).where(User.id == friend_id))
     ).scalar_one()
 
 

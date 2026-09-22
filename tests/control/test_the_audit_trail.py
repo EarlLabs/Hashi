@@ -37,10 +37,10 @@ from control.app.errors import DomainError, NotFound
 from control.app.models import (
     AuditAction,
     AuditEntry,
-    Friend,
     Node,
     NodeState,
     NodeTransport,
+    User,
 )
 from control.app.models.audit import LABEL_MAX_LENGTH
 from control.app.services import apply, audit, nodes, relay, revocation, rotation
@@ -132,7 +132,7 @@ def test_both_labels_are_exactly_as_wide_as_the_values_they_may_hold() -> None:
         assert AuditEntry.__table__.columns[column].type.length == LABEL_MAX_LENGTH
     for table, column in (
         (Node, "name"),
-        (Friend, "nickname"),
+        (User, "nickname"),
         (NodeTransport, "transport_name"),
     ):
         assert table.__table__.columns[column].type.length <= LABEL_MAX_LENGTH, (
@@ -644,7 +644,7 @@ async def test_every_label_in_the_trail_is_a_value_read_off_an_inventory_row(
     session.expire_all()
     inventory = {
         *(await session.execute(select(Node.name))).scalars(),
-        *(await session.execute(select(Friend.nickname))).scalars(),
+        *(await session.execute(select(User.nickname))).scalars(),
         *(await session.execute(select(NodeTransport.transport_name))).scalars(),
         *(state.value for state in NodeState),
     }

@@ -4,7 +4,7 @@ WHAT: runs the real ``alembic upgrade head`` against a real database and asks Al
       whether anything still differs from the models.
 WHY:  core invariants §2 requires every schema change to go through a migration,
       because ``create_all`` against a changed model silently diverges from a live
-      database and the failure mode is "every friend is locked out". The rest of this
+      database and the failure mode is "every user is locked out". The rest of this
       suite builds its tables with ``create_all`` for speed — which means without THIS
       file, a migration that forgot a column would never be noticed until deployment.
 HOW:  the migration is run as a SUBPROCESS, with exactly the command
@@ -158,6 +158,108 @@ async def test_the_migration_can_be_reversed(empty_database) -> None:
     assert sorted(remaining) == [], f"downgrade left tables behind: {sorted(remaining)}"
 
 
+async def test_the_rename_to_users_goes_forward_and_back_without_moving_a_token(
+    empty_database,
+) -> None:
+    """0008 renames ``friends`` to ``users`` both ways, and no subscription moves.
+
+    ``test_the_migration_can_be_reversed`` above proves the whole chain unwinds from an
+    EMPTY database, which a rename passes trivially — nothing is there to survive it. So
+    this is the other half: a row is put in, the rename is run forward and then back and
+    then forward again, and the token that row holds is compared byte for byte each
+    time. That token is a bearer credential already on somebody's phone; if a rename
+    ever disturbed it, the person would find out by their client going dark, and no
+    other test in this file would have noticed.
+
+    Raw SQL rather than the ORM, in the shape the two downgrade tests below already use:
+    the models describe the schema at HEAD and this test has to speak to the schema on
+    either side of one migration. Nothing here needs a secret box, because a rename
+    never opens an encrypted column — which is also why M29.5 can rehearse this against
+    a copy of real data without a key.
+    """
+    assert run_alembic("upgrade", "head").returncode == 0
+
+    engine = create_async_engine(DATABASE_URL)
+
+    async def names_of(kind: str) -> list[str]:
+        query = {
+            "tables": "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = current_schema()",
+            "credential_columns": "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'credentials'",
+            "subscription_columns": "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'subscriptions'",
+            "indexes": "SELECT indexname FROM pg_indexes "
+            "WHERE schemaname = current_schema()",
+            "constraints": "SELECT conname FROM pg_constraint",
+        }[kind]
+        async with engine.connect() as connection:
+            return list((await connection.execute(text(query))).scalars().all())
+
+    assert "users" in await names_of("tables")
+    assert "friends" not in await names_of("tables")
+    assert "user_id" in await names_of("subscription_columns")
+    assert "user_id" in await names_of("credential_columns")
+    assert "ix_credentials_user_id" in await names_of("indexes")
+    assert "ix_subscriptions_user_id" in await names_of("indexes")
+    assert "uq_user_node_transport" in await names_of("constraints")
+
+    # One person and the one URL they hold. The digest is what the delivery endpoint
+    # looks a request up by, so it is the value that decides whether their client still
+    # works — and it is stored, not derived, which is why it can be compared literally.
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("INSERT INTO users (id, nickname) VALUES ('user-1', 'nadia')")
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO subscriptions (id, user_id, token, token_digest) "
+                "VALUES ('sub-1', 'user-1', 'a-token', 'a-digest')"
+            )
+        )
+    await engine.dispose()
+
+    backed_out = run_alembic("downgrade", "0007")
+    assert backed_out.returncode == 0, (
+        f"stdout:\n{backed_out.stdout}\nstderr:\n{backed_out.stderr}"
+    )
+
+    engine = create_async_engine(DATABASE_URL)
+    assert "friends" in await names_of("tables")
+    assert "users" not in await names_of("tables")
+    assert "friend_id" in await names_of("subscription_columns")
+    assert "friend_id" in await names_of("credential_columns")
+    assert "ix_credentials_friend_id" in await names_of("indexes")
+    assert "uq_friend_node_transport" in await names_of("constraints")
+
+    async with engine.connect() as connection:
+        held = (
+            await connection.execute(
+                text(
+                    "SELECT f.nickname, s.token, s.token_digest FROM friends AS f "
+                    "JOIN subscriptions AS s ON s.friend_id = f.id"
+                )
+            )
+        ).all()
+    await engine.dispose()
+    assert [tuple(row) for row in held] == [("nadia", "a-token", "a-digest")]
+
+    assert run_alembic("upgrade", "head").returncode == 0
+
+    engine = create_async_engine(DATABASE_URL)
+    async with engine.connect() as connection:
+        held = (
+            await connection.execute(
+                text(
+                    "SELECT u.nickname, s.token, s.token_digest FROM users AS u "
+                    "JOIN subscriptions AS s ON s.user_id = u.id"
+                )
+            )
+        ).all()
+    await engine.dispose()
+    assert [tuple(row) for row in held] == [("nadia", "a-token", "a-digest")]
+
+
 async def test_upgrade_is_idempotent(empty_database) -> None:
     """Running it twice must be a no-op, because the entrypoint runs it on every boot.
 
@@ -205,14 +307,14 @@ async def test_the_downgrade_refuses_while_a_pool_is_in_use(empty_database) -> N
             )
         )
         await connection.execute(
-            text("INSERT INTO friends (id, nickname) VALUES ('friend-1', 'zoya')")
+            text("INSERT INTO users (id, nickname) VALUES ('user-1', 'zoya')")
         )
         await connection.execute(
             text(
                 "INSERT INTO credentials "
-                "(id, friend_id, node_transport_id, subject, secrets, tunnel_address, "
+                "(id, user_id, node_transport_id, subject, secrets, tunnel_address, "
                 " tunnel_address_digest) "
-                "VALUES ('cred-1', 'friend-1', 'row-1', 'x', '{}', 'x', 'a-digest')"
+                "VALUES ('cred-1', 'user-1', 'row-1', 'x', '{}', 'x', 'a-digest')"
             )
         )
     await engine.dispose()

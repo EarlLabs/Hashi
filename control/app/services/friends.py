@@ -29,13 +29,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict, DomainError, NotFound
-from control.app.models import AuditAction, Credential, Friend, NodeTransport, Subscription
+from control.app.models import AuditAction, Credential, NodeTransport, Subscription, User
 from control.app.services import addresses, audit, keymaterial, nodes, subscriptions
 from edge.registry import KeyScope, discover
 
 logger = logging.getLogger(__name__)
 
-# The width of ``Friend.nickname``. Stated here because this is the layer that
+# The width of ``User.nickname``. Stated here because this is the layer that
 # refuses a value the column could not hold; the model is the other half of the pair.
 NICKNAME_MAX_LENGTH = 64
 
@@ -54,19 +54,19 @@ ADDRESS_TAKEN_MEANWHILE = (
 )
 
 
-async def get_friend(session: AsyncSession, friend_id: str) -> Friend:
-    friend = await session.get(Friend, friend_id)
+async def get_friend(session: AsyncSession, friend_id: str) -> User:
+    friend = await session.get(User, friend_id)
     if friend is None:
         raise NotFound("no such friend")
     return friend
 
 
-async def list_friends(session: AsyncSession) -> list[Friend]:
-    result = await session.execute(select(Friend).order_by(Friend.created_at, Friend.id))
+async def list_friends(session: AsyncSession) -> list[User]:
+    result = await session.execute(select(User).order_by(User.created_at, User.id))
     return list(result.scalars().unique())
 
 
-async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
+async def create_friend(session: AsyncSession, *, nickname: str) -> User:
     """Register a friend, mint their subscription, and grant them every node.
 
     All three in one operation because a friend without a subscription cannot be
@@ -86,7 +86,7 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
             f"a nickname must be {NICKNAME_MAX_LENGTH} characters or fewer"
         )
 
-    existing = await session.execute(select(Friend).where(Friend.nickname == nickname))
+    existing = await session.execute(select(User).where(User.nickname == nickname))
     if existing.scalars().first() is not None:
         raise Conflict(f"a friend called {nickname!r} already exists")
 
@@ -101,7 +101,7 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
     if short:
         raise Conflict(addresses.too_small(short))
 
-    friend = Friend(nickname=nickname)
+    friend = User(nickname=nickname)
     session.add(friend)
     # Flushed rather than committed: the friend, their token and their credentials
     # are one unit of work, and a crash between them would leave a friend the
@@ -122,7 +122,7 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> Friend:
     return friend
 
 
-async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Credential]:
+async def grant_everywhere(session: AsyncSession, friend: User) -> list[Credential]:
     """Give a friend a credential on every serving node × transport.
 
     Does NOT commit: callers compose it with other work in one transaction.
@@ -136,7 +136,7 @@ async def grant_everywhere(session: AsyncSession, friend: Friend) -> list[Creden
 
 
 async def grant_on(
-    session: AsyncSession, friend: Friend, rows: Sequence[NodeTransport]
+    session: AsyncSession, friend: User, rows: Sequence[NodeTransport]
 ) -> list[Credential]:
     """The same grant, over rows the caller chose. Does NOT commit.
 
@@ -172,7 +172,7 @@ async def grant_on(
     # I/O, which in async SQLAlchemy is not a slow query but an immediate
     # MissingGreenlet crash. Explicit queries are the async idiom for a reason.
     existing = await session.execute(
-        select(Credential.node_transport_id).where(Credential.friend_id == friend.id)
+        select(Credential.node_transport_id).where(Credential.user_id == friend.id)
     )
     held = set(existing.scalars())
 
@@ -203,7 +203,7 @@ async def grant_on(
             )
 
         credential = Credential(
-            friend_id=friend.id,
+            user_id=friend.id,
             node_transport_id=node_transport.id,
             subject=subject,
             secrets=json.dumps({**minted.secrets, **minted.params}),
@@ -263,7 +263,7 @@ async def claim_withdrawal(session: AsyncSession, *, friend_id: str) -> bool:
     on ``nodes``, taken for a whole apply — a host being dialled sits inside that window.
     This one is one row of ``friends``, held for the two statements ``revoke_friend`` runs
     after it, and the only thing it makes wait is another WRITE to the same person. The
-    delivery endpoint does join this table (``Subscription.friend`` is ``lazy="joined"``),
+    delivery endpoint does join this table (``Subscription.user`` is ``lazy="joined"``),
     and it is unaffected: a plain read never waits on a row lock, so a friend fetching
     their subscription mid-revocation sees the row as it was committed and then, an instant
     later, as revoked — which is the outcome either way.
@@ -278,8 +278,8 @@ async def claim_withdrawal(session: AsyncSession, *, friend_id: str) -> bool:
     all three land together or not at all.
     """
     taken = await session.execute(
-        update(Friend)
-        .where(Friend.id == friend_id, Friend.revoked_at.is_(None))
+        update(User)
+        .where(User.id == friend_id, User.revoked_at.is_(None))
         .values(revoked_at=datetime.datetime.now(datetime.UTC))
         .execution_options(synchronize_session=False)
     )
@@ -342,7 +342,7 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
     # Explicit queries for the same reason as in ``grant_everywhere``: lazy access on
     # an async session raises rather than loading.
     held = await session.execute(
-        select(Credential).where(Credential.friend_id == friend.id)
+        select(Credential).where(Credential.user_id == friend.id)
     )
     credentials = list(held.scalars().unique())
     affected = [credential.node_transport for credential in credentials]
@@ -351,7 +351,7 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
         await session.delete(credential)
 
     issued = await session.execute(
-        select(Subscription).where(Subscription.friend_id == friend.id)
+        select(Subscription).where(Subscription.user_id == friend.id)
     )
     for subscription in issued.scalars().unique():
         subscription.revoked_at = subscription.revoked_at or now

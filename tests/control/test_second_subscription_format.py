@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import select
 
 from control.app.errors import NotDeliverable
-from control.app.models import Credential, Friend, NodeState
+from control.app.models import Credential, NodeState, User
 from control.app.services import apply, friends, nodes, subscriptions
 from edge.addressing import host_of
 from edge.registry import ClientConfig, SubscriptionFormat, discover
@@ -485,7 +485,7 @@ async def test_each_users_own_file_names_the_address_the_node_authorises_for_the
     theirs = set()
     for nickname in people:
         handle = (
-            await session.execute(select(Friend).where(Friend.nickname == nickname))
+            await session.execute(select(User).where(User.nickname == nickname))
         ).scalars().one()
         configs = await subscriptions.config_files_for(session, handle)
         assert len(configs) == 1, configs

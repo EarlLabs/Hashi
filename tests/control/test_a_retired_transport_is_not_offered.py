@@ -47,7 +47,7 @@ from dataclasses import replace
 import pytest
 from sqlalchemy import select
 
-from control.app.models import Friend, NodeState, NodeTransport
+from control.app.models import NodeState, NodeTransport, User
 from control.app.services import apply as apply_service
 from control.app.services import nodes as nodes_service
 from control.app.services import subscriptions as subscriptions_service
@@ -527,7 +527,7 @@ async def test_a_node_already_running_a_retired_transport_still_renders(
     assert rendered.get(name, "").strip(), "the node's own config no longer renders"
 
     session.expire_all()
-    person = (await session.execute(select(Friend))).scalars().unique().one()
+    person = (await session.execute(select(User))).scalars().unique().one()
     files = await subscriptions_service.config_files_for(session, person)
     assert files, "the user on this node was handed nothing"
     assert any(rendered[name].strip() and file.content.strip() for file in files), (

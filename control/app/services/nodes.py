@@ -729,7 +729,7 @@ async def _enable(
     # It says nothing about a node with NO hop, which is every leaf and every single box:
     # there the same transport renders a local exit and is exactly right, which is what
     # nine of M23's walks were carried on.
-    if not meta.serves_friends_through_a_hop:
+    if not meta.serves_users_through_a_hop:
         # Deferred for the cycle ``enable_and_grant`` names below: ``relay`` imports this
         # module for ``node_view`` and ``render_params``.
         from control.app.services import relay  # noqa: PLC0415
