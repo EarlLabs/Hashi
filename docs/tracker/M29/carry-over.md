@@ -91,3 +91,23 @@ scenario's ports, and neither is a rename milestone's business. Worth someone's
 decision: the published-port block is written down precisely so a third stack
 cannot collide with the host, and a scenario quietly living outside it is the
 case that rule exists to prevent.
+
+---
+
+## CLOSED by M29.4 — the flake from M29.3
+
+The entry above ("a flake nobody could reproduce") is **resolved**, not still open.
+`test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly` was a stale
+identity-map read in the test harness — `expire_on_commit=False` plus a setup helper
+writing through the test's own session while the apply wrote through the request's.
+Fixed with one `session.expire_all()` before the re-read, in commit `708441e`.
+
+**Not reachable in production**, and that was established rather than assumed: every
+route gets a fresh session per request with an empty identity map, so a `GET` after a
+`POST` always issues a real query. The reviewer also patched the service to write the
+wrong state and confirmed the fixed test still fails loudly.
+
+Causation stays unsettled: HEAD failed 5/5, baseline failed 2/3 — the builder
+reproduced it at baseline and the reviewer did not. Timing- or environment-sensitive.
+Recorded because the next person to see a once-in-three failure in this suite should
+know this shape exists and where to look.

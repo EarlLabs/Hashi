@@ -444,3 +444,142 @@ be empty afterwards.
 
 None. Every string this step touched is a comment, a docstring or a test assertion
 message.
+
+## M29.4 — `control`: the API and the panel, broken cleanly
+
+**The routes are `/api/users/*` and `/panel/users/*`, with nothing left serving the
+old ones.** `make test-control` against a real database: **910 passed, 2 skipped, 0
+failed** (the 2 being the baseline `wireguard declares it cannot carry a hop` pair),
+ruff clean over `control`, `tests/control` and `tests/e2e/control`.
+`tests/e2e/control`: **66 passed**. Live-checked: `/api/friends` and
+`/panel/friends` 404; `/api/users` 401 and `/panel/users` 303 — gone, not
+auth-gated.
+
+1. **The half-state M29.3 left is closed.** The ORM attribute, the API field, the
+   route path parameter, `RevocationOutcome.friend_id`, `RevocationResponse.friend_id`
+   and `services/friends.py` (now `services/users.py`, with `get_user` /
+   `create_user` / `list_users` / `revoke` / `claim_withdrawal` / `grant_everywhere`
+   / `grant_on`) all say `user`. Nothing in `control` mixes the two vocabularies.
+
+2. **A SECOND persisted column value, in the same shape as `TransportPurpose.FRIENDS`
+   and on nobody's list.** `AuditAction.FRIEND_ADDED = "friend-added"` and
+   `FRIEND_REVOKED = "friend-revoked"` (`models/audit.py:59-60`) are stored in
+   `audit_entries.action`, `VARCHAR(32)` since `0003`, read back through `EnumText` —
+   so a rename is a data migration, reversible, exactly like M29.4b's. Left
+   untouched, member AND value. **M29.4b was widened to cover them**, or M29 would
+   close against a value an operator reads on the audit screen.
+
+3. **`panel/wording.py` keeps its `friend` → `user` filter, deliberately, and this is
+   the one thing a later grep will misread.** The module exists because decision 9
+   made the code's word differ from the page's; M29 reverses that, so the
+   substitution now fires on nothing. Removing it means removing `keeping` and the
+   quote protection, threaded through ~25 `_mutation(...)` call sites in
+   `panel/routes.py` — a redesign of that module, not a vocabulary swap. So
+   `control/` still contains the string `friend` in `wording.py` and ~10 test
+   literals. **Those are the word being FILTERED, not the word for the concept** (the
+   same class as `edge/health/listening.py:36`), and "`control` has no `friend` left"
+   is therefore the wrong closing check for M29's second Done-when. Its five tests
+   were reframed so none is a no-op — they plant the OLD word and watch the boundary
+   still convert it; the reviewer confirmed each tests real behaviour.
+
+4. **A blind swap inverts every forbidden-word assertion, and there are thirteen.**
+   `assert "friend" not in _visible_text(...)` becomes `assert "user" not in ...`,
+   i.e. the panel must never say `user` — green only because nothing is checked.
+   Sites: `test_the_console.py` ×5, `test_every_user_holds_their_own_address.py` ×5,
+   `test_a_retired_node_is_never_applied_back_into_service.py`, and two in
+   `tests/e2e/control/`. Two forbidden-word TUPLES also collapsed to a duplicate
+   entry (`("user", "friend", …)` → `("user", "user", …)`). **Any later bulk rename
+   must grep for the old word inside negative assertions before trusting a green
+   run.** The reviewer swept the fence for the inverted form and found zero
+   survivors.
+
+5. **~28 comments stated decision 9 as live law and became self-contradictory.**
+   "the code says friend, the page says user" word-swaps into "the code says user,
+   the page says user". Each was rewritten to state the M29 fact. These are the only
+   paragraphs in the step that are not word-in-place. **Three of those rewrites
+   smuggled in a symbol that does not exist yet** — they cited `` `USERS` `` as a
+   live `TransportPurpose` member — and were caught in review and reverted. A
+   comment rewrite during a rename can name the future by accident; grep comments for
+   symbols, not just code.
+
+6. **The carry-over flake is fixed, not carried.**
+   `test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly` was a stale
+   identity-map read, exactly where `carry-over.md` said to look:
+   `a_node_with_a_transport` sets the node ACTIVE through the TEST's session, the
+   apply writes DEGRADED through the request's own session, and
+   `expire_on_commit=False` (`control/app/db.py`) makes the closing `get` return the
+   stale copy. One `session.expire_all()` before the re-read — this zone's idiom, 98
+   occurrences across 22 files, and
+   `test_a_retired_node_is_never_applied_back_into_service.py:134-135` is the same
+   three lines for the same reason.
+
+   **It is not reachable in production and that was checked, not assumed.** Every
+   route gets a new session per request with an empty identity map
+   (`control/app/db.py:53-66`), so a `GET` after a `POST` always issues a real query;
+   the staleness needs the test harness's two-session setup. The reviewer also
+   patched the service to write the wrong state and confirmed the fixed test fails
+   loudly, so the assertion still means something.
+
+   **Causation is unsettled and moot.** HEAD failed 5/5, baseline `c3fa3b0` failed
+   2/3 — the builder reproduced it at baseline, the reviewer did not. Timing- or
+   environment-sensitive either way. The fix belongs in this fence regardless of who
+   exposed it.
+
+7. **M29.4a is twice the size its plan text said.** Besides the five `/api/friends`
+   sites in `tests/e2e/infra/test_restore_proves_the_backup.py` (237, 240, 331, 404,
+   476), **`scripts/security/seed.py` has five more** (157, 160, 166, 173, 188).
+   `scripts/**` is the `infra` zone, no static target runs it, and both files 404
+   from `e02fbe5` onward. M29.4a was widened to name them.
+
+8. **Records that now cite paths which no longer exist, accepted rather than fixed.**
+   `docs/PLAN.md:1130` (`## ✅ M9`) and `:1913` (`## ✅ M17`) name
+   `test_a_hop_never_reaches_a_friend.py`; `docs/tracker/M8/step-notes.md:26` and
+   `docs/tracker/M9/fix-notes.md:53,134` name `panel/friends_table.html` and
+   `hx-push-url="/panel/friends"`. All record. M29.2's item 6 precedent.
+
+9. **`control/app/services/addresses.py:467` keeps "Counts ACTIVE USERS".** English
+   emphasis contrasted with "credentials held", not a code reference — and since this
+   step renamed the model to `User`, it is now the correct name of the entity being
+   counted as well. Reverting it would have been the error. Do not "fix" it.
+
+### How to test what M29.4 built
+
+Two gates, and **the zone's own gate cannot see a route rename at all**:
+
+```sh
+docker run -d --name hashi-db -p 127.0.0.1:54132:5432 \
+  -e POSTGRES_USER=hashi -e POSTGRES_PASSWORD=replace-me -e POSTGRES_DB=hashi \
+  postgres:16.4-alpine
+# drop the schema first if it predates this branch:
+docker exec hashi-db psql -U hashi -d hashi -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+make test-control                                  # 910 passed, 2 skipped — CHECK THE SKIP COUNT
+make e2e-up
+.venv/bin/python -m pytest tests/e2e/control -q     # 66 passed, ~25s
+make e2e-down
+```
+
+**A full `make test-control` run leaves schema behind that breaks the NEXT run's
+seven migration tests** with `relation "…" already exists` — drop the schema between
+runs, not only before the first. This cost a whole 7-minute run to diagnose.
+
+`make e2e-up` rebuilds the control image from the working tree, so the 66 scenarios
+are the real proof that the panel and the API agree on the new paths. Do not gate on
+`make verify` — still red for M29.7's runbook quotation.
+
+### Wording a person will see
+
+- **Routes, and they are the break:** `/api/users`,
+  `/api/users/{user_id}/subscription`, `/api/users/{user_id}/revoke`, `/panel/users`,
+  `/panel/users/table`, `/panel/users/new`, `/panel/users/{user_id}/subscription`,
+  `/panel/users/{user_id}/revoke`. **The runbook's M29.7 sentence — "anything
+  scripted against the old paths stops working" — is about exactly these.**
+- **API response fields:** `RevocationResponse.user_id` (was `friend_id`). A consumer
+  reading the old key gets `None`, silently.
+- `"this user has no live subscription"` — `NotFound` from
+  `GET /api/users/{id}/subscription`.
+- Audit screen sentences: `user {first} added`, `user {first} revoked — link is dead`.
+- The Users screen: title `Users`, subtitle *"who can dial the mesh, and the one URL
+  each of them holds"*, and *"A user gets one subscription URL covering every serving
+  node. Nothing else is stored about them."*
+- HTMX events, renamed on both sides: `users-changed`, `users-created`. A template
+  still listening for `friends-changed` would silently stop refreshing.
