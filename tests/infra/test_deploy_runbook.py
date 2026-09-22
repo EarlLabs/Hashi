@@ -1256,9 +1256,27 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
     right order for a node and the wrong one for a person. So a shape whose steps add a
     user has to apply AFTER it, and this asserts the order rather than the presence of the
     word: an apply above the add-user step is the version the walk followed.
+
+    THE ORDER CHECK SKIPS A SHAPE WHOSE ADD STEP IT CANNOT RECOGNISE, so it is bracketed
+    by two assertions that can fail on their own — "a verification that cannot fail" is
+    this repository's signature defect and the skip is one waiting to happen. One end
+    catches the specific way it would happen (a step reverting to the retired word, which
+    M29 took out of this page and which this regex no longer matches); the other catches
+    the general one (no shape matched at all, so nothing below ran), and is the same
+    ``assert steps`` the two ``user-facing`` filters above carry for the same reason.
     """
+    covered = set()
     for letter, body in shapes.items():
         steps = _numbered_steps(body)
+        retired = [
+            step for step in steps if re.search(r"add (?:a )?friends?\b", step, re.I)
+        ]
+        assert not retired, (
+            f"Shape {letter} tells an operator to add a friend. The word is `user` "
+            "(docs/decisions.md, 2026-09-22) — and the order check below does not "
+            f"recognise this step, so it skips the shape silently: "
+            f"{[step.strip() for step in retired]!r}"
+        )
         adding = [
             index
             for index, step in enumerate(steps)
@@ -1266,6 +1284,7 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
         ]
         if not adding:
             continue
+        covered.add(letter)
         applying = [
             index
             for index, step in enumerate(steps)
@@ -1275,6 +1294,11 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
             f"Shape {letter} adds a user and never applies afterwards, so the user it "
             "hands a link to is on no node until the operator works that out themselves"
         )
+    assert covered, (
+        "no shape adds a user at all, so the order this test exists to check was not "
+        "checked anywhere — either the runbook stopped telling an operator to add one, "
+        "or it words it in a way this no longer matches"
+    )
 
 
 def test_the_leaf_section_says_the_exit_codes_do_not_survive_make(
