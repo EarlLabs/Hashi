@@ -1072,9 +1072,18 @@ place, and its configuration does not change.
 
 **The person who uses hashi is a `user`. They used to be a `friend`** — in the API, in
 the panel's routes and in the database — **and this release moves all three at once.**
-Nothing on anybody's device changes: a subscription URL issued before this is
-byte-identical after it, `/sub/{token}` is untouched, and no token is reissued. What
-does change is what you can call from a script. **Anything scripted against the old
+**Nobody has to be sent a new link and nobody has to touch their device.** A
+subscription URL issued before this is byte-identical after it, so is the token inside
+it, `/sub/{token}` is untouched, no token is reissued, and a VLESS document comes back
+byte for byte as it went out. A WireGuard-family config comes back with **every
+functional line identical** — private key, address, MTU, the AmneziaWG obfuscation
+values (`Jc`, `Jmin`, `Jmax`, `H1`–`H4`), peer key, preshared key, `AllowedIPs`,
+endpoint, keepalive — and one `#` comment reworded, which `wg-quick` and `awg-quick`
+ignore. The device connects on that file exactly as it did. It is not the same file,
+though, and the panel counts the difference: read *Every WireGuard-family node reads as
+drifted*, below, before you read the Overview.
+
+What does change is what you can call from a script. **Anything scripted against the old
 paths stops working** the day this lands. There is no alias, no redirect and no
 deprecation window — the old paths answer `404`.
 
@@ -1093,6 +1102,27 @@ rather than an error — nothing raises, nothing is logged, and whatever it was 
 with that id it now does to nobody. That is worse than a `404`, because a `404` is
 visible. Grep your own tooling for `friend_id` before you deploy rather than after.
 
+### Every WireGuard-family node reads as drifted, and none of them has changed
+
+Drift is a byte comparison: the panel renders what it would push now and compares that
+against the digest of what it last pushed. A comment is bytes, so the one reworded
+comment above is a difference. **The moment the new image is up, every node carrying a
+WireGuard-family transport reads as out of sync, before anybody has touched anything.**
+The Overview says *"Not yet pushed to `<node>`: that node is not running the
+configuration this panel would give it"*, and the Nodes screen counts that row among the
+drifted ones. A node whose transports are all VLESS is unaffected — its rendered document
+did not move at all.
+
+**On screen that is indistinguishable from a real configuration change**, and it arrives
+at the one moment you are watching for trouble. It is not one, and no user is affected
+while it stands: the config already on the device keeps working, because the line that
+moved is one `wg-quick` never reads. Apply each of those nodes on the Nodes screen — an
+ordinary apply, nothing special about it — and the count goes back to nothing.
+
+**Expect it again, in the same shape, if you roll back.** Going back to the old image
+re-renders the old comment, so every one of those nodes drifts a second time and needs
+the same pass of applies.
+
 ### The two migrations, and how to go back
 
 The container applies them itself: `deploy/docker/entrypoint.sh` runs `alembic upgrade
@@ -1108,10 +1138,17 @@ head` on every start, so bringing the new image up **is** the upgrade. Two revis
   found. **`purpose` is handed back verbatim by the API**, so a consumer matching on the
   literal `friends` silently matches nothing from here on.
 
-Both reverse exactly, and the round trip has been run against a copy of real data. To go
-back, on the control-plane box:
+Both reverse exactly, and the round trip has been run against a copy of real data — and
+so has the rollback below, on real hosts. **The order is the whole of it: downgrade under
+the NEW image, stop the container, and only then put the old tree back.** The other order
+does not work, cannot be recovered in place, and takes the delivery endpoint down while
+it fails — *Do not roll the image back first*, below.
+
+On the control-plane box:
 
 ```bash
+# 1. Downgrade under the image that is still running. It is the only image that has
+#    0008 and 0009 in it, and therefore the only one that can undo them.
 docker compose --env-file .env -f deploy/docker-compose.yml exec control sh
 # --env-file is not optional: without it every ${VAR} becomes an empty string and
 # nothing says so.
@@ -1119,24 +1156,54 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec control sh
 # inside the container. alembic.ini ships inside the installed package, which is how
 # the entrypoint finds it too — there is no checkout in that image to point at.
 INI=$(python -c 'import control, pathlib; print(pathlib.Path(control.__file__).parent / "alembic.ini")')
-alembic -c "$INI" downgrade 0007
-alembic -c "$INI" current
+alembic -c "$INI" downgrade 0007    # Running downgrade 0009 -> 0008, then 0008 -> 0007
+alembic -c "$INI" current           # 0007
+exit
+
+# 2. Stop it, before anything can carry the schema forward again. `stop`, not `restart`
+#    and not `down` followed by an `up`.
+docker compose --env-file .env -f deploy/docker-compose.yml stop control
+
+# 3. Put the old tree back in the checkout, then bring the stack up on it. That image's
+#    entrypoint runs `alembic upgrade head` as always, but ITS head is 0007, so the
+#    upgrade is a no-op and the panel comes up on the schema you just rolled back to.
+git checkout <the commit or tag that predates this release>
+make up-panel
 ```
 
-**A schema rollback does not survive a restart, and this is the part that surprises
-people.** That `alembic upgrade head` in the entrypoint is unconditional and runs on
-*every* boot, so a database rolled back to `0007` under the new image is carried forward
-again by the next `compose up`, the next `restart` and the next reboot of the host —
-with nothing to read but two lines in the container log. **Roll the image back first,
-then the schema**, in that order, and check `select version_num from alembic_version`
-afterwards rather than assuming.
+**A schema rollback does not survive a restart, and that is why step 2 is a step.** That
+`alembic upgrade head` in the entrypoint is unconditional and runs on *every* boot, so a
+database left at `0007` under the new image is carried forward again by the next
+`compose up`, the next `restart` and the next reboot of the host — with nothing to read
+but two lines in the container log. Check `select version_num from alembic_version` when
+you are done rather than assuming.
 
-Ask the same question *before* you upgrade. Because that upgrade is unconditional and
-silent, a control plane sits at whatever revision its image last carried — this project's
-own was **seven revisions behind** its repository when it was measured, having been up
-since long before these two existed. The jump one container start makes is from what
-`alembic_version` actually says to head, which may be a good deal more than the two
-migrations above.
+**Do not roll the image back first.** The old image ships `0001`–`0007` and nothing else,
+so it holds no downgrade path from `0009` and cannot take the schema back for you. Its
+entrypoint dies on `Can't locate revision identified by '0009'`, and `restart:
+unless-stopped` makes it do that for as long as you leave it. Measured, in that state:
+
+- the control container crash-loops, logging `applying migrations…` then
+  `FAILED: Can't locate revision identified by '0009'`, over and over;
+- `make up-panel` exits non-zero with `dependency failed to start: container
+  hashi-control-1 is unhealthy`, and **Caddy never starts at all** — it sits in
+  `Created`;
+- so `/sub/{token}` refuses the connection for **every** user, from the first second of
+  that state until you are out of it. That is the one route the whole design says stays
+  up;
+- and you cannot `exec` in to fix it, because `docker compose exec` on a restarting
+  container answers `Container … is restarting, wait until the container is running`.
+  The commands above are not available to you there.
+
+Getting out of it is putting the new image back, doing step 1 under it, and continuing
+from step 2 — the order above, arrived at the expensive way.
+
+**Ask `alembic_version` that same question *before* you upgrade.** Because the upgrade is
+unconditional and silent, a control plane sits at whatever revision its image last
+carried — this project's own was **seven revisions behind** its repository when it was
+measured, having been up since long before these two existed. The jump one container
+start makes is from what `alembic_version` actually says to head, which may be a good
+deal more than the two migrations above.
 
 **Take a backup first** (*Backups*, below), and keep `HASHI_SECRET_KEY` where the dump is
 not. A restore under the wrong key is not a broken migration and must not be read as one:
