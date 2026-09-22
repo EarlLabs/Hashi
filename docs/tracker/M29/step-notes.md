@@ -652,3 +652,126 @@ None new. Every string changed is an operator-facing failure message inside a sc
 that only ever runs against a disposable stand. The audit's role names an agent types
 — `anon`, `operator`, `friend_a`, `friend_b`, `friend_revoked` — are **unchanged**,
 so a prompt or threat-model page naming them is still correct until M29.4c.
+
+## M29.4b — `control`: the two persisted words a person reads
+
+**The values are `users`, `user-added` and `user-revoked`, and they reverse exactly.**
+`make test-control` against a real database: **913 passed, 2 skipped, 0 failed**,
+ruff clean. `tests/e2e/control`: **66 passed**. This is the only step in M29 that
+wrote to rows, and every claim below was reproduced by the reviewer independently.
+
+1. **`0009_the_stored_words_a_person_reads.py`, revision `0009` on `0008`: four
+   guarded `UPDATE`s plus one `SET DEFAULT`.** `TransportPurpose.FRIENDS = "friends"`
+   → `USERS = "users"`, `AuditAction.FRIEND_ADDED` / `FRIEND_REVOKED` → `USER_ADDED =
+   "user-added"` / `USER_REVOKED = "user-revoked"`, member AND value, with every
+   comparison. No column changes type, width or nullability; nothing is renamed; no
+   encrypted column is opened.
+
+2. **NEITHER COLUMN IS A NATIVE POSTGRES `ENUM`, established rather than assumed.**
+   `node_transports.purpose` is `character varying(16)` (`0002` wrote a plain
+   `sa.String(16)`); `audit_entries.action` is `character varying(32)` (`0003`, read
+   back through `EnumText`, which is Python-side only by design).
+   `SELECT count(*) FROM pg_type WHERE typtype='e'` is **0** for the whole database.
+   So no `ALTER TYPE … RENAME VALUE` anywhere, and a later step adding a member needs
+   no migration.
+
+3. **The `server_default` moves with the values, and nothing static would have caught
+   it.** `0002` wrote `server_default="friends"` on `purpose`; the model declares only
+   a Python-side default, and `test_migrations.py` runs `compare_metadata` with
+   `compare_server_default` **off**. A row inserted without an explicit `purpose` by a
+   restore, a seed or a `psql` session would otherwise arrive holding a retired word.
+   The reviewer checked it the hard way, inserting a row with `purpose` omitted at
+   each of the three states. **Any later value rename must check the DDL default
+   separately from the model.**
+
+4. **"Needs no `HASHI_SECRET_KEY`" means "needs no REAL key" — M29.5 must know the
+   difference.** `control/migrations/env.py` builds the whole `Settings` object to get
+   the URL, and `Settings` refuses a `secret_key` under 32 characters, so
+   `HASHI_SECRET_KEY=''` dies on a Pydantic `string_too_short` **before Alembic
+   touches the database** — which looks exactly like a migration failure and is not
+   one. Any 32-character placeholder works, because neither `0008` nor `0009` opens an
+   encrypted column. `HASHI_OPERATOR_PASSWORD_HASH` must likewise be a real-shaped
+   scrypt string.
+
+5. **Two cases decided in the migration header rather than discovered later.** A value
+   that is neither the old nor the new one is **left exactly as found** — every
+   statement carries a `WHERE`, so `relay-entry`, `relay-leaf`, `node-added` and an
+   undeclared value survive both directions. Refusing on one would abort the `alembic
+   upgrade head` that `deploy/docker/entrypoint.sh` runs on EVERY boot, over a row the
+   application already cannot read back. An **empty table is a no-op**, and the
+   statements are self-idempotent because the `WHERE` matches nothing on a second pass.
+
+6. **The downgrade is exact, not approximately exact, and here is why it can be.** The
+   new values could not have existed before the upgrade: `EnumText` raises on an
+   undeclared value at the WRITE for `action`, and for `purpose` — which is a plain
+   `String(16)`, enforced by application discipline rather than by the column type —
+   `purpose=` is set only from `TransportPurpose` members throughout the services. So
+   every row the downgrade moves back is a row the upgrade moved. **A later value
+   rename that cannot make that argument is not reversible by a `WHERE` and needs a
+   different design.**
+
+7. **`AuditAction`'s docstring warned that a changed value orphans every row already
+   written, and it now says these two changed anyway, once, with `0009`.** The rule
+   stands; the price was paid deliberately, and the `UPDATE` is what avoided the
+   orphaning.
+
+8. **M29.4's item 5 is closed.** The three comments its review reverted to
+   `` `FRIENDS` `` because `USERS` did not yet exist — `services/nodes.py:280`,
+   `rotation.py:643`, `users.py:150` — now say `` `USERS` ``, which this step is what
+   makes true.
+
+9. **Nothing outside `control` referenced either enum.** Grepped `tests/infra/`,
+   `tests/e2e/infra/`, `tests/edge/`, `edge/`, `scripts/`, `deploy/`, `.e2e/`,
+   `.claude/` and `docs/` for `FRIEND_ADDED`, `friend-added`, `friend-revoked` and
+   `TransportPurpose`: zero hits outside this step's own plan text. M29.4c and M29.7
+   inherit nothing from this step.
+
+### How to test what M29.4b built
+
+```sh
+docker run -d --name hashi-db -p 127.0.0.1:54132:5432 \
+  -e POSTGRES_USER=hashi -e POSTGRES_PASSWORD=replace-me -e POSTGRES_DB=hashi postgres:16.4-alpine
+docker exec hashi-db psql -U hashi -d hashi -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+.venv/bin/python -m pytest tests/control/test_migrations.py -q   # 9 passed, ~18s, no app stack
+make test-control                                                # 913 passed, 2 skipped — CHECK THE SKIP COUNT
+make e2e-up && .venv/bin/python -m pytest tests/e2e/control -q && make e2e-down   # 66 passed
+```
+
+**Drop the schema between full runs**, still — M29.4's warning is unchanged.
+
+The two new tests, which a later step extends rather than rewrites:
+
+- `test_the_stored_words_go_forward_and_back_with_every_other_row_untouched` seeds rows
+  **at `0008`, in the old vocabulary**, because that is the only way to watch an
+  `UPDATE` move them — a schema comparison cannot see a value migration at all. It
+  plants three kinds of row per column on purpose: one the rename covers, one from the
+  same column's other members, and one nothing ever declared; the last two are what the
+  migration must NOT touch. It also asserts the DDL default in all three states and
+  asserts `data_type = 'character varying'` for both columns, which is item 2 pinned.
+- `test_the_data_migration_names_no_row_in_what_it_prints` plants a nickname in
+  `first_label` and asserts it appears in neither direction's stdout or stderr. The
+  audit table is the one place a well-meant `logger.info(row)` turns a trail that holds
+  no identity into a boot log that names a person.
+
+**Seeding trap, cost one run:** `node_transports` carries
+`uq_node_transport_config_name` over `(node_id, config_name)`, so several rows on one
+node need **one `config_name` each**. The pre-existing downgrade tests each seed a
+single row and so never met it.
+
+**The schema diff is necessary but NOT sufficient here, and that is the whole
+difference from `0008`** — it is empty even if every value is wrong. Compare the rows.
+The strongest evidence is the stand's own database after `tests/e2e/control`, written
+by the running application: `user-added` ×33, `user-revoked` ×4, `purpose = users` ×35.
+
+### Wording a person will see
+
+- **Stored values an operator can reach:** `user-added` and `user-revoked` in
+  `audit_entries.action`, `users` in `node_transports.purpose`. `purpose` is returned
+  verbatim by the API as `HopEndResponse.purpose` — **a consumer matching on the
+  literal `"friends"` silently matches nothing.**
+- The rendered audit sentences are **unchanged**: `user {first} added` and `user
+  {first} revoked — link is dead` already said *user* (`panel/wording.py`). Only the
+  key they are looked up by moved.
+- The two `tests/e2e/control/` scenarios list every stored action as a literal, by
+  design — `PERMITTED_ACTIONS` and `STORED_KEYS`. **A new action is written down
+  twice, once in the enum and once there**, and that duplication is the point.
