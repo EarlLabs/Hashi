@@ -968,3 +968,104 @@ no second image build.
 
 **Destroy with `compose down -v`, then shred every scratchpad file** — and check
 `docker volume ls` and `docker images` for the project name afterwards.
+
+## M29.6 — the promise to somebody's phone, as a test that can go red
+
+**A subscription issued before the rename still resolves, returns the same material
+and keeps the same token — asserted, not argued.** `make test-control` against a real
+database: **914 passed, 2 skipped, 0 failed**, ruff clean. One new file, no product
+code touched. The reviewer reproduced three deliberate breaks, one of its own
+choosing.
+
+1. **`tests/control/test_a_subscription_issued_before_the_rename_still_resolves.py`,
+   one test, 4 seconds.** Two serving nodes (one URI-shaped transport, one file-shaped
+   with an address per user), one user who keeps their link and one who is revoked,
+   then `head → 0007 → head` underneath both. Three claims, three assertions: **200**
+   on `/sub/{token}`, the SHA-256 of the body AND of the `?format=client-config-file`
+   archive unchanged, and `/api/users/{id}/subscription` still ending in the same token
+   with still one subscription row per person. The revoked link must still **404** —
+   without it, a migration that resurrected withdrawn subscriptions passes everything
+   else.
+
+2. **THE PRE-MIGRATION WORLD IS BUILT BY THE DOWNGRADE, and that is checkable where
+   hand-seeding is not.** Seeding a `friends` table by raw SQL (M29.3's pattern) cannot
+   produce ciphertext for the encrypted columns without reimplementing the secret box,
+   and leaves the "same material" claim with no baseline, because the application
+   cannot read a `0007` schema at all. Issuing at head and pushing the row back gives
+   both — and between the downgrade and the upgrade the test asserts the row really is
+   in `friends`, under `friend_id`, on a transport whose `purpose` reads `friends`.
+   **Not circular**: the comparison is against a response captured at head *before the
+   downgrade*, so it is a genuine before/after over the whole round trip.
+
+3. **Bodies are compared by DIGEST, never by bytes.** A failing
+   `assert a.content == b.content` puts both operands into pytest's report, and those
+   bytes are the user's key material. Same rule as M29.5's census. The eleven-column
+   census (`md5(string_agg(col ORDER BY id))` over `subscriptions`, `credentials`,
+   `node_transports`, `nodes`) is M29.5's by-hand md5 proof turned into an assertion; it
+   works unchanged on both sides of `0008` because those tables keep their NAMES — only
+   the foreign key column is renamed.
+
+4. **`httpx` logs the bearer path and `control` does not — and the mute is
+   load-bearing.** `httpx._client` writes `HTTP Request: GET
+   http://control.test/sub/<token>` at INFO. With the mute deleted, the reviewer
+   confirmed pytest's "Captured log call" section printed a **live token in
+   plaintext**. Muted to WARNING inside the test rather than exempted from an
+   assertion, so deleting the mute goes red.
+
+   **The rest of `tests/control/` was swept and is NOT exposed today**: only this file
+   and `test_revocation_push.py` call `caplog.set_level`, the latter never fetches
+   `/sub/`, and nothing in `pyproject.toml` raises the default log level. On the
+   application side, `api/delivery.py` has no logger call at all, `main.py:55` disables
+   `uvicorn.access`, and the error handlers log `exc.code` and the endpoint name, never
+   the path.
+
+5. **A revocation in this zone degrades every node, and that silently empties the other
+   user's subscription.** No node here has an SSH key, so the re-push a revocation fans
+   out cannot land and both nodes go DEGRADED — at which point the surviving user's
+   document renders EMPTY and every byte comparison compares nothing to nothing and
+   passes. The test puts both nodes back ACTIVE after the revoke and asserts the
+   document is non-empty before it measures anything. **Cost one debugging round; any
+   later test that revokes one user and then reads another's subscription hits it.**
+
+6. **The teardown drops tables by introspection, not through `Base.metadata`.** The
+   metadata describes head and has never heard of `friends`; this is the one file that
+   deliberately leaves the database calling the table that. A red run between the
+   downgrade and the upgrade would leave `friends` standing, `drop_all` would walk past
+   it, and the next run would die on `relation "friends" already exists` from `0001` —
+   M29.3's "bites every developer once" trap, on every red run. Reproduced and fixed.
+   **Cost: copied into a file sharing a database with a parallel run, it drops
+   everything in the schema, not only the models' tables.**
+
+7. **It imports `run_alembic` from `.test_migrations`** — the first cross-test-module
+   import in this zone, taken rather than keeping a second copy of the subprocess
+   command the container entrypoint uses. Moving or renaming `run_alembic` now breaks
+   two files.
+
+### How to test what M29.6 built
+
+```sh
+docker run -d --name hashi-db -p 127.0.0.1:54132:5432 \
+  -e POSTGRES_USER=hashi -e POSTGRES_PASSWORD=replace-me -e POSTGRES_DB=hashi postgres:16.4-alpine
+docker exec hashi-db psql -U hashi -d hashi -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+.venv/bin/python -m pytest \
+  tests/control/test_a_subscription_issued_before_the_rename_still_resolves.py \
+  tests/control/test_migrations.py -q          # 10 passed, ~22s, no app stack
+make test-control                              # 914 passed, 2 skipped — CHECK THE SKIP COUNT
+```
+
+**Red-first, breaks that are known to work** (inject, run, then
+`git checkout -- control/migrations/versions/`): `UPDATE friends SET revoked_at =
+now()` in `0008` → *"stopped resolving after it"*, 404 vs 200; `UPDATE nodes SET
+location_label` in `0009` → *"returned different bytes"*, two digests and no material;
+`UPDATE subscriptions SET token_digest = md5(token_digest)` → the census tripwire
+naming the column; an `INSERT … SELECT` reissuing every subscription → `assert 4 == 2`
+on the row count; and `UPDATE subscriptions SET token = token || 'X'` in `0009` → the
+census, catching a token-identity break before the panel is even re-queried.
+**The census fires before the fetch assertions for anything it covers** — deliberate,
+and why isolating the token assertion needs `subscriptions` lifted out of
+`CARRIED_MATERIAL`.
+
+### Wording a person will see
+
+None. Every string in this step is a test docstring or an assertion message; nothing
+reaches an operator, a panel screen, an API response or a log line.

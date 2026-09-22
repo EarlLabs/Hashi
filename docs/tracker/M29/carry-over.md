@@ -149,3 +149,19 @@ records of what was walked and when, which the record/living-document line says 
 not be rewritten. So this is not a violation to fix by editing. **It is the owner's
 call** whether a record naming a real host is a record they want to keep in a
 repository, and it is recorded here rather than acted on.
+
+## From M29.6, review round 1 — the round trip is never re-checked for schema drift, Low
+
+`test_migrations.py` runs `compare_metadata` on a plain `empty → head` chain, and
+M29.6 runs `head → 0007 → head` **with data** but never re-checks the metadata
+afterwards. So a regression specific to the down-then-up sequence — the reviewer's
+example is `_rename_constraint_if_present`'s guard silently no-opping because the
+prior name no longer matches after a downgrade, leaving a constraint under the wrong
+name — would move no byte, no token and no census value, and nothing in the tree
+would catch it.
+
+**Left open because** it is a schema-integrity question orthogonal to M29's promise
+("nothing on anybody's device changed"), which M29.6 proves from three independent
+angles. The fix is small and belongs to whoever next touches the migration tests:
+add `compare_metadata` after the final `upgrade head`, either in M29.6's file or in
+`test_migrations.py`'s own round-trip test.
