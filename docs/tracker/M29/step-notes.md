@@ -905,7 +905,7 @@ independently re-checked by the reviewer.
    `User.credentials` and `User.subscriptions` are `lazy="selectin"`
    (`models/user.py:45,48`) and `EncryptedText.process_result_value`
    (`models/base.py:104-107`) decrypts at result materialisation, which only runs
-   after the `SELECT`已 found the table. A migration fault raises
+   after the `SELECT` has found the table. A migration fault raises
    `UndefinedTable`/`UndefinedColumn` at the driver, first. **Do not report one as the
    other.**
 
