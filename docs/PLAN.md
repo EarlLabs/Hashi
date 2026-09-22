@@ -2509,6 +2509,13 @@ The moment M29.4 lands they are calls to a route that returns 404, and **no stat
 target will notice**: `make test-infra` runs `pytest tests/infra`, which does not
 reach `tests/e2e/infra/`. The scenario has to be run.
 
+**Widened 2026-09-22, measured during M29.4: it is ten call sites, not five.**
+`scripts/security/seed.py` has five more — lines 157, 160, 166, 173, 188, plus
+`friend_id` locals. `scripts/**` is the `infra` zone too, nothing static runs it
+either, and it 404s from `e02fbe5` onward. It seeds the identities the security
+audit's hunter attacks, so a broken seed does not fail loudly — it produces an audit
+that finds nothing and looks like good news.
+
 Its own step for the same reason M29.3b had one: this is the `infra` zone and M29.4
 is `control`, and `CLAUDE.md` does not allow the two in one diff. That is twice now
 that a `control` change has landed work in `infra`, which is worth noticing rather
@@ -2530,11 +2537,22 @@ returned by the API and shown in the panel, so a person reads it. Leaving it mea
 closing M29 against a checklist it does not meet, which is the same error M29.2b
 was added to correct.
 
+**Widened 2026-09-22, found during M29.4: there are TWO of these, not one.**
+`AuditAction.FRIEND_ADDED = "friend-added"` and `FRIEND_REVOKED = "friend-revoked"`
+(`control/app/models/audit.py:59-60`) are stored in `audit_entries.action`,
+`VARCHAR(32)` since migration `0003`, and read back through `EnumText`. Same shape,
+same data-migration requirement — and **an operator reads these on the audit
+screen**, which is the argument for taking them. Both enums move in this step or
+neither does; splitting them leaves the milestone half-closed against the same
+Done-when twice.
+
 Two things to get right:
 
-- **The identifier and the value both move**, `TransportPurpose.FRIENDS` → `USERS`
-  and `"friends"` → `"users"`, and every `purpose == "friends"` comparison with
-  them.
+- **The identifier and the value both move**, for both enums —
+  `TransportPurpose.FRIENDS` → `USERS` with `"friends"` → `"users"`, and
+  `AuditAction.FRIEND_ADDED` / `FRIEND_REVOKED` → `USER_ADDED` / `USER_REVOKED` with
+  `"friend-added"` / `"friend-revoked"` → `"user-added"` / `"user-revoked"` — and
+  every comparison against them.
 - **It is a data migration and therefore reversible in both directions**, on top of
   `0008`. `UPDATE … SET purpose='users' WHERE purpose='friends'` going forward and
   the exact inverse coming back, with the enum's own type updated if Postgres holds
