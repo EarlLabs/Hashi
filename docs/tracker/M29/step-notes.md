@@ -114,3 +114,101 @@ M29.1 introduced none. The strings an operator reads are M29.4's (panel and API)
 and M29.7's (charter, runbook, README); they must match the vocabulary above and
 the runbook must state the API break in the words *"anything scripted against the
 old paths stops working"*, per the owner's decision.
+
+## M29.2 — `edge` renamed (the zone is done except its e2e scenarios)
+
+**The vocabulary is proven.** `edge/**` and `tests/edge/**` carry no *friend*
+except two deliberate keeps. `make test-edge` is green on it (911 passed, 3
+skipped — `awg-quick` absent, the baseline skip).
+
+1. **The public name is now `TransportMeta.serves_users_through_a_hop`**
+   (`edge/registry.py`). `control` has NOT been updated and is red until it is.
+   The complete list M29.3/M29.4 must change, measured and independently
+   confirmed: `control/app/services/nodes.py:732` and
+   `control/app/services/relay.py:425` (calls), `control/app/errors.py:250` and
+   `control/app/services/transports.py:280` (prose), and
+   `tests/control/test_both_doors_refuse_a_friend_with_no_way_out.py` (lines 48,
+   53, 205, 457, 468 — and the file name itself). `grep -rn` over `control/`,
+   `tests/control/` and `tests/e2e/` returns exactly those sites and no others.
+
+2. **HOW RED THE TREE IS BETWEEN HERE AND M29.4 — measured, not estimated.**
+   M29.2's own hand-off first said "one collection error and one runbook
+   mismatch", and review round 1 disproved it. The true state after M29.2:
+
+   - static: `tests/control` has **1 collection error** (the file above) and is
+     otherwise green (216 passed, 670 skipped for want of Postgres — the
+     baseline shape); `tests/infra` has **1 failure** (item 3 below), 240 passed;
+     `make test-edge` is fully green.
+   - e2e: **28 failed and 5 errors** across `tests/e2e/control/` and
+     `tests/e2e/infra/`. Every one of them is the SAME root cause as the
+     collection error — `control` calling the renamed property unconditionally
+     on every "enable a transport" and "establish a hop" path. The container log
+     carries the identical `AttributeError: 'TransportMeta' object has no
+     attribute 'serves_friends_through_a_hop'` traceback on all 31
+     `internal_error` 500s; the remaining 2 are `Server disconnected` cascading
+     from the same crash, not a distinct defect.
+
+   **So essentially all of `tests/e2e/control/` and `tests/e2e/infra/` is
+   blocked until M29.3/M29.4 migrate the callers** — it is not "mostly green
+   with two known failures", and nothing downstream should rely on it being so.
+   Do not read a green-ish `make verify` summary as progress before M29.4.
+
+3. **A seam nobody predicted: `docs/deploy/runbook.md` quotes `edge`'s error
+   strings verbatim and `tests/infra/` pins the quotation.**
+   `tests/infra/test_deploy_runbook.py` imports `edge.egress.NO_RESOLVER` and
+   asserts the runbook contains it word for word. `NO_RESOLVER` now says "the
+   destinations its **users** ask for"; the runbook still says *friends*, so
+   `make test-infra` fails one test and **`make verify` cannot be green until
+   the runbook sentence moves, which is M29.7's**. Any step between M29.2 and
+   M29.7 that gates on `make verify` is gating on something already red for a
+   reason it did not cause. Gate on the zone's own verify instead.
+
+4. **`tests/e2e/edge/**` is in the old vocabulary — 94 occurrences.**
+   `CLAUDE.md` puts it in the `edge` zone, but M29.2's fence was `edge/**` +
+   `tests/edge/**` and M29.7's E2E note named only `tests/e2e/control/`. It
+   holds a file name (`test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py`)
+   and four identifiers (`NO_FRIEND_HERE`, `FRIEND_TRANSPORTS`, `FRIEND_PORT`,
+   `FRIEND_ATTEMPTS`), so the milestone's "no identifier in `control` or `edge`
+   still carries the old one" was not reachable by the seven steps as written.
+   **M29.2b was added to the plan to take it**, rather than leaving a Done-when
+   the milestone cannot satisfy.
+
+5. **Two occurrences are KEPT and must not be "finished" by a later step.**
+   `edge/health/listening.py:36` says "``/proc/net/tcp`` and friends" — English
+   for "and similar files", not a person. And
+   `tests/edge/test_a_tunnel_carries_traffic_off_the_node.py:583` cites the path
+   `tests/e2e/edge/test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py`,
+   which must keep naming the file that actually exists — so it moves only when
+   M29.2b renames that file, and then it moves with it.
+
+6. **`docs/decisions.md:104,110` name `edge.egress._friend_rules`**, now
+   `_user_rules`. Those rows are record and stay as written; the symbol they
+   point at has moved. Accepted, not fixed.
+
+### How to test what M29.2 built
+
+`make test-edge` — ruff plus `pytest tests/edge`, no Docker, ~8s. Nothing was
+fixtured or scaffolded: the existing `tests/edge/conftest.py` fixtures
+(`clients`, `credentials`, the per-transport `node` fixtures) are unchanged in
+shape and only their prose moved. The three golden files under
+`tests/edge/golden/` are rendered from the `.j2` templates, so **a comment
+reworded in `server.j2` or `client.j2` must be reworded identically in the
+golden `.conf`** — `test_golden_configs.py` compares byte for byte and will say
+so. A later step reworking edge prose changes the template and re-checks the
+golden, never the other way round.
+
+### Wording a person will see
+
+Operator-facing strings in `edge` now say *user*. The ones that matter, because
+they are quoted or asserted elsewhere:
+
+- `edge.egress.NO_RESOLVER` — "…names no resolver for the destinations its
+  **users** ask for…". **`docs/deploy/runbook.md` must be changed to match this
+  exact sentence** (`tests/infra/test_deploy_runbook.py` enforces it).
+- `edge.egress` hop refusal — "Give this node's **users** a transport that…".
+- `edge.registry` — "no **user**-facing format at all"; "so no **user** can be
+  given access to it individually — and therefore no **user** could be revoked
+  from it without affecting the others."
+- The WireGuard/AmneziaWG `Params` field descriptions (panel- and API-visible):
+  "the resolver a **USER**'s device is told to use inside the tunnel", "the
+  first address given out when this transport is offered to **users**".
