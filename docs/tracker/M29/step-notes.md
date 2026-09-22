@@ -1165,3 +1165,84 @@ on 54132** — the control zone's 697 skips are the baseline shape, not a regres
 - The runbook says *user-facing transport* everywhere it said *friend-facing*; two
   `tests/infra` step filters key off that exact hyphenated string, so **a shape
   reworded away from "user-facing" turns the gate red**.
+
+## M29.8 — the last places a person reads the old word
+
+**`make verify` is green: exit 0** — control `219 passed / 697 skipped` (no Postgres,
+the baseline shape), edge `911 / 3 skipped`, infra `241 passed`, e2e `192 passed`. The
+same shape M29.7 reported, unchanged by this step.
+
+1. **The record check is now FOUR commands, not three.** Check 4 was added to
+   `docs/records-and-living-documents.md`: the same `awk` slice idiom against
+   `docs/product/backlog.md`'s `## Журнал решений`. Copy all four; do not re-derive
+   them. All four printed nothing at both ends, against baseline `1b60280` — the
+   milestone's branch point, not the step's.
+
+2. **`docs/product/backlog.md` is settled and M29.1's carry-over is closed.** The
+   journal is a record; the roadmap above it is living. **An id moves too** — the
+   backlog's own header calls ids, zones, dependencies and statuses *«изменяемое
+   состояние»* and freezes only the goal and acceptance **text** in `research.md` §3.
+   The one exception is an id that is *also a heading in that frozen §3*:
+   `control-node-and-friend-records` is (`research.md:1026`) and keeps the old word;
+   `control-per-friend-tunnel-address` was not — zero hits in `research.md`, filed by
+   the backlog under *«Заведено во время исполнения очереди»* — and became
+   `control-per-user-tunnel-address`. **The test is the frozen counterpart, not the
+   `done` status and not that the string is written in code font.** Review round 1
+   caught the exception being applied one row too wide on the strength of a premise
+   verified on the other row; **check each id against the frozen document
+   individually.**
+
+3. **The Russian noun `друг` in the backlog is unswept, and the reason is an open
+   question rather than a rule.** Only two or three sites have a line-based defence:
+   the M2 milestone heading is verbatim-identical to the frozen criterion at
+   `research.md:382` and `:809` (verified by direct comparison, twice). The other ten —
+   lines 165, 214, 237, 273, 301, 361, 368, 370, 423, 456 — are ordinary retrospective
+   prose with **no record/living argument at all**; item 33's note reads *"AmneziaWG
+   как user-facing транспорт … для одного друга на узел"*, one word swept and the other
+   left in one sentence. They stay because **the owner settled an English word and
+   nobody has asked whether that reaches a second document's Russian vocabulary.**
+   That question is with the owner. **Do not close it inside a step.**
+
+4. **`## Where things stand` is living, and the reason it was missed is that it opens
+   on a date.** *"Run stopped by the owner on 2026-09-16"* made it look like the two
+   dated record sections beside it. **A date at the top is not what makes a record** —
+   the test is whether the section is rewritten when the facts change, and this one is.
+   All 10 occurrences moved; the check-2 `awk` slice needed no change, because its
+   accumulator turns on only at the three record headings.
+
+5. **`pyproject.toml:19` quotes `00-core-invariants.md` §2 and the quotation is now
+   stale.** The invariants say *"every user is locked out"*; the dependency comment
+   still says *friend* and cites §2. Two more of the same shape at `:16` and `:23`.
+   `pyproject.toml` is architect territory, so M29.8 named it rather than editing it.
+   **A stale quotation is arguably worse than a stale noun, because quote marks carry
+   an implicit claim of current accuracy** — a reader who trusts them will misquote the
+   invariants back. One line each; it needs one architect decision.
+
+6. **The charter's one-liner is now identical in three files and still nothing compares
+   them.** `docs/product/charter.md`, `project.json:3`, `deploy/warden/warden.py:320`.
+   The classification document now says all three move together, but that is prose, not
+   a test. **If a fourth copy appears, nothing will catch the drift.**
+
+### How to test what M29.8 built
+
+```sh
+make test-infra    # 241 passed, ~4s
+# plus the FOUR record checks from docs/records-and-living-documents.md § "Proving it"
+```
+
+Nothing to fixture and no new test: every file here is prose or config the existing
+suites already read. **No test reads `docs/records-and-living-documents.md` or
+`docs/product/backlog.md`** — grepped across tests, tooling, `.e2e/` and `deploy/` —
+so `make verify` is the only gate that covers this step, and it covers it by not
+breaking.
+
+### Wording a person will see
+
+- **The one-liner, now in all three copies:** *"A self-hosted, multi-protocol VPN for
+  its owner and ~30-50 users: a Russian entry node fronting foreign exit nodes, where
+  both nodes and protocols are data."* (`project.json` and `warden.py` use an ASCII
+  hyphen, the charter an en dash — deliberate; it was the noun that had to agree.)
+- **The threat model's boundary 2** reads *"user A → user B."*
+- **The backlog and the runbook both say `user-facing`** where they said
+  *friend-facing*. Two `tests/infra` step filters key off the runbook's exact
+  hyphenated string.
