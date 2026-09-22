@@ -2498,6 +2498,25 @@ underneath them at this step, which is the whole premise of the milestone.
 
 Gate: `make test-control`.
 
+### M29.4a — `infra`: the restore scenario calls the routes that now exist · added mid-run 2026-09-22
+
+M29.4 breaks `/api/friends/*` cleanly, with no aliases — the owner's decision. Five
+call sites in `tests/e2e/infra/test_restore_proves_the_backup.py` still post to the
+old path, and M29.3b deliberately left them because `control` was still serving
+them at the time.
+
+The moment M29.4 lands they are calls to a route that returns 404, and **no static
+target will notice**: `make test-infra` runs `pytest tests/infra`, which does not
+reach `tests/e2e/infra/`. The scenario has to be run.
+
+Its own step for the same reason M29.3b had one: this is the `infra` zone and M29.4
+is `control`, and `CLAUDE.md` does not allow the two in one diff. That is twice now
+that a `control` change has landed work in `infra`, which is worth noticing rather
+than working around — the zone split is doing exactly what it exists to do.
+
+Gate: run the scenario, `pytest tests/e2e/infra/test_restore_proves_the_backup.py`.
+`make test-infra` is not evidence here and cannot be.
+
 ### M29.4b — `control`: the transport purpose a person reads is still the old word · added mid-run 2026-09-22
 
 `TransportPurpose.FRIENDS = "friends"` (`control/app/models/node.py:114,134`) is a
