@@ -2432,6 +2432,32 @@ The work is `registry.py:718 serves_friends_through_a_hop`, the private
 
 Gate: `make test-edge`.
 
+### M29.2b — `edge`'s own e2e scenarios speak the same vocabulary · added mid-run 2026-09-22, see below
+
+**Not in the original seven steps, and it should have been.** `CLAUDE.md`'s zone
+table puts `tests/e2e/edge/**` in the `edge` zone, but M29.2's work was fenced to
+`edge/**` and `tests/edge/**`, and M29.7's E2E note named only
+`tests/e2e/control/`. So nothing claimed this directory — while the milestone's
+own "Done when" says *no identifier … in `control` or `edge` still carries the old
+one*. **The checklist the owner approved could not be satisfied by the steps the
+decomposition wrote.** This step exists to close that, and it is the same work in
+the same zone, not new scope.
+
+Measured: **94 occurrences**, independently counted twice. A file name —
+`test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py` — and four identifiers:
+`NO_FRIEND_HERE`, `FRIEND_TRANSPORTS`, `FRIEND_PORT`, `FRIEND_ATTEMPTS`.
+
+Two things travel with it. `tests/edge/test_a_tunnel_carries_traffic_off_the_node.py:583`
+cites that file by path and must move in the same commit, or it names a file that
+no longer exists. And the scenario at `tests/e2e/edge/…:158` holds a stale prose
+reference to a `tests/edge/` file M29.2 already renamed — a string in an assertion
+message, so nothing is red today, which is exactly why it would otherwise be missed.
+
+Gate: `make test-edge`. The e2e half of this zone cannot be green until M29.4
+migrates `control`'s callers — see `docs/tracker/M29/step-notes.md`, item 2, for
+how red the tree is between M29.2 and M29.4 and why a green-looking summary before
+M29.4 means nothing.
+
 ### M29.3 — `control`: the table, the columns and a migration that goes both ways
 
 `friends` → `users`, every `friend_id` column, and the foreign keys, indexes and
