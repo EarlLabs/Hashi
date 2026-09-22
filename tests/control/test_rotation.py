@@ -6,8 +6,8 @@ WHAT: re-minting a node-transport's key material, and replacing an operator-supp
 WHY:  the charter's job for the owner is "rotate anything that gets blocked, all from
       one admin panel". Two properties make that real rather than nominal, and both are
       asserted here: the new material actually reaches what would be pushed, and the
-      friend's subscription URL does NOT change — otherwise every rotation would mean
-      thirty friends re-importing a link, which is exactly what the product promises
+      user's subscription URL does NOT change — otherwise every rotation would mean
+      thirty users re-importing a link, which is exactly what the product promises
       never to require.
 HOW:  no node is contacted. The nodes here have no SSH key, so the push half fails by
       design, and the honest reporting of "rotated in the database, NOT on the node" is
@@ -33,7 +33,7 @@ from control.app.services import apply, keymaterial, nodes, relay, rotation
 
 
 async def fleet(client, session, reality_params):
-    """One active node running Reality, and one friend holding a subscription."""
+    """One active node running Reality, and one user holding a subscription."""
     node_id = (
         await client.post(
             "/api/nodes",
@@ -50,15 +50,15 @@ async def fleet(client, session, reality_params):
     )
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "kolya"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "kolya"})
     ).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
 
     node_transport_id = (
         await session.execute(select(NodeTransport.id))
     ).scalar_one()
-    return node_id, node_transport_id, friend_id, url.rsplit("/", 1)[-1]
+    return node_id, node_transport_id, user_id, url.rsplit("/", 1)[-1]
 
 
 async def rendered_server_config(session, node_id: str) -> dict:
@@ -104,7 +104,7 @@ async def test_rotating_keys_changes_what_would_be_pushed(
     assert after != before, "a key rotation left the rendered config identical"
 
 
-async def test_rotating_keys_does_not_change_the_friends_subscription_url(
+async def test_rotating_keys_does_not_change_the_users_subscription_url(
     client, session, reality_params
 ) -> None:
     """The property the whole feature exists for.
@@ -113,7 +113,7 @@ async def test_rotating_keys_does_not_change_the_friends_subscription_url(
     their device" would be false, and the operator would avoid rotating — which is the
     real failure, since the thing that does not get rotated is a blocked node.
     """
-    _, node_transport_id, friend_id, token = await fleet(
+    _, node_transport_id, user_id, token = await fleet(
         client, session, reality_params
     )
 
@@ -121,12 +121,12 @@ async def test_rotating_keys_does_not_change_the_friends_subscription_url(
 
     assert (await client.get(f"/sub/{token}")).status_code == 200
     reissued = (
-        await client.get(f"/api/friends/{friend_id}/subscription")
+        await client.get(f"/api/users/{user_id}/subscription")
     ).json()["url"]
-    assert reissued.endswith(token), "rotation moved the friend's subscription URL"
+    assert reissued.endswith(token), "rotation moved the user's subscription URL"
 
 
-async def test_rotating_keys_hands_the_friend_new_material_at_the_same_url(
+async def test_rotating_keys_hands_the_user_new_material_at_the_same_url(
     client, session, reality_params
 ) -> None:
     """Same link, different contents — the two halves of the promise together."""
@@ -136,27 +136,27 @@ async def test_rotating_keys_hands_the_friend_new_material_at_the_same_url(
     await client.post(f"/api/transports/{node_transport_id}/rotate-keys")
 
     after = base64.b64decode((await client.get(f"/sub/{token}")).text).decode()
-    assert after != before, "the friend would re-fetch the same link and get the old key"
+    assert after != before, "the user would re-fetch the same link and get the old key"
 
 
-async def test_rotating_keys_re_mints_every_friends_credential(
+async def test_rotating_keys_re_mints_every_users_credential(
     client, session, reality_params
 ) -> None:
     """Client material is rotated too, by default.
 
     A node worth re-keying is a node that may have leaked the credentials it was
-    authenticating, so rotating only the server key leaves every friend's identity on
+    authenticating, so rotating only the server key leaves every user's identity on
     that node unchanged. This is the assertion that keeps the default honest.
     """
     _, node_transport_id, _, _ = await fleet(client, session, reality_params)
     before = (await session.execute(select(Credential.subject))).scalars().all()
-    assert before, "the friend had no credential — the premise failed"
+    assert before, "the user had no credential — the premise failed"
 
     await client.post(f"/api/transports/{node_transport_id}/rotate-keys")
     session.expire_all()
 
     after = (await session.execute(select(Credential.subject))).scalars().all()
-    assert set(after).isdisjoint(before), "a friend's credential survived a re-key"
+    assert set(after).isdisjoint(before), "a user's credential survived a re-key"
 
 
 async def test_rotation_reports_that_the_node_was_not_updated(
@@ -210,8 +210,8 @@ async def test_replacing_a_parameter_preserves_key_material(
 ) -> None:
     """Two different operations with two different consequences, kept apart.
 
-    An operator changing a hostname must be able to predict what happens to friends:
-    nothing. Silently re-keying here would mean every friend's config is replaced by a
+    An operator changing a hostname must be able to predict what happens to users:
+    nothing. Silently re-keying here would mean every user's config is replaced by a
     routine edit.
     """
     _, node_transport_id, _, _ = await fleet(client, session, reality_params)
@@ -313,7 +313,7 @@ async def test_the_panel_leaves_blank_fields_alone(
 
     A rotation form that round-tripped every parameter would rewrite fields the
     operator never looked at — and on this form one of those fields is the port every
-    friend is currently connected to.
+    user is currently connected to.
     """
     node_id, node_transport_id, _, _ = await fleet(client, session, reality_params)
 

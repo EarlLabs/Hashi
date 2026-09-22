@@ -5,7 +5,7 @@ WHY:  explicit response models rather than returning ORM objects, because a
       SQLAlchemy model serialised directly would include whatever columns exist —
       and this schema has columns holding decrypted private keys and subscription
       tokens. An explicit model makes leaking one an act of writing a field name.
-HOW:  Pydantic v2. Node and friend responses carry no secret at all; the one place a
+HOW:  Pydantic v2. Node and user responses carry no secret at all; the one place a
       token is returned is ``SubscriptionIssued``, and only at the moment of issue.
 """
 
@@ -129,7 +129,7 @@ class TransportMetaResponse(BaseModel):
     # were written against.
     subscription_expressible: bool
 
-    # Every shape a friend can receive this transport in — the transport's own
+    # Every shape a user can receive this transport in — the transport's own
     # declaration, sorted. Since item 27 "not a URI" no longer means "not deliverable",
     # so a yes/no here would hide the thing an operator needs: whether this transport
     # arrives inside the subscription link they already sent, or as a file to import.
@@ -137,7 +137,7 @@ class TransportMetaResponse(BaseModel):
 
     # Whether a filtering network identifies this protocol on the wire. The transport's
     # own declaration; `control` passes it through and never decides it. Surfaced so the
-    # panel can refuse to present such a transport to a friend as a working exit —
+    # panel can refuse to present such a transport to a user as a working exit —
     # backlog item 28's constraint, whose declaration half lives in `edge`.
     blocked_by_inspection: bool
 
@@ -180,13 +180,13 @@ class TransportMetaResponse(BaseModel):
     operator_params: list[str]
 
 
-class FriendCreate(BaseModel):
+class UserCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nickname: str = Field(min_length=1, max_length=64)
 
 
-class FriendResponse(BaseModel):
+class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -199,7 +199,7 @@ class SubscriptionIssued(BaseModel):
     """The one response that contains a bearer credential.
 
     Returned when a subscription is created or re-displayed to the operator, because
-    the operator has to be able to send it to their friend. It is never logged and
+    the operator has to be able to send it to their user. It is never logged and
     never included in any list endpoint.
     """
 
@@ -209,7 +209,7 @@ class SubscriptionIssued(BaseModel):
 class RevocationResponse(BaseModel):
     """The outcome of a revocation, including the uncomfortable case."""
 
-    friend_id: str
+    user_id: str
 
     # ``RevocationOutcome.confirmed``, NOT ``RevocationOutcome.complete`` — M23, round 8,
     # and it is the same finding as the panel's one surface over. This field is what an
@@ -346,7 +346,7 @@ class HopCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # The node friends dial. It DIALS the leaf — the direction is forced, since an
+    # The node users dial. It DIALS the leaf — the direction is forced, since an
     # entry node behind a Russian carrier NAT cannot be dialled.
     entry_node_id: str
     leaf_node_id: str
@@ -364,7 +364,7 @@ class HopEndResponse(BaseModel):
     node_id: str
     transport_name: str
     # Same field, same reason as ``TransportResponse``: on a node that offers this
-    # transport to friends AND carries a hop over it, this is what says which file on
+    # transport to users AND carries a hop over it, this is what says which file on
     # the host is this end.
     config_name: str
     purpose: str
@@ -411,7 +411,7 @@ class ResolverChange(BaseModel):
 
 
 class TransportEnabledChange(BaseModel):
-    """Switching one node-transport in or out of what friends are offered.
+    """Switching one node-transport in or out of what users are offered.
 
     A required boolean rather than a toggle verb: two operators looking at the same
     stale page must not be able to flip a transport back and forth by both clicking

@@ -575,7 +575,7 @@ def assert_plain_reason(reason: str | None, *addresses: str) -> None:
 
     ``addresses`` is EVERY address that names the node under test, and at least one is
     required: the check is worthless in exactly the tests that forget to pass it. There
-    is more than one because a node record carries more than one — the address a friend
+    is more than one because a node record carries more than one — the address a user
     dials and the address `control` dials over SSH are separate columns, and until
     M21.2 they held the same string here, which is the only reason one argument ever
     looked sufficient. A reason may leak either.

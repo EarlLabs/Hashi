@@ -3,7 +3,7 @@
 
   UI-PATTERNS §3: a destructive action is a plain secondary button that confirms in a
   dialog. The prototype made revoke a toggle with "restore" beside it; this product
-  cannot do that — revoking deletes the friend's key material on every node — and
+  cannot do that — revoking deletes the user's key material on every node — and
   design/README.md says so itself: "if the key cannot be re-minted, irreversible —
   replace the toggle with a confirm dialog and a disabled row state".
 
@@ -13,7 +13,7 @@
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
        aria-labelledby="revoke-title">
-    <div class="dialog-title" id="revoke-title">Revoke {{ friend.nickname }}?</div>
+    <div class="dialog-title" id="revoke-title">Revoke {{ user.nickname }}?</div>
     <div class="dialog-body">
       Their link stops working on every node and every protocol, and their key
       material is deleted from each of them. This cannot be undone — restoring access
@@ -29,7 +29,7 @@
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
       <button class="btn btn-primary" type="button"
-              hx-post="/panel/friends/{{ friend.id }}/revoke"
+              hx-post="/panel/users/{{ user.id }}/revoke"
               hx-target="#dialog-slot" hx-swap="innerHTML">delete their key material</button>
     </div>
     {% include "panel/corners.html" %}

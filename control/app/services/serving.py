@@ -13,9 +13,9 @@ WHY:  two acceptance walks, one fault each, and the second one is why the socket
       * **Walk 2.** The apply looked once, in the first second of the container's first
         start — running, not yet restarting — concluded the node was serving, cleared a
         true probe finding and left the row reading ``active / in sync`` while the
-        container sat in a crash loop and the friend's ping was 100% loss. The same check
+        container sat in a crash loop and the user's ping was 100% loss. The same check
         fired the other way on a leaf whose container came up a moment later: ``degraded``
-        while that friend's ping was 0% loss.
+        while that user's ping was 0% loss.
       * **Walk 3.** With the crash loop closed, the walk replaced a leaf's image with one
         identical except that the data plane's ``up`` exits 0 having done nothing. The
         node's own generated compose command is ``sh -c 'set -e; … "$0" up "$1"; while :;

@@ -16,9 +16,9 @@ WHY:  the owner asked for it in these words — *"just stop suggest the wireguar
       M20'S ACCEPTANCE CLOSED THE OTHER HALF, and this file used to pin it open: the
       operator API went on answering ``POST /api/nodes/{id}/transports`` with 201 and
       ``enabled: true`` for a retired transport, and the complete credential it minted
-      reached the next friend's archive. The reading that allowed it — that the owner's
+      reached the next user's archive. The reading that allowed it — that the owner's
       words were about SUGGESTIONS — understated them ("may be it's better to drop it?"),
-      and the consequence is not a status code but a friend holding a tunnel that
+      and the consequence is not a status code but a user holding a tunnel that
       completes its handshake and carries nothing, with nothing on their device saying
       so. Refusing to CREATE is still not refusing to SERVE, which is the whole of the
       other half below.
@@ -497,7 +497,7 @@ async def test_a_node_already_running_a_retired_transport_still_renders(
     with it would have turned a protocol that carries nothing into a node that serves
     nothing.
 
-    THE FRIEND IS MADE AFTER THE RETIREMENT IS BACK, which is the sharper half: this is
+    THE USER IS MADE AFTER THE RETIREMENT IS BACK, which is the sharper half: this is
     somebody who joined the fleet today, on a node whose row predates the withdrawal, and
     the archive they are handed still has to contain that row's configuration. Refusing to
     create a row is not refusing to serve the one that exists, and nothing about the
@@ -509,8 +509,8 @@ async def test_a_node_already_running_a_retired_transport_still_renders(
     await nodes_service.set_node_state(
         session, node_id=node_id, state=NodeState.ACTIVE
     )
-    friend = await client.post("/api/friends", json={"nickname": "vera"})
-    assert friend.status_code == 201, friend.text
+    user = await client.post("/api/users", json={"nickname": "vera"})
+    assert user.status_code == 201, user.text
 
     dialog = await client.get(f"/panel/nodes/{node_id}/transports")
     assert dialog.status_code == 200, dialog.text
@@ -541,7 +541,7 @@ async def test_the_api_refuses_a_transport_the_registry_has_retired(
     """THE ROUTE THAT USED TO SAY 201 — M20's acceptance, and the reason this file moved.
 
     An operator naming a retired transport outright was obeyed here: a row, ``enabled:
-    true``, and a complete credential for it in the next friend's archive. What that costs
+    true``, and a complete credential for it in the next user's archive. What that costs
     is not a status code. It is a person on a tunnel whose handshake completes and which
     carries nothing on every host this project prepares, with nothing on their device
     saying so — and they would have no reason to suspect the protocol rather than the
@@ -586,14 +586,14 @@ async def test_a_retired_transport_is_refused_on_a_node_that_is_already_serving(
 ) -> None:
     """The same refusal on the path that would have fanned out to everybody.
 
-    Enabling on a SERVING node grants every active friend material in the same
+    Enabling on a SERVING node grants every active user material in the same
     transaction (``enable_and_grant``), so this is the one call where a retired
     transport's credential reaches devices immediately rather than at the next apply. A
     refusal that only guarded the draft case would leave the worst version of the bug
     reachable, and the two paths share ``_enable`` precisely so that they cannot differ —
     which is a claim worth one scenario rather than a comment.
 
-    The friend exists before the attempt and holds no credential after it: nothing was
+    The user exists before the attempt and holds no credential after it: nothing was
     minted, nothing was granted, and nobody's archive changed.
 
     THE SECOND ROW ASKS FOR A PORT AND A TUNNEL OF ITS OWN, and that is what makes this
@@ -609,7 +609,7 @@ async def test_a_retired_transport_is_refused_on_a_node_that_is_already_serving(
     assert offered, "this image offers nothing, so no node here can reach service"
     await a_row_from_before_the_retirement(client, node_id, offered[0])
     await nodes_service.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
-    assert (await client.post("/api/friends", json={"nickname": "yura"})).status_code == 201
+    assert (await client.post("/api/users", json={"nickname": "yura"})).status_code == 201
 
     refused = await client.post(
         f"/api/nodes/{node_id}/transports",

@@ -159,7 +159,7 @@ async def sweep_forever(database: Database, *, retention_days: int) -> None:
         except Exception:
             # The traceback, because this runs with nobody watching and a sweep that
             # stops working leaves a record growing past the window it promised. It
-            # names no friend and no node: the statement is one comparison against a
+            # names no user and no node: the statement is one comparison against a
             # timestamp.
             logger.exception(
                 "the audit retention sweep failed; the next attempt is in %d seconds",

@@ -178,7 +178,7 @@ async def enable_pool(client, node_id: str, transport_name: str, *, pool_size: i
 
 
 async def add_user(client, nickname: str) -> str:
-    created = await client.post("/api/friends", json={"nickname": nickname})
+    created = await client.post("/api/users", json={"nickname": nickname})
     assert created.status_code == 201, created.text
     return created.json()["id"]
 
@@ -515,17 +515,17 @@ async def test_a_refusal_that_rolled_the_session_back_still_reaches_the_operator
     it. ``_refuse_state`` carries the same lesson one screen over.
     """
     from control.app.errors import Conflict  # noqa: PLC0415
-    from control.app.services import friends  # noqa: PLC0415
+    from control.app.services import users  # noqa: PLC0415
 
     await add_user(client, "boris")
     node_id = await a_reachable_node(client, name="husk")
     assert (await enable_pool(client, node_id, pool_transport, pool_size=4)).status_code == 201
 
-    async def grant_on(session, friend, rows):
+    async def grant_on(session, user, rows):
         await session.rollback()
         raise Conflict("this pool has no room")
 
-    pinned(monkeypatch, friends, "grant_on", grant_on)
+    pinned(monkeypatch, users, "grant_on", grant_on)
 
     refused = await client.post(
         f"/panel/nodes/{node_id}/apply", headers={"HX-Request": "true"}

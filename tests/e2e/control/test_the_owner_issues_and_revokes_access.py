@@ -1,7 +1,7 @@
-"""The product, end to end: the owner builds a fleet and a friend gets a link.
+"""The product, end to end: the owner builds a fleet and a user gets a link.
 
 WHAT: one scenario that walks the whole main path over real HTTP against the booted
-      stack — log in, add a node, enable a protocol, add a friend, fetch the
+      stack — log in, add a node, enable a protocol, add a user, fetch the
       subscription exactly as their client would, add a second protocol, and revoke.
 WHY:  every step of this exists in a unit test somewhere. What no unit test can say is
       that the steps compose through the real application, the real database and the
@@ -62,7 +62,7 @@ def ws_params(port: int) -> dict:
 
 
 async def make_serving_node(operator, unique: str, *, port: int) -> str:
-    """A node with one protocol enabled, moved into the only state friends can see."""
+    """A node with one protocol enabled, moved into the only state users can see."""
     node = await operator.post(
         "/api/nodes",
         json={
@@ -97,7 +97,7 @@ def entries_in(document: str, unique: str | None = None) -> list[str]:
     return [line for line in lines if unique is None or unique in line]
 
 
-async def test_the_whole_path_from_an_empty_fleet_to_a_revoked_friend(
+async def test_the_whole_path_from_an_empty_fleet_to_a_revoked_user(
     operator, client, unique: str
 ) -> None:
     """One scenario, in the order the owner actually performs it."""
@@ -118,12 +118,12 @@ async def test_the_whole_path_from_an_empty_fleet_to_a_revoked_friend(
     assert console.status_code == 200, console.text
     assert "nodes active" in console.text
 
-    # --- a friend, and the one artefact they ever hold ------------------------
-    friend = await operator.post("/api/friends", json={"nickname": f"kolya-{unique}"})
-    assert friend.status_code == 201, friend.text
-    friend_id = friend.json()["id"]
+    # --- a user, and the one artefact they ever hold ------------------------
+    user = await operator.post("/api/users", json={"nickname": f"kolya-{unique}"})
+    assert user.status_code == 201, user.text
+    user_id = user.json()["id"]
 
-    issued = await operator.get(f"/api/friends/{friend_id}/subscription")
+    issued = await operator.get(f"/api/users/{user_id}/subscription")
     assert issued.status_code == 200, issued.text
     url = issued.json()["url"]
     token = url.rsplit("/", 1)[-1]
@@ -148,12 +148,12 @@ async def test_the_whole_path_from_an_empty_fleet_to_a_revoked_friend(
 
     refetched = await client.get(f"/sub/{token}")
     assert len(entries_in(refetched.text, unique)) == 2, (
-        "enabling a protocol did not reach an existing friend's SAME link — this is "
+        "enabling a protocol did not reach an existing user's SAME link — this is "
         "the promise that makes a rotation invisible to them"
     )
 
     # --- revocation is total -------------------------------------------------
-    revoked = await operator.post(f"/api/friends/{friend_id}/revoke")
+    revoked = await operator.post(f"/api/users/{user_id}/revoke")
     assert revoked.status_code == 200, revoked.text
 
     gone = await client.get(f"/sub/{token}")
@@ -166,7 +166,7 @@ async def test_a_draft_node_reaches_nobody(operator, client, unique: str) -> Non
     """The state filter, proven through the delivery endpoint rather than a query.
 
     A node is a record before it is a working host. If drafts leaked into
-    subscriptions, friends would be routed onto a host that has never been configured
+    subscriptions, users would be routed onto a host that has never been configured
     and would report a broken client.
     """
     await make_serving_node(operator, unique, port=8445)
@@ -184,9 +184,9 @@ async def test_a_draft_node_reaches_nobody(operator, client, unique: str) -> Non
         json={"transport_name": "vless-reality", "params": reality_params(8446)},
     )
 
-    friend = await operator.post("/api/friends", json={"nickname": f"masha-{unique}"})
+    user = await operator.post("/api/users", json={"nickname": f"masha-{unique}"})
     token = (
-        await operator.get(f"/api/friends/{friend.json()['id']}/subscription")
+        await operator.get(f"/api/users/{user.json()['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     entries = entries_in((await client.get(f"/sub/{token}")).text, unique)

@@ -8,8 +8,8 @@ HOW:  full pages for navigations, HTML FRAGMENTS for HTMX actions. The control
       rulebook names the trap: returning a full document from a partial route nests
       ``<html>`` inside the page and the bug looks like CSS.
 
-      Autoescaping stays on everywhere. Node names, friend nicknames and error
-      strings are attacker-influenced text — a friend's nickname is typed by the
+      Autoescaping stays on everywhere. Node names, user nicknames and error
+      strings are attacker-influenced text — a user's nickname is typed by the
       operator, but a node's ``state_detail`` can contain text from a remote host —
       and a ``|safe`` on any of them is an injection.
 
@@ -36,7 +36,7 @@ redirect: the console is the only caller and it asks with htmx.
 AND THE REFUSAL SPLIT IS GONE TOO, since M23's eighth round. Those two routes kept one
 last piece of the pre-redesign form: a caller that was not htmx got the ``DomainError``
 envelope at 400 instead of the dialog at 422, on the reading that such a caller has
-nowhere to render a field error. ``POST /panel/friends`` never had it — it re-renders
+nowhere to render a field error. ``POST /panel/users`` never had it — it re-renders
 its dialog for every caller — so one console answered the same kind of refusal in two
 shapes, and the walk read the worse of them: 400 with the field sentences joined into
 one paragraph that named no field and repeated itself once per missing box. Every panel
@@ -72,13 +72,13 @@ from control.app.services import (
     addresses,
     apply,
     console,
-    friends,
     health,
     nodes,
     relay,
     revocation,
     rotation,
     transports,
+    users,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ async def logout(request: Request) -> Response:
 # to add the measurement later.
 NAV = (
     {"key": "overview", "label": "Overview", "url": "/panel/"},
-    {"key": "friends", "label": "Users", "url": "/panel/friends"},
+    {"key": "users", "label": "Users", "url": "/panel/users"},
     {"key": "nodes", "label": "Nodes", "url": "/panel/nodes"},
     {"key": "hops", "label": "Hops", "url": "/panel/hops"},
     {"key": "transports", "label": "Transports", "url": "/panel/transports"},
@@ -231,36 +231,37 @@ async def overview_body(
     )
 
 
-@router.get("/friends", response_class=HTMLResponse)
-async def friends_screen(
+@router.get("/users", response_class=HTMLResponse)
+async def users_screen(
     request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """Users — the people who can dial the mesh.
 
     The screen says "users" and this function, its route and everything under it say
-    ``friend``. Decision 9: the rename stops at the rendered page.
+    ``user`` too, since M29 — the screens had said it for eleven milestones while the
+    code said something else, and that is the gap M29 closed rather than a new rule.
     """
     return _screen(
         request,
-        screen="panel/screens/friends.html",
-        current="friends",
+        screen="panel/screens/users.html",
+        current="users",
         title="Users",
         subtitle="who can dial the mesh, and the one URL each of them holds",
-        context=await _friends_context(session),
+        context=await _users_context(session),
     )
 
 
-@router.get("/friends/table", response_class=HTMLResponse)
-async def friends_table(
+@router.get("/users/table", response_class=HTMLResponse)
+async def users_table(
     request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """The users table on its own, for the refresh after a mutation."""
     return TEMPLATES.TemplateResponse(
-        request, "panel/friends_table.html", await _friends_context(session)
+        request, "panel/users_table.html", await _users_context(session)
     )
 
 
-async def _friends_context(session: AsyncSession) -> dict:
+async def _users_context(session: AsyncSession) -> dict:
     """What the users table needs, in one place so the screen and the refresh agree."""
     # READ ONCE and handed to both — M23, round 3. The note above the table and the cell
     # on a revoked row are two answers to the same question, and asking it twice is how
@@ -268,10 +269,10 @@ async def _friends_context(session: AsyncSession) -> dict:
     # nothing is in doubt.
     unconfirmed = await console.unconfirmed_nodes(session)
     return {
-        "friends": await console.friend_rows(session),
+        "users": await console.user_rows(session),
         "serving": len(await nodes.serving_transports(session)),
         # What adding a user does NOT do — M26's first acceptance walk. The walk added a
-        # friend, opened their link and got a correct configuration file for a node that
+        # user, opened their link and got a correct configuration file for a node that
         # held no peer for them; only a second apply made it true, and no screen said so.
         # The note beside it is about a withdrawal that cannot be confirmed, which is the
         # other direction, and is why an operator who had just added somebody read nothing
@@ -290,8 +291,8 @@ async def _friends_context(session: AsyncSession) -> dict:
     }
 
 
-@router.get("/friends/new", response_class=HTMLResponse)
-async def add_friend_dialog(
+@router.get("/users/new", response_class=HTMLResponse)
+async def add_user_dialog(
     request: Request, session: AsyncSession = Depends(session_dependency)
 ) -> Response:
     """The empty add-user dialog — and, since M17.2, whether there is room for one.
@@ -305,11 +306,11 @@ async def add_friend_dialog(
     explains why there is no control.
     """
     return TEMPLATES.TemplateResponse(
-        request, "panel/add_friend_dialog.html", await _add_friend_form(session)
+        request, "panel/add_user_dialog.html", await _add_user_form(session)
     )
 
 
-async def _add_friend_form(
+async def _add_user_form(
     session: AsyncSession, *, nickname: str = "", error: str | None = None
 ) -> dict:
     """What the add-user dialog needs, in one place so first paint and refusal agree.
@@ -465,7 +466,7 @@ POOL_NOT_A_NUMBER = "a whole number — how many people this transport hands an 
 # validator's complaint about a value they can see is wrong.
 #
 # NO ``maxlength`` IN THE MARKUP, which this console has already learned once
-# (``panel/add_friend_dialog.html``): the attribute silently clips a paste and the record
+# (``panel/add_user_dialog.html``): the attribute silently clips a paste and the record
 # is then written under something other than what the operator typed. Refused, not
 # trimmed.
 #
@@ -590,7 +591,7 @@ async def _set_offered(
             request,
             banner=(
                 console.OFFER_HOP_END
-                if not offer.for_friends
+                if not offer.for_users
                 else wording.for_the_page(exc.message)
             ),
             keeping=offer.node,
@@ -599,7 +600,7 @@ async def _set_offered(
     if offered:
         # Offering again runs the same grant fan-out ``enable_transport`` does, so the
         # material a user holds moves and the Keys screen's "users on it" count with it.
-        events = "nodes-changed, keys-changed, friends-changed"
+        events = "nodes-changed, keys-changed, users-changed"
         toast = console.offer_summary(
             offer.node, offer.transport, deliverable=offer.deliverable
         )
@@ -608,7 +609,7 @@ async def _set_offered(
         # CREDENTIAL — that stays minted, which is why the Keys screen is left alone —
         # but the Users table's own columns are derived from ``serving_transports``,
         # which counts only ENABLED rows, so both of them move the moment this commits.
-        events = "nodes-changed, friends-changed"
+        events = "nodes-changed, users-changed"
         # Asked AFTER the flag moved, because the sentence is about what is true now:
         # withdrawing the node's last enabled row leaves the apply it would otherwise
         # send the operator to with nothing to push — M18.1's review.
@@ -680,7 +681,7 @@ async def remove_transport(
         # backwards.
         return _mutation(
             request,
-            banner=console.REMOVE_HOP_END if not offer.for_friends else exc.message,
+            banner=console.REMOVE_HOP_END if not offer.for_users else exc.message,
             keeping=offer.node,
             events="nodes-changed",
         )
@@ -699,7 +700,7 @@ async def remove_transport(
         # Three, because a row leaving takes three collections with it: the node's chips,
         # the Keys screen's row for it, and the Users table's counts, which are derived
         # from ``serving_transports``.
-        events="nodes-changed, keys-changed, friends-changed",
+        events="nodes-changed, keys-changed, users-changed",
     )
 
 
@@ -750,9 +751,9 @@ async def _enable_form(
     IT USED TO SUBTRACT what the node already ran, on the reasoning that the form should
     not present an action whose only outcome is a refusal. That reasoning went with the
     rule it was built on: since M15 a node may carry two instances of one transport —
-    the runbook asks for exactly that, a friend-facing AmneziaWG and a hop over
-    AmneziaWG on one box — and the subtraction counted hop ends too, so hop-then-friends
-    was impossible from the only surface an operator has while friends-then-hop worked.
+    the runbook asks for exactly that, a user-facing AmneziaWG and a hop over
+    AmneziaWG on one box — and the subtraction counted hop ends too, so hop-then-users
+    was impossible from the only surface an operator has while users-then-hop worked.
     A filter cannot answer "is a second one legal here" without repeating the port rule,
     which is ``services.placement``'s single answer; so it does not try, and a genuine
     collision arrives as a refusal on this dialog with the port named.
@@ -1105,7 +1106,7 @@ async def set_node_state(
         # Both, and the second is not decoration: a node becoming serving hands every
         # active user a credential on it, which is what criterion 2 rests on and what
         # the Users table's own column counts.
-        events="nodes-changed, friends-changed",
+        events="nodes-changed, users-changed",
     )
 
 
@@ -1123,8 +1124,8 @@ async def _refuse_state(
 
     IT RE-READS THE NODE, like ``_refuse_enable`` and ``_refuse_params`` do, and that is
     required rather than symmetrical — M17. Since this milestone, moving a node to
-    serving grants every active friend inside the same transaction, and a pool with no
-    room refuses by ROLLING BACK (``friends.grant_everywhere``). A rollback expires every
+    serving grants every active user inside the same transaction, and a pool with no
+    room refuses by ROLLING BACK (``users.grant_everywhere``). A rollback expires every
     object in the session's identity map whatever ``expire_on_commit`` says, so a ``Node``
     this route had fetched before the call is a husk afterwards: reading ``node.state``
     to compose this dialog would emit a SELECT from a plain frame on an async session —
@@ -1149,7 +1150,7 @@ async def _refuse_state(
 # --- Hops (M9.2) -------------------------------------------------------------
 
 # The two ends of a hop, in the order the topology forces: the entry is the node
-# friends dial and the one that DIALS OUT, because a node behind a Russian carrier NAT
+# users dial and the one that DIALS OUT, because a node behind a Russian carrier NAT
 # cannot be dialled. ``prefix`` is what each end's parameters are named with in the
 # form, and it is the same prefix ``create_hop`` below has always stripped — declared
 # once here so the dialog that writes it and the route that reads it cannot drift.
@@ -1215,18 +1216,19 @@ def _in_the_pages_words(boxes: tuple) -> tuple:
 
     A box's hint is the FIELD'S OWN ``description``, written in the transport's package
     and rendered straight onto a console dialog — which makes it a server-composed
-    sentence a console template renders, and decision 9 says every one of those comes
-    through ``wording.for_the_page``. It was the one that did not, and it went unnoticed
-    while no shipped transport's description used the word: the moment one did (M17
-    widened ``peer_tunnel_address``'s description to say what it means on a transport
-    offered to friends), three dialogs started saying ``friends`` to an operator whose
-    every other word is ``user``.
+    sentence a console template renders, and every one of those comes through
+    ``wording.for_the_page``. It was the one that did not, and it went unnoticed while
+    no shipped transport's description used the word the panel refuses (M17 widened
+    ``peer_tunnel_address``'s description, and three dialogs started saying it at once).
+    M29 made the two vocabularies one, so the hint no longer has a word to lose here —
+    but a hint is still page copy composed in another package, and the refusals'
+    directions still cross this seam, so it keeps coming through.
 
     Applied here rather than in ``services/transports.py`` for the reason ``wording``'s
-    own header gives: a service writes in the code's vocabulary by design, and the
-    translation belongs at the moment the sentence becomes page copy. It is the hint and
-    never the NAME: a box is labelled with the field the transport declared, and renaming
-    that would be renaming a parameter the operator may have to type.
+    own header gives: a description is written for any caller, and page copy is settled
+    at the moment the sentence becomes page copy. It is the hint and never the NAME: a
+    box is labelled with the field the transport declared, and renaming that would be
+    renaming a parameter the operator may have to type.
     """
     return tuple(
         dataclasses.replace(box, hint=wording.for_the_page(box.hint)) for box in boxes
@@ -1843,7 +1845,7 @@ def _replaceable_boxes(node_transport) -> tuple:
     upwards from the address above it, and the hint says so.
 
     AND NOT AT ALL ON A HOP END, which is the row's own fact and not the transport's. The
-    transport the runbook mandates for the hop is also the one it recommends for friends,
+    transport the runbook mandates for the hop is also the one it recommends for users,
     so deciding from the declaration alone put this box on both ends of every hop: a
     control hinted "how many users this protocol may hand an address to" on a tunnel
     between two of the owner's own nodes, two lines above this same dialog's "No user
@@ -1909,7 +1911,7 @@ async def _params_form(
         "failure": failure or (None if key.installed else console.KEY_NOT_IN_THIS_IMAGE),
         # Shared with the rotate dialog and with the answer both of them produce — see
         # console.HOP_PUSH_OUTCOME. Rendered only on the hop branch, which the template
-        # already decides from ``key.for_friends``.
+        # already decides from ``key.for_users``.
         "hop_push_outcome": console.HOP_PUSH_OUTCOME,
     }
 
@@ -2118,7 +2120,7 @@ def _refuse_node(
     a form submitted with two boxes empty was refused with *"required — a node cannot be
     registered without it required — a node cannot be registered without it"*. Those
     sentences are written to sit under a box; joined into a paragraph they name nothing.
-    ``POST /panel/friends`` answers the same kind of refusal with its dialog at 422
+    ``POST /panel/users`` answers the same kind of refusal with its dialog at 422
     whoever asked, and one console may not hold two answers to one question.
 
     What that costs is a non-htmx caller getting markup, and it is the right cost: the
@@ -2262,7 +2264,7 @@ async def apply_node(
     node = await nodes.get_node(session, node_id)
     # READ BEFORE THE CALL AND NEVER OFF THE OBJECT AFTERWARDS — M23, round 3, and the
     # same lesson ``_refuse_state`` carries one screen over. A refusal from the fan-out
-    # this apply now runs comes out of ``friends.grant_everywhere``, which ROLLS BACK
+    # this apply now runs comes out of ``users.grant_everywhere``, which ROLLS BACK
     # before it raises; a rollback expires every object in the identity map whatever
     # ``expire_on_commit`` says, so ``node`` is a husk afterwards and ``node.name`` in
     # either arm below emits a SELECT from a plain frame on an async session. That is a
@@ -2587,7 +2589,7 @@ async def enable_transport(
         )
 
     # NO SECOND FAN-OUT HERE, and its absence is the point — M17. This route used to
-    # grant every active friend again, in a second transaction, after the enable had
+    # grant every active user again, in a second transaction, after the enable had
     # committed. ``nodes.enable_and_grant`` above does that INSIDE the transaction it
     # commits, which is what makes a pool with no room a refusal that changed nothing;
     # a second pass afterwards could still raise ``Conflict`` — outside this route's
@@ -2607,7 +2609,7 @@ async def enable_transport(
         # Three collections move: this node's chips, the material that was just minted,
         # and every active user's coverage count. Comma-separated in one HX-Trigger, the
         # shape M9.2 established for a mutation touching more than one.
-        events="nodes-changed, keys-changed, friends-changed",
+        events="nodes-changed, keys-changed, users-changed",
     )
 
 
@@ -2660,9 +2662,9 @@ def _mutation(
     reading the call sites rather than every template.
 
     Every sentence passes through ``wording.for_the_page``: they are composed in
-    ``services/``, which speaks the code's vocabulary, and decision 9 says that word
-    stops before the rendered page. ``keeping`` is the operator's own text inside the
-    sentence — a nickname — which is handed back exactly as they typed it.
+    ``services/`` for any caller, and where they send an operator is the console's to
+    say. ``keeping`` is the operator's own text inside the sentence — a nickname —
+    which is handed back exactly as they typed it.
 
     ``banner_label`` is the word above the banner and defaults to ``failed`` — the only
     other value this console has a use for is ``refused``, for an answer where nothing
@@ -2695,8 +2697,8 @@ def _mutation(
     return response
 
 
-@router.post("/friends", response_class=HTMLResponse)
-async def create_friend(
+@router.post("/users", response_class=HTMLResponse)
+async def create_user(
     request: Request,
     nickname: str = Form(""),
     session: AsyncSession = Depends(session_dependency),
@@ -2706,8 +2708,8 @@ async def create_friend(
     M8.5's whole behaviour is in the return values: on success the response REPLACES
     the add-user dialog with the subscription-link dialog, so the operator never has
     to go looking for the thing they just created — which is the primary job the
-    design optimises for. ``friends-created`` additionally routes the console to
-    Users, and ``friends-changed`` refreshes whichever tables are on screen.
+    design optimises for. ``users-created`` additionally routes the console to
+    Users, and ``users-changed`` refreshes whichever tables are on screen.
 
     A refusal comes back as the same dialog with the message under the field it is
     about, at 422. Field-level and not a toast: a toast is gone in 2200ms and would
@@ -2715,24 +2717,24 @@ async def create_friend(
     """
     nickname = nickname.strip()
     try:
-        friend = await friends.create_friend(session, nickname=nickname)
+        user = await users.create_user(session, nickname=nickname)
     except DomainError as exc:
         return TEMPLATES.TemplateResponse(
             request,
-            "panel/add_friend_dialog.html",
-            # Decision 9 in the direction the console had been leaking: the refusal
-            # is composed in the service, which says ``friend``, and the operator
-            # reads ``user``. No ``keeping`` here — a service quotes the nickname
-            # (``{value!r}``), and quoted text is data the boundary never rewrites.
+            "panel/add_user_dialog.html",
+            # Through the boundary like every other sentence a service composes, even
+            # though M29 left the two vocabularies saying the same word: the refusal's
+            # directions still cross it. No ``keeping`` here — a service quotes the
+            # nickname (``{value!r}``), and quoted text is data it never rewrites.
             #
             # THE POOLS ARE ASKED ABOUT AGAIN HERE, after the service — M17.2, and it is
             # required rather than tidy. A refusal from ``grant_everywhere`` rolls the
             # session back, so this dialog has to be composed from what the database says
-            # AFTERWARDS; ``_add_friend_form`` does that in fresh queries and reads no
+            # AFTERWARDS; ``_add_user_form`` does that in fresh queries and reads no
             # object this route was holding. It is also the one refusal whose honest
             # answer is "there is no room at all", which renders the dialog with no form
             # rather than with a message under the nickname.
-            await _add_friend_form(
+            await _add_user_form(
                 session, nickname=nickname, error=wording.for_the_page(exc.message)
             ),
             # 422 rather than 200, and htmx is configured in static/app.js to swap
@@ -2744,22 +2746,22 @@ async def create_friend(
     return _mutation(
         request,
         dialog="panel/subscription_dialog.html",
-        toast=f"{friend.nickname} added",
-        keeping=friend.nickname,
-        # Only ``friends-created``. It routes the console to Users (see the listener
+        toast=f"{user.nickname} added",
+        keeping=user.nickname,
+        # Only ``users-created``. It routes the console to Users (see the listener
         # on #main in pages/console.html), and the screen it lands on renders the
-        # table fresh — so also firing ``friends-changed`` would start a second
+        # table fresh — so also firing ``users-changed`` would start a second
         # refresh of a table that is about to be replaced under it.
-        events="friends-created",
+        events="users-created",
         context={
-            "friend": friend,
+            "user": user,
             "url": await console.subscription_url(
-                session, request.app.state.settings.public_base_url, friend
+                session, request.app.state.settings.public_base_url, user
             ),
             # THE SENTENCE THAT HAD TO BE HERE — M26's first acceptance walk. This is the
             # exchange that hands over a link for a user nobody has pushed yet, so it is
             # the exchange that has to say what that link will not carry until the nodes
-            # are applied. Asked AFTER the friend was created, so the nodes it names are
+            # are applied. Asked AFTER the user was created, so the nodes it names are
             # the ones now holding nothing for them.
             "material_doubt": console.material_doubt(
                 await console.nodes_missing_what_they_would_be_given(session)
@@ -2768,25 +2770,25 @@ async def create_friend(
     )
 
 
-@router.get("/friends/{friend_id}/subscription", response_class=HTMLResponse)
-async def friend_subscription(
-    friend_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+@router.get("/users/{user_id}/subscription", response_class=HTMLResponse)
+async def user_subscription(
+    user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
-    """Show the URL to send this friend, in its own dialog.
+    """Show the URL to send this user, in its own dialog.
 
     On demand rather than as a column in the users table: the table is the page the
     operator leaves open, and a live bearer credential should not sit on screen — or
     in a screenshot — the whole time. UI-PATTERNS §9 gives the URL its own dialog with
     a copy button for exactly this reason.
     """
-    friend = await friends.get_friend(session, friend_id)
+    user = await users.get_user(session, user_id)
     return TEMPLATES.TemplateResponse(
         request,
         "panel/subscription_dialog.html",
         {
-            "friend": friend,
+            "user": user,
             "url": await console.subscription_url(
-                session, request.app.state.settings.public_base_url, friend
+                session, request.app.state.settings.public_base_url, user
             ),
             # Read fresh here, like everything else in this dialog: a link shown an hour
             # after the user was added is a link to a fleet that has moved since, and the
@@ -2799,21 +2801,21 @@ async def friend_subscription(
     )
 
 
-@router.get("/friends/{friend_id}/revoke", response_class=HTMLResponse)
-async def revoke_friend_dialog(
-    friend_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+@router.get("/users/{user_id}/revoke", response_class=HTMLResponse)
+async def revoke_user_dialog(
+    user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """The confirmation. UI-PATTERNS §3: destructive actions confirm in a dialog."""
     return TEMPLATES.TemplateResponse(
         request,
         "panel/revoke_dialog.html",
-        {"friend": await friends.get_friend(session, friend_id)},
+        {"user": await users.get_user(session, user_id)},
     )
 
 
-@router.post("/friends/{friend_id}/revoke", response_class=HTMLResponse)
-async def revoke_friend(
-    friend_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+@router.post("/users/{user_id}/revoke", response_class=HTMLResponse)
+async def revoke_user(
+    user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
     """Revoke everywhere, and report the honest outcome — including partial success.
 
@@ -2834,14 +2836,14 @@ async def revoke_friend(
     accident. The second press is a banner now, carrying the service's own account of
     what a press that changed nothing can and cannot tell them.
     """
-    friend = await friends.get_friend(session, friend_id)
-    nickname = friend.nickname
-    outcome = await revocation.revoke_friend(session, friend_id=friend_id)
+    user = await users.get_user(session, user_id)
+    nickname = user.nickname
+    outcome = await revocation.revoke_user(session, user_id=user_id)
     return _mutation(
         request,
         toast=f"{nickname} revoked — link is dead" if outcome.confirmed else None,
         banner=None if outcome.confirmed else outcome.summary(),
-        events="friends-changed",
+        events="users-changed",
         keeping=nickname,
     )
 
@@ -2860,7 +2862,7 @@ async def audit_screen(request: Request, session: AsyncSession = Depends(session
     a sentence composed in ``panel/wording.py`` from a machine key and two labels.
 
     Every cell passes the test this console applies to every cell (``docs/decisions.md``,
-    2026-09-09): *does it move when a friend connects?* None of them does, and that is a
+    2026-09-09): *does it move when a user connects?* None of them does, and that is a
     property of the table rather than of this route — the delivery endpoint writes no row
     at all, which has a scenario of its own in both suites.
 
@@ -2922,7 +2924,7 @@ async def settings_screen(request: Request) -> Response:
     the first, and M9.3's note calling it "the only" one is superseded here). Nothing
     on it is a fact about the fleet, so there is no query to make; it is on ``router``,
     so it is still operator-only. A later step wanting a fleet fact on this screen adds
-    the session back — and at that point *"does it move when a friend connects?"*
+    the session back — and at that point *"does it move when a user connects?"*
     applies to whatever it wants to put here.
 
     No self-swapping fragment and no ``-changed`` trigger, for the Transports screen's

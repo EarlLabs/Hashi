@@ -61,7 +61,7 @@ from edge.bootstrap import NodeUnreachable
 
 from .conftest import GENERATED_SSH_KEY, assert_plain_reason, pinned
 
-# What a FRIEND would dial, and the only thing this address is here: RFC 5737
+# What a USER would dial, and the only thing this address is here: RFC 5737
 # TEST-NET-1, the same one every other fixture in this zone uses. Nothing in this file
 # dials it — the control plane reaches a node at its ``ssh_host`` — so nothing here
 # depends on what a documentation address does. It is still checked for below: a node
@@ -442,7 +442,7 @@ async def test_applying_a_node_with_nothing_enabled_is_refused_not_failed(
 
 
 async def a_node_with_one_transport(client, refusing_ssh, reality_params, name: str):
-    """A node, one friend-facing transport on it, and the node set serving.
+    """A node, one user-facing transport on it, and the node set serving.
 
     Shared by the three tests below, which differ only in what they do to that row and
     in what the refusal is then allowed to claim.

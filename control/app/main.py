@@ -200,7 +200,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The defect that put this here was neither of those, though. A console URL
         # has TWO representations — the whole document a browser navigates to, and
         # the fragment htmx swaps into #main — and without a directive the browser
-        # stored the fragment under /panel/friends. A back/forward navigation reuses
+        # stored the fragment under /panel/users. A back/forward navigation reuses
         # a stored entry WITHOUT revalidating, so pressing Back landed the operator
         # on the bare fragment as a whole document: no <head>, therefore no
         # stylesheets, therefore an unstyled console until a manual reload.

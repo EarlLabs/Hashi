@@ -3,7 +3,7 @@
 WHAT: derives the data-encryption key from ``HASHI_SECRET_KEY``, and provides the
       two operations that use it — ``encrypt``/``decrypt`` for stored secrets —
       plus the operator password hash check.
-WHY:  core invariants §3: node and friend secrets are encrypted at rest with a key
+WHY:  core invariants §3: node and user secrets are encrypted at rest with a key
       supplied by the environment, and the application fails loudly at boot when
       the key is missing rather than starting in a mode that writes plaintext.
       Doing it in the application rather than in the database (pgcrypto) is the
@@ -131,7 +131,7 @@ class SecretBox:
 
         Raises ``SecretUnreadable`` rather than returning None or "": a caller that
         silently gets an empty key renders a config that authorises nobody, pushes
-        it to a node, and locks out every friend on it. Failing here is loud and
+        it to a node, and locks out every user on it. Failing here is loud and
         recoverable; succeeding emptily is neither.
         """
         try:

@@ -1,4 +1,4 @@
-"""The operator API — nodes, transports, friends, revocation, health.
+"""The operator API — nodes, transports, users, revocation, health.
 
 WHAT: JSON endpoints for everything the owner can do, behind one router-level
       auth dependency.
@@ -20,13 +20,13 @@ from control.app.dependencies import session_dependency
 from control.app.models import NodeState
 from control.app.services import (
     apply,
-    friends,
     health,
     nodes,
     relay,
     revocation,
     rotation,
     transports,
+    users,
 )
 from edge.registry import discover
 
@@ -113,7 +113,7 @@ async def enable_transport(
 ):
     """Enable a transport, minting whatever key material it declared it needs.
 
-    Then grant it to every active friend, so enabling a protocol appears in every
+    Then grant it to every active user, so enabling a protocol appears in every
     subscriber's config at their next refresh with no further action — which is
     criterion 3 stated as an operation.
 
@@ -141,7 +141,7 @@ async def set_node_state(
 
     Exists as an operator action, not only as something ``apply`` does, because the two
     transitions an operator needs most cannot come from an apply: taking a node OUT of
-    rotation without destroying it (``active -> draft``, so it stops reaching friends
+    rotation without destroying it (``active -> draft``, so it stops reaching users
     immediately) and retiring one whose host is gone. Illegal transitions are refused
     with a 409 naming what is allowed — see ``NodeState.allowed_from``.
     """
@@ -193,56 +193,56 @@ async def node_health(node_id: str, session: AsyncSession = Depends(session_depe
     return await health.check_node(session, node_id=node_id)
 
 
-# --- friends -----------------------------------------------------------------
+# --- users -----------------------------------------------------------------
 
-@router.get("/friends", response_model=list[schemas.FriendResponse])
-async def list_friends(session: AsyncSession = Depends(session_dependency)):
-    return await friends.list_friends(session)
+@router.get("/users", response_model=list[schemas.UserResponse])
+async def list_users(session: AsyncSession = Depends(session_dependency)):
+    return await users.list_users(session)
 
 
 @router.post(
-    "/friends", response_model=schemas.FriendResponse, status_code=status.HTTP_201_CREATED
+    "/users", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED
 )
-async def create_friend(
-    payload: schemas.FriendCreate, session: AsyncSession = Depends(session_dependency)
+async def create_user(
+    payload: schemas.UserCreate, session: AsyncSession = Depends(session_dependency)
 ):
-    """Create a friend, mint their subscription, and grant every serving node."""
-    return await friends.create_friend(session, nickname=payload.nickname)
+    """Create a user, mint their subscription, and grant every serving node."""
+    return await users.create_user(session, nickname=payload.nickname)
 
 
-@router.get("/friends/{friend_id}/subscription", response_model=schemas.SubscriptionIssued)
-async def friend_subscription(
-    friend_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+@router.get("/users/{user_id}/subscription", response_model=schemas.SubscriptionIssued)
+async def user_subscription(
+    user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
-    """The URL to send this friend.
+    """The URL to send this user.
 
-    Re-displayable rather than one-shot: a friend who lost their link needs the same
-    one back, because issuing a new one means they must re-import — and "friends never
+    Re-displayable rather than one-shot: a user who lost their link needs the same
+    one back, because issuing a new one means they must re-import — and "users never
     re-add anything" is the charter's promise.
     """
-    friend = await friends.get_friend(session, friend_id)
-    live = [s for s in friend.subscriptions if s.is_active]
+    user = await users.get_user(session, user_id)
+    live = [s for s in user.subscriptions if s.is_active]
     if not live:
         from control.app.errors import NotFound
 
-        raise NotFound("this friend has no live subscription")
+        raise NotFound("this user has no live subscription")
     settings = request.app.state.settings
     return schemas.SubscriptionIssued(
         url=f"{settings.public_base_url}/sub/{live[0].token}"
     )
 
 
-@router.post("/friends/{friend_id}/revoke", response_model=schemas.RevocationResponse)
-async def revoke_friend(friend_id: str, session: AsyncSession = Depends(session_dependency)):
+@router.post("/users/{user_id}/revoke", response_model=schemas.RevocationResponse)
+async def revoke_user(user_id: str, session: AsyncSession = Depends(session_dependency)):
     """Withdraw access everywhere, and report honestly if a node could not be reached.
 
     ``complete`` carries ``outcome.confirmed`` and not ``outcome.complete`` — M23, round
     8. The schema says why; the short version is that the field an integration polls was
     true on the retry that changed nothing, which is the one moment it must not be.
     """
-    outcome = await revocation.revoke_friend(session, friend_id=friend_id)
+    outcome = await revocation.revoke_user(session, user_id=user_id)
     return schemas.RevocationResponse(
-        friend_id=outcome.friend_id,
+        user_id=outcome.user_id,
         complete=outcome.confirmed,
         withdrew=outcome.withdrew,
         nodes_updated=outcome.nodes_updated,
@@ -316,7 +316,7 @@ async def rotate_keys(
 ):
     """Re-mint this transport's key material and push it.
 
-    Friends' subscription URLs are untouched: they re-fetch the same link and receive
+    Users' subscription URLs are untouched: they re-fetch the same link and receive
     the new material, which is what makes rotation possible without anyone touching
     their device.
     """
@@ -339,9 +339,9 @@ async def set_transport_enabled(
     payload: schemas.TransportEnabledChange,
     session: AsyncSession = Depends(session_dependency),
 ):
-    """Put a transport into, or take it out of, what friends are offered.
+    """Put a transport into, or take it out of, what users are offered.
 
-    Criterion 3 in both directions. Enabling grants every active friend material for
+    Criterion 3 in both directions. Enabling grants every active user material for
     it, so it appears at their next refresh; disabling removes it from every
     subscription — and neither requires anyone to touch a device.
 
@@ -358,7 +358,7 @@ async def set_transport_enabled(
 async def remove_transport(
     node_transport_id: str, session: AsyncSession = Depends(session_dependency)
 ):
-    """Remove one friend-facing transport, with every credential minted under it — M15.2.
+    """Remove one user-facing transport, with every credential minted under it — M15.2.
 
     Answers in ``dissolve_hop``'s shape, because it is the same kind of answer: what is
     left for the caller is to re-apply, and the node may be unreachable right now. A

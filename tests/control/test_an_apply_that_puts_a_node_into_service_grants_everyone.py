@@ -28,7 +28,7 @@ HOW:  the shared ``accepting_nodes`` harness (``conftest.py``), which stands in 
 import pytest
 
 from control.app.models import NodeState
-from control.app.services import console, friends, nodes, subscriptions
+from control.app.services import console, nodes, subscriptions, users
 
 from .conftest import GENERATED_SSH_KEY
 
@@ -76,7 +76,7 @@ async def a_user_who_was_here_first(client) -> str:
     Which is the ordinary order for the case this file is about: the fleet exists, the
     people exist, and a REPLACEMENT node arrives afterwards.
     """
-    created = await client.post("/api/friends", json={"nickname": "boris"})
+    created = await client.post("/api/users", json={"nickname": "boris"})
     assert created.status_code == 201, created.text
     return created.json()["id"]
 
@@ -129,8 +129,8 @@ async def test_an_apply_that_puts_a_node_into_service_grants_every_active_user(
     )
 
     # And the half a person actually receives: their one link now resolves to this node.
-    friend = await friends.get_friend(session, a_user_who_was_here_first)
-    assert await subscriptions.entries_for(session, friend), (
+    user = await users.get_user(session, a_user_who_was_here_first)
+    assert await subscriptions.entries_for(session, user), (
         "the user's subscription is still empty over a node that is serving"
     )
 
@@ -140,7 +140,7 @@ async def test_the_same_apply_on_a_node_already_serving_changes_nothing(
 ) -> None:
     """A re-apply is not a second grant, and must not become one.
 
-    The fan-out is idempotent by construction (``friends.grant_everywhere`` skips a row a
+    The fan-out is idempotent by construction (``users.grant_everywhere`` skips a row a
     user already holds), and the guard above it asks whether this apply is what put the
     node into service. Both matter: the guard is what keeps an ordinary re-push from
     walking the whole fleet, and the idempotence is what makes it safe when it does.

@@ -44,11 +44,11 @@ class Conflict(DomainError):
 
 
 class NotDeliverable(DomainError):
-    """A transport cannot be expressed in the subscription format friends use.
+    """A transport cannot be expressed in the subscription format users use.
 
     Its own type because the charter requires this to be refused OUT LOUD rather
     than producing a quietly incomplete subscription (amendment A, and backlog item
-    7 S2a). A friend whose subscription silently lacks a node has no way to know.
+    7 S2a). A user whose subscription silently lacks a node has no way to know.
     """
 
     status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -60,10 +60,10 @@ class TransportRetired(DomainError):
 
     Its own type, and the only refusal in this file that is about the PROTOCOL rather
     than about the request: the transport is installed, its parameters are fine and it
-    would serialise into a friend's configuration perfectly. What is wrong with it is
+    would serialise into a user's configuration perfectly. What is wrong with it is
     that it does not work on the hosts this project prepares — a handshake that completes
     and carries nothing — which is the silent failure the charter calls the worst kind,
-    and minting fresh material for it would hand a friend a dead tunnel with nothing on
+    and minting fresh material for it would hand a user a dead tunnel with nothing on
     their device saying so.
 
     422 rather than 400, and the same status the console's own form answers with: the
@@ -177,10 +177,10 @@ class NodeCannotServe(Conflict):
     ``NothingToApply``'s sibling on the same endpoint, and the one refusal here that is
     about the node's STATE rather than about what it runs. An apply is what puts a node
     into service: it ends by writing ``active``, and since M23 it hands every active
-    friend a credential on the way in. On a ``retired`` node that is the transition
+    user a credential on the way in. On a ``retired`` node that is the transition
     ``NodeState.allowed_from`` exists to refuse — the row is how an operator records that
     a host is gone, sold on or seized, and bringing it back would put an address that may
-    now answer for a stranger into every friend's subscription and mint key material for
+    now answer for a stranger into every user's subscription and mint key material for
     everybody on it.
 
     The state endpoint has refused that move since backlog item 17; ``apply`` wrote the
@@ -243,14 +243,14 @@ class NodeNotInService(Conflict):
 
 
 class NoExitThroughTheHop(Conflict):
-    """A node's friends would have been put on a transport that cannot reach its hop.
+    """A node's users would have been put on a transport that cannot reach its hop.
 
-    M25. A node that dials a hop gives its friends ``Egress.HOP`` — out through the hop
+    M25. A node that dials a hop gives its users ``Egress.HOP`` — out through the hop
     and nowhere else — and only a transport that terminates their connection and
     re-originates it can honour that (``TransportMeta.serves_users_through_a_hop``). A
     kernel tunnel hands what it decrypts to the node's own routing table, and the only way
     out this project renders for a hop is a source route from the node's own address,
-    which a friend's packets do not carry. ``edge`` refuses to render it; this is the same
+    which a user's packets do not carry. ``edge`` refuses to render it; this is the same
     refusal moved to the two doors that create the combination, so that nothing is minted
     and nothing is delivered in between.
 
@@ -266,14 +266,14 @@ class NoExitThroughTheHop(Conflict):
     that fixes each is different. The operator's move here is to choose the other kind of
     transport, or to take one of the two rows away — which is what the message says, in
     ``edge``'s own words about why (``transports.NO_EXIT_THROUGH_THE_HOP``,
-    ``transports.NO_HOP_OVER_WHAT_IT_OFFERS`` and — for a friend-facing row the operator
+    ``transports.NO_HOP_OVER_WHAT_IT_OFFERS`` and — for a user-facing row the operator
     has withdrawn rather than offered, which this refusal counts and which the other two
     sentences would describe wrongly — ``transports.NO_HOP_OVER_WHAT_IT_HOLDS``).
 
     It refuses the CREATION and nothing else — ``TransportRetired``'s own asymmetry, and
     the same reason. A node already carrying both rows keeps every row it has, renders
     every config it could render before, and serves everyone it was serving; what it could
-    not do before and still cannot is render the friend-facing one, which is where the
+    not do before and still cannot is render the user-facing one, which is where the
     operator meets it and where the sentence has always been.
     """
 
@@ -324,7 +324,7 @@ class SecretsUnreadable(DomainError):
     Its own type, and the message names ``HASHI_SECRET_KEY``, because of one specific
     moment: the operator has just restored a database onto a new host — the very
     situation backups exist for — and got the key wrong. Everything else about the
-    restore looks perfect. Their friends and nodes are all listed.
+    restore looks perfect. Their users and nodes are all listed.
 
     Before this existed the failure was an opaque 500, and the only reading available to
     them was "the restore lost my data". They would then reasonably go looking for

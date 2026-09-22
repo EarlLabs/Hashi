@@ -2,7 +2,7 @@
 
 WHAT: drives the real control plane — add a user, add a node, enable a protocol,
       apply, revoke — then reads the trail straight out of Postgres, and finally
-      fetches a real subscription the way a friend's client does and requires the
+      fetches a real subscription the way a user's client does and requires the
       trail not to have grown by a single row.
 WHY:  M10's "done when": *"if an audit trail exists, it holds no token, no
       subscription URL and nothing about who connected."* The trail is the one durable
@@ -11,7 +11,7 @@ WHY:  M10's "done when": *"if an audit trail exists, it holds no token, no
       it is a ``details`` column, or one write on the delivery path. The second is what
       this file is named after, and it is asserted the strong way: not "no row mentions
       a token" but **no row at all**, because a row saying only "something happened" at
-      the second a friend refreshed is already the record.
+      the second a user refreshed is already the record.
 HOW:  over real HTTP against the booted stack, and over ``psql`` inside the database
       container for the reading — deliberately, and still deliberately now that M10.4
       has given the trail a screen: the claim here is about what is ON DISK, not about
@@ -116,7 +116,7 @@ def trail_text(exec_in) -> str:
     )
 
 
-async def test_the_trail_records_what_the_operator_did_and_nothing_a_friend_did(
+async def test_the_trail_records_what_the_operator_did_and_nothing_a_user_did(
     operator, client, exec_in, unique: str
 ) -> None:
     """One walk of the product, then the two questions M10 asks of the answer."""
@@ -162,11 +162,11 @@ async def test_the_trail_records_what_the_operator_did_and_nothing_a_friend_did(
         await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
     ).status_code == 200
 
-    friend = await operator.post("/api/friends", json={"nickname": f"kolya-{unique}"})
-    assert friend.status_code == 201, friend.text
-    friend_id = friend.json()["id"]
+    user = await operator.post("/api/users", json={"nickname": f"kolya-{unique}"})
+    assert user.status_code == 201, user.text
+    user_id = user.json()["id"]
 
-    url = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    url = (await operator.get(f"/api/users/{user_id}/subscription")).json()["url"]
     token = url.rsplit("/", 1)[-1]
 
     # A second user, withdrawn again — so the walk covers the entry that names somebody
@@ -174,11 +174,11 @@ async def test_the_trail_records_what_the_operator_did_and_nothing_a_friend_did(
     # disclosure over the rows it describes, and the reason retention is measured in
     # days. The first user stays live, because the fetch below needs a real link.
     withdrawn = await operator.post(
-        "/api/friends", json={"nickname": f"masha-{unique}"}
+        "/api/users", json={"nickname": f"masha-{unique}"}
     )
     assert withdrawn.status_code == 201, withdrawn.text
     revoked = await operator.post(
-        f"/api/friends/{withdrawn.json()['id']}/revoke"
+        f"/api/users/{withdrawn.json()['id']}/revoke"
     )
     assert revoked.status_code == 200, revoked.text
 

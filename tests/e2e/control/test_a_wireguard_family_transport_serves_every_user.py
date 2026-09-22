@@ -4,11 +4,11 @@ WHAT: two users on one such row receiving two different addresses, the pool refu
       before it can be saved too small, the pool filling up and being resized, and the
       three things that must never move an address somebody already holds — a rotation,
       a revocation and a hop end's dialog.
-WHY:  the field found this transport serving exactly one friend: every user on a row was
+WHY:  the field found this transport serving exactly one user: every user on a row was
       handed the row's own ``peer_tunnel_address``, and the second user made the node's
       configuration unrenderable (``AllowedIPs`` is the authorisation list and the
       routing table at once, so two peers on one address is a silent hijack of the first
-      one's return path). The charter's scale is ~30–50 friends. This scenario walks the
+      one's return path). The charter's scale is ~30–50 users. This scenario walks the
       milestone's acceptance line against the booted stack — *"either both work, or the
       refusal arrived early enough that the operator never believed it would"*.
 HOW:  the operator's own surfaces. The panel where the claim is about the panel — the
@@ -39,7 +39,7 @@ HTMX = {"HX-Request": "true"}
 CONFIG_FILE_FORMAT = "client-config-file"
 
 # The transport this is about, named for the reason the runbook scenario names one: it is
-# the protocol the runbook tells an owner to give their friends, and it is the one the
+# the protocol the runbook tells an owner to give their users, and it is the one the
 # field ran into. What keeps the literal honest is the first assertion below — the enable
 # dialog must still render a POOL BOX for this transport, which it does only for a
 # transport whose own declaration says each of its consumers needs an address. If that
@@ -55,7 +55,7 @@ REFUSED_PORT = 51942
 FULL_POOL_PORT = 51943
 ROTATE_PORT = 51944
 HOP_PORT = 51945
-ALSO_FRIENDS_PORT = 51946
+ALSO_USERS_PORT = 51946
 
 # Room for far more people than this stand will ever hold. The stand is WARM — every
 # scenario adds users to one control plane and none are removed — so a pool is measured
@@ -124,7 +124,7 @@ async def a_node(operator, *, name: str, address: str, label: str) -> str:
 async def enabled_over_the_api(
     operator, node_id: str, *, port: int, address: str, peer: str, pool_size: int = POOL_SIZE
 ) -> str:
-    """One friend-facing row, and its id — which is what every later call addresses.
+    """One user-facing row, and its id — which is what every later call addresses.
 
     Over the API rather than the panel wherever the id is needed: the panel answers with
     a dialog and no node endpoint lists a node's rows, so a scenario that enabled through
@@ -157,11 +157,11 @@ async def serving(operator, node_id: str) -> None:
 
 async def a_user(operator, nickname: str) -> tuple[str, str]:
     """One user, and the token their client fetches with."""
-    created = await operator.post("/api/friends", json={"nickname": nickname})
+    created = await operator.post("/api/users", json={"nickname": nickname})
     assert created.status_code == 201, created.text
-    friend_id = created.json()["id"]
-    url = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
-    return friend_id, url.rsplit("/", 1)[-1]
+    user_id = created.json()["id"]
+    url = (await operator.get(f"/api/users/{user_id}/subscription")).json()["url"]
+    return user_id, url.rsplit("/", 1)[-1]
 
 
 async def active_users(operator) -> int:
@@ -170,8 +170,8 @@ async def active_users(operator) -> int:
     Read from the API rather than assumed: the stand is shared, so the fleet this
     scenario meets is whatever every scenario before it left behind.
     """
-    listed = (await operator.get("/api/friends")).json()
-    return len([friend for friend in listed if friend["revoked_at"] is None])
+    listed = (await operator.get("/api/users")).json()
+    return len([user for user in listed if user["revoked_at"] is None])
 
 
 def files_in(archive: bytes) -> dict[str, str]:
@@ -289,7 +289,7 @@ async def test_a_pool_smaller_than_the_fleet_is_refused_under_its_own_box(
     said = under_the_box(refused, "pool_size")
     assert "cannot hold" in said, said
     assert said.startswith("a pool of 1"), said
-    # In the page's words, never the code's (decision 9).
+    # The word this product stopped using never reaches a page (M29).
     assert "friend" not in said.lower(), said
     # Nothing was written: a second node with the same port would collide if the refused
     # row had been created, and the key screen would carry it.
@@ -307,7 +307,7 @@ async def test_a_full_pool_refuses_the_next_user_and_a_resize_lets_them_in(
     The user created first is what makes that number at least one on an empty stand.
 
     THE ROW IS REMOVED IN ``finally``, and that is not tidiness. While it exists and
-    serves, every other scenario's ``POST /api/friends`` meets this pool and is refused —
+    serves, every other scenario's ``POST /api/users`` meets this pool and is refused —
     the stand is one fleet, and this file would otherwise break the rest of the suite from
     three directories away.
     """
@@ -328,7 +328,7 @@ async def test_a_full_pool_refuses_the_next_user_and_a_resize_lets_them_in(
         await serving(operator, node_id)
 
         refused = await operator.post(
-            "/api/friends", json={"nickname": f"waiting-{unique}"}
+            "/api/users", json={"nickname": f"waiting-{unique}"}
         )
 
         assert refused.status_code == 409, refused.text
@@ -338,9 +338,9 @@ async def test_a_full_pool_refuses_the_next_user_and_a_resize_lets_them_in(
         # BEFORE ANYTHING IS WRITTEN: no user, no subscription, no credential. The refusal
         # says "nothing has been changed", and this is what makes that true.
         assert not [
-            friend
-            for friend in (await operator.get("/api/friends")).json()
-            if friend["nickname"] == f"waiting-{unique}"
+            user
+            for user in (await operator.get("/api/users")).json()
+            if user["nickname"] == f"waiting-{unique}"
         ], "a refused creation left a user behind"
 
         resized = await operator.post(
@@ -353,7 +353,7 @@ async def test_a_full_pool_refuses_the_next_user_and_a_resize_lets_them_in(
         await serving(operator, node_id)
 
         admitted = await operator.post(
-            "/api/friends", json={"nickname": f"waiting-{unique}"}
+            "/api/users", json={"nickname": f"waiting-{unique}"}
         )
         assert admitted.status_code == 201, admitted.text
     finally:
@@ -399,7 +399,7 @@ async def test_a_rotation_keeps_every_address_and_a_revocation_frees_one(
     ]
     assert after == before, "a rotation moved somebody's address"
 
-    revoked = await operator.post(f"/api/friends/{second_id}/revoke")
+    revoked = await operator.post(f"/api/users/{second_id}/revoke")
     assert revoked.status_code == 200, revoked.text
     await serving(operator, node_id)
 
@@ -419,9 +419,9 @@ async def test_a_hop_end_is_offered_no_pool_anywhere_in_the_console(
 
     A hop's consumer is the far NODE, at the single address the row already names, so
     there is no pool to size on it. The transport the runbook mandates for a hop is also
-    the one it recommends for friends, so deciding from the declaration alone would put a
+    the one it recommends for users, so deciding from the declaration alone would put a
     pool box on the runbook's own entry box; the row's PURPOSE decides it, which is why
-    this is asserted against a real hop and against a friend-facing row of the same
+    this is asserted against a real hop and against a user-facing row of the same
     protocol on the same screen.
     """
     entry_id = await a_node(
@@ -452,15 +452,15 @@ async def test_a_hop_end_is_offered_no_pool_anywhere_in_the_console(
     assert new_hop.status_code == 200, new_hop.text
     assert "pool_size" not in new_hop.text, new_hop.text
 
-    # And the box IS on a friend-facing row of the same transport, on the same screen — so
+    # And the box IS on a user-facing row of the same transport, on the same screen — so
     # the absence above is about what the row is FOR and not about the dialog losing it.
-    friend_facing = await a_node(
-        operator, name=f"hopfriend-{unique}", address="192.0.2.96", label=f"Bothland-{unique}"
+    user_facing = await a_node(
+        operator, name=f"hopuser-{unique}", address="192.0.2.96", label=f"Bothland-{unique}"
     )
     row_id = await enabled_over_the_api(
         operator,
-        friend_facing,
-        port=ALSO_FRIENDS_PORT,
+        user_facing,
+        port=ALSO_USERS_PORT,
         address="10.89.0.1/20",
         peer="10.89.0.2/20",
     )

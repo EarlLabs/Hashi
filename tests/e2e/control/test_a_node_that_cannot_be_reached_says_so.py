@@ -3,7 +3,7 @@
 WHAT: what happens when the owner applies configuration to a node that cannot be
       reached, and which state changes the control plane refuses.
 WHY:  core invariants §4. A node that is half-configured and shown as active gets
-      friends routed onto it, and what comes back is a bug report about their client
+      users routed onto it, and what comes back is a bug report about their client
       rather than about the node. The honest failure is worth more than the optimistic
       success, and this is the scenario that keeps it honest.
 HOW:  the nodes in the e2e stack are records with no reachable host, which is exactly
@@ -66,17 +66,17 @@ async def test_an_apply_that_cannot_reach_the_node_degrades_it_and_says_why(
     assert node["state_detail"], node
 
 
-async def test_a_degraded_node_stops_reaching_friends(operator, client, unique: str) -> None:
+async def test_a_degraded_node_stops_reaching_users(operator, client, unique: str) -> None:
     """The point of the state, proven through the delivery endpoint."""
     import base64
 
     node_id = await a_node(operator, unique, port=8461)
     await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
 
-    friend_id = (await operator.post(
-        "/api/friends", json={"nickname": f"kolya-{unique}"}
+    user_id = (await operator.post(
+        "/api/users", json={"nickname": f"kolya-{unique}"}
     )).json()["id"]
-    token = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()[
+    token = (await operator.get(f"/api/users/{user_id}/subscription")).json()[
         "url"
     ].rsplit("/", 1)[-1]
 
@@ -94,7 +94,7 @@ async def test_a_degraded_node_stops_reaching_friends(operator, client, unique: 
 async def test_a_retired_node_cannot_be_brought_back(operator, unique: str) -> None:
     """Its host is usually destroyed, and its address may now belong to a stranger.
 
-    Re-activating the RECORD would put that address back into every friend's
+    Re-activating the RECORD would put that address back into every user's
     subscription. Creating a new node is the ten-minute operation instead.
     """
     node_id = await a_node(operator, unique, port=8462)
@@ -112,7 +112,7 @@ async def test_a_retired_node_cannot_be_brought_back(operator, unique: str) -> N
 async def test_taking_a_node_out_of_rotation_is_not_the_same_as_retiring_it(
     operator, unique: str
 ) -> None:
-    """active -> draft: it stops reaching friends immediately and keeps its config."""
+    """active -> draft: it stops reaching users immediately and keeps its config."""
     node_id = await a_node(operator, unique, port=8463)
     await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
 

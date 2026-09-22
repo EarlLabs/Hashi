@@ -3,7 +3,7 @@
 WHAT: the allocator and its refusals, end to end through the real services: who gets
       which address, what happens when the pool has no room, what a row that pre-dates
       this milestone renders, and what survives a rotation, a revocation and a removal.
-WHY:  the field found a WireGuard-family transport that served exactly one friend. The
+WHY:  the field found a WireGuard-family transport that served exactly one user. The
       renderers' refusal to put two peers on one address is right and stays; what this
       file pins is the two things that had to become true around it — that a second user
       gets a second address, and that a pool with no room refuses BEFORE anything is
@@ -44,10 +44,10 @@ from control.app.services import (
     addresses,
     apply,
     console,
-    friends,
     nodes,
     rotation,
     subscriptions,
+    users,
 )
 from control.app.services import transports as transports_service
 from edge.addressing import host_of, pool
@@ -208,7 +208,7 @@ async def enable_pool(
 
 
 async def add_user(client, nickname: str):
-    return await client.post("/api/friends", json={"nickname": nickname})
+    return await client.post("/api/users", json={"nickname": nickname})
 
 
 def routes_in(config: str) -> list[str]:
@@ -234,7 +234,7 @@ async def test_users_on_one_row_are_routed_separately(
 
     ``test_second_subscription_format`` asserts the same property for the first
     file-serialising transport this image ships; the plan's done-when names BOTH — "two
-    and three users on one friend-facing amneziawg row, AND on one wireguard row" — and
+    and three users on one user-facing amneziawg row, AND on one wireguard row" — and
     a family whose second member was never exercised at three is a family with one
     member tested. The two counts are not the same claim: two is "the second person gets
     a second address", three is "the allocator keeps walking the pool".
@@ -283,10 +283,10 @@ async def test_the_address_a_device_holds_is_the_one_its_node_routes(
 
     held = set()
     for nickname in ("cara", "dima"):
-        friend = (
+        user = (
             await session.execute(select(User).where(User.nickname == nickname))
         ).scalars().one()
-        files = await subscriptions.config_files_for(session, friend)
+        files = await subscriptions.config_files_for(session, user)
         assert len(files) == 1, files
         held.add(host_of(address_in(files[0].content)))
 
@@ -477,7 +477,7 @@ async def test_a_transport_that_hands_out_no_address_refuses_a_pool_size(
 async def test_adding_a_user_a_pool_cannot_hold_writes_nothing(
     client, session, pool_transport: str
 ) -> None:
-    """Not the friend, not their subscription, not a credential, not an audit entry.
+    """Not the user, not their subscription, not a credential, not an audit entry.
 
     The refusal is asked for before the first write rather than discovered when the
     address is allocated, so what the operator is told — nothing has been changed — is
@@ -717,7 +717,7 @@ async def test_revoking_a_user_frees_their_address_for_the_next_one(
     """The lowest free address wins, so a revoked person's address is reused.
 
     Not merely tidiness: without it a pool would be consumed by people who have left, and
-    an operator with thirty friends and a pool of thirty would run out by attrition.
+    an operator with thirty users and a pool of thirty would run out by attrition.
     """
     node_id = await a_node(client, name="reused", address="192.0.2.52")
     assert (await enable_pool(client, node_id, pool_transport, pool_size=2)).status_code == 201
@@ -730,7 +730,7 @@ async def test_revoking_a_user_frees_their_address_for_the_next_one(
     ann = (
         await session.execute(select(User).where(User.nickname == "ann"))
     ).scalars().one()
-    await friends.revoke(session, friend_id=ann.id)
+    await users.revoke(session, user_id=ann.id)
 
     assert (await add_user(client, "cara")).status_code == 201
     again = set(routes_in(await as_the_node_sees_it(session, node_id, pool_transport)))
@@ -771,10 +771,10 @@ async def test_a_hop_end_is_given_no_address_and_no_pool(
     that says so from the other side: the rows it writes carry no pool size, and nothing
     allocates against them.
 
-    BOTH NODES SERVE AND A FRIEND EXISTS, which is what gives the second assertion
-    anything to be false about: with no friend in the database no credential can exist
+    BOTH NODES SERVE AND A USER EXISTS, which is what gives the second assertion
+    anything to be false about: with no user in the database no credential can exist
     whatever the code does, so "a hop end minted a credential" would have been green
-    against any production. With a friend added AFTER both ends are serving, a
+    against any production. With a user added AFTER both ends are serving, a
     ``serving_transports`` that stopped filtering on purpose — or an
     ``establish_hop`` that minted per end — puts a credential on a relay row and this
     turns red.
@@ -828,7 +828,7 @@ async def test_a_hop_end_is_given_no_address_and_no_pool(
             )
         )
     ).scalars().unique().all()
-    assert on_a_hop_end == [], "a hop end was granted to a friend"
+    assert on_a_hop_end == [], "a hop end was granted to a user"
 
 
 async def test_a_hop_end_is_offered_no_pool_box_and_refuses_a_size_typed_at_it(
@@ -838,7 +838,7 @@ async def test_a_hop_end_is_offered_no_pool_box_and_refuses_a_size_typed_at_it(
 
     "A hop end has no pool" was asserted at CREATION only, and creation is not where a
     pool size can arrive. The transport the runbook mandates for the hop is the one it
-    recommends for friends, so a box decided from the transport's declaration appeared on
+    recommends for users, so a box decided from the transport's declaration appeared on
     both ends of every hop — hinted "how many users this protocol may hand an address to"
     on a tunnel between two of the owner's own nodes, two lines above this same dialog's
     own "No user holds anything on it: this is one end of a hop".
@@ -917,7 +917,7 @@ async def test_a_node_with_two_users_on_one_tunnel_renders_through_a_revocation(
     cara = (
         await session.execute(select(User).where(User.nickname == "cara"))
     ).scalars().one()
-    affected = await friends.revoke(session, friend_id=cara.id)
+    affected = await users.revoke(session, user_id=cara.id)
     assert affected, "the revocation found nothing to re-push"
 
     config = await as_the_node_sees_it(session, node_id, pool_transport)
@@ -1316,7 +1316,7 @@ async def test_a_serving_row_whose_pool_is_short_can_still_be_rotated(
 
     The test above it takes a node that never became serving, so nobody holds a credential
     on that row and the allocator has nothing to refuse. On a SERVING row the two
-    conditions are one: every active friend is granted there, so a pool smaller than the
+    conditions are one: every active user is granted there, so a pool smaller than the
     fleet means credentials with no address, and ``settle`` raised ``PoolFull`` a few
     lines after ``sized_pool`` had deliberately let the rotation through — rolling back the
     whole thing. The escape hatch was dead in exactly the state it names.
@@ -1802,7 +1802,7 @@ async def test_the_console_puts_a_refused_resize_under_the_box_it_is_about(
     assert refused.status_code == 422, refused.text
     said = param_errors(refused).get(addresses.POOL_BOX, "")
     assert "1" in said and said, said
-    # In the page's words, like every other sentence a service composes (decision 9).
+    # The word this product stopped using never reaches a page (M29).
     assert "friend" not in said.lower(), said
 
 
@@ -1816,12 +1816,12 @@ async def test_a_node_that_cannot_be_granted_says_so_in_the_dialog_it_was_moved_
 
     THE SETUP IS REACHABLE FROM THE CONSOLE AND FROM NOWHERE ELSE IN THIS FILE: a pool
     sized while the node is still a DRAFT is measured against the fleet of that moment,
-    and every friend added afterwards is accepted, because ``create_friend`` asks only
+    and every user added afterwards is accepted, because ``create_user`` asks only
     about rows that are SERVING. Move the node to serving later and the fan-out meets a
     pool that cannot hold everybody.
 
     Nothing commits, which was already true. What this pins is the other half: the
-    operator is TOLD. ``friends.grant_everywhere`` rolls the session back before raising,
+    operator is TOLD. ``users.grant_everywhere`` rolls the session back before raising,
     and a rollback expires every object in the identity map — so a ``Node`` this route
     had fetched before the call cannot be read afterwards without lazy I/O, which on an
     async session raises ``MissingGreenlet``, which is not a ``DomainError`` and leaves
@@ -1843,7 +1843,7 @@ async def test_a_node_that_cannot_be_granted_says_so_in_the_dialog_it_was_moved_
     assert refused.status_code == 422, refused.text
     said = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", STATE_ERROR.search(refused.text).group(1)))
     assert "late-fleet" in said and pool_transport in said, said
-    # In the page's words, like every other sentence a service composes (decision 9).
+    # The word this product stopped using never reaches a page (M29).
     assert "friend" not in said.lower(), said
 
     # And the node did not move, on the screen behind the dialog as well as in the record.
@@ -1877,7 +1877,7 @@ def test_no_surface_enables_a_transport_without_granting_it() -> None:
     The defect this is written against is a real one and it survived a review: the panel
     kept the fan-out loop the API route had deleted, sitting after
     ``nodes.enable_and_grant`` had already granted everybody and COMMITTED, and outside
-    the route's own try/except. In the window where a friend is created between the two,
+    the route's own try/except. In the window where a user is created between the two,
     the second pass raises ``Conflict`` — a bare 409 the console does not swap — for an
     enable that had already succeeded.
 
@@ -1889,7 +1889,7 @@ def test_no_surface_enables_a_transport_without_granting_it() -> None:
     """
     for module in ROUTE_MODULES:
         called = calls_in(module)
-        assert "friends.grant_everywhere" not in called, (
+        assert "users.grant_everywhere" not in called, (
             f"{module} grants outside the service transaction that commits the change"
         )
         assert "nodes.enable_transport" not in called, (
@@ -1938,18 +1938,18 @@ def _text_of(response) -> str:
 # exhaustive of the console but that it is exhaustive of the surfaces an ADDRESS could
 # reach: the screens that list transports and users, and every dialog opened from one.
 #
-# SPLIT FROM THE PER-FRIEND ONES BELOW, because those have to be walked for EVERY friend
+# SPLIT FROM THE PER-USER ONES BELOW, because those have to be walked for EVERY user
 # rather than for one. The sweep excludes the pool's first address (it is the row's own
-# typed parameter — see the test), and that address belongs to the first friend created;
-# walking only that friend's dialogs would leave the two surfaces most likely to grow a
+# typed parameter — see the test), and that address belongs to the first user created;
+# walking only that user's dialogs would leave the two surfaces most likely to grow a
 # per-person address checked against the one set of bytes they could print freely.
 def panel_surfaces(node_id: str, row_id: str) -> list[str]:
     return [
         "/panel/",
         "/panel/overview/body",
-        "/panel/friends",
-        "/panel/friends/table",
-        "/panel/friends/new",
+        "/panel/users",
+        "/panel/users/table",
+        "/panel/users/new",
         "/panel/nodes",
         "/panel/nodes/table",
         "/panel/hops",
@@ -1970,11 +1970,11 @@ def panel_surfaces(node_id: str, row_id: str) -> list[str]:
     ]
 
 
-def friend_surfaces(friend_id: str) -> list[str]:
+def user_surfaces(user_id: str) -> list[str]:
     """The surfaces opened for ONE person, walked once per person."""
     return [
-        f"/panel/friends/{friend_id}/subscription",
-        f"/panel/friends/{friend_id}/revoke",
+        f"/panel/users/{user_id}/subscription",
+        f"/panel/users/{user_id}/revoke",
     ]
 
 
@@ -1988,9 +1988,9 @@ async def test_no_user_address_reaches_any_panel_surface(
     on every screenshot the operator takes. So this walks every surface that could hold
     one and asserts the allocation is nowhere in the bytes.
 
-    EVERY FRIEND'S OWN DIALOGS ARE WALKED, not only the first one's. ``settle`` hands
+    EVERY USER'S OWN DIALOGS ARE WALKED, not only the first one's. ``settle`` hands
     ``pool[0]`` to the earliest credential, and ``pool[0]`` is the one address excluded
-    below — so a sweep that opened the subscription and revoke dialogs for that friend
+    below — so a sweep that opened the subscription and revoke dialogs for that user
     alone would be asking the two surfaces most likely to grow a per-person address about
     the one value they are allowed to print.
 
@@ -2021,11 +2021,11 @@ async def test_no_user_address_reaches_any_panel_surface(
     enabled = await enable_pool(client, node_id, pool_transport, pool_size=ROOMY)
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
-    friends_made = []
+    users_made = []
     for nickname in ("ann", "bob", "cat"):
         created = await add_user(client, nickname)
         assert created.status_code == 201, created.text
-        friends_made.append(created.json()["id"])
+        users_made.append(created.json()["id"])
 
     held = [
         host_of(route)
@@ -2037,8 +2037,8 @@ async def test_no_user_address_reaches_any_panel_surface(
     assert len(per_credential) == 2, per_credential
 
     walked = panel_surfaces(node_id, enabled.json()["id"])
-    for friend_id in friends_made:
-        walked += friend_surfaces(friend_id)
+    for user_id in users_made:
+        walked += user_surfaces(user_id)
     for url in walked:
         rendered = await client.get(url, headers=HTMX)
         assert rendered.status_code == 200, f"{url} -> {rendered.status_code}"
@@ -2143,7 +2143,7 @@ async def test_a_transport_whose_pool_is_short_is_not_offered_at_all(
     said = _text_of(dialog)
     assert f"{pool_transport} on short-offer is sized for 1 and would need 2" in said, said
     assert "replace params" in said, said
-    # In the page's words, like every other sentence a service composes (decision 9).
+    # The word this product stopped using never reaches a page (M29).
     assert "friend" not in said.lower(), said
 
 
@@ -2250,7 +2250,7 @@ async def test_the_offer_a_stale_page_still_draws_is_refused_before_anything_com
     said = _text_of(pressed)
     assert f"{pool_transport} on stale-offer is sized for 2 and would need 3" in said, said
     assert "Nothing has been changed" in said, said
-    # In the page's words, like every other sentence a service composes (decision 9).
+    # The word this product stopped using never reaches a page (M29).
     assert "friend" not in said.lower(), said
 
     session.expire_all()
@@ -2349,7 +2349,7 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     assert (await add_user(client, "ann")).status_code == 201
     # The ordinary branch first, while there is still room, so the two assertions below
     # about the refusal branch are a pair rather than a description nothing can lose.
-    ordinary = await client.get("/panel/friends/new", headers=HTMX)
+    ordinary = await client.get("/panel/users/new", headers=HTMX)
     assert 'name="nickname"' in ordinary.text, ordinary.text
     assert "add-user-no-room" not in ordinary.text, ordinary.text
     assert (
@@ -2357,7 +2357,7 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     ).status_code == 201
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    dialog = await client.get("/panel/friends/new", headers=HTMX)
+    dialog = await client.get("/panel/users/new", headers=HTMX)
 
     assert dialog.status_code == 200
     assert "add user</button>" not in dialog.text, "a button whose every outcome is 409"
@@ -2372,7 +2372,7 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     assert "friend" not in said.lower(), said
 
     # The service has not been relaxed: the refusal is still what enforces this.
-    refused = await client.post("/panel/friends", data={"nickname": "bob"}, headers=HTMX)
+    refused = await client.post("/panel/users", data={"nickname": "bob"}, headers=HTMX)
     assert refused.status_code == 422, refused.text
     session.expire_all()
     assert (
@@ -2402,7 +2402,7 @@ async def test_the_add_user_refusal_counts_its_list_and_wears_the_danger_hue(
     ).status_code == 201
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    one = await client.get("/panel/friends/new", headers=HTMX)
+    one = await client.get("/panel/users/new", headers=HTMX)
 
     assert one.status_code == 200
     assert "one of those pools is full:" in _text_of(one), _text_of(one)
@@ -2424,7 +2424,7 @@ async def test_the_add_user_refusal_counts_its_list_and_wears_the_danger_hue(
         )
     ).status_code == 201
 
-    two = await client.get("/panel/friends/new", headers=HTMX)
+    two = await client.get("/panel/users/new", headers=HTMX)
 
     assert two.status_code == 200
     said = _text_of(two)

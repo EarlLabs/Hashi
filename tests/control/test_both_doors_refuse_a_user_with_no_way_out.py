@@ -1,16 +1,16 @@
-"""A node that dials a hop offers its friends only a transport that can reach it — M25.
+"""A node that dials a hop offers its users only a transport that can reach it — M25.
 
 WHAT: the two doors that would otherwise create the one combination this product cannot
-      render — enabling a kernel tunnel for the friends of a node whose way out is a hop,
+      render — enabling a kernel tunnel for the users of a node whose way out is a hop,
       and giving a hop to a node that already offers them one — and the three
       arrangements beside it that must keep working untouched.
 WHY:  M25's walk proved route A carries on the owner's real leaf, and found this on the
       way. ``POST /panel/nodes/{id}/transports`` accepted the row without a word, the
-      friend was granted a credential on it, and ``GET /sub/{token}`` handed over a
+      user was granted a credential on it, and ``GET /sub/{token}`` handed over a
       complete, importable 2077-byte configuration file — for a node whose own renderer
       then refused it outright. The refusal at the apply is correct and fail-closed and
       is not what was wrong: what was wrong is that three surfaces said yes first, one of
-      them to a friend, and the operator found out at the end.
+      them to a user, and the operator found out at the end.
 
       So the refusal moves to the doors, where nothing has been written yet. Both of
       them, because the same mistake arrives from either side — the transport added to a
@@ -39,7 +39,7 @@ from control.app.services import apply, nodes, subscriptions
 from edge.registry import discover, profile
 
 # The two halves of the fleet, by the declaration and never by a name. A transport that
-# re-originates terminates a friend's connection and opens its own from whatever address
+# re-originates terminates a user's connection and opens its own from whatever address
 # the egress policy names, so a hop is expressible for it; one whose packets the node's
 # kernel routes has no way to send somebody else's out through a different interface.
 KERNEL_TUNNELS = sorted(
@@ -91,7 +91,7 @@ RESOLVER = "192.0.2.53"
 
 # Two ports, because two data planes on one host cannot share one. Typed here the way an
 # operator types them into the form rather than taken from anything this codebase ships.
-FRIEND_PORT = 51820
+USER_PORT = 51820
 HOP_PORT = 51821
 
 
@@ -127,9 +127,9 @@ async def a_node(client, name: str, address: str, *, resolver: str | None = None
 
 
 async def offer(client, node_id: str, transport_name: str, *, network="10.80.0", **overrides):
-    """Enable one transport for a node's friends, the way both surfaces do.
+    """Enable one transport for a node's users, the way both surfaces do.
 
-    ``network`` is the friend-facing tunnel's own range, and it is a parameter because two
+    ``network`` is the user-facing tunnel's own range, and it is a parameter because two
     tunnels on one node may not overlap (M17.1c) — a node here carries a hop as well.
     Filtered away for a transport that declares no tunnel of its own.
     """
@@ -139,7 +139,7 @@ async def offer(client, node_id: str, transport_name: str, *, network="10.80.0",
             "transport_name": transport_name,
             "params": params_for(
                 transport_name,
-                port=FRIEND_PORT,
+                port=USER_PORT,
                 tunnel_address=f"{network}.1/24",
                 peer_tunnel_address=f"{network}.2/24",
                 **overrides,
@@ -220,12 +220,12 @@ def test_this_image_ships_both_kinds_of_data_plane() -> None:
 
 # --- the door that adds a transport -------------------------------------------
 
-async def test_a_node_that_dials_a_hop_refuses_a_kernel_tunnel_for_its_friends(
+async def test_a_node_that_dials_a_hop_refuses_a_kernel_tunnel_for_its_users(
     client, kernel_tunnel: str
 ) -> None:
     """The first door, and the one the walk came in through.
 
-    The node has a hop, so its friends leave through it and nowhere else; this transport
+    The node has a hop, so its users leave through it and nowhere else; this transport
     cannot express that for somebody else's packets. Refused where the operator asked,
     naming the transport they named and saying what to do instead.
     """
@@ -244,13 +244,13 @@ async def test_a_node_that_dials_a_hop_refuses_a_kernel_tunnel_for_its_friends(
     assert "re-originates" in body["message"], body["message"]
 
 
-async def test_the_refusal_mints_nothing_and_hands_a_friend_nothing(
+async def test_the_refusal_mints_nothing_and_hands_a_user_nothing(
     client, session, kernel_tunnel: str
 ) -> None:
     """What "nothing was enabled" has to mean — M25's own finding, from the other end.
 
-    The walk's node was accepted, every active friend was granted a credential on it, and
-    the delivery endpoint answered a friend's own bearer token with a complete config file
+    The walk's node was accepted, every active user was granted a credential on it, and
+    the delivery endpoint answered a user's own bearer token with a complete config file
     for a node that can never be applied. So the row, the credential and the file are
     asserted absent together: each is a separate surface, and the one that mattered was
     the third.
@@ -260,14 +260,14 @@ async def test_the_refusal_mints_nothing_and_hands_a_friend_nothing(
     assert (await hop(client, entry, leaf, HOP_TRANSPORTS[0])).status_code == 201
     await nodes.set_node_state(session, node_id=entry, state=NodeState.ACTIVE)
 
-    friend = (await client.post("/api/friends", json={"nickname": "masha"})).json()
+    user = (await client.post("/api/users", json={"nickname": "masha"})).json()
     token = (
-        await client.get(f"/api/friends/{friend['id']}/subscription")
+        await client.get(f"/api/users/{user['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     assert (await offer(client, entry, kernel_tunnel)).status_code == 409
 
-    offered = await nodes.friend_facing_on(session, entry)
+    offered = await nodes.user_facing_on(session, entry)
     assert offered == [], "a row was written for a transport that was refused"
     credentials = (await session.execute(select(Credential))).scalars().unique().all()
     assert credentials == [], "a credential was minted on a refused transport"
@@ -276,10 +276,10 @@ async def test_the_refusal_mints_nothing_and_hands_a_friend_nothing(
     assert delivered.status_code == 200
     with zipfile.ZipFile(io.BytesIO(delivered.content)) as archive:
         # The endpoint answers an archive holding its own "nothing here right now" note
-        # rather than a 404, which is a friend who has not been revoked being told so.
+        # rather than a 404, which is a user who has not been revoked being told so.
         # What must not be in it is a configuration.
         assert archive.namelist() == [subscriptions.EMPTY_ARCHIVE_NOTE_NAME], (
-            "a friend was handed a configuration file for a node that cannot render"
+            "a user was handed a configuration file for a node that cannot render"
         )
 
 
@@ -291,7 +291,7 @@ async def test_a_node_already_offering_a_kernel_tunnel_refuses_the_hop(
     """The second door. The same rule, approached from the side the panel said yes to.
 
     ``hop establishing — apply both nodes to bring it up`` was the answer here, and the
-    node it described was one whose friend-facing row would not render from that moment
+    node it described was one whose user-facing row would not render from that moment
     on. The refusal names the node as well as the transport, because the operator is
     looking at a form with two nodes on it.
     """
@@ -344,7 +344,7 @@ async def test_an_offer_that_is_switched_off_still_refuses_the_hop(
 ) -> None:
     """The way round it that a flag would have left open.
 
-    A friend-facing row switched off is still a row, and the control that switches it back
+    A user-facing row switched off is still a row, and the control that switches it back
     on is about one row on one screen — it has no node in front of it and no hop to refuse
     about. So this door counts every offer the node holds rather than the ones that are
     live, which is the same reading ``exit_through_hop`` takes of a hop end for the same
@@ -382,7 +382,7 @@ async def test_a_transport_that_re_originates_is_offered_on_a_node_with_a_hop(
 ) -> None:
     """Route A itself, in both orders — the arrangement M25 measured carrying traffic.
 
-    A friend behind an entry, out through the hop, on at the leaf's address. Nothing in
+    A user behind an entry, out through the hop, on at the leaf's address. Nothing in
     this milestone may make it harder to build, and it is built both ways round because
     the two doors are two orders of the same fleet.
     """
@@ -405,7 +405,7 @@ async def test_a_kernel_tunnel_is_untouched_on_a_node_with_no_hop(
     """Route B, which nine walks on real hardware were carried on.
 
     Every leaf and every single-box deployment is this node. The transport renders a local
-    exit here and is exactly right, so the refusal above must not reach it — and a friend
+    exit here and is exactly right, so the refusal above must not reach it — and a user
     is granted on it and handed their file, which is the surface the other test asserts
     empty.
     """
@@ -413,9 +413,9 @@ async def test_a_kernel_tunnel_is_untouched_on_a_node_with_no_hop(
     assert (await offer(client, leaf, kernel_tunnel)).status_code == 201
     await nodes.set_node_state(session, node_id=leaf, state=NodeState.ACTIVE)
 
-    friend = (await client.post("/api/friends", json={"nickname": "sasha"})).json()
+    user = (await client.post("/api/users", json={"nickname": "sasha"})).json()
     token = (
-        await client.get(f"/api/friends/{friend['id']}/subscription")
+        await client.get(f"/api/users/{user['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     delivered = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
@@ -426,10 +426,10 @@ async def test_a_kernel_tunnel_is_untouched_on_a_node_with_no_hop(
 async def test_a_kernel_tunnel_is_untouched_on_the_leaf_end_of_a_hop(
     client, session, kernel_tunnel: str
 ) -> None:
-    """The far end of a hop serving friends of its own — the owner's live shape.
+    """The far end of a hop serving users of its own — the owner's live shape.
 
     A leaf holds the end of the hop that WAITS, and a node that waits has no way out of
-    its own: its friends leave by its own route exactly as they always have. The refusal
+    its own: its users leave by its own route exactly as they always have. The refusal
     is about the node that DIALS, and asserting that here is what stops it being written
     against ``hop_ends`` — which would take the owner's own leaf out of service.
     """
@@ -440,13 +440,13 @@ async def test_a_kernel_tunnel_is_untouched_on_the_leaf_end_of_a_hop(
     assert (await offer(client, leaf, kernel_tunnel)).status_code == 201
 
     # And the other order, which is the one an operator following the runbook reaches:
-    # the box is already serving friends when it is made the far end of somebody's hop.
+    # the box is already serving users when it is made the far end of somebody's hop.
     second = await a_node(client, "leaf-10", "192.0.2.37")
     assert (await offer(client, second, kernel_tunnel)).status_code == 201
     third = await a_node(client, "entry-11", "192.0.2.38", resolver=RESOLVER)
     assert (
         await hop(client, third, second, HOP_TRANSPORTS[0], network="10.84.0")
-    ).status_code == 201, "a leaf that offers friends a kernel tunnel was refused a hop"
+    ).status_code == 201, "a leaf that offers users a kernel tunnel was refused a hop"
 
 
 async def test_the_hop_itself_is_built_over_a_kernel_tunnel_and_always_was(
@@ -466,8 +466,8 @@ async def test_the_hop_itself_is_built_over_a_kernel_tunnel_and_always_was(
 
     assert established.status_code == 201, established.text
     assert not discover()[HOP_TRANSPORTS[0]].serves_users_through_a_hop
-    ends = await nodes.friend_facing_on(session, entry)
-    assert ends == [], "a hop end was written as something friends are offered"
+    ends = await nodes.user_facing_on(session, entry)
+    assert ends == [], "a hop end was written as something users are offered"
 
 
 # --- and what the operator reads ----------------------------------------------
@@ -482,8 +482,8 @@ async def test_the_enable_dialog_states_the_refusal_above_its_form(
 
     A refusal about the NODE has no box to sit under — every other sentence on this dialog
     is about a value the operator typed — so it is stated once above the form, which is
-    where ``_refuse_enable`` puts a failure. ``friends`` becomes ``users`` on the way out
-    (decision 9), and the sentence is otherwise the one the API answers with.
+    where ``_refuse_enable`` puts a failure. The sentence is the one the API answers
+    with, in the console's own words for where it sends the operator.
     """
     entry = await a_node(client, "entry-13", "192.0.2.41", resolver=RESOLVER)
     leaf = await a_node(client, "leaf-13", "192.0.2.42")
@@ -495,7 +495,7 @@ async def test_the_enable_dialog_states_the_refusal_above_its_form(
             f"{kernel_tunnel}-{field}": str(value)
             for field, value in params_for(
                 kernel_tunnel,
-                port=FRIEND_PORT,
+                port=USER_PORT,
                 tunnel_address="10.80.0.1/24",
                 peer_tunnel_address="10.80.0.2/24",
             ).items()
@@ -561,7 +561,7 @@ async def test_a_node_already_in_that_state_is_still_refused_at_the_apply(
     The doors above stop the combination being built; they do not go looking for a node
     that is already in it — a fleet that pre-dates this refusal, or a database edited by
     hand. So the fail-closed guarantee underneath them has to be exactly where it was:
-    ``edge`` refuses to render such a node's friend-facing config at all, rather than
+    ``edge`` refuses to render such a node's user-facing config at all, rather than
     writing one whose traffic surfaces in the country the hop exists to leave. That is
     the refusal M25's walk met, and it is correct; what this milestone changed is only
     how late it arrives.
@@ -577,7 +577,7 @@ async def test_a_node_already_in_that_state_is_still_refused_at_the_apply(
     assert (await offer(client, waiter, kernel_tunnel)).status_code == 201
     assert (await hop(client, dialler, waiter, HOP_TRANSPORTS[0])).status_code == 201
 
-    # The hop, reversed: the node serving friends becomes the end that DIALS.
+    # The hop, reversed: the node serving users becomes the end that DIALS.
     for end in await session.execute(
         select(NodeTransport).where(
             NodeTransport.purpose.in_(TransportPurpose.relays())

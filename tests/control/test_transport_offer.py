@@ -1,19 +1,19 @@
-"""Offering a protocol to friends, and moving a node's state — backlog item 29.
+"""Offering a protocol to users, and moving a node's state — backlog item 29.
 
 WHAT: the branchy half of the two operations item 29 added — ``set_transport_enabled``
       (what a withdrawal does to a subscription, what re-offering grants, what is
       refused) and the panel's own node-state route.
 WHY:  charter criterion 3 is "a transport is enabled from the panel and arrives in
-      every friend's subscription at the next refresh". Until this operation existed,
+      every user's subscription at the next refresh". Until this operation existed,
       ``NodeTransport.enabled`` was written ``True`` at creation and changed by no
       route, so only the positive half of the criterion could be stated. A criterion
       whose negative half is inexpressible is not a criterion — it says "enabling
-      added something", not "enabling controls what friends receive".
+      added something", not "enabling controls what users receive".
 HOW:  the acceptance scenarios for criterion 3 live in
       ``tests/e2e/control/test_a_replacement_node_and_a_protocol_from_the_panel.py``,
       driven through the panel against the booted stack. This file covers what a
       scenario cannot see: the refusal on a hop end, and that a re-offer grants the
-      friends who arrived while the transport was withdrawn.
+      users who arrived while the transport was withdrawn.
 """
 
 import base64
@@ -55,8 +55,8 @@ async def create_node(client, *, name: str, address: str, country: str) -> str:
     return response.json()["id"]
 
 
-async def one_node_one_friend(client, session, reality_params) -> tuple[str, str]:
-    """A serving node with one transport, and one friend holding a token."""
+async def one_node_one_user(client, session, reality_params) -> tuple[str, str]:
+    """A serving node with one transport, and one user holding a token."""
     node_id = await create_node(
         client, name="leaf-1", address="192.0.2.10", country="Netherlands"
     )
@@ -67,13 +67,13 @@ async def one_node_one_friend(client, session, reality_params) -> tuple[str, str
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
     return enabled.json()["id"], url.rsplit("/", 1)[-1]
 
 
 async def lines(anonymous, token: str) -> list[str]:
-    """The friend's subscription, decoded, exactly as their client reads it."""
+    """The user's subscription, decoded, exactly as their client reads it."""
     response = await anonymous.get(f"/sub/{token}")
     assert response.status_code == 200, response.text
     return base64.b64decode(response.text).decode().splitlines()
@@ -82,13 +82,13 @@ async def lines(anonymous, token: str) -> list[str]:
 async def test_withdrawing_empties_the_subscription_and_offering_refills_it(
     client, anonymous, session, reality_params
 ) -> None:
-    """The round trip, asserted on the friend's document rather than on the row.
+    """The round trip, asserted on the user's document rather than on the row.
 
     Asserting on ``enabled`` would prove only that a boolean was written. What the
-    criterion promises is about the document a friend's client fetches from a URL
+    criterion promises is about the document a user's client fetches from a URL
     that never changed, so that is what is read here — before, after, and after again.
     """
-    node_transport_id, token = await one_node_one_friend(client, session, reality_params)
+    node_transport_id, token = await one_node_one_user(client, session, reality_params)
     assert len(await lines(anonymous, token)) == 1
 
     withdrawn = await client.post(
@@ -99,7 +99,7 @@ async def test_withdrawing_empties_the_subscription_and_offering_refills_it(
     assert await lines(anonymous, token) == [], "a withdrawn transport is still delivered"
 
     # Still a 200 with an empty document rather than a 404: an empty offer is not a
-    # revoked link, and a client that got a 404 would report the friend's access as
+    # revoked link, and a client that got a 404 would report the user's access as
     # broken instead of momentarily empty.
     assert (await anonymous.get(f"/sub/{token}")).status_code == 200
 
@@ -110,22 +110,22 @@ async def test_withdrawing_empties_the_subscription_and_offering_refills_it(
     assert len(await lines(anonymous, token)) == 1
 
 
-async def test_a_friend_who_arrived_while_it_was_withdrawn_gets_it_on_the_re_offer(
+async def test_a_user_who_arrived_while_it_was_withdrawn_gets_it_on_the_re_offer(
     client, anonymous, session, reality_params
 ) -> None:
     """The bug this would otherwise have: the offer comes back for everyone but them.
 
-    A friend created while the only transport is withdrawn has no credential on it —
+    A user created while the only transport is withdrawn has no credential on it —
     there was nothing serving to grant. If re-offering did not grant, their
-    subscription would stay empty forever while every older friend's refilled, and
+    subscription would stay empty forever while every older user's refilled, and
     the operator would see a working fleet.
     """
-    node_transport_id, _ = await one_node_one_friend(client, session, reality_params)
+    node_transport_id, _ = await one_node_one_user(client, session, reality_params)
     await client.post(f"/api/transports/{node_transport_id}/state", json={"enabled": False})
 
-    latecomer = (await client.post("/api/friends", json={"nickname": "masha"})).json()["id"]
+    latecomer = (await client.post("/api/users", json={"nickname": "masha"})).json()["id"]
     token = (
-        await client.get(f"/api/friends/{latecomer}/subscription")
+        await client.get(f"/api/users/{latecomer}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
     assert await lines(anonymous, token) == []
 
@@ -137,7 +137,7 @@ async def test_setting_the_value_it_already_has_grants_nothing_new(
     client, session, reality_params
 ) -> None:
     """Idempotent. A retried click is not an event."""
-    node_transport_id, _ = await one_node_one_friend(client, session, reality_params)
+    node_transport_id, _ = await one_node_one_user(client, session, reality_params)
 
     before = len((await session.execute(select(Credential))).scalars().all())
     assert (
@@ -153,7 +153,7 @@ async def test_setting_the_value_it_already_has_grants_nothing_new(
 async def test_withdrawing_one_end_of_a_hop_is_refused(client, session) -> None:
     """Half a tunnel is the failure this refusal exists for.
 
-    A hop end is not an offer to friends, so switching it off is not a delivery
+    A hop end is not an offer to users, so switching it off is not a delivery
     change: it is a tunnel that stops completing while both ends still look
     configured, and nothing in the panel would say so.
     """
@@ -211,7 +211,7 @@ async def test_the_panel_returns_a_fragment_not_a_page(
     The route took this path back in M9.6 from the pre-redesign page's one toggle; it is
     two routes now, the destructive one confirming first. Same claim, same subject.
     """
-    node_transport_id, _ = await one_node_one_friend(client, session, reality_params)
+    node_transport_id, _ = await one_node_one_user(client, session, reality_params)
 
     response = await client.post(
         f"/panel/transports/{node_transport_id}/withdraw",
@@ -260,7 +260,7 @@ async def test_an_illegal_transition_from_the_panel_says_what_is_allowed(client)
 
     ``retired -> active`` is the transition that matters: a retired node's host is
     usually gone, and re-activating the record would put an address that may now belong
-    to a stranger back into every friend's subscription.
+    to a stranger back into every user's subscription.
     """
     node_id = await create_node(
         client, name="leaf-1", address="192.0.2.10", country="Netherlands"

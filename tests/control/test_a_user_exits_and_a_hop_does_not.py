@@ -2,11 +2,11 @@
 
 WHAT: that the egress policy `control` hands a renderer comes from the ``purpose``
       column and nothing else, and that a hop end never gets a local exit.
-WHY:  M14 was measured in the field: a friend's handshake completed and the friend
+WHY:  M14 was measured in the field: a user's handshake completed and the user
       carried nothing, because the node had no forwarding or NAT for the tunnel. Adding
       those rules fixes that transport and creates a new way to fail — quietly. The same
       rules on a hop end would masquerade entry↔leaf traffic out of the ENTRY, so a
-      friend in Russia would exit in Russia while the panel showed two active nodes and a
+      user in Russia would exit in Russia while the panel showed two active nodes and a
       live hop. Nothing would log it and nothing should.
 
       So the two halves are asserted together, in one file: the exit that must exist and
@@ -53,7 +53,7 @@ WG_PARAMS: dict[str, object] = {
 ENTRY_TUNNEL = "10.77.0.1/24"
 LEAF_TUNNEL = "10.77.0.2/24"
 
-# How many users a friend-facing row here may hand an address to — M17. Comfortably
+# How many users a user-facing row here may hand an address to — M17. Comfortably
 # inside the /24 above and comfortably above any count this file reaches.
 POOL_SIZE = 200
 
@@ -83,7 +83,7 @@ def kernel_tunnel(request, nothing_retired) -> str:
     return request.param
 
 
-async def friend_facing_node(client, session, transport_name: str) -> str:
+async def user_facing_node(client, session, transport_name: str) -> str:
     created = await client.post(
         "/api/nodes",
         json={"name": "leaf-1", "address": "192.0.2.10", "location_label": "Testland"},
@@ -113,7 +113,7 @@ async def friend_facing_node(client, session, transport_name: str) -> str:
 
 # --- the exit that must exist ------------------------------------------------
 
-async def test_a_friend_facing_tunnel_is_told_to_let_its_traffic_out(
+async def test_a_user_facing_tunnel_is_told_to_let_its_traffic_out(
     client, session, kernel_tunnel: str
 ) -> None:
     """The rendered config carries the NAT rule whose absence was M14.
@@ -122,7 +122,7 @@ async def test_a_friend_facing_tunnel_is_told_to_let_its_traffic_out(
     right and the argument never arriving at the renderer is exactly the shape of the
     original bug: everything correct, nothing connected.
     """
-    node_id = await friend_facing_node(client, session, kernel_tunnel)
+    node_id = await user_facing_node(client, session, kernel_tunnel)
     node = await nodes.get_node(session, node_id)
 
     config = (await apply.render_for_node(session, node))[kernel_tunnel]
@@ -144,9 +144,9 @@ async def test_the_entry_end_of_a_hop_is_never_told_to_let_traffic_out(
     what is asserted is the text that would reach a node.
 
     M14 wrote this as "neither end, ever", and M3 kept the half that is a safety property
-    and inverted the other. The ENTRY masquerading is a friend in Russia exiting in Russia
+    and inverted the other. The ENTRY masquerading is a user in Russia exiting in Russia
     while the panel shows two active nodes and a live hop. The LEAF masquerading is the
-    exit itself — the foreign address the friend is supposed to appear from — so a leaf
+    exit itself — the foreign address the user is supposed to appear from — so a leaf
     end with no rule is a hop that carries nothing, which is why it is asserted here too
     rather than merely allowed.
     """
@@ -202,7 +202,7 @@ def test_every_purpose_has_a_decided_egress_policy() -> None:
         assert nodes.egress_for(NodeTransport(purpose=purpose)) in tuple(Egress)
 
 
-def test_only_a_friend_facing_row_exits_locally() -> None:
+def test_only_a_user_facing_row_exits_locally() -> None:
     """The table, stated as the property it exists for."""
     assert nodes.egress_for(NodeTransport(purpose=TransportPurpose.FRIENDS)) is Egress.LOCAL
     for purpose in TransportPurpose.relays():

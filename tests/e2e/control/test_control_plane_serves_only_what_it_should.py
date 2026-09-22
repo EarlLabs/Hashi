@@ -59,7 +59,7 @@ async def test_unknown_path_is_a_plain_404(client) -> None:
         assert leak not in body, f"404 body mentions {leak!r}: {response.text[:200]}"
 
 
-@pytest.mark.parametrize("path", ["/panel/login", "/panel/friends"])
+@pytest.mark.parametrize("path", ["/panel/login", "/panel/users"])
 async def test_a_console_url_is_not_storable_over_real_http(client, path: str) -> None:
     """The headers that stop a browser rendering a fragment as a whole document.
 
@@ -69,7 +69,7 @@ async def test_a_console_url_is_not_storable_over_real_http(client, path: str) -
     by a middleware is exactly the kind of thing that survives an in-process client
     and not a deployment.
 
-    ``/panel/friends`` needs no session for this: an unauthenticated request is
+    ``/panel/users`` needs no session for this: an unauthenticated request is
     redirected to the login form, and the redirect is a response the browser stores
     under that URL too.
     """

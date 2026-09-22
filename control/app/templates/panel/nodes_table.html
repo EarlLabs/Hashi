@@ -1,7 +1,7 @@
 {#
   The nodes table, on its own so a mutation can refresh it without a page load.
 
-  Swaps itself, exactly like panel/friends_table.html and panel/overview_body.html:
+  Swaps itself, exactly like panel/users_table.html and panel/overview_body.html:
   one file is both the first paint and every refresh, so there is no second rendering
   that could disagree with this one about what a row says. It listens for
   `nodes-changed`, which every node mutation in panel/routes.py fires.
@@ -12,7 +12,7 @@
   loading skeleton — for an action that changes nothing about the list. Each button
   keeps its own indicator, which is the button itself (.btn.htmx-request in app.css).
 
-  What is NOT in this table, and may never be: anything that moves when a friend
+  What is NOT in this table, and may never be: anything that moves when a user
   connects. `docs/decisions.md` replaced the design's "load" column with `config`,
   which reads drift against the digest we last applied — a measurement of us rather
   than of the people on the node.
@@ -82,12 +82,12 @@
                   The transport's own name, printed as data. Which tag it wears is
                   decided by two facts about OUR configuration and never by which
                   protocol it is: whether the operator is offering it, and whether it
-                  faces friends at all. A hop end says so, because a tunnel between
+                  faces users at all. A hop end says so, because a tunnel between
                   two of our own nodes must not read as something a person is offered.
                 #}
                 {% if not transport.offered %}
                 <span class="tag tag-neutral">{{ transport.name }} (disabled)</span>
-                {% elif not transport.for_friends %}
+                {% elif not transport.for_users %}
                 <span class="tag tag-outline">{{ transport.name }} (hop)</span>
                 {% else %}
                 <span class="tag tag-accent">{{ transport.name }}</span>

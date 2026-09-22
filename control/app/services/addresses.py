@@ -11,8 +11,8 @@ WHAT: the allocator. ``settle`` gives every credential on a row an address of it
       proposed tunnel could no longer carry the addresses in hand, and how many of them
       each reason applies to.
 WHY:  found in the field. A WireGuard-family transport had one ``peer_tunnel_address``
-      for everybody, so it served exactly one friend against a charter scale of ~30-50 —
-      and the second friend was refused at RENDER, after the row was committed, which
+      for everybody, so it served exactly one user against a charter scale of ~30-50 —
+      and the second user was refused at RENDER, after the row was committed, which
       blocks every later push to that node including a revocation's. The refusal itself
       is right and is untouched (``AmbiguousPeerRoute``: on a WireGuard server
       ``AllowedIPs`` is the authorisation list and the routing table at once, so two
@@ -35,7 +35,7 @@ HOW:  **it reads a transport's declaration and never a transport's name.**
       **No lock is taken** — the same call as ``services/placement.py`` makes for ports,
       with the opposite backstop: the losing write here is refused by
       ``uq_credential_tunnel_address`` rather than accepted, so a race is a clean refusal
-      and never a shared address. See ``friends.grant_everywhere``, which turns the
+      and never a shared address. See ``users.grant_everywhere``, which turns the
       constraint's own error into that refusal.
 
       **Nothing here is logged.** An address against a person is exactly the record the
@@ -198,7 +198,7 @@ async def settle(session: AsyncSession, node_transport: NodeTransport) -> list[C
     NOTHING IS WRITTEN WHEN IT REFUSES — not "nothing is committed", nothing at all: the
     allocation is planned in full and applied only once every waiting credential has an
     address. So a caller may catch ``PoolFull``, report it and go on with its own
-    transaction. ``friends.grant_everywhere`` rolls back anyway, for a different reason
+    transaction. ``users.grant_everywhere`` rolls back anyway, for a different reason
     that still holds (a refusal there poisons four other services' transactions).
 
     FLUSHES FIRST, and that is required rather than tidy: this application's sessions are
@@ -211,7 +211,7 @@ async def settle(session: AsyncSession, node_transport: NodeTransport) -> list[C
     autoflushing session would write the rows the caller has in hand between these two
     queries, and what this needs is one consistent picture of who holds what. The one
     flush that matters is the one at the end, which is where a race loses — see
-    ``friends.grant_everywhere``, which turns that loss into a refusal.
+    ``users.grant_everywhere``, which turns that loss into a refusal.
 
     Returns the credentials it placed, which is empty when there was nothing to do — the
     ordinary case for a transport that declares no address at all.
@@ -268,16 +268,16 @@ async def settle(session: AsyncSession, node_transport: NodeTransport) -> list[C
     if waiting:
         node = await session.get(Node, node_transport.node_id)
         # Singular when it is one person, because this sentence is what an operator reads
-        # at the moment a pool refuses them and "1 more friends" is the kind of seam that
+        # at the moment a pool refuses them and "1 more users" is the kind of seam that
         # makes a product look machine-written.
         short = len(waiting)
         needing = (
-            f"{short} more friend needs one" if short == 1
-            else f"{short} more friends need one"
+            f"{short} more user needs one" if short == 1
+            else f"{short} more users need one"
         )
         raise PoolFull(
             f"{node_transport.transport_name} on {node.name if node else '?'} gives "
-            f"every friend an address of its own and its pool holds "
+            f"every user an address of its own and its pool holds "
             f"{node_transport.pool_size or 1}: {len(held)} are taken and "
             f"{needing}. Nothing has been changed. Make the "
             "pool bigger on that transport, or take somebody off it."
@@ -464,19 +464,19 @@ def edge_credential(
 async def fleet_size(session: AsyncSession, *, extra: int = 0) -> int:
     """How many people a pool on a serving row has to hold. ONE definition, three readers.
 
-    Counts ACTIVE FRIENDS rather than credentials held, deliberately: every active friend
+    Counts ACTIVE USERS rather than credentials held, deliberately: every active user
     gets a credential on every serving row, so that count is what the pool must hold, and
     reading the credentials instead would answer "is it full now" — which is a different
     question, and the one that lets a row be enabled at a size it can never satisfy.
 
     A function of its own because three places ask it and they must not drift: the
-    refusal when a friend is added (``shortfalls`` below), the refusal when a pool is
+    refusal when a user is added (``shortfalls`` below), the refusal when a pool is
     sized at enable (``nodes.sized_pool``), and the floor in the enable dialog's own
     placeholder (``console.pool_boxes``). Each had written the query out again. Change
     who counts as being in the fleet with three copies and the console offers a floor the
     service refuses, with nothing red anywhere.
 
-    ``extra`` is how many people are about to be added — one, for a friend being created.
+    ``extra`` is how many people are about to be added — one, for a user being created.
     """
     return (
         await session.execute(
@@ -494,12 +494,12 @@ async def shortfalls_among(
     fleet, which is what somebody being added meets. The console asks it of one node's
     own rows, because an action has to be withheld BEFORE the operator commits to it:
     offering a withdrawn transport and moving a node to serving each grant every active
-    friend an address on rows that are not serving yet, so neither is visible to the
+    user an address on rows that are not serving yet, so neither is visible to the
     serving query and both used to be refused only after the press. Measuring that in
     the console would have been a third copy of "what a pool has to hold", which is the
     drift ``fleet_size`` and ``nodes.sized_pool`` already exist to prevent.
 
-    FRIEND-FACING ROWS ONLY, and only where the transport declares each consumer needs
+    USER-FACING ROWS ONLY, and only where the transport declares each consumer needs
     an address. A hop end hands nothing to anybody and is refused a size outright
     (``rotation._resize``), so measuring its absent pool against the fleet would report a
     shortfall on the runbook's own entry box — an action withheld over a number that row
@@ -532,14 +532,14 @@ async def shortfalls_among(
 
 
 async def shortfalls(session: AsyncSession, *, extra: int = 0) -> list[Shortfall]:
-    """Every serving pool whose size is below the friends it would have to hold.
+    """Every serving pool whose size is below the users it would have to hold.
 
-    ``extra`` is how many people are about to be added — one, for a friend being
-    created, so the refusal arrives before the friend, their subscription and their
+    ``extra`` is how many people are about to be added — one, for a user being
+    created, so the refusal arrives before the user, their subscription and their
     credentials are written rather than after ``settle`` has already been handed an
     impossible job.
 
-    Serving rows only, which is the whole population a friend is granted on. A row being
+    Serving rows only, which is the whole population a user is granted on. A row being
     enabled in this transaction is not one of them and is not asked about here: it is
     measured by ``nodes.sized_pool`` while the operator is still looking at the box,
     against the same count this uses.
@@ -592,7 +592,7 @@ def too_small(short: list[Shortfall]) -> str:
     """
     listed = "; ".join(named(row) for row in short)
     return (
-        f"a transport that gives every friend an address of its own has too small a "
+        f"a transport that gives every user an address of its own has too small a "
         f"pool: {listed}. Nothing has been changed — make the pool bigger on that "
         "transport first."
     )

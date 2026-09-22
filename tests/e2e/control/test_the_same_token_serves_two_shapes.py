@@ -6,10 +6,10 @@ WHY:  the charter calls "how does a protocol with no URI form reach a phone in o
       link" the largest open question of phase 1, and says it is a product decision.
       The owner made it on 2026-08-09: option (b), per-client config files behind the
       SAME token. "Same token" is the whole constraint — a second token or a second
-      route would mean thirty friends re-importing something, which is precisely what
+      route would mean thirty users re-importing something, which is precisely what
       this product promises never to require, and every rule that protects the token in
       the path is written for one route.
-HOW:  driven exactly as a friend's client drives it: anonymous GETs against
+HOW:  driven exactly as a user's client drives it: anonymous GETs against
       ``/sub/{token}``, with and without the parameter. The operator's setup goes
       through the panel, since that is where an owner does it.
 
@@ -42,7 +42,7 @@ REALITY_PORT = 8471
 AWG_PORT_SHAPES = 51931
 AWG_PORT_UNTOUCHED = 51932
 
-# How many users a friend-facing row of this transport may hand an address to — M17. The
+# How many users a user-facing row of this transport may hand an address to — M17. The
 # stand is WARM: every scenario in this directory adds users to one control plane and
 # none are removed, so a pool is measured against a fleet that only grows. Low thousands
 # against a /20 tunnel for that reason — the number is a ceiling on people, not a
@@ -126,11 +126,11 @@ async def node_with(operator, *, name: str, address: str, country: str, transpor
     return node_id
 
 
-async def friend_token(operator, nickname: str) -> str:
-    friend_id = (
-        await operator.post("/api/friends", json={"nickname": nickname})
+async def user_token(operator, nickname: str) -> str:
+    user_id = (
+        await operator.post("/api/users", json={"nickname": nickname})
     ).json()["id"]
-    url = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    url = (await operator.get(f"/api/users/{user_id}/subscription")).json()["url"]
     return url.rsplit("/", 1)[-1]
 
 
@@ -138,7 +138,7 @@ def address_in(config: str) -> str | None:
     """The tunnel address a config file configures its interface with, or ``None``.
 
     Whatever it says, rather than a pattern: the shape is one assertion and comparing two
-    friends' addresses is another, and a helper that matched only the expected shape would
+    users' addresses is another, and a helper that matched only the expected shape would
     make the second one green by returning ``None`` twice.
     """
     found = re.search(r"Address\s*=\s*(\S+)", config)
@@ -159,7 +159,7 @@ def mine_in(archive: bytes, unique: str) -> dict[str, str]:
     truncated to fit an interface name, so a marker at the end would be cut off.
 
     Necessary because the stack outlives one run unless it is torn down with its
-    volumes, and every active friend is granted every serving node — including the ones
+    volumes, and every active user is granted every serving node — including the ones
     an earlier run left behind.
     """
     return {name: body for name, body in files_in(archive).items() if unique in name}
@@ -174,7 +174,7 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
 
     The negative half is the one worth stating: the shape must NOT depend on who is
     asking. A response that varies by User-Agent is one nobody can reproduce — the
-    friend describing a problem and the operator looking at it would be discussing
+    user describing a problem and the operator looking at it would be discussing
     different documents. So the same token is fetched twice with two different
     User-Agents and the bytes are required to be identical.
     """
@@ -188,7 +188,7 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
             **awg_params(AWG_PORT_SHAPES, "10.81.0.1/20", "10.81.0.2/20"),
         },
     )
-    token = await friend_token(operator, f"twoshapes-{unique}")
+    token = await user_token(operator, f"twoshapes-{unique}")
 
     document = await client.get(f"/sub/{token}")
     assert document.status_code == 200, document.text
@@ -216,18 +216,18 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
 
     # AND NOT THE SAME ONE TWICE, which is the half the pattern above cannot see: the
     # pre-M17 fallback put the row's single ``peer_tunnel_address`` into every user's
-    # file, and that value satisfies the pattern too. So a second friend is added on the
+    # file, and that value satisfies the pattern too. So a second user is added on the
     # same row and the two files are compared — remove the allocator and both read
     # 10.81.0.2/20, which is this assertion and not the one above turning red.
     also_theirs = await client.get(
-        f"/sub/{await friend_token(operator, f'twoshapes-{unique}-b')}",
+        f"/sub/{await user_token(operator, f'twoshapes-{unique}-b')}",
         params={"format": CONFIG_FILE_FORMAT},
     )
     assert also_theirs.status_code == 200, also_theirs.text
     theirs = mine_in(also_theirs.content, unique)
     assert len(theirs) == 1, theirs
     assert address_in(next(iter(theirs.values()))) != ours, (
-        "two friends on one row were handed one address"
+        "two users on one row were handed one address"
     )
 
     # The credential-protecting headers are on BOTH shapes. A second shape that lost
@@ -250,23 +250,23 @@ async def test_the_same_token_serves_both_shapes_and_the_caller_chooses(
         headers={"User-Agent": "AmneziaWG/1.0"},
     )
     assert as_a_browser.content == as_a_client.content, (
-        "the response depends on who asked, so nobody can reproduce a friend's report"
+        "the response depends on who asked, so nobody can reproduce a user's report"
     )
     # And it is byte-stable between refreshes: an archive stamped with the build clock
     # would differ on every fetch, which hides a real change in noise.
     assert as_a_browser.content == archive.content
 
 
-# --- S2: the link a friend already holds does not change ---------------------
+# --- S2: the link a user already holds does not change ---------------------
 
-async def test_a_friend_on_uri_transports_only_sees_no_change_at_all(
+async def test_a_user_on_uri_transports_only_sees_no_change_at_all(
     operator, client, unique: str
 ) -> None:
     """S2. Adding a second shape to the fleet does not touch the first one's bytes.
 
     Captured before and compared after, on the same token, with the config-file
     transport switched on in between. Not "the response still parses" — the same bytes,
-    because the promise is that a friend never re-imports anything and never notices an
+    because the promise is that a user never re-imports anything and never notices an
     operator's change.
     """
     country = f"Unchanged-{unique}"
@@ -283,11 +283,11 @@ async def test_a_friend_on_uri_transports_only_sees_no_change_at_all(
             "server_names": "www.example.com",
         },
     )
-    token = await friend_token(operator, f"uri-only-{unique}")
+    token = await user_token(operator, f"uri-only-{unique}")
     before = (await client.get(f"/sub/{token}")).text
 
-    # A config-file transport arrives in the fleet, on its own node, and this friend is
-    # granted it like every active friend.
+    # A config-file transport arrives in the fleet, on its own node, and this user is
+    # granted it like every active user.
     await node_with(
         operator,
         name=f"{unique}-fil",
@@ -303,13 +303,13 @@ async def test_a_friend_on_uri_transports_only_sees_no_change_at_all(
     assert after.status_code == 200
     assert after.text == before, (
         "the v1 subscription changed when a config-file transport was enabled — the "
-        "friend's client would re-read a document it had no reason to re-read"
+        "user's client would re-read a document it had no reason to re-read"
     )
     # And what they DO now have is reachable, in the other shape only.
     archive = await client.get(f"/sub/{token}", params={"format": CONFIG_FILE_FORMAT})
     assert any(
         f":{AWG_PORT_UNTOUCHED}" in body for body in mine_in(archive.content, unique).values()
-    ), "the friend was granted a config-file transport and cannot fetch it"
+    ), "the user was granted a config-file transport and cannot fetch it"
 
 
 # --- S4: an unknown token is a 404, identically in both shapes ---------------
@@ -342,7 +342,7 @@ async def test_a_format_nobody_ships_is_refused_without_revealing_anything(
     Refused before any lookup, so the answer is identical for a live token and a dead
     one — otherwise the new parameter would become an oracle for token existence.
     """
-    token = await friend_token(operator, f"badformat-{unique}")
+    token = await user_token(operator, f"badformat-{unique}")
     nonsense = "e2e-not-a-real-token-" + uuid.uuid4().hex
 
     live = await client.get(f"/sub/{token}", params={"format": "carrier-pigeon"})

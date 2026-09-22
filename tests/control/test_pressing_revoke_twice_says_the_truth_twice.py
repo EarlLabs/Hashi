@@ -16,7 +16,7 @@ WHY:  measured on the owner's real hosts. The first press said, correctly, *"fai
       moment must never produce by accident.
       AND THE SAME THING ON THE API, found by round 8 on the same hosts: the panel was
       taught in round 6 and ``RevocationResponse.complete`` was not, so
-      ``POST /api/friends/<id>/revoke`` answered ``complete: true`` to the second call
+      ``POST /api/users/<id>/revoke`` answered ``complete: true`` to the second call
       while the first had reported a node it could not update. Retrying after a partial
       failure is what an integration does, so the retry was the one call that reported
       success.
@@ -33,7 +33,7 @@ from control.app.services import nodes, revocation
 
 from .conftest import GENERATED_SSH_KEY
 
-FRIEND_TRANSPORT = "vless-reality"
+USER_TRANSPORT = "vless-reality"
 
 # RFC 5737 documentation addresses. Never dialled — the node below is refused before a
 # connection is attempted, because its record carries no key.
@@ -44,8 +44,8 @@ UNREACHABLE = "192.0.2.70"
 THE_REASSURANCE = "revoked — link is dead"
 
 
-async def a_friend_on_a_node_that_cannot_be_updated(client, session, reality_params) -> str:
-    """One active friend holding one credential on one serving, unpushable node."""
+async def a_user_on_a_node_that_cannot_be_updated(client, session, reality_params) -> str:
+    """One active user holding one credential on one serving, unpushable node."""
     created = await client.post(
         "/api/nodes",
         json={"name": "quiet-1", "address": UNREACHABLE, "location_label": "Testland"},
@@ -54,14 +54,14 @@ async def a_friend_on_a_node_that_cannot_be_updated(client, session, reality_par
     node_id = created.json()["id"]
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend = await client.post("/api/friends", json={"nickname": "kolya"})
-    assert friend.status_code < 300, friend.text
-    return friend.json()["id"]
+    user = await client.post("/api/users", json={"nickname": "kolya"})
+    assert user.status_code < 300, user.text
+    return user.json()["id"]
 
 
 async def test_the_second_press_does_not_claim_the_link_is_dead(
@@ -76,18 +76,18 @@ async def test_the_second_press_does_not_claim_the_link_is_dead(
 
     Red against the previous commit: the second press answered with the toast.
     """
-    friend_id = await a_friend_on_a_node_that_cannot_be_updated(
+    user_id = await a_user_on_a_node_that_cannot_be_updated(
         client, session, reality_params
     )
 
     first = await client.post(
-        f"/panel/friends/{friend_id}/revoke", headers={"HX-Request": "true"}
+        f"/panel/users/{user_id}/revoke", headers={"HX-Request": "true"}
     )
     assert first.status_code == 200, first.text
     assert "could NOT be updated" in html.unescape(first.text), first.text
 
     second = await client.post(
-        f"/panel/friends/{friend_id}/revoke", headers={"HX-Request": "true"}
+        f"/panel/users/{user_id}/revoke", headers={"HX-Request": "true"}
     )
 
     assert second.status_code == 200, second.text
@@ -114,16 +114,16 @@ async def test_the_outcome_says_it_withdrew_nothing_while_complete_stays_true(
     ``confirmed``, like the panel, because the vacuous answer was what a retrying
     integration read as success. This property is the component, not the answer.
     """
-    friend_id = await a_friend_on_a_node_that_cannot_be_updated(
+    user_id = await a_user_on_a_node_that_cannot_be_updated(
         client, session, reality_params
     )
 
-    first = await revocation.revoke_friend(session, friend_id=friend_id)
+    first = await revocation.revoke_user(session, user_id=user_id)
     assert first.withdrew is True
     assert first.complete is False
     assert first.confirmed is False
 
-    second = await revocation.revoke_friend(session, friend_id=friend_id)
+    second = await revocation.revoke_user(session, user_id=user_id)
 
     assert second.withdrew is False
     assert second.complete is True, "the vacuous answer this milestone is about"
@@ -152,12 +152,12 @@ async def test_the_api_says_it_withdrew_nothing_too(
     serving the credential. The panel had been taught this in round 6 and the
     machine-readable field had not.
     """
-    friend_id = await a_friend_on_a_node_that_cannot_be_updated(
+    user_id = await a_user_on_a_node_that_cannot_be_updated(
         client, session, reality_params
     )
 
-    first = (await client.post(f"/api/friends/{friend_id}/revoke")).json()
-    second = (await client.post(f"/api/friends/{friend_id}/revoke")).json()
+    first = (await client.post(f"/api/users/{user_id}/revoke")).json()
+    second = (await client.post(f"/api/users/{user_id}/revoke")).json()
 
     assert first["withdrew"] is True
     assert first["complete"] is False, first
@@ -197,15 +197,15 @@ async def test_a_revocation_the_api_could_finish_still_reports_complete(
     assert node.status_code == 201, node.text
     enabled = await client.post(
         f"/api/nodes/{node.json()['id']}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     applied = await client.post(f"/api/nodes/{node.json()['id']}/apply")
     assert applied.status_code == 200, applied.text
-    friend = await client.post("/api/friends", json={"nickname": "masha"})
-    assert friend.status_code < 300, friend.text
+    user = await client.post("/api/users", json={"nickname": "masha"})
+    assert user.status_code < 300, user.text
 
-    revoked = (await client.post(f"/api/friends/{friend.json()['id']}/revoke")).json()
+    revoked = (await client.post(f"/api/users/{user.json()['id']}/revoke")).json()
 
     assert revoked["withdrew"] is True
     assert revoked["complete"] is True, revoked
@@ -217,15 +217,15 @@ async def test_a_revocation_that_really_did_finish_still_gets_its_toast(
 ) -> None:
     """The other half, so the fix is not "never reassure anybody".
 
-    A friend who holds no credential on any node is withdrawn completely by the database
+    A user who holds no credential on any node is withdrawn completely by the database
     half alone: their subscription stops resolving and there is nothing on any host that
     could still authorise them. That is the case the toast is FOR, and it still happens.
     """
-    friend = await client.post("/api/friends", json={"nickname": "masha"})
-    assert friend.status_code < 300, friend.text
+    user = await client.post("/api/users", json={"nickname": "masha"})
+    assert user.status_code < 300, user.text
 
     response = await client.post(
-        f"/panel/friends/{friend.json()['id']}/revoke", headers={"HX-Request": "true"}
+        f"/panel/users/{user.json()['id']}/revoke", headers={"HX-Request": "true"}
     )
 
     assert response.status_code == 200, response.text

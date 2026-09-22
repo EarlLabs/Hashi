@@ -1,13 +1,13 @@
-"""Issuing and withdrawing a friend's access — backlog items 7 and 9.
+"""Issuing and withdrawing a user's access — backlog items 7 and 9.
 
-WHAT: creating a friend with a subscription, granting them credentials on every
+WHAT: creating a user with a subscription, granting them credentials on every
       serving node, and revoking them everywhere.
 WHY:  the charter's fifth criterion ("onboarding is one link") and sixth
       ("revocation is total") are both about this module. Granting means minting
       one credential per node × transport; revoking means removing every one of
       them and re-rendering every node they were on.
-HOW:  ``grant_everywhere`` is called both when a friend is created and when a new
-      node is enabled, so a node added later is not a node existing friends cannot
+HOW:  ``grant_everywhere`` is called both when a user is created and when a new
+      node is enabled, so a node added later is not a node existing users cannot
       reach. Revocation is a database change here; pushing the new configs is
       ``services/apply.py``, and ``revoke`` returns which nodes need it so the
       caller cannot forget.
@@ -54,22 +54,22 @@ ADDRESS_TAKEN_MEANWHILE = (
 )
 
 
-async def get_friend(session: AsyncSession, friend_id: str) -> User:
-    friend = await session.get(User, friend_id)
-    if friend is None:
-        raise NotFound("no such friend")
-    return friend
+async def get_user(session: AsyncSession, user_id: str) -> User:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFound("no such user")
+    return user
 
 
-async def list_friends(session: AsyncSession) -> list[User]:
+async def list_users(session: AsyncSession) -> list[User]:
     result = await session.execute(select(User).order_by(User.created_at, User.id))
     return list(result.scalars().unique())
 
 
-async def create_friend(session: AsyncSession, *, nickname: str) -> User:
-    """Register a friend, mint their subscription, and grant them every node.
+async def create_user(session: AsyncSession, *, nickname: str) -> User:
+    """Register a user, mint their subscription, and grant them every node.
 
-    All three in one operation because a friend without a subscription cannot be
+    All three in one operation because a user without a subscription cannot be
     given anything, and a subscription with no credentials resolves to an empty
     config — which a client reports as a broken link. There is no partially
     onboarded state an operator can observe, on purpose.
@@ -88,55 +88,55 @@ async def create_friend(session: AsyncSession, *, nickname: str) -> User:
 
     existing = await session.execute(select(User).where(User.nickname == nickname))
     if existing.scalars().first() is not None:
-        raise Conflict(f"a friend called {nickname!r} already exists")
+        raise Conflict(f"a user called {nickname!r} already exists")
 
     # BEFORE ANY WRITE — M17. A transport that gives each person an address of their own
-    # would refuse this friend when ``settle`` ran, which is correct but late: the
-    # refusal would arrive with the friend, their subscription and their credentials
+    # would refuse this user when ``settle`` ran, which is correct but late: the
+    # refusal would arrive with the user, their subscription and their credentials
     # already built in this transaction, and the operator would be told "nothing was
     # changed" by a path that had to roll back to make it true. Asked here, the pool is
-    # measured against the fleet the friend is about to join (``extra=1``) and the answer
+    # measured against the fleet the user is about to join (``extra=1``) and the answer
     # names which pool and by how much, while nothing has been touched at all.
     short = await addresses.shortfalls(session, extra=1)
     if short:
         raise Conflict(addresses.too_small(short))
 
-    friend = User(nickname=nickname)
-    session.add(friend)
-    # Flushed rather than committed: the friend, their token and their credentials
-    # are one unit of work, and a crash between them would leave a friend the
+    user = User(nickname=nickname)
+    session.add(user)
+    # Flushed rather than committed: the user, their token and their credentials
+    # are one unit of work, and a crash between them would leave a user the
     # operator believes has access.
     await session.flush()
 
-    subscriptions.issue(session, friend)
-    await grant_everywhere(session, friend)
+    subscriptions.issue(session, user)
+    await grant_everywhere(session, user)
 
-    # In the same transaction as the friend, their token and their credentials, so the
+    # In the same transaction as the user, their token and their credentials, so the
     # trail cannot name somebody the database does not have. The label is the nickname
     # the operator just chose, copied whole — never the subscription URL, which is the
     # one artefact of this operation that must never reach a durable record.
-    audit.record(session, AuditAction.FRIEND_ADDED, first_label=friend.nickname)
+    audit.record(session, AuditAction.FRIEND_ADDED, first_label=user.nickname)
 
     await session.commit()
-    logger.info("friend created: %s", friend.id)
-    return friend
+    logger.info("user created: %s", user.id)
+    return user
 
 
-async def grant_everywhere(session: AsyncSession, friend: User) -> list[Credential]:
-    """Give a friend a credential on every serving node × transport.
+async def grant_everywhere(session: AsyncSession, user: User) -> list[Credential]:
+    """Give a user a credential on every serving node × transport.
 
     Does NOT commit: callers compose it with other work in one transaction.
 
-    Idempotent by design — it skips node-transports the friend already holds a
+    Idempotent by design — it skips node-transports the user already holds a
     credential for. That is what lets it be called again after a new node is
     enabled, which is how "a replacement node needs no action from any user"
     (criterion 2) actually happens.
     """
-    return await grant_on(session, friend, await nodes.serving_transports(session))
+    return await grant_on(session, user, await nodes.serving_transports(session))
 
 
 async def grant_on(
-    session: AsyncSession, friend: User, rows: Sequence[NodeTransport]
+    session: AsyncSession, user: User, rows: Sequence[NodeTransport]
 ) -> list[Credential]:
     """The same grant, over rows the caller chose. Does NOT commit.
 
@@ -147,32 +147,32 @@ async def grant_on(
     one that cannot answer this case.
 
     THE ROWS ARE THE CALLER'S RESPONSIBILITY and there is one rule about them:
-    friend-facing only. ``serving_transports`` filters ``purpose == FRIENDS`` because a
-    friend handed a hop end would be routed straight past the entry node the topology
+    user-facing only. ``serving_transports`` filters ``purpose == USERS`` because a
+    user handed a hop end would be routed straight past the entry node the topology
     exists to hide behind, and that rule does not stop being true because the rows arrived
     from somewhere else. Nothing here re-filters, deliberately — a second copy of the rule
     is a second place for it to drift — so a caller passing its own list says in its own
-    words why the list is friend-facing.
+    words why the list is user-facing.
     """
-    if not friend.is_active:
-        # Silently granting a revoked friend would be the exact failure criterion 6
+    if not user.is_active:
+        # Silently granting a revoked user would be the exact failure criterion 6
         # forbids: access returning through a side door.
-        raise Conflict("cannot grant access to a revoked friend")
+        raise Conflict("cannot grant access to a revoked user")
 
     installed = discover()
     granted: list[Credential] = []
-    # The rows this call minted something on, by id so a friend granted twice in one
+    # The rows this call minted something on, by id so a user granted twice in one
     # transaction settles each row once. Keyed rather than a list because ``settle`` is
     # the one operation here that is about the row rather than about the person.
     touched: dict[str, NodeTransport] = {}
 
-    # Queried rather than read off ``friend.credentials``. The relationship is
-    # configured to load eagerly, but a friend created moments ago in this same
+    # Queried rather than read off ``user.credentials``. The relationship is
+    # configured to load eagerly, but a user created moments ago in this same
     # transaction has never been LOADED — so touching the collection triggers lazy
     # I/O, which in async SQLAlchemy is not a slow query but an immediate
     # MissingGreenlet crash. Explicit queries are the async idiom for a reason.
     existing = await session.execute(
-        select(Credential.node_transport_id).where(Credential.user_id == friend.id)
+        select(Credential.node_transport_id).where(Credential.user_id == user.id)
     )
     held = set(existing.scalars())
 
@@ -184,7 +184,7 @@ async def grant_on(
         if meta is None:
             # The node runs a transport this image does not ship. Skipped rather
             # than crashed: an operator mid-downgrade must still be able to add a
-            # friend, and the missing transport is visible in the panel.
+            # user, and the missing transport is visible in the panel.
             logger.warning(
                 "node-transport %s names a transport not installed here", node_transport.id
             )
@@ -199,11 +199,11 @@ async def grant_on(
         if subject is None:
             raise Conflict(
                 f"transport {node_transport.transport_name!r} declares no client-scoped "
-                "identity, so a friend cannot be given access to it individually"
+                "identity, so a user cannot be given access to it individually"
             )
 
         credential = Credential(
-            user_id=friend.id,
+            user_id=user.id,
             node_transport_id=node_transport.id,
             subject=subject,
             secrets=json.dumps({**minted.secrets, **minted.params}),
@@ -212,7 +212,7 @@ async def grant_on(
         granted.append(credential)
         # Settled below rather than here, and only for the rows this call actually
         # granted on: the allocation is a property of the ROW (who already holds what),
-        # not of this friend, so it is asked once per row after every credential is in.
+        # not of this user, so it is asked once per row after every credential is in.
         touched[node_transport.id] = node_transport
 
     await session.flush()
@@ -242,13 +242,13 @@ async def grant_on(
     return granted
 
 
-async def claim_withdrawal(session: AsyncSession, *, friend_id: str) -> bool:
-    """Take the withdrawal of this friend's access, and answer whether THIS call took it.
+async def claim_withdrawal(session: AsyncSession, *, user_id: str) -> bool:
+    """Take the withdrawal of this user's access, and answer whether THIS call took it.
 
     ONE STATEMENT, AND THE DATABASE DECIDES IT — M23, round 8. Whether a revocation
-    withdrew anything was read off ``friend.is_active`` before the work started, which is
+    withdrew anything was read off ``user.is_active`` before the work started, which is
     a read of the copy the caller's session is holding and not of the row. Two revocations
-    of one person in the same instant therefore both found an active friend and both
+    of one person in the same instant therefore both found an active user and both
     reported ``withdrew=True``: the second one pushed nothing, could confirm nothing, and
     said it had cut somebody off. That is the failure shape ``nodes._node_to_write`` is
     written against, one table over — a decision taken against a photograph.
@@ -261,10 +261,10 @@ async def claim_withdrawal(session: AsyncSession, *, friend_id: str) -> bool:
     IT IS A LOCK where ``_node_to_write`` settles for a read, and the difference is worth
     naming because that docstring declines this deliberately. What it declines is a lock
     on ``nodes``, taken for a whole apply — a host being dialled sits inside that window.
-    This one is one row of ``friends``, held for the two statements ``revoke_friend`` runs
+    This one is one row of ``users``, held for the two statements ``revoke_user`` runs
     after it, and the only thing it makes wait is another WRITE to the same person. The
     delivery endpoint does join this table (``Subscription.user`` is ``lazy="joined"``),
-    and it is unaffected: a plain read never waits on a row lock, so a friend fetching
+    and it is unaffected: a plain read never waits on a row lock, so a user fetching
     their subscription mid-revocation sees the row as it was committed and then, an instant
     later, as revoked — which is the outcome either way.
 
@@ -274,35 +274,35 @@ async def claim_withdrawal(session: AsyncSession, *, friend_id: str) -> bool:
     the row for exactly that reason, and the two must not disagree.
 
     It does not commit. The caller's transaction is what makes the withdrawal durable —
-    ``revocation.revoke_friend`` records the audit entry between this and ``revoke``, and
+    ``revocation.revoke_user`` records the audit entry between this and ``revoke``, and
     all three land together or not at all.
     """
     taken = await session.execute(
         update(User)
-        .where(User.id == friend_id, User.revoked_at.is_(None))
+        .where(User.id == user_id, User.revoked_at.is_(None))
         .values(revoked_at=datetime.datetime.now(datetime.UTC))
         .execution_options(synchronize_session=False)
     )
     return taken.rowcount == 1
 
 
-async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport]:
-    """Withdraw a friend's access everywhere, and report what must be re-pushed.
+async def revoke(session: AsyncSession, *, user_id: str) -> list[NodeTransport]:
+    """Withdraw a user's access everywhere, and report what must be re-pushed.
 
     Charter criterion 6. Three things happen, and all three are necessary:
 
-    1. the friend is marked revoked, so nothing can grant them access again;
+    1. the user is marked revoked, so nothing can grant them access again;
     2. their subscriptions are revoked, so the URL they hold stops resolving;
     3. every credential is DELETED, so no node config can be rendered that still
        authorises them.
 
     Deleting rather than flagging is the point. A flag means every renderer must
-    remember to filter on it, and the one that forgets leaves a friend connected —
+    remember to filter on it, and the one that forgets leaves a user connected —
     which is precisely the failure the criterion is written against. With the rows
     gone, a re-render cannot include them even by mistake.
 
     Returns the node-transports whose configs changed. The database half alone does
-    NOT complete a revocation: until those configs are pushed, the friend's
+    NOT complete a revocation: until those configs are pushed, the user's
     credential is still live in the running daemon on each node. The caller pushes;
     see ``services/apply.py``.
 
@@ -326,23 +326,23 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
     and the next step that gives a node a record of what it was last applied WITH is the
     one that can shut it — not the next step that touches addresses.
     """
-    friend = await get_friend(session, friend_id)
+    user = await get_user(session, user_id)
     now = datetime.datetime.now(datetime.UTC)
 
     # The withdrawal time is decided against the ROW — M23, round 8, and the same lesson
     # ``nodes._node_to_write`` states for a node record. These sessions keep what they
-    # loaded (``expire_on_commit=False``), so a friend another session has already
+    # loaded (``expire_on_commit=False``), so a user another session has already
     # withdrawn still reads ``revoked_at = NULL`` here, and the line below would then
     # overwrite that withdrawal's own timestamp with this call's. One named column rather
     # than a whole-object refresh, for ``_node_to_write``'s reason: these sessions are
     # ``autoflush=False`` and a refresh discards a pending edit instead of writing it
     # first.
-    await session.refresh(friend, ["revoked_at"])
+    await session.refresh(user, ["revoked_at"])
 
     # Explicit queries for the same reason as in ``grant_everywhere``: lazy access on
     # an async session raises rather than loading.
     held = await session.execute(
-        select(Credential).where(Credential.user_id == friend.id)
+        select(Credential).where(Credential.user_id == user.id)
     )
     credentials = list(held.scalars().unique())
     affected = [credential.node_transport for credential in credentials]
@@ -351,16 +351,16 @@ async def revoke(session: AsyncSession, *, friend_id: str) -> list[NodeTransport
         await session.delete(credential)
 
     issued = await session.execute(
-        select(Subscription).where(Subscription.user_id == friend.id)
+        select(Subscription).where(Subscription.user_id == user.id)
     )
     for subscription in issued.scalars().unique():
         subscription.revoked_at = subscription.revoked_at or now
 
-    friend.revoked_at = friend.revoked_at or now
+    user.revoked_at = user.revoked_at or now
 
     await session.commit()
-    logger.info("friend revoked: %s (%d node configs to re-push)", friend.id, len(affected))
-    # De-duplicated by id: a friend can hold two credentials on one node (two
+    logger.info("user revoked: %s (%d node configs to re-push)", user.id, len(affected))
+    # De-duplicated by id: a user can hold two credentials on one node (two
     # transports), and pushing that node twice is wasted work on the one operation
     # that must complete quickly.
     unique: dict[str, NodeTransport] = {t.id: t for t in affected}

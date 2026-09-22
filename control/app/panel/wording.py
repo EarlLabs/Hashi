@@ -1,18 +1,18 @@
-"""The boundary where the code's word becomes the panel's word.
+"""The boundary where a service's sentence becomes the panel's page copy.
 
-WHAT: rewrites a sentence composed under this codebase's vocabulary — ``friend`` —
-      into the word an operator reads on the console: ``user``; puts a refusal's
-      directions into the console's own words, where a service wrote them for any
-      caller; and composes the one sentence per recorded change that the audit screen
-      puts in front of the operator.
-WHY:  ``docs/decisions.md`` decision 9 draws one line and it has two sides. Nothing
-      may rename ``friend`` in a route, a schema field, a service name or a test —
-      and, equally, nothing the code calls a friend may arrive on the rendered page
-      under that name. The panel had held the first half and leaked the second: a
-      duplicate nickname was refused with *"a friend called 'dima' already exists"*
-      on a screen where every other word says user. A sentence composed in
-      ``services/`` is written in the code's vocabulary by design, so the
-      translation belongs at the moment that sentence becomes page copy.
+WHAT: puts a refusal's directions into the console's own words, where a service wrote
+      them for any caller; composes the one sentence per recorded change that the audit
+      screen puts in front of the operator; and still filters the word this codebase
+      used to call a user by — ``friend`` — out of anything a page renders.
+WHY:  the original reason was decision 9 of ``docs/PLAN.md``'s *Decisions needed from
+      you* (2026-09-08): the code said ``friend``, the page said ``user``, and the
+      panel had held the first half and leaked the second — a duplicate nickname was
+      refused with *"a friend called 'dima' already exists"* on a screen where every
+      other word says user. **M29 reversed that decision** (``docs/decisions.md``,
+      2026-09-22): the code says ``user`` too now, so the word half of this boundary
+      has nothing left to translate and is kept only as the filter that says so. What
+      it does NOT keep is a claim about where the words diverge, because they do not.
+      The directions half is untouched by any of that and is the live half.
 HOW:  every server-composed sentence a CONSOLE template renders passes through
       ``for_the_page`` — the mutation result's toast and banner, the add-user dialog's
       field error, and, since M17.1b, a tuning box's HINT (``panel/routes.py``'s
@@ -30,11 +30,11 @@ HOW:  every server-composed sentence a CONSOLE template renders passes through
       being true. What replaces it is the list above and the audit of it in
       ``tests/control/test_the_console.py``.
 
-The two translations are the same boundary seen from two sides. ``friend`` is a word of
-ours a page must not show; "the Nodes screen" is a word of the PAGE's that a service must
-not compose, because the same sentence is answered to ``POST /api/nodes/{id}/apply``,
-where there is no screen and the caller is not looking at one. Both are fixed at the
-moment a sentence becomes page copy, and nowhere else.
+The two translations were the same boundary seen from two sides. ``friend`` is a word
+this codebase no longer uses and a page must never show; "the Nodes screen" is a word of
+the PAGE's that a service must not compose, because the same sentence is answered to
+``POST /api/nodes/{id}/apply``, where there is no screen and the caller is not looking at
+one. Both are fixed at the moment a sentence becomes page copy, and nowhere else.
 
 Two things are never translated, because they are not ours to rewrite:
 
@@ -56,8 +56,12 @@ from control.app.models import AuditAction
 from control.app.services import apply, console
 
 # ``friend``/``friends``/``friend's``/``friends'`` — the shapes a sentence in this
-# codebase actually uses. Word-bounded on purpose: a nickname like ``friendly`` is
-# not the code's word and must come through untouched.
+# codebase used to be written in, before M29 made the code's word ``user`` as well.
+# Nothing composes them any more, so this fires on nothing; it is kept as the filter
+# that keeps it that way, and removing it (with ``keeping`` and the quote protection
+# below, which exist only to hold operator data out of it) is a redesign of this
+# module rather than the vocabulary swap M29.4 was. Word-bounded on purpose: a
+# nickname like ``friendly`` was never the code's word and must come through untouched.
 _THE_CODES_WORD = re.compile(r"\b(friend)(s'|'s|s)?\b", re.IGNORECASE)
 
 # A quoted value, in the shape ``{value!r}`` produces. The lookaround is what keeps an
@@ -228,10 +232,11 @@ def the_trail(entries: Sequence[console.TrailEntry]) -> list[TrailLine]:
     """Every recorded change as the sentence the operator reads.
 
     Here rather than in ``services/console.py``, which is where the console's other
-    prose lives, for the reason this module exists at all: these sentences are the
-    PANEL's vocabulary. ``user {first} added`` is decision 9's rendered word for a row
-    the code calls a friend, and a service composing it would be a service speaking the
-    page's dialect — the exact direction this module was written to stop.
+    prose lives, for the reason this module exists at all: these sentences are page
+    copy. ``user {first} added`` is rendered from a machine key the database holds, and
+    a service composing it would be a service speaking the page's dialect — the exact
+    direction this module was written to stop. That the word now matches the code's own
+    (M29) changes nothing here: the sentence is still the PAGE's to compose.
     """
     return [
         TrailLine(

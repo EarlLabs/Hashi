@@ -11,7 +11,7 @@
   * what a user has to do — nothing. Their link does not move, so this is safe during a
     block. What they will see is their client failing until it next refreshes;
   * what happens if the push does not land — which is not one outcome but two, and they
-    differ by row. A friend-facing node keeps running the old material until it is
+    differ by row. A user-facing node keeps running the old material until it is
     applied. A HOP END is rotated at both ends in one transaction and pushed to two
     nodes, so a push that reaches one of them leaves the two ends holding different
     material and the tunnel down until the other is applied. Both are stated here rather
@@ -28,7 +28,7 @@
   <div class="dialog blueprint" role="dialog" aria-modal="true"
        aria-labelledby="rotate-keys-title">
     <div class="dialog-title" id="rotate-keys-title">Rotate these keys?</div>
-    {% if key.for_friends %}
+    {% if key.for_users %}
     <div class="dialog-body">
       Fresh material is minted for {{ key.node }} — {{ key.transport }}, together with
       {{ key.holders }} user credential{{ "" if key.holders == 1 else "s" }} on it.
@@ -59,7 +59,7 @@
     #}
     <div class="dialog-body">{{ shared_with_peer }}</div>
     {% endif %}
-    {% if key.for_friends %}
+    {% if key.for_users %}
     <div class="dialog-body text-muted">
       The new material is written here first and then pushed. If the push cannot reach
       the host, the node keeps running what it has and this screen says so — apply the

@@ -1,13 +1,13 @@
-"""The entry→leaf hop, and the friend who must never see it.
+"""The entry→leaf hop, and the user who must never see it.
 
 WHAT: establishing a tunnel between two nodes through the panel, and proving it stays
       out of every subscription.
 WHY:  the hop is the topology the charter is built on, and it is also the most
       dangerous row in the database: it is a working transport configuration on a
-      serving node, so anything that treats it like the others hands a friend a
+      serving node, so anything that treats it like the others hands a user a
       configuration that routes them straight past the entry node the whole design
       exists to hide behind. Their client would use it happily.
-HOW:  the hop is established from the panel, then a friend's subscription is fetched
+HOW:  the hop is established from the panel, then a user's subscription is fetched
       anonymously and checked for what it must not contain.
 
 Boundary: real control + postgres. Neither node exists, so nothing here proves a tunnel
@@ -26,7 +26,7 @@ import pytest
 def _entries(archive: bytes) -> dict[str, bytes]:
     """Every file in a config archive, by name.
 
-    Read with the stdlib rather than by shelling out: this asserts what a friend's
+    Read with the stdlib rather than by shelling out: this asserts what a user's
     client will find in the response body, and nothing about our own tooling.
     """
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
@@ -97,7 +97,7 @@ async def test_a_hop_is_established_and_stays_out_of_every_subscription(
     assert created.json()["entry"]["purpose"] == "relay-entry"
     assert created.json()["leaf"]["purpose"] == "relay-leaf"
 
-    # A friend-facing protocol on the entry node, so the subscription is not empty for
+    # A user-facing protocol on the entry node, so the subscription is not empty for
     # the trivial reason, and both nodes serving so nothing is filtered by state.
     await operator.post(
         f"/api/nodes/{entry_id}/transports",
@@ -110,10 +110,10 @@ async def test_a_hop_is_established_and_stays_out_of_every_subscription(
     for node_id in (entry_id, leaf_id):
         await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
 
-    friend_id = (await operator.post(
-        "/api/friends", json={"nickname": f"kolya-{unique}"}
+    user_id = (await operator.post(
+        "/api/users", json={"nickname": f"kolya-{unique}"}
     )).json()["id"]
-    token = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()[
+    token = (await operator.get(f"/api/users/{user_id}/subscription")).json()[
         "url"
     ].rsplit("/", 1)[-1]
 
@@ -123,7 +123,7 @@ async def test_a_hop_is_established_and_stays_out_of_every_subscription(
 
     assert HOP_TRANSPORT not in document
     assert len(entries) == 1, entries
-    # The leaf's own label must not appear either: a friend picks an exit country from
+    # The leaf's own label must not appear either: a user picks an exit country from
     # the entries they are given, and the leaf is reached THROUGH the entry.
     assert f"Leafland-{unique}" not in entries
 
@@ -154,23 +154,23 @@ async def test_a_hop_that_would_not_form_a_tunnel_is_refused(
     assert not [hop for hop in hops if hop["entry"]["node_id"] == entry_id]
 
 
-async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouched(
+async def test_offering_the_hop_transport_to_users_leaves_the_hop_END_untouched(
     operator, client, unique: str
 ) -> None:
     """The assertion this scenario used to make, and why it changed.
 
-    Until backlog item 27 this transport could not be enabled for friends at all, and
+    Until backlog item 27 this transport could not be enabled for users at all, and
     that refusal was asserted here. The refusal was never about the hop, though — it
     was about US: the delivery endpoint could produce only a base64 list of URIs, and
-    this protocol has no URI form. Item 26 gave it a friend-facing serialisation and
+    this protocol has no URI form. Item 26 gave it a user-facing serialisation and
     item 27 gave the endpoint a way to hand it over, so the refusal would now be a lie.
-    It survives for a transport that declares NO friend-facing format at all, which is
+    It survives for a transport that declares NO user-facing format at all, which is
     asserted in tests/control (no such transport ships, so it cannot be provoked here).
 
     What this file is actually about is untouched and is what is asserted instead: a
     hop END is a different row with a different purpose, and enabling the same
-    transport for friends must not make the HOP reachable. The two are one protocol and
-    two topologies, and conflating them would route a friend straight past the entry
+    transport for users must not make the HOP reachable. The two are one protocol and
+    two topologies, and conflating them would route a user straight past the entry
     node the whole design exists to hide behind.
     """
     entry_id, leaf_id = await two_nodes(operator, unique)
@@ -188,10 +188,10 @@ async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouche
     assert established.status_code == 201, established.text
     hop_port = 51822
 
-    # The same transport, now as an offer to friends — on a THIRD node. That USED to be
+    # The same transport, now as an offer to users — on a THIRD node. That USED to be
     # forced: ``uq_node_transport`` was unique on (node, transport_name) with no purpose
     # in it, so one host could not both carry a hop and offer the same protocol to
-    # friends. M15 removed that limitation — uniqueness moved onto the port and the
+    # users. M15 removed that limitation — uniqueness moved onto the port and the
     # config name, and ``render_for_node`` keys by the latter — and the shape it unlocked
     # has a scenario of its own
     # (``test_the_runbook_shape_a_then_the_hop_it_mandates.py``). A third node is kept
@@ -208,7 +208,7 @@ async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouche
         f"/api/nodes/{exit_node}/transports",
         json={
             "transport_name": HOP_TRANSPORT,
-            # Friend-facing, unlike both ends of the hop above — so since M17 it says how
+            # User-facing, unlike both ends of the hop above — so since M17 it says how
             # many users it may hand an address to. Low thousands against a /20 because
             # the stand is warm and its fleet only grows; a hop end takes none of this,
             # which is what the two calls above show by not having it.
@@ -224,11 +224,11 @@ async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouche
             await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
         ).status_code == 200
 
-    friend_id = (
-        await operator.post("/api/friends", json={"nickname": f"hopfriend-{unique}"})
+    user_id = (
+        await operator.post("/api/users", json={"nickname": f"hopuser-{unique}"})
     ).json()["id"]
     token = (
-        await operator.get(f"/api/friends/{friend_id}/subscription")
+        await operator.get(f"/api/users/{user_id}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     archive = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
@@ -242,16 +242,16 @@ async def test_offering_the_hop_transport_to_friends_leaves_the_hop_END_untouche
         for name, content in _entries(archive.content).items()
         if ":51823" in content.decode()
     }
-    assert files, "the friend received nothing for a transport that was offered to them"
+    assert files, "the user received nothing for a transport that was offered to them"
 
-    # The hop's own port and tunnel network appear nowhere in what a friend receives.
+    # The hop's own port and tunnel network appear nowhere in what a user receives.
     # Asserted on the port and the address rather than on a row count, because the
-    # failure that matters is a friend's device holding a configuration that dials the
+    # failure that matters is a user's device holding a configuration that dials the
     # entry node's tunnel.
     everything = "\n".join(files.values())
     assert f":{hop_port}" not in everything, (
-        f"a hop end reached a friend's configuration:\n{everything[:2000]}"
+        f"a hop end reached a user's configuration:\n{everything[:2000]}"
     )
     assert "10.55.0." not in everything, (
-        f"the hop's tunnel network reached a friend:\n{everything[:2000]}"
+        f"the hop's tunnel network reached a user:\n{everything[:2000]}"
     )

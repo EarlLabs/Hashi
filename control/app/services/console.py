@@ -1,6 +1,6 @@
 """What the redesigned console puts on screen, and nothing more.
 
-WHAT: the Overview's four stat cards, the node rows they summarise, the friend rows
+WHAT: the Overview's four stat cards, the node rows they summarise, the user rows
       the Users screen lists, the hop rows the Hops screen lists, the capability row
       the Transports screen lists per protocol this image ships, and the key row the
       Keys & configs screen lists per transport enabled on a node, and the offer row
@@ -24,13 +24,13 @@ HOW:  every figure here is derived from configuration rows: node states, credent
       refuse.
 
 The one figure that looks like a measurement and is not: ``transports_served``. It counts
-the credentials WE minted for a friend against the node-transports currently serving —
+the credentials WE minted for a user against the node-transports currently serving —
 "is this person covered", a property of our own configuration. It does not move when
-they connect, it does not move when they do not, and it is identical for a friend whose
+they connect, it does not move when they do not, and it is identical for a user whose
 device is in a drawer. It was called ``nodes_served`` and the column above it read
 *nodes served* until M23's eighth round, which found the two disagreeing on the real
 hosts: one node serving two protocols reads ``2 / 2``, and what is being counted is the
-node-transport — the unit a friend's link actually carries an entry for.
+node-transport — the unit a user's link actually carries an entry for.
 """
 
 import dataclasses
@@ -58,12 +58,12 @@ from control.app.services import (
     addresses,
     apply,
     audit,
-    friends,
     keymaterial,
     nodes,
     relay,
     rotation,
     transports,
+    users,
 )
 from control.app.settings import (
     AUDIT_RETENTION_MAX_DAYS,
@@ -90,7 +90,7 @@ NOTHING_ENABLED = "nothing enabled"
 UNRENDERABLE = "cannot render"
 
 # And what the cell says about a node this control plane will never push to again — M23,
-# round 8, which read ``retired`` beside ``in sync`` on the real hosts with five friends
+# round 8, which read ``retired`` beside ``in sync`` on the real hosts with five users
 # revoked since that node's last apply.
 #
 # The comparison the other four answers come from is arithmetic on two digests, and for
@@ -126,7 +126,7 @@ TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
 # TRUE — found while fixing M20's acceptance finding about the sentence one screen over.
 # It was written before item 27 landed and describes the world it was written in. Item 27
 # landed: ``GET /sub/{token}?format=client-config-file`` answers the same bearer token
-# with an archive of this friend's configuration files (``control/app/api/delivery.py``,
+# with an archive of this user's configuration files (``control/app/api/delivery.py``,
 # which says so in its own docstring), and the delivery endpoint is this same
 # application. So the product hands it over; what is true is only that it is not IN the
 # base64 link, which is exactly what ``subscription_expressible`` measures and all this
@@ -219,7 +219,7 @@ KEY_NOT_IN_THIS_IMAGE = (
 # Who the material on one row is for. A hop end's second holder is the far NODE rather
 # than a person, which is a distinction the operator has to be able to make before they
 # press rotate: re-keying a hop end takes a tunnel down until both ends are applied,
-# and re-keying a friend-facing transport re-mints credentials people are holding.
+# and re-keying a user-facing transport re-mints credentials people are holding.
 KEY_SCOPE_NODE = "this node"
 KEY_SCOPE_HOP = "this node, and the far end of the hop"
 
@@ -329,14 +329,14 @@ class TransportChip:
     when this node runs more than one of it — the console compares it to nothing, and the
     template that renders these prints it without ever naming one.
     ``offered`` is the operator's own answer to "is this in a subscription", and
-    ``for_friends`` distinguishes a friend-facing transport from one end of a hop, so a
+    ``for_users`` distinguishes a user-facing transport from one end of a hop, so a
     tunnel between two of our own nodes cannot be misread as something a person is
     being offered.
     """
 
     name: str
     offered: bool
-    for_friends: bool
+    for_users: bool
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -361,14 +361,14 @@ class NodeRow:
     # needs no network; this one is what the HOST last said, and only a press gets it.
     probe: str | None = None
     # What this node runs. A configuration fact and nothing else: it moves when the
-    # OPERATOR enables or withdraws a protocol and never when a friend connects, which
+    # OPERATOR enables or withdraws a protocol and never when a user connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
     transports: tuple[TransportChip, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class FriendRow:
-    """A friend as the console lists them. The visible label is "user" — decision 9."""
+class UserRow:
+    """A user as the console lists them. The visible label is "user", and so is this."""
 
     id: str
     nickname: str
@@ -378,7 +378,7 @@ class FriendRow:
     # NAMED FOR WHAT THEY COUNT since M23's eighth round, which read ``2 / 2`` under a
     # column headed *nodes served* on a fleet with one node in service. The unit is the
     # NODE-TRANSPORT, and it is the right unit rather than the convenient one: it is what
-    # a friend's link carries one entry per, so a person missing the second protocol on
+    # a user's link carries one entry per, so a person missing the second protocol on
     # the only node in the fleet is a fault this column can show. Counting distinct nodes
     # instead would have read ``1 / 1`` over exactly that fault.
     transports_served: int
@@ -398,7 +398,7 @@ class HopRow:
     precisely so that removing one end leaves the other visible instead of silently
     disappearing with it.
 
-    Nothing here moves when a friend connects. A hop's state moves when the operator
+    Nothing here moves when a user connects. A hop's state moves when the operator
     establishes it, applies it or tears it down, which is the test docs/decisions.md
     sets for whether a cell may be on a screen at all.
     """
@@ -519,7 +519,7 @@ class KeyRow:
     pushed: datetime.datetime | None
     holders: int
     holders_of_pool: str
-    for_friends: bool
+    for_users: bool
     # Whether rotating THIS row also re-keys the far end of the hop, because the
     # transport declared material both ends must hold the same copy of. It used to mean
     # that rotating BROKE that value at the far end; the rotation now carries it across
@@ -569,15 +569,15 @@ class KeyRow:
 #
 # WHAT THE SECOND SENTENCE MAY NOT SAY IS THAT IT IS UNDELIVERED, which is where the
 # obvious wording would have gone and would have been the same defect pointed the other
-# way. The same bearer token answers ``?format=`` with an archive of this friend's
+# way. The same bearer token answers ``?format=`` with an archive of this user's
 # configuration files (``control/app/api/delivery.py``, item 27), so "this panel cannot
 # hand it over" is false about this product — see ``TRANSPORT_NOT_IN_THE_LINK``, which
 # said exactly that and has been corrected with it.
 #
-# NOR MAY IT SAY THE FRIEND SIMPLY GETS IT, which is the other way to be wrong here and
+# NOR MAY IT SAY THE USER SIMPLY GETS IT, which is the other way to be wrong here and
 # the more dangerous one: nothing in this panel hands the operator the URL that asks for
-# the file shape, so an operator told "delivered from that same link" would tell a friend
-# to open the link they already have and the friend would meet an empty page. That gap is
+# the file shape, so an operator told "delivered from that same link" would tell a user
+# to open the link they already have and the user would meet an empty page. That gap is
 # its own milestone and is not closed here. So the sentence says ONLY BY ASKING for the
 # shape — three facts, all true today, and none of them a decision that milestone has to
 # make: the host is told to serve it, it is not in the link itself, and the shape it
@@ -683,7 +683,7 @@ NODE_STATE_MEANS = {
 # it, so a short pool on the node usually refuses the move.
 #
 # USUALLY, and the sentence is written for the case where it does not. ``grant_everywhere``
-# skips a row a friend already holds a credential on, so on the field's own row — a
+# skips a row a user already holds a credential on, so on the field's own row — a
 # pre-pool row counted as one address with two people already on it — nothing is minted,
 # nothing is refused, and the node would go into service carrying a transport with no room
 # for the fleet. Withholding is still right there, and is the only reason that row gets
@@ -707,7 +707,7 @@ class OfferRow:
     address — the same id the Keys screen's rotations use, because it is the same row.
 
     ``offered`` is the operator's own answer to "is this in a subscription" and
-    ``for_friends`` is whether it could ever be: a hop end's consumer is the far NODE,
+    ``for_users`` is whether it could ever be: a hop end's consumer is the far NODE,
     so it has no offer to withdraw and the screen says so rather than showing a button
     whose only outcome is a refusal.
 
@@ -727,7 +727,7 @@ class OfferRow:
     node: str
     transport: str
     offered: bool
-    for_friends: bool
+    for_users: bool
     # Which of the three sentences above this row is in, composed here so no template
     # chooses between them and no route writes one.
     standing: str
@@ -803,7 +803,7 @@ class StateChoice:
 class Overview:
     stats: list[Stat]
     nodes: list[NodeRow]
-    friends: list[FriendRow]
+    users: list[UserRow]
     # What the four counts above do not know — M26's first acceptance walk. Up to two
     # sentences, empty on a fleet this panel has nothing to correct about, and composed
     # from the rows beside them so the cards and the warning cannot disagree.
@@ -939,7 +939,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
                     offered=row.enabled,
-                    for_friends=row.purpose == TransportPurpose.FRIENDS,
+                    for_users=row.purpose == TransportPurpose.FRIENDS,
                 )
                 # Sorted by name: this is a relationship load, and a column that
                 # reshuffles itself between reloads reads as the fleet changing.
@@ -957,7 +957,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
 #
 # IT IS A FLEET SENTENCE AND NOT A PER-PERSON ONE, and that is forced rather than chosen.
 # A revocation DELETES the credential rows — which is the property that makes revocation
-# total (``friends.revoke``) — so the moment it commits, nothing in this database records
+# total (``users.revoke``) — so the moment it commits, nothing in this database records
 # which nodes that person was on. Naming them per row would need a record this schema does
 # not carry and the charter would not obviously want; what is knowable is which hosts this
 # panel cannot say are running what it would give them, which is the same set for
@@ -1044,7 +1044,7 @@ def withdrawn_cell(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
 
     So the cell says nothing while that note is up. NOTHING, and not a hedge of its own:
     what a per-row sentence would have to claim is which nodes THIS person was on, and a
-    revocation deletes exactly the rows that would say (``friends.revoke``) — so there is
+    revocation deletes exactly the rows that would say (``users.revoke``) — so there is
     no per-row answer to give, which is the finding round 2 got right and this does not
     reopen. An empty cell is the honest amount, and the doubt is stated once, above the
     table, where it names the nodes and the two controls that resolve it.
@@ -1133,9 +1133,9 @@ def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
 # WHAT ADDING A USER DOES NOT DO — M26's first acceptance walk, and the finding is the
 # shape this project keeps producing: every signal green and nothing carried.
 #
-# The walk added a friend and fetched their configuration file. It was complete and
+# The walk added a user and fetched their configuration file. It was complete and
 # correct — the node's real public key, an address out of that row's pool — while on the
-# host the rendered config held ZERO peer blocks and the daemon listed none. A friend's
+# host the rendered config held ZERO peer blocks and the daemon listed none. A user's
 # client would have handshaked into nothing. Only a SECOND apply, three minutes later, put
 # the peer on the node and made the traffic flow.
 #
@@ -1173,7 +1173,7 @@ FLEET_NOT_PUSHED = (
 # nodes are running what they were told to — M26's first acceptance walk, the other half
 # of the same finding. The walk stopped a daemon, probed, read the correct answer, and
 # then watched the Overview go on reporting "nodes active 2 … transports serving 2" while
-# the friend's ping was 100% loss.
+# the user's ping was 100% loss.
 #
 # It does not repeat the finding itself. The finding is on the node's own row, where probe
 # and apply are, and a full diagnosis in a banner on another screen is a second copy of a
@@ -1273,33 +1273,33 @@ def fleet_doubt(rows: Sequence[NodeRow]) -> list[str]:
     ]
 
 
-async def friend_rows(session: AsyncSession) -> list[FriendRow]:
-    """Every friend, with how much of the fleet they are covered on.
+async def user_rows(session: AsyncSession) -> list[UserRow]:
+    """Every user, with how much of the fleet they are covered on.
 
-    ``transports_serving`` is the denominator every active friend shares, so a row reading
+    ``transports_serving`` is the denominator every active user shares, so a row reading
     ``2 / 3`` says "this person is missing one of the protocols being served", which is an
     actionable fault in OUR configuration and the reason the column exists.
 
-    ``serving_transports`` is friend-facing rows only, so the denominator never counts one
+    ``serving_transports`` is user-facing rows only, so the denominator never counts one
     end of a hop — a tunnel between two of our own nodes is not something a person holds a
     credential on.
     """
     serving = await nodes.serving_transports(session)
     serving_ids = {row.id for row in serving}
     return [
-        FriendRow(
-            id=friend.id,
-            nickname=friend.nickname,
-            is_active=friend.is_active,
-            added=friend.created_at,
+        UserRow(
+            id=user.id,
+            nickname=user.nickname,
+            is_active=user.is_active,
+            added=user.created_at,
             transports_served=sum(
                 1
-                for credential in friend.credentials
+                for credential in user.credentials
                 if credential.node_transport_id in serving_ids
             ),
             transports_serving=len(serving_ids),
         )
-        for friend in await friends.list_friends(session)
+        for user in await users.list_users(session)
     ]
 
 
@@ -1396,7 +1396,7 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             node=node.name,
             transport=placed_as(row.transport_name, row.config_name),
             offered=row.enabled,
-            for_friends=row.purpose == TransportPurpose.FRIENDS,
+            for_users=row.purpose == TransportPurpose.FRIENDS,
             standing=_standing(
                 row.purpose,
                 row.enabled,
@@ -1724,13 +1724,13 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
             fingerprint = (
                 keymaterial.fingerprint(meta.key_material, row.params) if meta else None
             )
-            for_friends = row.purpose == TransportPurpose.FRIENDS
+            for_users = row.purpose == TransportPurpose.FRIENDS
             rows.append(
                 KeyRow(
                     id=row.id,
                     node=node.name,
                     transport=placed_as(row.transport_name, row.config_name),
-                    scope=KEY_SCOPE_NODE if for_friends else KEY_SCOPE_HOP,
+                    scope=KEY_SCOPE_NODE if for_users else KEY_SCOPE_HOP,
                     fingerprint=fingerprint,
                     # The rule, printed exactly where a value could otherwise have gone.
                     held=(
@@ -1751,10 +1751,10 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                         if addresses.spec_for(row.transport_name) is not None
                         else None,
                     ),
-                    for_friends=for_friends,
+                    for_users=for_users,
                     shared_with_peer=bool(
                         meta
-                        and not for_friends
+                        and not for_users
                         and any(
                             spec.shared_between_peers and spec.scope is KeyScope.NODE
                             for spec in meta.key_material
@@ -1778,7 +1778,7 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                                 )
                             )
                         )
-                        if meta and for_friends
+                        if meta and for_users
                         else None
                     ),
                 )
@@ -1811,7 +1811,7 @@ def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     where an operator finishes a push.)
 
     A HOP END COSTS NOBODY A LINK, and now says so. Every other string on this screen
-    branches on ``for_friends``, including the confirmation the operator just read —
+    branches on ``for_users``, including the confirmation the operator just read —
     *"No user holds anything on it: this is a tunnel between two of our own nodes"* — so
     an answer that then reports what users will pick up contradicts the sentence they
     confirmed. The far end is named instead, because that is the only holder a hop end
@@ -1827,7 +1827,7 @@ def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     """
     if not outcome.complete:
         return _unpushed(row, outcome, "its keys were re-minted here")
-    if not row.for_friends:
+    if not row.for_users:
         return (
             f"keys rotated on {row.node} — {row.transport} and at the far end of the "
             "hop; no user holds anything on it, and both nodes have taken the new "
@@ -1846,13 +1846,13 @@ def replacement_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     operator typed themselves, so naming them back is how they confirm the right box
     landed. Nothing minted can be in this list — the form has no box for one.
 
-    Branched on ``for_friends`` for the reason ``rotation_summary`` above is: a hop end
+    Branched on ``for_users`` for the reason ``rotation_summary`` above is: a hop end
     has no user on it to be told about, and the dialog behind this answer says so.
     """
     changed = ", ".join(outcome.rotated)
     if not outcome.complete:
         return _unpushed(row, outcome, f"{changed} replaced here")
-    if not row.for_friends:
+    if not row.for_users:
         return (
             f"replaced {changed} on {row.node} — {row.transport}, at this end of the "
             "hop; no user holds anything on it, and the far end has been applied with "
@@ -1878,7 +1878,7 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     both ends and pushes two nodes, so one node taking it and the other not is a tunnel
     that is down, while neither taking it is a tunnel that is untouched. Reporting both
     as "the node is still running the old material" would be right about one of them and
-    a false reassurance about the other. A friend-facing row has one node and people on
+    a false reassurance about the other. A user-facing row has one node and people on
     the old material, who are unaffected.
 
     THE TWO HOP CLAUSES ARE NOT WRITTEN HERE. They are ``HOP_ONE_END_TOOK_IT`` and
@@ -1888,7 +1888,7 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     of them as fact, in the same words, so the pair cannot drift into contradicting each
     other again.
     """
-    if row.for_friends:
+    if row.for_users:
         standing = (
             "the node is still running the old material and users on it are unaffected"
         )
@@ -1999,7 +1999,7 @@ def withdrawal_summary(node: str, transport: str, *, nothing_left_enabled: bool)
     was the worst place in the console for it to be wrong. Withdrawing the node's last
     enabled row leaves ``render_for_node`` with nothing, so the apply this sentence sent
     the operator to answers "nothing to push" and the host keeps serving the row — which
-    still authorises every friend who holds a credential on it, since a withdrawal mints
+    still authorises every user who holds a credential on it, since a withdrawal mints
     nothing away. The only way out is to offer a transport there again, so the sentence
     says that, and says what it costs: the offered row goes back into every user's link.
     """
@@ -2065,7 +2065,7 @@ def offer_summary(node: str, transport: str, *, deliverable: bool) -> str:
     the same words: this one is read after the press and has to say what just happened.
 
     It says the material is MINTED rather than that nothing reaches anybody, because
-    something does: the same token answers with this friend's configuration file, so the
+    something does: the same token answers with this user's configuration file, so the
     honest report of this press is that everyone was granted and the link did not move.
     """
     if not deliverable:
@@ -2102,7 +2102,7 @@ async def overview(session: AsyncSession) -> Overview:
 
     The four stat cards are decision 6's replacements, in the design's own order:
     nodes active, active users, hops established, transports serving. Each is a fact
-    about the FLEET. How many friends exist is not a record of what any of them did.
+    about the FLEET. How many users exist is not a record of what any of them did.
 
     THE FIRST KICKER WAS "nodes online" AND COUNTED NEITHER — M18's acceptance. The value
     is the number of nodes in the ACTIVE state, which is an operator-settable column: a
@@ -2117,7 +2117,7 @@ async def overview(session: AsyncSession) -> Overview:
 
     AND THE FOURTH KICKER WAS "transports enabled" AND COUNTED SOMETHING NARROWER —
     M20's acceptance, which is the identical defect one card over. The value has always
-    been ``nodes.serving_transports``: distinct protocols enabled for friends ON A NODE
+    been ``nodes.serving_transports``: distinct protocols enabled for users ON A NODE
     THAT IS SERVING. The walk watched it read 0 with four rows at ``enabled=true``,
     because every node holding them was still draft — a true number whose meaning was
     nowhere on the screen. The label now names the state, exactly as "nodes active" and
@@ -2125,7 +2125,7 @@ async def overview(session: AsyncSession) -> Overview:
     to its left is showing for the same reason.
     """
     rows = await node_rows(session)
-    people = await friend_rows(session)
+    people = await user_rows(session)
     hops = await relay.list_hops(session)
 
     in_state = [row for row in rows if row.state == NodeState.ACTIVE]
@@ -2139,7 +2139,7 @@ async def overview(session: AsyncSession) -> Overview:
         for entry, leaf in hops
         if leaf is not None and entry.applied_at and leaf.applied_at
     ]
-    # Distinct protocols a user could be routed onto right now: enabled, friend-facing,
+    # Distinct protocols a user could be routed onto right now: enabled, user-facing,
     # and on a node in a state that reaches a subscription at all. NAMED for what it
     # measures since M20's acceptance, because the kicker beside it now says the same
     # word — see this function's own docstring.
@@ -2202,7 +2202,7 @@ async def overview(session: AsyncSession) -> Overview:
             ),
         ],
         nodes=rows,
-        friends=people,
+        users=people,
     )
 
 
@@ -2329,23 +2329,23 @@ def _plural(count: int, noun: str, tail: str) -> str:
 
 
 async def subscription_url(
-    session: AsyncSession, base_url: str, friend: User
+    session: AsyncSession, base_url: str, user: User
 ) -> str | None:
-    """The one URL a friend holds, or ``None`` if they have no live subscription.
+    """The one URL a user holds, or ``None`` if they have no live subscription.
 
     Built here rather than in a route so there is a single place that composes a
     bearer credential into a string. Every caller of this function is displaying it
     inside a dialog and nowhere else: it must not reach a query string, a log line,
     an error message or a ``title`` attribute (CLAUDE.md).
 
-    Queried rather than read off ``friend.subscriptions``, and that is not a style
-    choice. The add-user flow calls this with a friend created moments ago in the same
+    Queried rather than read off ``user.subscriptions``, and that is not a style
+    choice. The add-user flow calls this with a user created moments ago in the same
     transaction, whose relationship has never been LOADED — so touching the collection
     triggers lazy I/O, which in async SQLAlchemy is not a slow query but an immediate
-    MissingGreenlet crash. The same trap is documented in services/friends.py.
+    MissingGreenlet crash. The same trap is documented in services/users.py.
     """
     result = await session.execute(
-        select(Subscription).where(Subscription.user_id == friend.id)
+        select(Subscription).where(Subscription.user_id == user.id)
     )
     live = [row for row in result.scalars().unique() if row.is_active]
     return f"{base_url}/sub/{live[0].token}" if live else None
@@ -2700,7 +2700,7 @@ async def trail_entries(session: AsyncSession, *, limit: int = TRAIL_LIMIT) -> l
     uses the service (``docs/decisions.md``, 2026-09-09): the time is when a change
     committed, the action is one of the declared changes, and a label is a name the
     operator chose or the registry holds. The delivery endpoint writes no row at all, so
-    there is nothing on this screen for a friend's client to move — asserted in
+    there is nothing on this screen for a user's client to move — asserted in
     ``tests/control/test_the_audit_trail.py`` and again against the real stack.
 
     The timestamp is normalised to UTC here rather than in the template, because the
@@ -2837,9 +2837,9 @@ POOL_BOX_RESIZE_HINT = (
 # _LINK`` and its sibling), which is why it is here rather than left for a later pass: a
 # row's standing is read afterwards, and this is read while the operator is choosing. An
 # operator who enables a config-file transport on this sentence's word walks away
-# believing every friend has it.
+# believing every user has it.
 #
-# The second arm may not say the friend cannot have it, and may not say they simply get
+# The second arm may not say the user cannot have it, and may not say they simply get
 # it — the same two failures ``OFFER_NOT_IN_THE_LINK`` names at length, and the same
 # wording is used here so the operator reads one fact in both places. Nothing in this
 # panel yet hands the operator the URL that asks for the file shape; closing that is its
@@ -2898,7 +2898,7 @@ async def pool_boxes(
     number of people this control plane already has, because every one of them is granted
     a credential on this transport the moment the node serves — read from
     ``addresses.fleet_size``, which is the same call ``nodes.sized_pool`` refuses below
-    and the same one the add-a-friend refusal measures against, so the box and the two
+    and the same one the add-a-user refusal measures against, so the box and the two
     refusals cannot disagree about who is in the fleet.
 
     Asked of the transport's own declaration (``TransportMeta.peer_address``) rather than
@@ -2993,7 +2993,7 @@ async def full_pools(session: AsyncSession) -> list[str]:
     """Every serving pool that could not hold one more person, named — M17.2.
 
     ``extra=1`` is the person the operator is about to add, which is exactly the question
-    ``friends.create_friend`` asks before it writes anything — the same call, so the
+    ``users.create_user`` asks before it writes anything — the same call, so the
     dialog cannot offer a button the service is certain to refuse, and cannot withhold
     one the service would have accepted.
 

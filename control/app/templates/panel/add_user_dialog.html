@@ -16,7 +16,7 @@
   name became 64 characters in the box with no counter, no message and no hint that
   anything had been dropped, and the person was then created under the clipped name
   as though that were what the operator typed. The limit is now STATED under the
-  field and ENFORCED by services/friends.py, which refuses over-long input with a
+  field and ENFORCED by services/users.py, which refuses over-long input with a
   sentence through the same 422 path as a duplicate name. Both halves matter: the
   hint means the operator rarely meets the refusal, the refusal means they are never
   silently given something other than what they asked for.
@@ -75,17 +75,17 @@
       <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
     </div>
     {% else %}
-    <form hx-post="/panel/friends" hx-target="#dialog-slot" hx-swap="innerHTML">
+    <form hx-post="/panel/users" hx-target="#dialog-slot" hx-swap="innerHTML">
       <div class="field">
-        <label for="friend-nickname">nickname</label>
-        <input class="input" id="friend-nickname" name="nickname" type="text"
+        <label for="user-nickname">nickname</label>
+        <input class="input" id="user-nickname" name="nickname" type="text"
                value="{{ nickname or "" }}" placeholder="mira"
                autocomplete="off" required
-               aria-describedby="friend-nickname-hint{% if error %} friend-nickname-error{% endif %}"
+               aria-describedby="user-nickname-hint{% if error %} user-nickname-error{% endif %}"
                {% if error %}aria-invalid="true"{% endif %}>
-        <div class="field-hint" id="friend-nickname-hint">64 characters or fewer</div>
+        <div class="field-hint" id="user-nickname-hint">64 characters or fewer</div>
         {% if error %}
-        <div class="field-error" id="friend-nickname-error" role="alert">{{ error }}</div>
+        <div class="field-error" id="user-nickname-error" role="alert">{{ error }}</div>
         {% endif %}
       </div>
       <div class="dialog-body">

@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     # An apply used to look ONCE, straight after `docker compose up -d`, and a container
     # sampled in the first second of its first start is running and not yet restarting.
     # The walk read a node as serving while its container was in a crash loop, and read
-    # another as degraded while its friend's ping was 0% loss. Both readings were true
+    # another as degraded while its user's ping was 0% loss. Both readings were true
     # about the instant they were taken and meant nothing about the node.
     #
     # Settings rather than constants for ``node_connect_timeout``'s reason: they are what
@@ -170,6 +170,6 @@ class Settings(BaseSettings):
 
     @property
     def public_base_url(self) -> str:
-        """The origin a friend's client dials. Built here, so nothing hardcodes it."""
+        """The origin a user's client dials. Built here, so nothing hardcodes it."""
         scheme = "https" if self.public_https else "http"
         return f"{scheme}://{self.public_host}"

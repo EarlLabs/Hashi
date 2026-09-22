@@ -4,11 +4,11 @@ WHAT: that the three surfaces an operator meets while adding somebody — the Us
       screen, the dialog that hands their link over, and the same dialog opened later —
       say that the nodes are not yet holding what this panel would give them; and that
       all three go quiet once the fleet has been applied.
-WHY:  the walk added ``acc-friend`` and fetched ``…/sub/<token>?format=client-config-
+WHY:  the walk added ``acc-user`` and fetched ``…/sub/<token>?format=client-config-
       file``. What came back was complete and correct — ``Address = 10.77.13.2/24``, the
       node's real public key — while on the host ``grep -c "\\[Peer\\]"
       /opt/hashi/conf/amneziawg.conf`` was 0 and ``awg show`` listed no peers. That
-      friend's client would have handshaked into nothing. Only a second apply, three
+      user's client would have handshaked into nothing. Only a second apply, three
       minutes later by the audit trail, put the peer on the node and made the traffic
       flow, and no screen had asked for it: the Users screen's one standing note is about
       access WITHDRAWN and not confirmed gone, which is the other direction entirely.
@@ -86,7 +86,7 @@ async def test_adding_a_user_takes_the_node_out_of_in_sync(
     node = await nodes.get_node(session, node_id)
     assert await console.drift_of(session, node) == console.IN_SYNC
 
-    created = await client.post("/api/friends", json={"nickname": "acc-friend"})
+    created = await client.post("/api/users", json={"nickname": "acc-user"})
     assert created.status_code == 201, created.text
 
     session.expire_all()
@@ -108,7 +108,7 @@ async def test_the_dialog_that_hands_the_link_over_says_it_will_not_carry_yet(
     """
     await a_serving_node(client, reality_params)
 
-    added = await client.post("/panel/friends", data={"nickname": "acc-friend"})
+    added = await client.post("/panel/users", data={"nickname": "acc-user"})
 
     assert added.status_code == 200, added.text
     said = " ".join(added.text.split())
@@ -137,10 +137,10 @@ async def test_the_users_screen_says_it_too_and_not_only_about_a_withdrawal(
     them.
     """
     await a_serving_node(client, reality_params)
-    created = await client.post("/api/friends", json={"nickname": "acc-friend"})
+    created = await client.post("/api/users", json={"nickname": "acc-user"})
     assert created.status_code == 201, created.text
 
-    table = await client.get("/panel/friends/table")
+    table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
@@ -156,11 +156,11 @@ async def test_the_link_dialog_opened_later_asks_the_question_again(
 ) -> None:
     """A link shown an hour later is a link to a fleet that may have moved since."""
     await a_serving_node(client, reality_params)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "acc-friend"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "acc-user"})
     ).json()["id"]
 
-    dialog = await client.get(f"/panel/friends/{friend_id}/subscription")
+    dialog = await client.get(f"/panel/users/{user_id}/subscription")
 
     assert dialog.status_code == 200, dialog.text
     assert "A user added here is not on leaf-acc yet" in " ".join(
@@ -177,8 +177,8 @@ async def test_applying_afterwards_takes_the_sentence_away_everywhere(
     survived the press that fixes it would be the same defect as one that never appeared.
     """
     node_id = await a_serving_node(client, reality_params)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "acc-friend"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "acc-user"})
     ).json()["id"]
 
     applied = await client.post(f"/api/nodes/{node_id}/apply")
@@ -187,8 +187,8 @@ async def test_applying_afterwards_takes_the_sentence_away_everywhere(
     session.expire_all()
     assert await console.nodes_missing_what_they_would_be_given(session) == []
     for response in (
-        await client.get("/panel/friends/table"),
-        await client.get(f"/panel/friends/{friend_id}/subscription"),
+        await client.get("/panel/users/table"),
+        await client.get(f"/panel/users/{user_id}/subscription"),
     ):
         assert "A user added here is not on" not in " ".join(
             response.text.split()

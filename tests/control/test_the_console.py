@@ -47,13 +47,13 @@ from control.app.services import addresses as addresses_service
 from control.app.services import apply as apply_service
 from control.app.services import audit as audit_service
 from control.app.services import console as console_service
-from control.app.services import friends as friends_service
 from control.app.services import health as health_service
 from control.app.services import keymaterial
 from control.app.services import nodes as nodes_service
 from control.app.services import relay as relay_service
 from control.app.services import rotation as rotation_service
 from control.app.services import transports as transports_service
+from control.app.services import users as users_service
 from control.app.settings import Settings
 from edge import registry
 from edge.registry import profile
@@ -121,7 +121,7 @@ async def test_the_sidebar_leads_only_to_screens_that_exist(client) -> None:
     body = (await client.get("/panel/")).text
     targets = re.findall(r'<a href="(/panel/[^"]*)"', body)
 
-    assert "/panel/friends" in targets
+    assert "/panel/users" in targets
     assert "/panel/fleet" not in targets, "the sidebar still points at the deleted page"
     for target in set(targets):
         assert (await client.get(target)).status_code == 200, target
@@ -145,7 +145,7 @@ async def test_an_htmx_navigation_returns_a_fragment_not_a_document(client) -> N
     stay on the screen the operator just left, which is the specific bug this shape
     of shell always has.
     """
-    response = await client.get("/panel/friends", headers={"HX-Request": "true"})
+    response = await client.get("/panel/users", headers={"HX-Request": "true"})
 
     assert response.status_code == 200
     assert "<!doctype html>" not in response.text.lower()
@@ -161,7 +161,7 @@ async def test_the_overview_carries_only_facts_about_the_fleet(
 ) -> None:
     """The four stat cards are decision 6's, and none of the removed cells is back."""
     await a_serving_node(client, reality_params)
-    await client.post("/api/friends", json={"nickname": "mira"})
+    await client.post("/api/users", json={"nickname": "mira"})
 
     body = (await client.get("/panel/")).text
 
@@ -307,14 +307,14 @@ async def test_a_fresh_install_says_what_to_do_next(client) -> None:
 
 # --- Users (M8.5) -------------------------------------------------------------
 
-async def test_the_users_screen_says_users_and_the_route_says_friends(
+async def test_the_users_screen_and_the_route_under_it_both_say_users(
     client, reality_params
 ) -> None:
-    """Decision 9: the rename stops at the rendered page."""
+    """M29: the screen said it first, and the route says it too now."""
     await a_serving_node(client, reality_params)
-    await client.post("/api/friends", json={"nickname": "mira"})
+    await client.post("/api/users", json={"nickname": "mira"})
 
-    response = await client.get("/panel/friends")
+    response = await client.get("/panel/users")
 
     assert response.status_code == 200
     body = response.text
@@ -322,17 +322,17 @@ async def test_the_users_screen_says_users_and_the_route_says_friends(
     assert "mira" in body
     # The visible copy never calls them friends…
     assert "friend" not in _visible_text(body).lower()
-    # …and the machinery under it never calls them anything else.
-    assert "/panel/friends/" in body
+    # …and neither does the machinery under it.
+    assert "/panel/users/" in body
 
 
 async def test_the_users_table_shows_added_and_never_last_seen(
     client, reality_params
 ) -> None:
     await a_serving_node(client, reality_params)
-    await client.post("/api/friends", json={"nickname": "mira"})
+    await client.post("/api/users", json={"nickname": "mira"})
 
-    body = (await client.get("/panel/friends")).text
+    body = (await client.get("/panel/users")).text
 
     assert ">added<" in body
     for cell in FORBIDDEN_CELLS:
@@ -340,7 +340,7 @@ async def test_the_users_table_shows_added_and_never_last_seen(
 
 
 async def test_an_empty_users_screen_names_the_next_action(client) -> None:
-    body = (await client.get("/panel/friends")).text
+    body = (await client.get("/panel/users")).text
 
     assert "No users yet" in body
     assert "add user" in body
@@ -352,7 +352,7 @@ async def test_adding_a_user_hands_back_their_link_in_one_exchange(
     """M8.5's whole behaviour: create, close, and open the link dialog by itself."""
     await a_serving_node(client, reality_params)
 
-    response = await client.post("/panel/friends", data={"nickname": "mira"})
+    response = await client.post("/panel/users", data={"nickname": "mira"})
 
     assert response.status_code == 200
     body = response.text
@@ -363,14 +363,14 @@ async def test_adding_a_user_hands_back_their_link_in_one_exchange(
     # A toast, naming its object — UI-PATTERNS §8.
     assert "mira added" in body
     # …and the console is told to route to Users.
-    assert "friends-created" in response.headers.get("HX-Trigger", "")
+    assert "users-created" in response.headers.get("HX-Trigger", "")
 
 
 async def test_a_refused_nickname_comes_back_on_the_field(client) -> None:
     """M8.6 field-level validation, and no second user created."""
-    await client.post("/panel/friends", data={"nickname": "mira"})
+    await client.post("/panel/users", data={"nickname": "mira"})
 
-    duplicate = await client.post("/panel/friends", data={"nickname": "mira"})
+    duplicate = await client.post("/panel/users", data={"nickname": "mira"})
 
     assert duplicate.status_code == 422
     assert "already exists" in duplicate.text
@@ -378,7 +378,7 @@ async def test_a_refused_nickname_comes_back_on_the_field(client) -> None:
     # Still the add dialog, with what was typed still in the field.
     assert "Add a user" in duplicate.text
     assert 'value="mira"' in duplicate.text
-    assert len((await client.get("/api/friends")).json()) == 1
+    assert len((await client.get("/api/users")).json()) == 1
 
 
 @pytest.mark.parametrize(
@@ -389,7 +389,7 @@ async def test_a_nickname_that_cannot_be_stored_is_refused_with_a_sentence(
     client, nickname: str, expected: str
 ) -> None:
     """Without this, an over-long nickname reached the column and came back a 500."""
-    response = await client.post("/panel/friends", data={"nickname": nickname})
+    response = await client.post("/panel/users", data={"nickname": nickname})
 
     assert response.status_code == 422
     assert expected in response.text
@@ -406,17 +406,17 @@ async def test_the_link_appears_in_its_dialog_and_nowhere_else(
     which is the screen a shoulder or a screenshot is most likely to catch.
     """
     await a_serving_node(client, reality_params)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "mira"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "mira"})
     ).json()["id"]
     token = (
-        await client.get(f"/api/friends/{friend_id}/subscription")
+        await client.get(f"/api/users/{user_id}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
-    assert token not in (await client.get("/panel/friends")).text
+    assert token not in (await client.get("/panel/users")).text
     assert token not in (await client.get("/panel/")).text
 
-    dialog = await client.get(f"/panel/friends/{friend_id}/subscription")
+    dialog = await client.get(f"/panel/users/{user_id}/subscription")
     assert dialog.status_code == 200
     assert token in dialog.text
     # Never in an attribute a browser would keep or a person would hover: not an
@@ -434,23 +434,23 @@ async def test_revoking_confirms_first_then_names_the_object(client) -> None:
     No node in this fleet, so the revocation has nothing to push and completes — which
     is the path that produces the toast. The other path is the test below.
     """
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "mira"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "mira"})
     ).json()["id"]
 
-    confirm = await client.get(f"/panel/friends/{friend_id}/revoke")
+    confirm = await client.get(f"/panel/users/{user_id}/revoke")
     assert confirm.status_code == 200
     assert "Revoke mira?" in confirm.text
     assert "cannot be undone" in confirm.text
 
-    done = await client.post(f"/panel/friends/{friend_id}/revoke")
+    done = await client.post(f"/panel/users/{user_id}/revoke")
     assert done.status_code == 200
     assert "mira revoked — link is dead" in done.text
-    assert "friends-changed" in done.headers.get("HX-Trigger", "")
+    assert "users-changed" in done.headers.get("HX-Trigger", "")
 
     # The row is inert afterwards, with no way back — the design's revoke/restore
     # toggle would be a lie here, because the key material is gone.
-    table = (await client.get("/panel/friends/table")).text
+    table = (await client.get("/panel/users/table")).text
     assert "revoked" in table
     assert "restore" not in table
 
@@ -464,11 +464,11 @@ async def test_an_incomplete_revocation_stays_on_screen(client, reality_params) 
     action, not a message that removes itself after 2200ms.
     """
     await a_serving_node(client, reality_params)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "mira"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "mira"})
     ).json()["id"]
 
-    done = await client.post(f"/panel/friends/{friend_id}/revoke")
+    done = await client.post(f"/panel/users/{user_id}/revoke")
 
     assert done.status_code == 200
     assert 'hx-swap-oob="innerHTML:#banner-slot"' in done.text
@@ -983,8 +983,8 @@ async def test_no_probe_answer_says_anything_about_who_connected(
 #   sentences). ``docs/tracker/M10/step-notes.md`` records it as a gap in this scan; it
 #   is not one any more, and that entry is stale.
 # * ``panel/wording.py`` — M10.4's audit sentences, which are panel vocabulary
-#   rather than service prose: ``user <nick> added`` is decision 9's rendered word for a
-#   row the code calls a friend.
+#   rather than service prose: ``user <nick> added`` is rendered from a machine key and
+#   two labels, because the database holds nothing else.
 #
 # NOT ``panel/routes.py``, and that stays deliberate: this list must remain a list of
 # files whose literals are things a PERSON READS. Routes' literals are mostly template
@@ -1144,7 +1144,7 @@ def test_no_sentence_this_panel_hands_an_operator_names_a_surface_that_is_gone()
 
 
 async def a_node_with_an_offer(client, reality_params) -> tuple[str, str]:
-    """A node with one friend-facing transport on it, as (node id, node-transport id).
+    """A node with one user-facing transport on it, as (node id, node-transport id).
 
     Both ids, because these actions address two different things: the node's own dialogs
     are keyed by node, and withdrawing addresses the row. Its own helper rather than
@@ -1285,10 +1285,10 @@ async def test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in(
     is worth more than an assertion that a constant appears. The obvious correction — "not
     in any user's link, this panel cannot hand it over" — is the sentence the Transports
     screen was already carrying, and it is FALSE: item 27 landed, and the same bearer
-    token answers ``?format=`` with an archive of this friend's configuration files. So a
+    token answers ``?format=`` with an archive of this user's configuration files. So a
     fix written from the finding alone would have replaced one false sentence with another
     and had a green suite either way. What is asserted is therefore the pair: the link
-    does not carry it, and the friend is not empty-handed.
+    does not carry it, and the user is not empty-handed.
 
     Not parametrised over ``NOT_A_LINK_OFFERABLE``: the branch is one read of one
     declaration, so a second transport exercises the same line, and the declaration-driven
@@ -1325,10 +1325,10 @@ async def test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in(
     # TRANSPORT's own declaration can keep this row out of it.
     await nodes_service.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "anna"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "anna"})
     ).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
     token = url.rsplit("/", 1)[-1]
     fetched = await anonymous.get(f"/sub/{token}")
     assert fetched.status_code == 200, fetched.text
@@ -1339,7 +1339,7 @@ async def test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in(
     )
 
     # The other half of the true sentence, and the half a fix written from the finding
-    # alone would have denied: the same token, the file shape asked for, and this friend's
+    # alone would have denied: the same token, the file shape asked for, and this user's
     # configuration in it. Read as a real archive rather than as a byte count, because
     # "something came back" is what an empty zip also looks like.
     archive = await anonymous.get(f"/sub/{token}?format=client-config-file")
@@ -1362,8 +1362,8 @@ async def test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in(
     assert "in every user's link" not in said, said
 
     # Last, and it is what keeps the empty link above from being vacuous: the same node,
-    # the same friend and the same endpoint, with one transport added that DOES ride in the
-    # v1 list. The link is not broken and this friend is not unreachable — one protocol is
+    # the same user and the same endpoint, with one transport added that DOES ride in the
+    # v1 list. The link is not broken and this user is not unreachable — one protocol is
     # not a link, which is the walk's own reading, where the document held the URI entries
     # and only those.
     in_the_link = await client.post(
@@ -1409,7 +1409,7 @@ async def test_the_enable_dialog_says_what_enabling_each_protocol_will_do(
     WORSE PLACED THAN THE ROW SENTENCE the test above corrects, which is why it is its own
     scenario rather than a line added there. A row's standing is read afterwards; this is
     read while the operator is choosing, and an operator who enables a config-file
-    transport on this sentence's word walks away believing every friend now has it.
+    transport on this sentence's word walks away believing every user now has it.
 
     Asserted PER GROUP, not per page. Both sentences exist in this image, so a dialog that
     printed both somewhere would pass any assertion that looked at the whole document —
@@ -1504,7 +1504,7 @@ async def test_withdrawing_confirms_first_and_says_what_is_still_true(
     # table's own columns are derived from ``serving_transports``, which counts enabled
     # rows only, so a withdrawal moves them. ``keys-changed`` is correctly absent — a
     # credential already minted stays minted, so the Keys screen is unchanged.
-    assert answer.headers["HX-Trigger"] == "nodes-changed, friends-changed"
+    assert answer.headers["HX-Trigger"] == "nodes-changed, users-changed"
     # The property under the sentence: it is out of what any user would be handed now,
     # and it is the same query the Users table's two columns are built from.
     session.expunge_all()
@@ -1767,14 +1767,14 @@ async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
     """The other direction, from the same list. No confirmation: it takes nothing away.
 
     ``keys-changed`` rides with it and does not ride with a withdrawal, which is not
-    decoration: offering again runs ``friends.grant_everywhere``, so material is minted
+    decoration: offering again runs ``users.grant_everywhere``, so material is minted
     and the Keys screen's "users on it" count moves. Withdrawing takes no credential away
-    from anybody, so that screen is left alone — but ``friends-changed`` rides with BOTH,
+    from anybody, so that screen is left alone — but ``users-changed`` rides with BOTH,
     because the Users table counts what is being SERVED and both directions change it.
     """
     node_id, node_transport_id = await a_node_with_an_offer(client, reality_params)
     await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
-    await client.post("/panel/friends", data={"nickname": "mira"})
+    await client.post("/panel/users", data={"nickname": "mira"})
     await client.post(
         f"/panel/transports/{node_transport_id}/withdraw",
         headers={"HX-Request": "true"},
@@ -1790,7 +1790,7 @@ async def test_offering_a_transport_again_puts_it_back_with_nobody_re_importing(
     assert "offered again on offer-1" in reading
     assert "nobody re-imports anything" in reading
     assert (
-        answer.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
+        answer.headers["HX-Trigger"] == "nodes-changed, keys-changed, users-changed"
     )
     session.expunge_all()
     assert len(await nodes_service.serving_transports(session)) == 1
@@ -1829,8 +1829,8 @@ async def test_a_hop_end_is_not_something_a_user_is_offered(client, session) -> 
     assert console_service.OFFER_HOP_END in reading
     assert "/api/" not in refused.text
     assert "{node_transport_id}" not in refused.text
-    # Decision 9: the service says friend, the page says user, and this sentence crosses
-    # that boundary like every other one a service composes.
+    # And the word this product stopped using does not reach the page (M29): this
+    # sentence crosses the boundary like every other one a service composes.
     assert "friend" not in reading.lower()
 
 
@@ -1856,7 +1856,7 @@ async def test_the_enable_form_asks_only_what_the_transport_declares(
     # The dialog used to subtract those, which since M15 would hide a legitimate action:
     # a node may carry a second instance of one transport on another port, and the
     # subtraction counted hop ends too — so a node carrying a hop could never be offered
-    # the same protocol to friends from the only surface an operator has. Whether a
+    # the same protocol to users from the only surface an operator has. Whether a
     # second one is legal here is ``services.placement``'s single answer and arrives as a
     # refusal naming the port, not as a missing form.
     for name in transports_service.offerable_transports():
@@ -2033,7 +2033,7 @@ async def test_enabling_a_transport_from_the_console_names_it_and_refreshes_the_
     reading = _reading(answer.text)
     assert "vless-reality enabled on empty-2" in reading
     assert "apply the node to push it" in reading
-    assert answer.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
+    assert answer.headers["HX-Trigger"] == "nodes-changed, keys-changed, users-changed"
     assert "vless-reality" in (await client.get("/panel/nodes/table")).text
 
 
@@ -2205,8 +2205,8 @@ async def test_a_transport_this_form_cannot_offer_gets_the_service_s_answer(
     name, and this route's job is to get out of their way.
 
     Both sentences arrive through ``wording.for_the_page`` like every other sentence a
-    service composes, so the second one reads "a USER's client" on screen where the
-    service wrote "friend" — decision 9's line, asserted here in the shape a person sees.
+    service composes, and the second one reads "a USER's client" on screen, asserted
+    here in the shape a person sees rather than in the shape the service wrote.
 
     Two shapes, because they fail at two different lines of the service and only the
     first is reachable without fabricating an image:
@@ -2646,7 +2646,7 @@ async def test_putting_a_node_into_service_from_the_console_says_so(
     """Charter criterion 2's own control, on the screen the criterion is written about.
 
     An operator could create the node and enable its protocol on a screen and then had
-    to reach for curl to put it into service. ``friends-changed`` rides with the answer
+    to reach for curl to put it into service. ``users-changed`` rides with the answer
     because becoming serving hands every active user a credential on this node, which is
     the fan-out the criterion rests on.
     """
@@ -2660,7 +2660,7 @@ async def test_putting_a_node_into_service_from_the_console_says_so(
 
     assert answer.status_code == 200, answer.text
     assert "offer-1 is now active" in _reading(answer.text)
-    assert answer.headers["HX-Trigger"] == "nodes-changed, friends-changed"
+    assert answer.headers["HX-Trigger"] == "nodes-changed, users-changed"
     session.expunge_all()
     assert len(await nodes_service.serving_transports(session)) == 1
 
@@ -2755,7 +2755,7 @@ def a_hop_transport() -> str:
 def hop_side(address: str, peer: str, port: int = 51820) -> dict:
     """One end's operator-supplied parameters, as the API takes them.
 
-    The same block ``tests/e2e/control/test_a_hop_never_reaches_a_friend.py`` uses.
+    The same block ``tests/e2e/control/test_a_hop_never_reaches_a_user.py`` uses.
     RFC 5737 documentation addresses are not private, so the tunnel addresses are
     RFC 1918 — the transport's own model refuses a public range, for the reason it
     states there.
@@ -3046,13 +3046,13 @@ async def test_every_tuning_box_says_what_its_own_transport_declares(client) -> 
         # easily got wrong.
         #
         # IN FULL BUT IN THE PAGE'S WORDS. The comparison is against the description
-        # after ``wording.for_the_page``, which is decision 9's boundary and not a
+        # after ``wording.for_the_page``, which is the page-copy boundary and not a
         # weakening of "in full": a description is a server-composed sentence rendered
         # on a console dialog, so it crosses that boundary like every other one, and the
         # rule this line is really about is that nothing is TRUNCATED. It began to
         # matter with M17, which widened one field's description to say what the value
-        # means on a transport offered to friends — the code's word, on a screen where
-        # every other word is "user".
+        # means on a transport offered to users — in a vocabulary that, until M29, was
+        # not the one the screen around it used.
         if info.description:
             assert described.get(name) == wording.for_the_page(
                 info.description.strip()
@@ -3592,7 +3592,7 @@ async def test_a_transport_this_panel_cannot_hand_over_says_so(client) -> None:
 
     THE CELL USED TO SAY "this panel cannot hand it over" AND THAT WAS FALSE — found while
     fixing M20's acceptance finding about the offered sentence. Item 27 landed: the same
-    bearer token answers ``?format=`` with the friend's configuration files. The question
+    bearer token answers ``?format=`` with the user's configuration files. The question
     this screen is answering is which SHAPE, not whether — see
     ``TRANSPORT_NOT_IN_THE_LINK``, and the end-to-end proof in
     ``test_an_offered_row_that_is_not_a_link_says_which_shape_it_arrives_in``.
@@ -3697,7 +3697,7 @@ async def a_node_holding_material(client, reality_params) -> str:
 
     Returns the NODE-TRANSPORT id, which is what every rotation route addresses and
     what ``a_serving_node`` does not hand back — it returns the node, and two dozen
-    tests depend on that. The user is created last, deliberately: a friend is granted
+    tests depend on that. The user is created last, deliberately: a user is granted
     every SERVING node at the moment they are created, so this is what puts a
     credential on the row and gives the rotate dialog a blast radius to state.
     """
@@ -3716,7 +3716,7 @@ async def a_node_holding_material(client, reality_params) -> str:
     )
     assert enabled.status_code == 201, enabled.text
     await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
-    await client.post("/api/friends", json={"nickname": "mira"})
+    await client.post("/api/users", json={"nickname": "mira"})
     return enabled.json()["id"]
 
 
@@ -3724,18 +3724,18 @@ async def every_console_surface(client, reality_params) -> list[str]:
     """Every console URL that renders markup, and the fleet it takes to reach them.
 
     THE LIST IS THE TEST (docs/tracker/M8/step-notes.md), in the one shape that keeps
-    it honest: TWO sweeps walk this list — decision 9's, which reads every surface for
-    the code's word, and M9.4's, which reads every surface for key material — so a
+    it honest: TWO sweeps walk this list — the one that reads every surface for the word
+    this product stopped using, and M9.4's, which reads every surface for key material — so a
     screen, fragment or dialog that is not here is walked by neither. A new one joins
     this function in the change that adds it, which is the same rule the e2e scenario's
     ``PANEL_PAGES``/``PANEL_FRAGMENTS`` lists carry.
 
-    It creates what it lists: three of these surfaces do not exist without a friend, a
+    It creates what it lists: three of these surfaces do not exist without a user, a
     hop or a transport enabled on a node.
     """
     node_transport_id = await a_node_holding_material(client, reality_params)
     entry_end = await a_hop(client)
-    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    user_id = (await client.get("/api/users")).json()[0]["id"]
     node_id = next(
         node["id"]
         for node in (await client.get("/api/nodes")).json()
@@ -3744,12 +3744,12 @@ async def every_console_surface(client, reality_params) -> list[str]:
 
     return [
         "/panel/",
-        "/panel/friends",
+        "/panel/users",
         "/panel/overview/body",
-        "/panel/friends/table",
-        "/panel/friends/new",
-        f"/panel/friends/{friend_id}/subscription",
-        f"/panel/friends/{friend_id}/revoke",
+        "/panel/users/table",
+        "/panel/users/new",
+        f"/panel/users/{user_id}/subscription",
+        f"/panel/users/{user_id}/revoke",
         *NODE_SURFACES,
         *HOP_SURFACES,
         *TRANSPORT_SURFACES,
@@ -3757,7 +3757,7 @@ async def every_console_surface(client, reality_params) -> list[str]:
         *AUDIT_SURFACES,
         *SETTINGS_SURFACES,
         f"/panel/hops/{entry_end}/dissolve",
-        # Both rotation dialogs, on both kinds of row: one friend-facing transport and
+        # Both rotation dialogs, on both kinds of row: one user-facing transport and
         # one end of a hop. They are the surfaces closest to the material, so a sweep
         # that skipped them would skip the place a value would first appear.
         f"/panel/keys/{node_transport_id}/rotate",
@@ -4054,7 +4054,7 @@ async def test_rotating_one_end_of_a_hop_says_what_it_does_to_the_other(
 
     Read from the DECLARATION rather than from a name: this asserts the sentence appears
     on a hop end whose transport declares symmetric material, and does not appear on a
-    friend-facing row, which is the same distinction the code makes.
+    user-facing row, which is the same distinction the code makes.
     """
     entry_end = await a_hop(client)
     carrier = profile(a_hop_transport()).meta
@@ -4107,7 +4107,7 @@ async def test_a_hop_end_is_never_told_what_its_users_will_pick_up(
 ) -> None:
     """The dialog and its answer must agree about who holds this row.
 
-    ``rotate_keys_dialog.html`` branches on ``for_friends`` and tells the operator, in
+    ``rotate_keys_dialog.html`` branches on ``for_users`` and tells the operator, in
     so many words, *"No user holds anything on it: this is a tunnel between two of our
     own nodes"*. The answer then reported what users would pick up the next time their
     client refreshed — so the operator confirmed having read that no user is involved
@@ -4161,9 +4161,9 @@ async def test_every_rotation_sentence_branches_on_who_holds_the_row(
     node_transport_id = await a_node_holding_material(client, reality_params)
     entry_end = await a_hop(client)
     session.expunge_all()
-    for_friends = await console_service.key_row(session, node_transport_id)
+    for_users = await console_service.key_row(session, node_transport_id)
     hop_end = await console_service.key_row(session, entry_end)
-    assert for_friends.for_friends and not hop_end.for_friends
+    assert for_users.for_users and not hop_end.for_users
 
     landed = rotation_service.RotationOutcome(
         node_transport_id=node_transport_id,
@@ -4183,11 +4183,11 @@ async def test_every_rotation_sentence_branches_on_who_holds_the_row(
             assert "no user holds anything on it" in hop_sentence, what
             assert "same link" not in hop_sentence, what
             assert "users on it are unaffected" not in hop_sentence, what
-            # And the friend-facing row still says what it always said, so this is a
+            # And the user-facing row still says what it always said, so this is a
             # branch rather than a sentence that stopped mentioning people.
-            friends_sentence = compose(for_friends, outcome)
-            assert ("same link" in friends_sentence) or (
-                "users on it are unaffected" in friends_sentence
+            users_sentence = compose(for_users, outcome)
+            assert ("same link" in users_sentence) or (
+                "users on it are unaffected" in users_sentence
             ), what
 
     # AND THE DIALOGS THAT PRODUCE THOSE ANSWERS, because the contradiction survived a
@@ -4211,7 +4211,7 @@ async def test_every_rotation_sentence_branches_on_who_holds_the_row(
         assert "no user holds anything on it" in hop_dialog, action
         assert "same link" not in hop_dialog, action
 
-        # And the friend-facing dialog still says what it always said, so this is a
+        # And the user-facing dialog still says what it always said, so this is a
         # branch rather than a sentence that stopped mentioning people.
         assert "same link" in await as_read(node_transport_id, action), action
 
@@ -5269,7 +5269,7 @@ async def test_the_admins_table_is_one_row_and_has_no_last_login(
     """The design's third column is dropped, not blanked, and the table cannot grow.
 
     ``last login`` survives the LETTER of the cell test — it does not move when a
-    friend connects — and fails what that test is a proxy for: it is a per-person
+    user connects — and fails what that test is a proxy for: it is a per-person
     temporal record, the person being the owner, and it would be the only place in
     this codebase where a human merely being present causes a durable row. Dropped
     rather than rendered empty, for the reason decision 6 dropped the Traffic screen.
@@ -5419,9 +5419,9 @@ async def a_trail(client, reality_params) -> list[str]:
     assert (
         await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
     ).status_code == 200
-    added = await client.post("/api/friends", json={"nickname": "mira"})
+    added = await client.post("/api/users", json={"nickname": "mira"})
     assert added.status_code == 201, added.text
-    revoked = await client.post(f"/api/friends/{added.json()['id']}/revoke")
+    revoked = await client.post(f"/api/users/{added.json()['id']}/revoke")
     assert revoked.status_code == 200, revoked.text
 
     return [
@@ -5593,7 +5593,7 @@ async def test_no_subscription_link_or_token_can_reach_the_audit_screen(
 
     The trail cannot hold either of them — the labels are values read off inventory rows
     and there is no free-text column — so this is a check on the SCREEN: a template that
-    looked up a friend by nickname to link to their subscription would satisfy every
+    looked up a user by nickname to link to their subscription would satisfy every
     rule the table keeps and put a bearer credential on the one page whose subject is a
     permanent-looking record.
 
@@ -5603,10 +5603,10 @@ async def test_no_subscription_link_or_token_can_reach_the_audit_screen(
     defect than the one it closes.
     """
     await a_serving_node(client, reality_params)
-    added = await client.post("/api/friends", json={"nickname": "mira"})
+    added = await client.post("/api/users", json={"nickname": "mira"})
     assert added.status_code == 201, added.text
     url = (
-        await client.get(f"/api/friends/{added.json()['id']}/subscription")
+        await client.get(f"/api/users/{added.json()['id']}/subscription")
     ).json()["url"]
     token = url.rsplit("/", 1)[-1]
     assert len(token) > 16, "the premise: a real bearer token was issued"
@@ -5632,15 +5632,15 @@ async def test_nothing_on_the_audit_screen_moves_when_somebody_uses_the_service(
 
     Every column here moves when the OPERATOR acts. None of them may move because a
     person used the service — so the screen is rendered, a real subscription is fetched
-    the way a friend's client fetches it, and the screen is rendered again and required
+    the way a user's client fetches it, and the screen is rendered again and required
     to be the same page. It is the screen-level twin of
     ``test_fetching_a_subscription_writes_nothing_to_the_trail``: that one proves no row
     was written, this one proves nothing a reader could see moved either.
     """
     await a_serving_node(client, reality_params)
-    added = await client.post("/api/friends", json={"nickname": "mira"})
+    added = await client.post("/api/users", json={"nickname": "mira"})
     token = (
-        await client.get(f"/api/friends/{added.json()['id']}/subscription")
+        await client.get(f"/api/users/{added.json()['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     before = (await client.get("/panel/audit", headers={"HX-Request": "true"})).text
@@ -5663,7 +5663,7 @@ async def test_the_swept_console_walks_a_trail_that_is_not_empty(
 ) -> None:
     """The premise the two document-wide sweeps rest on, for this screen.
 
-    ``every_console_surface`` feeds decision 9's sweep and both material sweeps, and the
+    ``every_console_surface`` feeds the old-word sweep and both material sweeps, and the
     audit screen is now on that list — but an empty trail renders an empty state, and a
     screen with no rows passes every sweep for the wrong reason. This asserts the fleet
     that list builds actually leaves entries on it, so a leak in a rendered row is
@@ -5700,14 +5700,14 @@ async def test_the_swept_console_walks_a_trail_that_is_not_empty(
 # a reviewer.
 TWO_REPRESENTATION_URLS = (
     "/panel/",
-    "/panel/friends",
+    "/panel/users",
     "/panel/nodes",
     "/panel/hops",
     "/panel/transports",
     # M9.4's, and the one on this list whose body is the most sensitive: htmx's history
-    # cache writes a stored body to localStorage, which is what decision 9's htmx entry
-    # is about. This screen holds fingerprints rather than values, and it is on here so
-    # that stays a property of the response and not of the reader.
+    # cache writes a stored body to localStorage, which is what this entry on the
+    # old-word sweep is about. This screen holds fingerprints rather than values, and it
+    # is on here so that stays a property of the response and not of the reader.
     "/panel/keys",
     # M10.2's, added in the change that added the screen. It is a statement of what
     # this process was configured with, so a fragment of it kept under the page's own
@@ -5753,8 +5753,8 @@ async def test_a_console_fragment_can_never_be_stored_under_its_page_url(
     "path",
     (
         *TWO_REPRESENTATION_URLS,
-        "/panel/friends/table",
-        "/panel/friends/new",
+        "/panel/users/table",
+        "/panel/users/new",
         "/panel/keys/table",
     ),
 )
@@ -5790,7 +5790,7 @@ async def test_a_history_restore_is_answered_with_the_whole_document(client) -> 
     no dialog slot — which is the same "the styling is gone" report by another route.
     """
     response = await client.get(
-        "/panel/friends",
+        "/panel/users",
         headers={"HX-Request": "true", "HX-History-Restore-Request": "true"},
     )
 
@@ -5913,9 +5913,9 @@ async def test_opening_a_dialog_does_not_rename_the_screen(client, path: str) ->
 
     The cause was not the cache entry its neighbour (docs/decisions.md, 2026-09-09) was
     about, and not the dialog. ``#main`` in the shell carries
-    ``hx-push-url="/panel/friends"`` for the ``friends-created`` navigation, and
+    ``hx-push-url="/panel/users"`` for the ``users-created`` navigation, and
     ``hx-push-url`` is one of the attributes htmx INHERITS: it is resolved by walking up
-    from whatever made the request, so ``/panel/friends`` was the answer for every htmx
+    from whatever made the request, so ``/panel/users`` was the answer for every htmx
     control on every screen. Opening a dialog pushed it. So did a table refreshing
     itself after a mutation. The address bar then named a screen the operator was not
     on, and a reload took them there.
@@ -5960,7 +5960,7 @@ async def test_the_nickname_field_states_its_limit_instead_of_truncating(
     Now the limit is written under the field and the server refuses anything longer
     through the same 422 path a duplicate name takes.
     """
-    dialog = await client.get("/panel/friends/new")
+    dialog = await client.get("/panel/users/new")
 
     assert "maxlength" not in dialog.text
     assert "64 characters or fewer" in dialog.text
@@ -5968,11 +5968,11 @@ async def test_the_nickname_field_states_its_limit_instead_of_truncating(
 
 async def test_an_over_long_nickname_creates_nobody(client) -> None:
     """The half that was confirmed against the database: 1002 submitted, 64 stored."""
-    response = await client.post("/panel/friends", data={"nickname": "n" * 1002})
+    response = await client.post("/panel/users", data={"nickname": "n" * 1002})
 
     assert response.status_code == 422
     assert "64 characters or fewer" in response.text
-    assert (await client.get("/api/friends")).json() == []
+    assert (await client.get("/api/users")).json() == []
 
 
 async def test_a_row_action_does_not_take_the_whole_list_away(
@@ -5985,9 +5985,9 @@ async def test_a_row_action_does_not_take_the_whole_list_away(
     ``hx-disinherit`` leaves each button its own indicator, itself.
     """
     await a_serving_node(client, reality_params)
-    await client.post("/panel/friends", data={"nickname": "mira"})
+    await client.post("/panel/users", data={"nickname": "mira"})
 
-    table = await client.get("/panel/friends/table")
+    table = await client.get("/panel/users/table")
     overview = await client.get("/panel/overview/body")
 
     for response in (table, overview):
@@ -6006,10 +6006,10 @@ async def test_a_long_nickname_leaves_the_short_columns_alone(
     """
     await a_serving_node(client, reality_params)
     longest = "n" * 64
-    created = await client.post("/panel/friends", data={"nickname": longest})
+    created = await client.post("/panel/users", data={"nickname": longest})
     assert created.status_code == 200
 
-    for path in ("/panel/friends/table", "/panel/overview/body"):
+    for path in ("/panel/users/table", "/panel/overview/body"):
         body = (await client.get(path)).text
         assert longest in body, path
         assert 'class="text-muted nowrap"' in body, path
@@ -6203,7 +6203,7 @@ async def test_a_half_pushed_hop_rotation_says_the_tunnel_is_down(
     entry_end = await a_hop(client)
     session.expunge_all()
     row = await console_service.key_row(session, entry_end)
-    assert not row.for_friends
+    assert not row.for_users
 
     half = rotation_service.RotationOutcome(
         node_transport_id=entry_end,
@@ -6259,10 +6259,10 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
     It is a hand-maintained backstop over the half of each dialog that is still free
     prose, and it holds three wordings that are false OF A HOP END — not three wordings
     that are false. One of them, "the node keeps running what it has", is live in
-    ``rotate_keys_dialog.html`` right now and is TRUE there: it is the friend-facing
+    ``rotate_keys_dialog.html`` right now and is TRUE there: it is the user-facing
     branch, about the node rather than about the far end. The assertion only holds
     because this test drives a hop-end row and that branch never renders. It proves
-    nothing about a fourth wording, and nothing at all about the friend-facing branch,
+    nothing about a fourth wording, and nothing at all about the user-facing branch,
     which no test on this screen pairs with its answer.
 
     One more thing is unheld: ``HOP_PUSH_OUTCOME``'s lead clause ("Both nodes are
@@ -6276,7 +6276,7 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
     entry_end = await a_hop(client)
     session.expunge_all()
     row = await console_service.key_row(session, entry_end)
-    assert not row.for_friends, "this fixture stopped being a hop end"
+    assert not row.for_users, "this fixture stopped being a hop end"
 
     landed = rotation_service.RotationOutcome(
         node_transport_id=entry_end,
@@ -6336,7 +6336,7 @@ async def test_a_hop_dialog_and_the_answer_it_will_get_agree(client, session) ->
             )
 
         # The backstop, over the prose each dialog still writes for itself. Three
-        # wordings that are false OF A HOP END — the third is live in the friend-facing
+        # wordings that are false OF A HOP END — the third is live in the user-facing
         # branch of the rotate dialog and true there, and is only absent here because
         # this row is a hop end. See the docstring: this is weaker than it reads.
         for promise in (
@@ -6397,16 +6397,16 @@ def _css_rules() -> dict[str, str]:
 
 
 async def test_a_refusal_says_user_because_that_is_what_the_screen_says(client) -> None:
-    """Decision 9, in the direction the console was leaking.
+    """The message this boundary was written for, and the word it must never carry.
 
-    The rule has two sides: no rename may travel INTO the code, and the code's own
-    word may not travel OUT onto the page. A duplicate nickname was refused with
-    "a friend called 'dima' already exists" on a screen where every other word says
-    user — the same boundary crossed the other way.
+    A duplicate nickname was once refused with "a friend called 'dima' already exists"
+    on a screen where every other word says user. M29 made the service say ``user`` as
+    well, so there is nothing left to translate — and the refusal still has to arrive
+    saying ``user``, which is what this asserts, from the outside, where an operator is.
     """
-    await client.post("/panel/friends", data={"nickname": "dima"})
+    await client.post("/panel/users", data={"nickname": "dima"})
 
-    duplicate = await client.post("/panel/friends", data={"nickname": "dima"})
+    duplicate = await client.post("/panel/users", data={"nickname": "dima"})
 
     assert duplicate.status_code == 422
     visible = _visible_text(duplicate.text)
@@ -6421,10 +6421,15 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
     """The audit that goes with the one message, in this milestone's own shape.
 
     THE LIST IS THE TEST (docs/tracker/M8/step-notes.md): every console screen,
-    fragment and dialog is walked, and none of them may put the code's word in front
-    of the operator. A new one joins ``every_console_surface`` in the change that adds
-    it — one list, walked by this sweep and by M9.4's hunt for key material, so a
-    surface cannot be missing from one of them and present in the other.
+    fragment and dialog is walked, and none of them may put the word this product
+    stopped using in front of the operator. A new one joins ``every_console_surface``
+    in the change that adds it — one list, walked by this sweep and by M9.4's hunt for
+    key material, so a surface cannot be missing from one of them and present in the
+    other.
+
+    Since M29 this sweeps for a word no module composes any more, which makes it the
+    cheapest proof that the rename reached every rendered surface rather than most of
+    them.
     """
     for path in await every_console_surface(client, reality_params):
         response = await client.get(path)
@@ -6432,22 +6437,22 @@ async def test_no_console_surface_says_friend_where_a_person_can_read_it(
         assert "friend" not in _visible_text(response.text).lower(), path
 
 
-async def test_no_sentence_a_service_composes_reaches_the_page_in_the_code_s_words(
+async def test_no_sentence_a_service_composes_reaches_the_page_in_the_old_word(
     client, monkeypatch
 ) -> None:
     """The guard, rather than the one message.
 
-    A sentence written in ``services/`` is written in the code's vocabulary by design,
-    and any of them can be put in front of the operator. So the boundary translates
-    whatever it is handed — this plants a refusal that has never existed and watches
-    it arrive on the page in the panel's words.
+    Any sentence written in ``services/`` can be put in front of the operator, and
+    before M29 they were written in a vocabulary the page did not use. They are not any
+    more — so this plants a refusal in the OLD vocabulary, one no module composes today,
+    and watches the boundary still hand it to the page in the panel's words.
     """
     async def refuse(session, *, nickname):
         raise Conflict("another friend already holds that nickname")
 
-    monkeypatch.setattr(friends_service, "create_friend", refuse)
+    monkeypatch.setattr(users_service, "create_user", refuse)
 
-    response = await client.post("/panel/friends", data={"nickname": "dima"})
+    response = await client.post("/panel/users", data={"nickname": "dima"})
 
     assert response.status_code == 422
     visible = _visible_text(response.text)
@@ -6455,7 +6460,7 @@ async def test_no_sentence_a_service_composes_reaches_the_page_in_the_code_s_wor
     assert "friend" not in visible.lower()
 
 
-async def test_a_nickname_that_is_itself_the_code_s_word_is_handed_back_untouched(
+async def test_a_nickname_that_is_itself_the_filtered_word_is_handed_back_untouched(
     client,
 ) -> None:
     """The panel translates its OWN words, never the operator's.
@@ -6463,9 +6468,9 @@ async def test_a_nickname_that_is_itself_the_code_s_word_is_handed_back_untouche
     Somebody may be nicknamed ``friend``. "a user called 'user' already exists" would
     be the panel rewriting the operator's data back at them.
     """
-    await client.post("/panel/friends", data={"nickname": "friend"})
+    await client.post("/panel/users", data={"nickname": "friend"})
 
-    duplicate = await client.post("/panel/friends", data={"nickname": "friend"})
+    duplicate = await client.post("/panel/users", data={"nickname": "friend"})
 
     assert duplicate.status_code == 422
     # The nickname survives the crossing, quoted exactly as the service wrote it…
@@ -6482,11 +6487,11 @@ async def test_a_nickname_that_is_itself_the_code_s_word_is_handed_back_untouche
         ("friends pick it up on refresh", "users pick it up on refresh"),
         ("Friends are offered this", "Users are offered this"),
         ("both friends' links", "both users' links"),
-        # Not the code's word: a longer word that merely starts the same way.
+        # Not the filtered word: a longer word that merely starts the same way.
         ("a friendly name", "a friendly name"),
     ],
 )
-def test_the_boundary_knows_every_shape_of_the_code_s_word(
+def test_the_boundary_knows_every_shape_of_the_word_it_filters(
     sentence: str, expected: str
 ) -> None:
     assert wording.for_the_page(sentence) == expected
@@ -6524,9 +6529,9 @@ def test_a_refusal_hands_an_api_caller_no_panel_directions(refusal: str) -> None
     serving what it was last given": correct prose for a banner, and directions to a place
     the caller of an API is not in and cannot reach.
 
-    The seam is the one decision 9 already draws, not a second one: the service says what
-    is true of this control plane however it is driven, and the console says it the
-    console's way at ``wording.for_the_page``. So the assertion runs in both directions —
+    The seam is the one ``wording.for_the_page`` already draws, not a second one: the
+    service says what is true of this control plane however it is driven, and the
+    console says it the console's way there. So the assertion runs in both directions —
     no screen in what the service composed, and the screen back in what the panel renders
     — because a sentence that never names a screen on either side has lost the operator
     their next action, which is the defect the previous round fixed.
@@ -6656,9 +6661,9 @@ async def test_a_status_word_never_breaks_mid_word(client, reality_params) -> No
 
     await a_serving_node(client, reality_params)
     longest = "n" * 64
-    assert (await client.post("/panel/friends", data={"nickname": longest})).status_code == 200
+    assert (await client.post("/panel/users", data={"nickname": longest})).status_code == 200
 
-    for path in ("/panel/friends/table", "/panel/overview/body"):
+    for path in ("/panel/users/table", "/panel/overview/body"):
         body = (await client.get(path)).text
         cells = re.findall(r"<td([^>]*)>(.*?)</td>", body, flags=re.S)
         wrapping = [attrs for attrs, content in cells if "wraps" in attrs]
@@ -6679,12 +6684,12 @@ async def test_a_failure_does_not_read_like_a_notice(client, reality_params) -> 
     holds it.
     """
     await a_serving_node(client, reality_params)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "mira"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "mira"})
     ).json()["id"]
 
     # The node has no reachable host, so the revocation is partial — a failure.
-    failed = await client.post(f"/panel/friends/{friend_id}/revoke")
+    failed = await client.post(f"/panel/users/{user_id}/revoke")
     assert "banner-failure" in failed.text
     assert "failed" in _visible_text(failed.text)
 
@@ -6697,9 +6702,9 @@ async def test_a_failure_does_not_read_like_a_notice(client, reality_params) -> 
 async def test_the_notice_is_the_quiet_one_and_says_which_it_is(client) -> None:
     """The two can be on screen at once, one above the other, which is why they may
     not look alike. Nothing is serving here, so the notice is the one on show."""
-    await client.post("/panel/friends", data={"nickname": "mira"})
+    await client.post("/panel/users", data={"nickname": "mira"})
 
-    table = (await client.get("/panel/friends/table")).text
+    table = (await client.get("/panel/users/table")).text
 
     assert "No node is serving yet" in table
     assert "banner-failure" not in table
@@ -7021,7 +7026,7 @@ def _banner_faults(name: str, source: str) -> tuple[list[str], int]:
                 " the first and drops the second, and one element that renders as either"
                 " banner cannot have the role it renders paired with the class it"
                 " renders beside it; write the two banners as two elements, the way"
-                " panel/banner.html and panel/friends_table.html do"
+                " panel/banner.html and panel/users_table.html do"
             )
         elif role not in {"alert", "status"}:
             faults.append(f"{where} — a banner that says nothing about which of the two it is")
@@ -7156,8 +7161,8 @@ def _visible_text(html: str) -> str:
     """The page with its comments, tags and attributes removed.
 
     Needed because this codebase explains itself in template comments, and those
-    comments legitimately say "friend" — the rule decision 9 sets is about what an
-    operator READS, not about what the file contains.
+    comments legitimately name words the rendered page must never show — the rule is
+    about what an operator READS, not about what the file contains.
     """
     without_comments = re.sub(r"\{#.*?#\}", "", html, flags=re.S)
     return re.sub(r"<[^>]*>", " ", without_comments)

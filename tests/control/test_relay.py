@@ -1,11 +1,11 @@
 """Entry→leaf hops, from the control plane — backlog item 16.
 
 WHAT: establishing, rendering, listing and dissolving the tunnel between the entry node
-      friends dial and the leaf node their traffic leaves from.
+      users dial and the leaf node their traffic leaves from.
 WHY:  this is the charter's topology, and the two facts asserted hardest here are the
-      ones a friend would otherwise pay for: a hop is never in anyone's subscription,
+      ones a user would otherwise pay for: a hop is never in anyone's subscription,
       and a hop that would not form a working tunnel is refused before either end is
-      written. The first would route a friend straight past the entry node; the second
+      written. The first would route a user straight past the entry node; the second
       would leave the operator with a node that looks configured and an exit that is
       unreachable.
 HOW:  no node is contacted — nothing here pushes. The claim is about what the database
@@ -207,19 +207,19 @@ async def test_a_transport_no_hop_can_be_built_from_says_so_and_never_crashes(
 
 # --- what a hop must never do -------------------------------------------------
 
-async def test_a_hop_never_reaches_a_friends_subscription(
+async def test_a_hop_never_reaches_a_users_subscription(
     client, session, hop_params, reality_params
 ) -> None:
     """THE safety property of this feature.
 
-    A friend handed the entry↔leaf tunnel would be routed straight past the entry node
+    A user handed the entry↔leaf tunnel would be routed straight past the entry node
     the topology exists to hide behind — and their client would happily use it, because
     it is a working configuration. So the assertion is not "the hop is filtered
-    somewhere" but "the subscription contains exactly the friend-facing entries".
+    somewhere" but "the subscription contains exactly the user-facing entries".
     """
     entry_id, leaf_id, _ = await established(client, hop_params)
 
-    # A real, friend-facing transport on the entry node, so the subscription is not
+    # A real, user-facing transport on the entry node, so the subscription is not
     # empty for the trivial reason.
     await client.post(
         f"/api/nodes/{entry_id}/transports",
@@ -228,8 +228,8 @@ async def test_a_hop_never_reaches_a_friends_subscription(
     for node_id in (entry_id, leaf_id):
         await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
     document = base64.b64decode(
         (await client.get(f"/sub/{url.rsplit('/', 1)[-1]}")).text
     ).decode()
@@ -239,11 +239,11 @@ async def test_a_hop_never_reaches_a_friends_subscription(
 
 
 async def test_a_hop_is_granted_to_nobody(client, session, hop_params) -> None:
-    """No friend credential is ever created against a hop end."""
+    """No user credential is ever created against a hop end."""
     from control.app.models import Credential
 
     _, _, body = await established(client, hop_params)
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
 
     held = await session.execute(
         select(Credential).where(
@@ -328,7 +328,7 @@ async def test_dissolving_removes_both_ends(client, session, hop_params) -> None
 async def test_dissolving_something_that_is_not_a_hop_is_refused(
     client, session, hop_params, reality_params
 ) -> None:
-    """A friend-facing transport must not be removable through the hop route."""
+    """A user-facing transport must not be removable through the hop route."""
     entry_id, _ = await two_nodes(client)
     enabled = (await client.post(
         f"/api/nodes/{entry_id}/transports",

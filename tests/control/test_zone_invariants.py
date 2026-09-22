@@ -171,7 +171,7 @@ def test_no_model_records_anything_about_a_connection() -> None:
     exists — decision 8 (``docs/decisions.md``, 2026-09-11) refuses the design's
     ``source`` column on the Audit log and the ``last login`` cell on Settings, and a
     refusal that lives only in prose is one the next implementer re-decides. Both are
-    about the OPERATOR rather than about a friend, which is exactly why they need
+    about the OPERATOR rather than about a user, which is exactly why they need
     pinning here: the charter's argument is about what a seized machine yields, and an
     address or a login time against the one human at the keyboard is that record.
     """

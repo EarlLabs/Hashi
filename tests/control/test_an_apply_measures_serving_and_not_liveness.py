@@ -35,7 +35,7 @@ HOW:  against a fake host at the SHELL, like the two files either side of it —
       that refuses every apply in the fleet, which is the same uselessness as one that
       refuses none.
 
-      Boundary: nothing here says a friend's packets move. What a held port establishes
+      Boundary: nothing here says a user's packets move. What a held port establishes
       is that something on the node binds it — not that our container did, and not that
       anyone can reach it (``edge.health.listening``). The walk carried real traffic; a
       test run never does.
@@ -300,7 +300,7 @@ async def test_a_daemon_that_binds_a_moment_later_is_not_called_degraded(
 
     A daemon binds its socket some time after its container starts. A port question asked
     at the instant of the last container reading would call a healthy late binder dead,
-    which is exactly the reading that left a leaf ``degraded`` while its friend's ping was
+    which is exactly the reading that left a leaf ``degraded`` while its user's ping was
     0% loss — so the socket question is inside the settle loop and a late binder gets the
     patience a late starter gets.
     """

@@ -100,7 +100,7 @@ class AuditEntry(Base):
     __tablename__ = "audit_entries"
 
     # A UUID like every other table here, for the reason ``new_id`` gives: a sequential
-    # id says how many friends exist and in what order they arrived. It is in the
+    # id says how many users exist and in what order they arrived. It is in the
     # whitelist because a row needs a primary key, not because anything reads it.
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
 
@@ -117,7 +117,7 @@ class AuditEntry(Base):
     action: Mapped[AuditAction] = mapped_column(EnumText(AuditAction, 32), nullable=False)
 
     # What the change was about — a name the operator already chose or the registry
-    # already holds, copied whole and never composed: a node name, a friend's nickname,
+    # already holds, copied whole and never composed: a node name, a user's nickname,
     # a transport name, a node state. One label for a change about one thing ("kolya
     # added"), two for a change about a pair ("vless-reality enabled on leaf-ams-1").
     #

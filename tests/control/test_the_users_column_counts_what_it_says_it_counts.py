@@ -7,12 +7,12 @@ WHY:  measured on the owner's real hosts. The header said *nodes served* and the
       console is a fact about our own configuration stated in the operator's own words;
       this one stated a different fact from the one it named.
 
-      The number is the useful one and it is what stayed: a friend's link carries one entry
+      The number is the useful one and it is what stayed: a user's link carries one entry
       per protocol per node, so a person missing the second protocol on the only node in
       the fleet is a fault this column can show. Counting distinct nodes instead would have
       read ``1 / 1`` over exactly that fault, which is why the header moved and the
       arithmetic did not.
-HOW:  real Postgres, one node in service running two friend-facing transports, one user.
+HOW:  real Postgres, one node in service running two user-facing transports, one user.
       Nothing is dialled and nothing is rendered onto a host.
 """
 
@@ -29,7 +29,7 @@ THE_OLD_HEADER = "nodes served"
 
 
 async def one_node_two_transports(client, session, reality_params, ws_params) -> str:
-    """One serving node running two friend-facing protocols, and one user on both."""
+    """One serving node running two user-facing protocols, and one user on both."""
     created = await client.post(
         "/api/nodes",
         json={"name": "leaf-nl", "address": NODE_ADDRESS, "location_label": "Testland"},
@@ -47,8 +47,8 @@ async def one_node_two_transports(client, session, reality_params, ws_params) ->
         assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend = await client.post("/api/friends", json={"nickname": "anna"})
-    assert friend.status_code == 201, friend.text
+    user = await client.post("/api/users", json={"nickname": "anna"})
+    assert user.status_code == 201, user.text
     return node_id
 
 
@@ -65,7 +65,7 @@ async def test_the_header_names_the_unit_the_figure_counts(
     assert len((await client.get("/api/nodes")).json()) == 1, (
         "the fleet is not one node, so this proves nothing about the word above the column"
     )
-    table = await client.get("/panel/friends/table")
+    table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
@@ -92,7 +92,7 @@ async def test_the_figure_is_still_the_finer_one(
     """
     await one_node_two_transports(client, session, reality_params, ws_params)
 
-    covered = await console.friend_rows(session)
+    covered = await console.user_rows(session)
     assert [(row.transports_served, row.transports_serving) for row in covered] == [(2, 2)]
 
     held = (await session.execute(select(Credential))).scalars().unique().all()
@@ -101,7 +101,7 @@ async def test_the_figure_is_still_the_finer_one(
     await session.commit()
 
     session.expire_all()
-    after = await console.friend_rows(session)
+    after = await console.user_rows(session)
     assert [(row.transports_served, row.transports_serving) for row in after] == [(1, 2)], (
         "a person missing one of the two protocols on the only node in the fleet does not "
         "read as short of one"

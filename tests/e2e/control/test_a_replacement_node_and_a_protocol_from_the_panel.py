@@ -9,11 +9,11 @@ WHY:  both were reported closed and neither had a scenario that could fail. That
 
       Criterion 2 — "any node is replaceable in ten minutes and no user touches
       anything". Criterion 3 — "a transport is switched on from the panel and is in
-      every friend's subscription at their next refresh".
+      every user's subscription at their next refresh".
 HOW:  every operator action here is a POST to ``/panel/**``, because "from the panel"
       is part of both criteria — the same operations over ``/api/**`` would prove a
       different, weaker statement. Every assertion is read from ``/sub/{token}``
-      anonymously, exactly as a friend's client reads it: the friend's side of both
+      anonymously, exactly as a user's client reads it: the user's side of both
       criteria is that their link did not move and they did nothing.
 
 Boundary, stated plainly: no real host, no tunnel, no daemon. The replacement node is
@@ -189,16 +189,16 @@ async def withdraw_button(operator, node_id: str, transport_name: str) -> str:
     return posts_to.group(1)
 
 
-async def friend_token(operator, nickname: str) -> str:
-    friend_id = (
-        await operator.post("/api/friends", json={"nickname": nickname})
+async def user_token(operator, nickname: str) -> str:
+    user_id = (
+        await operator.post("/api/users", json={"nickname": nickname})
     ).json()["id"]
-    url = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    url = (await operator.get(f"/api/users/{user_id}/subscription")).json()["url"]
     return url.rsplit("/", 1)[-1]
 
 
 async def mine(client, token: str, marker: str) -> list[str]:
-    """This scenario's own entries in a friend's subscription.
+    """This scenario's own entries in a user's subscription.
 
     The stack is shared by every scenario in the run, so "the subscription" is only a
     meaningful subject when narrowed to the lines this scenario's fleet produced. The
@@ -215,9 +215,9 @@ async def mine(client, token: str, marker: str) -> list[str]:
 async def test_a_destroyed_node_is_replaced_and_the_same_link_follows(
     operator, client, unique: str
 ) -> None:
-    """S1. The friend does nothing, and their link resolves to the new host.
+    """S1. The user does nothing, and their link resolves to the new host.
 
-    The whole point of the criterion is the friend's inaction, so their token is
+    The whole point of the criterion is the user's inaction, so their token is
     captured BEFORE the replacement and never re-issued or re-read from the panel
     afterwards. If anything in the replacement path had to touch their access, this
     scenario would be reading a stale token and would fail.
@@ -232,7 +232,7 @@ async def test_a_destroyed_node_is_replaced_and_the_same_link_follows(
     await reality_from_the_panel(operator, original, port=REALITY_PORT_FIRST)
     await state_from_the_panel(operator, original, "active")
 
-    token = await friend_token(operator, f"kolya-{unique}")
+    token = await user_token(operator, f"kolya-{unique}")
     before = await mine(client, token, country)
     assert len(before) == 1, before
     assert "192.0.2.71" in before[0]
@@ -241,7 +241,7 @@ async def test_a_destroyed_node_is_replaced_and_the_same_link_follows(
     # what a real "the provider took the machine" looks like from here.
     await state_from_the_panel(operator, original, "retired")
     assert await mine(client, token, country) == [], (
-        "a retired node is still in a friend's subscription"
+        "a retired node is still in a user's subscription"
     )
 
     # The replacement: a new host, a new record, three actions on one screen.
@@ -264,7 +264,7 @@ async def test_a_destroyed_node_is_replaced_and_the_same_link_follows(
 
 # --- criterion 3 --------------------------------------------------------------
 
-async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves_nobody(
+async def test_a_transport_switched_on_reaches_every_user_and_off_again_leaves_nobody(
     operator, client, unique: str
 ) -> None:
     """S2, both halves. Enabling adds it for everyone; withdrawing removes it.
@@ -282,13 +282,13 @@ async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves
     await state_from_the_panel(operator, node_id, "active")
 
     tokens = [
-        await friend_token(operator, f"{name}-{unique}") for name in ("anya", "boris")
+        await user_token(operator, f"{name}-{unique}") for name in ("anya", "boris")
     ]
     for token in tokens:
         assert len(await mine(client, token, country)) == 1
 
     # A SECOND protocol on the same node, enabled from the panel. No redeploy, no
-    # code change, and nothing asked of any friend.
+    # code change, and nothing asked of any user.
     await enabled_from_the_panel(
         operator,
         node_id,
@@ -321,21 +321,21 @@ async def test_a_transport_switched_on_reaches_every_friend_and_off_again_leaves
         assert all(f"front-{unique}.example.com" not in line for line in lines), lines
 
 
-async def test_offering_a_protocol_does_not_reach_a_friend_who_was_not_given_the_node(
+async def test_offering_a_protocol_does_not_reach_a_user_who_was_not_given_the_node(
     operator, client, unique: str
 ) -> None:
     """S3. The fan-out has a boundary, and it is worth stating what the boundary is.
 
-    In this control plane every ACTIVE friend is granted every serving node on
-    purpose — that IS criterion 2, so among active friends there is nobody a node was
+    In this control plane every ACTIVE user is granted every serving node on
+    purpose — that IS criterion 2, so among active users there is nobody a node was
     "not given". The requirement therefore splits into the two true statements that
     remain, and both are asserted here:
 
-    * a REVOKED friend is not handed the new protocol, and their link stays a 404
+    * a REVOKED user is not handed the new protocol, and their link stays a 404
       rather than becoming valid-but-empty;
     * every entry the operator did not touch is unchanged — same lines, not merely the
       same number of them. That is what "does not touch" has to mean, because a client
-      re-reading a rewritten entry for an untouched node is a friend whose working
+      re-reading a rewritten entry for an untouched node is a user whose working
       exit stopped working during someone else's change.
     """
     country = f"Boundary-{unique}"
@@ -353,22 +353,22 @@ async def test_offering_a_protocol_does_not_reach_a_friend_who_was_not_given_the
     await reality_from_the_panel(operator, untouched, port=8467)
     await state_from_the_panel(operator, untouched, "active")
 
-    staying = await friend_token(operator, f"stays-{unique}")
+    staying = await user_token(operator, f"stays-{unique}")
     leaving_id = (
-        await operator.post("/api/friends", json={"nickname": f"leaves-{unique}"})
+        await operator.post("/api/users", json={"nickname": f"leaves-{unique}"})
     ).json()["id"]
     leaving = (
-        await operator.get(f"/api/friends/{leaving_id}/subscription")
+        await operator.get(f"/api/users/{leaving_id}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     assert len(await mine(client, leaving, country)) == 2
-    assert (await operator.post(f"/panel/friends/{leaving_id}/revoke")).status_code == 200
+    assert (await operator.post(f"/panel/users/{leaving_id}/revoke")).status_code == 200
     assert (await client.get(f"/sub/{leaving}")).status_code == 404
 
-    # A revocation re-pushes every node the friend was on, and these nodes have no SSH
+    # A revocation re-pushes every node the user was on, and these nodes have no SSH
     # key — so the push failed and the node is now DEGRADED and correctly out of
     # everyone's subscription. Put it back into service before asserting on what the
-    # remaining friend receives; otherwise the assertion below would pass or fail for
+    # remaining user receives; otherwise the assertion below would pass or fail for
     # the wrong reason entirely. That the failed push reports itself is asserted in
     # test_the_owner_issues_and_revokes_access.py, not re-litigated here.
     for node in (node_id, untouched):
@@ -376,7 +376,7 @@ async def test_offering_a_protocol_does_not_reach_a_friend_who_was_not_given_the
     before = await mine(client, staying, country)
     assert len(before) == 2, before
     assert (await client.get(f"/sub/{leaving}")).status_code == 404, (
-        "putting a node back into service handed access to a revoked friend"
+        "putting a node back into service handed access to a revoked user"
     )
 
     # Now switch a second protocol on, on ONE of the two nodes.
@@ -397,7 +397,7 @@ async def test_offering_a_protocol_does_not_reach_a_friend_who_was_not_given_the
     assert len(added) == 1, added
     assert f"edge-{unique}.example.com" in added[0]
     # Everything the operator did not touch is untouched — the same lines, not merely
-    # the same count. A grant that re-minted material the friend already held, or
+    # the same count. A grant that re-minted material the user already held, or
     # handed them a second credential on a node-transport they were already on, would
     # rewrite or duplicate entries here while the count still looked plausible.
     assert [line for line in after if line in before] == before, after

@@ -14,7 +14,7 @@ WHY:  round 12's walk found the two buttons disagreeing. Apply on a retired node
       the operator.
 
       The probe is the one that yields. Apply's refusal closes a hole nothing else closes
-      — a written-off host back in every friend's subscription with key material minted
+      — a written-off host back in every user's subscription with key material minted
       for the whole fleet — while the probe's answer is not lost, only moved behind the
       step the operator has to take anyway: register the host again as a new node, and
       probe that one. The cost is named in ``apply.CANNOT_BE_DIALLED`` rather than
@@ -132,7 +132,7 @@ async def test_the_refusal_says_what_a_probe_would_have_done(
     """The sentence, which is what tells the operator this is a decision and not a fault.
 
     It has to say more than "no": a probe answering nothing on a node whose host may still
-    be serving a withdrawn friend is the uncomfortable state this product is most careful
+    be serving a withdrawn user is the uncomfortable state this product is most careful
     about, and an operator who reads only a refusal will press it again.
     """
     node_id = await a_node_with_something_to_serve(client, reality_params, name="written-off")

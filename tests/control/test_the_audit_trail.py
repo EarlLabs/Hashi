@@ -11,7 +11,7 @@ WHY:  decision 8 (``docs/decisions.md``, 2026-09-11) grants this table and fixes
         acquires a token eighteen months from now without anyone deciding to add one,
         and this is the assertion that fails in the change that adds it, which is the
         only moment anybody is thinking about whether it should exist;
-      * **the ``/sub/{token}`` scenario** — a friend fetching their subscription must
+      * **the ``/sub/{token}`` scenario** — a user fetching their subscription must
         leave NO row, not merely no row naming a token. That is the rule whose breach
         turns this table into the record of who connected to what that the charter
         says is absent. Its e2e twin runs the same claim against the real stack.
@@ -208,7 +208,7 @@ async def trail(session) -> list[AuditEntry]:
 
     No ``expire_all()`` here, deliberately: several operations below are performed
     through ``client``, which uses a different session, and expiring this one would
-    detach every node and friend the test is still holding — an attribute read after
+    detach every node and user the test is still holding — an attribute read after
     that is lazy I/O, which on an async session raises rather than loading. It is not
     needed either, because an entry is append-only: a fresh SELECT sees every row
     another session has committed, and no row it already holds can have changed.
@@ -240,14 +240,14 @@ async def test_adding_a_user_records_the_nickname_and_nothing_else(
 ) -> None:
     """The label is the nickname the operator typed, copied whole.
 
-    What is NOT here is the point: creating a friend also mints a subscription token
+    What is NOT here is the point: creating a user also mints a subscription token
     and a URL, and neither may reach a durable record — they are the one artefact of
     this operation that is a live credential.
     """
-    response = await client.post("/api/friends", json={"nickname": "kolya"})
+    response = await client.post("/api/users", json={"nickname": "kolya"})
     assert response.status_code == 201, response.text
     url = (
-        await client.get(f"/api/friends/{response.json()['id']}/subscription")
+        await client.get(f"/api/users/{response.json()['id']}/subscription")
     ).json()["url"]
     token = url.rsplit("/", 1)[-1]
 
@@ -263,18 +263,18 @@ async def test_adding_a_user_records_the_nickname_and_nothing_else(
 
 async def test_a_refused_nickname_leaves_no_entry(client, session) -> None:
     """Only changes that COMMITTED. A refusal is not a change."""
-    assert (await client.post("/api/friends", json={"nickname": "  "})).status_code == 400
+    assert (await client.post("/api/users", json={"nickname": "  "})).status_code == 400
     assert await trail(session) == []
 
 
 async def test_revoking_records_the_nickname_once(client, session) -> None:
     """Recorded in the same transaction as the revocation, and not again on a retry."""
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "kolya"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "kolya"})
     ).json()["id"]
 
-    await revocation.revoke_friend(session, friend_id=friend_id)
-    await revocation.revoke_friend(session, friend_id=friend_id)
+    await revocation.revoke_user(session, user_id=user_id)
+    await revocation.revoke_user(session, user_id=user_id)
 
     revoked = await entries_for(session, AuditAction.FRIEND_REVOKED)
     assert len(revoked) == 1, "a second revocation changed nothing and recorded nothing"
@@ -285,7 +285,7 @@ async def test_revoking_records_the_nickname_once(client, session) -> None:
 async def test_a_revocation_that_never_happened_records_nothing(client, session) -> None:
     """The entry is pending in the same transaction, so a refusal takes it with it."""
     with pytest.raises(NotFound):
-        await revocation.revoke_friend(session, friend_id="no-such-friend")
+        await revocation.revoke_user(session, user_id="no-such-user")
     await session.rollback()
     assert await entries_for(session, AuditAction.FRIEND_REVOKED) == []
 
@@ -632,14 +632,14 @@ async def test_every_label_in_the_trail_is_a_value_read_off_an_inventory_row(
         )
     ).json()["id"]
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "kolya"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "kolya"})
     ).json()["id"]
     await client.post(f"/api/nodes/{node_id}/apply")  # fails; degrades the node
     await nodes.set_transport_enabled(
         session, node_transport_id=node_transport_id, enabled=False
     )
-    await revocation.revoke_friend(session, friend_id=friend_id)
+    await revocation.revoke_user(session, user_id=user_id)
 
     session.expire_all()
     inventory = {
@@ -680,11 +680,11 @@ async def test_fetching_a_subscription_writes_nothing_to_the_trail(
         json={"transport_name": TRANSPORT, "params": reality_params},
     )
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
-    friend_id = (
-        await client.post("/api/friends", json={"nickname": "kolya"})
+    user_id = (
+        await client.post("/api/users", json={"nickname": "kolya"})
     ).json()["id"]
     url = (
-        await client.get(f"/api/friends/{friend_id}/subscription")
+        await client.get(f"/api/users/{user_id}/subscription")
     ).json()["url"]
     token = url.rsplit("/", 1)[-1]
 

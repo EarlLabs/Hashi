@@ -6,7 +6,7 @@ WHY:  measured on the owner's real hosts. ``POST /panel/nodes`` answered a submi
       with two boxes empty with **400 and the error envelope**, carrying the field
       sentences run together into one paragraph that named no field and said the same
       thing twice — *"required — a node cannot be registered without it required — a node
-      cannot be registered without it"*. ``POST /panel/friends``, one screen over,
+      cannot be registered without it"*. ``POST /panel/users``, one screen over,
       answered its own refusal with **422 and the dialog re-rendered**, message under the
       box. Two shapes for the same kind of refusal, in one console.
 
@@ -67,11 +67,11 @@ async def test_a_node_form_refused_without_htmx_gets_the_dialog_and_not_an_envel
 async def test_the_user_form_answers_the_same_way_it_always_did(client) -> None:
     """The shape the console already had, asserted beside it — the pair IS the claim.
 
-    ``POST /panel/friends`` is the reference: it has never had the split, so a change that
+    ``POST /panel/users`` is the reference: it has never had the split, so a change that
     unified the two by giving this one an envelope would satisfy the test above and be the
     same finding pointing the other way.
     """
-    refused = await client.post("/panel/friends", data={"nickname": ""})
+    refused = await client.post("/panel/users", data={"nickname": ""})
 
     assert refused.status_code == 422, refused.text
     assert not is_the_error_envelope(refused), refused.text

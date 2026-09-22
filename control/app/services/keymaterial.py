@@ -132,8 +132,8 @@ def mint(specs: Iterable[KeySpec], scope: KeyScope) -> Minted:
 
     Filtered by scope rather than generating everything at once because the two
     happen at different times and for different reasons: node material is minted
-    when a transport is enabled on a node, client material when a friend is granted
-    access to it. Mixing them would mean re-keying a node every time a friend is
+    when a transport is enabled on a node, client material when a user is granted
+    access to it. Mixing them would mean re-keying a node every time a user is
     added.
     """
     minted = Minted()
@@ -166,7 +166,7 @@ def rotate(specs: Iterable[KeySpec], scope: KeyScope) -> Minted:
 
     Identical to ``mint`` today, and named separately because the CALLER's
     intent differs and the difference matters at the call site: rotating replaces
-    material that friends' devices are currently using, so it is always followed by
+    material that users' devices are currently using, so it is always followed by
     a re-render and a push to every affected node. See
     ``control/app/services/rotation.py``.
     """
@@ -244,7 +244,7 @@ def fingerprint(specs: Iterable[KeySpec], params: Mapping[str, object]) -> str |
       and a hash of a few bytes is recoverable by hashing every candidate. Feeding one
       in would turn a fingerprint into a way to READ something back, which is the one
       property this function exists to not have.
-    * **anything a friend holds.** Client-scoped material is per person, so a value
+    * **anything a user holds.** Client-scoped material is per person, so a value
       derived from it would be a per-person figure on a screen whatever it was called.
 
     Why hashing the public half is safe, and why showing that hash is: the value is

@@ -10,7 +10,7 @@
   dialog that changes nothing on it.
 #}
 <div id="overview-body" class="overview-body"
-     hx-get="/panel/overview/body" hx-trigger="friends-changed from:body"
+     hx-get="/panel/overview/body" hx-trigger="users-changed from:body"
      hx-target="this" hx-swap="outerHTML" hx-indicator="this"
      hx-disinherit="hx-indicator">
 
@@ -35,9 +35,9 @@
     {#
       WHAT THE FOUR COUNTS DO NOT KNOW — M26's first acceptance walk, and the screen
       whose own subtitle promises to say "whether the nodes are running what you told
-      them to". The walk stopped a node's friend-facing daemon, probed it, read the
+      them to". The walk stopped a node's user-facing daemon, probed it, read the
       correct finding, and then read "nodes active 2 … transports serving 2" here while
-      the friend's ping was 100% loss.
+      the user's ping was 100% loss.
 
       A NOTICE and not a failure banner: nothing went wrong in the request that drew
       this screen, and the failure slot above belongs to the action the operator just
@@ -62,12 +62,12 @@
     #}
     <p class="text-muted section-note">{{ overview.limit }}</p>
 
-    {% if not overview.nodes and not overview.friends %}
+    {% if not overview.nodes and not overview.users %}
     {#
       The first thing a new operator ever sees. It says what to do next rather than
       reporting an absence — and it says NODE first, deliberately: a subscription
       only resolves to nodes that are serving, so a link handed out before there is
-      one is a link that hands the friend an empty configuration.
+      one is a link that hands the user an empty configuration.
     #}
     <div class="empty">
       <div class="empty-title">Nothing is configured yet</div>
@@ -92,32 +92,32 @@
       <section class="card blueprint">
         <div class="card-head">
           <h4>Users</h4>
-          <a class="all-link" href="/panel/friends"
-             hx-get="/panel/friends" hx-target="#main" hx-swap="innerHTML"
+          <a class="all-link" href="/panel/users"
+             hx-get="/panel/users" hx-target="#main" hx-swap="innerHTML"
              hx-push-url="true">all users</a>
         </div>
-        {% if overview.friends %}
+        {% if overview.users %}
         <div class="table-scroll">
           <table class="table">
             <thead><tr><th>nickname</th><th>status</th><th>added</th><th></th></tr></thead>
             <tbody>
-              {% for friend in overview.friends[:5] %}
-              <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
+              {% for user in overview.users[:5] %}
+              <tr {% if not user.is_active %}class="row-inert"{% endif %}>
                 {# `.wraps` — operator text, the one cell in the row allowed to
                    break a word. app.css says why the whole row may not. #}
-                <td class="wraps">{{ friend.nickname }}</td>
+                <td class="wraps">{{ user.nickname }}</td>
                 <td>
                   {# UI-PATTERNS §4: status is a tag, never coloured text, and there is
                      no red — "revoked" is inert, so it is neutral. #}
-                  <span class="tag {{ 'tag-accent' if friend.is_active else 'tag-neutral' }}">
-                    {{ "active" if friend.is_active else "revoked" }}
+                  <span class="tag {{ 'tag-accent' if user.is_active else 'tag-neutral' }}">
+                    {{ "active" if user.is_active else "revoked" }}
                   </span>
                 </td>
-                <td class="text-muted nowrap">{{ friend.added.strftime("%d %b %Y") }}</td>
+                <td class="text-muted nowrap">{{ user.added.strftime("%d %b %Y") }}</td>
                 <td class="right">
-                  {% if friend.is_active %}
+                  {% if user.is_active %}
                   <button class="btn btn-ghost" type="button"
-                          hx-get="/panel/friends/{{ friend.id }}/subscription"
+                          hx-get="/panel/users/{{ user.id }}/subscription"
                           hx-target="#dialog-slot" hx-swap="innerHTML">link</button>
                   {% endif %}
                 </td>
