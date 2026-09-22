@@ -2340,6 +2340,416 @@ way M23 was run.
 
 ---
 
+## → M29 — One word for the person who uses this, and the product already picked a different one than the code did · asked for by the owner 2026-09-22 · PROPOSED
+
+**Not started.**
+
+### The premise is better than "the owner prefers a different word"
+
+The owner asked to stop calling them *friends* and call them *users*. Measured
+before planning, that turns out not to be a preference at all:
+
+| surface | says |
+|---|---|
+| `control/app/templates/panel/keys_table.html:46` | `<th>users on it</th>` |
+| eight panel templates, **including `friends_table.html` itself** | `users` |
+| `control/migrations/versions/0006_an_address_per_user.py` | `user` |
+| the model, the table, the routes, the file names | `friend` |
+
+**The screens already say one thing and the code says another**, and the screen is
+the half the operator reads. So this is not a rename of a settled term — it is
+finishing a change the product has already half-made, in the direction it already
+went.
+
+Footprint, measured: **~3650 occurrences across 239 files** — `control` 871,
+`tests` 1767, `docs` 682, `edge` 306, the rest small.
+
+### What is actually load-bearing, and what is only prose
+
+Most of that count is comments and docstrings. The identifiers are few and known:
+
+- **`control`** — `Friend` (`models/friend.py:25`), `FriendCreate` / `FriendResponse`
+  (`api/schemas.py:183,189`), `FriendRow` (`services/console.py:370`), the
+  `friends` table, `friend_id` columns, `/api/friends/*` and `/panel/friends/*`,
+  and the template file names.
+- **`edge`** — almost clean. Its public types are `NodeView` and `Credential`,
+  neither of which is named for a person. Only `registry.py:718
+  serves_friends_through_a_hop` is a public name; `egress.py:468 _friend_rules` is
+  private. Everything else in edge's 306 is prose.
+
+**That asymmetry is the plan: `edge`'s change is one method and a read-through of
+its comments; `control`'s is a migration.**
+
+### What the milestone has to decide, before it writes code
+
+1. **Whether the word is `user`, and this is the one question worth answering
+   before anything else.** This codebase already uses `user` for two other things:
+   `ssh_user` on a node record, and `HASHI_OPERATOR_USERNAME` for the person who
+   logs into the panel — plus `--user` in `scripts/node-bootstrap.sh`. Adopting it
+   for the consumer makes **three** meanings of one word, and the two existing ones
+   are both about accounts that log in somewhere. A sentence like *"the user the
+   node is driven as"* beside *"the users on this transport"* is the kind of
+   ambiguity that costs an hour at 3am. `subscriber` has none of that collision and
+   is what `subscriptions` already implies. **The owner asked for `user`; this
+   milestone must put the collision in front of them and take the answer, rather
+   than discover it half-way through a 239-file rename.**
+
+2. **What `friends` was doing that `users` does not.** The charter says *"for the
+   owner and ~30–50 friends"*, and the word carries three of its non-goals at once:
+   no public signup, no billing, no advertising. *Users* is what a service has.
+   Changing the code is mechanical; changing **the charter's own sentence** is a
+   product decision and belongs to the owner explicitly, not to a find-and-replace.
+
+3. **The history is not rewritten.** `docs/tracker/**` is a record of what happened
+   and what was said at the time; so are the completed milestones above in this
+   file and the entries in `docs/decisions.md`. **Changing the words in a record
+   falsifies it.** Only living documents move: the charter, `docs/deploy/runbook.md`,
+   `CLAUDE.md`, `README.md`, and this plan's *open* milestones. Decide the line and
+   write it down, because the naive `sed -i` over `docs/` crosses it.
+
+4. **The database migration, on live data.** `friends` → the new name, plus every
+   `friend_id` column and its foreign keys. It must be reversible, and it must be
+   run forward **and back** against a copy of real data before it is run against the
+   owner's. There is no way to delete a node record today; this milestone should not
+   add a second irreversible act to the same product.
+
+5. **`/api/friends/*` is a breaking change for whatever the owner has scripted.**
+   The runbook already documents calling the API by hand (`POST
+   /api/nodes/<id>/resolver`), so assume something exists. Decide: break cleanly and
+   say so, or keep the old paths as aliases for a while. Do not decide it silently.
+
+6. **Nothing on anybody's device may change.** `/sub/{token}` contains no such word,
+   so no subscription needs reissuing and nobody has to be told anything. **If this
+   milestone ends with a single person having to re-import a config, it was done
+   wrong.** This is the cheapest thing to get right and the most expensive to get
+   wrong.
+
+7. **It is three tasks, not one.** `CLAUDE.md`: cross-zone work stays in separate
+   tasks and never in one diff. So `edge`, then `control`, then the documents —
+   each gated on its own `make test-<zone>`, with `make verify` across the seam.
+
+**Done when**
+- [ ] One word for the concept everywhere a person can read it — screens, API,
+      code, and the living documents.
+- [ ] No identifier, table, column, route or template file in `control` or `edge`
+      still carries the old one.
+- [ ] `docs/tracker/**`, `docs/decisions.md` and the completed milestones are
+      **untouched**.
+- [ ] The migration has been run forward and back against a copy of real data.
+- [ ] Nothing on a device changed: no subscription reissued, nobody told anything.
+- [ ] `make verify` green.
+
+acceptance: yes
+Not because a rename is hard, but because this one carries a migration against live
+data. On a stand restored from a real dump: add a person, issue their subscription,
+revoke them, and confirm a subscription issued **before** the migration still fetches
+and still works on a device that already had it. Then run the migration backwards and
+confirm the panel still works.
+
+---
+
+## → M28 — The control plane must be restorable on a machine it has never run on · asked for by the owner 2026-09-22 · PROPOSED
+
+**Not started.**
+
+### What the owner asked for
+
+1. Everything the control plane generates is backed up **once a day, at 04:00**.
+2. The backups live in a **Yandex Object Storage bucket**, off the host.
+3. When the control-plane box is blocked, seized or lost, it comes back on **another
+   machine by one command**.
+
+Today none of the three exists. `scripts/backup.sh` dumps and restores, by hand,
+to a file beside the repository — `make backup`, `make restore FROM=…`. There is no
+schedule, nothing leaves the host, and the one machine that holds every friend's
+access and every node's credentials is also the only machine holding its own backup.
+
+### The finding that shapes this milestone, measured before it was planned
+
+**The dump is not encrypted, and the script says it is.** `scripts/backup.sh:72` is
+`pg_dump --format=plain | gzip`: ordinary SQL. What is encrypted is a *subset of
+columns* (`EncryptedText`, `control/app/models/base.py:86`) —
+
+| encrypted | in the clear |
+|---|---|
+| node `ssh_private_key`, node_transport `secrets` | node `address`, `ssh_port`, `ssh_host_key` |
+| friend `token`, `subject`, `secrets`, `tunnel_address` | `transport_name`, ports, states, every timestamp |
+
+**So a reader of the bucket who never obtains `HASHI_SECRET_KEY` still gets a map of
+the fleet**: every node's real address — including the leaf addresses a friend is
+never shown, which is the one thing the entry/leaf topology exists to hide — plus
+how many friends there are and when each arrived.
+
+`scripts/backup.sh:82` prints *"this dump is encrypted with HASHI_SECRET_KEY"*. That
+sentence is false as written and is how this was nearly planned wrong: an operator
+reading it concludes the artifact is safe to put anywhere. **Correcting that line is
+in scope, whatever else this milestone decides.**
+
+### What the milestone has to decide, before it writes code
+
+1. **What "everything the control plane generates" actually is.** The database is
+   the source of truth and a node holds nothing that cannot be regenerated from it —
+   so `/opt/hashi` on a node is explicitly **not** backup material. What else is:
+   Caddy's ACME state and private keys (`caddy_data`), the management tunnel config
+   under `~/.hashi/management/`, and `.env` itself. Decide each. `.env` is the
+   dangerous one — see the next point.
+
+2. **The key paradox, and it cannot be engineered away.** The dump's encrypted
+   columns are worthless without `HASHI_SECRET_KEY`, and putting the key in the
+   bucket beside them defeats the encryption entirely — `scripts/backup.sh:84`
+   already says so. **Therefore "restore by one command" is one command PLUS a
+   secret the operator carries in their head or their pocket.** The milestone must
+   state that plainly rather than build a command that silently needs something the
+   owner does not have with them at 3am. The honest target is: one command, two
+   inputs — the key, and read credentials for the bucket.
+
+3. **Whether the artifact is encrypted before it is uploaded, given the finding
+   above.** Two candidate answers. Encrypt the whole dump with a separate passphrase
+   (age, gpg) so the bucket holds an opaque blob — which adds a *second* secret the
+   operator must not lose, and losing it loses everything. Or upload as-is and accept
+   that the bucket is a fleet map to whoever can read it. **Recommend the first, but
+   it is a decision with a real cost and it gets recorded in `docs/decisions.md`
+   either way.**
+
+4. **The bucket is in Russia, and this is a decision, not a detail.** Yandex Object
+   Storage sits in the jurisdiction the project exists to keep working around, and
+   the account is tied to the owner's identity through payment. Combined with point 3
+   left undone, that is a fleet map, in Russia, attributable to a named person. The
+   owner asked for Yandex specifically and that is their call to make; the milestone's
+   job is to make sure it is made knowingly and written down, and to make the storage
+   backend a field rather than a hardcoded provider — `CLAUDE.md`'s rule about never
+   hardcoding a provider applies here exactly as it does to a node.
+
+5. **An attacker who holds the control-plane box holds its bucket credentials.**
+   They can then delete the backup history, which turns a seizure into a total loss.
+   So the credentials written onto the host must be **write-only** — no delete, no
+   overwrite — with retention enforced on the bucket side by versioning, object lock
+   or a lifecycle rule. Decide which of those Yandex actually offers and what the
+   fallback is if it offers none.
+
+6. **What runs at 04:00, and 04:00 where.** Cron, a systemd timer, or a service in
+   the compose stack: pick one, and note that adding a scheduler is a dependency and
+   therefore an architect decision (`CLAUDE.md`). Then decide what 04:00 means on a
+   host whose clock is UTC and whose owner is not, and what happens to the day's
+   backup when the box was down at 04:00 — a schedule that silently skips is the
+   failure mode that is only discovered during a restore.
+
+7. **A failure to back up must be visible somewhere the owner actually looks.** The
+   dangerous state is not "the backup failed", it is "the backup has been failing for
+   six weeks and nothing said so". Decide where that surfaces — the panel has a
+   Nodes screen that already carries banners, and this is the same kind of fact.
+
+8. **What restore does NOT do, said out loud.** It brings back the database and
+   whatever else point 1 decided. It does not move DNS, it does not re-issue the
+   delivery endpoint's certificate, and it does not tell friends anything. A restored
+   control plane on a new address with the old `HASHI_PUBLIC_HOST` pointed elsewhere
+   serves nobody. Whether the one command can fix any of that, and what the operator
+   must do by hand, belongs in the runbook beside the command.
+
+9. **Nothing here may record who connected to what.** A backup job is a new thing
+   that writes files and may log; the charter's one absolute prohibition applies to
+   it unchanged.
+
+### Why "one command" is the requirement and not a nicety
+
+The day this is used is the day the box is gone. The operator is not reading a
+runbook carefully; they are rebuilding under pressure, possibly from a phone tether,
+possibly having just lost the machine to something that was not an accident. Every
+step that is not in the command is a step that gets skipped or done wrong. **The
+measure of this milestone is not that a restore is possible — it already is — but
+that it is possible by someone frightened and in a hurry.**
+
+**Done when**
+- [ ] A backup lands in the bucket every day without anyone touching it, and a run
+      that does not land is visible where the owner already looks.
+- [ ] On a machine that has never run this project, one command — given the key and
+      read credentials for the bucket — produces a control plane serving the same
+      friends and driving the same nodes as the one that was lost.
+- [ ] What a reader of the bucket learns **without** `HASHI_SECRET_KEY` is written
+      down, and is either nothing or a recorded decision in `docs/decisions.md`.
+- [ ] An attacker holding the control-plane box cannot destroy the backup history.
+- [ ] The storage backend is configuration, not a hardcoded provider.
+- [ ] `scripts/backup.sh:82` no longer claims the dump is encrypted.
+- [ ] The restore has been **performed** on a bare host, not described.
+
+acceptance: yes
+Take a fleet with at least one node and one friend, both working. Destroy the
+control-plane box — do not stop it gracefully, take it away. On a genuinely bare
+machine, with nothing but the repository, `HASHI_SECRET_KEY` and read credentials
+for the bucket, run the one command. Then: log into the panel, apply the existing
+node, and confirm the existing friend's subscription still works on the device it
+was already on. The walk fails if the operator had to read anything other than the
+command to get there.
+
+---
+
+## → M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · PROPOSED
+
+**Not started.**
+
+### The coupling, stated plainly
+
+`deploy/caddy/Caddyfile` serves the public site and the private site as two blocks
+in **one** Caddy container, on **one** box. So `/sub/*` — the endpoint a friend
+refreshes a config from — lives wherever the panel and the database live. The
+runbook admits it in one sentence at the end of *Shape C*: *"today you choose one
+location for both."*
+
+**That makes the location of the delivery endpoint a consequence of the location of
+`HASHI_SECRET_KEY`, and those two want opposite countries.**
+
+| | wants to be | why |
+|---|---|---|
+| `/sub/{token}` | **inside Russia** | its entire purpose is being reachable at the moment a node was blocked and a friend needs a new config. A whitelist shutdown is exactly when it is needed and exactly when a foreign address is unreachable |
+| `HASHI_SECRET_KEY` | **outside Russia** | it decrypts every friend's credential and every node's private key, and `scripts/panel-bootstrap.sh:94` requires it in the env file on the host it installs |
+
+Today the operator picks one and pays for the other:
+
+- **Shape B** — control plane on the entry, in Russia. Refresh works under a
+  shutdown. The master key sits on the most seizable machine in the fleet, beside
+  the database it opens, which the runbook records as violating **the charter's own
+  condition** for putting the panel inside Russia.
+- **Shape C** — control plane abroad on its own box. The key is out of reach and
+  the refresh URL is behind the border that just closed.
+
+**The owner is running Shape B as of 2026-09-22, knowingly.** This milestone is what
+makes leaving it affordable: without it, moving the control plane out of Russia
+trades a seizure risk for a delivery outage, and that is not obviously a trade worth
+making.
+
+### The shape that does not work, recorded so it is not proposed again
+
+**A reverse proxy on the entry that forwards `/sub/*` to the control plane abroad.**
+It is the first idea everyone has and it fails twice:
+
+1. It inverts the project's one directional invariant — *control plane → node,
+   always; a node NEVER dials the control plane* (`CLAUDE.md`). A proxy on E
+   dialling C is that, whatever it is called.
+2. **It does not solve the problem.** Under a shutdown the proxy cannot reach C
+   either, so the refresh fails exactly as before — with one more moving part.
+
+The direction that already exists and already works is **control plane → node over
+SSH, on apply**. Anything this milestone builds should ride it.
+
+### What the milestone has to decide, before it writes code
+
+1. **What travels — the endpoint, or the artifacts?** Rendering a subscription
+   needs the database, so the endpoint cannot move on its own. The candidate is:
+   the control plane pre-renders each friend's subscription and **pushes it to the
+   entry on apply**, where something small and stateless serves `/sub/{token}`.
+   Decide whether that something is Caddy, the node stack, or a new thing — and
+   whether it is a transport-like row or a property of the node.
+2. **Staleness, and whether the operator is told.** A pushed subscription is a
+   snapshot. The panel already knows how to say *"this node is not running what
+   this panel would give them"* (M25). Decide whether delivery inherits that
+   sentence or needs one of its own, and what a friend gets when they refresh
+   against an entry that is three applies behind.
+3. **Every arrangement of the three roles must work, and none of them may be a
+   different product.** *Owner's requirement, 2026-09-22, broadened the same day.*
+   The three roles — control plane, entry, leaf — are placed on one, two or three
+   machines in any combination, and **the country each one sits in is not the
+   product's business.** That is the charter's own rule about nodes applied one
+   level up: nodes are data, so the arrangement of them is data too.
+
+   | machines | arrangement | what delivery does |
+   |---|---|---|
+   | 1 | C + E + L together | already served from that box |
+   | 2 | C + E \| L | already served from that box |
+   | 2 | C + L \| E | the case that needs the work |
+   | 3 | C \| E \| L | the case that needs the work |
+
+   **Where the roles are co-located the feature must be ABSENT, not merely inert.**
+   No second domain, no second certificate, no second listener, no extra key in
+   `.env` — and no flag the operator has to know to leave off, because a flag like
+   that is a way to get it wrong. Whatever is built works this out from what the
+   fleet already knows, and an operator who has never read this milestone cannot
+   arrive at the wrong shape by following the panel.
+
+   **The test of this point is the runbook, not the code.** Today `docs/deploy/runbook.md`
+   carries three shapes with three procedures and a migration section between them.
+   If this milestone lands and that structure survives unchanged, the point was
+   missed: the shapes should collapse into one installation with a field in it.
+4. **What a seized delivery host then yields, and this is the sharpest question
+   here.** A
+   subscription does not name only the node serving it — it names **every node that
+   friend may use**. Pushing rendered subscriptions to the entry therefore puts the
+   fleet's leaf addresses on the box most likely to be seized, which the current
+   design deliberately never does: a friend holds the entry's address and the leaf
+   is invisible to them. Decide whether the pushed artifact is narrowed to the
+   entry's own material, and if it is not, decide that knowingly and write down
+   what is lost.
+5. **Bearer-token rules are inherited, not re-decided.** `/sub/{token}` is a bearer
+   credential in a URL path; access logging is off in uvicorn and discarded in
+   Caddy. A second listener on a second host is **a second place a path can be
+   recorded**, and it is on a host whose logs the owner does not read daily. Every
+   new surface gets the same treatment, checked rather than assumed.
+6. **The certificate, on whichever host ends up serving delivery.** A public CA will
+   not issue for a bare address, so every host that serves `/sub/*` needs a real
+   name, a real record and a real certificate — issued and renewed from wherever
+   that host happens to be, on a machine the control plane drives but does not live
+   on. Decide who renews it, and what happens when renewal fails while the border is
+   shut.
+
+7. **Moving the delivery endpoint is the one change that cannot be announced
+   through the thing being moved.** A friend's subscription URL names a host. Change
+   which host serves it and every friend is holding a dead address — and the only
+   channel the product has for telling them is the address that just died. It works
+   if you move *before* a block and is impossible if you move *because* of one,
+   which is when you will actually want to.
+
+   So this milestone cannot treat the delivery host as freely rotatable the way a
+   node is, unless it decides one of these deliberately:
+   - a subscription carries **more than one** delivery URL from the day it is
+     issued, and a client falls back — which doubles the number of places a bearer
+     token can be recorded, and puts a Russian-side address into every foreign
+     artifact and the reverse;
+   - or moving delivery is defined as an **out-of-band event**, said so plainly in
+     the runbook, and the operator is expected to have a channel that is not this
+     product. That is the honest cheap answer and it is not obviously the wrong one.
+
+   Either way it is a decision with a cost, and the milestone is not done while it
+   is implied rather than recorded.
+
+### Why this is worth building rather than living with
+
+It is the one change that collapses a dilemma the charter cannot resolve and the
+operator cannot avoid. Every other answer is a trade: this one gives the fleet a
+refresh path that survives a shutdown **and** a master key that survives a seizure,
+and it leaves the third box doing nothing but holding secrets — which is the only
+job that actually wants to be abroad.
+
+**Done when**
+- [ ] With the control plane's box unreachable from Russia, a friend inside Russia
+      fetches a refreshed subscription and connects on it.
+- [ ] **All four arrangements in the table above install by one procedure**, and the
+      co-located ones need no second domain, no second certificate and no additional
+      configuration — an operator who has never read this milestone cannot arrive at
+      the wrong shape by following the panel.
+- [ ] No new surface records a token, an address, or who fetched what — checked on
+      every host that can serve delivery, not only on the control plane's.
+- [ ] What a seized delivery host yields is written down and is no wider than it is
+      today, or the widening is a recorded decision in `docs/decisions.md`.
+- [ ] How the delivery endpoint is moved, and what friends have to be told when it
+      moves, is decided and written down rather than left implied.
+- [ ] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
+      for both"* **and its three-shape structure**, because neither is true any more.
+
+acceptance: yes
+Walk it on the two arrangements that differ, not only on the one that motivated it.
+
+1. **Three boxes.** Control plane on its own box; block that box at the firewall so
+   it is unreachable from the entry's network. Then, as a friend: refresh a
+   subscription and connect on what comes back.
+2. **Control plane on the entry.** Install the same way, from the same procedure.
+   Confirm that nothing extra was configured, that no second name or certificate
+   exists, and that there was no point in the walk where the operator had to know
+   which shape they were building.
+
+A walk that only proves (1) has proved the easy half: (2) is the one that fails if
+the feature was built as a switch instead of as a consequence.
+
+---
+
 ## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day
 
 **Not started.**
