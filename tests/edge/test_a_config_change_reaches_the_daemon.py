@@ -7,9 +7,9 @@ WHY:  measured on real hardware on 2026-09-09 (docs/tracker/M1/field-measurement
       a config written 8m25s AFTER the container meant to serve it started, an apply
       that returned 200, a node reported ``active`` and a health probe reporting
       ``reachable: true, healthy: true, drifted: []``. Every one of those answers was
-      true; none of them established that the daemon had read the file. The friend who
+      true; none of them established that the daemon had read the file. The user who
       had just been added could not connect, and — the dangerous direction — a revoked
-      friend would not have been cut off.
+      user would not have been cut off.
 HOW:  against a fake node rather than a host. Two of the tests here are red by
       ASSERTION against the pre-M1 tree rather than by AttributeError, which is the
       only form of red worth much: see ``_FakeNode.run`` for the one deliberate
@@ -39,9 +39,9 @@ FIRST = "vless-reality"
 SECOND = "vless-ws-tls"
 
 A_CONFIG = '{"inbounds": []}'
-# The same config with one client added — which is exactly what adding a friend does,
+# The same config with one client added — which is exactly what adding a user does,
 # and what the field measurement's node never picked up.
-A_CHANGED_CONFIG = '{"inbounds": [{"clients": ["a-friend"]}]}'
+A_CHANGED_CONFIG = '{"inbounds": [{"clients": ["a-user"]}]}'
 
 
 class _FakeNode:
@@ -115,7 +115,7 @@ def test_a_changed_config_is_a_changed_service_definition() -> None:
     `docker compose up -d` compares the desired service definition against the running
     container and does nothing when they match. Before M1 these two rendered
     byte-identically — the config lives in a bind-mounted file whose CONTENTS are not
-    part of the definition — so the apply that added a friend recreated nothing and the
+    part of the definition — so the apply that added a user recreated nothing and the
     daemon went on serving the config it started with.
     """
     before = compose_for({FIRST: A_CONFIG})
@@ -142,7 +142,7 @@ def test_each_service_carries_the_digest_of_its_own_config() -> None:
     """Per service, not per node: one transport's change must not restart the others.
 
     A node-wide digest would make enabling a new protocol restart the one every
-    existing friend is already using — the blast radius the compose template exists to
+    existing user is already using — the blast radius the compose template exists to
     avoid (charter criterion 3).
     """
     rendered = yaml.safe_load(compose_for({FIRST: A_CONFIG, SECOND: A_CHANGED_CONFIG}))
@@ -159,7 +159,7 @@ def test_each_service_carries_the_digest_of_its_own_config() -> None:
 def test_the_label_discloses_nothing_from_the_config() -> None:
     """A digest, never the bytes. `docker inspect` is readable by anyone on the node.
 
-    A rendered server config carries the node's private key and every live friend's
+    A rendered server config carries the node's private key and every live user's
     subject, which is why the file itself is 0600. Putting any of it in a label would
     hand it to every process on the host that can talk to the docker socket.
     """
@@ -232,7 +232,7 @@ async def test_a_stale_daemon_is_not_reported_healthy() -> None:
 
     The file on disk is exactly what we would push; the process was started from the
     previous one. Before M1 this node answered ``healthy: true, drifted: []`` — every
-    field true, and the friend who had just been added could not connect.
+    field true, and the user who had just been added could not connect.
     """
     node = _FakeNode(
         containers={FIRST: node_stack.digest_of(A_CONFIG)},

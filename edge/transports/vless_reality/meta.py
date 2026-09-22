@@ -49,14 +49,14 @@ META = TransportMeta(
         ),
         # Reality's short id: a client that presents an unknown one is served the
         # decoy site, which is exactly the behaviour that makes probing useless.
-        # Not secret — it ships to every friend inside their own URI.
+        # Not secret — it ships to every user inside their own URI.
         KeySpec(
             name="short_id",
             kind=KeyKind.SHORT_ID,
             scope=KeyScope.NODE,
             secret=False,
         ),
-        # One VLESS client id per friend, per node. Client-scoped, which is what
+        # One VLESS client id per user, per node. Client-scoped, which is what
         # makes the charter's sixth criterion (total revocation) expressible:
         # deleting this row cannot leave a working copy on another node.
         KeySpec(name="subject", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
@@ -67,11 +67,11 @@ META = TransportMeta(
     # second format becomes the norm this transport's answer is a decision on the
     # record instead of whatever the default happened to be.
     subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
-    # Xray forwards no packet in the kernel: it accepts the friend's connection and opens
+    # Xray forwards no packet in the kernel: it accepts the user's connection and opens
     # its own, which is why ``render_server`` expresses its egress through
     # ``egress.exit_origin`` — an address the new connection is BOUND to — and not through
     # ``wg_quick_egress``. That is what makes this transport the one a node with a hop can
-    # offer its friends (M25, proven end to end on a real leaf), and it fails closed: with
+    # offer its users (M25, proven end to end on a real leaf), and it fails closed: with
     # the hop down the connection cannot be opened from that address at all.
     datapath=Datapath.RE_ORIGINATING,
 )

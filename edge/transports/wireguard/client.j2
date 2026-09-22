@@ -1,7 +1,7 @@
 {#
-  One friend's plain WireGuard configuration.
+  One user's plain WireGuard configuration.
 
-  WHAT: the file a friend imports — their own keypair, this node as the single peer.
+  WHAT: the file a user imports — their own keypair, this node as the single peer.
   WHY:  a file rather than a link, because this protocol family's configuration IS a
         file. It reaches them through the second subscription format (items 26 and 27).
   HOW:  rendered by render.py's ``render_client_config``.
@@ -9,12 +9,12 @@
   Two things differ from server.j2, and both are deliberate:
 
   * **AllowedIPs is the whole internet here.** On a node the field is an authorisation
-    list and must name exactly one peer's address; on a friend's device the point of the
+    list and must name exactly one peer's address; on a user's device the point of the
     transport is that everything leaves through the node. Same field, opposite answer,
     because the consumer is different. Both families, including the one no node in this
     fleet can carry — ``edge/egress.py``'s ``CLIENT_ROUTES`` is where that is argued.
   * **No ListenPort.** A client dials; it does not wait to be found. Pinning a source
-    port would also make a friend's traffic easier to correlate across networks.
+    port would also make a user's traffic easier to correlate across networks.
 #}
 # hashi — generated for one device. Re-import after any rotation; the link never moves.
 #
@@ -42,7 +42,7 @@ DNS = {{ resolvers | join(", ") }}
 {% endif %}
 
 [Peer]
-# The node. One peer, never a list: a friend's device talks to the exit it was given.
+# The node. One peer, never a list: a user's device talks to the exit it was given.
 PublicKey = {{ params.public_key }}
 PresharedKey = {{ peer.preshared_key }}
 # Everything, in both families, and the second family is the deliberate half. This node's

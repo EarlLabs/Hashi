@@ -1,7 +1,7 @@
 {#
-  One friend's AmneziaWG configuration, in wg-quick's INI format.
+  One user's AmneziaWG configuration, in wg-quick's INI format.
 
-  WHAT: the file a friend imports into their client — their own keypair, the node as
+  WHAT: the file a user imports into their client — their own keypair, the node as
         the single peer, and the obfuscation values that make this AmneziaWG.
   WHY:  this is the sketch the backlog carried as item 25 and could not build. The
         charter calls "how does a protocol with no URI form reach a phone in one link"
@@ -20,13 +20,13 @@
 
   * **AllowedIPs is the whole internet here.** On the entry-to-leaf hop a wide route
     would hand the far end the right to source traffic as any address and would pull
-    the node's own SSH session into the tunnel. On a friend's device the whole point
+    the node's own SSH session into the tunnel. On a user's device the whole point
     is that everything leaves through the node, so the full route is the correct
     value — the same field, an opposite answer, because the consumer is different.
     Both families, including the one no node in this fleet can carry —
     ``edge/egress.py``'s ``CLIENT_ROUTES`` is where that is argued.
   * **No ListenPort.** A client dials; it does not wait to be found. Pinning a source
-    port would also make the friend's traffic easier to correlate across networks.
+    port would also make the user's traffic easier to correlate across networks.
 #}
 # hashi — generated for one device. Re-import after any rotation; the link never moves.
 [Interface]
@@ -62,7 +62,7 @@ H3 = {{ params.underload_packet_magic_header }}
 H4 = {{ params.transport_packet_magic_header }}
 
 [Peer]
-# The node. One peer, never a list: a friend's device talks to the exit it was given.
+# The node. One peer, never a list: a user's device talks to the exit it was given.
 PublicKey = {{ params.public_key }}
 PresharedKey = {{ peer.preshared_key }}
 # Everything, in both families, and the second family is the deliberate half. This node's

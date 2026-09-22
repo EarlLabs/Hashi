@@ -31,7 +31,7 @@ HOW:  against the REAL rendered configs — the golden files, which are what thi
       deliberately separate modules — the same rule ``render.py`` keeps — and a test that
       only knew about one of them would let the other rot.
 
-      Boundary: nothing here says a friend's packets move. What this establishes is that
+      Boundary: nothing here says a user's packets move. What this establishes is that
       the daemon holds the authorisation list we gave it, which is strictly more than
       "something holds the port" and strictly less than a handshake — and a handshake is
       refused on the charter's own grounds (``edge.health.listening``).
@@ -147,7 +147,7 @@ def test_an_interface_holding_somebody_elses_peer_is_not_serving(package, golden
 def test_one_missing_peer_out_of_two_is_not_serving(package, golden) -> None:
     """Half an authorisation list is not an authorisation list.
 
-    A node holding one of two friends is a node where one person's client handshakes
+    A node holding one of two users is a node where one person's client handshakes
     into nothing while every screen is green — which is the same fault as the walk's,
     scaled down to the size nobody notices.
     """
@@ -188,7 +188,7 @@ def test_a_peer_we_did_not_render_is_not_this_questions_business(package, golden
 def test_a_config_that_authorises_nobody_is_serving_once_its_interface_is_up(
     package, golden
 ) -> None:
-    """A transport enabled on a node with no friends on it yet is not broken.
+    """A transport enabled on a node with no users on it yet is not broken.
 
     The interface existing is all there is to check, and this is the one case where this
     answer is no stronger than that. Refusing it would make an empty pool read as an

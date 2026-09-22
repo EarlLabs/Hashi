@@ -115,7 +115,7 @@ def reads(answer: ServingAnswer, config: str) -> bool | None:
     the state a data plane whose ``up`` did nothing successfully leaves behind for ever.
 
     A config that authorises NOBODY is serving as soon as its interface exists — a node
-    whose transport has no friends on it yet is not broken, and refusing it would make an
+    whose transport has no users on it yet is not broken, and refusing it would make an
     empty pool read as an outage. That is the one case where this answer is no stronger
     than "the interface is there", and it is honest: there is nothing else to check.
     """

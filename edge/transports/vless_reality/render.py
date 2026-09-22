@@ -1,7 +1,7 @@
 """Pure rendering for VLESS + Reality.
 
 WHAT: ``render_server`` (the node's Xray config) and ``render_client`` (one
-      friend's subscription entry).
+      user's subscription entry).
 WHY:  both are pure functions of their arguments — no clock, no randomness, no
       network, no database. That is what makes the golden-file tests meaningful
       and configuration drift on a node detectable by plain comparison.
@@ -38,13 +38,13 @@ def render_server(
     inbound carries every authorised client in one list: that is precisely why
     revocation has to re-render and re-push the node rather than only delete a
     database row. An empty sequence renders a valid config that authorises
-    nobody — the correct state for a node with no friends assigned yet, and not
+    nobody — the correct state for a node with no users assigned yet, and not
     an error.
 
-    ``egress`` and ``exit_via`` together say which way out a friend's traffic takes. This
+    ``egress`` and ``exit_via`` together say which way out a user's traffic takes. This
     transport renders no forwarding or NAT rule for either, and that is a statement about
     the protocol rather than an omission: Xray is a userspace proxy — it terminates a
-    connection and ORIGINATES a new one from the node itself, so no packet of a friend's
+    connection and ORIGINATES a new one from the node itself, so no packet of a user's
     is ever forwarded by the kernel and there is nothing for a FORWARD or NAT rule to act
     on. What decides where that new connection goes is the address it is opened FROM, and
     that is the outbound's business — M3.
@@ -52,24 +52,24 @@ def render_server(
     So on an entry node with a hop (``Egress.HOP`` plus the hop's near address) the config
     carries exactly ONE outbound, bound to that address. There is no second outbound to
     fall back to, which is decision 3 expressed structurally: when the hop is down the
-    connection cannot be opened, and a friend gets no exit rather than a Russian one.
+    connection cannot be opened, and a user gets no exit rather than a Russian one.
     With no hop the way out is unchanged — this node's own route, bound to nothing — and
-    only what a friend may ASK for is narrower since M23's tenth round.
+    only what a user may ASK for is narrower since M23's tenth round.
 
-    M16 is the part of that ``sendThrough`` cannot reach. A friend's client sends a NAME,
+    M16 is the part of that ``sendThrough`` cannot reach. A user's client sends a NAME,
     and the outbound resolves it before it dials — left alone, through the host's own
     resolver, which on an entry node is on the near side of the hop. So under a hop the
     config also carries the resolver on the node's record (``node.resolver``) and routes
     the lookup out through the same outbound as the traffic; a node with a hop and no
     resolver is refused rather than rendered with the host's (``edge/egress.py``).
 
-    And M23's ninth round is the part NEITHER of them reaches: where a friend's traffic may
+    And M23's ninth round is the part NEITHER of them reaches: where a user's traffic may
     GO. Both of those settings are about this node's own side of a connection, and a proxy
-    dials whatever it is asked for — so a friend on an entry node could name the leaf's
+    dials whatever it is asked for — so a user on an entry node could name the leaf's
     address on the hop and be answered by its SSH daemon, having reached it from the one
     address that leaf's peer entry trusts. Nothing this node forwards is on that path, so
     the refusal is a routing rule here and not a firewall rule anywhere: the config refuses
-    every destination off the public internet (``NOT_THE_INTERNET``) for the friend-facing
+    every destination off the public internet (``NOT_THE_INTERNET``) for the user-facing
     inbound alone, which is what leaves M16's own lookups untouched.
 
     M23's tenth round is that refusal made true rather than nearly true, and it is why this
@@ -91,7 +91,7 @@ def render_server(
         # ``sendThrough`` cannot reach: it binds the connection, not the lookup before it.
         # ``None`` with no hop; refused, never defaulted, on a node with one.
         resolver=lookup_resolver(egress, node.resolver),
-        # What a friend may NOT ask this node to dial — M23's ninth round, and the mirror
+        # What a user may NOT ask this node to dial — M23's ninth round, and the mirror
         # of the finding a kernel tunnel closed in its own firewall rules. ``edge.egress``
         # owns the list and both kinds of data plane read that one copy; what differs is
         # only how each expresses it, which is why the rule itself is in this package's
@@ -100,7 +100,7 @@ def render_server(
         refused=NOT_THE_INTERNET,
         clients=[
             # `email` in an Xray client entry is a label, and Xray uses it in
-            # statistics and log lines. It gets the friend's OPAQUE subject, never
+            # statistics and log lines. It gets the user's OPAQUE subject, never
             # a nickname or an address — the label must not become a record of who
             # connected. It is derived, not passed in, so no caller can smuggle
             # identifying text into it.
@@ -115,7 +115,7 @@ def render_client(
     params: Mapping[str, object],
     credential: Credential,
 ) -> ClientEntry:
-    """One friend's client entry for this node, as a finished VLESS URI.
+    """One user's client entry for this node, as a finished VLESS URI.
 
     Returned WITHOUT a display fragment: appending one is `control`'s half of the
     contract, because the fragment is a property of the subscription format that
@@ -140,7 +140,7 @@ def render_client(
     entry = f"vless://{credential.subject}@{node.address}:{params['port']}?{query}"
     return ClientEntry(
         entry=entry,
-        # The node's operator-chosen name, not the protocol's. A friend picking an
+        # The node's operator-chosen name, not the protocol's. A user picking an
         # exit in their client should read "leaf-ams-1", not "vless-reality".
         display_label=node.display_name,
         country_label=node.location_label,

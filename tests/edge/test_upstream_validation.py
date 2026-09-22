@@ -27,8 +27,8 @@ from edge.registry import ConfigFormat, SubscriptionFormat, discover, profile
 
 INSTALLED = sorted(discover())
 
-# Transports that serialise a friend's material into a config FILE (item 26). Their
-# friend-facing artefact goes through the same upstream checker as their server config.
+# Transports that serialise a user's material into a config FILE (item 26). Their
+# user-facing artefact goes through the same upstream checker as their server config.
 CONFIG_FILE_TRANSPORTS = sorted(
     name
     for name, meta in discover().items()
@@ -94,7 +94,7 @@ def test_upstream_accepts_the_rendered_server_config(
 
 @pytest.mark.parametrize("name", INSTALLED)
 def test_upstream_accepts_a_config_with_no_clients(name: str, node, request, tmp_path) -> None:
-    """A node whose last friend was just revoked must still be a valid node.
+    """A node whose last user was just revoked must still be a valid node.
 
     Otherwise the final revocation produces a config the daemon refuses, the node
     fails to restart, and the symptom is an outage for everyone still on it.
@@ -110,12 +110,12 @@ def test_upstream_accepts_a_config_with_no_clients(name: str, node, request, tmp
 
 
 @pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
-def test_upstream_accepts_a_friends_config_file(name: str, node, request, tmp_path) -> None:
-    """Item 26, S2: the file a FRIEND imports is accepted by the upstream tool.
+def test_upstream_accepts_a_users_config_file(name: str, node, request, tmp_path) -> None:
+    """Item 26, S2: the file a USER imports is accepted by the upstream tool.
 
     Separate from the server-config test above and not redundant with it. The two files
     share a format and almost nothing else: the client's has no ListenPort, carries the
-    friend's own key rather than the node's, routes everything rather than one host, and
+    user's own key rather than the node's, routes everything rather than one host, and
     may carry a DNS line the server's never does. Every one of those is a place a
     hand-written template can be wrong in a way that parses.
 
@@ -130,7 +130,7 @@ def test_upstream_accepts_a_friends_config_file(name: str, node, request, tmp_pa
 
     result = validate(rendered.content, config_format=transport.meta.config_format)
     assert result.ok, (
-        f"{name}: the upstream tool rejected a friend's config file\n{result.output}"
+        f"{name}: the upstream tool rejected a user's config file\n{result.output}"
     )
 
 

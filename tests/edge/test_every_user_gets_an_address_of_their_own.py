@@ -1,15 +1,15 @@
 """One tunnel, one address each — M17.1a.
 
 WHAT: the arithmetic in ``edge/addressing.py``, the rule both WireGuard-family
-      packages gained with it — a resolver written into a friend's config may not be an
+      packages gained with it — a resolver written into a user's config may not be an
       address inside the tunnel itself — and the refusal underneath all of it: two peers
       holding one address are refused at render, in each package.
 WHY:  a WireGuard-family transport used to hold ONE ``peer_tunnel_address``, so it
-      served one friend and the second was refused at render (``AmbiguousPeerRoute``,
+      served one user and the second was refused at render (``AmbiguousPeerRoute``,
       found in the field). The refusal is right and is unchanged by this milestone —
       and it is pinned here, in each package, because it is the one property with a
-      victim: what it prevents is one friend's return traffic arriving at another
-      friend's device. What these tests add around it is where the second address comes
+      victim: what it prevents is one user's return traffic arriving at another
+      user's device. What these tests add around it is where the second address comes
       from, and that the first one is still byte-for-byte the address the renderers
       already fall back to — a transport enabled before M17 must render the same bytes
       afterwards.
@@ -69,8 +69,8 @@ def test_every_kernel_tunnel_says_each_user_needs_an_address_of_their_own() -> N
 #
 # ``AllowedIPs`` is WireGuard's authorisation list AND its routing table, so two peers
 # holding one address is not a duplicate the daemon merges — the later peer silently
-# takes over the earlier one's route. Rendered, that is one friend's return traffic
-# arriving at another friend's device, with nothing anywhere saying so and both devices
+# takes over the earlier one's route. Rendered, that is one user's return traffic
+# arriving at another user's device, with nothing anywhere saying so and both devices
 # still looking configured. Each package refuses it at render (``AmbiguousPeerRoute``),
 # and the pool this milestone adds exists so that it never has to fire. These are the tests that
 # keep it firing: they are asked of every kernel tunnel, so a package cannot lose the
@@ -83,7 +83,7 @@ def _holding(credential: Credential, name: str, address: str | None) -> Credenti
     ``None`` is the pre-M17 shape rather than a broken credential: before this milestone
     nothing minted a per-peer address, so every credential on a row fell back to the
     single address in ``params``. That is the state the refusal was found in, in the
-    field, on the second friend.
+    field, on the second user.
     """
     secrets = {key: value for key, value in credential.secrets.items() if key != name}
     if address is not None:
@@ -120,7 +120,7 @@ def test_two_peers_holding_one_address_are_refused_rather_than_rendered(
 def test_two_peers_with_no_address_of_their_own_collide_on_the_one_in_params(
     name: str, node, request
 ) -> None:
-    """The field failure verbatim: a pre-pool row, a second friend, no allocation.
+    """The field failure verbatim: a pre-pool row, a second user, no allocation.
 
     Nothing here is malformed — this is what every credential on a row enabled before
     M17 looks like — which is exactly why the renderer has to be the one to refuse it.
@@ -150,7 +150,7 @@ def test_two_peers_from_one_pool_render_two_routes_of_their_own(
     """The other half, without which a package could pass by refusing everything.
 
     A refusal that fires on two peers whatever their addresses would be a transport
-    serving one friend — the state M17 exists to leave behind — and the test above
+    serving one user — the state M17 exists to leave behind — and the test above
     could not tell the difference.
     """
     transport = profile(name)

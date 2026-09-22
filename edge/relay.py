@@ -4,9 +4,9 @@ WHAT: ``render_hop`` — given the two ends of a node-to-node tunnel, the config
       each end must run so that traffic arriving at the entry node leaves through the
       leaf node.
 WHY:  this is the topology the charter is built on: a Russian ENTRY node fronts foreign
-      LEAF nodes, and friends only ever dial the entry. Everything the fleet promises
+      LEAF nodes, and users only ever dial the entry. Everything the fleet promises
       about survivability rests on that hop existing — a blocked leaf is replaced by
-      re-pointing one hop, with no friend touching their device, and the entry is the
+      re-pointing one hop, with no user touching their device, and the entry is the
       only address a Russian network ever sees.
 HOW:  a hop is symmetric data, not a special protocol. Each end is an ordinary
       transport configuration in which the OTHER end is the single authorised peer, so
@@ -176,7 +176,7 @@ def _check(transport_name: str, entry: HopEnd, leaf: HopEnd) -> None:
     if near.version != 4:
         # Checked here, before either end is rendered, because since M3 a hop is not two
         # tunnels but a relay: the leaf forwards and masquerades what arrives over it and
-        # the entry routes its friends into it, and both of those are IPv4 rules (see
+        # the entry routes its users into it, and both of those are IPv4 rules (see
         # ``edge/egress.py``). Rendering would raise from inside a transport instead —
         # which reaches the operator as "this node could not be rendered" rather than as
         # "this hop cannot carry traffic", and only after the pair was accepted.
@@ -190,7 +190,7 @@ def _peer(end: HopEnd, *, endpoint: str | None) -> Credential:
     """Describe one end as the other end's single authorised peer.
 
     A ``Credential`` because that is the contract's word for "one consumer of this
-    transport", and on this hop the consumer is a node rather than a friend. The
+    transport", and on this hop the consumer is a node rather than a user. The
     contract does not need to know the difference — which is the debt from M1 being
     paid: the transport contract survived a family that has no URI form.
 
@@ -219,23 +219,23 @@ def render_hop(
     and now M3. The two ends are not symmetric and neither answer is the safe default:
 
     * the LEAF forwards what arrives over the hop and masquerades it out of its own
-      route. That is the exit — the foreign address a friend's traffic is supposed to
+      route. That is the exit — the foreign address a user's traffic is supposed to
       appear from, and the whole point of the topology. ``Egress.RELAY`` and not
       ``LOCAL`` since M23's fifth walk, and the distinction is the whole of that
-      finding's fix: a friend's own tunnel may reach the internet and nothing else this
+      finding's fix: a user's own tunnel may reach the internet and nothing else this
       node is attached to, while what arrives over a hop is another NODE's traffic —
       including its own lookups, which M16 lets a record point at a private resolver on
-      this side. One value asked to mean both would either leave a friend reaching the
+      this side. One value asked to mean both would either leave a user reaching the
       entry or take the hop's own lookups away. It renders exactly the bytes this end
       has always rendered;
     * the ENTRY does the opposite. It masquerades nothing: a packet arriving over this
       hop is a reply for a connection the entry's own proxy opened, and nothing of a
-      friend's may leave the entry by the entry's own route. What it renders instead is
+      user's may leave the entry by the entry's own route. What it renders instead is
       the way OUT — a source-routed path through this tunnel, taken only by traffic
       already sourced from the tunnel's own address (``edge/egress.py``).
 
     Making either the caller's decision would mean one wrong argument, anywhere,
-    reproduces the failure this project is most afraid of: a friend in Russia exiting in
+    reproduces the failure this project is most afraid of: a user in Russia exiting in
     Russia while the panel shows two active nodes and a live hop.
     """
     _check(transport_name, entry, leaf)
@@ -257,7 +257,7 @@ def render_hop(
 
 
 def exit_via(entry: HopEnd) -> str:
-    """The address on the ENTRY node that friend traffic leaves through.
+    """The address on the ENTRY node that user traffic leaves through.
 
     The entry's own tunnel address without its prefix. A connection opened from it can
     only reach the internet through the hop, and while the hop is down it cannot be

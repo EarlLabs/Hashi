@@ -29,10 +29,10 @@ def render_server(
 ) -> str:
     """The node's complete Xray config, authorising exactly ``clients``.
 
-    ``egress`` and ``exit_via`` together say which way out a friend's traffic takes. This
+    ``egress`` and ``exit_via`` together say which way out a user's traffic takes. This
     transport renders no forwarding or NAT rule for either, and that is a statement about
     the protocol rather than an omission: Xray is a userspace proxy — it terminates a
-    connection and ORIGINATES a new one from the node itself, so no packet of a friend's
+    connection and ORIGINATES a new one from the node itself, so no packet of a user's
     is ever forwarded by the kernel and there is nothing for a FORWARD or NAT rule to act
     on. What decides where that new connection goes is the address it is opened FROM, and
     that is the outbound's business — M3.
@@ -40,20 +40,20 @@ def render_server(
     So on an entry node with a hop (``Egress.HOP`` plus the hop's near address) the config
     carries exactly ONE outbound, bound to that address. There is no second outbound to
     fall back to, which is decision 3 expressed structurally: when the hop is down the
-    connection cannot be opened, and a friend gets no exit rather than a Russian one.
+    connection cannot be opened, and a user gets no exit rather than a Russian one.
     With no hop the way out is unchanged — this node's own route, bound to nothing — and
-    only what a friend may ASK for is narrower since M23's tenth round.
+    only what a user may ASK for is narrower since M23's tenth round.
 
     M16 is the part of that ``sendThrough`` cannot reach, and it is the first transport's
-    reasoning unchanged: a friend's client sends a NAME, the outbound resolves it before it
+    reasoning unchanged: a user's client sends a NAME, the outbound resolves it before it
     dials, and under a hop that lookup goes through the hop to the resolver on the node's
     record (``node.resolver``) — or the node is refused, never given the host's resolver.
 
     M23's ninth and tenth rounds are the first transport's reasoning unchanged too: a proxy
     dials whatever it is asked for, so this config refuses every destination off the public
-    internet (``NOT_THE_INTERNET``) for the friend-facing inbound alone — on a leaf as much
+    internet (``NOT_THE_INTERNET``) for the user-facing inbound alone — on a leaf as much
     as on an entry, and by the destination's resolved ADDRESS rather than by the name a
-    friend happened to send. The list is ``edge.egress``'s one copy, shared with the kernel
+    user happened to send. The list is ``edge.egress``'s one copy, shared with the kernel
     tunnels that drop the same ranges; the rule expressing it is this package's, in its own
     template.
     """
@@ -67,7 +67,7 @@ def render_server(
         # Where the names in those connections are looked up — M16. ``None`` with no hop;
         # refused, never defaulted, on a node with one. See ``edge/egress.py``.
         resolver=lookup_resolver(egress, node.resolver),
-        # What a friend may NOT ask this node to dial — M23's ninth round, and the mirror
+        # What a user may NOT ask this node to dial — M23's ninth round, and the mirror
         # of the finding a kernel tunnel closed in its own firewall rules. ``edge.egress``
         # owns the list and both kinds of data plane read that one copy; what differs is
         # only how each expresses it, which is why the rule itself is in this package's
@@ -88,7 +88,7 @@ def render_client(
     params: Mapping[str, object],
     credential: Credential,
 ) -> ClientEntry:
-    """One friend's client entry, as a finished VLESS-over-WebSocket URI."""
+    """One user's client entry, as a finished VLESS-over-WebSocket URI."""
     query = urlencode(
         {
             "encryption": "none",

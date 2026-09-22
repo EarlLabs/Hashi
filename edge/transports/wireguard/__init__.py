@@ -17,10 +17,10 @@ that cannot be ignored:
 * ``blocked_by_inspection=True`` — WireGuard's handshake has a fixed, trivially
   fingerprinted shape with no camouflage at all. A network that inspects traffic
   identifies it on the first packet. Declared machine-readably so the panel can refuse
-  to offer it to a friend as a working exit, rather than leaving that to whoever
+  to offer it to a user as a working exit, rather than leaving that to whoever
   remembers the charter.
 
-Where it is used is a friend's link to an exit abroad, over a network that is not
+Where it is used is a user's link to an exit abroad, over a network that is not
 filtering — and, being a WireGuard-family transport, it reaches them as a config FILE
 rather than a URI, through the second subscription format (items 26 and 27).
 """

@@ -124,9 +124,9 @@ def test_the_entry_routes_everything_into_the_hop_and_installs_no_route(
 ) -> None:
     """The entry's half is the opposite, and both halves of that are load-bearing — M3.
 
-    ``AllowedIPs`` is WireGuard's crypto-routing table: a friend's packet is encrypted to
+    ``AllowedIPs`` is WireGuard's crypto-routing table: a user's packet is encrypted to
     a peer only if that peer's list covers the DESTINATION, and the reply is accepted only
-    if it covers the SOURCE. So an entry whose exit is the far end cannot route a friend
+    if it covers the SOURCE. So an entry whose exit is the far end cannot route a user
     anywhere with the narrow form — the interface drops the packet, and nothing logs it.
 
     What made a wide list dangerous is the ROUTE wg-quick derives from it, which would put
@@ -161,7 +161,7 @@ def test_the_hop_never_names_a_node_in_a_way_a_person_could_be_read_from(
 def test_the_way_out_is_the_entrys_own_tunnel_address(
     entry_node, leaf_node, amneziawg_params
 ) -> None:
-    """The address a friend's traffic leaves the entry through, without the prefix.
+    """The address a user's traffic leaves the entry through, without the prefix.
 
     The ENTRY's, not the leaf's, and that is M3's one correction to its own plan: nothing
     listens at the leaf's in-tunnel address for the entry to dial. What the leaf offers is
@@ -220,7 +220,7 @@ def test_mismatched_preshared_keys_are_refused(
 def test_both_ends_of_a_hop_still_carry_the_one_key_they_agree_on(
     entry_node, leaf_node, amneziawg_params
 ) -> None:
-    """M23 gave every friend a pre-shared key of their own; a hop must not get two.
+    """M23 gave every user a pre-shared key of their own; a hop must not get two.
 
     The peer at each end of a hop is a NODE, and its pre-shared key is declared at node
     scope and ``shared_between_peers`` precisely because two independently minted values

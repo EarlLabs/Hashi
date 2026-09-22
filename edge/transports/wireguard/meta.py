@@ -11,7 +11,7 @@ this one at all.
 package is the second member of the WireGuard family; having two is what proves the
 charter's rule that transports are data, because a family with one member cannot catch
 `control` learning its name. What stopped is being suggested, and nothing else: a node
-that already runs it renders exactly the bytes it rendered before, and the friend whose
+that already runs it renders exactly the bytes it rendered before, and the user whose
 device holds that configuration keeps it.
 """
 
@@ -71,7 +71,7 @@ META = TransportMeta(
             # second end to agree with, because there is never a second end.
             shared_between_peers=False,
         ),
-        # Per-friend material. Deleting this row is what makes a revocation total for
+        # Per-user material. Deleting this row is what makes a revocation total for
         # this transport: no copy of it authorises anyone anywhere else.
         KeySpec(
             name="peer_private_key",
@@ -80,22 +80,22 @@ META = TransportMeta(
             public_name="peer_public_key",
         ),
         # WireGuard's pre-shared key is a property of a PAIR, and until M23 this transport
-        # declared only the node-scoped one above — so every friend on a node was handed
+        # declared only the node-scoped one above — so every user on a node was handed
         # the identical value. Read off the real leaf: two PresharedKey lines in the node's
-        # config, one distinct value. One friend's leaked file therefore exposed the
-        # symmetric layer protecting every other friend's handshake on that node, and
-        # revoking that friend rotated nothing.
+        # config, one distinct value. One user's leaked file therefore exposed the
+        # symmetric layer protecting every other user's handshake on that node, and
+        # revoking that user rotated nothing.
         #
         # The same shape M17 gave the tunnel address one field over: CLIENT scope means
-        # "one per consumer", so `control` mints it per (friend, node, transport) with no
+        # "one per consumer", so `control` mints it per (user, node, transport) with no
         # knowledge of what it is for, and dropping that row is what makes a revocation
         # total.
         #
         # The node-scoped key above stays rather than being deleted, and on this transport
         # it now has exactly one job: it is what ``render_server`` falls back to for a
-        # credential minted before this declaration existed, so a node whose friends hold
+        # credential minted before this declaration existed, so a node whose users hold
         # older files keeps authorising them until they are re-issued. Removing it would
-        # cut those friends off at the next apply.
+        # cut those users off at the next apply.
         KeySpec(
             name="peer_preshared_key",
             kind=KeyKind.SYMMETRIC_32_BASE64,
@@ -115,18 +115,18 @@ META = TransportMeta(
     # written.
     hop_capable=False,
     # And the second: identifiable on the wire, by design. It has no camouflage — that
-    # is what AmneziaWG exists for — so the panel must never present it to a friend as a
+    # is what AmneziaWG exists for — so the panel must never present it to a user as a
     # working exit from a filtering network.
     blocked_by_inspection=True,
-    # Every friend on this transport holds a tunnel address of their own, drawn from the
+    # Every user on this transport holds a tunnel address of their own, drawn from the
     # room inside the interface's own address. AllowedIPs is this protocol's
-    # authorisation list AND its routing table, so two friends on one address is not a
+    # authorisation list AND its routing table, so two users on one address is not a
     # duplicate the daemon merges — it is the second silently taking over the first's
     # return path, which ``render_server`` refuses rather than renders. This transport is
     # never on a hop (``hop_capable`` is False), so its consumers are always people.
     peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
     # The same kernel data plane as its obfuscated cousin, and the same consequence: its
-    # ``render_server`` expresses egress through ``egress.wg_quick_egress``, so friends on
+    # ``render_server`` expresses egress through ``egress.wg_quick_egress``, so users on
     # a node that dials a hop may not be on this transport either (M25). Declared here as
     # well as there, rather than shared between the two: a family is two packages that
     # agree separately, and a fact stated once for both would be the branch on a family

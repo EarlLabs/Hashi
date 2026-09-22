@@ -1,9 +1,9 @@
-"""A friend's lookups leave through the hop, like their traffic — M16.
+"""A user's lookups leave through the hop, like their traffic — M16.
 
-WHAT: what an entry node's friend-facing proxy renders about name resolution once that
+WHAT: what an entry node's user-facing proxy renders about name resolution once that
       node has a hop, and what every node without one goes on rendering: nothing at all.
 WHY:  M3 moved the exit abroad and left the lookup behind. ``sendThrough`` binds the
-      connection, not the resolution that comes before it, so every destination a friend
+      connection, not the resolution that comes before it, so every destination a user
       asked for was still resolved by the entry host's own resolver — inside the network
       the hop exists to leave — while the exit address looked exactly right. As invisible
       as M3's own failure: pages load, the exit is abroad, and the list of names never
@@ -41,7 +41,7 @@ from edge.egress import (
 from edge.registry import ConfigFormat, discover, profile
 
 # The transports whose data plane terminates a connection and opens a new one — the only
-# kind that resolves a friend's destination itself. Derived as the M3 file derives it, so
+# kind that resolves a user's destination itself. Derived as the M3 file derives it, so
 # a proxy added later is held to this by arriving.
 PROXIES = sorted(
     name
@@ -56,7 +56,7 @@ HOP_ADDRESS = "10.44.0.1"
 
 # A resolver that is ON THE INTERNET, which every other address in this zone's fixtures
 # deliberately is not: the documentation ranges (RFC 5737) the rulebook mandates are all
-# addresses a friend's tunnel now drops, so a test that wanted "a resolver needing no
+# addresses a user's tunnel now drops, so a test that wanted "a resolver needing no
 # exception" could not use one. This is the deprecated 6to4 relay anycast block — still
 # reserved, so it is nobody's host, and still globally routable, so the rules carry it
 # without an exception. The test below asserts that rather than trusting this comment.
@@ -97,7 +97,7 @@ def test_the_lookup_is_asked_of_the_resolver_on_the_nodes_record(
 
 
 # Xray's outbound that opens no connection at all. Since M23's ninth round a config with
-# a hop carries one, to refuse the destinations a friend's traffic may not reach — see
+# a hop carries one, to refuse the destinations a user's traffic may not reach — see
 # ``tests/edge/test_a_proxy_dials_the_internet_and_not_its_own_neighbourhood.py``. It is
 # named here because the assertion below is about outbounds that RESOLVE a name, and this
 # one resolves nothing because it dials nothing.
@@ -113,7 +113,7 @@ def test_the_outbound_resolves_through_it_rather_than_through_the_host(
     Without it the outbound is ``AsIs``: it hands the NAME to the host's resolver and the
     ``dns`` object is never consulted — which is the config M3 shipped, with a resolver
     pasted on top. Checked on every outbound that opens one, because the one without it is
-    the one a friend's names leak through.
+    the one a user's names leak through.
 
     The blackhole is excluded and its exclusion is asserted rather than skipped past: it
     dials nothing, so a resolution strategy on it would be a key that reads as a decision
@@ -194,13 +194,13 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     record changes none of them. There the lookup and the exit already leave one host by
     one route, so there is nothing to move.
 
-    The NODE's config, and since M23 that qualifier is load-bearing: a friend's own
-    configuration file on such a node DOES change with the record, because a friend's
+    The NODE's config, and since M23 that qualifier is load-bearing: a user's own
+    configuration file on such a node DOES change with the record, because a user's
     device has no route to its usual resolver once the tunnel routes every address. That
-    is ``tests/edge/test_a_friend_can_resolve_a_name.py``, and the two claims are about
+    is ``tests/edge/test_a_user_can_resolve_a_name.py``, and the two claims are about
     two different files.
 
-    ONE EXCEPTION, added by M23's fifth round and narrower than it sounds: a friend's
+    ONE EXCEPTION, added by M23's fifth round and narrower than it sounds: a user's
     tunnel now carries only what is on the internet, so a resolver that is NOT — a
     private one, which the record is allowed to name — has to be let through by name in
     the node's own rules. A resolver on the internet needs no such rule and changes
@@ -209,7 +209,7 @@ def test_a_node_with_no_hop_renders_the_same_bytes_with_or_without_a_resolver(
     (``tests/edge/test_a_tunnel_carries_traffic_off_the_node.py``).
     """
     assert ipaddress.ip_address(A_RESOLVER_ON_THE_INTERNET).is_global, (
-        "this test's resolver must be one the friend-facing rules carry with no "
+        "this test's resolver must be one the user-facing rules carry with no "
         "exception of its own, or it proves nothing about the bytes"
     )
     on_the_internet = dataclasses.replace(node, resolver=A_RESOLVER_ON_THE_INTERNET)

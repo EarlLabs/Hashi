@@ -10,7 +10,7 @@ WHY:  the charter's fourth success criterion is that a brand-new protocol is one
       developers edit it at once.
 
       Everything in this module exists so that `control` can create nodes, mint
-      key material, render subscriptions and revoke friends **without ever
+      key material, render subscriptions and revoke users **without ever
       learning a protocol's name**. Every value `control` reads from here is
       either opaque text it passes through, or a member of a small closed
       vocabulary (``KeyKind``) that says nothing about which protocol asked.
@@ -45,7 +45,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
 
       ``PeerAddress`` came with M17, found in the field: a transport whose data plane
       identifies each consumer BY ADDRESS needs one address per user, and had one
-      parameter for all of them — so it served exactly one friend against a charter
+      parameter for all of them — so it served exactly one user against a charter
       scale of ~30-50. A transport now declares that each consumer needs an address of
       its own, and where the room for them comes from; `control` allocates, and
       ``edge/addressing.py`` does the arithmetic. Optional, defaulting to ``None``, so
@@ -64,12 +64,12 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
       ``Datapath`` came with M25, and is the one that was already load-bearing before it
       was written down: ``egress.py`` has expressed the same split as two functions since
       M14, and nothing declared which of them a transport uses — so `control` accepted a
-      kernel tunnel for the friends of a node that dials a hop, granted every friend a
+      kernel tunnel for the users of a node that dials a hop, granted every user a
       credential on it, handed one of them a complete configuration file, and only the
       apply refused. The same shape as ``PeerAddress`` and ``Retirement``, then: a
       property of one package, derived four surfaces away by everything that needed it,
       until the field measured what that cost. Defaulted to the answer that costs a
-      refusal rather than to the one that costs a friend a dead tunnel, so no existing
+      refusal rather than to the one that costs a user a dead tunnel, so no existing
       ``META`` is made wrong by it and the two that re-originate say so out loud.
 
       ``ServingQuestion`` came with M26's FOURTH acceptance walk, and it is the one
@@ -189,12 +189,12 @@ class ConfigFormat(StrEnum):
 
 
 class SubscriptionFormat(StrEnum):
-    """A shape a friend's client can consume, declared by the transport that produces it.
+    """A shape a user's client can consume, declared by the transport that produces it.
 
     This vocabulary replaces a boolean, and the replacement is the point. "Can this
     transport be expressed in the v1 subscription?" had exactly one answer for every
     transport that is not a URI — *no* — and that answer left AmneziaWG's
-    friend-facing form unbuildable rather than merely undelivered (backlog item 25,
+    user-facing form unbuildable rather than merely undelivered (backlog item 25,
     blocked since 2026-08-01, and the charter's largest open question in phase 1).
 
     A closed vocabulary rather than free-form strings, for the same reason as
@@ -208,7 +208,7 @@ class SubscriptionFormat(StrEnum):
     # (charter amendment A). Serialised by ``render_client`` into a ``ClientEntry``.
     V1_URI_LIST = "v1-uri-list"
 
-    # A complete configuration file the friend's client imports. Serialised by
+    # A complete configuration file the user's client imports. Serialised by
     # ``render_client_config`` into a ``ClientConfig``.
     #
     # This is the second format the charter calls a product decision rather than an
@@ -247,24 +247,24 @@ class Datapath(StrEnum):
     it can send out through a hop.
 
     The only respect in which `control` has to know: a node that dials one gives its
-    friends ``Egress.HOP``, and one kind of data plane can honour that for somebody
+    users ``Egress.HOP``, and one kind of data plane can honour that for somebody
     else's packets while the other cannot.
 
     M25, measured on the owner's real Amsterdam leaf. A node that dials a hop gives its
-    friends ``Egress.HOP`` — out through the hop and nowhere else — and the two data
+    users ``Egress.HOP`` — out through the hop and nowhere else — and the two data
     planes this image ships obey that in two incompatible ways. One hands what it
     decrypts to the node's own kernel, and the only way out a kernel tunnel can express
     is a SOURCE ROUTE from the node's own address (``egress.wg_quick_egress``): a
-    friend's packets do not carry that address, so they match no such rule and leave by
-    the node's own route instead. The other terminates the friend's connection and opens
+    user's packets do not carry that address, so they match no such rule and leave by
+    the node's own route instead. The other terminates the user's connection and opens
     its own, which it binds to that same address (``egress.exit_origin``) — and that one
     works, which is what M25's walk proved end to end.
 
     So it is a property OF THE TRANSPORT, declared here, and never a family or a name
     compared in `control` — the rule the whole of this module exists to keep. `control`
-    reads one derived answer, ``TransportMeta.serves_friends_through_a_hop``, and refuses
+    reads one derived answer, ``TransportMeta.serves_users_through_a_hop``, and refuses
     both doors that would otherwise produce a node whose configuration cannot be rendered:
-    enabling such a transport for friends on a node that dials a hop, and giving a hop to
+    enabling such a transport for users on a node that dials a hop, and giving a hop to
     a node that already offers one.
 
     Two members and not a boolean, because these are two KINDS of data plane rather than
@@ -274,7 +274,7 @@ class Datapath(StrEnum):
     policy are exactly these two members, one function each.
     """
 
-    # The node's kernel routes what this tunnel decrypts. It cannot carry a friend's
+    # The node's kernel routes what this tunnel decrypts. It cannot carry a user's
     # traffic out through a hop — see the class docstring, and ``wg_quick_egress``, which
     # refuses to render exactly that rather than emitting a file whose tunnel comes up
     # and whose traffic surfaces in the country the hop exists to leave.
@@ -293,7 +293,7 @@ class Datapath(StrEnum):
     RE_ORIGINATING = "re-originating"
 
 
-# Why a kernel-routed data plane cannot be a friend's way into a hop, in the words an
+# Why a kernel-routed data plane cannot be a user's way into a hop, in the words an
 # operator reads. Declared beside the vocabulary it explains rather than written in
 # `control`, for ``Retirement.reason``'s reason: the fact is about a DATA PLANE, `control`
 # has no way to know it, and the sentence a render refuses with
@@ -304,20 +304,20 @@ class Datapath(StrEnum):
 # It names no protocol and no node, so both doors and both surfaces can print it whole.
 NOT_THROUGH_A_HOP = (
     "its data plane hands what it decrypts to this node's own kernel, and the way out "
-    "through a hop is a source route from the node's OWN address — a friend's packets do "
+    "through a hop is a source route from the node's OWN address — a user's packets do "
     "not carry it, so they would leave by the node's own route instead: an exit in the "
     "country the hop exists to leave, with every screen green."
 )
 
 
 class KeyScope(StrEnum):
-    """Whether a piece of material belongs to a node or to one friend."""
+    """Whether a piece of material belongs to a node or to one user."""
 
-    # Generated once per node × transport, shared by every friend on that node —
+    # Generated once per node × transport, shared by every user on that node —
     # a server private key, for instance.
     NODE = "node"
 
-    # Generated per friend, per node, per transport. This is what makes total
+    # Generated per user, per node, per transport. This is what makes total
     # revocation expressible: drop the row, and nothing elsewhere still works.
     CLIENT = "client"
 
@@ -349,7 +349,7 @@ class KeySpec:
     #
     # Not every generated value is a secret, and treating them alike is wrong in
     # both directions. A Reality short id is minted randomly but travels to every
-    # friend inside their subscription URI, so encrypting it buys nothing and
+    # user inside their subscription URI, so encrypting it buys nothing and
     # makes it unavailable to the client renderer. A WebSocket path secret IS a
     # secret even though it is not a key. So the transport says which, and
     # `control` files each value accordingly.
@@ -365,7 +365,7 @@ class KeySpec:
     # protocol knowledge the contract keeps out of the control plane.
     #
     # Meaningful only at NODE scope and only on a hop (see ``edge/relay.py``); a
-    # friend-facing transport never has a second end to agree with.
+    # user-facing transport never has a second end to agree with.
     shared_between_peers: bool = False
 
 
@@ -393,7 +393,7 @@ class PeerAddress:
 
     Declaring this is what makes the scale expressible. Without it, a data plane that
     routes by address has one address for everybody, and its own renderer refuses the
-    second friend rather than hijacking the first's return path.
+    second user rather than hijacking the first's return path.
     """
 
     name: str
@@ -563,9 +563,9 @@ class TransportMeta:
     # Every subscription format this transport serialises itself into. Declared, not
     # inferred — the S6 requirement from the backlog, now stated as a set rather than
     # as a yes/no: a transport says which shapes it produces, and produces exactly
-    # those. Empty means "nothing a friend can consume", which is a legitimate answer
+    # those. Empty means "nothing a user can consume", which is a legitimate answer
     # for a transport that only ever runs between our own nodes, and `control` refuses
-    # out loud to offer such a transport to friends rather than shipping a
+    # out loud to offer such a transport to users rather than shipping a
     # subscription that is quietly one node short.
     #
     # Defaulting to the v1 URI list rather than to the empty set is deliberate: a new
@@ -612,7 +612,7 @@ class TransportMeta:
     # code, and the property is not "where" but "this protocol looks like itself on the
     # wire". Which networks do the inspecting is the charter's subject, not this file's.
     #
-    # It exists so the panel can refuse to present such a transport to a friend as a
+    # It exists so the panel can refuse to present such a transport to a user as a
     # working exit. Shipping it anyway is deliberate — the charter names it first-class
     # in phase 1, because it is the right choice on a network that is not filtering.
     blocked_by_inspection: bool = False
@@ -628,7 +628,7 @@ class TransportMeta:
     peer_address: PeerAddress | None = None
 
     # What this transport's data plane does with the traffic it decrypts, and therefore
-    # whether a friend on it can be carried out through their node's hop — see
+    # whether a user on it can be carried out through their node's hop — see
     # ``Datapath``, including why the default is the restrictive member.
     #
     # Declared rather than inferred, and that is M25's whole finding: the fact existed
@@ -669,12 +669,12 @@ class TransportMeta:
         Kept as a name of its own, derived rather than stored, because it is the
         question `control` has been asking since item 7 and the answer has not
         changed shape: an entry in the v1 document, or not. What changed is that "not"
-        no longer means "nothing a friend can consume" — see ``subscription_formats``.
+        no longer means "nothing a user can consume" — see ``subscription_formats``.
 
-        NOT "can a friend receive this", which this paragraph used to say it was: delivery
+        NOT "can a user receive this", which this paragraph used to say it was: delivery
         of the second format was backlog item 27 and it has LANDED —
         ``GET /sub/{token}?format=client-config-file`` answers the same bearer token with
-        an archive of that friend's configuration files. The distinction survived the
+        an archive of that user's configuration files. The distinction survived the
         wording that described the world before it: a transport can be undeliverable-by-
         link and perfectly deliverable, and `control` still needs this answer because the
         base64 document is assembled from URIs and nothing else can go in it.
@@ -715,8 +715,8 @@ class TransportMeta:
         return self.hop_capable and self.peer_address is not None
 
     @property
-    def serves_friends_through_a_hop(self) -> bool:
-        """Whether friends on a node whose own way out is a HOP may be offered this.
+    def serves_users_through_a_hop(self) -> bool:
+        """Whether users on a node whose own way out is a HOP may be offered this.
 
         Derived here, once, for ``hop_expressible``'s reason and with a sharper edge: the
         two surfaces that need it are two different services in `control`, and the
@@ -727,7 +727,7 @@ class TransportMeta:
         NOT the same question as ``hop_expressible``, and the difference is whose traffic
         is being asked about. That one is "can this transport BE the hop" — two ends of
         one tunnel network, each with an address of its own — and the WireGuard family is
-        the only thing in this image that can. This one is "can a friend's traffic be
+        the only thing in this image that can. This one is "can a user's traffic be
         carried THROUGH a hop by this transport", and the answer is the exact opposite
         pair: the proxies can, the kernel tunnels cannot. A transport can be either, both
         or neither, which is why they are two properties and not one.
@@ -751,7 +751,7 @@ class TransportMeta:
 
 @dataclass(frozen=True)
 class ClientEntry:
-    """One node × one transport × one friend, serialised by the transport itself.
+    """One node × one transport × one user, serialised by the transport itself.
 
     ``entry`` is finished text. `control` does not parse it, does not rebuild it
     and does not branch on it — see the edge rulebook's *What ``render_client``
@@ -776,7 +776,7 @@ class ClientEntry:
 
 @dataclass(frozen=True)
 class ClientConfig:
-    """One friend's complete configuration FILE, serialised by the transport itself.
+    """One user's complete configuration FILE, serialised by the transport itself.
 
     The second serialisation shape, and the counterpart to ``ClientEntry``: same
     division of labour, different container. ``content`` is finished text — `control`
@@ -812,7 +812,7 @@ class ClientConfig:
 
         A transport is trusted code in this image, so this is not a defence against a
         hostile transport — it is a defence against a plausible mistake. A filename
-        carrying a separator reaches an HTTP header and a friend's filesystem; silently
+        carrying a separator reaches an HTTP header and a user's filesystem; silently
         rewriting it would hide the bug, so it raises where it can still be read.
         """
         if "/" in self.filename or "\\" in self.filename or self.filename in {"", ".", ".."}:
@@ -848,7 +848,7 @@ class ContractViolation(Exception):
     Raised at load time, with the missing symbol named. A declaration that obliges
     nothing is a comment, and the failure it hides is the worst shape available: a
     transport that looks deliverable in the panel and raises ``AttributeError`` deep
-    inside a subscription render, for one friend, at refresh time.
+    inside a subscription render, for one user, at refresh time.
     """
 
 
@@ -872,21 +872,21 @@ class TransportProfile(Protocol):
     ) -> str:
         """The node's complete config file for this transport. Deterministic.
 
-        ``clients`` is every consumer this node authorises on this transport — friends
-        on a friend-facing transport, the single far node on a hop end.
+        ``clients`` is every consumer this node authorises on this transport — users
+        on a user-facing transport, the single far node on a hop end.
 
         ``egress`` says which way out packets this transport decrypts take
         (``edge/egress.py``, M14.3 and M3). It is a keyword with a fail-closed default so
         that a caller which has not thought about it gets the answer that fails loudly: a
-        tunnel with no exit produces a friend who reports at once that nothing loads,
-        while a tunnel that exits where it should not produces a friend who reports
+        tunnel with no exit produces a user who reports at once that nothing loads,
+        while a tunnel that exits where it should not produces a user who reports
         nothing at all.
 
         ``exit_via`` is the other half of the same answer and nothing more: the ADDRESS on
         this node that the way out runs through, when the policy is ``Egress.HOP``.
         ``None`` means this node's own route, which is what a node without a hop has
         always had. It is an address and never a protocol, a name or an interface — which
-        is precisely what lets an entry node route friend traffic into a hop without any
+        is precisely what lets an entry node route user traffic into a hop without any
         transport learning what the hop is made of.
 
         Every transport takes both, including those whose data plane forwards no packet in
@@ -901,7 +901,7 @@ class TransportProfile(Protocol):
         params: Mapping[str, object],
         credential: Credential,
     ) -> ClientEntry:
-        """One friend's entry for this node.
+        """One user's entry for this node.
 
         Takes ``params`` as well as ``credential`` because a client entry needs
         the node-scoped public half of the configuration — the listening port,
@@ -917,7 +917,7 @@ class TransportProfile(Protocol):
         params: Mapping[str, object],
         credential: Credential,
     ) -> ClientConfig:
-        """One friend's complete configuration file for this node.
+        """One user's complete configuration file for this node.
 
         Same arguments as ``render_client`` and the same purity rules — a file is a
         different serialisation of the same facts, not a different kind of operation.
@@ -950,7 +950,7 @@ class Transport:
         params: Mapping[str, object],
         credential: Credential,
     ) -> ClientEntry | ClientConfig:
-        """Produce one friend's material in ``subscription_format``.
+        """Produce one user's material in ``subscription_format``.
 
         The one call `control` needs in order to deliver a second shape without
         learning a second protocol. It asks for a format; which function runs is
@@ -965,7 +965,7 @@ class Transport:
             raise FormatNotDeclared(
                 f"transport {self.meta.name!r} does not declare "
                 f"{subscription_format!r}; it declares "
-                f"{sorted(self.meta.subscription_formats) or 'no friend-facing format at all'}"
+                f"{sorted(self.meta.subscription_formats) or 'no user-facing format at all'}"
             )
         return getattr(self.profile, SERIALISERS[subscription_format])(
             node, params, credential
@@ -979,7 +979,7 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
     failure land at the right moment. ``discover()`` is called by every screen in the
     panel and by every subscription render, so a malformed package found here is one
     error message on the fleet page; the same package found later is an exception inside
-    one friend's refresh, or a node configured with a transport that cannot mint a
+    one user's refresh, or a node configured with a transport that cannot mint a
     credential. Backlog item 30, S2.
 
     What is NOT checked here is anything requiring ``render.py``: importing a renderer
@@ -1022,7 +1022,7 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
         )
 
     # A per-client identity is what makes the charter's sixth criterion expressible: with
-    # nothing scoped to one consumer, a friend cannot be revoked without affecting the
+    # nothing scoped to one consumer, a user cannot be revoked without affecting the
     # others, because there is no row that belongs only to them.
     client_scoped = {
         spec.name for spec in meta.key_material if spec.scope is KeyScope.CLIENT
@@ -1030,8 +1030,8 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
     if "subject" not in client_scoped:
         raise ContractViolation(
             f"transport {meta.name!r} declares no client-scoped KeySpec named 'subject', "
-            "so no friend can be given access to it individually — and therefore no "
-            "friend could be revoked from it without affecting the others."
+            "so no user can be given access to it individually — and therefore no "
+            "user could be revoked from it without affecting the others."
         )
 
     unknown = meta.subscription_formats - set(SERIALISERS)
@@ -1123,7 +1123,7 @@ def _check_contract(meta: TransportMeta, render: ModuleType, params_model: type)
 
     Load time rather than render time, and that is the whole value: the failure this
     prevents is a transport that looks deliverable in the panel and raises deep inside
-    one friend's subscription render at refresh time — visible to the operator as
+    one user's subscription render at refresh time — visible to the operator as
     "hashi is broken for Masha", days later.
 
     ``params_model`` is here for the same reason ``render`` is: ``PeerAddress`` names two
