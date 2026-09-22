@@ -277,7 +277,7 @@ def node_view(node: Node) -> NodeView:
 # say NONE rather than mirroring what ``render_hop`` does. A guard's job is to be safe,
 # and this one cannot supply the address the entry's real policy needs.
 #
-# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(USERS, True)`` says a
+# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(FRIENDS, True)`` says a
 # user's traffic leaves through the hop, and only a transport that re-originates can
 # express that; ``_enable`` and ``relay.establish_hop`` refuse to create the pairing with
 # one that cannot, so the row is still reached by every node that legitimately holds it

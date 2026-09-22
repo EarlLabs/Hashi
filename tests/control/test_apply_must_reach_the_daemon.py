@@ -294,6 +294,12 @@ async def test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly(
     assert "still running an older configuration" in message
     assert TRANSPORT in message
 
+    # ``a_node_with_a_transport`` set this node ACTIVE through THIS session, so the row
+    # is in its identity map; the apply wrote DEGRADED through the request's own session.
+    # With ``expire_on_commit=False`` a plain ``get`` short-circuits on the stale copy and
+    # this reads ``active`` — the zone's usual idiom before re-reading what a request
+    # wrote (``test_a_retired_node_is_never_applied_back_into_service``).
+    session.expire_all()
     node = await nodes.get_node(session, node_id)
     assert node.state == NodeState.DEGRADED
     assert "still running an older configuration" in node.state_detail

@@ -147,7 +147,7 @@ async def grant_on(
     one that cannot answer this case.
 
     THE ROWS ARE THE CALLER'S RESPONSIBILITY and there is one rule about them:
-    user-facing only. ``serving_transports`` filters ``purpose == USERS`` because a
+    user-facing only. ``serving_transports`` filters ``purpose == FRIENDS`` because a
     user handed a hop end would be routed straight past the entry node the topology
     exists to hide behind, and that rule does not stop being true because the rows arrived
     from somewhere else. Nothing here re-filters, deliberately — a second copy of the rule

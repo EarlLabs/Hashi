@@ -640,7 +640,7 @@ async def _resize(
     are unchanged by this milestone — no address, no pool, the same dialog boxes — and a
     hop end is a row of a transport that DOES declare each consumer needs an address, so
     deciding from the transport's declaration alone put a pool on the runbook's own entry
-    box. Nothing downstream reads it (``nodes.serving_transports`` filters on ``USERS``,
+    box. Nothing downstream reads it (``nodes.serving_transports`` filters on ``FRIENDS``,
     so no user is ever granted there and ``settle`` finds nobody to place), which is
     exactly why it had to be refused here: a number stored on a relay row is a fact about
     that row that is not true, and the fleet refusal it can produce — "every one of them
