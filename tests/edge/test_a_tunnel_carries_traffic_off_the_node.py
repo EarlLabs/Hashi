@@ -580,7 +580,7 @@ def test_the_two_globally_reachable_registry_entries_are_a_decision() -> None:
       there arrives at a relay router on the public internet and nothing in the address
       says where it goes next — so it IS the internet, and it is the address this
       project's own stands use for that word (``tests/edge`` above, and
-      ``tests/e2e/edge/test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py``, which
+      ``tests/e2e/edge/test_a_user_exits_at_the_leaf_and_not_at_the_entry.py``, which
       round eleven had to fix because it was passing through the very bypass it was
       closing). Adding it would refuse the one destination those scenarios exist to prove
       a user still reaches.
