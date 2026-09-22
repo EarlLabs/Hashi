@@ -76,3 +76,18 @@ the tree has **no `pytest-randomly`**, so ordering is stable — which means a
 failure that appears once and then vanishes is not explained by shuffling, and that
 is the unsettling part. If it returns, the first place to look is session identity
 rather than the assertion.
+
+## From M29.3b — the port table does not mention a third block, Low
+
+`tests/e2e/infra/test_restore_proves_the_backup.py` stands up two disposable
+compose projects on **54300 / 54301 / 54305**, which is outside the 54100–54299
+block `CLAUDE.md` documents as this project's own. Confirmed **pre-existing** —
+the constants are unchanged from before M29's baseline — so it is neither this
+step's doing nor its to fix.
+
+**Left open because** the fix is either a documentation change to `CLAUDE.md`'s
+port section (it belongs to no zone and is the owner's file) or moving a working
+scenario's ports, and neither is a rename milestone's business. Worth someone's
+decision: the published-port block is written down precisely so a third stack
+cannot collide with the host, and a scenario quietly living outside it is the
+case that rule exists to prevent.

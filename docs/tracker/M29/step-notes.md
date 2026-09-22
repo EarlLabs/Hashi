@@ -382,3 +382,65 @@ migration.
 None. Every string this step touched is a comment, a docstring or a migration
 header; the migration logs only Alembic's own revision line and **prints no row, no
 nickname and no token**. The operator- and API-facing wording is M29.4's.
+
+## M29.3b — `infra`: the restore scenario counts rows in `users`
+
+**`tests/e2e/infra/**` carries no *friend* except five `/api/friends` URL paths,
+which are M29.4's.** `make test-infra` is unchanged at 1 failed / 240 passed (the
+M29.7 runbook quotation) — and that is the point of item 2 below.
+
+1. **The rename broke the scenario in TWO places, not one.** The plan named
+   `test_restore_proves_the_backup.py:389` (`rows_in(..., "friends")`). The second
+   is S3 at :456: it cuts its damaged dump at `text.rfind("COPY public.friends")`
+   and asserts the marker was found, so a post-`0008` `pg_dump` — which writes
+   `COPY public.users` — fails it too. **A table rename must be grepped for as a
+   `pg_dump` artefact, not only as a query.** The reviewer swept the directory for
+   a third such artefact (index, constraint and sequence names, other `COPY`
+   markers) and found none.
+
+2. **`make test-infra` never ran this file and cannot have.** It is
+   `ruff check tests/infra deploy/warden .e2e` + `pytest tests/infra`
+   (Makefile:96-99); `tests/e2e/infra/` is in neither half. So the before/after
+   counts are identical (1 failed, 240 passed, the same runbook test) and **the
+   zone gate is not evidence for this step** — the only evidence is running the
+   scenario. This is M29.2b's item 4 recurring in a second zone: the run/lint gap
+   is now confirmed for `infra` as well as `edge`.
+
+3. **The `/api/friends/*` paths in this file are deliberately NOT renamed.**
+   `control` still serves them until M29.4. The file therefore reads
+   `user = client.post("/api/friends", ...)` — local names in the new vocabulary,
+   routes in the old. **M29.4 must re-run this file after flipping the routes**;
+   no static target will catch it, and M29.3's item 4 trap applies here too.
+
+4. **Prose in four other `tests/e2e/infra/` files moved too** (9 occurrences in
+   `test_a_client_that_sends_no_sni_can_reach_the_sites.py`,
+   `test_caddy_discards_access_logs.py`, `test_panel_bootstrap.py`,
+   `test_the_console_is_not_on_the_public_site.py`) — comments and assertion
+   messages only, no executable change. `test_caddy_discards_access_logs.py`'s
+   own assertions are byte-for-byte unchanged, verified: it still proves what it
+   exists to prove.
+
+### How to test what M29.3b built
+
+The zone gate does not execute it. What does, with docker and nothing else:
+
+```sh
+.venv/bin/python -m pytest tests/e2e/infra/test_restore_proves_the_backup.py -q   # 3 passed, 2-3 min
+.venv/bin/python -m ruff check tests/e2e/infra/                                   # no Make target does this
+```
+
+**It needs no `make e2e-up`.** The file installs two disposable compose projects of
+its own (`hashi-restore-src-<run>` / `-dst-<run>`) through
+`scripts/panel-bootstrap.sh` on ports **54300/54301/54305** — a third block, clear
+of dev (541xx) and e2e (542xx) — with an env file it generates in `tmp_path`
+(`env_file()`, which doubles every `$` so the scrypt hash survives compose
+interpolation). **It never reads the repository `.env`**: every invocation passes
+`--env-file` or sets `ENV_FILE` explicitly, overriding `panel-bootstrap.sh`'s own
+default — verified line by line, and it matters, because no agent may read that
+file. Most of the runtime is image build. `docker volume ls | grep restore` should
+be empty afterwards.
+
+### Wording a person will see
+
+None. Every string this step touched is a comment, a docstring or a test assertion
+message.
