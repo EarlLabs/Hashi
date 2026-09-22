@@ -2567,6 +2567,46 @@ with `0008`.
 Gate: `make test-control`, with a real database — a green run whose ~670
 database-backed tests were skipped proves nothing about a data migration.
 
+### M29.4c — `infra`: the scripts, and the test that reaches into `control` by AST · added mid-run 2026-09-22
+
+Two things `scripts/**` and `tests/infra/**` are owed, found by M29.4a and confirmed
+by its reviewer. Both are the `infra` zone, which is why neither could ride along
+with the `control` step that caused them.
+
+**1. A test that reaches into `control` by AST, which no grep would find.**
+`tests/infra/test_deploy_runbook.py:1107` walks the AST of `relay.establish_hop`
+looking for calls to `nodes.friend_facing_on`. M29.4 renamed that to
+`user_facing_on`, so the set comes back empty and
+`test_the_growth_path_sends_the_box_that_already_serves_friends_to_the_leaf_end`
+fails — loudly, which is the only good thing about it. **A symbol a test reaches by
+`ast` or `inspect` is invisible to a grep for its call site.** The test's own name
+and docstring move with the string.
+
+**2. `scripts/**` prose, which no step owned.** M29.7 is `docs/` only, so as
+decomposed this milestone would close with `backup.sh`, `panel-bootstrap.sh`,
+`node-bootstrap.sh`, `acceptance/query.py`, `acceptance/stand.sh`,
+`security/stand.sh` and `security/role.sh` still saying the old word — against a
+"Done when" that says *one word for the concept everywhere a person can read it —
+screens, API, **code***. A script an operator runs during an emergency is code they
+read.
+
+**The security stand's names are a cross-file contract and move together or not at
+all.** `scripts/security/seed.py` deliberately left its `FRIENDS` constant, the role
+keys `friend_a` / `friend_b` / `friend_revoked`, the nicknames `audit-friend-*` and
+the `roles.json` key `friend_id`, because `role.sh` and `stand.sh` read them by those
+names and `aikit.yml`'s `security.roles` block names the roles too. This step takes
+all of it in one diff, `aikit.yml` included, or leaves all of it — **a half-renamed
+contract is a stand that seeds nothing and an audit that finds nothing**, which is
+the failure that looks like good news.
+
+A stale `.acceptance/security/roles.json` from an older stand still carries the old
+key, so the step re-seeds rather than reusing one.
+
+Gate: `make test-infra` — and this is the one step in M29 where that gate can
+finally go from 2 failures to 1, the last being M29.7's runbook quotation. Then run
+what the gate cannot: the security stand up, the seed, the identities read back
+through `scripts/acceptance/query.py`, and down.
+
 ### M29.5 — Run the migration forward and back against a copy of real data
 
 Not against a fixture. Take a dump of a real control plane, restore it onto a

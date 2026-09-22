@@ -583,3 +583,72 @@ are the real proof that the panel and the API agree on the new paths. Do not gat
   node. Nothing else is stored about them."*
 - HTMX events, renamed on both sides: `users-changed`, `users-created`. A template
   still listening for `friends-changed` would silently stop refreshing.
+
+## M29.4a — `infra`: the restore scenario and the audit seed call the routes that exist
+
+**All ten sites move, and both files were RUN, not read.** The five in
+`tests/e2e/infra/test_restore_proves_the_backup.py` (3 passed) and the five in
+`scripts/security/seed.py` (executed on a real stand, identities read back through
+the read-only role) now call `/api/users/*`.
+
+1. **The roles-file key stays `friend_id`, and it is not an oversight.**
+   `scripts/security/role.sh` reads `role['friend_id']` out of
+   `.acceptance/security/roles.json`, so the key is a two-file contract while the
+   locals around it are not. The locals moved to `user_id`; the key did not, with a
+   comment at the assignment saying why. **Renaming it means editing `role.sh` in the
+   same commit and re-seeding — a stale roles file from an older stand carries the
+   old key and would `KeyError`.** M29.4c takes the whole contract at once.
+
+2. **`make test-infra` is now 2 failed / 239 passed, not 1 / 240.** The second failure
+   is M29.4's, not M29.4a's, and both agents confirmed it predates this step's
+   baseline (`relay.py` is byte-identical across `00ef7da..94cdb53`):
+   `tests/infra/test_deploy_runbook.py:1107` walks the AST of `relay.establish_hop`
+   for calls to `nodes.friend_facing_on`, which M29.4 renamed to `user_facing_on`.
+   The set comes back empty and
+   `test_the_growth_path_sends_the_box_that_already_serves_friends_to_the_leaf_end`
+   fails. **A rename that a test reaches by `ast`/`inspect` is invisible to a grep
+   for the call site — grep for the bare symbol.** M29.4c takes it.
+
+3. **Neither file read `RevocationResponse.friend_id`** — checked rather than
+   assumed, by both agents. `revoke()` ignores the body, `token_of` reads `["url"]`,
+   creation reads `["id"]`. The silent-`None` failure M29.4 warned about was not
+   present in this fence.
+
+4. **Completeness, verified twice.** A grep over `tests/e2e/`, `scripts/`, `deploy/`,
+   `.e2e/`, `.github/`, `Makefile` and `tests/infra/` for `api/friends`,
+   `panel/friends`, `friends-changed`, `friends-created` and `friends_table` returns
+   zero hits, as does one for `COPY public.friends`, `friends_pkey`,
+   `friends_nickname_key` and the old index and constraint names.
+
+### How to test what M29.4a built
+
+The zone gate executes **neither** file. What does:
+
+```sh
+.venv/bin/python -m pytest tests/e2e/infra/test_restore_proves_the_backup.py -q  # 3 passed, ~2-3 min
+.venv/bin/python -m ruff check tests/e2e/infra/ scripts/security/seed.py         # no Make target does this
+
+scripts/security/stand.sh up     # = acceptance stand, browser off, + seed.py; ~2 min
+.venv/bin/python scripts/acceptance/query.py \
+  "SELECT nickname, revoked_at IS NOT NULL AS revoked FROM users ORDER BY nickname"
+scripts/security/stand.sh down
+```
+
+`stand.sh up` prints `[seed] 3 friends seeded (…), one of them revoked` — **a green
+line is not the proof**, because a seed that 404s exits 1 and takes `stand.sh` with
+it, while a half-seeded one would not. Read the three rows back through `query.py`'s
+read-only role instead; that is the stand's own truth source and the audit's. Verify
+the boundary the way it broke: anonymous `curl` gives 404 on `/api/friends` and 401
+on `/api/users`.
+
+**`role.sh <role>` prints a bearer token to stdout — redact it before it reaches a
+transcript**; nothing in a report may carry one. Both stands are self-contained: the
+restore scenario builds its own projects on 54300/54301/54305, the security stand is
+the e2e stand on 54200/54232, and neither reads the repository `.env`.
+
+### Wording a person will see
+
+None new. Every string changed is an operator-facing failure message inside a script
+that only ever runs against a disposable stand. The audit's role names an agent types
+— `anon`, `operator`, `friend_a`, `friend_b`, `friend_revoked` — are **unchanged**,
+so a prompt or threat-model page naming them is still correct until M29.4c.
