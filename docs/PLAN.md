@@ -2661,6 +2661,47 @@ carries them.
 The records listed in M29.1 are verified untouched at the end of this step, by
 diff and not by intention.
 
+### M29.8 — The last places a person reads the old word · added mid-run 2026-09-22
+
+M29.7 closed the gate but not the first "Done when". Six things still say *friend*
+where a person reads it, each found and measured by an earlier step and owned by none
+of them.
+
+**The charter's own sentence disagrees with itself in three places.** `project.json:3`
+and `deploy/warden/warden.py:320` both still carry *"for its owner and ~30-50
+friends"*, and **no test compares the three copies**. The owner settled that sentence;
+having it say two different things in one repository is the half-finished state this
+milestone exists to end.
+
+**Two living documents M29.1 classified and M29.7's fence did not reach:**
+`.claude/projects/00-core-invariants.md` (2) and `docs/security/threat-model.md` (5).
+The first is a fleet instruction file — leaving it stale reproduces the old noun in
+new code, which is the one residual with a way of spreading.
+
+**`docs/product/backlog.md` (8), and its classification must be settled first.** This
+is M29.1's open carry-over: the file is living, but its own `## Журнал решений` is a
+dated decision journal in the same shape as `docs/decisions.md` and is therefore a
+**record**. Row `2026-08-01 (ohno-6)` contains the old word inside a recorded
+decision. **Settle the carve-out in `docs/records-and-living-documents.md` before
+touching the file**, then move only the mutable backlog above the journal.
+
+**`docs/PLAN.md`'s `## Where things stand` (10)** is in neither the living list nor the
+records table. By the document's own test it reads living — it says what is open now,
+not what was said then — so classify it there and reword it.
+
+**The infra zone's remaining prose:** `deploy/caddy/Caddyfile` (5), `.env.example` (4),
+`deploy/e2e.env` (1), `.gitignore` (1). All comments.
+
+**Deliberately NOT in this step, and each for a stated reason.** `pyproject.toml` (3)
+is architect territory — `CLAUDE.md` says a developer who needs it asks. `design/**`
+(42) and `docs/research/**` (11) are dated artefacts of what was designed and
+researched at a time, which is the record test, and `design/VPN Admin.dc.html` is a
+tool export nobody hand-edits. All three are named for the owner to decide rather than
+swept.
+
+Gate: `make verify`. It is green as of M29.7 and **must still be green** — this step is
+the last thing in the milestone and may not be what breaks it.
+
 **E2E:** `tests/e2e/control/` — every existing scenario stays green with its own
 names updated, and M29.6 adds the one that asserts a pre-migration subscription
 survives. `make verify` across the seam, because this milestone touches two zones
