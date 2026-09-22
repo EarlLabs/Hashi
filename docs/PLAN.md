@@ -2702,6 +2702,53 @@ swept.
 Gate: `make verify`. It is green as of M29.7 and **must still be green** — this step is
 the last thing in the milestone and may not be what breaks it.
 
+### M29.9 — Two things the real-host walk disproved · found in the walk 2026-09-22
+
+The walk on real hosts passed M29's central claim: a subscription issued by the
+pre-M29 code into the pre-M29 schema, fetched from a second machine before and after
+both migrations, came back with **the same URL, the same token, the same status and
+headers, a byte-identical VLESS body, and an AmneziaWG config whose every functional
+line is byte-identical**. `0008` and `0009` reversed exactly. The panel worked in all
+three states.
+
+It also disproved two sentences M29.7 wrote into the runbook. Both are the milestone's
+own text, and both mislead an operator at the worst moment.
+
+**1. The rollback procedure cannot be executed as written, and attempting it takes the
+delivery endpoint down.** The runbook says *roll the image back first, then the
+schema*. That was inferred from M29.5's finding that the entrypoint's
+`alembic upgrade head` is unconditional, and it is **wrong**: the pre-M29 image
+contains only `0001`–`0007`, so it holds no downgrade path from `0009`. Measured, the
+old image crash-loops on `Can't locate revision identified by '0009'`, `make up-panel`
+exits `dependency failed to start: container hashi-control-1 is unhealthy`, **Caddy
+never starts at all**, and `/sub/*` is unreachable for every user for the whole of that
+state — the one route the charter says must stay up. The runbook's own recovery
+commands cannot be run either, because a restarting container cannot be `exec`'d into.
+
+The order that works, and it was walked: **downgrade under the NEW image**, then
+`stop` it before anything can restart it, then swap the tree and bring the old image
+up — whose `upgrade head` is then `0007`, a no-op. The restart trap M29.5 documented
+is real and was reproduced deliberately, but it is a reason to stop the container, not
+a reason to roll the image back first.
+
+**2. "Nothing on anybody's device changes" is true of the URL and not of the file.**
+The subscription URL and token are byte-identical, and so is the VLESS body. But the
+rendered WireGuard-family config differs by one line — a `#` comment `wg-quick`
+ignores — because M29 reworded the rendered server text too. The consequence is
+visible and unannounced: **every node carrying a WireGuard-family transport reads as
+drifted immediately after the upgrade**, the Overview carries *"not running the
+configuration this panel would give it"* until each is re-applied, and the same
+happens in reverse after a downgrade. Drift is `applied_digest != digest_of(rendered)`,
+so a comment is enough to trip it.
+
+That is harmless in itself and it is **indistinguishable on screen from a real
+configuration change**, arriving exactly when an operator is watching for trouble.
+Either the sentence narrows to the URL and the functional config, or the upgrade
+section tells the operator to expect a fleet-wide re-apply. Do both.
+
+Gate: `make verify`. `tests/infra/` reads the runbook and pins some of its sentences,
+so a rewrite here is executed by the suite the moment it runs.
+
 **E2E:** `tests/e2e/control/` — every existing scenario stays green with its own
 names updated, and M29.6 adds the one that asserts a pre-migration subscription
 survives. `make verify` across the seam, because this milestone touches two zones
