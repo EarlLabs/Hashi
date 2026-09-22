@@ -861,3 +861,110 @@ never-issued **404**. Indistinguishable, which is the promise.
   is overwritten by the dump"*, and *"If **users** cannot connect afterwards,
   HASHI_SECRET_KEY does not match…"*. `scripts/panel-bootstrap.sh`'s firewall refusal:
   *"this host is the one **users** dial for their subscriptions"*.
+
+## M29.5 — the migration run against a copy of real data
+
+**`0007`→`0008`→`0009`→`0007` is proven on real rows, and the copy is destroyed.**
+The subject was a dump of a live control plane, restored onto a disposable local
+stand, migrated both ways, served to a logged-in panel in both states, then shredded.
+Nothing was committed; no defect was found in `0008` or `0009`. Every claim below was
+independently re-checked by the reviewer.
+
+1. **The live control plane was at `0002`, not `0007` — measured, and it changes what
+   a rehearsal means.** Its control image predates `0003` (no `audit_entries` table,
+   container up since 2026-09-09), and since `deploy/docker/entrypoint.sh:45` runs
+   `alembic upgrade head` **unconditionally on every boot**, `0002` IS that
+   deployment's head. The copy was walked `0002`→`0007` on the real chain before
+   `0008` was touched. **Never assume a deployed chain is at the repository's head
+   minus this milestone; ask `select version_num from alembic_version` first.**
+
+2. **"Needs no `HASHI_SECRET_KEY`" is now measured, not argued.** md5 over every
+   encrypted column — `subscriptions.token`, `token_digest`, `credentials.subject`,
+   `credentials.secrets`, `node_transports.secrets`, `nodes.ssh_private_key` — is
+   byte-identical at `0002`, at `0007`, at head and back. M29.4b item 4's empty-key
+   trap reproduced exactly: `HASHI_SECRET_KEY=''` dies on a Pydantic
+   `string_too_short` (`control/app/settings.py:48`, `min_length=32`) inside
+   `env.py`'s `Settings()` call, **before Alembic opens a connection**.
+
+3. **The real data carried the mixed `purpose` case the tests had to fabricate.**
+   `friends`=3, `relay-entry`=1, `relay-leaf`=1 → `users`=3 with both relay values
+   untouched, and back. The DDL default moved `'friends'`→`'users'`→`'friends'` with
+   them. M29.4b items 3 and 5, confirmed on real rows rather than fixtures.
+
+4. **`audit_entries` is EMPTY on a real control plane**, so half of `0009` proves
+   nothing against real data. It was exercised by seeding five rows at `0007` in the
+   old vocabulary on the same copy: `friend-added`×2 and `friend-revoked`×1 became
+   `user-added`/`user-revoked`, while `node-added` and an undeclared value survived
+   both directions. **Any later value migration rehearsed against real data must check
+   whether the column it renames has any rows at all before calling the run evidence.**
+
+5. **A WRONG KEY AND A BROKEN MIGRATION LOOK NOTHING ALIKE, and the 409 is how you
+   tell.** A control plane serving a restored database with a foreign key answers
+   `409 secrets_unreadable` — *"The data is intact; the key is wrong. Nothing has been
+   changed."* — on every screen that loads a user or a node, because
+   `User.credentials` and `User.subscriptions` are `lazy="selectin"`
+   (`models/user.py:45,48`) and `EncryptedText.process_result_value`
+   (`models/base.py:104-107`) decrypts at result materialisation, which only runs
+   after the `SELECT`已 found the table. A migration fault raises
+   `UndefinedTable`/`UndefinedColumn` at the driver, first. **Do not report one as the
+   other.**
+
+6. **To see the panel actually work, re-key the copy — do not chase the owner's key,
+   and keep the boundary explicit.** All migration evidence, and the Users and Nodes
+   screens, were recorded on the owner's **untouched** ciphertext: those screens read
+   only plaintext columns (nickname, node name, address, timestamps, `purpose`,
+   `state`, `revoked_at`). Only the decryption-dependent screens needed the six
+   encrypted columns overwritten with ciphertext of substitute plaintext under the
+   stand's own key. **"The panel works" is therefore two claims, not one, and
+   collapsing them into a single sentence would overstate it.** Expect
+   `could not render node … for the drift cell` afterwards: that is the substitution,
+   not the migration.
+
+7. **A rollback to `0007` does not survive a container restart.** Database at `0007`,
+   `compose up -d control` on the current image → `Running upgrade 0007 -> 0008`,
+   `0008 -> 0009`. `deploy/docker/entrypoint.sh:45` is unconditional by design, so
+   rolling the schema back without rolling the image back is undone by the next boot.
+   **M29.7's runbook sentence about the break must say this.**
+
+8. **`scripts/panel-bootstrap.sh` refuses to install on a host whose `ufw` logging is
+   on**, including a developer workstation. That is the charter rule, not a bug. Bring
+   a stand up with `docker compose -f deploy/docker-compose.yml -f
+   deploy/docker-compose.dev.yml -f <plain-http overlay>` rather than turning a
+   firewall's logging off to get past it.
+
+### How to rehearse a migration against real data
+
+Nothing was built. What this step established, for whoever does it next:
+
+```sh
+# 1. The dump, read-only, without reading an env file anywhere. NOTE: backup.sh uses
+#    `docker compose exec -T`; a bare `docker exec` has no -T and will fail.
+ssh <host> 'U=$(docker exec <db-container> printenv POSTGRES_USER | tr -d "\r\n")
+            D=$(docker exec <db-container> printenv POSTGRES_DB   | tr -d "\r\n")
+            docker exec <db-container> pg_dump --username="$U" --dbname="$D" \
+              --clean --if-exists --format=plain | gzip -9' > copy.sql.gz
+
+# 2. A disposable stand: own env file, own throwaway key and operator password,
+#    loopback ports outside the dev (541xx) and e2e (542xx) blocks.
+docker compose --env-file <scratch>/x.env -p <project> \
+  -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml -f <plain-http>.yml up -d --build
+docker compose … exec -T db psql -U hashi -d hashi -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+ENV_FILE=<scratch>/x.env COMPOSE_PROJECT_NAME=<project> FORCE=1 scripts/backup.sh restore copy.sql.gz
+```
+
+**Drop the schema before restoring**: a pre-`0008` dump's `DROP TABLE IF EXISTS
+friends` cannot remove the `users` table the stand's own boot just created, and `0008`
+then fails with `relation "users" already exists`.
+
+**Census by counts, histograms and md5 — never by printing a row.** The dump's
+plaintext is a map of the fleet: every node address, how many users there are and when
+each arrived. `md5(string_agg(col, '|' order by id))` per encrypted column is the whole
+proof that a migration never opened one, and it names nobody.
+
+**To serve the PRE-migration panel, export the old code rather than branching:**
+`git archive <baseline> | tar -x -C <scratch>/pre`, then run uvicorn from there with
+`HASHI_DATABASE_URL` pointing at the stand's published port. No worktree, no branch,
+no second image build.
+
+**Destroy with `compose down -v`, then shred every scratchpad file** — and check
+`docker volume ls` and `docker images` for the project name afterwards.

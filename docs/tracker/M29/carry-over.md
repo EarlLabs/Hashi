@@ -111,3 +111,41 @@ Causation stays unsettled: HEAD failed 5/5, baseline failed 2/3 — the builder
 reproduced it at baseline and the reviewer did not. Timing- or environment-sensitive.
 Recorded because the next person to see a once-in-three failure in this suite should
 know this shape exists and where to look.
+
+## From M29.5 — the deployed control plane is seven revisions behind, Medium
+
+**Measured on the owner's live box, 2026-09-22, and confirmed by the reviewer: its
+`alembic_version` is `0002`.** Its control image predates `0003` — there is no
+`audit_entries` table — and it has been running since 2026-09-09.
+
+`deploy/docker/entrypoint.sh:45` runs `alembic upgrade head` **unconditionally on
+every boot**. So **the next time that image is updated, one container start will apply
+`0003` through `0009` — seven migrations, including this milestone's two.** That is
+not M29's doing and nothing was changed about it.
+
+Two consequences worth the owner's attention:
+
+- The rehearsal validated `0007`→`0008`→`0009` and back. The jump that will actually
+  happen on that box is larger, and no run of ours has exercised `0003`–`0007` against
+  its data. They are this repository's own migrations and were green in every suite,
+  but "rehearsed" and "will run" are not the same set here.
+- **A schema rollback does not survive a restart.** Downgrading to `0007` without also
+  rolling the image back is undone by the next boot, because the entrypoint's upgrade
+  is unconditional. M29.7's runbook sentence says so.
+
+**Left open because** updating that deployment is not this milestone's work and is the
+owner's call about their own fleet.
+
+## From M29.5 — the test hosts' addresses are already in tracked records, Low
+
+The reviewer noticed while checking this step leaked nothing: **the authorised host's
+address already appears in tracked files** — `docs/tracker/M3/`,
+`docs/tracker/field-checklist.md`, `docs/PLAN.md:3497`, `docs/tracker/M26/walk-*.md`
+and `docs/tracker/M16/acceptance.md`. All pre-date M29 by months, and M29.5 added
+nothing.
+
+`CLAUDE.md`'s rule is about hardcoding an address **in code**, and these are field
+records of what was walked and when, which the record/living-document line says must
+not be rewritten. So this is not a violation to fix by editing. **It is the owner's
+call** whether a record naming a real host is a record they want to keep in a
+repository, and it is recorded here rather than acted on.
