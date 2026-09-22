@@ -2626,7 +2626,31 @@ returns the same material, and still carries the same token afterwards.
 **If this milestone ends with a single person having to re-import a config, it was
 done wrong.**
 
-### M29.7 — The living documents, including the charter's own sentence
+### M29.7 — The living documents, including the charter's own sentence · widened mid-run 2026-09-22
+
+**Widened to carry the assertions that read those documents, and the last prose
+residuals.** `docs/**` belongs to no zone, so a diff may hold the documents and the
+`infra`-zone tests that quote them without breaking `CLAUDE.md`'s cross-zone rule —
+and it **must**, because they cannot move apart:
+
+- `tests/infra/test_deploy_runbook.py:779` and `:1187` do `if "friend-facing" in step`
+  over `docs/deploy/runbook.md`'s own text, and
+  `tests/infra/test_the_charter_states_what_the_scripts_deliver.py` quotes the
+  charter's *"a friend's packets move…"*. **Reword either side alone and the gate goes
+  red against the other.**
+- `test_the_runbook_quotes_the_refusal_a_node_without_a_resolver_gets` imports
+  `edge.egress.NO_RESOLVER` and asserts the runbook quotes it verbatim. M29.2 reworded
+  the string; this is the **last red test in the tree** and closing it is what makes
+  `make verify` green.
+- Pure docstrings still saying the old word in `tests/infra/test_backup_script.py`,
+  `test_panel_bootstrap_script.py`, `test_management_tunnel_script.py`,
+  `test_caddyfile.py` and `test_drive.py` — swept here. `test_drive.py:194` says "a
+  friendly", which is English and stays.
+- `aikit.yml` :191, :194 and :268, and `deploy/docker-compose.e2e.yml:40` (*"no real
+  friends in it"*) — the last two prose residuals M29.4c named and could not take.
+
+The runbook also states the API break in the owner's own words — *anything scripted
+against the old paths stops working* — naming `/api/users/*` and `/panel/users/*`.
 
 The charter, the runbook, `CLAUDE.md`, `README.md` and this plan's open
 milestones. The charter's *"for the owner and ~30–50 friends"* becomes

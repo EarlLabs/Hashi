@@ -775,3 +775,89 @@ by the running application: `user-added` ×33, `user-revoked` ×4, `purpose = us
 - The two `tests/e2e/control/` scenarios list every stored action as a literal, by
   design — `PERMITTED_ACTIONS` and `STORED_KEYS`. **A new action is written down
   twice, once in the enum and once there**, and that duplication is the point.
+
+## M29.4c — `infra`: the scripts, and the test that reached into `control` by AST
+
+**`scripts/**` carries no *friend*, and the security stand's cross-file contract moved
+whole.** `make test-infra` went from **2 failed / 239 passed to 1 failed / 240
+passed**; the one left is `test_the_runbook_quotes_the_refusal_a_node_without_a_resolver_gets`,
+M29.7's, and it is now the only red test in this zone.
+
+1. **The AST test is fixed and the lesson generalises.**
+   `tests/infra/test_deploy_runbook.py` matches `node.func.attr == "user_facing_on"`
+   now. **A symbol a test reaches by `ast` or `inspect` is invisible to a grep for its
+   call site** — grep for the bare symbol name after any rename in `control` or `edge`.
+
+2. **The role names ARE renamed: `user_a`, `user_b`, `user_revoked`.** M29.4a's item 1
+   is closed. `seed.py`'s `FRIENDS`→`USERS`, the `audit-friend-*` nicknames →
+   `audit-user-*`, the `roles.json` key `friend_id`→`user_id`, `role.sh`'s read of it
+   and its usage line, `stand.sh`'s banner, and `aikit.yml`'s four `security.roles`
+   entries — **one commit**, because a half-renamed contract is a stand that seeds
+   nothing and an audit that finds nothing. `docs/security/threat-model.md` cites no
+   role name today, so nothing downstream inherits a stale citation. **A roles file
+   from an older stand carries the old key**, so a leftover
+   `.acceptance/security/roles.json` must be deleted and re-seeded, not reused.
+
+3. **`tests/infra/` is NOT finished, and roughly half of what is left CANNOT move
+   until the documents do — verified by the reviewer, not merely claimed.**
+   `test_deploy_runbook.py:779` and `:1187` do `if "friend-facing" in step` over
+   `docs/deploy/runbook.md`'s own text, and
+   `test_the_charter_states_what_the_scripts_deliver.py` quotes the charter's own
+   prose (*"a friend's packets move…"*). **Renaming them before the documents move
+   turns the gate red against a document nobody has reworded.** `docs/**` belongs to
+   no zone, so a diff may carry the documents and these assertions together —
+   **M29.7 was widened to take both in one commit.**
+
+4. **Accepted residual, named so a later grep does not read it as an oversight**
+   (review round 1, Low): pure docstrings still saying *friend* in
+   `test_backup_script.py:51,75`, `test_panel_bootstrap_script.py:99,197,338`,
+   `test_the_charter_states_what_the_scripts_deliver.py`,
+   `test_management_tunnel_script.py`, `test_caddyfile.py` and `test_drive.py`. None
+   is an assertion; nothing is functionally wrong. **M29.7 sweeps them with the
+   documents.** `test_drive.py:194` says "a friendly" — English, a deliberate keep,
+   same class as `edge/health/listening.py:36`.
+
+5. **Two prose residuals outside this fence.** `aikit.yml` :191, :194 and :268 still
+   say *friend* — :268 is the comment directly above the now-`user_*` roles list — and
+   `deploy/docker-compose.e2e.yml:40` still says *"no real friends in it"*, the
+   sentence `seed.py` and `scripts/acceptance/stand.sh` both mirror. Nothing parses
+   either. **M29.7 was widened to take both.**
+
+### How to test what M29.4c built
+
+`make test-infra` proves item 1 and nothing else — **no target runs a single line of
+`scripts/`**, which is the third zone this gap has appeared in (M29.2b item 4, M29.3b
+item 2). What does:
+
+```sh
+scripts/security/stand.sh up          # acceptance stand, browser off, + seed.py; ~2 min
+.venv/bin/python scripts/acceptance/query.py \
+  "SELECT nickname, revoked_at IS NOT NULL AS revoked FROM users ORDER BY nickname"
+scripts/security/stand.sh down
+
+.venv/bin/python -m pytest tests/e2e/infra/test_restore_proves_the_backup.py \
+  tests/e2e/infra/test_panel_bootstrap.py -q     # 10 passed, ~3.5 min — the only thing
+                                                 # that executes backup.sh and panel-bootstrap.sh
+.venv/bin/python -m ruff check scripts/security/seed.py scripts/acceptance/query.py
+bash -n scripts/*.sh scripts/*/*.sh              # the shell half has no linter here
+```
+
+**The rows are the proof, not the `[seed]` line** — a seed that 404s exits 1 and takes
+`stand.sh` with it; a half-seeded one does not. Stronger and cheap: compare every
+`user_id` in `.acceptance/security/roles.json` against `users.id`, and check the
+charter's revocation promise directly — live `/sub/…` **200**, revoked **404**,
+never-issued **404**. Indistinguishable, which is the promise.
+
+**`role.sh <role>` prints a bearer token to stdout — redact before quoting anywhere.**
+
+### Wording a person will see
+
+- `scripts/acceptance/stand.sh`: *"The control plane is empty — no nodes, no
+  transports, no **users**, no hops."*
+- `scripts/security/stand.sh` banner: `Roles  anon, operator, user_a, user_b, user_revoked`.
+- `scripts/security/seed.py`: `[seed] 3 **users** seeded (audit-user-a, audit-user-b,
+  audit-user-revoked), one of them revoked`.
+- `scripts/backup.sh`, during a restore: *"Every current node, **user** and credential
+  is overwritten by the dump"*, and *"If **users** cannot connect afterwards,
+  HASHI_SECRET_KEY does not match…"*. `scripts/panel-bootstrap.sh`'s firewall refusal:
+  *"this host is the one **users** dial for their subscriptions"*.
