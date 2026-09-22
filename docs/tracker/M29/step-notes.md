@@ -1069,3 +1069,99 @@ and why isolating the token assertion needs `subscriptions` lifted out of
 
 None. Every string in this step is a test docstring or an assertion message; nothing
 reaches an operator, a panel screen, an API response or a log line.
+
+## M29.7 — the living documents, and the gate goes green
+
+**`make verify` is green: exit 0** — reproduced independently by the reviewer. control
+`219 passed / 697 skipped` (no Postgres, the baseline shape), edge `911 passed /
+3 skipped` (`awg-quick` absent, baseline), infra **`241 passed, 0 failed`** (was
+1/240), e2e **`192 passed`**. M29.2's item 3 seam is closed and item 2's warning no
+longer describes the tree.
+
+1. **The records were proven untouched by diff at the START and at the END**, and
+   again by the reviewer against baseline `1b60280`. All three commands printed
+   nothing every time, and `git diff --name-only 1b60280..HEAD` over
+   `control/migrations/`, `docs/tracker/` and `docs/decisions.md` returns only *added*
+   files plus `decisions.md`'s appended rows. **Decision 9 — the owner's 2026-09-08
+   answer that `friend` stays the word — is intact**, with M29's reversal recorded as
+   an appended row dated 2026-09-22 rather than as an edit to it. **Run the check at
+   both ends; a failure at the end is then known to be yours.**
+
+2. **The plan's open milestones split into two classes and only one moves.** A *use* of
+   the word (M24, M26, M27, M28 — 22 sites) is reworded. A *mention* is not: **M29's
+   own `## →` section is 62 occurrences and every one names the identifier being
+   renamed**, so a word swap would make the milestone specify renaming `user` to
+   `user`. It also becomes a record the day M29 is ✅. Same reasoning kept
+   `docs/PLAN.md:3108`, a dated quotation. **A later bulk rename over an open milestone
+   must sort mention from use before it swaps anything.**
+
+3. **`## Where things stand` is classified by nothing and was left alone.** In neither
+   the plan's living list nor the records table's three slices. By the document's own
+   test it reads living, and it holds **10** occurrences. M29.8 takes it.
+
+4. **The runbook's new `## Upgrading an install that predates the rename` section is
+   where the break lives.** It carries the before/after route table,
+   `RevocationResponse.user_id` and the silent `None`, what `0008` and `0009` each do,
+   the reversal, and **M29.5 item 7: a schema rollback does not survive a restart,
+   because `deploy/docker/entrypoint.sh` runs `alembic upgrade head` unconditionally on
+   every boot — roll the image back FIRST, then the schema, and check
+   `select version_num from alembic_version` afterwards.** The section deliberately
+   keeps 21 occurrences of the old word: a break table that does not name the old paths
+   is not a break table.
+
+5. **`_flat(NO_RESOLVER)` is asserted word for word and nothing else in the document
+   is.** The runbook quotes four operator-facing strings; only this one, `TUNNEL_TAKEN`'s
+   placeholder-free tail and `console.removal_summary`'s cost clause are pinned. **Any
+   later rewording in `edge.egress` or `control.services.placement`/`console` turns
+   `make test-infra` red against a document nobody edited** — that is the seam, by
+   design.
+
+6. **A docstring quoting a RETIRED runbook bullet was rewritten, not word-swapped.**
+   Swapping falsifies a quotation of what a page used to say; the rewrite describes the
+   retired rule instead. The original sentence survives in `git show` and in the plan's
+   ✅ M15 section.
+
+6b. **The narrowing that removed the retired word from a regex opened a silent skip,
+   and review would not carry it.** `test_every_shape_that_adds_a_user_applies_afterwards`
+   loops per shape and `continue`s past one it cannot recognise, so tightening
+   `add (?:a )?(?:friend|user)` to `add (?:a )?user` meant a reverted step would go
+   **uncovered rather than red**. Fixed in round 1 by bracketing the loop with two
+   assertions that each fail on their own: no step may match the retired
+   `add a friend` form (catches a reversion, **including a partial one**), and at least
+   one shape must have matched at all (catches a rewording into a third form that would
+   leave the whole test a no-op). The reviewer proved each is load-bearing — under a
+   partial reversion the general check stays green at `covered = {'C'}` and misses it.
+   **`docs/decisions.md` names "a verification that cannot fail" as this repository's
+   signature defect — around seventeen instances — so any later rename that tightens a
+   regex a test SKIPS on must add the assertion in the same diff.**
+
+7. **The charter's one-liner is duplicated in two files nothing compares.**
+   `project.json:3` and `deploy/warden/warden.py:320` both still carried *"for its
+   owner and ~30-50 friends"*. M29.8 takes them.
+
+### How to test what M29.7 built
+
+```sh
+make test-infra    # 241 passed, ~4s — ruff + pytest tests/infra
+.venv/bin/python -m pytest tests/infra/test_deploy_runbook.py -k "quotes_the_refusal" -q   # 2 passed, <1s
+```
+
+There is nothing to fixture: every test here reads files and imports `control`/`edge`,
+so a documentation change is executed by the suite the moment it runs. `make verify` is
+the milestone's Done-when, ~8–15 minutes, and needs a docker engine and **no Postgres
+on 54132** — the control zone's 697 skips are the baseline shape, not a regression.
+
+### Wording a person will see
+
+- **The charter's one-liner:** *"A self-hosted, multi-protocol VPN for its owner and
+  ~30–50 users"*, followed by a new paragraph stating plainly the three things
+  `friends` used to carry on its own: **no public signup**, **no payments and no
+  billing**, **never advertised** (art. 14.3 KoAP). `CLAUDE.md` and `README.md` match.
+- **The break, as the owner asked for it:** *"**Anything scripted against the old paths
+  stops working** the day this lands. There is no alias, no redirect and no deprecation
+  window — the old paths answer `404`."*
+- **The rollback sentence:** *"**A schema rollback does not survive a restart** …
+  **Roll the image back first, then the schema**, in that order."*
+- The runbook says *user-facing transport* everywhere it said *friend-facing*; two
+  `tests/infra` step filters key off that exact hyphenated string, so **a shape
+  reworded away from "user-facing" turns the gate red**.
