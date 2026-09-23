@@ -49,3 +49,27 @@ file is untouched by M28.2.
 
 **Left open because** it is a pre-existing marginal cap under disk pressure, not a
 regression. If it recurs on the fleet's dind, the cap is the thing to look at.
+
+## From M28.3, review round 1 — three Lows
+
+**1. The `http` private-address check can be raced by DNS.** `deploy/backup/upload.py`'s
+`configuration()` resolves the endpoint host once to decide whether plain `http` is
+allowed; `send()` opens its own connection later and the OS resolves again. A rebinding
+answer between the two could route an `http` PUT to a public address despite passing.
+**Blast radius is narrow:** the secret never crosses the wire either way (SigV4 signs),
+so only the access-key id, the bucket name and the ciphertext could leak, and only for
+an operator who deliberately opted into `http` against something meant to be private —
+which in practice is a test endpoint. Disclosed rather than claimed away. **Left open**
+as a recorded limit; closing it means pinning the resolved address into the connection.
+
+**2. `docs/deploy/runbook.md`'s `### What you carry` item 3 is stale future tense.** It
+says the bucket read credential *"becomes needed the day the offsite upload exists"* —
+and M28.3 is the day. M28.1 set the rule that the description and the behaviour move in
+the same step, and this section was not touched. **Folded into M28.4's fence**, which is
+in the runbook anyway.
+
+**3. Port `54308` is outside the documented 54100–54299 block**, joining the
+pre-existing 54300/54301/54305 the restore scenario already uses (recorded in
+`docs/tracker/M29/carry-over.md`, "From M29.3b"). Loopback-only and test-only. **This is
+a fourth instance of one known gap, not a new kind** — whoever decides the third-block
+convention decides all four together.
