@@ -41,10 +41,15 @@ PANEL_SCRIPT = REPO / "scripts" / "panel-bootstrap.sh"
 CADDYFILE = REPO / "deploy" / "caddy" / "Caddyfile"
 NODES_TABLE = REPO / "control" / "app" / "templates" / "panel" / "nodes_table.html"
 MIGRATIONS = REPO / "control" / "migrations" / "versions"
+ENV_EXAMPLE = REPO / ".env.example"
 
 # M16's section, by its exact title: the shapes that build a hop and the migration that
 # empties the field both point at it by these words.
 RESOLVER_SECTION = "A node that dials a hop needs a resolver"
+
+# M28.4's section, by its exact title, for the same reason: ``.env.example`` sends the
+# operator here for the one decision it cannot carry in a comment.
+RETENTION_SECTION = "The retention this host's own key cannot reach"
 
 # Ports that mean something to somebody, so a literal one is a value that gets copied.
 # The same list the script's own test uses, for the same reason.
@@ -1374,4 +1379,148 @@ def test_the_prerequisites_name_what_the_control_plane_box_needs(runbook: str) -
         )
     assert re.search(r"control.plane box", said, re.I), (
         "the section answers for a node only, and the control-plane box is not a node"
+    )
+
+
+@pytest.fixture(scope="module")
+def retention_section(runbook: str) -> str:
+    """M28.4's section: the half of the protection that is not on this host at all."""
+    section = re.search(
+        rf"^### {re.escape(RETENTION_SECTION)}\n((?:.*\n)*?)(?=^#{{2,3}} )", runbook, re.M
+    )
+    assert section, (
+        "the runbook no longer says what retention the backup bucket must have — which "
+        "leaves a write-only key against a bucket that keeps one overwritable copy"
+    )
+    return section.group(1)
+
+
+def _table_rows(section: str) -> list[list[str]]:
+    """The decision table's data rows, as cells. Header and separator dropped."""
+    rows = [
+        [cell.strip() for cell in line.strip().strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|") and set(line) - set("|- ")
+    ]
+    assert rows, "the section carries no table"
+    return rows[1:]
+
+
+def test_the_retention_section_settles_the_three_rather_than_offering_them(
+    retention_section: str,
+) -> None:
+    """The plan offered versioning, object lock and a lifecycle rule as a choice.
+
+    They are not one: the first is the defence, the second an upgrade to it, the third the
+    thing being defended against. A page that lists all three with no verdict reads as
+    "pick whichever your store has", and the store that has only the third is then set up
+    with a rule that deletes the history on a timer and nothing that keeps it.
+    """
+    rows = _table_rows(retention_section)
+    verdicts = {row[0].lower(): row[1] for row in rows}
+    for mechanism in ("versioning", "object lock", "lifecycle"):
+        matched = [name for name in verdicts if mechanism in name]
+        assert len(matched) == 1, f"the table has no single row for {mechanism}: {matched}"
+
+    versioning = next(v for name, v in verdicts.items() if "versioning" in name)
+    assert "required" in versioning.lower(), (
+        f"versioning is not stated as required — it reads {versioning!r}, and every other "
+        "row on this page assumes it is on"
+    )
+    lifecycle = next(v for name, v in verdicts.items() if "lifecycle" in name)
+    assert "not a retention mechanism" in lifecycle.lower(), (
+        f"the lifecycle row reads {lifecycle!r}, which lets a rule that deletes on a "
+        "schedule be mistaken for one that keeps things"
+    )
+
+
+def test_the_retention_section_denies_that_the_object_name_is_the_defence(
+    retention_section: str,
+) -> None:
+    """The plausible wrong answer, and it is already half true, which is what makes it bad.
+
+    ``hashi-<timestamp>.sql.gz.age`` does stop two runs colliding. It stops nothing else:
+    the uploading credential picks the name, so it can write yesterday's name, and a bucket
+    with no versioning keeps whatever was written last.
+    """
+    said = _flat(retention_section)
+    assert "hashi-<timestamp>" in said, (
+        "the section does not say what the object is called, so a reader cannot tell "
+        "whether the naming is doing the work"
+    )
+    assert "by mistake" in said and "on purpose" in said, (
+        "the section does not separate what the naming defends against from what "
+        "versioning defends against"
+    )
+
+
+def test_the_retention_section_gives_a_check_this_host_cannot_run_for_them(
+    retention_section: str,
+) -> None:
+    """A retention that has only been described is worth nothing, and cannot be tested here.
+
+    The credential on this host writes and does nothing else, so the check has to be run by
+    the owner from somewhere else — and the page has to say that this repository will never
+    run it, or ``make verify`` passing reads as the bucket being configured.
+    """
+    said = _flat(retention_section)
+    for call in (
+        "GetBucketVersioning",
+        "GetObjectLockConfiguration",
+        "GetBucketLifecycleConfiguration",
+        "ListObjectVersions",
+    ):
+        assert call in said, (
+            f"the section does not name {call}, so the operator is left to find the check "
+            "in a console whose wording differs from every other store's"
+        )
+    assert "No test in this tree asserts any of the above" in said, (
+        "the section does not say that nothing here proves the retention is on, which is "
+        "the sentence that keeps a green `make verify` from being read as one"
+    )
+
+
+def test_the_retention_section_names_no_provider(retention_section: str) -> None:
+    """CLAUDE.md's rule, in the one section most likely to break it.
+
+    Retention is configured in somebody's console, and a console path is the shape a
+    provider name arrives in: it reads as helpful and is indistinguishable, later, from a
+    requirement. The protocol calls above are the general form and every store answers
+    them.
+    """
+    providers = re.compile(
+        r"aws|amz|amazon|google|azure|cloudflare|backblaze|wasabi|yandex|selectel|minio",
+        re.IGNORECASE,
+    )
+    found = providers.findall(retention_section)
+    assert found == [], f"the retention section names {sorted(set(found))}"
+    assert not re.search(r"[a-z]+://", retention_section), (
+        "the retention section carries a URL — the store is a field, not an address"
+    )
+    assert not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", retention_section), (
+        "an IP address is hardcoded in the retention section"
+    )
+
+
+def test_the_env_file_sends_the_operator_to_the_section_that_decides_retention(
+    runbook: str,
+) -> None:
+    """The comment beside the write-only key cannot carry the whole decision, so it points.
+
+    An anchor by exact title, the same way M16's resolver section is pointed at: rename the
+    heading and this fails, rather than leaving a comment that directs an operator to a
+    section that is no longer there.
+    """
+    # The comment wraps, and a wrapped title is still a pointer: the `#` that opens each
+    # continuation line is dropped before the phrase is looked for.
+    env = ENV_EXAMPLE.read_text()
+    said = _flat(re.sub(r"\n#", " ", env))
+    assert RETENTION_SECTION in said, (
+        "`.env.example` does not point at the section that decides the bucket-side "
+        "retention, so the credential comment is the only account of it an operator sees"
+    )
+    assert f"### {RETENTION_SECTION}" in runbook, "the section it points at is gone"
+    assert "VERSIONING" in said, (
+        "the comment beside the write-only key does not name the mechanism that makes "
+        "write-only stick, so the key reads as sufficient on its own"
     )

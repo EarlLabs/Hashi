@@ -1384,9 +1384,9 @@ another store is four lines of `.env` and no code.
 **The credential kept on this host may only write.** `PutObject` and nothing else: no
 `GetObject`, no `ListBucket`, no `DeleteObject`. Whoever holds this box holds that key, and
 a key that can delete turns a seizure into the loss of the entire backup history as well as
-the machine. Retention is therefore enforced on the **bucket** side — versioning, object
-lock, or a lifecycle rule — where this key cannot reach it. Set that up when you create the
-bucket: nothing on this host can do it for you, and nothing on this host can undo it.
+the machine. That is half of the protection; the other half is enforced on the **bucket**,
+where this key has no authority, and it is set up by hand when you create the bucket — see
+*The retention this host's own key cannot reach*, below.
 
 **What "uploaded" proves, exactly.** The SHA-256 of the artifact is inside the request's
 signature, so a store that accepts the request has recomputed that hash over the bytes it
@@ -1415,6 +1415,95 @@ artifact is written and stays on this host, and every run says so in as many wor
 still does not exist is the **schedule**: nothing runs `make backup` for you yet. Nor does
 the management directory have a place inside the artifact (see the table below — the
 artifact is the database and nothing else so far).
+
+### The retention this host's own key cannot reach
+
+The write-only key is the half of the protection that can be taken from you. Whoever holds
+this box holds a credential that may `PutObject` **to any name in the bucket, including a
+name that is already there** — so "it cannot delete" is not the same as "it cannot
+destroy". The rest is enforced by the account that owns the bucket, with a credential that
+never comes near this machine.
+
+**The requirement, before any mechanism:** an artifact that was in the bucket yesterday must
+still be retrievable tomorrow, by somebody holding a *different* credential, after anything
+the key on this host is able to do to that bucket today. Three things get offered as the way
+to get there and they are not interchangeable — one is the defence, one is an upgrade to it,
+and the third is the thing you are defending against.
+
+| Mechanism | In force? | What it actually defends against |
+|---|---|---|
+| **Bucket versioning** | **Required. This is the mechanism.** | The overwrite. A `PutObject` to a key that already exists adds a version instead of replacing one, so the one destructive act this host's credential can perform destroys nothing: the earlier bytes stay and are addressable by their version id. It covers the second case too — should the key turn out to have more authority than was intended, a `DeleteObject` under versioning writes a delete marker over versions that are still there. Without it, a single authenticated `PutObject` is a permanent loss and nothing else on this page helps. |
+| **Object lock (WORM retention)** | **On top of versioning where the store offers it. Optional, because many S3-compatible stores do not implement it.** | The deletion that versioning does not stop. Versions survive `DeleteObject`; they do not survive `DeleteObjectVersion`, which removes history one version at a time. A locked version cannot be removed until its retention expires — in governance mode, not by anyone without the privilege to bypass it; in compliance mode, not by anyone at all, including the account owner. That second property is also its cost: a period you set too long is paid for in storage until it runs out, and compliance mode cannot be talked out of it. It is defined on versions, so it needs the row above; it is never a substitute for it. |
+| **A lifecycle rule** | **Not a retention mechanism. Set one anyway, with a floor you chose on purpose.** | Nothing. It deletes on a schedule — that is its entire function, and under versioning it is the necessary counterweight that stops every version of every daily artifact accumulating for ever. It is therefore also the only thing here that can quietly undo the two rows above. Give noncurrent versions an expiry longer than the longest stretch in which you would not notice that the recent artifacts are garbage, remembering that noticing means *restoring one*, because this host cannot read back what it wrote. A rule that expires noncurrent versions after a few days turns versioning into a few days of protection. |
+
+**So, in one line:** versioning on, object lock on top of it where the store has it, and one
+lifecycle rule whose noncurrent expiry you picked deliberately and wrote down.
+
+**The object's name does a different job, and it is not this one.** `make backup` writes
+`hashi-<timestamp>.sql.gz.age` and sends it under that name below
+`HASHI_BACKUP_S3_PREFIX`, so two runs never collide and a scheduled run cannot clobber the
+one before it. That is protection against *accident* and it is worth having. It is not
+protection against anybody: the uploading key chooses the name, so it can name an object
+yesterday's name, and a bucket without versioning will accept that `PutObject` and keep the
+last one written. **The naming means nobody loses a backup by mistake; versioning is what
+means nobody loses one on purpose.**
+
+**If the store offers none of it.** First, ask properly rather than concluding it from a
+console page that had no checkbox on it — the three calls below answer it definitively, and
+versioning is the one of the three a store is likeliest to have. If the answer is genuinely no, the
+protection moves off the bucket and onto **a copy you pull down**: a machine that is not the
+control plane, holding the read credential from *What you carry*, fetches new objects out of
+the bucket on whatever cadence you can actually keep, onto media you hold. The artifact is
+already `age` ciphertext, so a copy on your own disk is no more exposed than the copy in the
+bucket; what it buys is that it is out of reach of this host's key entirely, which is the
+property versioning would have given you. **The cadence of the pull is the size of the
+window you can lose.**
+
+What is *not* a fallback: a second destination configured in `.env` here. Two buckets
+written by two keys on the same box are two things one seizure takes. Nor is giving this
+host a key that can delete so it can tidy up after itself — tidying is the lifecycle rule's
+job, and it is row three above. Moving the whole thing to a store that does offer versioning
+costs four lines of `.env` and no code, which is what keeping the store a *field* bought;
+whether to move is the owner's call and the constraints on it are recorded in
+`docs/decisions.md`, not re-argued here.
+
+**Checking it is really in force — from anywhere that is not this host.** You cannot check
+with the credential in `.env`, by construction: it can write and it can do nothing else.
+With an administrative credential for the bucket, on your own machine, ask the store
+directly:
+
+- `GetBucketVersioning` — the answer must be `Enabled`. `Suspended`, and an empty answer,
+  both mean new writes are unversioned; the difference between the two is only whether
+  versions were ever kept at all.
+- `GetObjectLockConfiguration` — the mode and the period, or an error saying the store does
+  not implement it. An error is not a failed check here; it is the answer to whether row two
+  is available to you.
+- `GetBucketLifecycleConfiguration` — read the noncurrent-version expiry and compare it to
+  the number you chose. This is the one that drifts, because it is the one somebody edits
+  later to save money.
+
+Those are the protocol's own names for the three settings, not one store's menu: what a
+console calls them differs from store to store, and a store that does not implement one
+answers the call with an error rather than under a different name. That is why they are
+written here as calls and not as a path through somebody's console.
+
+A setting can read `Enabled` and still not be doing what you assume, so confirm it
+empirically as well: with that same administrative credential, `PutObject` a throwaway
+object twice under one key, then `ListObjectVersions` under its prefix. **Two versions is
+versioning working. One is the state this entire section exists to prevent.** Objects that
+were already in the bucket are protected from the moment versioning is switched on, but
+nothing brings back a write that happened while it was off — so the check belongs at bucket
+creation, after any credential rotation, after a move to another store, and after anybody
+touches a lifecycle rule. Not once a year.
+
+**What this repository cannot tell you, and never will.** No test in this tree asserts any
+of the above. It cannot: the only credential this project holds is write-only by design,
+there is no read, list or delete path anywhere in the product, and the bucket lives in an
+account this code has no standing in. `make verify` proves the artifact is written, that it
+is encrypted before it reaches the disk, and that a store accepted exactly those bytes — it
+says nothing whatever about what that store does with them a minute later. The calls above
+are the only proof there is, you are the only one who can run them, and the day you will
+wish they had been true is a day you can no longer run them.
 
 ### What belongs in a backup, and what does not
 
@@ -1475,13 +1564,17 @@ repository's own Caddyfile. Neither is measured — see *Known-unproven*.
 
 Three things live on you and never on the control host. The first two are needed by every
 restore of an artifact written since 2026-09-23 — the file does not even open without the
-second. The third becomes needed the day the offsite upload exists.
+second. The third is needed from the moment anything is in the bucket, which since
+2026-09-23 it is.
 
 1. `HASHI_SECRET_KEY` — without it the dump is unreadable data.
 2. The **private half** of the age keypair whose public half is `HASHI_BACKUP_AGE_RECIPIENT`.
    Without it the artifact does not open at all, on any machine, including this one.
-3. A **read** credential for the backup bucket. The key in `.env` is write-only on
-   purpose, so the box that is seized cannot delete its own history.
+3. A **read** credential for the backup bucket — and, to check the retention above, an
+   administrative one. The key in `.env` can only write, on purpose, so the box that is
+   seized cannot delete its own history; the direct consequence is that fetching an
+   artifact back out of the bucket, and asking that bucket whether versioning is on, are
+   both things only you can do. Neither is ever written into `.env` on this host.
 
 Plus the values needed to rewrite `.env` itself — hosts, ports, the operator password
 hash, the Postgres password. Everything else in that file comes from `.env.example`.
