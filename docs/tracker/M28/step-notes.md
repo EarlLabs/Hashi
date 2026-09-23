@@ -248,3 +248,73 @@ not prove"**. A failure prints **"The artifact is written and it did NOT leave t
 machine"** plus `make backup-upload FROM=<path>`. With no store configured: **"This
 artifact is on this host and nowhere else"**. The runbook's new subsection is **"Where
 the artifact goes, and the credential that sends it"**.
+
+## M28.4 — retention is on the bucket, and this repository cannot check it
+
+`make test-infra` 263 passed (was 258, +5); `make verify` green (e2e 199, **no skips**,
+so the offsite scenarios really ran). Documentation and five static tests; no behaviour
+changed — confirmed by an empty diff over `scripts`, `deploy`, `control`, `edge`. Every
+technical claim below was checked against real object-storage semantics by the reviewer.
+
+1. **Bucket versioning is THE mechanism and is required. The three are not a choice.**
+   Versioning answers the overwrite — the host's key can `PutObject` to an arbitrary
+   name including yesterday's, and versioning makes that additive instead of
+   destructive — and it downgrades a `DeleteObject` to a delete marker, covering "the
+   key had more authority than intended" one level down. **Object lock** is an upgrade
+   on top where a store has it: it is what survives `DeleteObjectVersion`, is defined on
+   versions, therefore requires versioning and is never a substitute. **A lifecycle rule
+   defends against nothing** — it deletes on a schedule, is the necessary counterweight
+   to versions accumulating, and is the only one that can undo the other two. Do not
+   relitigate this as "pick whichever the store offers".
+
+2. **The object name is not the defence, and it looks like it.** `hashi-<timestamp>…`
+   stops two runs colliding — an accident. **The uploading key picks the name, so it can
+   write yesterday's.** Naming defends against mistake; versioning defends against
+   intent. Keep that split in any later text.
+
+3. **The fallback, if a store has none of the three: a copy pulled DOWN** by a machine
+   holding a read credential, onto media the owner holds; **the cadence of the pull is
+   the window that can be lost.** A second destination in `.env` on this host is
+   explicitly **not** a fallback — two keys on one box are two things one seizure takes.
+
+4. **The verification is the owner's, in protocol terms** and needs an administrative
+   credential, not the write-only one: `GetBucketVersioning` must say `Enabled`
+   (`Suspended` and empty both mean new writes are unversioned), plus
+   `GetObjectLockConfiguration` and `GetBucketLifecycleConfiguration` — then the
+   empirical check, because a setting can read `Enabled` and not behave: `PutObject`
+   twice under one key, then `ListObjectVersions`. **No provider is named anywhere in
+   the section**, deliberately: every console names these differently and the protocol
+   does not.
+
+5. **Nothing in this tree asserts the retention and nothing ever can** — write-only
+   credential, no read path in the product, a bucket in an account this code has no
+   standing in. The runbook says so in those words, under *"What this repository cannot
+   tell you, and never will"*, so a green `make verify` is not read as a configured
+   bucket. **M28.6 must not inflate this.**
+
+6. **`## Backups` now has TWO decision tables.** M28.1's *What belongs in a backup, and
+   what does not* is for what goes into an artifact; the new *The retention this host's
+   own key cannot reach* is for what the bucket does to it. Extend the right one.
+
+7. **`.env.example` points at the runbook heading by its exact title**, and
+   `test_the_env_file_sends_the_operator_to_the_section_that_decides_retention` fails if
+   the heading is renamed.
+
+8. **`HASHI_RESTORE_S3_*` still has no consumer in the repository** — verified by grep;
+   `.env.example` now says so. Until M28.8 the owner fetches the object with their own
+   client. `HASHI_RESTORE_AGE_IDENTITY` is the one a restore really reads.
+
+### How to test what M28.4 built
+
+`make test-infra` (4s, no Docker). The five new tests sit on a `retention_section`
+fixture that slices by the exact heading, and `_table_rows()` parses the table into
+cells so the verdict column is asserted rather than the prose around it. **No e2e
+scenario reads `docs/deploy/runbook.md`** — a words-only change there is fully covered
+by the static tier.
+
+### Wording later steps must match
+
+Heading: **"The retention this host's own key cannot reach"** (quoted in `.env.example`).
+Pinned sentences: **"nobody loses a backup by mistake"** / **"nobody loses one on
+purpose"**, and **"No test in this tree asserts any of the above"**. Verdict cells:
+**"Required. This is the mechanism."** and **"Not a retention mechanism."**
