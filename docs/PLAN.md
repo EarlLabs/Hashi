@@ -2340,9 +2340,10 @@ way M23 was run.
 
 ---
 
-## → M29 — One word for the person who uses this, and the product already picked a different one than the code did · asked for by the owner 2026-09-22 · PROPOSED
+## ✅ M29 — One word for the person who uses this, and the product already picked a different one than the code did · asked for by the owner 2026-09-22 · done 2026-09-23 (acceptance: stand walk good on everything a stand can reach; 2 checklist lines it cannot observe were lifted by the owner 2026-09-23; the real-host walk passed and found 2 runbook defects, fixed in M29.9)
 
-**Not started.**
+**Done.** Thirteen steps, 37 commits, every step converged clean under an
+independent reviewer. `make verify` green.
 
 ### The premise is better than "the owner prefers a different word"
 
