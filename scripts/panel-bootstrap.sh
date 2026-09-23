@@ -74,6 +74,24 @@ fail() { printf 'panel-bootstrap: %s\n' "$1" >&2; exit 1; }
   "no env file at ${ENV_FILE}. Copy .env.example to .env and fill it in, or pass
   --env-file. Nothing is generated for you: see the refusal below."
 
+# An env file compose cannot PARSE is answered here, first, and without its contents.
+#
+# This is M28.7's gate, and it is here because this script had the same leak one script
+# over: when compose cannot parse an env file it quotes the offending line's whole value
+# back, and section 2 below prints `compose up -d --build`'s output as it comes. So one
+# unclosed quote on the HASHI_SECRET_KEY line put the master key on the terminal of a
+# failed install — which is the output somebody pastes into a chat window when asking why
+# their install did not work. Reproduced live, not reasoned about (M28.8).
+#
+# Position is the whole of it: before every compose call this script can reach, so there is
+# nothing to remember when one is added. The checks below read the file themselves, for
+# PRESENCE of keys and for line numbers, and never print a value — but they cannot tell a
+# file compose will refuse from one it will accept, which is why this comes first.
+ENV_GATE_NOTHING_HAPPENED="Nothing was installed, started or changed."
+# shellcheck source=lib/env-file-gate.sh
+. "${REPO_ROOT}/scripts/lib/env-file-gate.sh"
+env_file_must_be_readable
+
 # grep for `KEY=value` with a non-empty value. Deliberately not `source`: sourcing an
 # env file runs it, so a stray backtick in a password becomes a command on this host.
 has_value() {

@@ -17,7 +17,10 @@ WHY:  this is the half of the backup that the control-plane host is deliberately
       So the read credential lives on the operator, is handed to one command on the day it
       is needed, and is named ``HASHI_RESTORE_S3_*`` rather than ``HASHI_BACKUP_S3_*``
       precisely so that no env file on a control-plane host ever has a reason to contain
-      it. ``scripts/backup.sh`` refuses an env file that does.
+      it. ``scripts/backup.sh`` refuses unless both are in the COMMAND'S OWN ENVIRONMENT —
+      stated as what is literally checked: it does not inspect the env file, which it never
+      opens (CLAUDE.md, hard rules), so a credential written only into ``.env`` gets a
+      refusal naming where it belongs, and one written into both is not detected.
 
       **The signature maths is written out again here rather than imported**, and that is
       a decision rather than an oversight. Both programs are handed to a one-off container

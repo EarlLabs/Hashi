@@ -46,8 +46,13 @@ BACKUP = REPO / "scripts" / "backup.sh"
 RUNNER = REPO / "scripts" / "backup-run.sh"
 INSTALLER = REPO / "scripts" / "backup-schedule.sh"
 UPLOADER = REPO / "deploy" / "backup" / "upload.py"
+# The gate below moved into a library in M28.8, when `scripts/panel-bootstrap.sh` turned
+# out to have the same leak and the choice was one implementation or two scrubbers that
+# drift. Sourced by both callers; executed by neither.
+GATE = REPO / "scripts" / "lib" / "env-file-gate.sh"
+BOOTSTRAP = REPO / "scripts" / "panel-bootstrap.sh"
 
-SURFACES = (BACKUP, RUNNER, INSTALLER, UPLOADER)
+SURFACES = (BACKUP, RUNNER, INSTALLER, UPLOADER, GATE)
 
 
 @pytest.fixture(scope="module")
@@ -314,10 +319,19 @@ def test_a_line_of_the_env_file_never_reaches_the_output_of_a_run() -> None:
     which has the docker engine it takes to run compose at all.
     """
     script = BACKUP.read_text()
-    assert "env_file_must_be_readable()" in script, "the gate is gone"
+    gate = GATE.read_text()
+    assert "env_file_must_be_readable()" in gate, "the gate is gone"
+    # ONE implementation. M28.8 gave it a second caller rather than a second copy, because
+    # two scrubbers are two things that drift and the next printer added to either script
+    # would be behind whichever one its author remembered.
+    assert len(re.findall(r"^env_file_must_be_readable\(\) \{", gate, re.M)) == 1
+    for caller in (BACKUP, BOOTSTRAP):
+        assert not re.search(
+            r"^env_file_must_be_readable\(\) \{", caller.read_text(), re.M
+        ), f"{caller.name} defines the gate again instead of sourcing it"
 
     body = re.search(
-        r"env_file_must_be_readable\(\) \{\n(.*?)\n\}\n", script, re.S
+        r"env_file_must_be_readable\(\) \{\n(.*?)\n\}\n", gate, re.S
     ).group(1)
     assert 'complaint="$(' in body, "compose's complaint is no longer captured"
     assert not re.search(r'(echo|printf|cat)[^\n]*\$\{complaint\}', body), (
@@ -327,6 +341,11 @@ def test_a_line_of_the_env_file_never_reaches_the_output_of_a_run() -> None:
     assert "BASH_REMATCH[1]" in body and "[0-9]+" in body, (
         "the line number is no longer taken out of a digits-only capture"
     )
+    # It asks with the CALLER's own compose invocation, which is the one carrying
+    # --env-file. A command assembled inside the library would be a second place for the
+    # `docker compose` rule to be got wrong, unwatched by either script's own tests.
+    assert '"${COMPOSE[@]}" config --quiet' in body
+    assert "docker compose" not in body
 
     # ...and every verb that can reach a compose call goes through it first.
     dispatch = script.split("case \"${1:-}\" in")[-1]

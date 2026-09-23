@@ -456,9 +456,13 @@ def test_the_new_verb_sits_behind_the_one_gate_and_has_none_of_its_own(script: s
         assert branch and "env_file_must_be_readable" in branch.group(0), (
             f"the {verb} branch does not pass through the env-file gate"
         )
-    assert len(re.findall(r"^env_file_must_be_readable\(\) \{", script, re.M)) == 1, (
-        "the gate exists more than once, which is how the two copies come to disagree"
+    # ONE implementation of the gate, in a library both this script and
+    # `scripts/panel-bootstrap.sh` source — never a copy in either, which is how two
+    # scrubbers come to disagree and the next printer ends up behind only one of them.
+    assert not re.search(r"^env_file_must_be_readable\(\) \{", script, re.M), (
+        "the gate is defined in this script as well as in the library it sources"
     )
+    assert '. "${REPO_ROOT}/scripts/lib/env-file-gate.sh"' in script
 
 
 def test_the_read_credential_is_taken_from_the_environment_and_never_from_the_env_file(
@@ -605,6 +609,27 @@ def test_a_damaged_artifact_is_walked_past_and_a_wrong_identity_is_not(script: s
         "a wrong identity does not stop the walk"
     )
     assert "RESTORE_CANDIDATES" in verb, "the walk has no bound"
+
+
+def test_naming_one_object_never_promises_to_try_the_one_before_it(script: str) -> None:
+    """Two lines that contradict each other are worse than either of them alone.
+
+    With ``OBJECT=`` there is exactly one candidate, so "Trying the one before it."
+    followed immediately by "none of them opened" reads as a command that has lost track of
+    what it is doing — and an operator who stops believing the output stops believing the
+    part of it that says which of their three inputs is wrong. Both the walk line and the
+    advice at the end are conditional on whether the operator chose.
+    """
+    verb = body_of(script, "command_restore_from_bucket")
+    walk = [line for line in verb.splitlines() if "Trying the one before it." in line]
+    assert len(walk) == 1, walk
+    assert 'if [ -z "${wanted}" ]; then' in walk[0], (
+        "the walk line is printed even when the operator named the one object there is"
+    )
+    assert "That is the one object you named." in verb, (
+        "the give-up message tells an operator who named an object to name one"
+    )
+    assert 'if [ -n "${wanted}" ]; then' in code_of(script, "command_restore_from_bucket")
 
 
 def test_the_last_thing_on_the_screen_is_what_it_did_not_do(script: str) -> None:

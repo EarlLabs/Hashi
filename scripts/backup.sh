@@ -183,45 +183,14 @@ USAGE
   exit 2
 }
 
-# Compose is the ONE thing allowed to open the env file (CLAUDE.md, hard rules), and when
-# it cannot PARSE that file it quotes the offending line straight back: `unterminated
-# quoted value "…"`, `Invalid template: "…"`, `unexpected character … in variable name
-# "…"`. The line it is complaining about is as likely to be HASHI_SECRET_KEY or
-# POSTGRES_PASSWORD as anything else — and this script's output is what cron mails when a
-# scheduled run fails (scripts/backup-run.sh), so one stray quote in .env puts a secret in
-# a mail spool, on every retry, for ever. Checked here and not fixed at each printer
-# because every compose call in this file produces the same message.
-#
-# WHAT MAKES THAT SAFE IS STRUCTURAL, and it is the property to preserve: this is called
-# from the DISPATCH at the bottom, before any of the three verb functions is entered, so
-# every compose call any of them can reach is behind it — however many there come to be.
-# Do not turn this into a count to check against, and do not move it inside a verb.
-#
-# What is repeated: the file, and compose's own line number. What is never repeated: the
-# text on that line. Compose's complaint is captured and dropped, not printed.
-env_file_must_be_readable() {
-  local complaint first line=""
-  if complaint="$("${COMPOSE[@]}" config --quiet 2>&1)"; then return 0; fi
-  # Any other refusal is about the compose files or an unset variable — it names variables
-  # and never values, and the caller reports it itself with its own advice attached.
-  case "${complaint}" in "failed to read "*) ;; *) return 0 ;; esac
-
-  # Digits only, out of a regex capture, so nothing of the operator's file can ride along
-  # in what looks like a number.
-  first="${complaint%%$'\n'*}"
-  [[ "${first}" =~ :\ line\ ([0-9]+): ]] && line=", at line ${BASH_REMATCH[1]},"
-
-  cat >&2 <<MSG
-the env file at ${ENV_FILE}${line} is one compose cannot read.
-
-Nothing was dumped, written or sent. What compose said about that line is deliberately NOT
-repeated here: it quotes the line's whole value back, that value may be HASHI_SECRET_KEY or
-POSTGRES_PASSWORD, and this text is what cron mails when a scheduled run fails. Open the
-file and look: an unclosed quote, a key with a space in it, or a stray dollar sign is what
-produces this.
-MSG
-  exit 1
-}
+# The env-file gate, M28.7, now shared with scripts/panel-bootstrap.sh — which reached
+# compose the same way and printed the same complaint, verbatim, during an install (M28.8).
+# One implementation and two callers rather than two scrubbers that drift apart; the file's
+# own header carries the finding and the structural property. It uses the COMPOSE array and
+# ENV_FILE defined above, so what it tests is this script's own invocation.
+ENV_GATE_NOTHING_HAPPENED="Nothing was dumped, written or sent."
+# shellcheck source=lib/env-file-gate.sh
+. "${REPO_ROOT}/scripts/lib/env-file-gate.sh"
 
 # Read only the variables this script needs, and only their names — never printing the
 # file. The env file holds real secrets and must not be echoed (CLAUDE.md, hard rules).
@@ -862,12 +831,27 @@ MSG
         echo "" >&2
         echo "${name} did not open, and it is not the identity — this artifact is damaged." >&2
         printf '%s\n' "${OPENS_COMPLAINT}" | sed 's/^/  /' >&2
-        echo "Trying the one before it." >&2
+        # Only when there is in fact one before it. An operator who named an object gets a
+        # single candidate, and "trying the one before it" followed immediately by "none of
+        # them opened" reads as a command that has lost track of what it is doing — at
+        # which point they stop believing the rest of the output, which is the part telling
+        # them which of their three inputs is wrong.
+        if [ -z "${wanted}" ]; then echo "Trying the one before it." >&2; fi
         echo "" >&2 ;;
     esac
   done <<< "${candidates}"
 
   if [ -z "${chosen}" ]; then
+    # Two different sentences, because the operator who named an object has already done
+    # the thing the other one is about to be asked to do.
+    local reach_further="Name an older object yourself to reach further back than this
+command does on its own:
+
+  … make restore-from-bucket OBJECT=<one of the names listed above>"
+    if [ -n "${wanted}" ]; then
+      reach_further="That is the one object you named. Run this again without OBJECT= to
+let it take the newest that opens, or name another from the listing above."
+    fi
     cat >&2 <<MSG
 
 ${tried} artifact(s) were fetched and none of them opened. Nothing was restored and nothing
@@ -875,10 +859,7 @@ was changed.
 
 That is a statement about the bucket rather than about this machine: the objects are there,
 they came back whole enough to try, and what is inside them is not what a backup of this
-project looks like. Name an older object yourself to reach further back than this command
-does on its own:
-
-  … make restore-from-bucket OBJECT=<one of the names listed above>
+project looks like. ${reach_further}
 
 The ones that were tried are in ${REPO_ROOT}/backups/ and can be examined with the identity
 on any machine that has age.

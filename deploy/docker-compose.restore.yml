@@ -17,9 +17,14 @@
 #       form (`- VAR`) does NOT mean "the shell only". With `--env-file`, a value in the
 #       env file reaches the container exactly as a shell value would, and the shell only
 #       wins when both are set. So no shape of this file can enforce "never from the env
-#       file" on its own. That enforcement is a refusal in `scripts/backup.sh`, which
-#       stops when the env file contains any `HASHI_RESTORE_` name — and that refusal is
-#       load-bearing rather than tidy-minded, which is why it is written down here too.
+#       file" on its own. That enforcement is a refusal in `scripts/backup.sh`, and it is
+#       precise about what it does: it stops unless the two credentials are in the
+#       COMMAND'S OWN ENVIRONMENT. It does not inspect the env file — that script opens no
+#       env file at all (CLAUDE.md, hard rules) — so a credential written only into `.env`
+#       is a refusal that says where it belongs, while one written into both is not
+#       detected. That is the property, stated as what is literally checked rather than as
+#       what it achieves, and it is load-bearing rather than tidy-minded, which is why it
+#       is written down here too.
 #
 #       The four NON-secret fields are a different case and fall back on purpose. Which
 #       store, which region, which bucket and which prefix are not secrets, they are
