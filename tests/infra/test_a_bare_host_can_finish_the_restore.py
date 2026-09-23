@@ -330,6 +330,28 @@ def test_a_host_with_no_tunnel_can_still_publish_the_panel(makefile: str) -> Non
     assert "docker-compose.tunnel.yml" in definitions["COMPOSE_PANEL"]
 
 
+def test_the_env_template_names_the_file_that_actually_reads_the_bind_address() -> None:
+    """A comment that names the wrong file is how the next reader loses ten minutes.
+
+    ``.env.example`` said this variable was read by ``docker-compose.public.yml``, which
+    was true until the mapping moved. Nothing caught it, because nothing had ever had a
+    reason to read that paragraph against the files — so it is read here now, along with
+    the target that leaves the variable unset, which is the one a rebuilt host uses.
+    """
+    template = ENV_EXAMPLE.read_text()
+    block = template.split("HASHI_PRIVATE_BIND_ADDR=")[0].rsplit("\n\n", 1)[-1]
+    assert "docker-compose.tunnel.yml" in block, (
+        "the template names a file that no longer carries this variable"
+    )
+    assert "HASHI_PRIVATE_BIND_ADDR" in TUNNEL_OVERLAY.read_text(), (
+        "the file the template now points at does not read this variable either"
+    )
+    assert "make up-panel-over-ssh" in block, (
+        "the one route that works on a host with no tunnel is not named where the "
+        "variable is set"
+    )
+
+
 def test_the_loopback_refusal_names_the_command_instead_of_a_document(
     bootstrap: str, backup: str
 ) -> None:

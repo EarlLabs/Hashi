@@ -104,18 +104,49 @@ def test_the_hash_is_produced_on_a_host_with_nothing_but_a_container_runtime(
     )
 
 
-def test_stdout_is_exactly_the_line_to_paste(printed) -> None:
-    """Everything else — the build, the prompts, the explanation — is on stderr.
+def test_the_build_and_the_prompts_stay_off_stdout(printed) -> None:
+    """Named for what it checks, which is not "stdout is only the line".
 
-    An operator at 3am copies what they see; a build log interleaved with the one line
-    that matters is how half a hash ends up in an env file. It also means the command can
-    be piped, which is what this test is doing.
+    It is not: ``control/cli.py`` prints the line under a sentence naming where it goes
+    and over a paragraph about the doubled ``$$``, and that block is out of this step's
+    fence and worth having. What this asserts is the property the redirection actually
+    buys — that **nothing this script emitted** is mixed into it. An operator at 3am
+    copies what they see, and a build log interleaved with the value is how half a hash
+    ends up in an env file.
+
+    The first name this test had claimed the stronger property and checked this one, which
+    is the defect this repository has recorded more often than any other.
     """
-    kept = [line for line in printed.stdout.splitlines() if line.strip()]
-    assert kept[0].startswith("Put this in .env"), printed.stdout[:500]
-    assert any(line.startswith("HASHI_OPERATOR_PASSWORD_HASH=") for line in kept)
-    assert "Step" not in printed.stdout and "sha256:" not in printed.stdout, (
-        "build output reached stdout, where the value to paste lives"
+    stdout = printed.stdout
+    kept = [line for line in stdout.splitlines() if line.strip()]
+
+    # Everything on stdout comes from the CLI's block: the line, and prose about it.
+    assert kept[0].startswith("Put this in .env"), stdout[:500]
+    assert sum(line.startswith("HASHI_OPERATOR_PASSWORD_HASH=") for line in kept) == 1
+    assert kept[-1].endswith("would arrive empty."), stdout[-500:]
+
+    # And nothing the SCRIPT emitted is anywhere in it. Each of these is a real line from
+    # one of the three noisy sources: this script's own progress, docker's build, and
+    # getpass's prompt — checked as text rather than by a marker, so a change in any of
+    # the three that starts leaking is caught here rather than on somebody's terminal.
+    for noise in (
+        "building the control image",   # this script's own progress lines
+        "DONE",                         # buildkit's step output
+        "CACHED",
+        "sha256:",
+        "naming to docker.io",
+        "operator password:",           # getpass, which writes its prompt to stderr
+        "again:",
+        "Warning: Password input may be echoed.",
+    ):
+        assert noise not in stdout, f"{noise!r} reached stdout, where the value to paste is"
+
+    # The other half of the same claim, so none of the above can pass by nothing having
+    # been printed at all: all three sources really did emit, on the other stream.
+    assert "building the control image" in printed.stderr
+    assert "operator password:" in printed.stderr
+    assert "DONE" in printed.stderr or "CACHED" in printed.stderr, (
+        "docker printed no build output anywhere, so the sweep above proves nothing"
     )
 
 

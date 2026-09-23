@@ -21,10 +21,17 @@
 #       needs no env file to build, so this runs BEFORE .env can be filled in.
 # HOW:  ./scripts/hash-password.sh   (or: make hash-password)
 #
-#       It prompts twice, prints the ready-to-paste line on stdout and everything else on
-#       stderr, and writes nothing anywhere. The password is read from a prompt and never
-#       from an argument, because an argument is world-readable in /proc and lands in
-#       shell history — control/cli.py's own rule, and this only moves where it runs.
+#       It prompts twice and writes nothing anywhere. WHAT GOES WHERE, measured rather
+#       than claimed: this script's own progress lines, the two prompts and the whole of
+#       docker's build output go to STDERR; stdout carries control/cli.py's own block and
+#       nothing this script added — the HASHI_OPERATOR_PASSWORD_HASH= line, under a
+#       sentence naming where it goes, over the paragraph explaining the doubled `$$`
+#       that belongs in the file. So stdout is NOT "the line alone", and saying it was
+#       would have been a checkable claim that is false: what the redirection below buys
+#       is that no build noise can ever land among that block. The
+#       password is read from a prompt and never from an argument, because an argument is
+#       world-readable in /proc and lands in shell history — control/cli.py's own rule,
+#       and this only moves where it runs.
 #
 #       On a machine that DOES have the venv, `python -m control.cli hash-password` is
 #       the same command without a build, and stays the documented route there.
@@ -70,8 +77,8 @@ fi
 
 echo "building the control image, which is where the hashing code lives" >&2
 echo "(on a fresh host this is the slow part; it is the same build a restore does)" >&2
-# Build output goes to stderr on its own, which is what keeps stdout exactly the line to
-# paste. BUILDX_NO_DEFAULT_ATTESTATIONS for the same reason every `up --build` in this
+# Build output is sent to stderr, which is what keeps it out of the block the operator
+# copies from. BUILDX_NO_DEFAULT_ATTESTATIONS for the same reason every `up --build` in this
 # project sets it: an attestation records the build time, so a fully cached rebuild still
 # produces a new image digest and nothing downstream can tell a cached build from a churn.
 if ! BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build -f "${DOCKERFILE}" -t "${IMAGE}" . >&2; then
