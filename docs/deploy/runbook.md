@@ -112,12 +112,12 @@ On the control-plane box, `cp .env.example .env` and fill in:
 | `HASHI_SECRET_KEY` | from your machine; never generated on the host |
 | `HASHI_PUBLIC_HOST` | the panel/delivery hostname, already pointing here |
 | `HASHI_OPERATOR_USERNAME` | `owner` is the default and is guessable — that is fine, the password is the defence |
-| `HASHI_OPERATOR_PASSWORD_HASH` | the hash, never the password |
+| `HASHI_OPERATOR_PASSWORD_HASH` | the hash, never the password. `make hash-password` produces it **on this host**, inside the control image, with nothing installed but the container runtime; `python -m control.cli hash-password` is the same command on a machine that already has the project set up |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `HASHI_DATABASE_URL` is composed from these, so the app and the database cannot drift apart |
 | `CADDY_ACME_EMAIL` | not checked by the bootstrap script; compose fails without it |
 | `HASHI_PRIVATE_HOST` | the name your own devices ask for over the management tunnel — usually this host's tunnel address |
 | `HASHI_PRIVATE_PORT` | where Caddy serves the console; the same variable drives the listener and the published mapping, so they cannot drift |
-| `HASHI_PRIVATE_BIND_ADDR` | which address on **this** host the console is published on. The tunnel's, never loopback — see *Reaching the panel* |
+| `HASHI_PRIVATE_BIND_ADDR` | which address on **this** host the console is published on. The tunnel's, never loopback — see *Reaching the panel*. Read only by `make up-panel`; a host with no tunnel yet leaves it unset and publishes with `make up-panel-over-ssh` |
 | `HASHI_MGMT_*` | optional: the management tunnel's own address, port, endpoint, MTU and device list. Absent means no tunnel is generated |
 
 **Paste the hash exactly as `hash-password` printed it, doubled `$$` and all.** The
@@ -145,16 +145,30 @@ So `panel-bootstrap.sh` installs a stack that nothing outside the host can reach
 says so: it verifies the control plane from *inside* the compose network and ends by
 naming what it proved and what it did not. It used to end with `The panel is at
 https://…/panel/` — an address that answered nothing, because 80 and 443 were closed. It
-prints no address now. Publishing is still a separate, deliberate step:
+prints no address now. Publishing is still a separate, deliberate step, and there are two
+of them because a host either has a management tunnel or does not:
 
 ```bash
-make up-panel
+make up-panel            # the delivery endpoint, and the console on this host's
+                         # management-tunnel address
+make up-panel-over-ssh   # the same without that last mapping, for a host with no tunnel
+                         # yet: the console answers on loopback only, reached with ssh -L
 ```
 
-That is the base stack plus `deploy/docker-compose.public.yml`, which **ships with the
-repository** — it used to be a heredoc you typed onto the box, and that stopped being
-survivable when the file grew a mapping whose bind address is the difference between a
-private console and a public one. Caddy only. Never the database.
+That is the base stack plus `deploy/docker-compose.public.yml` — and, for the first,
+`deploy/docker-compose.tunnel.yml` on top. Both **ship with the repository**: they used to
+be a heredoc you typed onto the box, and that stopped being survivable when the file grew
+a mapping whose bind address is the difference between a private console and a public one.
+Caddy only. Never the database.
+
+**Why two files.** `HASHI_PRIVATE_BIND_ADDR` is the one value in the deployed shape that
+names an address *this host must actually hold*, and a machine restored from a bucket
+holds no tunnel address — the tunnel's keys were on the box that was lost. `make up-panel`
+there fails on a bind docker cannot make, at the point where the operator cannot log in
+yet; the bare-host walk of 2026-09-23 answered it with `ip addr add`, by hand. So the
+mapping that needs a tunnel is a file of its own, and everything a deployed host publishes
+regardless — including the loopback fallback the `ssh -L` route uses — is in the other.
+Neither publishes the console on an address the internet can reach.
 
 **And remember it after every `make panel-bootstrap`.** That script uses the base file
 alone, on purpose — so a later run brings the stack back to the base file's shape and
@@ -251,7 +265,10 @@ appears on. Then `make up-panel`, and open the console from a device on the tunn
 **Never `HASHI_PRIVATE_BIND_ADDR=127.0.0.1`.** Loopback is already claimed for that port
 by the fallback below, and docker refuses the second bind with "port is already
 allocated"; `panel-bootstrap.sh` checks for it and says so, because that error names
-neither the cause nor the cure.
+neither the cause nor the cure. **And never an address this host does not hold** — that
+is the same mistake wearing different clothes, and it is what a freshly restored machine
+has: no tunnel, therefore no address, therefore `make up-panel` fails on the bind. Leave
+the variable unset and publish with `make up-panel-over-ssh` until the tunnel is up.
 
 ### The way back in when the tunnel is unavailable
 
@@ -259,9 +276,10 @@ neither the cause nor the cure.
 need it is the day of an emergency rotation, and a fallback nobody has run is a paragraph.
 It is also the route this project's own field run used all night.
 
-`make up-panel` publishes the console's port a second time, on this host's loopback only.
-Nothing off the host can reach it; anything that can already open an SSH session can
-forward it:
+`make up-panel` publishes the console's port a second time, on this host's loopback only
+— and `make up-panel-over-ssh` publishes *only* that one, which is the whole of its
+difference. Nothing off the host can reach it; anything that can already open an SSH
+session can forward it:
 
 ```bash
 ssh -L PRIVATE_PORT:127.0.0.1:PRIVATE_PORT USER@THE_PANEL_HOST
@@ -1359,6 +1377,14 @@ HASHI_RESTORE_AGE_IDENTITY=/path/to/hashi-backup-identity.txt \
   make restore FROM=backups/hashi-<...>.sql.gz.age
 ```
 
+**What it asks before it replaces anything**: it names the env file, the compose project
+and the database it resolved, counts what is in that database, and asks you to type the
+database name — *unless there is nothing there*, in which case it says so and asks
+nothing. A database with rows in it and no terminal to answer on is a refusal with a
+sentence, not a silent exit; `FORCE=1` is the deliberate way past. Afterwards it prints
+`make restart-control`, which restarts the control plane without changing what this host
+publishes — **not** `make down && make up`, which would take every published port away.
+
 `age` runs inside the control container, so nothing extra is installed on the box and any
 host that can run the stack can restore. If the control plane itself will not start, open
 the artifact by hand on any machine that has `age` and restore what comes out — the script
@@ -1386,8 +1412,14 @@ repository, and three things you are carrying. One command does the rest:
 # the runtime first — a genuinely bare host has none of docker, git or make; see
 # "What every box must already have" above. This command does not install one for you.
 git clone <this repo> hashi && cd hashi
-cp .env.example .env    # fill in HASHI_SECRET_KEY, the hostnames, the operator password
-                        # hash and the database password. Nothing else is needed.
+cp .env.example .env
+
+make hash-password      # prints the whole HASHI_OPERATOR_PASSWORD_HASH line to paste in.
+                        # It runs inside this project's control image, so this host needs
+                        # nothing but the runtime it already has.
+
+# then fill in .env: HASHI_SECRET_KEY, the hostnames, that hash and the database
+# password. Nothing else is needed to run the command below.
 
 HASHI_RESTORE_AGE_IDENTITY=/path/to/hashi-backup-identity.txt \
 HASHI_RESTORE_S3_ACCESS_KEY_ID=<a key that may list and get> \
@@ -1397,6 +1429,38 @@ HASHI_RESTORE_S3_SECRET_ACCESS_KEY=<its secret> \
 
 That installs the control plane on this machine, reads the bucket, takes the newest
 artifact that actually opens, and restores it. It is safe to run again after any failure.
+
+**`make hash-password` is here because the value could not be made on the machine that
+needs it.** The hash is a scrypt digest produced by this project's own code, so the
+documented route — `python -m control.cli hash-password` — needs the project installed and
+Python 3.14. A host rented an hour ago has the system's Python (3.10 on Ubuntu 22.04) and
+`make setup` cannot make a venv it does not have an interpreter for. Until this target
+existed, one of the four values above required a **second working computer**, in the
+middle of a rebuild: the walk of 2026-09-23 met it as a traceback, then a
+`command not found`. The image the target builds is the same image the restore builds
+seconds later, so it costs nothing the rebuild was not already spending.
+
+**A terminal, or `FORCE=1`.** The restore replaces live data and confirms before it does,
+and a confirmation needs somewhere to be answered. On a machine this command has just
+installed from nothing there is nothing to confirm — the database holds no rows and it
+says so instead of asking — so the ordinary bare-host run needs no terminal at all. If the
+database does hold something and there is no tty (`ssh host 'make …'`, a wrapper, a cron
+entry), it stops **before the bucket is read** and says so, rather than printing a question
+into a session that cannot answer it. `FORCE=1` skips the question and nothing else.
+
+**Then publish the ports, and mind which command.** The command ends by naming them; the
+one to use on a freshly restored host is `make up-panel-over-ssh`, because `make up-panel`
+wants `HASHI_PRIVATE_BIND_ADDR` to be a management-tunnel address this machine does not
+have yet. See *The port-publication gap*.
+
+**And the restored host is not backing anything up.** `HASHI_BACKUP_AGE_RECIPIENT` and the
+write-only `HASHI_BACKUP_S3_*` credential lived only in the `.env` that was lost — that
+file is deliberately in no backup — so `make backup` here refuses outright with
+`required variable HASHI_BACKUP_AGE_RECIPIENT is missing a value`, and the crontab that ran
+the schedule was on the old machine too. Put the **public** half of the age keypair you are
+carrying back into `.env`, refill the S3 block, and run `make backup-schedule`. The command
+says this on its last screen as well, and says which of the two cases it measured. Until
+you do it, the fleet has exactly one copy of itself and it is the machine you just built.
 
 **It does not move DNS, it does not re-issue the delivery endpoint's certificate, and it
 tells no user anything** — the three that decide whether a restored control plane serves
@@ -1435,9 +1499,11 @@ minutes and an hour.** Every one of them names which of the three inputs is wron
 | What is wrong | What you get |
 |---|---|
 | No container runtime, no compose plugin, or a daemon that is not answering | Three different sentences, each naming which one, and *"Nothing has been fetched and nothing has been changed"*. `git` and `make` cannot be the problem here — they are what put this checkout on the machine and what ran the command |
-| No `.env` | The copy-and-fill line, and why that file is deliberately in no backup |
+| No `.env` | The copy-and-fill line, `make hash-password` for the value that cannot be typed, and why that file is deliberately in no backup |
 | The env file is one compose cannot parse | The file and the line number, never the line — see *When the backup runs* |
 | `HASHI_SECRET_KEY` missing from `.env` | The bootstrap refuses before anything is built, and never generates one |
+| `HASHI_OPERATOR_PASSWORD_HASH` missing, or still `.env.example`'s placeholder | The bootstrap refuses at once and names `make hash-password`, rather than letting the control plane refuse the unfilled value three minutes later as a health-check timeout |
+| No terminal to confirm on, and a database with something in it | Said **before the bucket is read**, with what it counted and with `FORCE=1`. A database this command just installed holds nothing and is never asked about |
 | `HASHI_RESTORE_AGE_IDENTITY` unset or not a file | Named as the private half you carry, with the form to supply it in |
 | The read credential is not in the command's environment | Named, with the reminder that the key in `.env` may only write and is not the one to reach for |
 | Endpoint, region or bucket unresolvable | Every missing name at once, and that three of them may come from the `HASHI_BACKUP_S3_` block instead |
@@ -1463,8 +1529,9 @@ that *serves somebody*.
    deliberately not in the backup (see *What belongs in a backup, and what does not*): the
    old host's private keys are to be presumed compromised. Caddy asks a public CA for a new
    one the first time the name resolves *here* and inbound `:80`/`:443` reach this machine
-   — which cannot happen before 1, and cannot happen at all until `make up-panel` publishes
-   those ports, because the base stack publishes none. Until then `/sub/*` serves nothing.
+   — which cannot happen before 1, and cannot happen at all until `make up-panel` (or
+   `make up-panel-over-ssh`, on a host with no tunnel yet) publishes those ports, because
+   the base stack publishes none. Until then `/sub/*` serves nothing.
    The panel itself is unaffected: it is served by Caddy's own CA, which is new, so each of
    your own devices is asked to trust the console once more. The costs and the issuance
    limits are in *The `caddy_data` cost, stated rather than waved at*.
@@ -1755,7 +1822,12 @@ It does not give you back:
   and every screen that touches a node or a user answers *"The data is intact; the key is
   wrong. Nothing has been changed."*
 - **A way to log in.** `HASHI_OPERATOR_PASSWORD_HASH` lives in `.env`, not in the
-  database.
+  database. `make hash-password` makes a new one on the host itself.
+- **A backup.** `HASHI_BACKUP_AGE_RECIPIENT` and the write-only S3 credential were in
+  `.env` too, and the schedule was a crontab on the machine that is gone — so the host
+  that came out of the backup history cannot add to it until you put both back and run
+  `make backup-schedule`. Nothing fails loudly on its own: `make backup` refuses, and the
+  panel truthfully reports that nothing has been recorded here.
 - **A working fleet.** Restoring records does not touch a node. The new control plane
   believes in nodes that may be seized, blocked or gone; you re-apply to the ones you
   still hold and delete the ones you do not.
@@ -1802,5 +1874,7 @@ second. The third is needed from the moment anything is in the bucket, which sin
    one command — neither it nor the age identity is ever written into `.env` on this host,
    and the command refuses rather than reading them from there.
 
-Plus the values needed to rewrite `.env` itself — hosts, ports, the operator password
-hash, the Postgres password. Everything else in that file comes from `.env.example`.
+Plus the values needed to rewrite `.env` itself — hosts, ports, the Postgres password,
+and a password for the panel. The operator password **hash** is not on that list any more:
+`make hash-password` makes it on the host, so what you carry is the password itself, in
+your head. Everything else in that file comes from `.env.example`.

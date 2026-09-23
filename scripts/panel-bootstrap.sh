@@ -141,9 +141,64 @@ for key in HASHI_PUBLIC_HOST HASHI_PRIVATE_HOST HASHI_PRIVATE_PORT \
   has_value "$key" || MISSING+=("$key")
 done
 if [ ${#MISSING[@]} -gt 0 ]; then
+  # One of them cannot be typed, and on a bare host nothing here could produce it —
+  # which is why the way to make it is named HERE rather than left to a document. The
+  # bare-host walk met this refusal, followed it to .env.example, followed that to
+  # `python -m control.cli hash-password`, and found a machine with Python 3.10, no venv
+  # and no way to make one (M28.10, finding 1). `make hash-password` runs the same
+  # command inside the control image and needs nothing but the runtime this host
+  # already has.
+  HASH_ROUTE=""
+  case " ${MISSING[*]} " in
+    *" HASHI_OPERATOR_PASSWORD_HASH "*)
+      HASH_ROUTE="
+
+  HASHI_OPERATOR_PASSWORD_HASH is the one you cannot type. Make it on this machine,
+  with nothing installed but the container runtime that is already here:
+
+      make hash-password
+
+  It prompts for a password, prints the whole line to paste into ${ENV_FILE}, and
+  writes nothing anywhere. On a machine that already has this project set up,
+  \`python -m control.cli hash-password\` is the same command without the build." ;;
+  esac
   fail "these keys are missing or empty in ${ENV_FILE}: ${MISSING[*]}.
   See .env.example for what each one is. Nothing is defaulted: a default here would be
-  the same value on every host that ever runs this script."
+  the same value on every host that ever runs this script.${HASH_ROUTE}"
+fi
+
+# A required key still holding .env.example's own placeholder is a key nobody filled in,
+# and this is the one where noticing costs nothing and not noticing costs three minutes.
+# The control plane refuses to boot on a hash that is not one, so an unfilled hash
+# arrives as the health-check timeout at the end of this script — a failure whose message
+# is about a container that did not answer, with nothing in it about a password. It is
+# also the key the operator was most likely to leave, because until `make hash-password`
+# existed there was no way to produce it on a host like this one (M28.10, finding 1).
+#
+# Read OUT OF .env.example rather than written here, so the two cannot drift, and
+# compared as a whole line rather than matched as a pattern. Only this key: the VALIDITY
+# of a value is control/app/settings.py's to judge, and this is not that — it is
+# "nothing was put here at all", which no amount of validation downstream says plainly.
+TEMPLATE="${REPO_ROOT}/.env.example"
+PLACEHOLDER=""
+if [ -r "${TEMPLATE}" ]; then
+  PLACEHOLDER="$(sed -n 's/^HASHI_OPERATOR_PASSWORD_HASH=//p' "${TEMPLATE}" | awk 'NR==1')"
+fi
+if [ -n "${PLACEHOLDER}" ] && awk -v want="HASHI_OPERATOR_PASSWORD_HASH=${PLACEHOLDER}" \
+     '$0 == want { found = 1 } END { exit !found }' "${ENV_FILE}"; then
+  fail "HASHI_OPERATOR_PASSWORD_HASH in ${ENV_FILE} is still the placeholder .env.example
+  ships, so nobody has set an operator password and the panel would refuse to start.
+
+  Make it on this machine, with nothing installed but the container runtime that is
+  already here:
+
+      make hash-password
+
+  It prompts for a password, prints the whole line to paste into ${ENV_FILE}, and writes
+  nothing anywhere. On a machine that already has this project set up,
+  \`python -m control.cli hash-password\` is the same command without the build.
+
+  Nothing was installed, started or changed."
 fi
 
 # A `$` that is not doubled. This check earns its place with a bug that cost a whole
@@ -206,8 +261,19 @@ case "${PRIVATE_BIND}" in
   mapping beside it, so docker would refuse the second bind with 'port is already
   allocated' and you would be reading that instead of this.
 
-  If there is no management tunnel on this host yet, leave the variable unset and reach
-  the panel over SSH — docs/deploy/runbook.md, 'Reaching the panel'." ;;
+  If there is no management tunnel on this host yet — which is true of every host a
+  restore has just rebuilt, because the tunnel's keys were on the machine that was lost
+  — leave this variable unset and publish with
+
+      make up-panel-over-ssh
+
+  That is the same publication without the one mapping that needs a tunnel address, so
+  the console lands on this host's loopback only and you reach it with
+
+      ssh -L <HASHI_PRIVATE_PORT>:127.0.0.1:<HASHI_PRIVATE_PORT> <you>@<this host>
+
+  Move to \`make up-panel\` once the tunnel is up. The long version of both routes is
+  docs/deploy/runbook.md, 'Reaching the panel'." ;;
 esac
 
 say "env file ${ENV_FILE} has every required key and no unescaped \$"
@@ -404,6 +470,13 @@ say "done. Proven: the control plane runs, answers /healthz and routes /sub/{tok
   all of it asked from inside the compose network."
 say "NOT proven, and not yet true: nothing here is reachable from outside this host. This
   stack publishes no ports and this script adds none, so there is no panel address to
-  visit until Caddy's ports are published — \`make up-panel\`, which is this same stack
-  plus deploy/docker-compose.public.yml. What that costs to re-run this script afterwards
-  is in docs/deploy/runbook.md under 'The port-publication gap'."
+  visit until Caddy's ports are published:
+
+      make up-panel            this stack plus the delivery endpoint and the console on
+                               this host's management-tunnel address
+      make up-panel-over-ssh   the same without that last mapping, for a host with no
+                               tunnel yet — the console then answers on loopback only
+                               and you reach it with \`ssh -L\`
+
+  What either costs to re-run this script afterwards is in docs/deploy/runbook.md under
+  'The port-publication gap'."

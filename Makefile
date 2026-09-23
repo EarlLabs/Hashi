@@ -11,13 +11,22 @@ VENV        := .venv
 PY          := $(VENV)/bin/python
 COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
-# The deployed shape: the base stack plus the only overlay that opens a port on a
+# The deployed shape: the base stack plus the only overlays that open a port on a
 # real host. Never the dev overlay — that publishes the database.
-COMPOSE_PANEL := $(COMPOSE) -f deploy/docker-compose.public.yml
+#
+# Two of them, and the split is M28.10's: everything a deployed host publishes whether
+# or not it has a management tunnel is in public.yml, and the console on the TUNNEL's
+# own address — the one mapping that needs an address this host actually holds — is in
+# tunnel.yml. A host restored from a bucket has no tunnel yet, so `up-panel` there fails
+# on a bind docker cannot make, and `up-panel-over-ssh` below is the same publication
+# without that one line.
+COMPOSE_PANEL_SSH := $(COMPOSE) -f deploy/docker-compose.public.yml
+COMPOSE_PANEL := $(COMPOSE_PANEL_SSH) -f deploy/docker-compose.tunnel.yml
 
 .PHONY: setup env verify e2e-verify test test-control test-edge test-infra test-e2e lint \
-        up up-dev up-panel down logs ps e2e-up e2e-down e2e-reset e2e-psql \
-        e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap
+        up up-dev up-panel up-panel-over-ssh restart-control down logs ps \
+        e2e-up e2e-down e2e-reset e2e-psql \
+        e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap hash-password
 
 ## --- setup ------------------------------------------------------------------
 
@@ -166,6 +175,37 @@ up-dev: env
 up-panel: env
 	$(NO_ATTESTATIONS) $(COMPOSE_PANEL) up -d --build
 
+# The same publication on a host that has no management tunnel yet — which is every
+# host `make restore-from-bucket` has just rebuilt, because the tunnel's keys were on
+# the machine that was lost and a fresh one has no address to bind to. `make up-panel`
+# there fails on `cannot assign requested address`, and the walk that found it answered
+# with `ip addr add`, by hand, at the point where the operator cannot log in yet.
+#
+# What it publishes: the delivery endpoint on 80/443, and the console on THIS HOST'S
+# LOOPBACK only. Nothing off the box can reach the console; you reach it the way the
+# runbook's "The way back in when the tunnel is unavailable" already describes, and
+# which the field run used all night:
+#
+#   ssh -L <HASHI_PRIVATE_PORT>:127.0.0.1:<HASHI_PRIVATE_PORT> you@this-host
+#
+# It is not a weaker `up-panel`: the mapping it leaves out is an ADDITIONAL address to
+# reach the same console on, and nothing here publishes the console on an address the
+# internet can reach. Move to `make up-panel` once the tunnel is up.
+up-panel-over-ssh: env
+	$(NO_ATTESTATIONS) $(COMPOSE_PANEL_SSH) up -d --build
+
+# What to run after a restore, and deliberately not `make down && make up`.
+#
+# The restore used to end by telling the operator exactly that, and on a deployed host
+# it is the one sequence the Makefile itself warns against: `make up` converges the
+# stack back to the base file's shape and takes the published ports away, so the
+# instruction that was supposed to finish a rebuild ends with a panel nobody can reach
+# (M28.10, finding 3). `restart` restarts the containers that are there and changes
+# nothing about what the stack publishes, so it is correct whichever of `up-dev`,
+# `up-panel` and `up-panel-over-ssh` this host was brought up with.
+restart-control:
+	$(COMPOSE) restart control
+
 down:
 	$(COMPOSE) down
 
@@ -187,6 +227,22 @@ ps:
 
 panel-bootstrap:
 	@scripts/panel-bootstrap.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
+
+# The one value in .env that cannot be typed, on a host where nothing can produce it.
+#
+# HASHI_OPERATOR_PASSWORD_HASH comes from `python -m control.cli hash-password`, which
+# needs this project's dependencies and Python 3.14 — and a rented Ubuntu box has 3.10,
+# no venv and no way to make one (`make setup` looks for python3.14 and does not find
+# it). So the restore runbook asked for four values and one of them could only be made
+# on a SECOND working machine, which is the difference between "read the command" and
+# "have another computer" (M28.10, finding 1).
+#
+# It runs in the control image, which is the same answer this project already gives for
+# pg_dump and for age: the tool lives where the stack lives, and the host needs nothing
+# but a container runtime. Nothing here reads an env file — it cannot, because the file
+# is what this command exists to help fill in.
+hash-password:
+	@scripts/hash-password.sh
 
 ## --- preparing a host to be a node (see scripts/node-bootstrap.sh) ----------
 

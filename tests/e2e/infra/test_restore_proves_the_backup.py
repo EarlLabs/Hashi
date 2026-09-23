@@ -122,7 +122,17 @@ def _docker_env() -> dict[str, str]:
     return env
 
 
-def env_file(directory: pathlib.Path, *, key: str, port: int) -> pathlib.Path:
+def env_file(
+    directory: pathlib.Path, *, key: str, port: int, recipient: str | None = BACKUP_RECIPIENT
+) -> pathlib.Path:
+    """The env file a host under test is installed from.
+
+    ``recipient=None`` is what a REBUILT host really looks like — M28.10. The age
+    recipient and the write-only S3 key lived only in the `.env` that was lost, because
+    that file is deliberately in no backup, so the machine that comes back out of the
+    backup history is the one machine that cannot add to it. Every other scenario here
+    needs the recipient, because it takes a backup; the rescue host does not take one.
+    """
     from control.app.crypto import hash_password
 
     # Every `$` doubled. `docker compose --env-file` interpolates the values it reads, so
@@ -141,7 +151,7 @@ def env_file(directory: pathlib.Path, *, key: str, port: int) -> pathlib.Path:
                 "HASHI_SECRET_KEY": key,
                 # The PUBLIC half, and nothing else. This is what makes the stack able to
                 # write a backup it cannot read — the property the next test asserts.
-                "HASHI_BACKUP_AGE_RECIPIENT": BACKUP_RECIPIENT,
+                **({"HASHI_BACKUP_AGE_RECIPIENT": recipient} if recipient else {}),
                 "HASHI_PUBLIC_HOST": "restore.invalid",
                 "HASHI_PRIVATE_HOST": "restore-console.invalid",
                 "HASHI_PRIVATE_PORT": "54143",
@@ -706,9 +716,13 @@ def run_the_one_command(
             "HASHI_RESTORE_S3_PREFIX": store["prefix"],
             "HASHI_RESTORE_S3_ACCESS_KEY_ID": STORE_ACCESS_KEY,
             "HASHI_RESTORE_S3_SECRET_ACCESS_KEY": secret,
-            # The destructive confirmation is a `read` on a terminal there is not one of
-            # here. Deliberately an env var and not a flag, so skipping it is a decision.
-            "FORCE": "1",
+            # NO `FORCE`, and its absence is the assertion — M28.10. This is a real
+            # non-interactive session: `stdin=DEVNULL`, no tty, nothing to answer a
+            # question on. It used to print the destructive confirmation, read EOF and
+            # exit 2 with no sentence, after installing a control plane and fetching an
+            # artifact, and the suite hid that behind `FORCE=1`. A machine this command
+            # has just built from nothing holds no rows, so there is nothing to confirm
+            # and nothing is asked; a run that starts asking again fails here.
         },
     )
 
@@ -732,7 +746,9 @@ def rescue_scenarios(
     results: dict = {}
     rescue = directory / "rescue"
     rescue.mkdir(exist_ok=True)
-    path = env_file(rescue, key=KEY, port=RESCUE_PORT)
+    # No recipient, because a rebuilt host has none: it was in the `.env` that was lost.
+    # That is the state the closing screen has to notice and say out loud — M28.10.
+    path = env_file(rescue, key=KEY, port=RESCUE_PORT, recipient=None)
     identity = identity_file(rescue)
     results["env_file"] = path.read_text()
     network = ""
@@ -892,6 +908,25 @@ def dumped(tmp_path_factory):
         # And the whole run, both streams, for the audit sweep in S11: what an operator
         # (or cron) is shown by a dump taken over a real fleet.
         fleet["dump_run"] = result
+
+        # A restore this session could never authorise, over a database that HAS a fleet in
+        # it — M28.10. No `FORCE`, no terminal, and something real to lose: the one case
+        # that must stop. Driven here rather than on a stack of its own because it changes
+        # nothing by construction, and the assertion below is that the fleet is still here
+        # afterwards. Before the schedule and the upload, so the `missed`/store state those
+        # set up is untouched by it.
+        fleet["refused_without_a_terminal"] = subprocess.run(
+            [str(BACKUP), "restore", str(dump)],
+            capture_output=True, text=True, timeout=300, cwd=REPO_ROOT,
+            stdin=subprocess.DEVNULL,
+            env={
+                **_docker_env(),
+                "ENV_FILE": str(path),
+                "COMPOSE_PROJECT_NAME": SOURCE_PROJECT,
+                "HASHI_RESTORE_AGE_IDENTITY": str(identity_file(directory)),
+            },
+        )
+        fleet["users_after_the_refusal"] = rows_in(SOURCE_PROJECT, path, "users")
 
         # The schedule, driven BEFORE the upload scenarios because those leave the env file
         # pointing at a store that has been torn down — M28.5.
@@ -1788,6 +1823,90 @@ def test_a_store_it_cannot_reach_stops_before_anything_is_fetched_or_changed(
         "the run did not get as far as installing the control plane, so the failure is "
         "somewhere other than the one this scenario is about"
     )
+
+
+def test_a_restore_that_cannot_be_confirmed_stops_and_says_so(dumped) -> None:
+    """S14. The question is not printed into a session that cannot answer it — M28.10.
+
+    Measured on the bare-host walk: over a non-interactive session the old code printed the
+    confirmation, read EOF and exited 2 with **no sentence at all** — after installing a
+    control plane and fetching an artifact. `ssh host 'make …'`, a wrapper, anything that
+    closes stdin: the operator got a bare exit code at the end of a rebuild.
+
+    This is the case that must still stop, because there is a real fleet in that database.
+    The other case — a machine the command has just built from nothing — is asserted by
+    S13, which now runs with no terminal and no `FORCE` and is expected to succeed.
+    """
+    _, fleet = dumped
+    refused = fleet["refused_without_a_terminal"]
+    said = refused.stdout + refused.stderr
+
+    assert refused.returncode != 0, f"a restore nobody authorised went ahead: {said[-3000:]}"
+    assert "no terminal here" in said, (
+        f"it stopped without saying why a terminal matters: {said[-3000:]}"
+    )
+    assert "FORCE=1" in said, "the refusal does not say how to mean it deliberately"
+    assert "row(s) of data" in said, (
+        "the refusal does not say what it found, so the operator cannot tell a database "
+        "with their fleet in it from one with nothing"
+    )
+    assert fleet["users_after_the_refusal"] == 1, (
+        "the database was changed by a restore that refused"
+    )
+
+
+def test_a_machine_built_from_nothing_is_not_asked_what_it_is_overwriting(rescue) -> None:
+    """S15. The other half of the same finding, and it is the reason S13 can run at all.
+
+    A control plane installed minutes ago holds a migrated schema and no rows, so the old
+    prompt — *"Every current node, user and credential is overwritten"* — described nothing
+    in exactly the case the command exists for. It now counts, says what it found, and asks
+    nothing.
+    """
+    said = rescue["restored"].stdout + rescue["restored"].stderr
+    assert "no rows at all" in said, (
+        f"the rebuild did not report an empty destination: {said[-3000:]}"
+    )
+    assert "nothing to confirm" in said
+    assert "Type the database name to confirm" not in said, (
+        "a machine with nothing in it was still asked to authorise the replacement of "
+        "nothing — and over a session with no terminal, which is how this used to end in "
+        "exit 2 and silence"
+    )
+
+
+def test_the_last_screen_only_names_commands_this_host_can_actually_run(rescue) -> None:
+    """S16. Findings 3, 4 and 5 of the walk, all of them read off one screen.
+
+    Between "restored" and "logged in" the screen used to contradict itself: it said
+    `make down && make up`, which converges a deployed stack back to publishing NOTHING,
+    and two paragraphs later `make up-panel` — which on this host fails anyway, because
+    `HASHI_PRIVATE_BIND_ADDR` names a management-tunnel address a rebuilt machine does not
+    have. And it said nothing at all about the thing that is now true of this host: the
+    backup recipient and the write-only key were in the `.env` that was lost, so the
+    machine built out of the backup history cannot add to it.
+    """
+    said = rescue["restored"].stdout + rescue["restored"].stderr
+    closing = said[said.index("did NOT do"):]
+
+    assert "make down && make up" not in said, (
+        "the rebuild still ends by telling a deployed host to unpublish itself"
+    )
+    assert "make restart-control" in said
+
+    assert "make up-panel-over-ssh" in closing, (
+        "the only publication offered is the one that needs a tunnel this machine has not "
+        "got — which is what sent the walk to `ip addr add`"
+    )
+
+    assert "HASHI_BACKUP_AGE_RECIPIENT" in closing, (
+        "nothing on the last screen says this host is not backing anything up"
+    )
+    assert "make backup-schedule" in closing
+    # MEASURED, not chosen: this rescue env file carries no recipient, exactly as a
+    # rebuilt host's does not, so the screen has to be the NOT-backing-up one. The other
+    # branch — a recipient present, nothing scheduled — is asserted as text only.
+    assert "this host is NOT backing anything up" in closing, closing[-2000:]
 
 
 def test_the_run_says_what_it_chose_what_it_saw_and_what_it_did_not_do(

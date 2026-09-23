@@ -102,6 +102,11 @@ Copy .env.example to .env and fill it in first: this file is deliberately not in
 backup, because it holds HASHI_SECRET_KEY and keeping that beside the data it opens would
 mean one theft took both. Everything in it but the values you carry — the hostnames, the
 operator password hash, the database password — comes from .env.example.
+
+  cp .env.example ${ENV_FILE}
+  make hash-password        # the one value you cannot type: it prints the whole
+                            # HASHI_OPERATOR_PASSWORD_HASH line to paste in, and needs
+                            # nothing on this host but the container runtime
 MSG
   exit 1
 }
@@ -176,8 +181,10 @@ Name an object to restore something other than the newest. It does not move DNS,
 re-issue the delivery endpoint's certificate and tells no user anything; it says so again
 when it has finished.
 
-All of them read POSTGRES_* from the env file via compose. The stack must be up
-(`make up`) for every verb but `restore-from-bucket`, which brings it up itself.
+All of them read POSTGRES_* from the env file via compose. The stack must be running for
+every verb but `restore-from-bucket`, which brings it up itself — `make up` on a machine
+that publishes nothing, `make up-panel` or `make up-panel-over-ssh` on a deployed host,
+and never a bare `make up` there, which would take its published ports away.
 Set ENV_FILE and COMPOSE_PROJECT_NAME to act on a stack other than the default one.
 USAGE
   exit 2
@@ -408,6 +415,67 @@ MSG
   echo "the artifact is unchanged on this host as well: ${input}" >&2
 }
 
+# How much this restore would actually replace, measured rather than asserted — M28.10.
+#
+# The confirmation used to say "Every current node, user and credential is overwritten"
+# on every restore, and on the machine this command exists for that sentence describes
+# NOTHING: a control plane installed minutes ago holds a migrated schema and no rows. A
+# prompt that overstates what it is protecting is a prompt an operator learns to type
+# through, and this one was being asked in exactly the case where there was nothing to
+# protect.
+#
+# Echoes a row count, or nothing at all when it could not be asked — in which case the
+# caller treats it as unknown and keeps the confirmation, because the safe direction for
+# a destructive act is to ask.
+#
+# It names no table of ours. The count is over every base table in `public`, discovered
+# from the catalogue, so this stays true across the schema changing under it; the one
+# name it does mention is alembic's own bookkeeping row, which every migrated database
+# has, which is nobody's data, and which the dump replaces anyway.
+rows_at_stake() {
+  local user="$1" name="$2"
+  "${COMPOSE[@]}" exec -T "${SERVICE}" \
+    psql --username="${user}" --dbname="${name}" --tuples-only --no-align --quiet \
+    --command "select coalesce(sum(n), 0) from (
+        select (xpath('/row/c/text()', query_to_xml(
+                 format('select count(*) as c from %I.%I', table_schema, table_name),
+                 false, true, '')))[1]::text::bigint as n
+        from information_schema.tables
+        where table_schema = 'public' and table_type = 'BASE TABLE'
+          and table_name <> 'alembic_version') t" 2>/dev/null | tr -d '[:space:]'
+}
+
+# The refusal when the question cannot be asked at all, and it is its own function
+# because two places need to say the same thing.
+#
+# What happened before: over a non-interactive session the prompt was printed, `read` met
+# EOF, and the script exited 2 with no sentence — after installing a control plane and
+# fetching an artifact. Nothing anywhere said a terminal was needed. An operator running
+# this over `ssh host 'make …'`, from a cron entry, or from any wrapper that closes
+# stdin, got a bare exit code at the end of a rebuild.
+no_terminal_refusal() {
+  local at_stake="$1" measured
+  case "${at_stake}" in
+    unknown) measured="this database could not be counted, so what it holds is unknown" ;;
+    *)       measured="this database holds ${at_stake} row(s) of data" ;;
+  esac
+  cat >&2 <<MSG
+
+this restore replaces live data and there is no terminal here to confirm it on — stdin
+is not a tty, so the question cannot be asked and nothing has been changed.
+
+${measured}, and replacing it is not something to do on an assumption.
+
+Run it again from a terminal, or say deliberately that nothing here needs keeping:
+
+  FORCE=1 <the same command>
+
+FORCE=1 skips the question and nothing else. A machine this command has just installed
+from nothing holds no rows at all, and that case never asks in the first place.
+MSG
+  exit 1
+}
+
 # Set while an artifact is staged inside the control container, so that an interrupted or
 # failed restore does not leave a copy of it there.
 STAGED=""
@@ -469,9 +537,15 @@ MSG
   user="$(db_user)"
   name="$(db_name)"
 
-  # Interactive confirmation, because this replaces live data and there is no undo.
+  # Interactive confirmation, because this replaces live data and there is no undo —
+  # asked only when there IS live data, and refused out loud when it cannot be asked.
   # Skippable for automation with FORCE=1, which has to be set deliberately.
+  local at_stake
   if [ "${FORCE:-0}" != "1" ]; then
+    # Measured only when it is going to be used: FORCE says the operator has already
+    # decided, and a count nobody is shown is one container exec for nothing.
+    at_stake="$(rows_at_stake "${user}" "${name}" || true)"
+    [ -n "${at_stake}" ] || at_stake="unknown"
     # WHICH stack, named before anything else. The database is called `hashi` on every
     # stack this project builds — dev, e2e, the disposable ones the acceptance scenarios
     # install — so "type the database name" cannot distinguish them. Since this script
@@ -482,11 +556,28 @@ MSG
     echo "  env file: ${ENV_FILE}" >&2
     echo "  compose project: ${COMPOSE_PROJECT_NAME:-<default: the directory name>}" >&2
     echo "  database: ${name}" >&2
-    echo "This REPLACES its contents. Every current node, user and credential is" >&2
-    echo "overwritten by the dump." >&2
-    printf "Type the database name to confirm: " >&2
-    read -r answer
-    [ "${answer}" = "${name}" ] || { echo "aborted" >&2; exit 1; }
+    if [ "${at_stake}" = "0" ]; then
+      # The case this whole command exists for, and the one the old prompt lied about.
+      # Nothing is lost here, so nothing is asked: a question whose true answer is
+      # always yes is a step, and a step on the way out of a seizure is a step skipped.
+      echo "  holding: no rows at all — this control plane was installed and never used." >&2
+      echo "Nothing here is being overwritten, so there is nothing to confirm." >&2
+    else
+      if [ "${at_stake}" = "unknown" ]; then
+        echo "  holding: unknown — the row count could not be read from this database." >&2
+      else
+        echo "  holding: ${at_stake} row(s) of data." >&2
+      fi
+      echo "This REPLACES its contents. Every current node, user and credential is" >&2
+      echo "overwritten by the dump." >&2
+      # Before the prompt rather than after it meets EOF: printing a question into a
+      # session that cannot answer, and then exiting on the silence, is how this ended
+      # a whole rebuild with a bare exit code.
+      [ -t 0 ] || no_terminal_refusal "${at_stake}"
+      printf "Type the database name to confirm: " >&2
+      read -r answer
+      [ "${answer}" = "${name}" ] || { echo "aborted" >&2; exit 1; }
+    fi
   fi
 
   echo "restoring into ${name}…" >&2
@@ -526,7 +617,14 @@ MSG
   fi
 
   echo "restored." >&2
-  echo "Restart the control plane so it reconnects: make down && make up" >&2
+  # NOT `make down && make up`, which is what this line used to say. On a deployed host
+  # that sequence converges the stack back to the base file's shape and takes away every
+  # published port — the Makefile's own comment on `up-panel` warns against exactly it —
+  # so the instruction that was meant to finish a rebuild ended with a panel nobody could
+  # reach, two paragraphs above the same screen recommending `make up-panel` (M28.10,
+  # finding 3). `restart` restarts what is running and changes nothing about what this
+  # host publishes, whichever `up` brought it up.
+  echo "Restart the control plane so it reconnects: make restart-control" >&2
   echo "If users cannot connect afterwards, HASHI_SECRET_KEY does not match the" >&2
   echo "one this dump was written with — the app will say so loudly on first use." >&2
 }
@@ -739,6 +837,20 @@ MSG
     exit 1
   fi
 
+  # The destructive question this may still have to ask is asked ABOUT here, before a
+  # byte leaves the bucket. The restore itself asks it again at the moment it matters —
+  # this is only the case where it could never be answered: no terminal, no FORCE, and a
+  # database with something in it. Over a non-interactive session that used to be
+  # discovered at the very end, after an install and a fetch, and it was discovered as
+  # exit 2 with nothing said. Whether there is anything to lose cannot be known before
+  # section 3 above, because until then there is no database on this machine at all.
+  if [ "${FORCE:-0}" != "1" ] && [ ! -t 0 ]; then
+    local standing
+    standing="$(rows_at_stake "$(db_user)" "$(db_name)" || true)"
+    [ -n "${standing}" ] || standing="unknown"
+    [ "${standing}" = "0" ] || no_terminal_refusal "${standing}"
+  fi
+
   # --- 4. what is in the bucket -----------------------------------------------
   echo "" >&2
   if ! fetch_run preflight </dev/null; then
@@ -823,8 +935,9 @@ written to. Every object in that bucket was written to the same public key, so a
 one would answer the same way and this stops rather than walking the history to say it
 again.
 
-Check that you are pointing at the right file — the one `age-keygen` printed when the pair
-was made, beginning "AGE-SECRET-KEY-1". The artifact is at ${target}; nothing was changed.
+Check that you are pointing at the right file — the one \`age-keygen\` printed when the
+pair was made, beginning "AGE-SECRET-KEY-1". The artifact is at ${target}; nothing was
+changed.
 MSG
         exit 1 ;;
       *)
@@ -882,6 +995,34 @@ MSG
   delivery="$(public_host)"
   [ -n "${delivery}" ] || delivery="<HASHI_PUBLIC_HOST>"
 
+  # A restored fleet is an UNBACKED-UP fleet, and until M28.10 nothing said so — not the
+  # closing screen and not the runbook. The write-only key and the age recipient lived
+  # only in the `.env` that was lost, deliberately, because that file is in no backup: so
+  # the machine that has just been rebuilt out of the backup history cannot add to it.
+  # `make backup` on the restored host refuses outright, and the panel is honest about
+  # what it RECORDS while saying nothing about the fact that nothing will be recorded.
+  #
+  # Measured, not assumed: the same compose check `dump` makes before it reads the
+  # database, which trips on a recipient that is missing or blank. Its complaint is
+  # discarded rather than printed — M28.7's rule, and this is not the place to start
+  # repeating what compose says about an env file.
+  local backup_standing
+  if "${COMPOSE_BACKUP[@]}" config --quiet >/dev/null 2>&1; then
+    backup_standing="Backups: this host has an age recipient, but nothing is SCHEDULED
+here — the crontab was on the machine you lost. \`make backup-schedule\` starts
+it again and \`make backup-status\` is what it will say afterwards. Until then
+the panel reads \"No backup has ever been recorded on this host.\", and it is
+right."
+  else
+    backup_standing="Backups: this host is NOT backing anything up, and this is the quiet
+one. HASHI_BACKUP_AGE_RECIPIENT and the write-only HASHI_BACKUP_S3_* key lived
+only in the .env you lost — deliberately, because that file is in no backup —
+so \`make backup\` here refuses today rather than writing anything. Put the
+PUBLIC half of the age keypair you are carrying into ${ENV_FILE}, refill that
+S3 block, then \`make backup-schedule\`. Until you do, this fleet has exactly one
+copy of itself and it is this machine."
+  fi
+
   cat >&2 <<MSG
 
 ──────────────────────────────────────────────────────────────────────────────
@@ -908,7 +1049,21 @@ Three things it did NOT do, and each of them is yours:
      user has to be handed a new link by you.
 
 Nothing on this host is reachable from outside it yet, either: this stack
-publishes no ports. \`make up-panel\` is what opens Caddy's.
+publishes no ports, so there is no panel to log into until you open them:
+
+  make up-panel            the delivery endpoint on 80/443, and the console on
+                           this host's management-tunnel address
+  make up-panel-over-ssh   the same without that last one, for a host with no
+                           tunnel yet — which is this one, unless you have
+                           already built one here. The console then answers on
+                           loopback only and you reach it from your own machine:
+                             ssh -L <panel port>:127.0.0.1:<panel port> you@here
+
+The tunnel that reached the old panel does not reach this one: its keys were on
+the machine you lost, and \`make up-panel\` on a host with no tunnel address
+fails on a bind docker cannot make.
+
+${backup_standing}
 
 And one thing this command cannot check for you. Whether HASHI_SECRET_KEY in
 ${ENV_FILE} is the key this artifact was written under: the restore succeeds
