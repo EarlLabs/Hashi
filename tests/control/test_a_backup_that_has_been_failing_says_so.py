@@ -31,6 +31,8 @@ HOW:  the reader is driven against real files under ``tmp_path``; the wording is
       ``docs/tracker/M28/step-notes.md``, not the other zone's source.
 """
 
+import ast
+import dataclasses
 import datetime
 import json
 import logging
@@ -677,3 +679,134 @@ async def test_an_outcome_this_panel_has_no_word_for_is_named_rather_than_hidden
 
     assert said.loud is False
     assert "sent-twice" in said.headline
+
+
+# --- and none of it records who connected to what (M28.7) ---------------------------
+
+# Planted in every damaged record below, and looked for in every log line and every
+# sentence that comes back. It stands in for A BYTE OF THE FILE reaching a log by any
+# route at all — not for a nickname the record could really hold, because it could not:
+# the writer's key set is closed and the three values it takes out of the env file are
+# charset-limited to 64 characters (M28.5). What this guards is the OTHER direction, where
+# a future `logger.warning(..., data)`, or an exception rendered with `str()` instead of
+# with its type, starts putting the contents of a file on a read-only mount into the
+# container's log — which `make logs` keeps and which is a persistent record of a file
+# this panel has no business quoting.
+NOT_FOR_A_LOG = "PLANTED-NICKNAME-AND-192.0.2.7"
+
+DISAPPOINTING = {
+    "not json at all": NOT_FOR_A_LOG.encode(),
+    "json, but not an object": json.dumps(NOT_FOR_A_LOG).encode(),
+    "a string that never ends": b'{"schema": 1, "at": "' + NOT_FOR_A_LOG.encode(),
+    "a control character in a value": b'{"schema": 1, "at": "' + NOT_FOR_A_LOG.encode() + b'\n"}',
+    "a schema this reader has never seen": json.dumps(
+        {"schema": 99, "at": NOT_FOR_A_LOG}
+    ).encode(),
+    "a key of the wrong kind": json.dumps(
+        {"schema": 1, "at": [NOT_FOR_A_LOG], "missed_dates": []}
+    ).encode(),
+    "a missed day that is not a day": json.dumps(
+        record(missed_dates=[NOT_FOR_A_LOG])
+    ).encode(),
+    "a timestamp that is not one": json.dumps(
+        record(last_success={"at": NOT_FOR_A_LOG, "due_date": "2026-09-23",
+                             "exit_code": 0, "outcome": "offsite"})
+    ).encode(),
+    "bytes that are not utf-8": b'{"schema": 1, "at": "\xff\xfe' + NOT_FOR_A_LOG.encode() + b'"}',
+    "a file far too big to be the record": b'{"x": "' + NOT_FOR_A_LOG.encode() * 10_000 + b'"}',
+}
+
+
+@pytest.mark.parametrize("why", sorted(DISAPPOINTING))
+async def test_no_way_of_disappointing_this_reader_puts_the_file_into_a_log(
+    backup_record: pathlib.Path, caplog, why: str
+) -> None:
+    """M28.7. Every branch that gives up on the record, and none of them quotes it.
+
+    Ten ways in, one rule out: the log line carries the PATH and the failure's KIND, and
+    never a byte of what was at that path. Parametrised rather than written as one sweep so
+    that a branch which starts talking fails on its own name — and driven through the real
+    ``read`` rather than through the private helpers, because the two places this could go
+    wrong are the ``except`` clauses and they are only reachable from outside.
+
+    The composed sentence is checked as well as the log. ``UNREADABLE`` names the file it
+    could not read, which is right — an operator has to be told which file to go and look
+    at — and that is the whole of what it may repeat about it.
+    """
+    backup_record.parent.mkdir(parents=True, exist_ok=True)
+    backup_record.write_bytes(DISAPPOINTING[why])
+
+    with caplog.at_level(logging.DEBUG, logger="control.app.services.backups"):
+        reading = await backups.read(backup_record, now=NOW)
+    said = console.backup_standing(reading)
+
+    assert reading.standing is backups.Standing.UNREADABLE, why
+    assert caplog.text.strip(), f"{why}: gave up on the record without saying so anywhere"
+    assert NOT_FOR_A_LOG not in caplog.text, f"{why}: the record's contents reached a log"
+    assert str(backup_record) in caplog.text, f"{why}: the log line does not say which file"
+    assert NOT_FOR_A_LOG not in said.headline + said.detail + said.label, (
+        f"{why}: the record's contents reached the screen"
+    )
+
+
+async def test_the_reading_that_reaches_a_screen_carries_no_request_and_no_person(
+    written,
+) -> None:
+    """What a ``Reading`` is allowed to be made of, checked as a whole rather than field by field.
+
+    A subscription token is a bearer credential in a URL path (CLAUDE.md), so the thing to
+    be sure of about a value that crosses from a file into a rendered page is not only that
+    it is harmless today: it is that the set of values is small, named and fixed. Every
+    string in a reading is either the record's own path or one of M28.5's closed fields,
+    and this walks the dataclass to say so — a sixteenth field added here would have to be
+    justified against this list rather than arriving with a template change.
+    """
+    reading = await backups.read(written(record()), now=NOW)
+
+    assert dataclasses.fields(backups.Reading) and [
+        field.name for field in dataclasses.fields(backups.Reading)
+    ] == ["path", "standing", "record", "since_success", "since_failure", "failed_since"]
+    assert [field.name for field in dataclasses.fields(backups.Record)] == [
+        "at", "at_source", "zone", "zone_source", "missed_dates", "missed_total",
+        "last_attempt", "last_success", "last_failure",
+    ]
+    assert [field.name for field in dataclasses.fields(backups.Run)] == [
+        "at", "exit_code", "outcome",
+    ]
+    # Nothing in the reading is a URL, and nothing in it came out of a request.
+    assert "/sub/" not in repr(reading) and "http" not in repr(reading)
+
+
+def test_this_module_prints_nothing_and_logs_through_one_logger() -> None:
+    """The zone's rule, checked on the one module in it that reads a file off a mount.
+
+    ``print`` would go to the container's stdout, which is the same journal as everything
+    else and is kept — and a module that reads a file is where a debugging ``print`` gets
+    left behind. The logger is asserted to be the module's own so that the level set in
+    ``main.configure_logging`` applies to it: a logger acquired by another name would not
+    be covered by the two lines that silence uvicorn's access log.
+    """
+    source = pathlib.Path(backups.__file__).read_text()
+
+    assert "print(" not in source
+    assert source.count("logging.getLogger(") == 1
+    assert "logger = logging.getLogger(__name__)" in source
+    # ...and no log call anywhere in the module takes the bytes or the parsed object as an
+    # argument. Read off the syntax tree rather than out of a regex: the point is which
+    # NAMES are handed to the logger, and a text search answers that question about the
+    # prose around it as well.
+    tree = ast.parse(source)
+    carriers = {"data", "raw", "value", "handle", "record"}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "logger"):
+            continue
+        named = {
+            inner.id for argument in node.args for inner in ast.walk(argument)
+            if isinstance(inner, ast.Name)
+        }
+        assert not named & carriers, (
+            f"a log call on line {node.lineno} is handed {sorted(named & carriers)} — the "
+            "contents of the record, which is a file this module reads and never quotes"
+        )

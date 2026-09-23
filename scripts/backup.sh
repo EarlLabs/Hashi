@@ -127,6 +127,42 @@ USAGE
   exit 2
 }
 
+# Compose is the ONE thing allowed to open the env file (CLAUDE.md, hard rules), and when
+# it cannot PARSE that file it quotes the offending line straight back: `unterminated
+# quoted value "…"`, `Invalid template: "…"`, `unexpected character … in variable name
+# "…"`. The line it is complaining about is as likely to be HASHI_SECRET_KEY or
+# POSTGRES_PASSWORD as anything else — and this script's output is what cron mails when a
+# scheduled run fails (scripts/backup-run.sh), so one stray quote in .env puts a secret in
+# a mail spool, on every retry, for ever. Checked here and not fixed at each printer
+# because EVERY compose call in this file produces the same message, and there are six of
+# them; one gate in front of all of them is the whole of it.
+#
+# What is repeated: the file, and compose's own line number. What is never repeated: the
+# text on that line. Compose's complaint is captured and dropped, not printed.
+env_file_must_be_readable() {
+  local complaint first line=""
+  if complaint="$("${COMPOSE[@]}" config --quiet 2>&1)"; then return 0; fi
+  # Any other refusal is about the compose files or an unset variable — it names variables
+  # and never values, and the caller reports it itself with its own advice attached.
+  case "${complaint}" in "failed to read "*) ;; *) return 0 ;; esac
+
+  # Digits only, out of a regex capture, so nothing of the operator's file can ride along
+  # in what looks like a number.
+  first="${complaint%%$'\n'*}"
+  [[ "${first}" =~ :\ line\ ([0-9]+): ]] && line=", at line ${BASH_REMATCH[1]},"
+
+  cat >&2 <<MSG
+the env file at ${ENV_FILE}${line} is one compose cannot read.
+
+Nothing was dumped, written or sent. What compose said about that line is deliberately NOT
+repeated here: it quotes the line's whole value back, that value may be HASHI_SECRET_KEY or
+POSTGRES_PASSWORD, and this text is what cron mails when a scheduled run fails. Open the
+file and look: an unclosed quote, a key with a space in it, or a stray dollar sign is what
+produces this.
+MSG
+  exit 1
+}
+
 # Read only the variables this script needs, and only their names — never printing the
 # file. The env file holds real secrets and must not be echoed (CLAUDE.md, hard rules).
 # Asked of the RUNNING container rather than parsed out of the file, so the answer is the
@@ -466,9 +502,12 @@ MSG
   echo "one this dump was written with — the app will say so loudly on first use." >&2
 }
 
+# Before ANY of the six compose calls below, and before the database is touched by any of
+# the three verbs: an env file compose cannot parse is answered here, once, without its
+# contents. See env_file_must_be_readable.
 case "${1:-}" in
-  dump)    shift; command_dump "$@" ;;
-  upload)  shift; command_upload "$@" ;;
-  restore) shift; command_restore "$@" ;;
+  dump)    shift; env_file_must_be_readable; command_dump "$@" ;;
+  upload)  shift; env_file_must_be_readable; command_upload "$@" ;;
+  restore) shift; env_file_must_be_readable; command_restore "$@" ;;
   *)       usage ;;
 esac

@@ -638,6 +638,11 @@ def schedule_scenarios(directory: pathlib.Path, path: pathlib.Path) -> dict:
         results["record_after_catch_up"] = _record(state)
         results["after_catch_up"] = _new_artifacts(artifacts, before)
         results["gap_start"] = gap_start
+
+        # 5. What `make backup-status` prints, read back off a record that four real runs
+        #    over a real fleet produced — for the audit sweep in S11. It touches nothing
+        #    and needs no docker, so it costs this fixture nothing.
+        results["status"] = run_scheduler("status", path, SOURCE_PROJECT, state)
     finally:
         results["artifacts_created"] = _new_artifacts(artifacts, before)
         for written in results["artifacts_created"]:
@@ -753,6 +758,9 @@ def dumped(tmp_path_factory):
         # This env file names no object store, which is what a host ships as. Kept so the
         # scenario below can assert the run SAYS the artifact went nowhere.
         fleet["local_only"] = result.stderr
+        # And the whole run, both streams, for the audit sweep in S11: what an operator
+        # (or cron) is shown by a dump taken over a real fleet.
+        fleet["dump_run"] = result
 
         # The schedule, driven BEFORE the upload scenarios because those leave the env file
         # pointing at a store that has been torn down — M28.5.
@@ -839,6 +847,17 @@ def test_a_clean_stack_restored_from_a_dump_carries_the_whole_fleet(dumped, tmp_
             assert after.text == fleet["subscription"], (
                 "the restored fleet serves a different configuration than the one that "
                 "was dumped"
+            )
+
+        # M28.7. A restore pipes plain SQL into `psql`, which echoes a command tag per
+        # statement — so what an operator watches during a restore is the one place a row
+        # count or a table's contents could reach a terminal. Read here rather than in S11
+        # because a restore needs a second stack and this scenario already has one.
+        watched = result.stdout + result.stderr
+        for needle in (*NOBODY_MAY_BE_NAMED, fleet["token"], KEY, BACKUP_IDENTITY):
+            assert needle not in watched, (
+                f"the restore printed {needle!r} — a restore is watched by an operator and "
+                "its output is a copy of nothing"
             )
     finally:
         compose(TARGET_PROJECT, path, "down", "-v")
@@ -1325,3 +1344,120 @@ def test_the_record_the_panel_will_read_says_nothing_about_anybody(dumped) -> No
         "due_date", "attempts", "retry_not_before", "last_attempt", "last_success",
         "last_failure", "missed_dates", "missed_total",
     }, sorted(written)
+
+
+# --- S11: none of this wrote down who connected to what (M28.7) ----------------
+
+# Everything that would be a finding if it turned up in what a run printed. The first five
+# are the fleet this module really dumped — a nickname, a node's name and its real address,
+# a location label and a live subscription token — and the rest are the secrets out of the
+# env file that produced it. Checked against OUTPUT only: the artifact itself is supposed
+# to contain the fleet, and it is `age` ciphertext by the time it reaches a disk.
+NOBODY_MAY_BE_NAMED = (
+    "restored-user",
+    "leaf-restored",
+    "192.0.2.60",
+    "Restoreland",
+)
+NOTHING_MAY_BE_QUOTED = (KEY, "restore-not-real", STORE_SECRET_KEY, BACKUP_IDENTITY)
+
+# Stands in for whatever an operator's malformed env-file line really holds — most likely
+# HASHI_SECRET_KEY or POSTGRES_PASSWORD, since those are the long opaque values a hand edit
+# goes wrong on.
+PLANTED_IN_THE_ENV_FILE = "PLANTED-VALUE-THAT-MUST-NOT-BE-MAILED"
+
+
+def _every_stream(fleet: dict) -> dict[str, str]:
+    """Both streams of every run this module made, keyed by which run it was.
+
+    Collected from the fixtures rather than by running anything again: these are the same
+    processes the scenarios above already judged, so the sweep costs nothing and covers a
+    dump, four scheduled ticks, a status, a successful upload, a refused upload and a
+    refusal before the database was read.
+    """
+    runs = {"dump": fleet["dump_run"]}
+    runs |= {
+        f"schedule:{name}": fleet["schedule"][name]
+        for name in ("first", "early", "fired", "catch_up", "status")
+        if fleet["schedule"].get(name) is not None
+    }
+    runs |= {
+        f"offsite:{name}": fleet["offsite"][name]
+        for name in ("dump", "denied", "refused")
+        if fleet["offsite"].get(name) is not None
+    }
+    return {name: (run.stdout or "") + (run.stderr or "") for name, run in runs.items()}
+
+
+def test_nothing_any_of_these_runs_printed_names_anybody_in_the_fleet_it_dumped(
+    dumped,
+) -> None:
+    """S11a. A dump is a copy of the whole database; what it SAYS must be about nothing.
+
+    The charter's one absolute prohibition is that nothing records who connected to what,
+    at any level and including while debugging, and a backup job is a new thing that prints
+    on every run — an artifact path, a size, an object name, a store's refusal. Every one of
+    those is a place a fact about a person could surface, and the only way to know is to
+    take a backup of a real fleet and read what came out.
+
+    So this asserts against the fleet that was actually dumped a few minutes ago, on this
+    run, rather than against a fixture: the user whose subscription S1 then fetched, the
+    node whose address is in that dump, and the env file's own secrets. The failure paths
+    are in here too — a refused upload and a half-configured refusal both print more than a
+    success does, and more is where this goes wrong.
+    """
+    _, fleet = dumped
+    token = fleet["token"]
+
+    for name, said in _every_stream(fleet).items():
+        for needle in NOBODY_MAY_BE_NAMED:
+            assert needle not in said, f"`{name}` printed {needle!r}, which names a user or a node"
+        assert token not in said, (
+            f"`{name}` printed a subscription token — a bearer credential in a URL path"
+        )
+        for secret in NOTHING_MAY_BE_QUOTED:
+            assert secret not in said, f"`{name}` printed a secret out of the env file"
+
+
+def test_a_scheduled_run_never_mails_a_line_of_the_env_file(tmp_path) -> None:
+    """S11b. The finding this step made, reproduced: one stray quote used to mail a secret.
+
+    ``docker compose`` is the only thing allowed to open the env file, and when it cannot
+    PARSE that file it quotes the offending line's whole value straight back —
+    ``unterminated quoted value "…"``. ``scripts/backup.sh`` printed compose's complaint so
+    that an operator could see which variable was wrong, and ``scripts/backup-run.sh``
+    prints a failed run's whole output, which is what cron mails. A single unclosed quote
+    on the ``HASHI_SECRET_KEY`` line therefore put the secret key in a mail spool, on every
+    retry, every day, for as long as the file stayed wrong.
+
+    Three of compose's parse errors carry the line's text and one carries only a variable
+    name, so all four shapes are driven here. Nothing is dumped and no stack is needed —
+    the refusal happens before anything reaches a database, which is itself part of the
+    contract.
+    """
+    malformed = {
+        "an unclosed quote": 'HASHI_BACKUP_AGE_RECIPIENT="age1' + PLANTED_IN_THE_ENV_FILE,
+        "a stray dollar": f"HASHI_BACKUP_AGE_RECIPIENT=age1${{{PLANTED_IN_THE_ENV_FILE}",
+        "a quote inside a value": f'HASHI_PRIVATE_HOST="a"{PLANTED_IN_THE_ENV_FILE}"',
+        "a key with a space in it": f"A KEY={PLANTED_IN_THE_ENV_FILE}",
+    }
+
+    for why, line in malformed.items():
+        path = tmp_path / "broken.env"
+        path.write_text(
+            f"POSTGRES_USER=hashi\nPOSTGRES_DB=hashi\n"
+            f"HASHI_SECRET_KEY={PLANTED_IN_THE_ENV_FILE}\n{line}\n"
+        )
+        refused = run_backup(["dump"], path, SOURCE_PROJECT)
+
+        assert refused.returncode == 1, f"{why}: {refused.stdout}\n{refused.stderr}"
+        said = refused.stdout + refused.stderr
+        assert PLANTED_IN_THE_ENV_FILE not in said, (
+            f"{why}: a line of the env file reached the output of a run, which is what "
+            "cron mails when a scheduled run fails"
+        )
+        assert "compose cannot read" in said, (
+            f"{why}: the operator is not told that their env file is the problem"
+        )
+        assert str(path) in said, f"{why}: the operator is not told which file to look at"
+
