@@ -793,3 +793,113 @@ for the one failure the command cannot see), **"A restore needs a credential tha
 and GET this bucket"**, **"The credential works — this is the bucket or the prefix"**,
 **"Nothing was fetched and nothing was changed"**, and the closing **"Three things it did
 NOT do"** naming DNS, the certificate and **"Telling anybody"**.
+
+## M28.9 — the restore, performed on real hosts
+
+**It works.** A control plane built on the Russian box and killed without a graceful
+stop came back on a machine that had never run this project: one command plus the three
+carried inputs, the existing node applied from the rebuilt panel in **3.8s**, and the
+existing user's subscription returned **byte for byte identical** — same token, same
+path, `sha256 14b0d1fb…`, 336 bytes, compared before and after. Honest bare-host total
+**≈2m 05s**.
+
+1. **The two layers do exactly what the plan says.** A bucket reader gets
+   `age-encryption.org/v1` and `no identity matched any of the recipients`. The decrypted
+   dump has **the leaf address in the clear** — the address M28.2 exists to cover — and
+   the subscription token **0 times**, because that column is encrypted. Both halves
+   confirmed on a real artifact.
+2. **The scheduled path fired unattended at the appointed minute** and recorded
+   `outcome: offsite`, `missed_total: 0`. The panel said so immediately. Nobody expected
+   to avoid falling back to `make backup`, and it was not needed.
+3. **The three inputs are distinguishable when wrong**, tested by breaking each: a wrong
+   identity says *"the artifact is intact; the identity is wrong"* and **stops**; the
+   host's own write-only key says *"A restore needs a credential that may LIST and GET
+   this bucket … no key on the lost host was ever the right one"*; no credential at all
+   refuses **before installing anything**. A wrong `HASHI_SECRET_KEY` cannot be seen by
+   the command and is deferred to the panel's own sentence, as designed.
+4. **The three things it says it does not do were confirmed by observation**, not by
+   reading: DNS still pointed at the destroyed box; with the name forced at the new host
+   TLS aborted **even with verification disabled**, because no certificate for that name
+   exists there and cannot until DNS moves; and nothing anywhere touched
+   `scripts/notify.sh`.
+5. **The charter held on the live deployment**: the token appears **0** times in any
+   container log and **0** times in Docker's on-disk JSON logs, `/sub/` **0** times, ufw
+   `LOGLEVEL=off` with no `ufw.log`.
+
+**What this walk cannot prove** — a disposable MinIO store the walker stood up, on a host
+they control, with keys they minted. It proves the command, the credential split, the
+artifact and the age layer. It proves **nothing** about the owner's Yandex account, its
+retention, its object lock, its write-only key, or whether it is reachable from inside
+Russia on the day it is needed. The VM was not deallocated (no cloud API): destruction was
+SIGKILL plus removal of containers, volumes, images, the checkout and the env file. Three
+roles were collapsed onto two machines. **And nothing here says anything about surviving a
+Russian mobile whitelist shutdown.**
+
+## M28.10 — what the walk found, answered where the operator is standing
+
+`make test-infra` **379 passed** (was 351); `make verify` green, e2e **220** (was 214).
+Six findings, one diff, `control/` untouched.
+
+1. **`make hash-password` → `scripts/hash-password.sh`, and it must stay compose-free.**
+   Plain `docker build -f deploy/docker/control.Dockerfile` then `docker run --entrypoint
+   python3 … -m control.cli hash-password`. **No `docker compose`, no `--env-file`, no
+   `.env` anywhere** — asserted — because the env file is what this command exists to help
+   fill in, and every base-stack interpolation carries a `:?` guard. That ordering is the
+   whole trick: the image builds from a checkout that needs no `.env`.
+   **Correction from round 1:** stdout is **not** "the line alone" — it is
+   `control/cli.py`'s whole block. What the redirection buys is that **nothing the script
+   emitted** lands among it. Claim it that way; a line count is a checkable claim about a
+   file outside this fence, and the first version of it was false.
+2. **A non-empty placeholder passes a presence check.** `panel-bootstrap.sh` now refuses
+   an env file whose hash is still `.env.example`'s own placeholder line, **read out of
+   `.env.example`** so the two cannot drift. Without it the failure surfaced 180 seconds
+   later as a health-check timeout about a container.
+3. **The destructive confirmation is measured, not asserted.** `rows_at_stake()` counts
+   `public` base tables via `information_schema` + `query_to_xml`, excluding
+   `alembic_version`, and **names no table of ours**. Zero rows → says so and asks
+   nothing; rows → asks, stating the count, so *"every current node, user and credential
+   is overwritten"* is only printed when true; unreadable → treated as rows, the safe
+   direction.
+4. **`no_terminal_refusal` fires in two places and the second is the point** — in
+   `command_restore` before `read -r`, and in `command_restore_from_bucket` **after the
+   install and before the bucket is read**, the earliest moment a database exists to
+   count. `FORCE=1` is named in the refusal. **The e2e rescue run no longer passes
+   `FORCE=1`, and that absence is the assertion**: no tty, `stdin=DEVNULL`, and it
+   succeeds because a fresh control plane holds no rows.
+5. **`make restart-control` is what a restore ends with** — never `make down && make up`,
+   which converges a deployed stack to the base shape and unpublishes it.
+6. **The deployed publication is TWO overlays now**: `public.yml` (80/443 + console on
+   loopback) and `tunnel.yml` (console on `HASHI_PRIVATE_BIND_ADDR`). `make up-panel` =
+   both, **meaning unchanged**; **`make up-panel-over-ssh`** = the first alone, for a host
+   with no tunnel, which is every host a restore just rebuilt. `tests/infra/test_compose.py`
+   iterates `PANEL_OVERLAYS` — **add a third overlay to that list, do not start a second
+   one.**
+7. **A restored fleet is an unbacked-up fleet, and the closing screen now measures it**
+   with the same `config --quiet` a dump makes, compose's complaint discarded per M28.7.
+   The write-only key and the age recipient lived only in the lost `.env`, which is
+   deliberately not in the backup.
+8. **A backtick inside an unquoted heredoc is EXECUTED.** The wrong-identity diagnostic was
+   running `age-keygen` at an operator on a host that has none. Escaped, and a sweep now
+   covers every `scripts/**/*.sh`. Its parser needs `(?<!<)<<(?!<)` — `backup-schedule.sh`
+   prints `# <<< hashi backup schedule <<<`, and a parser without that guard swallows the
+   rest of the file and sweeps nothing. It did, first try.
+9. **One existing guard was loosened, knowingly**: the provider check strips the literal
+   `127.0.0.1` so the closing screen can print an `ssh -L` line. Loopback names no host and
+   rotates nowhere; every other dotted quad still fails, verified.
+10. **`docs/decisions.md` may be SHARPENED in place by the step that wrote the row, while
+    that step is still in review** — the file's own header says so at lines 15-21, dated
+    2026-09-11, *"so it stops being re-derived by whoever next feels reasonable"*. It does
+    not trip the record check, because the row did not exist at the baseline. After
+    acceptance it is append-only like every other row.
+11. **A test whose name states a property it does not check is this repository's most
+    recorded defect** — caught here for the third milestone running.
+    `test_the_build_and_the_prompts_stay_off_stdout` now sweeps eight real strings from
+    three noisy sources and asserts each appears on **stderr**, so it cannot pass by
+    nothing having been printed.
+
+### Not proven by any suite, and do not imply otherwise
+
+Findings 1–4's field halves: that a bare Ubuntu host runs `make hash-password` with
+nothing installed, that `make up-panel-over-ssh` binds on a machine with no tunnel, that
+`ip addr add` is no longer needed. **And nothing asserts `make restart-control` is
+sufficient after a restore** — it restarts the process; no test then reads the panel.
