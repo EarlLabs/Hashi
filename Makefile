@@ -27,8 +27,14 @@ setup:
 	$(PY) -m pip install --quiet -e ".[dev]"
 	@echo "ready — run: make test"
 
+# The state directory is created HERE, before anything brings the stack up, and that
+# ordering is the whole reason it is in this target: the control service mounts it
+# read-only (deploy/docker-compose.yml), and a bind mount whose source does not exist is
+# created by the docker daemon — as root. The backup schedule, which runs as the operator,
+# could then never write the record it exists to write.
 env:
 	@test -f .env || { cp .env.example .env; echo ".env created from .env.example — fill it in"; }
+	@mkdir -p backups/state
 
 # Every verify target needs the venv. Fail with an instruction, not a traceback.
 define need_venv
@@ -213,10 +219,35 @@ node-bootstrap:
 # the backup history and can neither read nor destroy it. `make backup` exits 3, not 0,
 # when the dump succeeded and the upload did not: the file is here, and a backup that
 # never left the machine is not an offsite backup.
-.PHONY: backup backup-upload restore checkers
+#
+# WHEN it happens is `make backup-schedule` — one cron entry that calls
+# scripts/backup-run.sh every 15 minutes. The entry carries no hour on purpose: the hour
+# is HASHI_BACKUP_AT in HASHI_BACKUP_TZ, decided by that script, so a box that was down at
+# 04:00 takes the day's backup when it comes back instead of skipping the day in silence.
+# `make backup-status` is what the record of all that says.
+.PHONY: backup backup-upload backup-schedule backup-unschedule backup-status restore checkers
 
+# Goes through the recorder rather than straight to the script, so that a backup taken by
+# hand counts as the day's backup: without it the panel would report a host as un-backed-up
+# an hour after its operator backed it up, and the schedule would take a second one at
+# 04:00 for a day that already had one. What it prints is scripts/backup.sh's own output,
+# unchanged, and it exits with the same 0/1/3.
 backup:
-	@scripts/backup.sh dump
+	@scripts/backup-run.sh now
+
+# The schedule itself. Idempotent: it replaces its own block in this account's crontab and
+# leaves every other line alone. No root, no new package, no daemon of ours — see the
+# script's header for why a container with the docker socket was rejected instead.
+backup-schedule:
+	@scripts/backup-schedule.sh install
+
+backup-unschedule:
+	@scripts/backup-schedule.sh remove
+
+# "When did a backup last succeed, and has one failed since?" — answered from the record
+# on this host, because the credential here may only write and cannot look in the bucket.
+backup-status:
+	@scripts/backup-run.sh status
 
 # What exit 3 leaves you holding. Sends an artifact that is already on disk, and never
 # dumps — so it costs the database nothing and can be retried as often as the store needs.

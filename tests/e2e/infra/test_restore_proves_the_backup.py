@@ -42,6 +42,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 BOOTSTRAP = REPO_ROOT / "scripts" / "panel-bootstrap.sh"
 BACKUP = REPO_ROOT / "scripts" / "backup.sh"
+SCHEDULER = REPO_ROOT / "scripts" / "backup-run.sh"
 COMPOSE_FILE = REPO_ROOT / "deploy" / "docker-compose.yml"
 DEV_OVERLAY = REPO_ROOT / "deploy" / "docker-compose.dev.yml"
 
@@ -530,6 +531,131 @@ def a_fleet(client: httpx.Client) -> dict:
     }
 
 
+def run_scheduler(
+    verb: str, path: pathlib.Path, project: str, state: pathlib.Path
+) -> subprocess.CompletedProcess:
+    """The thing cron calls, run the way cron calls it."""
+    return subprocess.run(
+        [str(SCHEDULER), verb],
+        capture_output=True, text=True, timeout=600, cwd=REPO_ROOT,
+        stdin=subprocess.DEVNULL,
+        env={
+            **_docker_env(),
+            "ENV_FILE": str(path),
+            "COMPOSE_PROJECT_NAME": project,
+            # The record goes in this run's own directory rather than the checkout's, so a
+            # suite never overwrites the record of a real host it is running on.
+            "HASHI_BACKUP_STATE_DIR": str(state),
+        },
+    )
+
+
+def schedule_scenarios(directory: pathlib.Path, path: pathlib.Path) -> dict:
+    """Watch the schedule actually fire — M28.5.
+
+    A schedule nobody watched run is this milestone's whole subject, so this does not read
+    the crontab and conclude things: it sets the appointed time about a minute into the
+    future, calls `tick` the way cron would, and looks at what is on the disk before and
+    after that minute passes. The ticks are driven here rather than by a cron daemon
+    because the entry that is installed is `*/15` — proving a daemon fires it would mean
+    waiting on a quarter-hour boundary, which proves cron rather than hashi. Everything
+    that decides whether a backup happens is in the script, and that is what runs here.
+
+    Three things come out of it: a first tick on a host with no record (which must back up
+    at once), a tick before the appointed minute (which must not), and the same tick after
+    it (which must). Then the case the plan names — a record whose last accounted day is
+    four days ago, which is what a box that was switched off leaves behind.
+    """
+    import datetime
+    import time
+
+    state = directory / "schedule-state"
+    artifacts = REPO_ROOT / "backups"
+    artifacts.mkdir(exist_ok=True)
+    before = set(artifacts.glob("*.age"))
+    results: dict = {"artifacts_created": set()}
+
+    try:
+        # Far enough ahead that the two ticks below are safely before it, near enough that
+        # the suite waits under two minutes. Truncated to the minute, which is the
+        # granularity HASHI_BACKUP_AT is written at.
+        target = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=75)
+        appointed = target.strftime("%H:%M")
+        kept = [
+            line for line in path.read_text().splitlines()
+            if not line.startswith(("HASHI_BACKUP_AT", "HASHI_BACKUP_TZ"))
+        ]
+        # `Etc/UTC` here only because a test needs a zone whose answer it can compute; the
+        # product defaults to no zone at all and records that it did.
+        path.write_text(
+            "\n".join(kept + [f"HASHI_BACKUP_AT={appointed}", "HASHI_BACKUP_TZ=Etc/UTC"]) + "\n"
+        )
+        path.chmod(0o600)
+        results["appointed"] = appointed
+
+        # 1. A host with no record of any backup. The first tick takes one immediately —
+        #    a control plane with no backup at all must not wait for tomorrow's 04:00.
+        results["first"] = run_scheduler("tick", path, SOURCE_PROJECT, state)
+        results["after_first"] = _new_artifacts(artifacts, before)
+        results["record_after_first"] = _record(state)
+        # Read now, because the artifacts this scenario writes are deleted on the way out:
+        # they land in the checkout's own `backups/`, which belongs to whoever is running
+        # the suite and not to it.
+        results["first_artifact_head"] = (
+            results["after_first"][0].read_bytes()[:21] if results["after_first"] else b""
+        )
+
+        # 2. The same tick again, still before the appointed minute. Nothing may happen:
+        #    this is the 95 ticks out of 96 that must be silent.
+        results["early"] = run_scheduler("tick", path, SOURCE_PROJECT, state)
+        results["after_early"] = _new_artifacts(artifacts, before)
+
+        # 3. Now wait for the minute to arrive, ticking the way cron does.
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            time.sleep(5.0)
+            results["fired"] = run_scheduler("tick", path, SOURCE_PROJECT, state)
+            if len(_new_artifacts(artifacts, before)) > len(results["after_early"]):
+                break
+        results["after_appointed"] = _new_artifacts(artifacts, before)
+        results["record_after_appointed"] = _record(state)
+
+        # 4. The box that was down. Its record says the last day accounted for was four
+        #    days ago, which is exactly what a machine that was off leaves behind.
+        record = state / "last-run.json"
+        gap_start = (
+            datetime.date.fromisoformat(results["record_after_appointed"]["due_date"])
+            - datetime.timedelta(days=4)
+        ).isoformat()
+        record.write_text(
+            record.read_text().replace(
+                f'"due_date": "{results["record_after_appointed"]["due_date"]}",',
+                f'"due_date": "{gap_start}",',
+                1,
+            )
+        )
+        results["catch_up"] = run_scheduler("tick", path, SOURCE_PROJECT, state)
+        results["record_after_catch_up"] = _record(state)
+        results["after_catch_up"] = _new_artifacts(artifacts, before)
+        results["gap_start"] = gap_start
+    finally:
+        results["artifacts_created"] = _new_artifacts(artifacts, before)
+        for written in results["artifacts_created"]:
+            written.unlink(missing_ok=True)
+    return results
+
+
+def _new_artifacts(directory: pathlib.Path, before: set) -> list[pathlib.Path]:
+    return sorted(set(directory.glob("*.age")) - before)
+
+
+def _record(state: pathlib.Path) -> dict:
+    import json
+
+    path = state / "last-run.json"
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
 def offsite_scenarios(directory: pathlib.Path, path: pathlib.Path) -> dict:
     """Drive every upload case once, while there is a stack and a store to drive it with.
 
@@ -627,6 +753,10 @@ def dumped(tmp_path_factory):
         # This env file names no object store, which is what a host ships as. Kept so the
         # scenario below can assert the run SAYS the artifact went nowhere.
         fleet["local_only"] = result.stderr
+
+        # The schedule, driven BEFORE the upload scenarios because those leave the env file
+        # pointing at a store that has been torn down — M28.5.
+        fleet["schedule"] = schedule_scenarios(directory, path)
 
         # Everything about the upload, driven here because it needs this stack up — M28.3.
         fleet["offsite"] = offsite_scenarios(directory, path)
@@ -1077,3 +1207,121 @@ def test_a_dump_with_no_store_configured_says_the_artifact_went_nowhere(dumped) 
     said = dumped[1]["local_only"]
     assert "on this host and nowhere else" in said, said[-2000:]
     assert "HASHI_BACKUP_ENABLED" in said
+
+
+# --- S10: something runs it, and it is watched running -------------------------
+
+def schedule(dumped) -> dict:
+    return dumped[1]["schedule"]
+
+
+def test_a_host_with_no_backup_at_all_gets_one_at_the_first_tick(dumped) -> None:
+    """S10. The first tick after the schedule is installed, on a host with no record.
+
+    Waiting for tomorrow's 04:00 would mean a control plane spends its first day with no
+    backup — and that the operator learns whether the schedule works the morning after
+    installing it, rather than within the quarter of an hour they are still watching.
+    """
+    observed = schedule(dumped)
+    first = observed["first"]
+    assert first.returncode == 0, f"{first.stdout[-2000:]}\n{first.stderr[-2000:]}"
+    assert len(observed["after_first"]) == 1, (
+        "the first tick on a host with no record did not take a backup: "
+        f"{observed['after_first']}"
+    )
+    assert observed["first_artifact_head"] == b"age-encryption.org/v1", (
+        "the schedule wrote something that is not the encrypted artifact the script writes"
+    )
+    record = observed["record_after_first"]
+    assert record["last_success"]["exit_code"] == 0
+    assert record["zone"] == "Etc/UTC" and record["zone_source"] == "configured"
+
+
+def test_the_tick_waits_for_the_appointed_minute_and_then_fires(dumped) -> None:
+    """S10b. The schedule was watched running — which is this milestone's whole subject.
+
+    Both halves matter and neither is provable from the other: a tick that always backed up
+    would pass "it fired" while making the hour meaningless, and a tick that never did
+    would pass "it waited" while the host quietly went un-backed-up for ever. So the same
+    tick is called before the appointed minute and after it, one minute apart, against a
+    real stack, and what is asserted is what appeared on the disk.
+    """
+    observed = schedule(dumped)
+    early = observed["early"]
+    assert early.returncode == 0, f"{early.stdout[-2000:]}\n{early.stderr[-2000:]}"
+    assert early.stdout == "" and early.stderr == "", (
+        "a tick with nothing owed printed something; cron would mail that 96 times a day"
+    )
+    assert observed["after_early"] == observed["after_first"], (
+        f"a tick before {observed['appointed']} took a second backup — the appointed time "
+        "decides nothing"
+    )
+
+    assert len(observed["after_appointed"]) == len(observed["after_first"]) + 1, (
+        f"the appointed minute ({observed['appointed']}) passed and no backup was taken: "
+        f"{observed['after_appointed']}"
+    )
+    assert observed["fired"].returncode == 0
+    assert observed["record_after_appointed"]["due_date"] > (
+        observed["record_after_first"]["due_date"]
+    ), "the run after the appointed time was not recorded against the new day"
+
+
+def test_a_box_that_was_down_takes_the_backup_late_and_names_the_days_it_lost(
+    dumped,
+) -> None:
+    """S10c. The failure the plan calls the one discovered during a restore.
+
+    The record says the last day accounted for was four days ago — which is what a machine
+    that was switched off leaves behind. The tick that finds it must back up AT ONCE rather
+    than wait for the hour, and the three days in the gap must be written down by date,
+    because after this run succeeds nothing else on this host would remember them.
+
+    One run, not four: a dump is a copy of the database as it is now, so four runs today
+    would be four copies of today wearing four different dates.
+    """
+    observed = schedule(dumped)
+    catch_up = observed["catch_up"]
+    assert catch_up.returncode == 0, f"{catch_up.stdout[-2000:]}\n{catch_up.stderr[-2000:]}"
+    assert len(observed["after_catch_up"]) == len(observed["after_appointed"]) + 1, (
+        "a box that had been down for four days took no backup when it came back"
+    )
+
+    record = observed["record_after_catch_up"]
+    assert record["missed_total"] == 3, (
+        f"the days with no backup were not recorded: {record['missed_dates']}"
+    )
+    assert len(record["missed_dates"]) == 3
+    assert observed["gap_start"] not in record["missed_dates"], (
+        "the last day that DID have a backup is listed as missed"
+    )
+    assert record["due_date"] not in record["missed_dates"], (
+        "the day this very run backed up is listed as missed"
+    )
+    # And the record still answers M28.6's question after a successful catch-up: the days
+    # that were lost survive the run that ends the gap.
+    assert record["last_success"]["due_date"] == record["due_date"]
+    assert record["last_success"]["outcome"] == "on-this-host-only"
+
+
+def test_the_record_the_panel_will_read_says_nothing_about_anybody(dumped) -> None:
+    """S10d. The one record that can hurt a real person is the one written automatically.
+
+    This file is appended to by an unattended job for as long as the host lives, which is
+    how a schedule becomes a log. What the fleet that produced it looked like — one node,
+    one user, one subscription, all of it in the database this very run dumped — must be
+    nowhere in it.
+    """
+    observed = schedule(dumped)
+    written = (observed["record_after_catch_up"] or {})
+    assert written, "no record was written at all"
+    flat = repr(written)
+    fleet = dumped[1]
+    for secret in (fleet["token"], "restored-user", "leaf-restored", "192.0.2.60",
+                   "Restoreland", "vless-reality"):
+        assert secret not in flat, f"the backup record names {secret!r}"
+    assert set(written) == {
+        "schema", "written_at", "at", "at_source", "zone", "zone_source", "offsite",
+        "due_date", "attempts", "retry_not_before", "last_attempt", "last_success",
+        "last_failure", "missed_dates", "missed_total",
+    }, sorted(written)

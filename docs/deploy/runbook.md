@@ -1411,10 +1411,111 @@ Nothing is dumped a second time, and the database is not touched. Use `https`: o
 unless the endpoint resolves to a private address.
 
 `HASHI_BACKUP_ENABLED=0`, or unset, is a supported mode rather than an oversight — the
-artifact is written and stays on this host, and every run says so in as many words. What
-still does not exist is the **schedule**: nothing runs `make backup` for you yet. Nor does
-the management directory have a place inside the artifact (see the table below — the
-artifact is the database and nothing else so far).
+artifact is written and stays on this host, and every run says so in as many words. It does
+not switch the **schedule** off: a daily backup that never leaves the machine is still a
+backup, and the section below keeps taking it. What still does not exist is a place for the
+management directory inside the artifact (see *What belongs in a backup, and what does
+not* — the artifact is the database and nothing else so far).
+
+### When the backup runs, and how you know it did
+
+```bash
+make backup-schedule      # install it: one cron entry, no root, nothing new on the host
+make backup-status        # when did one last succeed, and has one failed since
+make backup-unschedule    # stop it
+```
+
+**Set the hour first**, in `.env`:
+
+```ini
+HASHI_BACKUP_AT=04:00
+HASHI_BACKUP_TZ=Etc/UTC     # an IANA zone NAME — `Europe/Paris`, `Asia/Tokyo` — never an offset
+```
+
+`HASHI_BACKUP_AT` is a wall-clock time **in that zone**, and the zone is spelled out
+because this host's clock is UTC and you are not. A name rather than `+02:00`: an offset is
+a decision taken once about a rule that changes — by season, and by decree — and on the day
+it changes, nothing anywhere tells you. Get it wrong in any of the three ways and the
+backup still happens: an unset zone falls back to this host's own clock and is recorded as
+`unset` (there is no correct country to guess at), a zone this host has never heard of is
+recorded as `unknown`, and a time that is not `HH:MM` falls back to `04:00` and is recorded
+as `malformed`. A typo must not cost you a day of backups; it costs you a line in
+`make backup-status` until you fix it.
+
+> The zone is **checked against this host's zone database, not trusted**, because
+> `TZ=Nowhere/Useful date` does not fail — it answers in UTC and exits 0. A misspelled zone
+> would otherwise be indistinguishable from a working one, which is the silent skew the
+> variable exists to prevent.
+
+**The cron entry carries no hour.** It runs every fifteen minutes and asks
+`scripts/backup-run.sh` whether the day's backup is owed. That is the whole design, and the
+reason is the failure this section exists to prevent:
+
+> `0 4 * * *` is a promise cron cannot keep. If the box is off, asleep, or being rebuilt at
+> 04:00, the minute passes and **nothing anywhere records that it did**. You find out
+> during a restore.
+
+So "today's backup has not been taken" stays true until one is taken. A box that was down
+at 04:00 and came back at 10:00 takes the day's backup at 10:00 — late, and a late backup
+is a backup. **The days that had none are written down by date**, and stay written down
+after the next successful run; `make backup-status` and the panel both report them.
+Deliberately **one** run, not one per missed day: a dump is a copy of the database as it is
+now, so five runs today would be five copies of today wearing five different dates.
+
+The first tick after `make backup-schedule` takes a backup immediately, because this host
+has no record of one. That is on purpose — you learn within a quarter of an hour whether
+the schedule works, instead of the morning after.
+
+**What is recorded, and where.** `backups/state/last-run.json` on this host. It holds the
+schedule's settings, the last attempt, the last success, the last failure, and the dates
+with no backup — dates, exit codes and settings, **and nothing about any person**, now or
+ever. The control container reads it through a read-only mount, which is how the panel can
+answer *when did a backup last succeed, and has one failed since* without a credential that
+could look in the bucket. Nothing on this host has one: see the section above.
+
+A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
+was written, **3** the artifact exists and did not leave this machine. Only **1** is retried
+automatically, hourly, up to six times a day — a stack that had not finished booting is the
+usual cause and a retry costs nothing. **3 is not retried**, because the artifact is already
+on the disk and re-dumping would fill it with copies of the same database; the remedy is
+the `make backup-upload FROM=…` above, which the failing run prints.
+
+A tick with nothing to do prints nothing, so a working schedule is silent and cron sends no
+mail. A tick that fails prints everything, and cron delivers that wherever it delivers mail
+— which on most hosts is nowhere anybody looks. **The record is the channel that does not
+depend on mail existing.**
+
+**On a host with no `crontab`**, the same script under a systemd timer, as root:
+
+```ini
+# /etc/systemd/system/hashi-backup.service
+[Service]
+Type=oneshot
+User=<the account that runs `make up`>
+ExecStart=<the checkout>/scripts/backup-run.sh tick
+
+# /etc/systemd/system/hashi-backup.timer
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl enable --now hashi-backup.timer
+systemctl list-timers hashi-backup.timer
+```
+
+`OnCalendar=*:0/15` and not `04:00`, for the reason above — the timer carries no hour
+either, and `Persistent=true` is then only a belt on top of a schedule that already cannot
+skip a day. Everything else is identical: the same script, the same record, the same
+`.env`.
+
+**What none of this proves.** That the artifact of any of those runs is still in the
+bucket. This host cannot look — see *The retention this host's own key cannot reach*, below
+— and a green `make backup-status` is a statement about what happened here, not about what
+is kept there. The only check is a restore.
 
 ### The retention this host's own key cannot reach
 

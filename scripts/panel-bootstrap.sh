@@ -271,6 +271,12 @@ fi
 # images are built on the host that runs them and never pushed anywhere that could check
 # a signature. Set on this one command rather than exported, so it describes the build and
 # nothing else.
+# Before the first `up`, and this ordering is the only reason it is here: the control
+# service mounts this directory read-only (the backup schedule's record, M28.5), and a
+# bind mount whose source does not exist is created by the docker daemon, as root. The
+# schedule runs as the operator and would then never be able to write the record.
+mkdir -p "${REPO_ROOT}/backups/state"
+
 say "building and starting the stack (this is the slow part on a fresh host)"
 # A failure here does NOT end the run, and that is deliberate rather than lax.
 # `compose up -d` fails when a service it was told to wait for never becomes healthy —
