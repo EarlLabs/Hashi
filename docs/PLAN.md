@@ -3018,6 +3018,75 @@ are `control`'s and neither is M28's to widen into. `HASHI_PUBLIC_HTTPS` is sett
 
 Gate: `make verify`. The proof of 1–4 is a second walk, not a suite.
 
+### M28.11 — `control`: the panel must not say a backup left the machine when it did not · found in acceptance 2026-09-23
+
+Three things the panel says that are not true. All four of acceptance's blocking
+findings have a panel half and a script half; this step is the panel's, M28.12 is the
+script's, and they are separate because `CLAUDE.md` does not allow one diff to cross
+zones.
+
+1. **A backup that never left the machine reads exactly like one that reached the
+   store.** Two records identical but for `offsite` — `yes` against `no`, both with a
+   success today — render **byte-identical** screens: *"Last backup 17 hours ago: the run
+   reported "ok"."* `cmp` reports no difference. The caveat below then talks about
+   *"whether any of those artifacts is still in the bucket"*, which for a host that sends
+   nothing is worse than silence. **This is the shipped default** — `.env.example` carries
+   `HASHI_BACKUP_ENABLED=0`, and its own comment states the rule being broken: *a backup
+   that never left the machine is not an offsite backup and must not be reported as one.*
+   The record carries the field; the panel drops it. **It goes straight at the milestone's
+   first "Done when" and at the complaint that started M28.**
+
+2. **"Most recent" missed days prints the oldest ones.** With eight days stored, three in
+   August and three this week, the panel printed *"8 — most recent 2026-08-12,
+   2026-08-13, 2026-08-14"*. In the long-outage state — the exact case that sentence
+   exists to distinguish — it points six weeks back instead of at now. Neither surface
+   sorts; both trust the writer's order, so one of the two labels is wrong whatever that
+   order is, and nothing enforces it.
+
+3. **A record dated in the future reads as the quiet reassuring state and can never leave
+   it.** Clock skew gives *"Last backup less than an hour ago"* for ever. M28.6 clamps a
+   future age to zero rather than reporting it; clamping is right for arithmetic and wrong
+   for the sentence.
+
+Gate: `make test-control` with a real Postgres — **report the skip count** — plus
+`tests/e2e/control`, then `make verify`.
+
+### M28.12 — `infra`: the command line must not be more confident than the panel · found in acceptance 2026-09-23
+
+The other half of the same four findings.
+
+1. **`make backup-status` reads a damaged record as a fresh host.** The panel refuses to
+   assume anything from it — *"Nothing has been assumed from it"* — and then sends the
+   operator to `make backup-status`, which prints *"last success: never / last attempt:
+   never"* plus a confident *"scheduled: 04:00 Etc/UTC (configured)"* and exits **0**,
+   indistinguishable from a machine that has never run one. It can clearly do better: with
+   the file **absent** it prints a proper "no record" page and exits 1. It validates
+   nothing — `schema: 99`, or a 1000-character `outcome` carrying a `<script>` tag, is
+   printed verbatim as fact while the panel calls the same file unreadable.
+
+2. **The same `offsite` blindness, in `make backup-status`**, and the same missed-days
+   ordering. Whatever M28.11 settles for the panel's wording, this must match it — and the
+   **writer** is here too, so if the order of `missed_dates` is the thing to fix, fix it
+   at the source and let both readers stop guessing.
+
+3. **`make backup` blames the backup keypair for failures that have nothing to do with
+   it, and the remedy would orphan every existing artifact.** With
+   `HASHI_BACKUP_AGE_RECIPIENT` set and non-empty, `make backup` still printed the whole
+   *"it needs the PUBLIC half of your backup keypair … `age-keygen -o …`"* page; supplying
+   the variable it named moved the cause to the next one and printed the same advice
+   again. So the guard says "your recipient is missing" for **any** env-interpolation
+   failure. An operator who follows it generates a new keypair — after which every
+   artifact already in the store is addressed to an identity they have just replaced.
+   **`make restore-from-bucket` meets the same class of failure and names the exact keys:
+   the good pattern is already next door.**
+
+4. **Smaller, same file:** exit 3 is shown as a number and never as what it means — the
+   artifact is still on the machine and `make backup-upload` is the remedy; and the
+   crontab block says *"is the **account** that does not depend on mail existing"* where
+   it means *channel*.
+
+Gate: `make test-infra`, then `make verify`.
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
