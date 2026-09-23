@@ -2952,6 +2952,72 @@ decision of its own — if it is refused, the suite gate narrows to `tests/infra
 and the real proof is M28.9's walk, which is a field observation and is reported
 as one.
 
+### M28.10 — What the bare-host walk found · walked 2026-09-23
+
+**The restore works.** A control plane built on a Russian box and killed without a
+graceful stop came back on a machine that had never run this project: one command plus
+the three carried inputs, the existing node applied from the rebuilt panel in 3.8s, and
+the existing user's subscription returned **byte for byte identical** — same token, same
+path, `sha256 14b0d1fb…`, 336 bytes. The age layer holds: a bucket reader gets
+`age-encryption.org/v1` and a refusal, while the decrypted dump carries the leaf address
+in the clear, which is precisely what that layer exists to cover. The scheduled path fired
+unattended at the appointed minute and recorded `outcome: offsite`.
+
+**It fails the milestone's own measure**, which is not "a restore is possible" but *"the
+walk fails if the operator had to read anything other than the command to get there"*.
+Six things made that untrue, in the order they bite.
+
+1. **`HASHI_OPERATOR_PASSWORD_HASH` cannot be produced on a bare host, and the runbook
+   says it can.** The first refusal sends the operator to `.env.example`, which sends them
+   to `python -m control.cli hash-password`. Ubuntu 22.04 ships Python 3.10; `make setup`
+   wants 3.14 and fails. The runbook's restore block says *"fill in HASHI_SECRET_KEY, the
+   hostnames, the operator password hash and the database password. Nothing else is
+   needed"* — and one of those four cannot be made on the machine. **This is the gap
+   between "the operator reads the command" and "the operator needs a second working
+   checkout."** The hash is computable inside the control image, which the command builds
+   anyway.
+
+2. **The one command is interactive and says nothing when it cannot be.** Over a
+   non-interactive session it prints the confirmation prompt, reads EOF, and exits 2 with
+   no sentence — **after** installing the control plane and fetching the artifact. Nothing
+   in the runbook's command block says a terminal is needed. And on a bare host the
+   prompt's own text is false: *"Every current node, user and credential is overwritten"*
+   describes nothing, in exactly the case the command exists for.
+
+3. **The closing screen's first instruction is the one the Makefile warns against.** It
+   says *"Restart the control plane so it reconnects: `make down && make up`"*. Followed
+   literally that yields a stack publishing **no ports** — `make up` converges to the base
+   shape, which the Makefile itself flags. Two paragraphs later the same screen says
+   `make up-panel`. Between "restored" and "logged in", the screen contradicts itself.
+
+4. **`make up-panel` needs a non-loopback address a fresh restore does not have.**
+   `HASHI_PRIVATE_BIND_ADDR` is refused if it is loopback, and with no management tunnel
+   there is no other address on the box. The walker had to invent one. The refusal points
+   at the runbook, which is documented — and is one more step the command does not carry.
+
+5. **A restored fleet is an unbacked-up fleet, and nothing says so.** The write-only S3
+   key and the age recipient lived only in the lost `.env`, which is deliberately not in
+   the backup. On the restored host `make backup` fails outright:
+   `required variable HASHI_BACKUP_AGE_RECIPIENT is missing a value`. Neither the closing
+   screen nor the runbook's restore section mentions re-establishing the offsite block.
+   **The panel is honest about what it records and silent about the fact that nothing will
+   be recorded.**
+
+6. **`scripts/backup.sh` calls `age-keygen` in a diagnostic, and a bare host has none.**
+   The wrong-identity path prints `age-keygen: command not found` — a raw shell error on
+   the operator's screen — and loses the public key the sentence meant to show. It
+   degrades on precisely the machine the command is designed for.
+
+**Not in this step, and recorded rather than fixed:** with a wrong `HASHI_SECRET_KEY` the
+panel answers every page with **409 and a raw JSON body** rather than a screen (the
+message inside it is exactly right), and `/sub/{token}` returns **404 with zero bytes**,
+indistinguishable from a revoked token — the same signature as M26's open blocker 2. Both
+are `control`'s and neither is M28's to widen into. `HASHI_PUBLIC_HTTPS` is settable in
+`settings.py` and the Settings screen but is in neither `.env.example` nor
+`deploy/docker-compose.yml`.
+
+Gate: `make verify`. The proof of 1–4 is a second walk, not a suite.
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
