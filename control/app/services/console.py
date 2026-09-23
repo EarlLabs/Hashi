@@ -802,10 +802,11 @@ class StateChoice:
 
 # --- the backups this host took, as the Overview says it (M28.6) -------------------
 
-# THE SENTENCE THIS SCREEN EXISTS NOT TO INFLATE, said under every one of the six
-# standings including the good one. It opens with the same words `make backup-status`
-# closes with, deliberately: the operator meets this fact in two channels and they must
-# not be two different strengths of claim.
+# THE SENTENCE THIS SCREEN EXISTS NOT TO INFLATE — one of three, and one of them is said
+# under every one of the six standings including the good one. This is the one for a host
+# whose record says it uploads. It opens with the same words `make backup-status` closes
+# with, deliberately: the operator meets this fact in two channels and they must not be
+# two different strengths of claim.
 #
 # The distinction it is defending: a successful upload proves the store received exactly
 # those bytes and accepted them (the payload's digest is inside the signature), and proves
@@ -825,6 +826,63 @@ BACKUP_NOT_THE_BUCKET = (
     "only thing that proves a backup is a restore: docs/deploy/runbook.md, under "
     "“Backups”."
 )
+
+# AND THE ONE FOR A HOST THAT SENDS NOTHING ANYWHERE, which is the shipped default.
+#
+# M28.11: until it, there was one caveat and it was the sentence above, said on every host
+# whether or not that host had a bucket. Two records differing only in `offsite` drew
+# byte-identical screens, and the one that sends nothing closed by telling its operator
+# that what it could not vouch for was whether the artifact was still in a bucket — which
+# invites exactly the belief that there is one. A caveat is meant to take a claim away; a
+# caveat about the wrong thing hands one over.
+#
+# It is NOT a weaker sentence than the one above and must not become one. The upload being
+# off is a supported mode — the artifact is written, the schedule keeps taking it, and that
+# is worth having — so this is not an alarm and does not make the screen loud. What it does
+# is refuse the inference the other caveat's wording invites, and it refuses the same final
+# claim: only a restore proves a backup.
+#
+# Phrased about the HOST and not about the run above it, deliberately. A record can
+# honestly hold a run whose outcome is `offsite` under a host whose `offsite` is now `no`
+# — the operator switched it off between two runs — and a caveat reading "none of this
+# left the machine" would then flatly contradict the true sentence directly above it. What
+# is always true is what the setting says the host does today.
+BACKUP_NEVER_LEFT_THIS_HOST = (
+    "What this does NOT say: that this host is sending its backups anywhere. The record "
+    "says the upload is switched off on it (HASHI_BACKUP_ENABLED), so an artifact it "
+    "takes is written to that host's own disk and stays there — a copy that shares a "
+    "disk with the thing it is a copy of is not a backup of it, and neither of them "
+    "survives losing the machine. Nothing in this panel has ever read any store. Turning "
+    "the upload on, and the only thing that proves a backup — a restore — are both in "
+    "docs/deploy/runbook.md, under “Backups”."
+)
+
+# And the one for when there is nothing to ask. No record, or a record whose `offsite`
+# holds a word this panel has no meaning for.
+#
+# A third sentence rather than defaulting to either of the other two, for the reason
+# ``backups.Destination.UNKNOWN`` gives: defaulting to the bucket is the M28.11 bug with an
+# extra step, and defaulting to "nothing left the machine" would tell an operator whose
+# uploads are working that they are not. Saying "this panel could not tell" is the only one
+# of the three that is true here.
+BACKUP_WHERE_IT_WENT_IS_UNKNOWN = (
+    "What this does NOT say: whether anything was sent anywhere. This panel could not "
+    "read whether that host sends its backups to a store at all, so it is not claiming "
+    "an artifact reached one and not claiming none did — and it has never read any store "
+    "either way. The only thing that proves a backup is a restore: "
+    "docs/deploy/runbook.md, under “Backups”."
+)
+
+# Which of the three a standing closes with. Keyed on where the HOST sends, never on how a
+# run went: a run's outcome is about one artifact at one moment, and this is about the
+# machine as it is set up now. The two may honestly disagree — an operator who switched the
+# upload on this morning has yesterday's run saying it stayed here and a host that now
+# sends — and neither of them is the record being damaged.
+BACKUP_CAVEATS = {
+    backups.Destination.OFFSITE: BACKUP_NOT_THE_BUCKET,
+    backups.Destination.THIS_HOST: BACKUP_NEVER_LEFT_THIS_HOST,
+    backups.Destination.UNKNOWN: BACKUP_WHERE_IT_WENT_IS_UNKNOWN,
+}
 
 # What each of the writer's outcome words means, in a clause that goes after a colon.
 # M28.3's own pinned wording, so the panel, the script's output and the runbook say the
@@ -888,10 +946,10 @@ class BackupStanding:
     label: str | None
     headline: str
     detail: str
-    # ``BACKUP_NOT_THE_BUCKET``, carried on the object rather than pulled in by the
-    # template, for the reason every other console sentence is composed here: so a test
-    # asserts the constant appears under every standing rather than trusting a template
-    # to include it.
+    # One of ``BACKUP_CAVEATS``, chosen by where the host sends and never by the
+    # standing — carried on the object rather than pulled in by the template, for the
+    # reason every other console sentence is composed here: so a test asserts one of the
+    # three appears under every standing rather than trusting a template to include it.
     caveat: str
     loud: bool
 
@@ -913,9 +971,40 @@ def _how_long(delta: datetime.timedelta) -> str:
     return _plural(hours // 24, "day", "").strip()
 
 
-def _ago(delta: datetime.timedelta | None) -> str:
+# What a screen says instead of an age, for a run the record dates AFTER the moment the
+# record was read. M28.11: the age is clamped to zero for the arithmetic, which is right
+# and which on its own printed "less than an hour ago" — the most reassuring phrase this
+# feature has — about a record from next week, permanently. There is no number to print
+# here, because the two clocks disagree and this panel has no way to say by how much.
+BACKUP_AGE_UNKNOWABLE = "at a time that had not come yet when this was read"
+
+
+def _ago(delta: datetime.timedelta | None, *, ahead: bool = False) -> str:
     """The same gap, as a moment in the past. ``None`` never reaches here."""
+    if ahead:
+        return BACKUP_AGE_UNKNOWABLE
     return f"{_how_long(delta)} ago" if delta is not None else "at no recorded time"
+
+
+def _backup_clock(reading: backups.Reading) -> str:
+    """Said whenever a run in the record is dated ahead of the clock it was read against.
+
+    Not a seventh standing and not a second colour — the standings are about the backups
+    and this is about a clock, and one FRESH branch goes loud for it because that branch is
+    the only quiet one and the quiet one is where this hides. What it has to convey is that
+    every age on the screen is now worthless, which is worse than any single wrong number:
+    a host whose clock runs ahead reports its six-week-old backup as this morning's and
+    never stops.
+    """
+    if not (reading.success_ahead or reading.failure_ahead):
+        return ""
+    return (
+        " This record is dated AHEAD of the clock this panel read it against, so no age "
+        "on this screen can be believed: the machine that wrote it and the machine "
+        "drawing this disagree about the time, and until they agree a backup taken weeks "
+        "ago can read as one taken this morning. Fix the clock on that host, then read "
+        "this again."
+    )
 
 
 def _backup_outcome(outcome: str) -> str:
@@ -947,6 +1036,10 @@ def _backup_gap(record: backups.Record) -> str:
     """
     if record.missed_total <= 0:
         return ""
+    # ``missed_dates`` arrives newest first — the reader sorts it, and does not take the
+    # writer's word for the order. M28.11: this used to take the first three of whatever
+    # order was on disk and label them "most recent", which during a running gap printed
+    # three days in August under a label whose entire job is to point at now.
     recent = ", ".join(record.missed_dates[:3])
     tail = f" — most recent {recent}." if recent else "."
     return f" Days with no backup at all since this record began: {record.missed_total}{tail}"
@@ -960,11 +1053,18 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
     six without a filesystem.
 
     WHAT IS NOT SAID, under any of them: that a backup exists. Every branch talks about
-    RUNS — one succeeded, one failed, none has happened — and closes with
-    ``BACKUP_NOT_THE_BUCKET``. The good state is the one that matters here: "last backup
+    RUNS — one succeeded, one failed, none has happened — and closes with the caveat for
+    where that host sends. The good state is the one that matters here: "last backup
     6 hours ago: written here, and the object store accepted it" is the strongest claim
     this host is entitled to, and it is a claim about an upload that was accepted, not
     about an object that is still there.
+
+    AND THE TWO CLAIMS ARE KEPT APART, which is M28.11's whole correction. Whether a run
+    reached a store at all is something this host recorded and this screen now says, in
+    the run's outcome clause and in the caveat that follows it. Whether what reached the
+    store is still there is something nothing in this product can know, and no branch
+    here says it. The second was already right; the first was missing, so a host that
+    sends nothing anywhere read exactly like one that uploads every night.
     """
     record = reading.record
     match reading.standing:
@@ -981,7 +1081,7 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                     "what this panel is reading, make backup-schedule installs the "
                     "schedule, make backup takes one now."
                 ),
-                caveat=BACKUP_NOT_THE_BUCKET,
+                caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
             )
         case backups.Standing.UNREADABLE:
@@ -998,7 +1098,7 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                     "screen is not telling you backups are working and not telling you "
                     "they are failing. Read it on the host with make backup-status."
                 ),
-                caveat=BACKUP_NOT_THE_BUCKET,
+                caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
             )
         case backups.Standing.NEVER if reading.failed_since:
@@ -1007,12 +1107,13 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                 label="no backup",
                 headline="No backup has ever succeeded on this host.",
                 detail=(
-                    f"The last run was {_ago(reading.since_failure)}: "
+                    f"The last run was {_ago(reading.since_failure, ahead=reading.failure_ahead)}: "
                     f"{_backup_outcome(failure.outcome)}, exit {failure.exit_code}. "
-                    f"{_backup_schedule(record)}{_backup_gap(record)} "
+                    f"{_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)} "
                     "make backup-status on the host prints this record in full."
                 ),
-                caveat=BACKUP_NOT_THE_BUCKET,
+                caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
             )
         case backups.Standing.NEVER:
@@ -1021,10 +1122,11 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                 headline="No backup has run on this host yet.",
                 detail=(
                     "The schedule has been resolved and nothing has been recorded under "
-                    f"it. {_backup_schedule(record)}{_backup_gap(record)} make backup on "
+                    f"it. {_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)} make backup on "
                     "the host takes one now, without waiting for the appointed time."
                 ),
-                caveat=BACKUP_NOT_THE_BUCKET,
+                caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
             )
         case backups.Standing.SILENT:
@@ -1037,13 +1139,14 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                     "— so nothing has been trying."
                 ),
                 detail=(
-                    f"The last run that succeeded was {_ago(reading.since_success)}: "
+                    "The last run that succeeded was "
+                    f"{_ago(reading.since_success, ahead=reading.success_ahead)}: "
                     f"{_backup_outcome(success.outcome)}. {_backup_schedule(record)}"
-                    f"{_backup_gap(record)} Check on that host that the schedule is "
-                    "still installed — make backup-schedule is idempotent, and make "
-                    "backup-status prints this record in full."
+                    f"{_backup_gap(record)}{_backup_clock(reading)} Check on that host "
+                    "that the schedule is still installed — make backup-schedule is "
+                    "idempotent, and make backup-status prints this record in full."
                 ),
-                caveat=BACKUP_NOT_THE_BUCKET,
+                caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
             )
         case backups.Standing.FAILING:
@@ -1052,28 +1155,41 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                 label="failing",
                 headline=(
                     "Backups on this host are failing. The last one that succeeded was "
-                    f"{_ago(reading.since_success)}, and every run since has failed."
+                    f"{_ago(reading.since_success, ahead=reading.success_ahead)}, and "
+                    "every run since has failed."
                 ),
                 detail=(
-                    f"The last run was {_ago(reading.since_failure)}: "
+                    f"The last run was {_ago(reading.since_failure, ahead=reading.failure_ahead)}: "
                     f"{_backup_outcome(failure.outcome)}, exit {failure.exit_code}. "
-                    f"{_backup_schedule(record)}{_backup_gap(record)} make "
+                    f"{_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)} make "
                     "backup-status on the host prints this record in full."
                 ),
-                caveat=BACKUP_NOT_THE_BUCKET,
+                caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
             )
         case backups.Standing.FRESH:
             success = record.last_success
+            # THE ONE PLACE A CLOCK CHANGES THE WEIGHT, and it is the whole of M28.11's
+            # third finding. A record dated in the future clamps to an age of zero, which
+            # lands here — the muted note, the quietest thing this feature can say — and
+            # stays there for as long as the two machines disagree, because nothing about
+            # waiting makes a future timestamp pass. Every other standing that can carry
+            # an impossible date is already loud and already carries the clause; this one
+            # would otherwise be a permanent reassurance about a host nobody is checking.
+            ahead = reading.success_ahead or reading.failure_ahead
             return BackupStanding(
-                label=None,
+                label="clock ahead" if ahead else None,
                 headline=(
-                    f"Last backup {_ago(reading.since_success)}: "
+                    f"Last backup {_ago(reading.since_success, ahead=reading.success_ahead)}: "
                     f"{_backup_outcome(success.outcome)}."
                 ),
-                detail=f"{_backup_schedule(record)}{_backup_gap(record)}",
-                caveat=BACKUP_NOT_THE_BUCKET,
-                loud=False,
+                detail=(
+                    f"{_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)}"
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=ahead,
             )
 
     # ``Standing`` is a closed enum one module over and every member of it is answered
@@ -1089,7 +1205,7 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
             "what it found, which is a fault in the panel and not in the backups. Read "
             "it on the host with make backup-status."
         ),
-        caveat=BACKUP_NOT_THE_BUCKET,
+        caveat=BACKUP_CAVEATS[reading.destination],
         loud=True,
     )
 

@@ -15,9 +15,16 @@ WHY:  the dangerous state is not "the backup failed", it is "the backup has been
       in this product at all (M28.3), and nothing in this repository asserts the bucket's
       retention or ever can (M28.4). A successful run means the store received exactly
       those bytes and accepted them, and says nothing about a minute later. That is why
-      this module composes no prose — every sentence built from a ``Reading`` carries
-      ``console.BACKUP_NOT_THE_BUCKET``, and a green tick on a screen is precisely how
-      that distinction would otherwise be lost.
+      this module composes no prose — every sentence built from a ``Reading`` carries the
+      caveat for where that host sends, and a green tick on a screen is precisely how that
+      distinction would otherwise be lost.
+
+      AND THE OTHER HALF OF IT, which M28.11 found inverted: whether a run reached a store
+      AT ALL is something this host does know, and until then the panel threw it away.
+      ``HASHI_BACKUP_ENABLED=0`` is the shipped default, so the screen that talked about a
+      bucket was, by default, talking about a bucket that does not exist. The two claims
+      are different and both are said now: where the run went, which this host recorded,
+      and whether the artifact is still there, which nothing here will ever know.
 HOW:  the file is a bind mount, read-only, so there is no writer here and there is not
       going to be one. It is parsed STRICTLY and every way it can disappoint degrades to
       one of two answers, ``ABSENT`` or ``UNREADABLE``: a mount that arrived empty, a
@@ -102,6 +109,19 @@ TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
 # printed on a screen.
 A_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# How far ahead of this process's clock a record's timestamp may be before it is reported
+# as coming from the future rather than quietly treated as "just now".
+#
+# There is normally no skew at all to absorb: the schedule writes the file and this reads
+# it through a bind mount, so both sit on one kernel's clock, and the writer truncates to
+# whole seconds, which can only move a stamp backwards. The grace is for the two cases
+# where the two clocks really are two — a record delivered over a network mount from the
+# machine that takes the backups, and an NTP step landing between the write and the read —
+# so that neither puts a standing sentence about a broken clock on the front page for the
+# few seconds it lasts. Anything beyond a minute is not skew, it is a host that has the
+# wrong time, and that is worth a sentence because it makes every age on this screen wrong.
+CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
+
 
 class Standing(enum.StrEnum):
     """Where the backups on this host stand, in the only six answers there are.
@@ -127,6 +147,45 @@ class Standing(enum.StrEnum):
     SILENT = "silent"
     FAILING = "failing"
     FRESH = "fresh"
+
+
+class Destination(enum.StrEnum):
+    """Where this host sends its backups — which is not the same question as how a run went.
+
+    THE DISTINCTION THE PANEL GOT WRONG UNTIL M28.11, and it is the milestone's own
+    premise inverted. ``HASHI_BACKUP_ENABLED=0`` is the shipped default: the artifact is
+    written and stays on the machine, which is a supported mode and not a fault. The
+    record says so in its own ``offsite`` field, the reader dropped that field on the
+    grounds that every run's ``outcome`` already carried it, and so two hosts — one
+    uploading, one sending nothing anywhere — drew byte-identical screens, both closing
+    with a caveat about a bucket one of them does not have. A caveat about a bucket, on a
+    host with no bucket, is worse than saying nothing.
+
+    The two are different in TIME as well as in kind, which is why both are kept. A run's
+    ``outcome`` says what happened to THAT artifact, whenever it was taken. This says what
+    the host is set to do NOW, and the operator may have changed it since — so the two
+    disagreeing is not a damaged record, it is a switch that was thrown between two runs.
+
+    * ``OFFSITE`` — the record says the upload is on.
+    * ``THIS_HOST`` — the record says it is off. Nothing has been sent anywhere.
+    * ``UNKNOWN`` — there is no record, or it holds a word this panel has no meaning for.
+      Never collapsed into either of the other two: guessing "offsite" would reinstate the
+      bug, and guessing "this host" would deny an upload that may well be happening.
+    """
+
+    OFFSITE = "offsite"
+    THIS_HOST = "this-host"
+    UNKNOWN = "unknown"
+
+
+# The writer's own two words for its ``offsite`` field, and the only two it emits. Anything
+# else is UNKNOWN rather than _Malformed, for ``outcome``'s reason one field over: a later
+# writer gaining a third word must not be able to turn this screen into "the record is
+# unreadable", and "this panel cannot tell where these go" is an answer it can say out loud.
+_DESTINATIONS = {
+    "yes": Destination.OFFSITE,
+    "no": Destination.THIS_HOST,
+}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -156,9 +215,14 @@ class Record:
 
     A deliberate subset of M28.5's fifteen keys. ``schema`` is checked and not kept,
     ``written_at`` and ``due_date`` say what ``last_attempt`` already says, and
-    ``attempts``, ``retry_not_before`` and ``offsite`` are the scheduler's own working
-    state — the last of those is already in every run's ``outcome``. A field nothing
-    reads is a field nobody notices has gone wrong, so they are not carried.
+    ``attempts`` and ``retry_not_before`` are the scheduler's own working state. A field
+    nothing reads is a field nobody notices has gone wrong, so they are not carried.
+
+    ``offsite`` USED TO BE ON THAT LIST and that was the M28.11 defect — see
+    ``Destination``. The reason given for dropping it was that every run's ``outcome``
+    already carried it, which is true only while the outcome is one of the five words this
+    panel knows; a sixth word is named verbatim, and a screen composed from nothing but
+    that word says nothing at all about whether the artifact left the machine.
     """
 
     # The appointed time and the zone it is in, both exactly as the host resolved them.
@@ -168,8 +232,21 @@ class Record:
     at_source: str
     zone: str
     zone_source: str
+    # The host's own word for whether the upload is switched on, kept verbatim. What it
+    # MEANS is ``Reading.destination``; the raw word stays here so nothing is lost on the
+    # way to a screen that may have to print a word this code does not recognise.
+    offsite: str
     # Days the schedule noticed had no backup at all, and the cumulative count of them.
     # Both survive the run that ends a gap, so they are history rather than an alarm.
+    #
+    # NEWEST FIRST, AND SORTED HERE RATHER THAN TRUSTED. The panel says "most recent" over
+    # the first few of these, and until M28.11 it said it over whatever order the writer
+    # happened to use — which put a label meaning "now" on three days in August while a
+    # gap was running. Nothing downstream can check an order, and this file is on a disk
+    # where a hand edit goes, so the order is established here and the invariant belongs
+    # to the type rather than to an agreement between two zones. These are
+    # ``YYYY-MM-DD`` and validated as such before they get here, so sorting them as text
+    # is sorting them as dates.
     missed_dates: tuple[str, ...]
     missed_total: int
     last_attempt: Run | None
@@ -192,6 +269,9 @@ class Reading:
     standing: Standing
     # ``None`` for ABSENT and UNREADABLE, and those are the only two.
     record: Record | None
+    # Where this host sends its backups, as the record says it does today. ``UNKNOWN``
+    # whenever there is no record to ask, which is exactly the two standings above.
+    destination: Destination
     # How long ago the last successful run was, ``None`` if there has never been one.
     since_success: datetime.timedelta | None
     # ...and the last failed one, on the same terms.
@@ -200,6 +280,18 @@ class Reading:
     # ``last_failure.at > last_success.at`` and is true of a failure with no success at
     # all beside it.
     failed_since: bool
+    # Whether that run is stamped AHEAD of the clock this was read against, per run,
+    # because a screen prints the two ages in separate sentences and only one of them may
+    # be the impossible one.
+    #
+    # The ages above stay CLAMPED — arithmetic on a negative age is how a clock that
+    # disagrees turns a stale backup into a fresh one or the reverse, and M28.6 was right
+    # about that. These are what stops the clamp from also being a lie: without them the
+    # panel reported "last backup less than an hour ago" for a record dated next week, for
+    # ever, which is the most reassuring sentence on the screen said about the one state
+    # nobody can get out of by waiting.
+    success_ahead: bool
+    failure_ahead: bool
 
 
 class _Malformed(Exception):
@@ -345,7 +437,9 @@ def _parse(data: bytes) -> Record:
         at_source=_text(raw, "at_source"),
         zone=_text(raw, "zone"),
         zone_source=_text(raw, "zone_source"),
-        missed_dates=tuple(dates),
+        offsite=_text(raw, "offsite"),
+        # Newest first, whatever order the writer used — see ``Record.missed_dates``.
+        missed_dates=tuple(sorted(dates, reverse=True)),
         missed_total=_whole(raw, "missed_total"),
         last_attempt=_run(raw, "last_attempt"),
         last_success=_run(raw, "last_success"),
@@ -384,9 +478,12 @@ def _judge(record: Record, now: datetime.datetime, path: pathlib.Path) -> Readin
         path=str(path),
         standing=standing,
         record=record,
+        destination=_DESTINATIONS.get(record.offsite, Destination.UNKNOWN),
         since_success=since_success,
         since_failure=since_failure,
         failed_since=failed_since,
+        success_ahead=_ahead(success, now),
+        failure_ahead=_ahead(failure, now),
     )
 
 
@@ -397,8 +494,22 @@ def _age(moment: datetime.datetime, now: datetime.datetime) -> datetime.timedelt
     a backup that has not happened yet. Clamped rather than reported, because the only
     thing an operator could do with "-3 hours ago" is misread it, and a clock that
     disagrees must not be able to turn a fresh backup into a stale one or the reverse.
+
+    The clamp is the arithmetic and is right. It is NOT the sentence: on its own it turns
+    a record dated next week into "less than an hour ago", which reads as the quietest
+    state on the screen and stays there for as long as the clocks disagree. ``_ahead``
+    beside it is what lets the sentence say the other thing.
     """
     return max(now - moment, datetime.timedelta(0))
+
+
+def _ahead(run: Run | None, now: datetime.datetime) -> bool:
+    """Whether that run claims to have happened after the moment it is being read at.
+
+    ``CLOCK_AHEAD_GRACE`` says why this is not simply ``run.at > now``. ``None`` — a thing
+    that has never happened — is not ahead of anything.
+    """
+    return run is not None and run.at - now > CLOCK_AHEAD_GRACE
 
 
 async def read(
@@ -479,7 +590,13 @@ def _nothing(path: pathlib.Path, standing: Standing) -> Reading:
         path=str(path),
         standing=standing,
         record=None,
+        # There is no record to ask where this host sends anything, and neither of the
+        # other two answers may be guessed: "offsite" would reinstate the bug this field
+        # exists to close, and "this host" would deny an upload that may be working.
+        destination=Destination.UNKNOWN,
         since_success=None,
         since_failure=None,
         failed_since=False,
+        success_ahead=False,
+        failure_ahead=False,
     )

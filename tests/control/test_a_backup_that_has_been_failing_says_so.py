@@ -517,7 +517,9 @@ async def test_missed_days_are_history_and_never_an_alarm(written) -> None:
 
     assert said.loud is False
     assert "Days with no backup at all since this record began: 14" in said.detail
-    assert "most recent 2026-06-01, 2026-06-02" in said.detail
+    # Newest first — see the ordering scenario below for why the panel does not take the
+    # writer's word for which end of the list "most recent" is at.
+    assert "most recent 2026-06-02, 2026-06-01" in said.detail
 
 
 async def test_a_clock_that_disagrees_does_not_invent_a_stale_backup(written) -> None:
@@ -527,6 +529,297 @@ async def test_a_clock_that_disagrees_does_not_invent_a_stale_backup(written) ->
 
     assert reading.standing is backups.Standing.FRESH
     assert reading.since_success == datetime.timedelta(0)
+
+    # ...and the clamp is the arithmetic, never the sentence. M28.11: on its own it made a
+    # record dated next week read as the quietest line this feature has, permanently.
+    assert reading.success_ahead is True
+
+
+# --- where the artifact went, which is not whether it is still there (M28.11) --------
+
+async def test_a_host_that_sends_nothing_does_not_read_like_one_that_uploads(
+    client, written
+) -> None:
+    """Acceptance 2026-09-23, the first finding, and the milestone's own premise inverted.
+
+    Two records identical but for ``offsite``, both with a recent success, drew screens a
+    ``cmp`` could not tell apart — and both closed by saying what they could not tell you
+    about a bucket, which on a host that sends nothing anywhere is worse than silence.
+    ``HASHI_BACKUP_ENABLED=0`` is the SHIPPED DEFAULT, so that was the out-of-the-box
+    screen.
+
+    Driven through the rendered page rather than through the composed object, because
+    byte-identical pages is what was actually observed, and an assertion on the two
+    standings would not have noticed a template that dropped the difference again.
+    """
+    screens = {}
+    for offsite in ("yes", "no"):
+        # The outcome the walker's records carried: a word this panel has no meaning for,
+        # so the run clause cannot be what distinguishes the two. That is the point — the
+        # record's own ``offsite`` field is the only thing left that can, and the panel
+        # used to drop it.
+        written(
+            record(
+                offsite=offsite,
+                last_success=live(17, outcome="ok"),
+                last_attempt=live(17, outcome="ok"),
+            )
+        )
+        screens[offsite] = (await client.get("/panel/")).text
+
+    assert screens["yes"] != screens["no"], "cmp reports no difference, as acceptance did"
+    assert console.BACKUP_NOT_THE_BUCKET in screens["yes"]
+    assert console.BACKUP_NOT_THE_BUCKET not in screens["no"]
+    assert console.BACKUP_NEVER_LEFT_THIS_HOST in screens["no"]
+    assert console.BACKUP_NEVER_LEFT_THIS_HOST not in screens["yes"]
+
+
+async def test_the_shipped_default_says_the_backup_never_left_the_machine(
+    written,
+) -> None:
+    """The words, on the record `.env.example`'s own default produces.
+
+    Its comment states the rule: a backup that never left the machine is not an offsite
+    backup and must not be reported as one. It is still not an alarm — the artifact is
+    taken, the schedule keeps running, and that is a supported mode — so the weight does
+    not change and only the sentence does.
+    """
+    said = await standing_of(
+        written(
+            record(
+                offsite="no",
+                last_success=run(6, outcome="on-this-host-only"),
+                last_attempt=run(6, outcome="on-this-host-only"),
+            )
+        )
+    )
+
+    assert said.loud is False, "not sending is a supported mode, not a fault"
+    assert said.caveat == console.BACKUP_NEVER_LEFT_THIS_HOST
+    assert "What this does NOT say: that this host is sending its backups anywhere" in (
+        said.caveat
+    )
+    assert "on that host's own disk and stays there" in said.caveat
+    assert "neither of them survives losing the machine" in said.caveat
+    # The claim M28.6 spent two rounds on is not weakened by the claim M28.11 added: this
+    # screen still refuses to say an artifact can be restored.
+    assert "only thing that proves a backup is a restore" in said.caveat
+    for word in NEVER_SAID:
+        assert word not in f"{said.headline} {said.detail} {said.caveat}".lower()
+
+
+async def test_a_run_that_reached_a_store_still_says_nothing_about_the_bucket(
+    written,
+) -> None:
+    """The other half, and the one that must NOT be softened into the new one.
+
+    Whether a run reached a store at all is something this host knows and now says.
+    Whether what reached it is still there is something nothing here will ever know, and
+    the caveat that refuses it is unchanged, word for word, from M28.6 — it opens with the
+    words `make backup-status` closes with, and the two channels may not be two different
+    strengths of claim.
+    """
+    said = await standing_of(written(record(offsite="yes")))
+
+    assert said.headline == (
+        "Last backup 6 hours ago: written here, and the object store accepted it."
+    )
+    assert said.caveat == console.BACKUP_NOT_THE_BUCKET
+    assert "still in the bucket" in said.caveat
+    assert "may only write, so it cannot look" in said.caveat
+
+
+async def test_where_it_went_is_not_guessed_when_the_record_does_not_say(
+    written,
+) -> None:
+    """A word this panel has no meaning for is neither of the two answers.
+
+    Guessing "offsite" is the bug this field exists to close; guessing "this host" tells an
+    operator whose uploads are working that nothing is leaving. The third answer is the
+    only true one, and it is a sentence rather than a silence.
+    """
+    reading = await backups.read(written(record(offsite="maybe")), now=NOW)
+
+    assert reading.destination is backups.Destination.UNKNOWN
+    said = console.backup_standing(reading)
+    assert said.caveat == console.BACKUP_WHERE_IT_WENT_IS_UNKNOWN
+    assert "not claiming an artifact reached one and not claiming none did" in said.caveat
+
+
+async def test_a_record_with_no_offsite_field_is_not_read_as_a_record(written) -> None:
+    """``offsite`` is a key this reader now READS, so the strict half applies to it.
+
+    The distinction M28.6 drew and this keeps: silent about keys it does not read, strict
+    about keys it does. A record missing one of those is not this writer's record, and
+    "I cannot read this" is recoverable in a way "I assumed where your backups go" is not.
+    """
+    without = record()
+    del without["offsite"]
+    assert (await backups.read(written(without), now=NOW)).standing is (
+        backups.Standing.UNREADABLE
+    )
+
+
+async def test_every_standing_and_every_destination_closes_with_a_caveat(
+    written,
+) -> None:
+    """Six standings against three destinations, and none of the eighteen inflates.
+
+    Iterates the real enums, so a seventh standing or a fourth destination cannot be
+    satisfied by a hand-picked pair — the same reason the sweep above iterates ``Standing``
+    rather than a list of strings.
+    """
+    bodies = {
+        backups.Standing.NEVER: record(last_success=None, last_attempt=None),
+        backups.Standing.SILENT: record(
+            last_success=run(24 * 43), last_attempt=run(24 * 43)
+        ),
+        backups.Standing.FAILING: record(
+            last_failure=run(1, exit_code=3, outcome="not-sent")
+        ),
+        backups.Standing.FRESH: record(),
+    }
+    words = {
+        "yes": backups.Destination.OFFSITE,
+        "no": backups.Destination.THIS_HOST,
+        "sometimes": backups.Destination.UNKNOWN,
+    }
+
+    seen = set()
+    for standing, body in bodies.items():
+        for word, destination in words.items():
+            reading = await backups.read(written(body | {"offsite": word}), now=NOW)
+            assert reading.standing is standing
+            assert reading.destination is destination, word
+
+            said = console.backup_standing(reading)
+            assert said.caveat == console.BACKUP_CAVEATS[destination]
+            whole = f"{said.label or ''} {said.headline} {said.detail} {said.caveat}"
+            for never in NEVER_SAID:
+                assert never not in whole.lower(), f"{standing}/{word} says {never!r}"
+            seen.add((standing, destination))
+
+    # The two standings with no record behind them can only be UNKNOWN, and are swept by
+    # ``test_every_standing_says_what_it_does_not_know`` above.
+    assert seen == {
+        (standing, destination)
+        for standing in bodies
+        for destination in backups.Destination
+    }
+
+
+# --- "most recent" must point at now (M28.11) ---------------------------------------
+
+async def test_the_most_recent_missed_days_are_the_most_recent_ones(written) -> None:
+    """Acceptance 2026-09-23, the second finding.
+
+    Eight missed days, three of them six weeks back and three of them this week, and the
+    panel printed the August ones under a label whose entire job is to point at now — in
+    the long-outage state, which is the exact case that sentence exists to distinguish.
+
+    THE ORDER ON DISK IS NOT TRUSTED, and that is the fix rather than an agreement with
+    the writer. Neither surface sorted, so one of the two labels was wrong whatever order
+    the writer used; and the record is a file on a disk, which is where a hand edit goes.
+    The reader establishes the order, so the label is true however the list arrives.
+    """
+    said = await standing_of(
+        written(
+            record(
+                missed_total=8,
+                missed_dates=[
+                    "2026-08-12",
+                    "2026-08-13",
+                    "2026-08-14",
+                    "2026-09-20",
+                    "2026-09-21",
+                    "2026-09-22",
+                ],
+                last_success=run(24 * 43),
+                last_attempt=run(24 * 43),
+            )
+        )
+    )
+
+    assert "most recent 2026-09-22, 2026-09-21, 2026-09-20" in said.detail
+    assert "2026-08" not in said.detail
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        pytest.param(["2026-09-22", "2026-09-21", "2026-08-14"], id="newest-first"),
+        pytest.param(["2026-08-14", "2026-09-21", "2026-09-22"], id="oldest-first"),
+        pytest.param(["2026-09-21", "2026-08-14", "2026-09-22"], id="no-order-at-all"),
+    ],
+)
+async def test_the_missed_days_arrive_in_one_order_whatever_the_writer_used(
+    written, order: list[str]
+) -> None:
+    """The invariant belongs to the type, so nothing downstream has to check it.
+
+    These are ``YYYY-MM-DD`` and validated as such before they are sorted, so sorting them
+    as text is sorting them as dates.
+    """
+    reading = await backups.read(written(record(missed_dates=order)), now=NOW)
+    assert reading.record.missed_dates == ("2026-09-22", "2026-09-21", "2026-08-14")
+
+
+# --- a record from the future is not the reassuring state (M28.11) ------------------
+
+async def test_a_record_dated_in_the_future_does_not_read_as_a_fresh_backup(
+    client, written
+) -> None:
+    """Acceptance 2026-09-23, the third finding.
+
+    Clock skew gave "Last backup less than an hour ago" — the quietest sentence on the
+    screen — and gave it for ever, because no amount of waiting makes a future timestamp
+    pass. The clamp stays: it is the arithmetic, and without it a disagreeing clock could
+    turn a stale backup into a fresh one or the reverse. What changes is that the screen
+    stops printing an age it cannot stand behind.
+    """
+    written(record(last_success=live(-30), last_attempt=live(-30)))
+
+    body = (await client.get("/panel/")).text
+
+    assert "less than an hour ago" not in body
+    assert "at a time that had not come yet when this was read" in body
+    assert ">clock ahead<" in body, "the quiet state is where this hid"
+    assert "no age on this screen can be believed" in body
+
+
+async def test_the_clock_is_said_without_becoming_a_seventh_standing(written) -> None:
+    """It is a fault in a clock, not a standing of the backups, so it rides on whichever
+    standing was already there — and it does not invent a second colour."""
+    said = await standing_of(
+        written(
+            record(
+                last_success=run(19),
+                last_failure=run(-30, exit_code=3, outcome="not-sent"),
+                last_attempt=run(-30, exit_code=3, outcome="not-sent"),
+            )
+        )
+    )
+
+    assert said.label == "failing", "the standing is unchanged"
+    assert "The last one that succeeded was 19 hours ago" in said.headline
+    assert "The last run was at a time that had not come yet" in said.detail
+    assert "disagree about the time" in said.detail
+
+
+async def test_a_clock_a_moment_out_is_not_worth_a_sentence(written) -> None:
+    """The record is written and read on one machine, so there is normally no skew at all
+    — but a network mount or an NTP step is two clocks, and neither should put a standing
+    complaint on the front page for the few seconds it lasts."""
+    inside = await backups.read(
+        written(record(last_success=run(-0.001), last_attempt=run(-0.001))), now=NOW
+    )
+    assert inside.success_ahead is False
+    assert console.backup_standing(inside).loud is False
+
+    outside = await backups.read(
+        written(record(last_success=run(-1), last_attempt=run(-1))), now=NOW
+    )
+    assert outside.success_ahead is True
 
 
 # --- the sentence that must not be inflated -----------------------------------------
@@ -569,8 +862,11 @@ async def test_every_standing_says_what_it_does_not_know(written) -> None:
         seen.add(reading.standing)
 
         said = console.backup_standing(reading)
-        assert said.caveat == console.BACKUP_NOT_THE_BUCKET
-        assert "still in the bucket" in said.caveat
+        # One of the three, chosen by where that host sends — never absent, and never the
+        # bucket's one on a reading that could not tell whether there is a bucket.
+        assert said.caveat == console.BACKUP_CAVEATS[reading.destination]
+        assert "What this does NOT say" in said.caveat
+        assert "only thing that proves a backup is a restore" in said.caveat
         whole = f"{said.label or ''} {said.headline} {said.detail}".lower()
         for word in NEVER_SAID:
             assert word not in whole, f"{expected} says {word!r}"
@@ -608,7 +904,10 @@ async def test_the_overview_says_so_when_nothing_has_been_recorded(client) -> No
     body = (await client.get("/panel/")).text
 
     assert "No backup has ever been recorded on this host." in body
-    assert console.BACKUP_NOT_THE_BUCKET in body
+    # With no record there is nothing to say where this host sends, so the caveat is the
+    # one that claims neither — not the bucket's, which would imply there is a bucket.
+    assert console.BACKUP_WHERE_IT_WENT_IS_UNKNOWN in body
+    assert console.BACKUP_NOT_THE_BUCKET not in body
 
 
 async def test_a_damaged_record_does_not_take_the_front_page_down(

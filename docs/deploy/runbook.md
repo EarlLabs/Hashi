@@ -1657,8 +1657,32 @@ like; *backups are failing*; and a quiet muted line for a recent one. There is n
 change between a blip and a disaster and there is not going to be one: what separates them
 is the sentence — *"the last one that succeeded was 19 hours ago"* against *"43 days ago"* —
 because a banner that shouts on the first failure is a banner that is ignored by the
-fortieth. Every one of the six, the quiet one included, closes with the same caveat
-`make backup-status` does.
+fortieth. Every one of the six, the quiet one included, closes with a caveat saying what
+it is not telling you.
+
+**Which caveat depends on where that host sends, and this is the one thing on the screen
+that is not about a run.** The record carries whether the upload is switched on, and the
+panel reads it:
+
+| the record says | what closes the screen |
+|---|---|
+| the upload is on | *whether any of those artifacts is still in the bucket* — the same caveat `make backup-status` closes with, because this host's credential may only write and cannot look |
+| the upload is off | *that this host is sending its backups anywhere* — nothing has left the machine, and a copy on the same disk as the thing it copies does not survive losing that disk |
+| there is no record, or a word this panel has no meaning for | *whether anything was sent anywhere* — it is claiming neither, because it could not read which |
+
+The second row is the shipped default (`HASHI_BACKUP_ENABLED=0`) and it is not an alarm:
+the artifact is still taken, the schedule still runs, and this is a supported mode. It is
+said out loud because a caveat about a bucket, on a host that has no bucket, invites
+exactly the belief that there is one.
+
+**Two smaller things the screen now gets right, and both are about trusting the file less.**
+The missed days are printed newest first — the panel sorts them itself rather than taking
+the writer's order, so *"most recent"* points at now even during a gap that started weeks
+ago. And a record dated **ahead** of the clock the panel reads it against is said so
+instead of being reported as a backup taken minutes ago: the age is still clamped for the
+arithmetic, so a disagreeing clock cannot turn a stale backup into a fresh one, but the
+screen goes loud with `clock ahead` and says no age on it can be believed until the two
+machines agree about the time.
 
 A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
 was written, **3** the artifact exists and did not leave this machine. Only **1** is retried

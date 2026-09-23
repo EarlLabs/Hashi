@@ -3085,6 +3085,53 @@ The other half of the same four findings.
    crontab block says *"is the **account** that does not depend on mail existing"* where
    it means *channel*.
 
+**Widened by the second bare-host walk, 2026-09-23.** Five of M28.10's six fixes were
+confirmed working on real machines — `make hash-password` in 46s on Ubuntu 22.04 with
+Python 3.10 and no images; the placeholder refused in 1s instead of 180; the prompt
+asked nothing on a bare target and named `FORCE=1` on a populated one; no address had to
+be invented; `make restart-control` left the ports published. **The measure now fails on
+one sentence rather than six places.**
+
+5. **The runbook's restore block is wrong about what `.env` needs, and it costs a whole
+   failed run.** It says *"fill in `.env`: `HASHI_SECRET_KEY`, the hostnames, that hash
+   and the database password. **Nothing else is needed** to run the command below."*
+   Following it exactly installed the entire control plane and then died at
+   `storage.example.net` — because `deploy/backup/fetch.py` falls back to the
+   `HASHI_BACKUP_S3_*` block, and on a rebuilt host that block is `.env.example`'s fakes.
+   **`HASHI_RESTORE_S3_ENDPOINT` / `_REGION` / `_BUCKET` / `_PREFIX` are named nowhere in
+   that block**, and the walker had to read a trailing comment in `.env.example` to learn
+   they exist. **This is now the only remaining place an operator must read something
+   other than the command.** Good half: the command prints the endpoint it used, so you
+   can see it is not yours. Bad half: *"the configuration resolves"* one line above
+   `Name or service not known` reads as a contradiction.
+
+6. **"A second run is safe" is true for the data and false for the panel.** Re-running the
+   command runs `panel-bootstrap.sh`, which converges to the base compose file — after
+   which nothing is published on 80, 443 or the console port, and Caddy is back to
+   unpublished. **This is M28.10's finding 3 arriving through a different door**: the
+   operator re-runs the command they were told was safe to re-run and loses the console
+   and the delivery endpoint. The only warning is in the runbook, under a different
+   heading — which is again "something other than the command".
+
+7. **The restore generated a management tunnel from the template and printed two device
+   private keys into the rebuild's scrollback.** `.env.example` ships a complete
+   `HASHI_MGMT_*` block, so panel-bootstrap wrote `~/.hashi/management/awg-mgmt.conf` and
+   printed two full device configs — `PrivateKey = …`, `Endpoint = hashi.example.com:51821`
+   — at an operator who asked for none of it. They are fabricated credentials pointing at
+   the template's example host, and a private key on a terminal is the class of thing
+   M28.7 and M28.8 exist to prevent. It also puts the closing screen at odds with the
+   machine: the screen says the old tunnel's keys were lost, while a tunnel config now
+   exists here and `make up-panel` fails for a different reason than the screen gives.
+
+8. **Smaller:** `.env.example`'s placeholder *value* still reads
+   `run-python--m-control.cli-hash-password-and-paste-the-output` — the route that cannot
+   run on a bare host — even though the comment above it and the refusal both name
+   `make hash-password`; the closing screen's `ssh -L` line makes the operator go and find
+   `HASHI_PRIVATE_PORT` in `.env` although the script already reads `HASHI_PUBLIC_HOST`
+   out of the running container; and a successful restore puts ~6.7 KB on **stdout** (the
+   build log and ~90 lines of raw `psql` tags) between "restoring…" and the closing
+   screen, which is on stderr.
+
 Gate: `make test-infra`, then `make verify`.
 
 **Done when**

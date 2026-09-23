@@ -226,7 +226,59 @@ async def test_an_empty_mount_reads_as_nothing_recorded_and_names_the_file(
 
     assert "No backup has ever been recorded on this host." in page
     assert IN_THE_CONTAINER in page
-    assert "whether any of those artifacts is still in the bucket" in page
+    # With no record there is nothing that says where this host sends, so the closing
+    # sentence claims neither. The bucket's caveat here would imply a bucket (M28.11).
+    assert "whether anything was sent anywhere" in page
+    assert "whether any of those artifacts is still in the bucket" not in page
+
+
+async def test_the_shipped_default_does_not_read_like_a_host_that_uploads(
+    operator, on_the_hosts_disk
+) -> None:
+    """M28.11, acceptance 2026-09-23: `HASHI_BACKUP_ENABLED=0` is what ships.
+
+    Two records identical but for ``offsite`` drew byte-identical screens, and the one
+    that sends nothing closed with a caveat about a bucket it does not have. Driven here
+    rather than only in the unit tier because what acceptance compared was two rendered
+    pages off a real stack, and the field the panel had dropped travels from the writer's
+    file through a mount and a parser before it reaches a sentence.
+    """
+    write, _ = on_the_hosts_disk
+
+    write(a_record(offsite="no", last_success=a_run(0, outcome="on-this-host-only"),
+                   last_attempt=a_run(0, outcome="on-this-host-only")))
+    stays_here = (await operator.get("/panel/")).text
+
+    write(a_record(offsite="yes", last_success=a_run(0), last_attempt=a_run(0)))
+    uploads = (await operator.get("/panel/")).text
+
+    assert stays_here != uploads
+    assert "that this host is sending its backups anywhere" in stays_here
+    assert "on this host and nowhere else" in stays_here
+    assert "whether any of those artifacts is still in the bucket" not in stays_here
+    # ...and the claim M28.6 spent two rounds on is intact on the host that does upload.
+    assert "whether any of those artifacts is still in the bucket" in uploads
+    for word in NEVER_SAID:
+        assert word not in stays_here.lower(), f"the screen says {word!r} about a backup"
+
+
+async def test_a_record_from_the_future_is_not_the_quiet_state(
+    operator, on_the_hosts_disk
+) -> None:
+    """A clock that disagrees gave "less than an hour ago" permanently — M28.11.
+
+    The age is still clamped, so a disagreeing clock cannot turn a stale backup into a
+    stale-looking one or the reverse; what it may no longer do is print a number this
+    panel cannot stand behind, on the quietest line the feature has.
+    """
+    write, _ = on_the_hosts_disk
+    write(a_record(last_success=a_run(-2), last_attempt=a_run(-2)))
+
+    page = (await operator.get("/panel/")).text
+
+    assert "less than an hour ago" not in page
+    assert "at a time that had not come yet when this was read" in page
+    assert ">clock ahead<" in page
 
 
 async def test_the_panel_cannot_write_the_record_it_reads(
