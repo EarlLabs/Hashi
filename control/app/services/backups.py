@@ -39,8 +39,10 @@ import datetime
 import enum
 import json
 import logging
+import os
 import pathlib
 import re
+import stat
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,27 @@ MOST_OF_A_RECORD = 64 * 1024
 # screen, and a zone name of ten thousand characters is not a zone name. Autoescaping
 # makes it safe; this makes it readable.
 LONGEST_VALUE = 200
+
+# How long the request that draws a screen will wait for the filesystem before giving up
+# on it. Two seconds: a kilobyte off a local bind mount is microseconds, so anything near
+# this ceiling is not a slow read, it is a mount that has stopped answering.
+#
+# WHAT IT FREES AND WHAT IT DOES NOT, because the next reader will assume it is the whole
+# fix and it is not. It frees the REQUEST: the coroutine stops waiting and the screen says
+# it could not read the record, which is true. It does NOT free the THREAD — nothing in
+# Python can reclaim a thread blocked in a syscall, so a filesystem that never answers
+# costs one slot of the default executor for the life of the process, and an interpreter
+# shutdown that drains that executor will itself wait on it. That is a real residual and
+# it is written down rather than papered over.
+#
+# Why the shared default executor anyway, having said that: a private pool moves the leak
+# without closing it and adds a problem of its own — its threads are non-daemon and are
+# joined at interpreter exit, so an isolated pool turns a leaked thread into a hang on
+# shutdown. What actually shrinks the exposure is one file over: the open is non-blocking
+# and refuses anything that is not a regular file, so the only way left into this state is
+# a mount that has died, which is a fault on the host rather than a shape anything can
+# plant at the path.
+READ_CEILING_SECONDS = 2.0
 
 # How old the last SUCCESS may be before this stops being recent. The schedule takes one
 # backup a day, so two days is a whole appointed time missed plus a day of slack — long
@@ -196,10 +219,25 @@ def _read_bytes(path: pathlib.Path) -> tuple[bool, bytes | None]:
     filesystem can raise is one or the other: a missing file, a missing mount point and an
     empty bind mount are all absence; a directory, a permission, a dead mount and an I/O
     error are all presence with nothing legible in it.
+
+    ``O_NONBLOCK``, AND A CHECK THAT THIS IS A REGULAR FILE BEFORE A BYTE IS READ. Both
+    are about one shape: a FIFO at the record path. ``open()`` on a FIFO with no writer
+    does not fail and is not slow — it blocks in the kernel and **never returns**, and a
+    Python thread stuck in that syscall cannot be killed, cancelled or reclaimed by
+    anything short of restarting the process. ``O_RDONLY | O_NONBLOCK`` is the documented
+    way to ask for a FIFO without agreeing to wait: the open returns at once. The
+    ``S_ISREG`` test then refuses it — a FIFO, a socket, a device or a directory at this
+    path is not the record, so there is nothing to read out of it and it never gets read.
+
+    Chosen over timing the trap out, which was the other candidate: a ceiling frees the
+    REQUEST and leaves the thread gone for the life of the process, so a path an attacker
+    (or a careless `mkfifo`) controls would leak one executor slot per page draw. This
+    never enters the blocking state at all. The ceiling in ``read`` stays as well, because
+    it covers the case ``O_NONBLOCK`` cannot: a dead NFS or fuse mount blocks in the
+    filesystem layer, where the flag has no effect.
     """
     try:
-        with path.open("rb") as handle:
-            return True, handle.read(MOST_OF_A_RECORD + 1)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except FileNotFoundError:
         return False, None
     except OSError as exc:
@@ -211,6 +249,24 @@ def _read_bytes(path: pathlib.Path) -> tuple[bool, bytes | None]:
             "the backup record at %s could not be opened (%s)", path, type(exc).__name__
         )
         return True, None
+
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            logger.warning(
+                "the backup record at %s is not a regular file, so it is not the record",
+                path,
+            )
+            return True, None
+        # ``closefd=False`` — the descriptor is this function's and is closed once, below.
+        with open(descriptor, "rb", closefd=False) as handle:
+            return True, handle.read(MOST_OF_A_RECORD + 1)
+    except OSError as exc:
+        logger.warning(
+            "the backup record at %s could not be read (%s)", path, type(exc).__name__
+        )
+        return True, None
+    finally:
+        os.close(descriptor)
 
 
 def _text(raw: dict, key: str) -> str:
@@ -355,13 +411,31 @@ async def read(
     because this is called from the path that draws a screen and a shell script that
     wrote a file badly must not be able to take the panel down with it.
 
-    The read itself goes through a thread. It is a tiny local file and the cost is
-    nothing, but it is the one blocking call on a request path in this zone, and a bind
-    mount whose source has gone away can block for as long as the kernel likes — so it
-    blocks a thread rather than the event loop every other request is sharing.
+    The read itself goes through a thread, under a ceiling. It is a tiny local file and
+    the cost is nothing, but it is the one blocking call on a request path in this zone,
+    and a mount whose source has gone away can block for as long as the kernel likes — so
+    it blocks a thread rather than the event loop every other request is sharing, and it
+    stops waiting after ``READ_CEILING_SECONDS`` rather than holding the front page open
+    for ever. A ceiling reached is read as UNREADABLE, which is the honest answer: there is
+    supposed to be a record there and this process could not get at it.
+
+    ``READ_CEILING_SECONDS`` says what that does and does not repair — it frees the
+    request, not the thread — and ``_read_bytes`` says why the shape that could be planted
+    deliberately never reaches it.
     """
     now = now or datetime.datetime.now(datetime.UTC)
-    present, data = await asyncio.to_thread(_read_bytes, path)
+    try:
+        present, data = await asyncio.wait_for(
+            asyncio.to_thread(_read_bytes, path), timeout=READ_CEILING_SECONDS
+        )
+    except TimeoutError:
+        logger.warning(
+            "the backup record at %s did not answer within %.1fs, so the screen says it "
+            "could not be read",
+            path,
+            READ_CEILING_SECONDS,
+        )
+        return _nothing(path, Standing.UNREADABLE)
 
     if not present:
         return _nothing(path, Standing.ABSENT)

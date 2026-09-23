@@ -33,11 +33,19 @@ HOW:  the reader is driven against real files under ``tmp_path``; the wording is
 
 import datetime
 import json
+import logging
+import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 
 from control.app.services import backups, console
+
+# The child in ``test_a_fifo_at_the_record_path_cannot_hang_the_panel`` imports the
+# application, so it is started from the checkout root rather than from here.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 # A fixed instant for every judgement, so "43 days ago" is arithmetic and not a race.
 NOW = datetime.datetime(2026, 9, 23, 12, 0, 0, tzinfo=datetime.UTC)
@@ -303,6 +311,76 @@ async def test_a_directory_where_the_record_should_be_degrades(
     assert (await backups.read(backup_record, now=NOW)).standing is (
         backups.Standing.UNREADABLE
     )
+
+
+async def test_something_that_is_not_a_file_is_refused_before_it_is_read(caplog) -> None:
+    """A character device answers instantly and for ever, so it is refused on its type.
+
+    ``/dev/zero`` rather than something planted: it is a real non-regular file every Linux
+    has, it opens without blocking, and it would otherwise hand back as many bytes as this
+    process cared to ask for. The refusal is on ``S_ISREG``, before a byte is read, which
+    is the same guard that keeps a FIFO out — see the scenario below.
+
+    The LOG LINE is asserted and not only the standing, because the standing alone would
+    not notice the guard going: sixty-four kilobytes of zeros are not JSON either, so a
+    reader that slurped the device would answer UNREADABLE for the wrong reason and this
+    would stay green while the FIFO hole reopened.
+    """
+    with caplog.at_level(logging.WARNING, logger="control.app.services.backups"):
+        reading = await backups.read(pathlib.Path("/dev/zero"), now=NOW)
+
+    assert reading.standing is backups.Standing.UNREADABLE
+    assert "is not a regular file" in caplog.text, caplog.text
+
+
+# A whole interpreter, started by the scenario below, because the fault it is about cannot
+# be exercised in this process safely. Kept as source rather than as a helper module so
+# what the child does is readable beside the reason it is a child.
+FIFO_PROBE = """
+import asyncio, os, pathlib, sys
+
+from control.app.services import backups
+
+path = pathlib.Path(sys.argv[1])
+os.mkfifo(path)
+print(asyncio.run(backups.read(path)).standing.value)
+"""
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_a_fifo_at_the_record_path_cannot_hang_the_panel(tmp_path) -> None:
+    """The one shape that could stop the front page answering at all, in a child process.
+
+    ``open()`` on a FIFO with no writer does not fail and is not slow: it blocks in the
+    kernel and never returns. A Python thread stuck there cannot be killed, cancelled or
+    reclaimed, so before the non-blocking open this was a request that never answered and
+    an executor slot gone until the process restarted — and an interpreter shutdown that
+    drains that executor waits on it too.
+
+    IN A SUBPROCESS ON PURPOSE, and this is the whole reason the test is shaped this way:
+    a regression here does not fail, it HANGS, and a test that hangs wedges ``make verify``
+    for everybody instead of reporting. The child can be killed and a timeout is then an
+    ordinary failing assertion with a sentence on it. Nothing in this process ever opens
+    the FIFO.
+    """
+    fifo = tmp_path / "last-run.json"
+    try:
+        answered = subprocess.run(
+            [sys.executable, "-c", FIFO_PROBE, str(fifo)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=REPO_ROOT,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "reading a FIFO at the record path never returned — the open is blocking "
+            "again, so the panel's front page hangs and one executor thread is gone for "
+            "the life of the process"
+        )
+
+    assert answered.returncode == 0, answered.stderr
+    assert answered.stdout.strip() == backups.Standing.UNREADABLE.value, answered.stdout
 
 
 # --- what counts as alarming --------------------------------------------------------
