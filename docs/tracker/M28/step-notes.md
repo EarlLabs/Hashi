@@ -549,3 +549,106 @@ is still in the bucket."** Labels: **`not recorded` / `not readable` / `no backu
 recorded on this host."**, **"Backups on this host are failing."**, **"…so nothing has
 been trying."** Outcome clauses are M28.3's pinned words — **"the object store accepted
 it"**, **"on this host and nowhere else"**, **"it did NOT leave this machine"**.
+
+## M28.7 — an env file's own line was reaching cron's mail
+
+`make test-infra` 323 passed (was 309); `make test-control` **957 passed, 2 skipped**
+against a real Postgres (the 2 are still the `wireguard declares it cannot carry a hop`
+pair); `make verify` green, e2e **210** (was 207). Two rounds. Every surface below was
+RUN with both streams captured, not read. **This step touched no document at all.**
+
+1. **THE LEAK, and it was real — reproduced independently at baseline by the reviewer.**
+   `docker compose` is the one thing allowed to open the env file, and when it cannot
+   **parse** that file it quotes the offending line's whole value back:
+   `unterminated quoted value "…"`, `Invalid template: "…"`,
+   `unexpected character … in variable name "…"`. `scripts/backup.sh` printed compose's
+   complaint so an operator could see which variable was wrong; `backup-run.sh` prints a
+   failed run's whole output; cron mails it. **One unclosed quote on the
+   `HASHI_SECRET_KEY` line put the master key in `/var/mail/<operator>`, six times a
+   day, for as long as the file stayed wrong.**
+
+2. **Fixed with ONE gate, `env_file_must_be_readable`, called from the DISPATCH.** It
+   **captures compose's complaint and drops it**, repeating only the env file's path and
+   compose's own line number out of a **digits-only `BASH_REMATCH` capture**. The
+   reviewer tried to fool that capture with a value embedding the literal text
+   `line 999:` inside the unterminated quote; it still reported the real number, because
+   compose's `failed to read <path>: line N:` prefix always precedes attacker-controlled
+   content, so the leftmost match is structurally the real one. Also tried a 5000-byte
+   value and a locale change.
+
+   **What makes it safe is STRUCTURAL and is the property to preserve**: the gate runs
+   before any of the three verb functions is entered, so every compose call any of them
+   can reach is behind it — however many there come to be. **Do not turn it into a count
+   to check against** (the first version of this note said six; the real number is a
+   dozen), do not move it inside a verb, and do not "simplify" it to scrubbing at each
+   printer. Any other compose refusal — `error while interpolating … required variable X
+   is missing a value` — names variables and never values and passes through untouched,
+   so an operator with a genuinely missing variable is still told which one.
+
+3. **WHERE CRON'S OUTPUT ACTUALLY GOES, measured in two throwaway Debian containers**
+   (never the real crontab). **With an MTA — which Debian's `cron` pulls in by default —
+   output is delivered to `/var/mail/<operator>`, mode 0660, and stays there**; the
+   `Subject:` carries the crontab command verbatim. **With no MTA it is discarded
+   entirely.** The second is not a leak, it is the other failure, and M28.5's record is
+   already the channel that does not depend on mail. **Do not add `>/dev/null` to the
+   entry** — it would make the mail shape safe and the no-MTA shape permanently silent.
+
+4. **Everything else came back clean.** Stdout is byte-clean on every uploader branch
+   (six driven, plus a real 403 XML and a closed port); `RequestId`/`HostId` dropped and
+   `<Message>` capped at 200 chars; the one-off containers use `--entrypoint`, so uvicorn
+   and its access log never start in one, and `--rm` takes the json-file log with it; the
+   control reader's log lines carry the path and the exception's **kind** only. M28
+   touched neither `main.py`, `entrypoint.sh` nor the `Caddyfile`, so access logging is
+   where M7 left it.
+
+5. **The record's values are structurally independent of the database's contents** —
+   dates, exit codes, and three env settings sanitised to `[A-Za-z0-9_+:/.-]` and 64
+   characters. That is *why* M28.5's S10d passes against a real fleet, and it is the
+   thing to preserve: **a fourth whitelisted name is how a fleet value gets in.**
+
+6. **A restore prints command tags and never a row — and the reason is not ours.**
+   `pg_dump --clean --if-exists` puts **`SET client_min_messages = warning;`** in the
+   **artifact's** own preamble, so `NOTICE: table "…" does not exist, skipping` never
+   reaches the operator, even restoring onto a database with no tables. Measured against
+   a real Postgres 16 by two agents independently, and proven load-bearing by stripping
+   that one line, which brings the NOTICE straight back. **The first version of this note
+   claimed "no table names" as flatly true on reasoning alone**; it happens to hold, for
+   a reason nobody here chose — which is why S12 pins the mechanism beside the claim. A
+   table name there would **not** be a charter matter (schema names are public, they are
+   in this repository's own migrations, and a restore is interactive and never
+   scheduled). **A row is the charter matter**, and that is what S12 asserts.
+
+### How to test what M28.7 built
+
+- **`tests/infra/test_the_backup_surfaces_record_nobody.py`** (14 tests, ~1s, no Docker).
+  It imports `env_file`, `run`, `seed` and `verdict` from `test_backup_schedule.py` — use
+  those, and anything put through `run()` inherits M28.5's planted-secret assertion. The
+  `>>` check strips double-quoted literals first, because the crontab block's own
+  `# >>> hashi backup schedule >>>` markers are a string the installer **prints**. Known
+  limit: it checks for the `>>` token, so a future surface achieving append semantics by
+  read-then-overwrite would evade it.
+- **`tests/control/…failing_says_so.py`** gained `DISAPPOINTING`, ten damaged records each
+  carrying a planted marker, driven through the real `read`. **Add a new give-up branch to
+  `backups.py` and add its shape here, or it is unwatched.** The AST walk forbids
+  `logger.*` being handed `data`/`raw`/`value`/`record`.
+- **`_every_stream(fleet)`** collects both streams of nine runs the fixtures **already
+  made** — a dump, four ticks, a `status`, an accepted upload, a refused upload, a refusal
+  before the dump — and sweeps them for the live subscription token of the fleet this
+  module really dumped. It costs nothing; put new runs into the scenario results and they
+  are swept for free.
+- **S12 costs no second stack**: it runs LAST inside the `dumped` fixture, on the source
+  stack whose database is about to be `down -v`'d anyway — drop the schema, restore into
+  it. **The `public` table count is read and asserted `== "0"` first**, because without
+  that a silently-failed drop turns the scenario into S1 under another name; the reviewer
+  broke the drop to a no-op and confirmed it goes red. Every other restore here goes onto
+  a migrated stack, which is why the bare case had never been run.
+- **Red-first, all of it**: the gate removed, a stray `echo` on the quiet tick, an append,
+  a `print` in the uploader, the secret in `say()`, the file's bytes in a log line, a
+  `print` in `_parse` — each watched failing, then restored.
+
+### Wording later steps must match
+
+The gate's refusal opens **"the env file at <path>, at line N, is one compose cannot
+read."** and says **"Nothing was dumped, written or sent."** It deliberately does **not**
+repeat what compose said; **a step that "improves" it by quoting compose reopens the
+leak.**
