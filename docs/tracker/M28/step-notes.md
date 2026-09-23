@@ -435,3 +435,117 @@ backup has ever been recorded on this host."**, **"last success:"**, **"last att
 **"FAILED SINCE THE LAST SUCCESS:"**, **"days with no backup:"**, and closes with **"What
 this does NOT say: whether any of those artifacts is still in the bucket."** — **M28.6 must
 not inflate that last one.**
+
+## M28.6 — the panel says where the backups stand, and refuses to say more
+
+`make test-control` **945 passed, 2 skipped** against a real Postgres (the 2 are the
+long-standing `wireguard declares it cannot carry a hop` pair, **not** the ~670
+database skips); `make verify` green, e2e **207** (was 203). Two rounds.
+
+1. **It lives at the top of the Overview, above the four stat cards.** `/panel/` **is**
+   the Overview, so a run that did not land is read on the first request of every
+   session without anybody navigating — which is the plan's own criterion. **Not the
+   Nodes screen** (every row there is about one node; this is about none of them) and
+   **not Settings** (a screen you have to decide to open). Above the cards because it is
+   the only thing there that can be six weeks out of date.
+
+2. **Freshness keys on the age of the last SUCCESS, not on "has one failed since", and
+   this is the load-bearing decision.** A crontab that was removed produces **no failure
+   at all** — nothing runs, so nothing fails, and M28.5's own
+   `last_failure.at > last_success.at` reads that record as healthy for ever. That is
+   exactly the six-weeks case, so it gets its own standing, `silent`, whose sentence is
+   *"nothing has failed either — so nothing has been trying"*.
+   `SUCCESS_STALE_AFTER = 2 days`: one appointed time missed plus a day of slack,
+   boundary-tested at 47h and 49h.
+
+3. **Six standings, two weights, and no third.** `not recorded` / `not readable` /
+   `no backup` / `silent` / `failing` use the neutral `.banner` frame with the severity
+   in the **label**; a recent success is a muted `.section-note`. **The failure red is
+   deliberately not used** — `docs/decisions.md` (2026-09-10) reserves it for a request
+   that was refused or failed, i.e. an answer to something the operator just did, and a
+   standing condition is not that. The console's banner scan then forces `role="status"`.
+   **A blip and six weeks are the SAME standing**, separated only by *"19 hours ago"*
+   versus *"43 days ago"* — a banner that shouts on the first failure is ignored by the
+   fortieth. Do not add a second colour or a shouting threshold.
+
+4. **`missed_total` is history, never an alarm.** Cumulative, survives the run that ends
+   a gap, stated beside a healthy backup, changes the weight of nothing.
+
+5. **The bucket caveat is on all six, the good one included**, rendered outside the
+   banner/note conditional, and it opens with the words `make backup-status` closes
+   with: **"What this does NOT say: whether any of those artifacts is still in the
+   bucket."** Every headline talks about **runs**, never about an artifact existing;
+   there is no tick, no green and no colour anywhere in the feature. A test sweeps all
+   six for "safe", "guaranteed", "verified", "backed up and", "you are covered" — and it
+   iterates the real `Standing` enum, so it cannot be satisfied by a hand-picked string.
+
+6. **The reader never raises and there are exactly two bad answers.** `ABSENT` is
+   `FileNotFoundError` **alone** — the empty mount, which means *nothing recorded*, not
+   *broken*. `UNREADABLE` is everything else: a directory, a permission, non-UTF-8,
+   non-JSON, an unknown `schema`, a nested entry of the wrong shape, or a file over
+   64 KiB. Parsing is **strict about keys it reads, silent about keys it does not**, so a
+   sixteenth key from a later writer changes nothing. **A damaged `last_success` is
+   `UNREADABLE`, not "no backup has ever succeeded"** — same alarm, different reason.
+
+7. **A FIFO at the record path used to hang the front page for ever, and the fix avoids
+   the blocking state rather than timing out of it.** `open()` on a FIFO with no writer
+   blocks in the kernel and never returns; `asyncio.wait_for` cancels the coroutine but
+   the OS thread stays blocked and the executor never drains — round 1 had to `kill -9`.
+   The reader now uses `O_RDONLY | O_NONBLOCK` and checks `S_ISREG` via `fstat`
+   **before a byte is read**: a FIFO now answers `unreadable` in ~2ms. A `wait_for`
+   ceiling (`READ_CEILING_SECONDS = 2.0`) sits behind it for the case `O_NONBLOCK`
+   cannot cover — a dead NFS or fuse mount blocks in the VFS regardless of the flag.
+   **The residual is written down in the code**: the timeout frees the *request*, not
+   the *thread*, because nothing in Python can reclaim a thread blocked in a syscall; a
+   private executor was rejected because non-daemon threads joined at interpreter exit
+   turn a leak into a shutdown hang.
+   `O_NONBLOCK` is a no-op for regular files per POSIX, so there is no truncation risk
+   once `S_ISREG` passes — verified on records of 500 B, 28.5 KB and 63.5 KB.
+
+8. **`HASHI_BACKUP_RECORD`** defaults to the mount point
+   `/var/lib/hashi/backup/last-run.json`, so nothing need be added to an env file.
+   `.env.example` deliberately does not mention it (infra's fence) and the Settings
+   screen has no row for it (the backup section already names the file it read).
+
+9. **An unknown `outcome` is named verbatim** — *"the run reported “X”"* — rather than
+   turning the record unreadable. The set is closed today; a sixth word must not break a
+   screen.
+
+10. **The zone is printed as the IANA name and never interpreted into a place.** No
+    country, no flag, no offset. `zone_source` ∈ `configured | unset | unknown |
+    no-zone-database` each get their own sentence, because all three failures resolve to
+    UTC and the operator fixes a different thing in each.
+
+### How to test what M28.6 built
+
+- **`tests/control/conftest.py` gained a `backup_record` fixture** pointing at a path
+  that does not exist, wired into `settings` — so every other test in the zone draws the
+  Overview against "no backup has ever been recorded", which is what the field really
+  looks like. Override it the way `settle_window` is overridden.
+- `tests/control/test_a_backup_that_has_been_failing_says_so.py` (~30 tests, no Docker).
+  **`live()` exists because a rendered screen reads the wall clock** — a record pinned to
+  a fixed `NOW` reads "42 days ago" in the morning and "43" after lunch, and that flake
+  cost a round. Use `live()` in anything that renders and asserts a number.
+- The FIFO regression test runs **in a subprocess with a hard timeout**, so a regression
+  fails it rather than wedging `make verify`. Keep it that way.
+- The e2e scenario writes into the bind-mount source **through a one-off container from
+  the stack's own image**, with `--entrypoint sh` and `--user <the directory's uid:gid>`:
+  the engine is not always the machine running pytest, and a root-owned file left in a
+  checkout is one the real unprivileged schedule could never rewrite. It restores
+  whatever was there.
+
+**Nothing mechanically joins the writer to the reader**, and this is the milestone's one
+real seam. The reader is pinned to M28.5's closed key set from the control end, the
+writer from the infra end, and one test parses a byte-for-byte copy of the writer's
+heredoc output — but **no test runs `scripts/backup-run.sh` and then reads the panel**.
+Schema drift there would be caught only by a person noticing the two disagree. **Do not
+report that seam as covered.**
+
+### Wording later steps must match
+
+Caveat, under every standing: **"What this does NOT say: whether any of those artifacts
+is still in the bucket."** Labels: **`not recorded` / `not readable` / `no backup` /
+`silent` / `failing`**, and none on the good one. Headlines: **"No backup has ever been
+recorded on this host."**, **"Backups on this host are failing."**, **"…so nothing has
+been trying."** Outcome clauses are M28.3's pinned words — **"the object store accepted
+it"**, **"on this host and nowhere else"**, **"it did NOT leave this machine"**.
