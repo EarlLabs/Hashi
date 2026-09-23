@@ -213,6 +213,31 @@ async def test_no_record_at_all_is_nothing_recorded_and_not_an_error(
     assert "make backup-schedule" in said.detail
 
 
+async def test_the_advice_on_a_host_with_no_record_is_true_on_a_restored_one(
+    backup_record: pathlib.Path,
+) -> None:
+    """Found on a real rebuilt host: the panel named a command that refuses there.
+
+    A machine restored out of the backup history has no `.env` — the age recipient and
+    the write-only key lived only in the file that is deliberately in no backup — so
+    `make backup` there refuses outright, and this is the state such a machine is in:
+    nothing at the record path.
+
+    The panel cannot tell that machine from one where the schedule was simply never
+    installed, and it does not try. What it may do is lead with the command that runs in
+    either case, and say that what it cannot see is whether a backup can run there at all.
+    """
+    said = console.backup_standing(await backups.read(backup_record, now=NOW))
+
+    assert "start with make backup-status" in said.detail
+    assert ".env is in no backup by design" in said.detail
+    assert "make backup refuses there" in said.detail
+    # It is still told what to do, so the softening did not turn into a shrug.
+    assert "make backup-schedule installs the schedule" in said.detail
+    # And it does not borrow the restore screen's verdict, which was measured on a host.
+    assert "NOT backing anything up" not in said.detail
+
+
 async def test_the_record_the_schedule_really_writes_is_read(written) -> None:
     """Byte for byte, in the layout the writer's heredoc produces."""
     path = written(AS_THE_SCHEDULE_WRITES_IT)
@@ -599,7 +624,7 @@ async def test_the_shipped_default_says_the_backup_never_left_the_machine(
     assert "What this does NOT say: that this host is sending its backups anywhere" in (
         said.caveat
     )
-    assert "on that host's own disk and stays there" in said.caveat
+    assert "written to the disk of that one machine and stays there" in said.caveat
     assert "neither of them survives losing the machine" in said.caveat
     # The claim M28.6 spent two rounds on is not weakened by the claim M28.11 added: this
     # screen still refuses to say an artifact can be restored.
@@ -694,6 +719,11 @@ async def test_every_standing_and_every_destination_closes_with_a_caveat(
 
             said = console.backup_standing(reading)
             assert said.caveat == console.BACKUP_CAVEATS[destination]
+            # The refusal M28.6 built, said the same way whatever the destination is:
+            # naming where a run went may not come at the cost of the claim about what
+            # is still there.
+            assert "What this does NOT say" in said.caveat
+            assert "only thing that proves a backup is a restore" in said.caveat
             whole = f"{said.label or ''} {said.headline} {said.detail} {said.caveat}"
             for never in NEVER_SAID:
                 assert never not in whole.lower(), f"{standing}/{word} says {never!r}"
@@ -1064,10 +1094,20 @@ async def test_the_reading_that_reaches_a_screen_carries_no_request_and_no_perso
 
     assert dataclasses.fields(backups.Reading) and [
         field.name for field in dataclasses.fields(backups.Reading)
-    ] == ["path", "standing", "record", "since_success", "since_failure", "failed_since"]
+    ] == [
+        "path",
+        "standing",
+        "record",
+        "destination",
+        "since_success",
+        "since_failure",
+        "failed_since",
+        "success_ahead",
+        "failure_ahead",
+    ]
     assert [field.name for field in dataclasses.fields(backups.Record)] == [
-        "at", "at_source", "zone", "zone_source", "missed_dates", "missed_total",
-        "last_attempt", "last_success", "last_failure",
+        "at", "at_source", "zone", "zone_source", "offsite", "missed_dates",
+        "missed_total", "last_attempt", "last_success", "last_failure",
     ]
     assert [field.name for field in dataclasses.fields(backups.Run)] == [
         "at", "exit_code", "outcome",

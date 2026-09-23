@@ -1662,15 +1662,15 @@ it is not telling you.
 
 **Which caveat depends on where that host sends, and this is the one thing on the screen
 that is not about a run.** The record carries whether the upload is switched on, and the
-panel reads it:
+panel reads it. With the upload **on**, the screen closes with *whether any of those
+artifacts is still in the bucket* — the same caveat `make backup-status` closes with,
+because the credential here may only write and cannot look. With the upload **off**, it
+closes with *that this host is sending its backups anywhere*: nothing left the machine,
+and a copy on the same disk as the thing it copies does not survive losing that disk. And
+where there is no record at all, or a word the panel has no meaning for, it closes with
+*whether anything was sent anywhere* — claiming neither, because it could not read which.
 
-| the record says | what closes the screen |
-|---|---|
-| the upload is on | *whether any of those artifacts is still in the bucket* — the same caveat `make backup-status` closes with, because this host's credential may only write and cannot look |
-| the upload is off | *that this host is sending its backups anywhere* — nothing has left the machine, and a copy on the same disk as the thing it copies does not survive losing that disk |
-| there is no record, or a word this panel has no meaning for | *whether anything was sent anywhere* — it is claiming neither, because it could not read which |
-
-The second row is the shipped default (`HASHI_BACKUP_ENABLED=0`) and it is not an alarm:
+The middle one is the shipped default (`HASHI_BACKUP_ENABLED=0`) and it is not an alarm:
 the artifact is still taken, the schedule still runs, and this is a supported mode. It is
 said out loud because a caveat about a bucket, on a host that has no bucket, invites
 exactly the belief that there is one.

@@ -850,11 +850,11 @@ BACKUP_NOT_THE_BUCKET = (
 BACKUP_NEVER_LEFT_THIS_HOST = (
     "What this does NOT say: that this host is sending its backups anywhere. The record "
     "says the upload is switched off on it (HASHI_BACKUP_ENABLED), so an artifact it "
-    "takes is written to that host's own disk and stays there — a copy that shares a "
-    "disk with the thing it is a copy of is not a backup of it, and neither of them "
-    "survives losing the machine. Nothing in this panel has ever read any store. Turning "
-    "the upload on, and the only thing that proves a backup — a restore — are both in "
-    "docs/deploy/runbook.md, under “Backups”."
+    "takes is written to the disk of that one machine and stays there — a copy that "
+    "shares a disk with the thing it is a copy of is not a backup of it, and neither of "
+    "them survives losing the machine. Nothing in this panel has ever read any store. "
+    "The only thing that proves a backup is a restore: docs/deploy/runbook.md, under "
+    "“Backups”, which is also where turning the upload on is."
 )
 
 # And the one for when there is nothing to ask. No record, or a record whose `offsite`
@@ -873,6 +873,11 @@ BACKUP_WHERE_IT_WENT_IS_UNKNOWN = (
     "docs/deploy/runbook.md, under “Backups”."
 )
 
+# NONE OF THE THREE CONTAINS AN APOSTROPHE, and that is not a style choice. Jinja
+# autoescaping is on and turns one into `&#39;`, so a constant carrying one cannot be
+# asserted verbatim against a rendered page — and asserting it against the composed object
+# instead is exactly the test that does not notice a template dropping the line.
+#
 # Which of the three a standing closes with. Keyed on where the HOST sends, never on how a
 # run went: a run's outcome is about one artifact at one moment, and this is about the
 # machine as it is set up now. The two may honestly disagree — an operator who switched the
@@ -1069,6 +1074,24 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
     record = reading.record
     match reading.standing:
         case backups.Standing.ABSENT:
+            # WHAT THIS BRANCH MAY TELL AN OPERATOR TO RUN, which a walk on a real
+            # rebuilt host found it getting wrong. It used to end "make backup takes one
+            # now", and on a machine restored out of the backup history that command
+            # refuses: the age recipient and the write-only key lived only in the `.env`
+            # that was lost, deliberately, because `.env` is in no backup.
+            #
+            # And the panel CANNOT TELL THE TWO APART. "Never configured" and "configured
+            # but never run" both arrive here as the same thing — no file at the record
+            # path — because a record is the only thing this panel reads, and the
+            # settings a backup needs are in a file it has no business opening. So it
+            # does not guess: it names the command that runs in either case and prints
+            # the truth, and it says plainly that the rest is something it cannot see.
+            #
+            # Deliberately NOT the restore command's closing screen in other words. That
+            # screen ran on the host and MEASURED whether the recipient is there, so it
+            # is entitled to a verdict; this reads one file and is not. Two surfaces with
+            # different knowledge saying the same sentence is how the weaker one starts
+            # being believed.
             return BackupStanding(
                 label="not recorded",
                 headline="No backup has ever been recorded on this host.",
@@ -1077,9 +1100,13 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                     "installed, or this control plane is not running on the machine that "
                     "takes the backups — a mount that arrives empty reads exactly like a "
                     "host that has never run one, so this is “nothing recorded” rather "
-                    "than “something is broken”. On that host: make backup-status prints "
-                    "what this panel is reading, make backup-schedule installs the "
-                    "schedule, make backup takes one now."
+                    "than “something is broken”. On that host, start with "
+                    "make backup-status: it runs whatever state the machine is in and "
+                    "prints what is really set up there, which this panel cannot see. "
+                    "What a backup needs in order to run at all is in .env, and .env is "
+                    "in no backup by design — so a machine rebuilt out of the backup "
+                    "history has none of it, and make backup refuses there until it is "
+                    "put back. make backup-schedule installs the schedule once it is."
                 ),
                 caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
@@ -1123,8 +1150,11 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                 detail=(
                     "The schedule has been resolved and nothing has been recorded under "
                     f"it. {_backup_schedule(record)}{_backup_gap(record)}"
-                    f"{_backup_clock(reading)} make backup on "
-                    "the host takes one now, without waiting for the appointed time."
+                    f"{_backup_clock(reading)} make backup-status on the host prints "
+                    "this record in full, and make backup takes one now without waiting "
+                    "for the appointed time — on a host that still has what a backup "
+                    "needs in .env, which is in no backup and so is not on a machine "
+                    "rebuilt out of one."
                 ),
                 caveat=BACKUP_CAVEATS[reading.destination],
                 loud=True,
