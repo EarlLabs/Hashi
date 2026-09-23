@@ -903,3 +903,106 @@ Findings 1–4's field halves: that a bare Ubuntu host runs `make hash-password`
 nothing installed, that `make up-panel-over-ssh` binds on a machine with no tunnel, that
 `ip addr add` is no longer needed. **And nothing asserts `make restart-control` is
 sufficient after a restore** — it restarts the process; no test then reads the panel.
+
+## M28.11 — the panel must not say a backup left the machine when it did not
+
+`make test-control` **971 passed, 2 skipped** against a real Postgres (the 2 are the
+long-standing `wireguard` pair, not the ~670 database skips); `make verify` green, e2e
+**222**. Acceptance blocked on three panel findings; a second bare-host walk added a
+fourth mid-step.
+
+**Note on the diff:** half of it (`control/app/services/backups.py`, the new e2e file) is
+in `4175562`, a *plan* commit that swept in work in progress because the coordinator ran
+`git add -A` while the implementer was editing. Nothing was rewritten. **Read this step by
+path — `git diff bc43f59..HEAD -- control/ tests/control/ tests/e2e/control/`** — not by
+commit.
+
+1. **The root cause was a dropped field, and the reasoning for dropping it was true
+   only conditionally.** `Record` deliberately omitted the record's top-level `offsite`,
+   its own docstring saying *"it is already in every run's `outcome`"* — which holds only
+   while the outcome is one of the five known words. With an unrecognised word (`"ok"`)
+   the panel had **no source at all**, and the two screens could not differ. **A field
+   dropped because another field implies it is a field that stops being implied.**
+
+2. **THE CAVEAT IS NO LONGER ONE CONSTANT — it is three, keyed on where the HOST sends,
+   never on the standing.** `console.BACKUP_CAVEATS[Destination]`, public because tests
+   sweep it. `BACKUP_NOT_THE_BUCKET` is byte-for-byte unchanged and is now the `OFFSITE`
+   one only. M28.6 §5's *"the bucket caveat is on all six"* is **superseded**: what is on
+   all six is *a* caveat, and all three end with the identical clause **"The only thing
+   that proves a backup is a restore"**.
+
+3. **The two claims are different and both are said.** Whether a run reached a store **at
+   all** is something this host recorded — and it was being thrown away, with
+   `HASHI_BACKUP_ENABLED=0` as the shipped default, so by default the screen talked about
+   a bucket that does not exist. Whether the artifact is **still there** is refused
+   exactly as before. **Do not merge them back.**
+
+4. **`Destination` is `OFFSITE` / `THIS_HOST` / `UNKNOWN`, and `UNKNOWN` collapses into
+   neither.** Guessing "offsite" is the original bug; guessing "this host" denies a
+   working upload. An unrecognised `offsite` *word* is `UNKNOWN`, not `UNREADABLE`
+   (`outcome`'s precedent); a record **missing** the key is `UNREADABLE`, because it is
+   now a key this reader reads.
+
+5. **The caveat is phrased about the HOST, not the run above it.** A run whose outcome is
+   `offsite` under a host whose `offsite` is now `no` is a switch thrown between two runs,
+   not a damaged record — and a caveat saying "none of this left the machine" would
+   contradict a true sentence directly above it.
+
+6. **NONE OF THE THREE CAVEATS CONTAINS AN APOSTROPHE, and that is not style.** Jinja
+   autoescaping makes it `&#39;`, so a constant carrying one cannot be asserted verbatim
+   against a **rendered page** — and asserting against the composed object instead is
+   exactly the test that would not notice a template dropping the line. The screen-level
+   assertions go through `client.get("/panel/")` and read `.text`, which is the class of
+   test that catches what acceptance caught. **Keep new caveats apostrophe-free.**
+
+7. **`missed_dates` is sorted NEWEST FIRST in the reader, and the invariant belongs to the
+   type.** The panel labels the first few "most recent" and used to trust the writer's
+   order, which during a live gap pointed six weeks back. Validated `YYYY-MM-DD` **before**
+   the sort, so text order is date order. The writer should sort too (M28.12) — **not
+   sufficient**, because the record is a file on a disk where a hand edit goes.
+
+8. **A future timestamp: the clamp stays, the sentence changes.** `_age` still clamps — a
+   disagreeing clock must not turn a stale backup fresh or the reverse — and
+   `success_ahead` / `failure_ahead` carry what the clamp hides, per-run because the screen
+   prints two ages in two sentences. `CLOCK_AHEAD_GRACE = 1 minute`: writer and reader
+   normally share one kernel clock. **`FRESH` goes loud with the label `clock ahead`** —
+   it is the only quiet standing and therefore the only place this could hide for ever.
+   **Not a seventh standing and not a second colour**: `Standing` is still exactly six, and
+   every other standing keeps its own label and merely gains the clause.
+
+9. **The panel's advice must be true on the machine the panel is running on.** The
+   "nothing recorded" state named `make backup`, which **refuses** on a host restored out
+   of the backup history — the age recipient and the S3 key were in the `.env` that is
+   deliberately in no backup. **The panel cannot tell that host from one where the schedule
+   was never installed** (a record is all it reads) and does not try: it leads with
+   `make backup-status`, which runs either way. **It deliberately does not borrow the
+   restore screen's wording** — that screen ran on the host and *measured* the recipient,
+   so it is entitled to a verdict; this reads one file and is not. A test asserts the panel
+   never says *"NOT backing anything up"*.
+
+### How to test what M28.11 built
+
+Same fixtures as M28.6, plus `record(offsite=…)` and `run(-N)` / `live(-N)` for a
+timestamp N hours in the **future**. **`test_every_standing_and_every_destination_closes_with_a_caveat`
+iterates the real `Standing` × real `Destination`** — a seventh standing or a fourth
+destination is covered free and cannot be satisfied by a hand-picked pair. **Two field-list
+assertions pin `Reading` and `Record` name-for-name**, so a field added to either fails
+there first, on purpose: a value crossing from a file into a rendered page has to be
+justified. The screen-level regression writes the same record twice differing only in
+`offsite` and compares the two **rendered pages**, because byte-identical pages is what
+acceptance observed and an assertion on two standings would not have seen it.
+
+**The infra zone guards the runbook's `### When the backup runs…` section against
+containing a table.** A first draft added one and `make verify` caught it. **Write prose
+there, not a table.**
+
+### Wording M28.12 must match, or the two channels disagree
+
+Caveat openings: **"What this does NOT say: whether any of those artifacts is still in the
+bucket."** (upload on) / **"What this does NOT say: that this host is sending its backups
+anywhere."** (upload off) / **"What this does NOT say: whether anything was sent
+anywhere."** (cannot tell). All three close with **"The only thing that proves a backup is
+a restore"**. Future timestamps read **"at a time that had not come yet when this was
+read"** under the label **`clock ahead`**. The restored-host advice says **".env is in no
+backup by design"** and **"make backup refuses there"**, leading with **"start with make
+backup-status"**.
