@@ -61,24 +61,37 @@ def installer() -> str:
     return INSTALLER.read_text()
 
 
-def env_file(directory: pathlib.Path, **values: str) -> pathlib.Path:
-    """An env file with the schedule's settings in it, and one secret that must not be read.
+# Planted in every env file this suite writes, and asserted absent from the output of
+# every run — see `run()`. This script is the only one in the project that opens the env
+# file at all, so the check belongs on the path every test already takes rather than in one
+# test somebody can forget to look at.
+PLANTED = ("this-is-not-real-and-must-never-be-read-0000", "also-not-real-either")
 
-    The secret is there on purpose: this script is the only one in the project that opens
-    the env file at all, so every run of every test below is also a check that it takes
-    three names out and leaves the rest alone.
+
+def env_file(directory: pathlib.Path, **values: str) -> pathlib.Path:
+    """An env file with the schedule's settings in it, and secrets that must not be read.
+
+    The secrets are there on purpose, and `run()` asserts on them after every invocation:
+    what this script may take out of the env file is three named settings, and everything
+    else in the file must stay in it.
     """
     path = directory / "schedule.env"
     path.write_text(
-        "HASHI_SECRET_KEY=this-is-not-real-and-must-never-be-read-0000\n"
-        "POSTGRES_PASSWORD=also-not-real\n"
+        f"HASHI_SECRET_KEY={PLANTED[0]}\n"
+        f"POSTGRES_PASSWORD={PLANTED[1]}\n"
         + "".join(f"{name}={value}\n" for name, value in values.items())
     )
     return path
 
 
 def run(verb: str, path: pathlib.Path, state: pathlib.Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    """One invocation, with the environment cron gives it — and nothing leaked.
+
+    The secrets planted by `env_file()` are checked here rather than in a test of their
+    own, so the property is asserted by every scheduling test in this file instead of by
+    one that has to be remembered. A cron job's output goes to a mail spool.
+    """
+    result = subprocess.run(
         [str(RUNNER), verb],
         capture_output=True, text=True, timeout=60, cwd=REPO,
         stdin=subprocess.DEVNULL,
@@ -88,6 +101,17 @@ def run(verb: str, path: pathlib.Path, state: pathlib.Path) -> subprocess.Comple
             "HASHI_BACKUP_STATE_DIR": str(state),
         },
     )
+    said = result.stdout + result.stderr
+    for secret in PLANTED:
+        assert secret not in said, (
+            f"`{verb}` printed a value it is not allowed to read out of the env file"
+        )
+    record = state / "last-run.json"
+    if record.is_file():
+        written = record.read_text()
+        for secret in PLANTED:
+            assert secret not in written, "a secret from the env file reached the record"
+    return result
 
 
 def verdict(result: subprocess.CompletedProcess) -> dict[str, str]:
@@ -173,6 +197,15 @@ def test_the_hour_is_read_in_the_configured_zone_and_not_the_hosts(tmp_path) -> 
         ("", "unset"),
         ("Nowhere/Useful", "unknown"),
         ("+03:00", "unknown"),
+        # A PATH rather than a name. `../../../../etc/passwd` under the zone database is a
+        # real file, so the `-f` test alone called it a configured zone and the promise in
+        # docs/decisions.md — checked against the database rather than trusted — was not
+        # true for this shape. Nothing was disclosed either way; `date` ignores a file that
+        # is not a zone file. It is refused by name now.
+        ("../../../../etc/passwd", "unknown"),
+        ("/etc/passwd", "unknown"),
+        ("..", "unknown"),
+        ("Europe/../Europe/Moscow", "unknown"),
     ],
 )
 def test_a_zone_that_is_missing_or_not_a_zone_is_named_rather_than_guessed(
@@ -205,6 +238,12 @@ def test_a_zone_that_is_missing_or_not_a_zone_is_named_rather_than_guessed(
     "value,at,source",
     [("04:00", "04:00", "configured"), ("4:00", "04:00", "configured"),
      ("23:59", "23:59", "configured"), ("", "04:00", "unset"),
+     # 08 and 09 are the two hours a leading zero makes fatal: both printf and $(( ))
+     # read them as OCTAL, and the tick died before writing any record at all — a silent
+     # skip with nothing for the panel to show. Found by review, not by the suite, which
+     # is why they are named here rather than left to whichever hour a test picks.
+     ("08:00", "08:00", "configured"), ("09:15", "09:15", "configured"),
+     ("08:30", "08:30", "configured"), ("09:00", "09:00", "configured"),
      ("quarter past", "04:00", "malformed"), ("25:00", "04:00", "malformed")],
 )
 def test_a_time_that_is_not_a_time_falls_back_and_says_so(

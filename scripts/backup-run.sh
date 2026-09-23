@@ -141,7 +141,14 @@ resolve_schedule() {
     AT="04:00"; AT_SOURCE="unset"
   elif [[ "${raw}" =~ ^([0-9]|[01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
     # `4:00` means what it looks like; the record and every comparison use `04:00`.
-    AT="$(printf '%02d:%s' "${raw%%:*}" "${raw##*:}")"; AT_SOURCE="configured"
+    #
+    # `10#` is not decoration. Both printf and $(( )) read a leading zero as OCTAL, so a
+    # perfectly ordinary `08:30` or `09:15` was a fatal "invalid octal number" under
+    # `set -e` — and fatal BEFORE the record is written, so the tick left no trace at all
+    # and the panel would have shown nothing wrong. That is worse than the malformed
+    # fallback below, which at least still takes a backup, and it is this milestone's own
+    # silent skip arriving through the front door for two hours out of twenty-four.
+    AT="$(printf '%02d:%s' "$((10#${raw%%:*}))" "${raw##*:}")"; AT_SOURCE="configured"
   else
     AT="04:00"; AT_SOURCE="malformed"
   fi
@@ -156,13 +163,29 @@ resolve_schedule() {
   # assumed). So an unknown zone would otherwise be indistinguishable from a working one,
   # which is exactly the silent skew this variable exists to prevent. It is looked up
   # against the host's own zone database instead, and what was found is recorded.
+  #
+  # And it is looked up by NAME, not by path: a value carrying `..`, or starting with `/`
+  # or `.`, is refused before the file test, because `../../../../etc/passwd` names a real
+  # file and would otherwise have been recorded as a configured zone. No zone is spelled
+  # that way, nothing is disclosed either way (`date` ignores a file that is not a zone
+  # file), and the refusal keeps the sentence in docs/decisions.md true — the zone is
+  # CHECKED against the host's zone database rather than trusted. Residual, stated: a
+  # symlink inside that database pointing out of it would still pass, which is not a shape
+  # an operator's env file can create.
   raw="$(sanitised "$(env_value HASHI_BACKUP_TZ)")"
   local zonedir="${TZDIR:-/usr/share/zoneinfo}"
+  local named="yes"
+  case "${raw}" in /*|.*|*/../*|*/..) named="no" ;; esac
   if [ -z "${raw}" ]; then
     # No zone configured is not a place; it is the absence of one, and the host's own
     # clock is the only remaining answer. Recorded as `unset` so the panel can say so —
     # no country is defaulted to here, ever.
     ZONE="UTC"; ZONE_SOURCE="unset"
+  elif [ "${named}" = "no" ]; then
+    # Recorded as `unknown`, the same as any other value the database does not have: it is
+    # the same fact and the same sentence for the operator, and a state nobody added is a
+    # state M28.6 cannot get wrong.
+    ZONE="UTC"; ZONE_SOURCE="unknown"
   elif [ ! -d "${zonedir}" ]; then
     ZONE="UTC"; ZONE_SOURCE="no-zone-database"
   elif [ -f "${zonedir}/${raw}" ]; then
@@ -259,13 +282,23 @@ OK_AT=""; OK_DUE=""; OK_CODE=0; OK_OUTCOME=""
 BAD_AT=""; BAD_DUE=""; BAD_CODE=0; BAD_OUTCOME=""
 MISSED_LIST=""; MISSED_TOTAL=0
 
+# The two numbers that come back OUT of the record and then go into arithmetic. `$(( ))`
+# reads a leading zero as octal and dies on `08`, so anything that has been on a disk —
+# where a hand edit, a half-written file or a future writer can put one — is forced to
+# base 10 before it is counted with. The same trap as HASHI_BACKUP_AT's hour, one file over.
+as_number() {
+  local raw="${1//[^0-9]/}"
+  [ -n "${raw}" ] || { printf '0'; return; }
+  printf '%s' "$((10#${raw}))"
+}
+
 read_state() {
   [ -f "${STATE_FILE}" ] || return 0
   STATE_DUE="$(field due_date)"
-  STATE_ATTEMPTS="$(field attempts)"; STATE_ATTEMPTS="${STATE_ATTEMPTS:-0}"
+  STATE_ATTEMPTS="$(as_number "$(field attempts)")"
   STATE_RETRY_AT="$(field retry_not_before)"
   MISSED_LIST="$(missed_dates | tr '\n' ' ')"
-  MISSED_TOTAL="$(field missed_total)"; MISSED_TOTAL="${MISSED_TOTAL:-0}"
+  MISSED_TOTAL="$(as_number "$(field missed_total)")"
   # The three nested objects, read off their single lines.
   local line
   for line in last_attempt last_success last_failure; do
@@ -277,9 +310,9 @@ read_state() {
     code="$(printf '%s' "${raw}" | sed -n 's/.*"exit_code": \([0-9]*\).*/\1/p')"
     outcome="$(printf '%s' "${raw}" | sed -n 's/.*"outcome": "\([^"]*\)".*/\1/p')"
     case "${line}" in
-      last_attempt) LAST_AT="${at}"; LAST_DUE="${due}"; LAST_CODE="${code:-0}"; LAST_OUTCOME="${outcome}" ;;
-      last_success) OK_AT="${at}"; OK_DUE="${due}"; OK_CODE="${code:-0}"; OK_OUTCOME="${outcome}" ;;
-      last_failure) BAD_AT="${at}"; BAD_DUE="${due}"; BAD_CODE="${code:-0}"; BAD_OUTCOME="${outcome}" ;;
+      last_attempt) LAST_AT="${at}"; LAST_DUE="${due}"; LAST_CODE="$(as_number "${code}")"; LAST_OUTCOME="${outcome}" ;;
+      last_success) OK_AT="${at}"; OK_DUE="${due}"; OK_CODE="$(as_number "${code}")"; OK_OUTCOME="${outcome}" ;;
+      last_failure) BAD_AT="${at}"; BAD_DUE="${due}"; BAD_CODE="$(as_number "${code}")"; BAD_OUTCOME="${outcome}" ;;
     esac
   done
 }
