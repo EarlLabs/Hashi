@@ -200,8 +200,13 @@ node-bootstrap:
 ## --- backup / restore (see scripts/backup.sh) -------------------------------
 
 # The control database is the single source of truth, so it is the one thing whose
-# loss cannot be repaired by rebuilding a node. The dump is useless without
-# HASHI_SECRET_KEY — back that up separately, and see the script's own warning.
+# loss cannot be repaired by rebuilding a node. The WHOLE dump is encrypted with age, to
+# HASHI_BACKUP_AGE_RECIPIENT, before it reaches the disk — this host holds only the public
+# half, so it can write a backup and cannot read one back. Underneath that layer the
+# columns holding node and user secrets are encrypted again and are useless without
+# HASHI_SECRET_KEY; back that up separately and keep it somewhere the age identity is not.
+# A restore costs both, and neither of them lives on this machine. See the script's own
+# warning, and docs/deploy/runbook.md, "Backups".
 .PHONY: backup restore checkers
 
 backup:
@@ -210,8 +215,13 @@ backup:
 # Deliberately requires the path on the command line rather than picking the newest
 # dump: restoring is destructive and "the latest one" is not a decision a Makefile
 # should make for the operator.
+#
+# The age identity is handed over at the moment of the restore and never stored here:
+#   HASHI_RESTORE_AGE_IDENTITY=/path/to/identity make restore FROM=backups/hashi-....sql.gz.age
+# An artifact written before the encryption existed — plain SQL, gzipped — still restores
+# and needs no identity. The script tells the two apart by reading the file, not its name.
 restore:
-	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz"; exit 2; }
+	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz.age"; exit 2; }
 	@scripts/backup.sh restore "$(FROM)"
 
 # Fetch the upstream data-plane checkers, so the validation tests stop skipping.

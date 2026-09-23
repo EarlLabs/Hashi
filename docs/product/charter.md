@@ -233,7 +233,7 @@ and every node key, and losing it means re-issuing to all 30–50 people by hand
 | What | Why it must survive |
 |---|---|
 | Control-plane database | user records, node inventory, which transports are enabled where |
-| Node and transport secrets | Reality private keys, WG keys, SSH keys — encrypted at rest, and the backup is encrypted with a key **not stored beside it** |
+| Node and transport secrets | Reality private keys, WG keys, SSH keys — encrypted at rest, and the whole backup artifact is encrypted again to a public key whose **private half never touches the host that writes it** |
 | Panel configuration | so the panel script can rebuild a working install, not an empty one |
 
 Rules:

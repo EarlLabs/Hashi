@@ -1303,28 +1303,78 @@ what turns that into a fact; if it does not go that way, that is a finding.
 ## Backups
 
 ```bash
-make backup                                   # → backups/hashi-<timestamp>.sql.gz, mode 0600
-make restore FROM=backups/hashi-<...>.sql.gz  # destructive, so the path is required
+make backup                                       # → backups/hashi-<timestamp>.sql.gz.age, mode 0600
+HASHI_RESTORE_AGE_IDENTITY=/path/to/identity \
+  make restore FROM=backups/hashi-<...>.sql.gz.age  # destructive, so the path is required
 ```
 
 Restore is destructive and never picks "the latest one" for you — that is not a decision a
 Makefile gets to make.
 
-**The file `make backup` writes is NOT encrypted.** It is plain SQL, gzipped. What is
-encrypted inside it is a *subset of columns* — every node's `ssh_private_key`, every
-node_transport's `secrets`, every user's `token`, `subject`, `secrets` and
-`tunnel_address` — and those cannot be restored without `HASHI_SECRET_KEY`. Everything
-else is readable by anyone who opens the file: **every node's real address** and port,
-including the leaf addresses no user is ever shown, every SSH host key, which transports
-run where, and how many users there are with the date each one arrived. That is a map of
-the fleet, and hiding it is the entire point of the entry/leaf split.
+**The file `make backup` writes is encrypted, whole, before it reaches the disk.** It is
+`age` ciphertext, addressed to the public key in `HASHI_BACKUP_AGE_RECIPIENT`, and this
+host holds only that public half: it can write a backup and **cannot read one back**. The
+plaintext exists nowhere but in memory, in flight, while the dump runs — it is never a
+file on this machine, not even briefly, so there is no moment at which a seizure catches a
+plain copy on the disk.
 
-Both halves are true at once, and until this file was corrected only the second half was
-written down here: the dump **rebuilds nothing without the key**, and it is **still not
-safe to put anywhere**. Keep it on media you control. Not an object store, not a chat, not
-mail. The age-encrypted daily upload described by the `HASHI_BACKUP_*` block in
-`.env.example` is what makes offsite copies safe, and it does not exist yet — until it
-does, "offsite" means media in your hand.
+Under the `age` layer it is plain SQL, gzipped, in which a *subset of columns* is
+encrypted again — every node's `ssh_private_key`, every node_transport's `secrets`, every
+user's `token`, `subject`, `secrets` and `tunnel_address`. **Opening the artifact and
+reading it are two different secrets:**
+
+1. the **age identity**, the private half of the keypair, which opens the file;
+2. **`HASHI_SECRET_KEY`**, without which those columns cannot be restored.
+
+Neither is on the control host, and that is the whole point: a seizure of this machine
+hands over every backup it ever wrote and opens none of them. Keep the two apart from each
+other as well — a copy of both in one place means one theft takes everything.
+
+What a reader of the bucket learns, and the jurisdiction that bucket sits in, is written
+down in `docs/decisions.md`. In one line: that a backup exists, how big it is and when it
+was written — not a node address, not a leaf address, not how many users there are.
+
+**Generating the keypair**, once, on a machine that is not the control plane:
+
+```bash
+age-keygen -o hashi-backup-identity.txt   # prints the public key; keep the FILE with you
+```
+
+The public key it prints goes in `HASHI_BACKUP_AGE_RECIPIENT` in `.env`. Until it does,
+`make backup` refuses and says so. It will not write a plain artifact as a fallback,
+because a fallback is how the plain shape survives.
+
+**Restoring.** The identity is handed over at the moment of the restore, from whatever you
+are carrying, and never written into `.env` on this host:
+
+```bash
+HASHI_RESTORE_AGE_IDENTITY=/path/to/hashi-backup-identity.txt \
+  make restore FROM=backups/hashi-<...>.sql.gz.age
+```
+
+`age` runs inside the control container, so nothing extra is installed on the box and any
+host that can run the stack can restore. If the control plane itself will not start, open
+the artifact by hand on any machine that has `age` and restore what comes out — the script
+still accepts that shape:
+
+```bash
+age --decrypt --identity /path/to/hashi-backup-identity.txt <file> > hashi.sql.gz
+make restore FROM=hashi.sql.gz
+```
+
+**A backup taken before 2026-09-23 still restores.** Plain SQL, gzipped, is what
+`make backup` wrote until then; `make restore` takes it as-is and needs no identity. It
+tells the two shapes apart by reading the file rather than trusting its name, and says
+which one it found before it touches anything. Those older files are **not** safe offsite:
+they are a map of the fleet to anyone who opens them, with every node's real address,
+including the leaf addresses no user is ever shown. Keep them on media you control, and
+replace them with a fresh backup at the first opportunity.
+
+What still does not exist is the daily **upload** to an object store described by the
+`HASHI_BACKUP_*` block in `.env.example`, and the management directory's place inside the
+artifact (see the table below — the artifact is the database and nothing else so far).
+The encryption those need is now here: copying an artifact offsite is a thing you do by
+hand, and it is safe to do.
 
 ### What belongs in a backup, and what does not
 
@@ -1383,13 +1433,13 @@ repository's own Caddyfile. Neither is measured — see *Known-unproven*.
 
 ### What you carry
 
-Three things live on you and never on the control host. The first is needed by every
-restore that has ever been possible here; the second and third become needed the day the
-offsite upload exists, and are listed now so the keypair is generated before it is
-urgent rather than after.
+Three things live on you and never on the control host. The first two are needed by every
+restore of an artifact written since 2026-09-23 — the file does not even open without the
+second. The third becomes needed the day the offsite upload exists.
 
 1. `HASHI_SECRET_KEY` — without it the dump is unreadable data.
 2. The **private half** of the age keypair whose public half is `HASHI_BACKUP_AGE_RECIPIENT`.
+   Without it the artifact does not open at all, on any machine, including this one.
 3. A **read** credential for the backup bucket. The key in `.env` is write-only on
    purpose, so the box that is seized cannot delete its own history.
 

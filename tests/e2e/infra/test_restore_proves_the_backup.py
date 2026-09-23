@@ -1,8 +1,11 @@
 """A backup that has never been restored is not a backup — backlog item 32.
 
 WHAT: fills a disposable stack, dumps it, restores the dump into a CLEAN stack, and
-      checks that what the owner would need is actually there — plus the two failures
-      that matter: a restore with the wrong key, and a restore that stops halfway.
+      checks that what the owner would need is actually there — plus the failures that
+      matter: a restore with the wrong key, a restore that stops halfway, and a host
+      trying to read back the backup it just wrote. Since M28.2 the artifact is `age`
+      ciphertext, so the scenario also covers the shape written before that, which
+      exists in the world and must still restore.
 WHY:  the charter says a backup nobody has restored is not a backup, and that proving it
       belongs to the e2e set. Until this file, ``tests/infra/test_backup_script.py`` read
       the script's TEXT and said so honestly in its own header: "nothing here proves a
@@ -47,6 +50,20 @@ TARGET_PROJECT = f"hashi-restore-dst-{RUN}"
 KEY = "e2e-restore-key-not-real-0000000000000000000000000"
 WRONG_KEY = "e2e-restore-WRONG-key-not-real-0000000000000000000"
 
+# The backup keypair for this scenario. Fixed, obviously fake and committed on purpose,
+# exactly like the key above. Generating one here would need `age` on the machine running
+# pytest, and the whole point of shipping the binary in the control image is that a host
+# which can run the stack can make and open a backup without installing anything — so the
+# suite must pass on a machine that has never heard of age.
+#
+# The stack under test is given ONLY the public half. The identity below never enters an
+# env file: it is handed to the restore at the moment it runs, which is the contract.
+BACKUP_RECIPIENT = "age1efx4vjnw8csr825yvmypzas9k63sf0r2suv82fefvle058azwayskvwgcz"
+BACKUP_IDENTITY = "AGE-SECRET-KEY-1SHYNP57023UZU8D3JCXETCWLW2WMDZX34A2E5FENPYWP89090HNQ4M4JSC"
+# A second, unrelated pair — for the difference between holding AN identity and holding
+# THE identity.
+UNRELATED_IDENTITY = "AGE-SECRET-KEY-1E7H77KJSTLXSA5GDKA24AH48970FZUJ92X6V84LVMUPVE90M934SMH5W7P"
+
 OPERATOR_PASSWORD = "restore-proves-the-backup"
 # Loopback ports well clear of the dev (541xx) and e2e (542xx) blocks, per CLAUDE.md's
 # published-port rule: this is a third stack on the same host and it must collide with
@@ -81,6 +98,9 @@ def env_file(directory: pathlib.Path, *, key: str, port: int) -> pathlib.Path:
             f"{name}={value}\n"
             for name, value in {
                 "HASHI_SECRET_KEY": key,
+                # The PUBLIC half, and nothing else. This is what makes the stack able to
+                # write a backup it cannot read — the property the next test asserts.
+                "HASHI_BACKUP_AGE_RECIPIENT": BACKUP_RECIPIENT,
                 "HASHI_PUBLIC_HOST": "restore.invalid",
                 "HASHI_PRIVATE_HOST": "restore-console.invalid",
                 "HASHI_PRIVATE_PORT": "54143",
@@ -135,6 +155,76 @@ def plain_http_overlay(directory: pathlib.Path) -> pathlib.Path:
         '      HASHI_PUBLIC_HTTPS: "false"\n'
     )
     return path
+
+
+def identity_file(directory: pathlib.Path, secret: str = BACKUP_IDENTITY) -> pathlib.Path:
+    """The private half, written where only this run can read it.
+
+    A file, because that is what ``HASHI_RESTORE_AGE_IDENTITY`` names and what an operator
+    carries. It lives in pytest's tmp directory and nowhere near an env file — putting it
+    in one on the control host is the exact thing the design forbids.
+    """
+    path = directory / "backup-identity.txt"
+    path.write_text(secret + "\n")
+    path.chmod(0o600)
+    return path
+
+
+def control_image(project: str, path: pathlib.Path) -> str:
+    """The image name compose built for the control service of a running stack.
+
+    Asked of compose rather than assembled from the project name, so the convention for
+    naming built images is not something this file has to be right about.
+    """
+    import json
+
+    listed = compose(project, path, "images", "--format", "json", "control")
+    assert listed.returncode == 0, listed.stderr[-2000:]
+    entries = json.loads(listed.stdout)
+    assert entries, "compose knows of no image for the control service"
+    entry = entries[0]
+    return f"{entry['Repository']}:{entry['Tag']}"
+
+
+def age_in_the_image(image: str, ciphertext: bytes, *, identity: str | None):
+    """Try to open an artifact with the same `age` the script uses, and nothing else.
+
+    The binary comes from the control image on purpose: the machine running this suite is
+    not assumed to have age, because the point of shipping it in an image this repository
+    builds is that any host able to run the stack can make and open a backup. Asserting
+    with a different age would be asserting about a different tool than the one deployed.
+
+    ``identity=None`` is the interesting case — it is everything the control host has.
+    """
+    # --entrypoint, because the image's own entrypoint boots the control plane: without it
+    # this asks age a question and gets "database did not become reachable" back.
+    command = ["docker", "run", "--rm", "-i", "--entrypoint", "sh"]
+    program = "exec age --decrypt"
+    if identity is not None:
+        command += ["-e", f"AGE_IDENTITY={identity}"]
+        # Written inside a container that is deleted on exit. The script itself never does
+        # this on a real host — it streams the identity to age on stdin — but here the
+        # ciphertext is what arrives on stdin, so the two have to swap places.
+        program = 'printf "%s\\n" "$AGE_IDENTITY" > /tmp/identity; exec age --decrypt --identity /tmp/identity'
+    command += [image, "-c", program]
+    return subprocess.run(
+        command, input=ciphertext, capture_output=True, timeout=120, env=_docker_env()
+    )
+
+
+def encrypt_in_the_image(image: str, plaintext: bytes, recipient: str = BACKUP_RECIPIENT) -> bytes:
+    """The other direction, for building an artifact this scenario needs but the script
+    would not write — a DAMAGED one. Encrypting needs only the public half, which is the
+    property under test, so nothing secret is involved in making it.
+    """
+    result = subprocess.run(
+        ["docker", "run", "--rm", "-i", "--entrypoint", "sh",
+         "-e", f"AGE_RECIPIENT={recipient}", image,
+         "-c", 'exec age --recipient "$AGE_RECIPIENT"'],
+        input=plaintext, capture_output=True, timeout=120, env=_docker_env(),
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return result.stdout
 
 
 def compose(project: str, path: pathlib.Path, *args: str, dev: bool = True):
@@ -260,6 +350,12 @@ def dumped(tmp_path_factory):
 
     Torn down before the restore deliberately: a restore that quietly depended on the
     original stack still running would pass here and fail on the day it is needed.
+
+    Two artefacts come out of it. The one the script writes today — `age` ciphertext — and
+    one built the way the script built them before M28.2, plain SQL gzipped, taken with
+    pg_dump directly rather than through the script, because the script no longer has a
+    code path that writes one. Files of that shape exist in the world and the restore has
+    to keep taking them.
     """
     directory = tmp_path_factory.mktemp("restore-source")
     path = env_file(directory, key=KEY, port=SOURCE_PORT)
@@ -274,7 +370,20 @@ def dumped(tmp_path_factory):
             assert subscription.status_code == 200
             fleet["subscription"] = subscription.text
 
-        dump = directory / "hashi.sql.gz"
+        # Asked while the stack is up; used by the tests that run age after it is gone.
+        fleet["image"] = control_image(SOURCE_PROJECT, path)
+
+        legacy = directory / "pre-m28-2.sql.gz"
+        old_shape = compose(
+            SOURCE_PROJECT, path, "exec", "-T", "db",
+            "pg_dump", "--username=hashi", "--dbname=hashi", "--clean", "--if-exists",
+            "--format=plain",
+        )
+        assert old_shape.returncode == 0, old_shape.stderr[-2000:]
+        legacy.write_bytes(gzip.compress(old_shape.stdout.encode()))
+        fleet["legacy"] = legacy
+
+        dump = directory / "hashi.sql.gz.age"
         result = subprocess.run(
             [str(BACKUP), "dump", str(dump)],
             capture_output=True, text=True, timeout=300, cwd=REPO_ROOT,
@@ -288,7 +397,18 @@ def dumped(tmp_path_factory):
     return dump, fleet
 
 
-def restore_into(dump: pathlib.Path, path: pathlib.Path, project: str):
+def restore_into(
+    dump: pathlib.Path,
+    path: pathlib.Path,
+    project: str,
+    *,
+    identity: pathlib.Path | None = None,
+):
+    """Run the restore the way an operator does, with what they are carrying.
+
+    ``identity=None`` is not an oversight: it is how a pre-M28.2 artifact is restored, and
+    the absence of the variable is part of what those scenarios assert.
+    """
     return subprocess.run(
         [str(BACKUP), "restore", str(dump)],
         capture_output=True, text=True, timeout=300, cwd=REPO_ROOT,
@@ -297,6 +417,9 @@ def restore_into(dump: pathlib.Path, path: pathlib.Path, project: str):
             **_docker_env(),
             "ENV_FILE": str(path),
             "COMPOSE_PROJECT_NAME": project,
+            # Supplied HERE, at the moment of the restore, and nowhere else. It is not in
+            # the env file above and never reaches the control host — see .env.example.
+            **({"HASHI_RESTORE_AGE_IDENTITY": str(identity)} if identity else {}),
             # The confirmation prompt exists because a restore is destructive and has no
             # undo. Skipping it has to be deliberate, which is why it is an env var and
             # not a flag.
@@ -320,7 +443,7 @@ def test_a_clean_stack_restored_from_a_dump_carries_the_whole_fleet(dumped, tmp_
     install(path, TARGET_PROJECT)
 
     try:
-        result = restore_into(dump, path, TARGET_PROJECT)
+        result = restore_into(dump, path, TARGET_PROJECT, identity=identity_file(tmp_path))
         assert result.returncode == 0, f"{result.stdout[-3000:]}\n{result.stderr[-3000:]}"
 
         with as_operator(TARGET_PORT) as client:
@@ -377,7 +500,7 @@ def test_the_same_dump_with_a_different_key_yields_no_secrets_and_says_so(
     install(path, project)
 
     try:
-        result = restore_into(dump, path, project)
+        result = restore_into(dump, path, project, identity=identity_file(tmp_path))
         # The restore itself SUCCEEDS: psql does not know or care about our key. Asserted
         # rather than assumed, because "it failed" would be the wrong kind of comfort —
         # the rows really are there, and that is the situation encryption has to survive.
@@ -444,26 +567,39 @@ def test_a_restore_that_fails_halfway_leaves_the_database_untouched(dumped, tmp_
     The damaged dump is built from the real one, so everything before the injected error
     is valid SQL that WOULD have applied. That is what makes the assertion meaningful:
     without the transaction, the fleet would be half there.
+
+    It is damaged in the SHAPE the script writes, not in the older plain one: opening the
+    artifact is now part of the restore, and a transaction test that skipped that stage
+    would stop covering the path an operator actually takes.
     """
     dump, fleet = dumped
     project = f"{TARGET_PROJECT}-halfway"
     path = env_file(tmp_path, key=KEY, port=TARGET_PORT + 4)
-    install(path, project)
 
-    damaged = tmp_path / "damaged.sql.gz"
-    text = gzip.decompress(dump.read_bytes()).decode()
+    # Built BEFORE the stack is installed: everything here can fail, and a failure between
+    # the install and the try/finally below leaks a running stack onto the machine.
+    damaged = tmp_path / "damaged.sql.gz.age"
+    # Opened with the identity this scenario carries, damaged, and sealed again with the
+    # PUBLIC half — which is all encrypting ever needs, and is the asymmetry under test.
+    opened = age_in_the_image(fleet["image"], dump.read_bytes(), identity=BACKUP_IDENTITY)
+    assert opened.returncode == 0, opened.stderr[-2000:]
+    text = gzip.decompress(opened.stdout).decode()
     # Cut after the users table's data and append a statement Postgres must reject.
     marker = text.rfind("COPY public.users")
     assert marker != -1, "the dump does not contain the users table, so this is vacuous"
     cut = text.find("\n\n", marker)
     damaged.write_bytes(
-        gzip.compress(
-            (text[:cut] + "\n\nSELECT this_function_does_not_exist();\n").encode()
+        encrypt_in_the_image(
+            fleet["image"],
+            gzip.compress(
+                (text[:cut] + "\n\nSELECT this_function_does_not_exist();\n").encode()
+            ),
         )
     )
 
+    install(path, project)
     try:
-        result = restore_into(damaged, path, project)
+        result = restore_into(damaged, path, project, identity=identity_file(tmp_path))
         assert result.returncode != 0, (
             "a restore that hit a broken statement reported success"
         )
@@ -477,5 +613,98 @@ def test_a_restore_that_fails_halfway_leaves_the_database_untouched(dumped, tmp_
 
         with api(TARGET_PORT + 4) as anonymous:
             assert anonymous.get(f"/sub/{fleet['token']}").status_code == 404
+    finally:
+        compose(project, path, "down", "-v")
+
+
+# --- S4: the host cannot read back what it just wrote -------------------------
+
+def test_the_host_that_wrote_the_backup_cannot_read_it_back(dumped) -> None:
+    """S4. The point of a keypair, asserted rather than asserted-about — M28.2.
+
+    The control host holds the PUBLIC half and nothing else, so it can write a backup and
+    cannot open one. That is what makes the artifact safe to copy off the machine: seizing
+    the box yields every backup it ever wrote and opens none of them. A design where the
+    host could decrypt would look identical from the outside and be worth nothing.
+
+    Three attempts with everything that host has, then one with what the operator carries.
+    No stack is installed: this is about bytes and keys, and the age it uses is the one
+    from the image the stack was built from.
+    """
+    dump, fleet = dumped
+    raw = dump.read_bytes()
+    image = fleet["image"]
+
+    assert raw.startswith(b"age-encryption.org/v1\n"), (
+        "the artifact is not age ciphertext at all"
+    )
+    # Nothing readable survives into the file. The node address and the token are the two
+    # things the plan names as what a reader of the bucket must not get; the SQL markers
+    # are what a plain dump would have opened with.
+    for leak in (b"COPY public.", b"CREATE TABLE", b"192.0.2.60", b"gAAAA",
+                 fleet["token"].encode()):
+        assert leak not in raw, f"the artifact carries {leak!r} in the clear"
+
+    # 1. Everything the control host has: the artifact, and no identity anywhere on it.
+    none_at_all = age_in_the_image(image, raw, identity=None)
+    assert none_at_all.returncode != 0, "the artifact opened with no identity at all"
+    assert b"no identity matched" in none_at_all.stderr, none_at_all.stderr[-500:]
+
+    # 2. An identity, but not this one. Holding A key is not holding THE key.
+    unrelated = age_in_the_image(image, raw, identity=UNRELATED_IDENTITY)
+    assert unrelated.returncode != 0, "an unrelated identity opened the artifact"
+    assert b"no identity matched" in unrelated.stderr, unrelated.stderr[-500:]
+
+    # 3. The public half the host DOES hold, offered as though it were a key. This is the
+    #    mistake an operator might actually make, and it must fail rather than half-work.
+    as_a_key = age_in_the_image(image, raw, identity=BACKUP_RECIPIENT)
+    assert as_a_key.returncode != 0, "the public recipient decrypted the artifact"
+
+    # 4. And the identity the owner carries opens it, so the failures above are about the
+    #    key rather than about a broken file.
+    carried = age_in_the_image(image, raw, identity=BACKUP_IDENTITY)
+    assert carried.returncode == 0, carried.stderr[-2000:]
+    assert b"COPY public.users" in gzip.decompress(carried.stdout)
+
+
+# --- S5: an artifact from before the encryption still restores ----------------
+
+def test_an_artifact_written_before_the_encryption_still_restores(dumped, tmp_path) -> None:
+    """S5. Plain `.sql.gz` files exist in the world, and they are somebody's last backup.
+
+    Breaking them would mean the step that made backups safe also made every backup taken
+    before it unusable — discovered, as always, on the day one is needed. So the script
+    reads the file to decide what it is holding, takes the old shape as-is, and needs no
+    identity for it: this restore is run with ``HASHI_RESTORE_AGE_IDENTITY`` unset, which
+    is the situation of an operator who has an old dump and no keypair yet.
+
+    It also says which shape it found before it touches anything, so the operator is never
+    guessing which kind of file they just restored.
+    """
+    dump, fleet = dumped
+    project = f"{TARGET_PROJECT}-legacy"
+    path = env_file(tmp_path, key=KEY, port=TARGET_PORT + 6)
+    install(path, project)
+
+    try:
+        result = restore_into(fleet["legacy"], path, project)
+        assert result.returncode == 0, f"{result.stdout[-3000:]}\n{result.stderr[-3000:]}"
+        assert "PLAIN SQL, gzipped" in result.stderr, (
+            "the operator is not told which shape was restored:\n" + result.stderr[-1000:]
+        )
+
+        with as_operator(TARGET_PORT + 6) as client:
+            assert [node["id"] for node in client.get("/api/nodes").json()] == [
+                fleet["node_id"]
+            ]
+            assert [user["id"] for user in client.get("/api/users").json()] == [
+                fleet["user_id"]
+            ]
+
+        # The same assertion S1 makes, because "it restored" means the user's link works.
+        with api(TARGET_PORT + 6) as anonymous:
+            after = anonymous.get(f"/sub/{fleet['token']}")
+            assert after.status_code == 200, after.text
+            assert after.text == fleet["subscription"]
     finally:
         compose(project, path, "down", "-v")

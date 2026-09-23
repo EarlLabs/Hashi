@@ -6,6 +6,19 @@
 
 FROM python:3.14-slim
 
+# `age`, for scripts/backup.sh. It lives in this image rather than on the box for the
+# same reason pg_dump runs inside the db container: a restore has to work on a host that
+# was rented an hour ago, and "install age first" is a step nobody has at 3am. Nothing
+# new is required of the control-plane host — see docs/deploy/runbook.md, "Backups".
+#
+# Deliberately not pinned to a Debian binary revision: that revision is a mirror snapshot
+# Debian removes, so pinning it turns a rebuild into a failure at exactly the moment a
+# rebuild is what you are doing. What has to stay stable is the FILE FORMAT, and age
+# versions that itself — every artifact opens with `age-encryption.org/v1`.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends age \
+ && rm -rf /var/lib/apt/lists/*
+
 # Build in /src and install, then throw the sources away and run from an empty
 # directory. WHY the dance: the image used to `pip install .` in the same
 # WORKDIR it then ran from, so `import edge` resolved to the COPIED tree (cwd is
