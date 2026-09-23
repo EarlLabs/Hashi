@@ -134,8 +134,12 @@ USAGE
 # POSTGRES_PASSWORD as anything else — and this script's output is what cron mails when a
 # scheduled run fails (scripts/backup-run.sh), so one stray quote in .env puts a secret in
 # a mail spool, on every retry, for ever. Checked here and not fixed at each printer
-# because EVERY compose call in this file produces the same message, and there are six of
-# them; one gate in front of all of them is the whole of it.
+# because every compose call in this file produces the same message.
+#
+# WHAT MAKES THAT SAFE IS STRUCTURAL, and it is the property to preserve: this is called
+# from the DISPATCH at the bottom, before any of the three verb functions is entered, so
+# every compose call any of them can reach is behind it — however many there come to be.
+# Do not turn this into a count to check against, and do not move it inside a verb.
 #
 # What is repeated: the file, and compose's own line number. What is never repeated: the
 # text on that line. Compose's complaint is captured and dropped, not printed.
@@ -502,9 +506,9 @@ MSG
   echo "one this dump was written with — the app will say so loudly on first use." >&2
 }
 
-# Before ANY of the six compose calls below, and before the database is touched by any of
-# the three verbs: an env file compose cannot parse is answered here, once, without its
-# contents. See env_file_must_be_readable.
+# Here, in the dispatch, and not inside the three functions: an env file compose cannot
+# parse is answered once, before any verb is entered and therefore before every compose
+# call any of them can reach, without the file's contents. See env_file_must_be_readable.
 case "${1:-}" in
   dump)    shift; env_file_must_be_readable; command_dump "$@" ;;
   upload)  shift; env_file_must_be_readable; command_upload "$@" ;;

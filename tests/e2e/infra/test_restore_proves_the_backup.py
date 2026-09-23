@@ -768,6 +768,33 @@ def dumped(tmp_path_factory):
 
         # Everything about the upload, driven here because it needs this stack up — M28.3.
         fleet["offsite"] = offsite_scenarios(directory, path)
+
+        # A restore onto a database with NO TABLES IN IT — M28.7. Last, and on this stack,
+        # because it replaces a database that is about to be thrown away anyway: no second
+        # stack is installed for it and it costs this fixture one restore.
+        #
+        # WHY it is worth the lines. Every restore scenario below runs against a target
+        # whose migrations have already made the tables, so `--clean --if-exists` drops
+        # something real. A bare database is where those same statements find nothing, and
+        # it is the disaster-recovery shape this whole milestone exists for — a host rented
+        # an hour ago. Nothing here had ever read what that prints, which is exactly how
+        # M28.7's audit came to claim more than it had measured. S12 is the assertion.
+        emptied = compose(
+            SOURCE_PROJECT, path, "exec", "-T", "db",
+            "psql", "-U", "hashi", "-d", "hashi",
+            "-c", "drop schema public cascade; create schema public;",
+        )
+        assert emptied.returncode == 0, emptied.stderr[-2000:]
+        # Counted rather than assumed: if the drop quietly did not happen, the restore
+        # below would go over a populated database and the scenario would be the same one
+        # as S1 wearing a different name — which is precisely the mistake it exists to fix.
+        fleet["tables_before_bare_restore"] = query(
+            SOURCE_PROJECT, path,
+            "select count(*) from information_schema.tables where table_schema = 'public'",
+        )
+        fleet["onto_bare"] = restore_into(
+            dump, path, SOURCE_PROJECT, identity=identity_file(directory)
+        )
     finally:
         compose(SOURCE_PROJECT, path, "down", "-v")
 
@@ -851,8 +878,8 @@ def test_a_clean_stack_restored_from_a_dump_carries_the_whole_fleet(dumped, tmp_
 
         # M28.7. A restore pipes plain SQL into `psql`, which echoes a command tag per
         # statement — so what an operator watches during a restore is the one place a row
-        # count or a table's contents could reach a terminal. Read here rather than in S11
-        # because a restore needs a second stack and this scenario already has one.
+        # of the database could reach a terminal. This is the restore OVER a populated
+        # database; the bare-database one, which is louder, is S12.
         watched = result.stdout + result.stderr
         for needle in (*NOBODY_MAY_BE_NAMED, fleet["token"], KEY, BACKUP_IDENTITY):
             assert needle not in watched, (
@@ -1461,3 +1488,59 @@ def test_a_scheduled_run_never_mails_a_line_of_the_env_file(tmp_path) -> None:
         )
         assert str(path) in said, f"{why}: the operator is not told which file to look at"
 
+
+# --- S12: the restore this backup actually exists for, and what it prints ------
+
+def test_a_restore_onto_a_bare_database_prints_schema_and_never_a_row(dumped) -> None:
+    """S12. The disaster-recovery restore — and the audit's own blind spot.
+
+    Every other restore in this file goes into a stack whose migrations have already made
+    the tables, so ``--clean --if-exists``'s ``DROP TABLE IF EXISTS`` drops something real
+    and says nothing. Onto a database with NOTHING in it, the same statements are the
+    loudest thing the product does — and nothing had ever read that output. This is the
+    shape the whole milestone exists for: a host rented an hour ago.
+
+    WHAT IT ACTUALLY PRINTS, measured rather than reasoned about: command tags, and not one
+    table name. ``NOTICE: table "…" does not exist, skipping`` is what Postgres would
+    answer, and it never arrives — because ``pg_dump`` puts ``SET client_min_messages =
+    warning`` in the artifact's own preamble, so the restore is quiet about missing objects
+    for reasons that belong to the DUMP and not to anything this repository chose. That is
+    worth pinning precisely because it is not ours: a later change of format or flags could
+    take it away without anyone here deciding to.
+
+    Both halves are asserted, and they fail differently. A table name on the terminal would
+    NOT be a charter matter — schema names are public, they are in this repository's own
+    migrations, and a restore is interactive, never scheduled, so its output reaches an
+    operator and never a log or cron's mail. It would make a sentence in M28.7's notes
+    wrong, which is why the mechanism is asserted beside it. **A row is the charter matter**,
+    and ``psql`` reports ``COPY <n>`` per table and never what is in one — so no nickname, no
+    node name, no real address, no subscription token and neither of the two secrets a
+    restore costs, checked against the fleet this module really dumped.
+    """
+    _, fleet = dumped
+    restored = fleet["onto_bare"]
+    watched = restored.stdout + restored.stderr
+
+    assert restored.returncode == 0, f"{restored.stdout[-3000:]}\n{restored.stderr[-3000:]}"
+    assert fleet["tables_before_bare_restore"] == "0", (
+        "the database was not actually bare, so this scenario is S1 under another name"
+    )
+
+    # THE claim. A row of the database must not reach the terminal an operator is watching.
+    for needle in (*NOBODY_MAY_BE_NAMED, fleet["token"], KEY, BACKUP_IDENTITY):
+        assert needle not in watched, (
+            f"a restore onto a bare database printed {needle!r} — psql reports `COPY <n>` "
+            "per table and must never report what is in one"
+        )
+
+    # ...and the quieter half, with the reason beside it so a failure says which changed.
+    assert "NOTICE" not in watched, (
+        "a restore onto a bare database now names tables on the operator's terminal. That "
+        "is not a charter violation — schema names are public and a restore is never "
+        "scheduled — but M28.7 recorded that it does not happen, and the note is now wrong."
+    )
+    preamble = gzip.decompress(fleet["legacy"].read_bytes()).decode()[:4000]
+    assert "SET client_min_messages = warning;" in preamble, (
+        "the artifact no longer raises client_min_messages, which is the ONLY reason a "
+        "restore onto a bare database says nothing about the objects it did not find"
+    )

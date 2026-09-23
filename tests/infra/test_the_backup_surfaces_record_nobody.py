@@ -301,11 +301,14 @@ def test_a_line_of_the_env_file_never_reaches_the_output_of_a_run() -> None:
     secret key into what a scheduled run printed, and a scheduled run's output is what cron
     mails, on every retry, for ever.
 
-    It is gated ONCE, in front of all six of that script's compose calls and all three of
-    its verbs, because every one of them produces the same message. The gate CAPTURES
-    compose's complaint and never prints it: what is repeated is the file and compose's own
-    line number, taken out of a digits-only capture so nothing of the operator's file can
-    ride along inside what looks like a number.
+    It is gated ONCE, in the script's dispatch, because every compose call in that file
+    produces the same message. The assertion below is on the DISPATCH rather than on a
+    count of call sites, and that is the point: a gate in front of the three verb functions
+    covers every compose call any of them can reach, however many there come to be, while a
+    count is true until somebody adds one more. The gate CAPTURES compose's complaint and
+    never prints it: what is repeated is the file and compose's own line number, taken out
+    of a digits-only capture so nothing of the operator's file can ride along inside what
+    looks like a number.
 
     Behaviourally reproduced in ``tests/e2e/infra/test_restore_proves_the_backup.py``,
     which has the docker engine it takes to run compose at all.
