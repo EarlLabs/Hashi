@@ -70,3 +70,84 @@ heading is **"What belongs in a backup, and what does not"**. The three carried
 items are **`HASHI_SECRET_KEY`**, **the private half of the age keypair**, and
 **a read credential for the backup bucket** — the last two flagged as future,
 not claimed as present.
+
+## M28.2 — the artifact is encrypted, and the host cannot read it back
+
+`make test-infra` 249 passed (was 241, +8); `make verify` green (e2e 194 passed).
+Every claim below was reproduced by the reviewer running it, not reading it.
+
+1. **`age` lives in the CONTROL IMAGE, not on the host** (`deploy/docker/control.Dockerfile`,
+   apt, Debian trixie, deliberately **unpinned** — a Debian binary revision is a mirror
+   snapshot that gets deleted, so a pin fails the rebuild you are doing *because* you
+   need a restore; what is stable is the file format, which age versions itself).
+   Same reasoning as pg_dump-in-the-db-container. **Nothing new is required of the
+   control-plane host, and the suite passes on a machine with no `age`.** Do not
+   "simplify" this to a host package: the restore host is rented an hour before use.
+   The apt layer sits before the source `COPY`, so ordinary code changes keep it cached.
+
+2. **The plaintext exists only in RAM, in flight.** `pg_dump` (db) → `gzip -9` (host) →
+   `age` (control) → file. The destination is created **empty under `umask 077` before
+   the write** — the old code ran `chmod 600` *after*, leaving a window at the
+   operator's umask — then `chmod 600` and `mv`; a failed pipeline deletes the partial,
+   so no half-artifact can be mistaken for a backup. Restore mirrors it: ciphertext
+   staged into the container, identity streamed on stdin (`--identity -`), plaintext a
+   pipe into `psql`, staged file removed by an EXIT trap. **No intermediate plaintext
+   file, no temp, no encrypt-in-place, in either direction.**
+
+   Known residual, accepted: the plaintext crosses the host's memory between two
+   containers. Closing it means building our own Postgres image, and
+   `tests/infra/test_builds_converge.py` records that the db being **pulled** is why a
+   build never recreates it. **Do not make `db` a built service to shorten this pipe.**
+
+3. **The recipient reaches `age` through `deploy/docker-compose.backup.yml`** — a
+   one-variable overlay loaded only by `scripts/backup.sh`, with a `:?` guard. It is
+   **not** in the base compose file because `tests/infra/test_compose.py::test_required_env_vars_fail_loudly`
+   requires a `:?` guard on every interpolation there, and **`${VAR:?}` fires on an
+   EMPTY value too** (verified live) — `.env.example` ships the recipient blank, so the
+   whole stack would refuse to boot on a host with no keypair yet. **No Make target may
+   load this overlay**; a test asserts it.
+
+4. **A missing or blank recipient is a refusal, before `pg_dump` runs, and there is no
+   plaintext fallback — ever.** `compose config --quiet` trips the guard first, so the
+   database is untouched and no file exists. A fallback is how the plain shape survives.
+
+5. **Restore takes `HASHI_RESTORE_AGE_IDENTITY` (a path) from the environment at the
+   moment it runs.** The private half is never written to this host.
+   `HASHI_RESTORE_AGE_IDENTITY=… make restore FROM=…` is the documented form.
+
+6. **The shape is sniffed from the file, never the name**: `age-encryption.org/v1` →
+   age; gzip magic `1f8b` → the pre-M28.2 plain shape (restores, no identity needed);
+   anything else → refused naming both shapes. **All three resolve before the
+   destructive confirmation prompt** — nobody types a database name to authorise a
+   restore that was always going to refuse. Pre-M28.2 artifacts must keep restoring;
+   do not drop that branch.
+
+7. **`docker compose run` replaced `exec` for the dump**, because `exec` reads the
+   environment a container was *created* with, so a recipient added to `.env` without a
+   `make up` would be silently missing. Cost: one container start per backup, and
+   compose's creation noise — **stderr only; stdout is byte-clean, verified with a
+   100,000-byte round trip.** Anything added to this pipeline must preserve that, since
+   one polluting byte corrupts the artifact.
+
+8. **What a reader of the bucket learns is now a recorded decision**
+   (`docs/decisions.md`, two rows of 2026-09-23): existence, size and timing and nothing
+   else — plus the jurisdiction and payment-identity row, accepted knowingly. **M28.3
+   and M28.4 cite those rows rather than re-deriving them.**
+
+### How to test what M28.2 built
+
+- `tests/infra/test_backup_script.py` gained `body_of()` / `code_of()` helpers that
+  extract one shell function with comments and heredocs stripped — **use them for any
+  ordering claim**, or the assertion measures the prose.
+- `tests/e2e/infra/test_restore_proves_the_backup.py` carries a **committed disposable
+  age keypair**. Committed on purpose: generating one needs `age` on the machine running
+  pytest, which the design exists to avoid. The stack's env file gets only the public
+  half; the private halves are passed only when a test invokes
+  `HASHI_RESTORE_AGE_IDENTITY`, mirroring what a real operator does.
+- `control_image(project, path)` asks compose for the built image name **while the stack
+  is up**; `age_in_the_image()` runs age via `docker run --rm -i --entrypoint sh <image>`.
+  **`--entrypoint sh` is mandatory** — the image's own entrypoint boots the app and
+  answers "database did not become reachable" instead of decrypting.
+- The fixture produces **two** artifacts: the encrypted one from the script, and a
+  pre-M28.2 plain `.sql.gz` taken with `pg_dump` directly, because the script has no
+  code path that writes one any more. Five scenarios, ~150s.
