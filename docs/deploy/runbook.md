@@ -1295,6 +1295,11 @@ Every other data-plane image pin is checked against a real registry by
 `tests/e2e/edge/test_every_image_pin_resolves.py` — a check that exists because one pin
 in the tree turned out never to have existed at all.
 
+**This project has never re-issued a certificate on a replacement host.** The reasoning
+in *Backups* for not keeping `caddy_data` rests on issuance being automatic and on the
+CA's published rate limits, both read rather than observed. The first real rebuild is
+what turns that into a fact; if it does not go that way, that is a finding.
+
 ## Backups
 
 ```bash
@@ -1302,6 +1307,91 @@ make backup                                   # → backups/hashi-<timestamp>.sq
 make restore FROM=backups/hashi-<...>.sql.gz  # destructive, so the path is required
 ```
 
-The dump is encrypted with `HASHI_SECRET_KEY` and cannot be restored without it. Keep the
-key somewhere the dumps are not. Restore is destructive and never picks "the latest one"
-for you — that is not a decision a Makefile gets to make.
+Restore is destructive and never picks "the latest one" for you — that is not a decision a
+Makefile gets to make.
+
+**The file `make backup` writes is NOT encrypted.** It is plain SQL, gzipped. What is
+encrypted inside it is a *subset of columns* — every node's `ssh_private_key`, every
+node_transport's `secrets`, every user's `token`, `subject`, `secrets` and
+`tunnel_address` — and those cannot be restored without `HASHI_SECRET_KEY`. Everything
+else is readable by anyone who opens the file: **every node's real address** and port,
+including the leaf addresses no user is ever shown, every SSH host key, which transports
+run where, and how many users there are with the date each one arrived. That is a map of
+the fleet, and hiding it is the entire point of the entry/leaf split.
+
+Both halves are true at once, and until this file was corrected only the second half was
+written down here: the dump **rebuilds nothing without the key**, and it is **still not
+safe to put anywhere**. Keep it on media you control. Not an object store, not a chat, not
+mail. The age-encrypted daily upload described by the `HASHI_BACKUP_*` block in
+`.env.example` is what makes offsite copies safe, and it does not exist yet — until it
+does, "offsite" means media in your hand.
+
+### What belongs in a backup, and what does not
+
+Decided 2026-09-23, item by item, because "everything the control plane generates" is not
+self-evident at 3am and half of it is key material.
+
+| Item | Backed up? | Why |
+|---|---|---|
+| **The control database** (the `hashi-db` volume, via `make backup`) | **Yes** — it *is* the backup | The single source of truth. Every node, every transport row, every user and every credential. Nothing else in this table can be reconstructed *from* the others; this can reconstruct a whole fleet. |
+| **`caddy_data`** (Caddy's ACME account key, its issued certificates, and the internal CA root the panel is served with) | **No** | Every byte of it regenerates on first boot with no operator action, and after a seizure the old host's private keys are to be presumed compromised — restoring them carries the seized machine's identity onto the new one. The cost of regenerating is real but bounded, and it is spelled out below rather than assumed. |
+| **`~/.hashi/management/`** (this host's management-tunnel private key, its per-host obfuscation values, and every enrolled device's public key and pre-shared key) | **Yes** — but only inside the age-encrypted artifact, never in the plain dump above | It is regenerable but **not reproducibly**: `scripts/management-tunnel.sh` prints each device's config exactly once and keeps no copy, so a fresh run invalidates every device already enrolled. Losing it means re-enrolling your laptop *and* your phone by copying a freshly printed private key out of an SSH session, at the moment the panel is unreachable and you are rebuilding under pressure — which is the one moment the tunnel exists for. It is 32 bytes and it is the difference between typing one new `Endpoint` line per device and re-doing the whole enrolment. |
+| **`.env`** | **NO. Not in the artifact, not in the bucket, not even encrypted.** | It holds `HASHI_SECRET_KEY`, which is the *only* thing standing between a reader of the bucket and every node credential and user token in the dump. Putting it beside the data defeats the encryption entirely: one stolen age identity would then yield both halves. Excluding it is what makes a restore cost **two** secrets that never meet on this host — the age identity and `HASHI_SECRET_KEY`, both carried by you. It also holds `HASHI_OPERATOR_PASSWORD_HASH`, so it is what lets you log in at all; see *What you carry*, below. Rebuild it on the new machine from `.env.example` plus what you carry. |
+| **`/opt/hashi` on a node** | **No**, explicitly | A node holds nothing that cannot be regenerated from the database — that is the invariant that makes replacing a node safe. Its rendered configs come back from an apply. Backing a node up would be backing up a derived artifact and calling it a source. |
+
+### What a restore of the database actually gives you back
+
+Every node record, every transport row, every user and every subscription token — so
+**every user's existing subscription URL keeps working**, with no message to anyone,
+*provided the delivery name still resolves to the new host*. If the domain itself is
+gone, that is the one thing no backup returns: the tokens survive and the URL they live
+in does not, and every user has to be handed a new link.
+
+It does not give you back:
+
+- **Anything readable without `HASHI_SECRET_KEY`.** Under the wrong key the panel loads
+  and every screen that touches a node or a user answers *"The data is intact; the key is
+  wrong. Nothing has been changed."*
+- **A way to log in.** `HASHI_OPERATOR_PASSWORD_HASH` lives in `.env`, not in the
+  database.
+- **A working fleet.** Restoring records does not touch a node. The new control plane
+  believes in nodes that may be seized, blocked or gone; you re-apply to the ones you
+  still hold and delete the ones you do not.
+- **The management tunnel**, unless you carried `~/.hashi/management/` (above).
+
+### The `caddy_data` cost, stated rather than waved at
+
+On a new host Caddy registers a fresh ACME account and requests a fresh certificate for
+`HASHI_PUBLIC_HOST` the first time it boots. That needs the name to already resolve to
+the new machine and inbound `:80`/`:443` to reach it; until both are true, `/sub/*`
+serves nothing. Users with a working config are unaffected — a user who needs to
+*refresh* one is not.
+
+Issuance is rate-limited at the CA, and the binding limit for a rebuild is the
+**duplicate-certificate** one: for an identical set of names it is five per week, on top
+of a per-registered-domain limit an order of magnitude higher. One rebuild spends one.
+You would have to rebuild the same name six times in seven days to be refused, and the
+refusal degrades the delivery endpoint only.
+
+The panel is not affected either way: it is served with `tls internal`, Caddy's own CA,
+created at first boot and never published to a CA's logs. What you do lose is that the
+root is **new**, so each device is asked to trust the console once more. On a deliberate
+rebuild that prompt is expected. A prompt you did *not* expect is the one to refuse.
+
+Both paragraphs above are read from the issuer's published limits and from this
+repository's own Caddyfile. Neither is measured — see *Known-unproven*.
+
+### What you carry
+
+Three things live on you and never on the control host. The first is needed by every
+restore that has ever been possible here; the second and third become needed the day the
+offsite upload exists, and are listed now so the keypair is generated before it is
+urgent rather than after.
+
+1. `HASHI_SECRET_KEY` — without it the dump is unreadable data.
+2. The **private half** of the age keypair whose public half is `HASHI_BACKUP_AGE_RECIPIENT`.
+3. A **read** credential for the backup bucket. The key in `.env` is write-only on
+   purpose, so the box that is seized cannot delete its own history.
+
+Plus the values needed to rewrite `.env` itself — hosts, ports, the operator password
+hash, the Postgres password. Everything else in that file comes from `.env.example`.

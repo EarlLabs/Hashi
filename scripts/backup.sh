@@ -5,11 +5,21 @@
 #       node is nothing; losing this database is losing every user's access and every
 #       node's credentials at once, with no way to rebuild them.
 #
-#       The dump is USELESS WITHOUT HASHI_SECRET_KEY, and that is the design (§3,
-#       encryption at rest) — not an oversight to work around. It also means the key is
-#       part of the backup in a way this script cannot help with: whoever holds only the
-#       dump can restore nothing. Say so out loud, every run, because a backup you
-#       cannot restore is worse than no backup — it is a false sense of one.
+#       WHAT THE FILE ACTUALLY IS, because this header used to get it wrong: plain
+#       SQL, gzipped, NOT encrypted. What is encrypted inside it is a subset of
+#       COLUMNS — node `ssh_private_key`, node_transport `secrets`, user `token`,
+#       `subject`, `secrets`, `tunnel_address` (§3, encryption at rest) — so those
+#       cannot be restored without HASHI_SECRET_KEY. Everything else is in the clear,
+#       including every node's real address and the leaf addresses no user is ever
+#       shown. Both halves are true at once: the file is a map of the fleet to anyone
+#       who opens it, AND it rebuilds nothing without the key. Each half is printed on
+#       every run, because the previous wording said only the second and an operator
+#       who believed it would have put the fleet's addresses somewhere public.
+#
+#       What else belongs in a backup — `caddy_data`, `~/.hashi/management/`, `.env`,
+#       and why `/opt/hashi` on a node is not backup material — is decided and written
+#       down in docs/deploy/runbook.md, "Backups". This script writes the database and
+#       nothing else.
 # HOW:  ./scripts/backup.sh dump [path]
 #       ./scripts/backup.sh restore <path>
 #
@@ -72,16 +82,28 @@ command_dump() {
     pg_dump --username="${user}" --dbname="${name}" --clean --if-exists --format=plain \
     | gzip -9 > "${output}"
 
-  # 0600: this file contains every node's encrypted credentials and every user's
-  # encrypted token. Encrypted is not the same as safe to leave world-readable.
+  # 0600: this file contains every node's credentials and every user's token — those
+  # encrypted — and every node's ADDRESS in the clear. Neither is safe to leave
+  # readable by every account on the host, and the second is not protected at all.
   chmod 600 "${output}"
 
   echo "wrote ${output} ($(du -h "${output}" | cut -f1))" >&2
   cat >&2 <<'WARNING'
 
-IMPORTANT: this dump is encrypted with HASHI_SECRET_KEY and cannot be restored
-without it. Back that key up SEPARATELY, somewhere this dump is not — a copy of
-both in one place defeats the encryption; a copy of only the dump restores nothing.
+IMPORTANT: this file is NOT encrypted. It is plain SQL, gzipped. What is encrypted
+inside it is a SUBSET OF COLUMNS — node SSH keys, node_transport secrets, user
+tokens and secrets — and those cannot be restored without HASHI_SECRET_KEY.
+
+Everything else is readable by anyone who opens the file: every node's real address
+and port, including the leaf addresses no user is ever shown, every SSH host key,
+which transports run where, and how many users there are with the date each arrived.
+That is a map of the fleet, which is the one thing the entry/leaf split hides.
+
+So both halves are true: this file rebuilds nothing without HASHI_SECRET_KEY, and it
+still must not go anywhere you would put something you believed was encrypted — no
+object store, no chat, no mail. Keep it on media you control, and keep the key
+somewhere this file is not: a copy of both in one place means one theft takes
+everything. See docs/deploy/runbook.md, "Backups".
 WARNING
 }
 
