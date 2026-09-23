@@ -95,7 +95,7 @@ test-edge:
 
 test-infra:
 	$(need_venv)
-	$(PY) -m ruff check tests/infra deploy/warden .e2e
+	$(PY) -m ruff check tests/infra deploy/backup deploy/warden .e2e
 	$(PY) -m pytest tests/infra -q
 
 # Acceptance scenarios, run against the disposable e2e stack (`make e2e-up`) —
@@ -207,10 +207,22 @@ node-bootstrap:
 # HASHI_SECRET_KEY; back that up separately and keep it somewhere the age identity is not.
 # A restore costs both, and neither of them lives on this machine. See the script's own
 # warning, and docs/deploy/runbook.md, "Backups".
-.PHONY: backup restore checkers
+#
+# With HASHI_BACKUP_ENABLED=1 the same artifact is then sent to the object store in the
+# HASHI_BACKUP_S3_* block, with a credential that may only write — so this host can add to
+# the backup history and can neither read nor destroy it. `make backup` exits 3, not 0,
+# when the dump succeeded and the upload did not: the file is here, and a backup that
+# never left the machine is not an offsite backup.
+.PHONY: backup backup-upload restore checkers
 
 backup:
 	@scripts/backup.sh dump
+
+# What exit 3 leaves you holding. Sends an artifact that is already on disk, and never
+# dumps — so it costs the database nothing and can be retried as often as the store needs.
+backup-upload:
+	@test -n "$(FROM)" || { echo "usage: make backup-upload FROM=backups/hashi-....sql.gz.age"; exit 2; }
+	@scripts/backup.sh upload "$(FROM)"
 
 # Deliberately requires the path on the command line rather than picking the newest
 # dump: restoring is destructive and "the latest one" is not a decision a Makefile

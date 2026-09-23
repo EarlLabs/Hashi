@@ -5,7 +5,11 @@ WHAT: fills a disposable stack, dumps it, restores the dump into a CLEAN stack, 
       matter: a restore with the wrong key, a restore that stops halfway, and a host
       trying to read back the backup it just wrote. Since M28.2 the artifact is `age`
       ciphertext, so the scenario also covers the shape written before that, which
-      exists in the world and must still restore.
+      exists in the world and must still restore. Since M28.3 it also leaves the machine:
+      the last four scenarios stand up a disposable S3-compatible endpoint and prove an
+      object really landed, that a refused credential leaves the operator holding the
+      artifact with an exit code of its own, and that a half-configured offsite block is
+      refused before the database is read.
 WHY:  the charter says a backup nobody has restored is not a backup, and that proving it
       belongs to the e2e set. Until this file, ``tests/infra/test_backup_script.py`` read
       the script's TEXT and said so honestly in its own header: "nothing here proves a
@@ -64,12 +68,37 @@ BACKUP_IDENTITY = "AGE-SECRET-KEY-1SHYNP57023UZU8D3JCXETCWLW2WMDZX34A2E5FENPYWP8
 # THE identity.
 UNRELATED_IDENTITY = "AGE-SECRET-KEY-1E7H77KJSTLXSA5GDKA24AH48970FZUJ92X6V84LVMUPVE90M934SMH5W7P"
 
+# The disposable object store the upload scenarios send to — M28.3. An S3-compatible
+# server in a container, on the stack's own network, holding one bucket that exists for
+# the length of this module. It is TEST infrastructure: it is in no compose file of this
+# project, no Make target starts it, and nothing in the product knows it exists. Proving
+# that `PutObject` happened needs something that actually implements the protocol, and an
+# independent implementation is also the only honest check that the signature this
+# repository computes is the signature the protocol specifies — a home-made receiver would
+# agree with whatever mistake the signer made.
+#
+# From quay rather than the other registry, where this repository is now gated behind a
+# login. Pinned to a release, like every other image here.
+STORE_IMAGE = "quay.io/minio/minio:RELEASE.2024-09-13T20-26-02Z"
+STORE_BUCKET = "hashi-e2e-backups"
+STORE_PREFIX = "control/"
+# Obviously fake, like every other credential in this file. The store's ROOT credential:
+# this one may read, which is how the scenario checks that an object landed. The control
+# host under test is never given anything but what the env file below carries.
+STORE_ACCESS_KEY = "e2e-upload-not-real"
+STORE_SECRET_KEY = "e2e-upload-secret-not-real-00000"
+WRONG_STORE_SECRET_KEY = "e2e-upload-WRONG-secret-not-real"
+
 OPERATOR_PASSWORD = "restore-proves-the-backup"
 # Loopback ports well clear of the dev (541xx) and e2e (542xx) blocks, per CLAUDE.md's
 # published-port rule: this is a third stack on the same host and it must collide with
 # neither.
 SOURCE_PORT = 54300
 TARGET_PORT = 54301
+# Where the disposable store is published, so this suite can read an object back. The
+# control plane under test never uses this address: it reaches the store by container name
+# on the compose network, which is the only route a real one would have.
+STORE_PORT = 54308
 
 
 def _docker_env() -> dict[str, str]:
@@ -258,6 +287,169 @@ def install(path: pathlib.Path, project: str) -> None:
     assert published.returncode == 0, published.stderr[-3000:]
 
 
+# --- the disposable object store, and the upload under test (M28.3) -----------
+
+def uploader() -> object:
+    """The program `scripts/backup.sh` runs inside the container, imported here.
+
+    Used for ONE thing this file cannot otherwise do: sign a `GetObject` so the scenario
+    can read back what the control plane wrote. Reusing the code under test to check the
+    code under test would normally be circular — it is not here, because the thing being
+    proven is that a real S3 implementation ACCEPTS what this signs, and the store is the
+    one making that judgement. A wrong signature is a 403 at the PUT, before any of this
+    runs; the GET is only how the bytes come back.
+    """
+    import importlib.util
+
+    source = REPO_ROOT / "deploy" / "backup" / "upload.py"
+    spec = importlib.util.spec_from_file_location("hashi_backup_uploader", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def stack_network(project: str, path: pathlib.Path) -> str:
+    """The network the stack's containers are on, asked rather than assumed.
+
+    The store has to be reachable by the one-off container `scripts/backup.sh` starts, and
+    that container joins whatever network compose made for the project. Deriving the name
+    from the project name would be this file being right about a compose convention;
+    asking is the same choice ``control_image`` makes one function up.
+    """
+    listed = compose(project, path, "ps", "-q", "control")
+    assert listed.returncode == 0, listed.stderr[-2000:]
+    container = listed.stdout.strip().splitlines()[0]
+    inspected = subprocess.run(
+        ["docker", "inspect", "-f",
+         "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}", container],
+        capture_output=True, text=True, timeout=60, env=_docker_env(),
+    )
+    assert inspected.returncode == 0, inspected.stderr[-2000:]
+    return inspected.stdout.strip()
+
+
+def object_store(project: str, path: pathlib.Path) -> dict | None:
+    """Start the disposable endpoint, or say why there is none and let the caller skip.
+
+    ``None`` when the image cannot be obtained — an offline machine, or one that has never
+    pulled it. The scenarios that need it skip loudly rather than failing: a suite that
+    goes red because a third-party registry is unreachable teaches everyone to ignore it.
+    """
+    pulled = subprocess.run(
+        ["docker", "pull", STORE_IMAGE],
+        capture_output=True, text=True, timeout=600, env=_docker_env(),
+    )
+    if pulled.returncode != 0:
+        return None
+
+    name = f"hashi-store-{RUN}"
+    started = subprocess.run(
+        ["docker", "run", "-d", "--name", name,
+         "--network", stack_network(project, path),
+         "-p", f"{_bind_address()}:{STORE_PORT}:9000",
+         "-e", f"MINIO_ROOT_USER={STORE_ACCESS_KEY}",
+         "-e", f"MINIO_ROOT_PASSWORD={STORE_SECRET_KEY}",
+         "--entrypoint", "sh", STORE_IMAGE,
+         # The bucket is a directory that exists before the server starts, which is all
+         # this store needs to consider it created. Creating it over the API would take a
+         # credential allowed to create buckets, and the whole point of the scenario is
+         # that the host under test holds one that may only write an object.
+         "-c", f"mkdir -p /data/{STORE_BUCKET} && exec minio server /data"],
+        capture_output=True, text=True, timeout=300, env=_docker_env(),
+    )
+    assert started.returncode == 0, started.stderr[-2000:]
+
+    import os
+    import time
+
+    published = os.environ.get("E2E_API_HOST", "127.0.0.1")
+    store = {
+        "container": name,
+        # What the control plane under test is told: a name on the compose network, which
+        # is the only way it could reach a store from inside.
+        "endpoint": f"http://{name}:9000",
+        # What THIS process uses to look: the published port.
+        "reachable": f"http://{published}:{STORE_PORT}",
+        "bucket": STORE_BUCKET,
+        "prefix": STORE_PREFIX,
+    }
+
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        with contextlib.suppress(httpx.HTTPError):
+            # Any answer at all means it is serving; an anonymous request is refused, and
+            # a refusal is an answer.
+            httpx.get(store["reachable"], timeout=5.0)
+            return store
+        time.sleep(1.0)
+    remove_store(store)
+    raise AssertionError("the disposable object store never answered")
+
+
+def remove_store(store: dict | None) -> None:
+    if store:
+        subprocess.run(
+            ["docker", "rm", "-f", store["container"]],
+            capture_output=True, timeout=120, env=_docker_env(),
+        )
+
+
+def configure_upload(
+    path: pathlib.Path, store: dict, *, secret: str = STORE_SECRET_KEY, bucket: str | None = None
+) -> None:
+    """Point a stack's env file at the store, the way an operator's `.env` would.
+
+    Rewritten rather than appended to, so a second call replaces the first — the failure
+    scenarios differ from the working one by one value, which is exactly how an operator
+    gets it wrong.
+    """
+    kept = [
+        line
+        for line in path.read_text().splitlines()
+        if not line.startswith(("HASHI_BACKUP_S3_", "HASHI_BACKUP_ENABLED"))
+    ]
+    kept += [
+        "HASHI_BACKUP_ENABLED=1",
+        f"HASHI_BACKUP_S3_ENDPOINT={store['endpoint']}",
+        "HASHI_BACKUP_S3_REGION=e2e-region-1",
+        f"HASHI_BACKUP_S3_BUCKET={bucket if bucket is not None else store['bucket']}",
+        f"HASHI_BACKUP_S3_PREFIX={store['prefix']}",
+        f"HASHI_BACKUP_S3_ACCESS_KEY_ID={STORE_ACCESS_KEY}",
+        f"HASHI_BACKUP_S3_SECRET_ACCESS_KEY={secret}",
+    ]
+    path.write_text("\n".join(kept) + "\n")
+    path.chmod(0o600)
+
+
+def object_in_the_store(store: dict, name: str) -> tuple[int, bytes]:
+    """Read one object back with a credential the control host does not have."""
+    module = uploader()
+    config = {
+        "scheme": "http",
+        "netloc": store["reachable"].removeprefix("http://"),
+        "region": "e2e-region-1",
+        "bucket": store["bucket"],
+        "access_key": STORE_ACCESS_KEY,
+        "secret_key": STORE_SECRET_KEY,
+    }
+    request_path, headers = module.signed(
+        config, "GET", store["prefix"] + name, module.EMPTY_BODY
+    )
+    with httpx.Client(timeout=120.0) as client:
+        answer = client.get(store["reachable"] + request_path, headers=headers)
+    return answer.status_code, answer.content
+
+
+def run_backup(arguments: list[str], path: pathlib.Path, project: str):
+    """The script, run the way an operator runs it, with nothing extra in its environment."""
+    return subprocess.run(
+        [str(BACKUP), *arguments],
+        capture_output=True, text=True, timeout=600, cwd=REPO_ROOT,
+        stdin=subprocess.DEVNULL,
+        env={**_docker_env(), "ENV_FILE": str(path), "COMPOSE_PROJECT_NAME": project},
+    )
+
+
 def query(project: str, path: pathlib.Path, sql: str) -> str:
     """One value straight out of Postgres, bypassing the application entirely.
 
@@ -338,6 +530,51 @@ def a_fleet(client: httpx.Client) -> dict:
     }
 
 
+def offsite_scenarios(directory: pathlib.Path, path: pathlib.Path) -> dict:
+    """Drive every upload case once, while there is a stack and a store to drive it with.
+
+    Kept in one place rather than four independent scenarios because all of it needs the
+    same two expensive, short-lived things: a stack with a fleet in it, and a store on that
+    stack's own network. Nothing is asserted here — the tests below do that — so a failure
+    reads as the scenario it belongs to rather than as "the fixture broke".
+    """
+    store = object_store(SOURCE_PROJECT, path)
+    if store is None:
+        return {"store": None}
+
+    results: dict = {"store": store}
+    try:
+        configure_upload(path, store)
+        uploaded = directory / "uploaded.sql.gz.age"
+        results["artifact"] = uploaded
+        results["dump"] = run_backup(["dump", str(uploaded)], path, SOURCE_PROJECT)
+        if uploaded.is_file():
+            results["local"] = uploaded.read_bytes()
+            results["object"] = object_in_the_store(store, uploaded.name)
+
+        # The same artifact, the same store, a credential it will refuse — a key that was
+        # rotated, mistyped, or never allowed to write. The operator has to be left holding
+        # something rather than nothing.
+        configure_upload(path, store, secret=WRONG_STORE_SECRET_KEY)
+        results["denied"] = run_backup(["upload", str(uploaded)], path, SOURCE_PROJECT)
+        results["after_denial"] = uploaded.read_bytes() if uploaded.is_file() else None
+
+        # Switched on, half filled in — the state a host is in halfway through being set
+        # up. It must be refused BEFORE the database is read, which is why the path it was
+        # told to write to is checked afterwards and must not exist.
+        half = directory / "half-configured.env"
+        half.write_text(path.read_text())
+        configure_upload(half, store, bucket="")
+        never = directory / "never-written.sql.gz.age"
+        results["refused"] = run_backup(["dump", str(never)], half, SOURCE_PROJECT)
+        results["never"] = never
+    finally:
+        # Before the stack comes down: a container attached to the project's network stops
+        # compose from removing it.
+        remove_store(store)
+    return results
+
+
 @pytest.fixture(scope="module", autouse=True)
 def docker_available() -> None:
     if shutil.which("docker") is None:
@@ -384,13 +621,15 @@ def dumped(tmp_path_factory):
         fleet["legacy"] = legacy
 
         dump = directory / "hashi.sql.gz.age"
-        result = subprocess.run(
-            [str(BACKUP), "dump", str(dump)],
-            capture_output=True, text=True, timeout=300, cwd=REPO_ROOT,
-            env={**_docker_env(), "ENV_FILE": str(path), "COMPOSE_PROJECT_NAME": SOURCE_PROJECT},
-        )
+        result = run_backup(["dump", str(dump)], path, SOURCE_PROJECT)
         assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
         assert dump.is_file() and dump.stat().st_size > 0
+        # This env file names no object store, which is what a host ships as. Kept so the
+        # scenario below can assert the run SAYS the artifact went nowhere.
+        fleet["local_only"] = result.stderr
+
+        # Everything about the upload, driven here because it needs this stack up — M28.3.
+        fleet["offsite"] = offsite_scenarios(directory, path)
     finally:
         compose(SOURCE_PROJECT, path, "down", "-v")
 
@@ -708,3 +947,133 @@ def test_an_artifact_written_before_the_encryption_still_restores(dumped, tmp_pa
             assert after.text == fleet["subscription"]
     finally:
         compose(project, path, "down", "-v")
+
+
+# --- S6: the artifact actually leaves the machine ------------------------------
+
+def offsite(dumped) -> dict:
+    """The upload results, or a loud skip when there was no store to send to."""
+    results = dumped[1]["offsite"]
+    if results["store"] is None:
+        pytest.skip(
+            f"could not obtain {STORE_IMAGE}, so no S3-compatible endpoint exists to send "
+            "an object to. The upload is UNPROVEN on this machine — this is a skip, not a "
+            "pass."
+        )
+    return results
+
+
+def test_the_artifact_is_sent_to_the_object_store_and_lands_byte_for_byte(dumped) -> None:
+    """S6. The step's whole claim: the backup is somewhere other than the box it came from.
+
+    Read back afterwards with the store's own credential — which the control plane under
+    test does not have and must never have — and compared byte for byte with the file on
+    the host. Anything weaker ("the script printed success") would pass for a script that
+    uploaded nothing at all, which is exactly the failure this milestone exists to prevent.
+    """
+    results = offsite(dumped)
+    sent = results["dump"]
+    assert sent.returncode == 0, f"{sent.stdout[-3000:]}\n{sent.stderr[-3000:]}"
+    assert "the object store accepted it" in sent.stderr, sent.stderr[-2000:]
+
+    status, stored = results["object"]
+    assert status == 200, f"the object is not in the bucket: HTTP {status}"
+    assert stored == results["local"], (
+        "the object in the bucket is not the artifact that was written here"
+    )
+    assert stored.startswith(b"age-encryption.org/v1\n"), (
+        "what left this machine is not the encrypted shape"
+    )
+
+    # The upload is a copy, not a move: the artifact is still here, and a restore run an
+    # hour later from this host does not depend on the store answering.
+    assert results["artifact"].is_file()
+
+    # Nothing in what a person or a log sees carries the credential that sent it.
+    for leak in (STORE_SECRET_KEY, "Signature=", "Credential="):
+        assert leak not in sent.stdout + sent.stderr, f"the upload printed {leak!r}"
+
+
+def test_the_upload_says_what_it_proves_and_what_it_does_not(dumped) -> None:
+    """S6b. The sentence an operator will quote at 3am, and the one M28.6 must not inflate.
+
+    A write-only credential cannot read its own object back, so "uploaded" is a statement
+    about a response and not about a bucket. The run says so on every success, because the
+    alternative is a project that believes it has an offsite backup on the strength of a
+    tick mark.
+    """
+    sent = offsite(dumped)["dump"]
+    assert "What it does not prove" in sent.stderr or "does not prove" in sent.stderr, (
+        sent.stderr[-2000:]
+    )
+    assert "write-only" in sent.stderr
+
+
+# --- S7: the store refuses, and the operator is left holding something ---------
+
+def test_a_store_that_refuses_the_credential_leaves_the_artifact_and_its_own_exit_code(
+    dumped,
+) -> None:
+    """S7. The dump succeeded and the object did not land. That is neither 0 nor 1.
+
+    Exit 3 exists so a schedule, and the panel M28.6 builds on it, can tell "there is no
+    backup" from "there is a backup and it never left the machine" — two different things
+    to do about it. The artifact must survive the failure untouched: what the operator is
+    holding is a complete, encrypted backup, and the retry is a send rather than a dump.
+    """
+    results = offsite(dumped)
+    denied = results["denied"]
+    assert denied.returncode == 3, (
+        f"a refused upload exited {denied.returncode}, so it is indistinguishable from "
+        f"having no backup at all:\n{denied.stderr[-2000:]}"
+    )
+    assert "did NOT leave this machine" in denied.stderr, denied.stderr[-2000:]
+    assert "make backup-upload FROM=" in denied.stderr, (
+        "the operator is not told how to send the file they are holding"
+    )
+    # What the store said, so the fix is a key and not a guess.
+    assert "the object store did not take it" in denied.stderr
+    assert "403" in denied.stderr, denied.stderr[-2000:]
+
+    assert results["after_denial"] == results["local"], (
+        "the artifact changed, or was removed, when its upload failed"
+    )
+    for leak in (WRONG_STORE_SECRET_KEY, STORE_SECRET_KEY):
+        assert leak not in denied.stdout + denied.stderr, "the refusal printed the credential"
+
+
+# --- S8: half-configured is refused before the database is read ----------------
+
+def test_an_offsite_block_that_is_switched_on_and_incomplete_refuses_before_the_dump(
+    dumped,
+) -> None:
+    """S8. The state a host is in halfway through being set up.
+
+    Refusing after the dump would leave a fresh artifact on disk and an operator who has to
+    work out whether it is safe where it is. Refusing first costs nothing and touches
+    nothing — which is what the missing file below proves — and it names every variable
+    that is missing at once rather than one per run.
+    """
+    results = offsite(dumped)
+    refused = results["refused"]
+    assert refused.returncode == 1, refused.stderr[-2000:]
+    assert not results["never"].exists(), (
+        "an artifact was written by a run that was supposed to refuse before dumping"
+    )
+    assert "HASHI_BACKUP_S3_BUCKET" in refused.stderr, refused.stderr[-2000:]
+    assert "write-only" in refused.stderr
+
+
+# --- S9: no store configured is a real mode, and it says so --------------------
+
+def test_a_dump_with_no_store_configured_says_the_artifact_went_nowhere(dumped) -> None:
+    """S9. `HASHI_BACKUP_ENABLED` unset is supported, and must never look like coverage.
+
+    This is the state every host ships in, so the run that takes a local-only backup is the
+    run most likely to be believed to have done more. It succeeds — a local artifact is a
+    real thing to have — and it says in as many words that this artifact is on this host
+    and nowhere else.
+    """
+    said = dumped[1]["local_only"]
+    assert "on this host and nowhere else" in said, said[-2000:]
+    assert "HASHI_BACKUP_ENABLED" in said

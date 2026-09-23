@@ -1304,6 +1304,7 @@ what turns that into a fact; if it does not go that way, that is a finding.
 
 ```bash
 make backup                                       # → backups/hashi-<timestamp>.sql.gz.age, mode 0600
+make backup-upload FROM=backups/hashi-<...>.sql.gz.age  # send one that is already written
 HASHI_RESTORE_AGE_IDENTITY=/path/to/identity \
   make restore FROM=backups/hashi-<...>.sql.gz.age  # destructive, so the path is required
 ```
@@ -1370,11 +1371,50 @@ they are a map of the fleet to anyone who opens them, with every node's real add
 including the leaf addresses no user is ever shown. Keep them on media you control, and
 replace them with a fresh backup at the first opportunity.
 
-What still does not exist is the daily **upload** to an object store described by the
-`HASHI_BACKUP_*` block in `.env.example`, and the management directory's place inside the
-artifact (see the table below — the artifact is the database and nothing else so far).
-The encryption those need is now here: copying an artifact offsite is a thing you do by
-hand, and it is safe to do.
+### Where the artifact goes, and the credential that sends it
+
+With `HASHI_BACKUP_ENABLED=1`, `make backup` sends the artifact it has just written to the
+object store configured in the `HASHI_BACKUP_S3_*` block of `.env`: one `PutObject` to
+`<endpoint>/<bucket>/<prefix><file>`, and nothing else. The store is addressed by the **S3
+protocol, never by a provider's name** — the same rule as a node's country and address
+living in a node record rather than in code, and for the same reason: a provider you cannot
+rotate away from is one you are stuck with on the day you need to leave it. Moving to
+another store is four lines of `.env` and no code.
+
+**The credential kept on this host may only write.** `PutObject` and nothing else: no
+`GetObject`, no `ListBucket`, no `DeleteObject`. Whoever holds this box holds that key, and
+a key that can delete turns a seizure into the loss of the entire backup history as well as
+the machine. Retention is therefore enforced on the **bucket** side — versioning, object
+lock, or a lifecycle rule — where this key cannot reach it. Set that up when you create the
+bucket: nothing on this host can do it for you, and nothing on this host can undo it.
+
+**What "uploaded" proves, exactly.** The SHA-256 of the artifact is inside the request's
+signature, so a store that accepts the request has recomputed that hash over the bytes it
+received; where the store returns a comparable `ETag`, it is compared against the same
+bytes as well. That is a real statement about what arrived. It is *not* a statement that
+the object is still there, that retention is keeping it, or that it can be read back — this
+host holds a write-only credential and cannot look, which is the whole point. The only way
+to verify a backup is to restore it, from a machine that holds the identity, which is the
+part of this section above.
+
+**When the upload fails, the dump does not fail with it.** The artifact is here, intact and
+encrypted, and `make backup` exits **3** rather than 0 — a code of its own, because "there
+is no backup" and "there is a backup and it never left the machine" call for different
+actions. Send the same file once the store answers again:
+
+```bash
+make backup-upload FROM=backups/hashi-<...>.sql.gz.age
+```
+
+Nothing is dumped a second time, and the database is not touched. Use `https`: over plain
+`http` the key id and the name of your bucket travel in the clear, and the upload refuses
+unless the endpoint resolves to a private address.
+
+`HASHI_BACKUP_ENABLED=0`, or unset, is a supported mode rather than an oversight — the
+artifact is written and stays on this host, and every run says so in as many words. What
+still does not exist is the **schedule**: nothing runs `make backup` for you yet. Nor does
+the management directory have a place inside the artifact (see the table below — the
+artifact is the database and nothing else so far).
 
 ### What belongs in a backup, and what does not
 

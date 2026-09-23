@@ -1,0 +1,38 @@
+# hashi — the upload overlay: where the object store's address and credential live.
+#
+# WHAT: hands scripts/backup.sh the S3-protocol configuration for one one-off container,
+#       and nothing else. It adds no service, publishes nothing and starts no application.
+# WHY:  two reasons, and the second is the important one.
+#
+#       The script must never read the env file itself (CLAUDE.md, hard rules), so compose
+#       — the one thing allowed to read it — interpolates these values here and they never
+#       pass through the script at all. Same shape as docker-compose.backup.yml carries the
+#       age recipient.
+#
+#       And the credential must not be in the LONG-LIVED control container. It is a
+#       bearer secret for the bucket that holds every backup this fleet has ever written;
+#       putting it in the application's environment would mean any bug that lets the app
+#       read its own environment also reaches the backups. It lives instead for the length
+#       of one `compose run` container that does nothing but send one object, and is gone
+#       when that container exits. No Make target loads this file and `make up` never sees
+#       it — tests/infra/test_backup_script.py asserts both.
+#
+#       No `:?` guards here, unlike the base file, and this is deliberate: these variables
+#       are required only when HASHI_BACKUP_ENABLED is 1. A guard cannot say "required if",
+#       and ${VAR:?} fires on an EMPTY value too, so a guard would refuse the backup of
+#       every host that has not set up an offsite bucket yet — including the one that ships
+#       from .env.example. The conditional refusal lives where it can be conditional, in
+#       deploy/backup/upload.py, which names every missing variable at once and refuses
+#       BEFORE the database is read.
+# HOW:  loaded by scripts/backup.sh alone, with `run --rm --no-deps --entrypoint python3`,
+#       so the control application is never started from it.
+services:
+  control:
+    environment:
+      HASHI_BACKUP_ENABLED: "${HASHI_BACKUP_ENABLED:-0}"
+      HASHI_BACKUP_S3_ENDPOINT: "${HASHI_BACKUP_S3_ENDPOINT:-}"
+      HASHI_BACKUP_S3_REGION: "${HASHI_BACKUP_S3_REGION:-}"
+      HASHI_BACKUP_S3_BUCKET: "${HASHI_BACKUP_S3_BUCKET:-}"
+      HASHI_BACKUP_S3_PREFIX: "${HASHI_BACKUP_S3_PREFIX:-}"
+      HASHI_BACKUP_S3_ACCESS_KEY_ID: "${HASHI_BACKUP_S3_ACCESS_KEY_ID:-}"
+      HASHI_BACKUP_S3_SECRET_ACCESS_KEY: "${HASHI_BACKUP_S3_SECRET_ACCESS_KEY:-}"

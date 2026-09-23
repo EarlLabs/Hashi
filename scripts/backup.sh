@@ -22,8 +22,27 @@
 #       and why `/opt/hashi` on a node is not backup material — is decided and written
 #       down in docs/deploy/runbook.md, "Backups". This script writes the database and
 #       nothing else.
+#
+#       WHERE IT GOES. When HASHI_BACKUP_ENABLED is 1, the same artifact is then sent to
+#       an object store addressed by the S3 PROTOCOL — never by a provider's name, exactly
+#       as a node's country and address are node-record data and not code. The credential
+#       that sends it is write-only: PutObject and nothing else, so this host can add to
+#       the backup history and can neither read nor destroy it. That is also why nothing
+#       here verifies an upload by reading it back — it cannot, and the one place that
+#       would be possible is the machine an attacker holds. See deploy/backup/upload.py
+#       for exactly what a successful upload does and does not prove.
 # HOW:  ./scripts/backup.sh dump [path]
+#       ./scripts/backup.sh upload <path>
 #       HASHI_RESTORE_AGE_IDENTITY=<path> ./scripts/backup.sh restore <path>
+#
+#       EXIT CODES, because a schedule and a panel both have to tell these apart:
+#         0  the artifact was written, and sent offsite if that is switched on
+#         1  nothing usable happened — refused before the dump, or the dump failed
+#         2  wrong usage
+#         3  the artifact WAS written and did NOT leave this machine. The dump is on this
+#            host and nowhere else; `scripts/backup.sh upload <path>` sends the same file
+#            once the store is reachable again. A backup that silently did not leave the
+#            machine is the failure this exists to prevent, so it is never a 0.
 #
 #       Runs pg_dump INSIDE the db container, so no Postgres client is needed on the
 #       host and the version always matches the server. age runs inside the CONTROL
@@ -41,7 +60,11 @@
 #
 #       The recipient is read out of the env file by COMPOSE, through
 #       deploy/docker-compose.backup.yml, and never passes through this script. Same rule
-#       as the connection details below: this script does not open .env.
+#       as the connection details below: this script does not open .env. The bucket's
+#       address and its credential arrive the same way, through
+#       deploy/docker-compose.upload.yml, into a container that exists for one upload —
+#       so the secret is never in this script, never in an argument list, and never in the
+#       environment of the long-running control plane.
 #
 #       ENV_FILE (default .env) and COMPOSE_PROJECT_NAME select WHICH stack it acts on.
 #       That is not a convenience: until item 32 this script could only ever act on the
@@ -63,12 +86,25 @@ COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
 # guard on this one would refuse to start the WHOLE STACK on a host whose keypair does not
 # exist yet. Here it refuses exactly one thing, the backup, at the moment it is asked for.
 COMPOSE_BACKUP=("${COMPOSE[@]}" -f deploy/docker-compose.backup.yml)
+# The same stack plus the object store's address and credential, for the length of one
+# container. Separate from the recipient's overlay because the two are needed at different
+# moments and by different code, and because this one carries a bearer secret that must
+# never reach the long-running control plane — see that file's own header.
+COMPOSE_UPLOAD=("${COMPOSE[@]}" -f deploy/docker-compose.upload.yml)
 SERVICE="db"
+
+# The program that speaks the S3 protocol, kept as a readable file in this repository and
+# handed to the container as an argument rather than baked into the image. Two reasons: a
+# rebuild is not a precondition for an upload (the restore host is rented an hour before
+# use), and the thing that signs a request with a credential is a file a reviewer can read
+# rather than a string embedded in a shell script.
+UPLOADER="${REPO_ROOT}/deploy/backup/upload.py"
 
 usage() {
   cat >&2 <<'USAGE'
 usage:
   scripts/backup.sh dump [output-path]      # default: backups/hashi-<timestamp>.sql.gz.age
+  scripts/backup.sh upload <input-path>     # send an artifact that is already on disk
   scripts/backup.sh restore <input-path>    # DESTRUCTIVE: replaces the current database
 
 A dump is encrypted to HASHI_BACKUP_AGE_RECIPIENT (an age PUBLIC key, in the env file)
@@ -79,6 +115,11 @@ file needs the private half, which is never stored here:
 
 Artifacts written before that encryption existed — plain SQL, gzipped — still restore,
 and need no identity. The shape is sniffed from the file, not from its name.
+
+With HASHI_BACKUP_ENABLED=1 a dump is also sent to the object store described by the
+HASHI_BACKUP_S3_* block in the env file, with a credential that may only write. If that
+send fails the dump still exists here and the exit code is 3 — retry it with `upload`,
+which never dumps and never touches the database.
 
 Both read POSTGRES_* from the env file via compose. The stack must be up (`make up`).
 Set ENV_FILE and COMPOSE_PROJECT_NAME to act on a stack other than the default one.
@@ -110,6 +151,62 @@ artifact_kind() {
   echo "unknown"
 }
 
+# Run the uploader inside a one-off control container. Everything it needs to reach the
+# store is in that container's environment, put there by compose; nothing sensitive is on
+# the command line, where a process list would show it to every account on this host.
+# --no-deps and --entrypoint, so this starts the interpreter and not the control plane.
+upload_run() {
+  [ -f "${UPLOADER}" ] || {
+    echo "the uploader is missing at ${UPLOADER}; this checkout is incomplete." >&2
+    return 1
+  }
+  "${COMPOSE_UPLOAD[@]}" run --rm --no-deps -T --entrypoint python3 control \
+    -c "$(cat "${UPLOADER}")" "$@"
+}
+
+# Is this artifact going anywhere, and is what it needs to get there actually configured?
+# Answered BEFORE the database is read, for the same reason the recipient is: a host whose
+# offsite block is half-filled is refused while the database is untouched and no file
+# exists, instead of being dumped and then found wanting.
+UPLOAD="no"
+resolve_upload() {
+  local status=0
+  upload_run preflight </dev/null || status=$?
+  case "${status}" in
+    0)  UPLOAD="yes" ;;
+    10) UPLOAD="no" ;;  # switched off, and the uploader has already said so out loud
+    *)  cat >&2 <<'MSG'
+
+Nothing was dumped, written or sent. Fix the block named above in your env file, or set
+HASHI_BACKUP_ENABLED=0 to take a backup that stays on this host on purpose.
+MSG
+        exit 1 ;;
+  esac
+}
+
+# Send one artifact, once, and turn the uploader's verdict into this script's. A failure
+# here is never fatal to the artifact: the file is on the disk, intact and encrypted, and
+# the exit code says exactly that so a schedule can tell it apart from having no backup.
+upload_artifact() {
+  local artifact="$1"
+  if upload_run put "$(basename "${artifact}")" < "${artifact}"; then
+    return 0
+  fi
+  cat >&2 <<MSG
+
+The artifact is written and it did NOT leave this machine. It is at:
+
+  ${artifact}
+
+A backup of this host, on this host, is the failure an offsite copy exists to prevent —
+one seizure, one disk, and both are gone together. Nothing needs dumping again: fix what
+the store said above and send the same file with
+
+  make backup-upload FROM=${artifact}
+MSG
+  exit 3
+}
+
 command_dump() {
   local output="${1:-}"
   if [ -z "${output}" ]; then
@@ -137,6 +234,8 @@ its own backups is a host whose seizure hands over every one of them.
 MSG
     exit 1
   fi
+
+  resolve_upload
 
   local user name
   user="$(db_user)"
@@ -195,6 +294,53 @@ To restore it:
   HASHI_RESTORE_AGE_IDENTITY=/path/to/identity make restore FROM=<this file>
 See docs/deploy/runbook.md, "Backups".
 WARNING
+
+  # Last, so the final thing on the screen is where this artifact actually is. When the
+  # upload is off that is said rather than left to be assumed: a backup that never left
+  # the machine is not a covered backup, and silence here is how that gets believed.
+  if [ "${UPLOAD}" = "yes" ]; then
+    upload_artifact "${output}"
+  else
+    echo "" >&2
+    echo "This artifact is on this host and nowhere else. Offsite upload is switched off" >&2
+    echo "(HASHI_BACKUP_ENABLED); see the backup block in .env.example." >&2
+  fi
+}
+
+command_upload() {
+  local input="${1:-}"
+  [ -n "${input}" ] || usage
+  [ -f "${input}" ] || { echo "no such file: ${input}" >&2; exit 1; }
+
+  # Only the encrypted shape ever goes to a bucket. An artifact from before the encryption
+  # existed is a readable map of the fleet — every node's real address, including the leaf
+  # addresses no user is ever shown — and the one place it must never be put is somewhere
+  # somebody else holds. Sniffed from the file, like a restore, because the name proves
+  # nothing.
+  if [ "$(artifact_kind "${input}")" != "age" ]; then
+    echo "${input} is not an encrypted artifact, and only an encrypted artifact is" >&2
+    # Quoted heredoc: this text names shell commands, and an unquoted one would RUN the
+    # backticked make target instead of printing it — which is exactly what it did the
+    # first time it was written.
+    cat >&2 <<'MSG'
+sent offsite. A file this script wrote begins "age-encryption.org/v1". A plain gzipped
+dump reads as the fleet to anyone who obtains it — keep it on media you control and take
+a fresh backup with `make backup`, which encrypts before it writes. Nothing was sent.
+MSG
+    exit 1
+  fi
+
+  resolve_upload
+  if [ "${UPLOAD}" != "yes" ]; then
+    cat >&2 <<'MSG'
+
+Offsite upload is switched off, so there is nowhere to send this. Set HASHI_BACKUP_ENABLED=1
+and the HASHI_BACKUP_S3_* block in your env file first. Nothing was sent.
+MSG
+    exit 1
+  fi
+  upload_artifact "${input}"
+  echo "the artifact is unchanged on this host as well: ${input}" >&2
 }
 
 # Set while an artifact is staged inside the control container, so that an interrupted or
@@ -322,6 +468,7 @@ MSG
 
 case "${1:-}" in
   dump)    shift; command_dump "$@" ;;
+  upload)  shift; command_upload "$@" ;;
   restore) shift; command_restore "$@" ;;
   *)       usage ;;
 esac

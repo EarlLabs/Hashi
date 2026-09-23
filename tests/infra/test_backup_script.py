@@ -276,3 +276,162 @@ def test_no_make_target_loads_the_backup_overlay() -> None:
     refuses to start.
     """
     assert "docker-compose.backup.yml" not in MAKEFILE.read_text()
+
+
+# --- the upload, M28.3 --------------------------------------------------------
+
+UPLOADER = REPO / "deploy" / "backup" / "upload.py"
+UPLOAD_OVERLAY = REPO / "deploy" / "docker-compose.upload.yml"
+BASE_COMPOSE = REPO / "deploy" / "docker-compose.yml"
+
+
+@pytest.fixture(scope="module")
+def uploader() -> str:
+    return UPLOADER.read_text()
+
+
+def test_the_upload_is_settled_before_the_database_is_read(script: str) -> None:
+    """Same rule as the recipient: refuse while nothing has happened yet.
+
+    A host whose offsite block is half filled in is the normal state of a host being set
+    up. Discovering that after the dump leaves a fresh artifact on the disk and an operator
+    deciding whether it is safe where it is; discovering it first costs nothing.
+    """
+    dump = code_of(script, "command_dump")
+    assert "resolve_upload" in dump, "nothing works out whether this dump is going anywhere"
+    assert dump.index("resolve_upload") < dump.index("pg_dump"), (
+        "the upload is resolved after the database has already been read"
+    )
+
+
+def test_the_artifact_is_written_and_only_then_sent(script: str) -> None:
+    """Send from the file, not from the pipeline.
+
+    Uploading a stage of the pipe would mean the thing on this host and the thing in the
+    bucket are two different streams, either of which could be the truncated one — and the
+    local copy is what the operator is left holding when the store says no.
+    """
+    dump = code_of(script, "command_dump")
+    assert dump.index('> "${partial}"') < dump.index("upload_artifact")
+
+
+def test_a_failed_upload_keeps_the_artifact_and_has_an_exit_code_of_its_own(
+    script: str,
+) -> None:
+    """Exit 3: the dump exists and it did not leave the machine.
+
+    Neither 0 nor 1 would be true. 0 says an offsite backup happened; 1 says there is no
+    backup and sends the operator to take another one, when what they are holding is a
+    complete encrypted artifact that only needs sending. The panel (M28.6) keys on this
+    distinction, so it is part of the script's contract and not an implementation detail.
+    """
+    upload = code_of(script, "upload_artifact")
+    assert "exit 3" in upload, "a failed upload does not have its own exit code"
+    assert not re.search(r"\brm\b", upload), (
+        "the failure path deletes something — the artifact is the one thing the operator "
+        "still has"
+    )
+    # And the operator is told how to send what they are holding, without dumping again.
+    assert "make backup-upload FROM=" in script
+    assert re.search(r"^#\s+3\s+the artifact WAS written", script, re.MULTILINE), (
+        "the exit codes are not written down in the script's own header"
+    )
+
+
+def test_only_the_encrypted_shape_is_ever_sent_offsite(script: str) -> None:
+    """A pre-M28.2 artifact is a readable map of the fleet, and a bucket is somebody else's.
+
+    Those files exist in the world — the restore path still takes them on purpose — so the
+    one thing that must be impossible is sending one to an object store. Sniffed from the
+    file, like a restore, because the name proves nothing.
+    """
+    upload = code_of(script, "command_upload")
+    assert 'artifact_kind "${input}"' in upload
+    assert upload.index("artifact_kind") < upload.index("upload_artifact")
+    assert "only an encrypted artifact is" in script
+
+
+def test_the_credential_never_passes_through_the_script(script: str) -> None:
+    """The secret reaches one container, from compose, and nothing else ever holds it.
+
+    Not a variable in this script, not a command-line argument (a process list is readable
+    by every account on the host), and not the environment of the long-running control
+    plane, whose job is to face the internet.
+    """
+    code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+    assert "HASHI_BACKUP_S3_SECRET_ACCESS_KEY" not in code, (
+        "the credential is named in this script, so it passes through it"
+    )
+    assert UPLOAD_OVERLAY.is_file(), "the upload overlay is gone"
+    overlay = UPLOAD_OVERLAY.read_text()
+    assert "HASHI_BACKUP_S3_SECRET_ACCESS_KEY" in overlay
+    assert "ports:" not in overlay and "services:\n  control:\n" in overlay, (
+        "the upload overlay has grown beyond the variables it exists for"
+    )
+    # The one-off container, and nothing else: no `up`, no `exec` into the running plane.
+    assert re.search(r"COMPOSE_UPLOAD\[@\]\}\" run --rm --no-deps -T --entrypoint python3", script)
+    assert "HASHI_BACKUP_S3" not in BASE_COMPOSE.read_text(), (
+        "the base stack carries the bucket credential, so every control container has it"
+    )
+    assert "docker-compose.upload.yml" not in MAKEFILE.read_text(), (
+        "a Make target loads the upload overlay, which puts the credential in the stack"
+    )
+
+
+def test_the_uploader_can_only_write(uploader: str) -> None:
+    """One request, one method. There is no code path that reads, lists or deletes.
+
+    The credential on the host is PutObject-and-nothing-else because whoever seizes the box
+    holds it; a program that could delete would be a second place for that property to be
+    lost, and the first time anybody noticed would be after a seizure.
+    """
+    methods = re.findall(r'putrequest\(\s*"([A-Z]+)"', uploader)
+    assert methods == ["PUT"], f"the uploader issues {methods}"
+
+
+def test_the_uploader_names_no_provider(uploader: str, script: str) -> None:
+    """A reader of this code cannot tell which company holds the bucket — CLAUDE.md.
+
+    The protocol's own wire constants are not a provider: a signature algorithm name and a
+    header prefix are what every S3-compatible store implements, the same way every artifact
+    this project writes begins ``age-encryption.org/v1``. Anything else is a provider you
+    cannot rotate away from, written into code that was supposed to make it a field.
+    """
+    allowed = ("AWS4-HMAC-SHA256", "AWS4", "aws4_request", "x-amz-", "X-amz-", "x-amz")
+    # A short list of the names a "just make it upload" implementation reaches for. It is a
+    # negative list on purpose: naming one here forbids it, which is the opposite of the
+    # thing the rule is about.
+    providers = re.compile(
+        r"aws|amz|amazon|google|azure|cloudflare|backblaze|wasabi|yandex|selectel|minio",
+        re.IGNORECASE,
+    )
+    files = (
+        (UPLOADER, uploader),
+        (SCRIPT, script),
+        (UPLOAD_OVERLAY, UPLOAD_OVERLAY.read_text()),
+    )
+    for path, text in files:
+        stripped = text
+        for literal in allowed:
+            stripped = stripped.replace(literal, "")
+        found = providers.findall(stripped)
+        assert found == [], f"{path.name} names {sorted(set(found))}"
+
+
+def test_the_uploader_never_prints_the_secret(uploader: str) -> None:
+    """It is used to derive a signing key, in one place, and is printed nowhere.
+
+    An upload is a new thing that prints, and the output of a backup run is the sort of
+    thing that ends up in a mail spool, a terminal recording or — from M28.6 — a panel.
+    """
+    assert len(re.findall(r'config\["secret_key"\]', uploader)) == 1
+    for line in uploader.splitlines():
+        if re.search(r"say\(|Refusal\(", line):
+            assert "secret_key" not in line, f"a message interpolates the secret: {line.strip()}"
+
+
+def test_the_uploader_is_linted_by_this_zone() -> None:
+    """A new directory of Python that no verify command reads is a new blind spot."""
+    assert "deploy/backup" in MAKEFILE.read_text(), (
+        "make test-infra does not lint deploy/backup, so nothing checks the uploader"
+    )
