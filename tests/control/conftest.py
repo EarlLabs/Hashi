@@ -23,6 +23,7 @@ suite that silently passes without a database is a suite that proves nothing.
 import dataclasses
 import inspect
 import os
+import pathlib
 import socket
 from collections.abc import Iterator
 from typing import NamedTuple
@@ -132,8 +133,29 @@ def settle_window() -> tuple[float, float]:
 
 
 @pytest.fixture
+def backup_record(tmp_path) -> pathlib.Path:
+    """Where this suite's control plane reads the host's backup record from — M28.6.
+
+    A path under the test's own ``tmp_path`` which DOES NOT EXIST unless a test writes it,
+    so every other test in this zone draws the Overview against "no backup has ever been
+    recorded on this host" — which is what a control plane with no backup schedule beside
+    it really sees, and what the default (a read-only mount that arrived empty) produces
+    in the field.
+
+    A fixture rather than a literal for ``settle_window``'s reason: the file that is ABOUT
+    the backup standing overrides it to a record it wrote itself, so the value lives where
+    the scenario is, and a value the suite never moves is a value no test can prove is
+    read.
+    """
+    return tmp_path / "backup" / "last-run.json"
+
+
+@pytest.fixture
 async def settings(
-    clean_database, operator_password_hash: str, settle_window: tuple[float, float]
+    clean_database,
+    operator_password_hash: str,
+    settle_window: tuple[float, float],
+    backup_record: pathlib.Path,
 ) -> Settings:
     return Settings(
         secret_key=TEST_SECRET_KEY,
@@ -168,6 +190,10 @@ async def settings(
         # The tests that rely on this assert the premise first, so moving it back shows
         # up as a failure rather than as a test quietly proving nothing.
         audit_retention_days=9,
+        # Off its declared default — the read-only mount inside the container — because
+        # the suite must not depend on what is on the machine running pytest, and because
+        # the one file that is about this points it at a record it wrote.
+        backup_record=backup_record,
     )
 
 

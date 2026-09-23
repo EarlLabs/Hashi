@@ -58,6 +58,7 @@ from control.app.services import (
     addresses,
     apply,
     audit,
+    backups,
     keymaterial,
     nodes,
     relay,
@@ -799,6 +800,300 @@ class StateChoice:
     withheld: str | None = None
 
 
+# --- the backups this host took, as the Overview says it (M28.6) -------------------
+
+# THE SENTENCE THIS SCREEN EXISTS NOT TO INFLATE, said under every one of the six
+# standings including the good one. It opens with the same words `make backup-status`
+# closes with, deliberately: the operator meets this fact in two channels and they must
+# not be two different strengths of claim.
+#
+# The distinction it is defending: a successful upload proves the store received exactly
+# those bytes and accepted them (the payload's digest is inside the signature), and proves
+# nothing about a minute later. The credential this host holds may only WRITE — there is
+# no GET, LIST or DELETE code path in the product at all — so nothing here can look in the
+# bucket, and nothing in this repository asserts its retention or ever can: that is a
+# setting in somebody else's account, checked by the owner with an administrative
+# credential this code has no standing to hold (docs/deploy/runbook.md, "The retention
+# this host's own key cannot reach").
+#
+# Which is why this screen says how the RUNS went and never that a backup exists. A green
+# tick is exactly how the difference gets lost.
+BACKUP_NOT_THE_BUCKET = (
+    "What this does NOT say: whether any of those artifacts is still in the bucket. The "
+    "credential on this host may only write, so it cannot look — nothing in this panel "
+    "has ever read that store, and no test in this project asserts what it keeps. The "
+    "only thing that proves a backup is a restore: docs/deploy/runbook.md, under "
+    "“Backups”."
+)
+
+# What each of the writer's outcome words means, in a clause that goes after a colon.
+# M28.3's own pinned wording, so the panel, the script's output and the runbook say the
+# same thing about the same run.
+#
+# NOT a closed match statement, and the fallback is the reason: the set is closed today
+# and asserted in the infra zone, but a later step adding a sixth word must not turn this
+# screen into "the record is unreadable". An unknown word is named verbatim instead, which
+# is honest and is the smallest thing that can go wrong here.
+_BACKUP_OUTCOMES = {
+    "offsite": "written here, and the object store accepted it",
+    "on-this-host-only": "written, and this artifact is on this host and nowhere else",
+    "not-sent": "written, and it did NOT leave this machine",
+    "no-artifact": "no artifact was produced",
+    "refused": "refused before anything was dumped",
+}
+
+# Why the appointed time is in the zone it is in. ``configured`` says itself and gets
+# nothing. The other three all resolved to UTC, and the difference between them is what
+# the operator has to fix, so each says which one happened.
+#
+# No entry maps a zone to a place, here or anywhere: the zone is an IANA NAME and this
+# panel prints the name it was given. Turning "Europe/Moscow" into a country on a screen
+# is the panel deciding where its operator is, which is not its business and is a fact
+# about a person sitting in the one record a seizure reads.
+_BACKUP_ZONE_NOTES = {
+    "configured": "",
+    "unset": " No zone is configured for the schedule, so that is the host clock's own "
+             "time.",
+    "unknown": " The zone configured is not one that host's zone database has, so UTC "
+               "was used instead.",
+    "no-zone-database": " That host has no zone database at all, so UTC was used "
+                        "instead.",
+}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BackupStanding:
+    """Where the backups stand, as the Overview draws it.
+
+    ``loud`` is the whole of the styling decision and it is a boolean rather than a
+    severity, because this console has exactly two weights for a standing fact: the
+    bordered banner frame, and a muted note. It is deliberately NOT the failure banner's
+    red — UI-PATTERNS §4 licenses that hue for a request that was refused or failed, which
+    is an answer to something the operator just pressed, and widening it to a standing
+    condition is how the one colour that means "you did that and it did not work" stops
+    meaning anything. §4's own rule is that the severity is carried by the WORD, and
+    ``label`` is that word. (The console's banner scan enforces the other half of the same
+    pairing: the neutral frame takes ``role="status"``, and ``role="alert"`` belongs to the
+    failure frame alone — so the choice of frame settles the role too.)
+
+    Which leaves the escalation from a blip to six weeks to the sentence, and that is
+    where it belongs: one failed run and a schedule that has been dead since August are
+    the same standing, and what separates them is "the last one that succeeded was 19
+    hours ago" against "43 days ago". A second colour would have to pick a day on which
+    the panel starts shouting, and the operator would learn the shout rather than the
+    number.
+    """
+
+    # The word over the sentence, ``None`` in the one state that is not drawn as a banner.
+    label: str | None
+    headline: str
+    detail: str
+    # ``BACKUP_NOT_THE_BUCKET``, carried on the object rather than pulled in by the
+    # template, for the reason every other console sentence is composed here: so a test
+    # asserts the constant appears under every standing rather than trusting a template
+    # to include it.
+    caveat: str
+    loud: bool
+
+
+def _how_long(delta: datetime.timedelta) -> str:
+    """"5 hours" / "43 days" — a gap, in the coarsest unit that still says something.
+
+    Hours up to two days and days after that, which is the same boundary
+    ``backups.SUCCESS_STALE_AFTER`` sits on: everything this panel calls recent is said in
+    hours, and everything it does not is said in days. "less than an hour" rather than
+    "0 hours" for the first sixty minutes, because a backup taken twenty minutes ago is
+    the one case where the number would read as none.
+    """
+    hours = int(delta.total_seconds() // 3600)
+    if hours < 1:
+        return "less than an hour"
+    if hours < 48:
+        return _plural(hours, "hour", "").strip()
+    return _plural(hours // 24, "day", "").strip()
+
+
+def _ago(delta: datetime.timedelta | None) -> str:
+    """The same gap, as a moment in the past. ``None`` never reaches here."""
+    return f"{_how_long(delta)} ago" if delta is not None else "at no recorded time"
+
+
+def _backup_outcome(outcome: str) -> str:
+    return _BACKUP_OUTCOMES.get(outcome, f"the run reported “{outcome}”")
+
+
+def _backup_schedule(record: backups.Record) -> str:
+    """When the host says it takes one, and anything wrong with how it was configured.
+
+    The time and the zone are printed exactly as the host resolved them. The zone is an
+    IANA name and stays one — see ``_BACKUP_ZONE_NOTES``.
+    """
+    note = _BACKUP_ZONE_NOTES.get(record.zone_source, "")
+    if record.at_source != "configured":
+        note += (
+            " The time configured for it could not be read, so the schedule fell back "
+            f"to {record.at}."
+        )
+    return f"The host takes one a day at {record.at} {record.zone}.{note}"
+
+
+def _backup_gap(record: backups.Record) -> str:
+    """Days the schedule found had no backup at all — history, and never an alarm.
+
+    ``missed_total`` is cumulative and survives the run that ends a gap, so a host that
+    was off for a fortnight in June still carries fourteen in December. Stating it beside
+    a fresh backup is a fact about this record's whole life; ESCALATING on it would mean
+    a panel that never stops warning about a fortnight nobody can now do anything about.
+    """
+    if record.missed_total <= 0:
+        return ""
+    recent = ", ".join(record.missed_dates[:3])
+    tail = f" — most recent {recent}." if recent else "."
+    return f" Days with no backup at all since this record began: {record.missed_total}{tail}"
+
+
+def backup_standing(reading: backups.Reading) -> BackupStanding:
+    """The six answers, in the words the operator reads.
+
+    Composed from a ``Reading`` and nothing else — no clock, no file, no settings object —
+    so every sentence here is a pure function of what was read, and the tests drive all
+    six without a filesystem.
+
+    WHAT IS NOT SAID, under any of them: that a backup exists. Every branch talks about
+    RUNS — one succeeded, one failed, none has happened — and closes with
+    ``BACKUP_NOT_THE_BUCKET``. The good state is the one that matters here: "last backup
+    6 hours ago: written here, and the object store accepted it" is the strongest claim
+    this host is entitled to, and it is a claim about an upload that was accepted, not
+    about an object that is still there.
+    """
+    record = reading.record
+    match reading.standing:
+        case backups.Standing.ABSENT:
+            return BackupStanding(
+                label="not recorded",
+                headline="No backup has ever been recorded on this host.",
+                detail=(
+                    f"There is nothing at {reading.path}. Either the schedule was never "
+                    "installed, or this control plane is not running on the machine that "
+                    "takes the backups — a mount that arrives empty reads exactly like a "
+                    "host that has never run one, so this is “nothing recorded” rather "
+                    "than “something is broken”. On that host: make backup-status prints "
+                    "what this panel is reading, make backup-schedule installs the "
+                    "schedule, make backup takes one now."
+                ),
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=True,
+            )
+        case backups.Standing.UNREADABLE:
+            return BackupStanding(
+                label="not readable",
+                headline=(
+                    "There is a backup record on this host and this panel could not "
+                    "read it."
+                ),
+                detail=(
+                    f"{reading.path} is not the file the backup schedule writes: either "
+                    "it is damaged, or it was written by a newer version of that script "
+                    "than this panel knows. Nothing has been assumed from it — this "
+                    "screen is not telling you backups are working and not telling you "
+                    "they are failing. Read it on the host with make backup-status."
+                ),
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=True,
+            )
+        case backups.Standing.NEVER if reading.failed_since:
+            failure = record.last_failure
+            return BackupStanding(
+                label="no backup",
+                headline="No backup has ever succeeded on this host.",
+                detail=(
+                    f"The last run was {_ago(reading.since_failure)}: "
+                    f"{_backup_outcome(failure.outcome)}, exit {failure.exit_code}. "
+                    f"{_backup_schedule(record)}{_backup_gap(record)} "
+                    "make backup-status on the host prints this record in full."
+                ),
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=True,
+            )
+        case backups.Standing.NEVER:
+            return BackupStanding(
+                label="no backup",
+                headline="No backup has run on this host yet.",
+                detail=(
+                    "The schedule has been resolved and nothing has been recorded under "
+                    f"it. {_backup_schedule(record)}{_backup_gap(record)} make backup on "
+                    "the host takes one now, without waiting for the appointed time."
+                ),
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=True,
+            )
+        case backups.Standing.SILENT:
+            success = record.last_success
+            return BackupStanding(
+                label="silent",
+                headline=(
+                    "Nothing has been backed up on this host for "
+                    f"{_how_long(reading.since_success)}, and nothing has failed either "
+                    "— so nothing has been trying."
+                ),
+                detail=(
+                    f"The last run that succeeded was {_ago(reading.since_success)}: "
+                    f"{_backup_outcome(success.outcome)}. {_backup_schedule(record)}"
+                    f"{_backup_gap(record)} Check on that host that the schedule is "
+                    "still installed — make backup-schedule is idempotent, and make "
+                    "backup-status prints this record in full."
+                ),
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=True,
+            )
+        case backups.Standing.FAILING:
+            failure = record.last_failure
+            return BackupStanding(
+                label="failing",
+                headline=(
+                    "Backups on this host are failing. The last one that succeeded was "
+                    f"{_ago(reading.since_success)}, and every run since has failed."
+                ),
+                detail=(
+                    f"The last run was {_ago(reading.since_failure)}: "
+                    f"{_backup_outcome(failure.outcome)}, exit {failure.exit_code}. "
+                    f"{_backup_schedule(record)}{_backup_gap(record)} make "
+                    "backup-status on the host prints this record in full."
+                ),
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=True,
+            )
+        case backups.Standing.FRESH:
+            success = record.last_success
+            return BackupStanding(
+                label=None,
+                headline=(
+                    f"Last backup {_ago(reading.since_success)}: "
+                    f"{_backup_outcome(success.outcome)}."
+                ),
+                detail=f"{_backup_schedule(record)}{_backup_gap(record)}",
+                caveat=BACKUP_NOT_THE_BUCKET,
+                loud=False,
+            )
+
+    # ``Standing`` is a closed enum one module over and every member of it is answered
+    # above. A member added there and not here would otherwise fall out of this function
+    # as ``None`` and reach a template, so it says so on screen instead — the same refusal
+    # to guess the UNREADABLE branch makes about a file, one layer up. It does not claim
+    # the record was bad: it was read, and the fault is this function's.
+    return BackupStanding(
+        label="not readable",
+        headline="This panel has nothing to say about the backups on this host.",
+        detail=(
+            f"The record at {reading.path} was read and this panel has no sentence for "
+            "what it found, which is a fault in the panel and not in the backups. Read "
+            "it on the host with make backup-status."
+        ),
+        caveat=BACKUP_NOT_THE_BUCKET,
+        loud=True,
+    )
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Overview:
     stats: list[Stat]
@@ -814,6 +1109,11 @@ class Overview:
     # No default, like every field above it: this screen is built in one place, and a
     # default here would be a second place the sentence could come from.
     limit: str
+    # Where the backups on this host stand — M28.6. On this screen and not on a screen of
+    # its own because the criterion is that a run which does not land is seen WITHOUT
+    # anybody going to look for it, and this is the screen the panel opens on. See
+    # ``backup_standing``.
+    backup: BackupStanding
 
 
 async def drift_of(session: AsyncSession, node: Node) -> str:
@@ -2097,8 +2397,14 @@ def tear_down_summary(affected: list[str]) -> str:
     )
 
 
-async def overview(session: AsyncSession) -> Overview:
+async def overview(session: AsyncSession, *, backup: backups.Reading) -> Overview:
     """The Overview screen's whole content, in one call.
+
+    ``backup`` is read by the CALLER and handed in, which is the only thing on this screen
+    that does not come out of the database. It is a file on a read-only mount, so reading
+    it is I/O of a kind this module does none of anywhere else, and a route that wants the
+    Overview has to have gone and got it — see ``panel/routes.py``. What arrives here is
+    already a value, so everything below stays a pure function of what was read.
 
     The four stat cards are decision 6's replacements, in the design's own order:
     nodes active, active users, hops established, transports serving. Each is a fact
@@ -2161,6 +2467,7 @@ async def overview(session: AsyncSession) -> Overview:
     return Overview(
         doubts=fleet_doubt(rows),
         limit=COUNTERS_COUNT_CONFIGURATION,
+        backup=backup_standing(backup),
         stats=[
             Stat(
                 kicker="nodes active",

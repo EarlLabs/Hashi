@@ -21,6 +21,49 @@
   </div>
 
   <div class="loaded stack-8">
+
+    {#
+      WHERE THE BACKUPS STAND — M28.6, and the first thing on the screen the panel opens
+      on, above the fleet's own counts.
+
+      Here rather than on a screen of its own because the plan's criterion is that a run
+      which does not land is seen WITHOUT anybody going to look for it, and a screen
+      nobody opens is where a six-week silence goes unnoticed. Above the four cards rather
+      than under them because it is the only thing on this screen that can be six weeks
+      out of date: the counts are configuration and are true the instant they are drawn.
+      Not the Nodes screen either — every row there is about one node, and whether this
+      control plane's own database is being copied is not a fact about any of them.
+
+      TWO WEIGHTS AND NO THIRD. A standing that wants the eye gets the same bordered
+      `.banner` frame the Overview's notes use, with the severity in the LABEL, per
+      UI-PATTERNS §4; the good state gets a muted note. It is deliberately not
+      `.banner-failure`: that red belongs to a request the operator just made and that
+      was refused or failed (see panel/banner.html), and spending it on a standing
+      condition is how it stops meaning anything. `role="status"` follows from that and
+      is not a second decision — the console's own banner scan pairs `alert` with the
+      failure frame and `status` with this one, and nothing here went wrong in the
+      request that drew the screen. What separates one failed run from six weeks of them
+      is the sentence — "19 hours ago" against "43 days ago" — which is composed in
+      services/console.py like every other word on this screen.
+
+      The caveat under it is drawn under EVERY standing including the good one, and it is
+      the one line here that must never be trimmed for looks: this host's record says how
+      its own runs went and knows nothing about whether an artifact is still in the
+      bucket. A green line on a screen is exactly how that gets read as "backups are
+      fine".
+    #}
+    {% if overview.backup.loud %}
+    <div class="banner" role="status">
+      <span class="banner-label">{{ overview.backup.label }}</span>
+      <span>{{ overview.backup.headline }} {{ overview.backup.detail }}</span>
+    </div>
+    {% else %}
+    <p class="text-muted section-note">
+      {{ overview.backup.headline }} {{ overview.backup.detail }}
+    </p>
+    {% endif %}
+    <p class="text-muted section-note">{{ overview.backup.caveat }}</p>
+
     <div class="grid-4">
       {% for stat in overview.stats %}
       <div class="card blueprint">

@@ -9,6 +9,8 @@ HOW:  ``Settings()`` raises when a required value is absent. Nothing else in the
       codebase may read the environment directly.
 """
 
+import pathlib
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -130,6 +132,21 @@ class Settings(BaseSettings):
         ge=AUDIT_RETENTION_MIN_DAYS,
         le=AUDIT_RETENTION_MAX_DAYS,
     )
+
+    # Where this control plane READS the backup record from — M28.6. The file is written
+    # on the host by scripts/backup-run.sh after every run and mounted in here read-only
+    # (deploy/docker-compose.yml), which is what lets the panel report what the host
+    # recorded while being unable to invent a success or erase a failure.
+    #
+    # The default IS the mount point, so nothing has to be added to an env file for the
+    # panel to answer — and a machine where the mount arrived empty, or where this
+    # process is not running beside the backups at all, is a file that is not there,
+    # which the panel reads as "nothing recorded" rather than as an error.
+    #
+    # A setting rather than a constant for the reason the two node ceilings above are
+    # settings: the suite points it at a record it wrote itself, which is how it stays
+    # honest that the value is read at all.
+    backup_record: pathlib.Path = pathlib.Path("/var/lib/hashi/backup/last-run.json")
 
     @field_validator("operator_password_hash")
     @classmethod

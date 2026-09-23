@@ -71,6 +71,7 @@ from control.app.panel import wording
 from control.app.services import (
     addresses,
     apply,
+    backups,
     console,
     health,
     nodes,
@@ -205,6 +206,25 @@ def _screen(
     return TEMPLATES.TemplateResponse(request, "pages/console.html", payload)
 
 
+async def _overview(request: Request, session: AsyncSession) -> console.Overview:
+    """The Overview's content, and the one thing on it that is not a database read.
+
+    The backup record is a file on a read-only mount, written by the host's own schedule
+    (M28.5), so it is fetched here — at the door, where every other dependency of a screen
+    is resolved — and handed to ``console.overview`` as a value. Both routes below go
+    through this rather than each reading the file, so the screen and its refresh cannot
+    come to two accounts of one host's backups.
+
+    ``backups.read`` never raises: a missing mount, a damaged record or a path pointing at
+    something else all come back as a reading the screen has a sentence for. That is
+    deliberate and it is the reason there is no try/except here — a shell script that
+    wrote a file badly must not be able to take the panel's front page down.
+    """
+    return await console.overview(
+        session, backup=await backups.read(request.app.state.settings.backup_record)
+    )
+
+
 @router.get("/", response_class=HTMLResponse)
 async def overview(request: Request, session: AsyncSession = Depends(session_dependency)):
     """Overview — the fleet's health, in facts about the fleet and never about a person."""
@@ -217,7 +237,7 @@ async def overview(request: Request, session: AsyncSession = Depends(session_dep
             "what is serving, who can dial it, and whether the nodes are running "
             "what you told them to"
         ),
-        context={"overview": await console.overview(session)},
+        context={"overview": await _overview(request, session)},
     )
 
 
@@ -227,7 +247,9 @@ async def overview_body(
 ):
     """The Overview's content on its own, for the refresh after a mutation."""
     return TEMPLATES.TemplateResponse(
-        request, "panel/overview_body.html", {"overview": await console.overview(session)}
+        request,
+        "panel/overview_body.html",
+        {"overview": await _overview(request, session)},
     )
 
 

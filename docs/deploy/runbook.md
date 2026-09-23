@@ -1473,6 +1473,20 @@ ever. The control container reads it through a read-only mount, which is how the
 answer *when did a backup last succeed, and has one failed since* without a credential that
 could look in the bucket. Nothing on this host has one: see the section above.
 
+**Where the panel says it.** At the top of the **Overview** — the screen `/panel/` opens on
+— above the four counts, because a run that did not land has to be read without anybody
+going to look for it. It says one of six things: *no backup has ever been recorded on this
+host* (which is also what an empty mount says, and it means nothing recorded rather than
+something broken); *there is a record and this panel could not read it*, assuming nothing
+either way; *no backup has ever succeeded*; *nothing has been trying* — one succeeded, it is
+days old, and nothing has failed since, which is what a schedule that was uninstalled looks
+like; *backups are failing*; and a quiet muted line for a recent one. There is no colour
+change between a blip and a disaster and there is not going to be one: what separates them
+is the sentence — *"the last one that succeeded was 19 hours ago"* against *"43 days ago"* —
+because a banner that shouts on the first failure is a banner that is ignored by the
+fortieth. Every one of the six, the quiet one included, closes with the same caveat
+`make backup-status` does.
+
 A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
 was written, **3** the artifact exists and did not leave this machine. Only **1** is retried
 automatically, hourly, up to six times a day — a stack that had not finished booting is the
@@ -1515,7 +1529,9 @@ skip a day. Everything else is identical: the same script, the same record, the 
 **What none of this proves.** That the artifact of any of those runs is still in the
 bucket. This host cannot look — see *The retention this host's own key cannot reach*, below
 — and a green `make backup-status` is a statement about what happened here, not about what
-is kept there. The only check is a restore.
+is kept there. **The panel's line is the same statement in a second place, and no stronger
+for being on a screen**: it is read from this host's own record, and nothing in the control
+plane has ever read that bucket. The only check is a restore.
 
 ### The retention this host's own key cannot reach
 
