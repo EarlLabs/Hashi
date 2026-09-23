@@ -318,3 +318,120 @@ Heading: **"The retention this host's own key cannot reach"** (quoted in `.env.e
 Pinned sentences: **"nobody loses a backup by mistake"** / **"nobody loses one on
 purpose"**, and **"No test in this tree asserts any of the above"**. Verdict cells:
 **"Required. This is the mechanism."** and **"Not a retention mechanism."**
+
+## M28.5 — the schedule carries no hour, and a missed day is written down
+
+`make test-infra` 309 passed (was 263, +46); `make verify` green (e2e 203, was 199,
+**no skips**). Two review rounds; round 1 found a High that both gates had missed.
+
+1. **The mechanism is ONE cron entry, `*/15 * * * * scripts/backup-run.sh tick`**, in the
+   crontab of the account that already runs `make up` (`make backup-schedule`, idempotent,
+   no root, no new package, no image). **It carries no hour, and that is the design.**
+   `0 4 * * *` is a promise cron cannot keep — a box off at 04:00 misses the minute and
+   nothing records that it did. All scheduling lives in the script, so cron's own timezone
+   (implementations disagree) decides nothing. **Do not "simplify" this to an hour in the
+   crontab.** A systemd timer (`OnCalendar=*:0/15`, `Persistent=true`) is the documented
+   equivalent for a host with no `crontab`; an alternative, not the default.
+
+2. **A compose scheduler service was REJECTED and must not be reopened.** It would need
+   `/var/run/docker.sock` in a long-running container — root on the host — plus the env
+   file, including `HASHI_SECRET_KEY`, `POSTGRES_PASSWORD` and the S3 credential, because
+   the dump comes out of `db` and is encrypted in `control`.
+   `deploy/warden/docker-compose.yml` already refuses that mount once.
+
+3. **`HASHI_BACKUP_AT` is HH:MM in `HASHI_BACKUP_TZ`, an IANA zone NAME, never an
+   offset.** Every wrong value still takes the backup and is recorded: unset → host clock,
+   `zone_source=unset` (**no country is ever defaulted to**); unknown or path-shaped zone →
+   the same, `unknown`; bad time → `04:00`, `at_source=malformed`. Checked, not assumed:
+   **`TZ=Nowhere/Useful date` prints UTC and exits 0**, so the zone is looked up rather
+   than trusted — and refused **by name** first (`/*|.*|*/../*|*/..`), because
+   `../../../../etc/passwd` names a real file under the zone database and was otherwise
+   recorded as a configured zone. Residual, accepted: a symlink inside that root-owned
+   database pointing out of it would still pass.
+
+4. **A box that was down takes ONE late run, not one per missed day** — a dump is a copy
+   of the database as it is now. The gap days go into `missed_dates` by date and **survive
+   the run that ends the gap**; `missed_total` is cumulative.
+
+5. **The record is `backups/state/last-run.json`**, mode 0644, atomic, **one key per
+   line** so a shell with no JSON parser can read it. Closed key set, asserted:
+   `schema, written_at, at, at_source, zone, zone_source, offsite, due_date, attempts,
+   retry_not_before, last_attempt, last_success, last_failure, missed_dates,
+   missed_total`. The three nested entries are `{at, due_date, exit_code, outcome}` or
+   `null`. **"Has one failed since?" is `last_failure.at > last_success.at`.** `outcome` ∈
+   `offsite | on-this-host-only | not-sent | no-artifact | refused`, derived from M28.3's
+   exit code plus `HASHI_BACKUP_ENABLED` — **never by parsing output**. **Nothing about a
+   person, ever**, asserted statically and against the real fleet in e2e.
+
+6. **M28.6 reads `/var/lib/hashi/backup/last-run.json`** — `deploy/docker-compose.yml`
+   mounts `../backups/state` there **read-only**, so the panel reads and the control plane
+   can neither invent a success nor erase a failure. **No deploy change needed in M28.6.**
+   On a remote daemon the mount arrives empty, which reads as "nothing recorded".
+
+7. **`scripts/backup-run.sh` is the one script that opens the env file**, and may read
+   exactly three non-secret names (`HASHI_BACKUP_AT`, `HASHI_BACKUP_TZ`,
+   `HASHI_BACKUP_ENABLED`). The whitelist is enforced (`exit 2`) and the reviewer attacked
+   it — substring collisions, comment injection, shell expansion — and could not get
+   anything to stdout, stderr, the record or a trace. `scripts/backup.sh` still opens
+   nothing. **Adding a fourth name is how a secret gets read: don't.**
+
+8. **Exit codes are M28.3's, unchanged and passed through.** `1` is retried hourly, six
+   times a day; **`3` is NOT retried** — the artifact is on disk and re-dumping fills it
+   with copies of the same database; the remedy stays `make backup-upload FROM=<path>`.
+
+9. **`make backup` now goes through `scripts/backup-run.sh now`.** Same output, same exit
+   codes, plus the record — otherwise the panel reports a host as un-backed-up an hour
+   after its operator backed it up. It takes the same lock, so `make backup` during a tick
+   exits 1.
+
+10. **The read-only mount introduced a root-owned-directory hazard, handled.** A bind
+    mount whose source is missing is created by dockerd as root. `make env` and
+    `panel-bootstrap.sh` both `mkdir -p backups/state` before any `up`, and
+    `ensure_state_dir` refuses **loudly** with the `chown` rather than skipping.
+
+### Round 1's findings — the leading zero, and the zone that was a path
+
+11. **A leading zero is OCTAL to `$(( ))` and to `printf %d`, and it was fatal.**
+    `HASHI_BACKUP_AT=08:xx`/`09:xx` — valid, in range, accepted as `configured` — killed
+    the tick under `set -e` **before any record was written**, so `missed_dates` never grew
+    and the panel would have shown nothing wrong. **Worse than the `malformed` fallback,
+    which at least still backs up.** Both gates stayed green because no test picked those
+    hours. Fixed with `10#`, and the sweep found the same shape in the integers read back
+    **out of the record** (`attempts`, `missed_total`, `exit_code`) — that is what
+    `as_number()` is for, because a file on a disk is where a hand edit puts an `08`.
+    Checked empirically so nobody re-derives it: **`[ 08 -ge 6 ]` is SAFE** (POSIX `test`
+    is base 10) while `[[ 08 -ge 6 ]]` and `$((08+1))` both error; and **no `date +%d`/`+%m`
+    reaches arithmetic** — every date is string-compared or handed back to `date -d`.
+
+12. **The env-file secrecy check runs on every invocation, not in one test.**
+    `run()` in `tests/infra/test_backup_schedule.py` asserts two planted secrets are absent
+    from stdout, stderr **and the record** after each of the 46 calls — and it was proven to
+    fire by inserting a deliberate leak. Put new scheduling tests through `run()` and they
+    inherit it; a test that calls the script directly does not.
+
+### How to test what M28.5 built
+
+`tests/infra/test_backup_schedule.py` (46 tests, ~7s, **no Docker**). **The seam is the
+`due` verb**: it answers "what would `tick` do right now", including `missed=`, and changes
+nothing — so every scheduling decision is reachable without dumping a database and without
+a test backdoor. Drive it with `seed(state, …)` and `env_file(tmp, …)`, with `ENV_FILE` and
+`HASHI_BACKUP_STATE_DIR` in a **stripped** env, as cron would.
+
+**Never let a test touch the real crontab** — the installer's round trip was exercised by
+hand; the suite only reads the script's text. **Not proven anywhere, and say so rather than
+implying it: that a host's `cron` daemon invokes a `*/15` line.** That needs a wall-clock
+wait on a quarter-hour boundary in a privileged container and would prove cron, not hashi.
+
+The e2e `schedule_scenarios()` runs inside the `dumped` fixture **before**
+`offsite_scenarios()`, which leave the env file pointing at a torn-down store. Artifacts
+land in the checkout's `backups/` and are deleted on the way out, so **read any bytes you
+need before the `finally`.**
+
+### Wording later steps must match
+
+Runbook heading: **"When the backup runs, and how you know it did"**. Make verbs:
+**`make backup-schedule` / `backup-unschedule` / `backup-status`**. `status` prints **"No
+backup has ever been recorded on this host."**, **"last success:"**, **"last attempt:"**,
+**"FAILED SINCE THE LAST SUCCESS:"**, **"days with no backup:"**, and closes with **"What
+this does NOT say: whether any of those artifacts is still in the bucket."** — **M28.6 must
+not inflate that last one.**
