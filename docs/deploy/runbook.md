@@ -1307,10 +1307,16 @@ make backup                                       # → backups/hashi-<timestamp
 make backup-upload FROM=backups/hashi-<...>.sql.gz.age  # send one that is already written
 HASHI_RESTORE_AGE_IDENTITY=/path/to/identity \
   make restore FROM=backups/hashi-<...>.sql.gz.age  # destructive, so the path is required
+make restore-from-bucket                          # the whole rebuild, on a machine that
+                                                  # has never run this — see below
 ```
 
-Restore is destructive and never picks "the latest one" for you — that is not a decision a
-Makefile gets to make.
+`make restore` is destructive and never picks "the latest one" for you: it is given a file
+you are already holding, and choosing between files you can see is not a decision a
+Makefile gets to make. `make restore-from-bucket` is the other case and does choose,
+because there the artifacts are in a bucket you cannot see into at all and the alternative
+is a restore that cannot be started — see *Coming back from the bucket, on a machine that
+has never run this*, below, for how it chooses and what it prints.
 
 **The file `make backup` writes is encrypted, whole, before it reaches the disk.** It is
 `age` ciphertext, addressed to the public key in `HASHI_BACKUP_AGE_RECIPIENT`, and this
@@ -1370,6 +1376,106 @@ which one it found before it touches anything. Those older files are **not** saf
 they are a map of the fleet to anyone who opens them, with every node's real address,
 including the leaf addresses no user is ever shown. Keep them on media you control, and
 replace them with a fresh backup at the first opportunity.
+
+### Coming back from the bucket, on a machine that has never run this
+
+The day this is used is the day the box is gone. What you have is a bare machine, this
+repository, and three things you are carrying. One command does the rest:
+
+```bash
+# the runtime first — a genuinely bare host has none of docker, git or make; see
+# "What every box must already have" above. This command does not install one for you.
+git clone <this repo> hashi && cd hashi
+cp .env.example .env    # fill in HASHI_SECRET_KEY, the hostnames, the operator password
+                        # hash and the database password. Nothing else is needed.
+
+HASHI_RESTORE_AGE_IDENTITY=/path/to/hashi-backup-identity.txt \
+HASHI_RESTORE_S3_ACCESS_KEY_ID=<a key that may list and get> \
+HASHI_RESTORE_S3_SECRET_ACCESS_KEY=<its secret> \
+  make restore-from-bucket
+```
+
+That installs the control plane on this machine, reads the bucket, takes the newest
+artifact that actually opens, and restores it. It is safe to run again after any failure.
+
+**It does not move DNS, it does not re-issue the delivery endpoint's certificate, and it
+tells no user anything** — the three that decide whether a restored control plane serves
+anybody. They are the section immediately below, and the command says them again on its
+last screen.
+
+**`HASHI_SECRET_KEY` goes in `.env` here; the other two never do.** That is not the design
+leaking — it is where the design puts it. The control plane cannot start without that key
+and cannot read one node or user credential without the *right* one, so it belongs in this
+machine's own env file exactly as it belonged in the lost machine's. What must never be
+written onto a control-plane host is the **age identity** and the **read credential for the
+bucket**: those are `HASHI_RESTORE_*`, they are handed to the command in its environment at
+the moment it runs, and the command reads them from there and nowhere else. Putting them in
+`.env` is not a working shortcut — it refuses, and says where they belong.
+
+**Which object it takes.** It lists everything under the prefix, prints the newest ten with
+the store's own timestamps, and takes the newest. The order is the **store's**
+`LastModified`, not the object's name: the name is chosen by whichever key wrote the
+object, and on a live control plane that is a key an attacker would hold. If the newest
+does not open, it says so and walks back — up to five — and each attempt names what was
+wrong with the one before it. `make restore-from-bucket OBJECT=<name>` takes exactly the
+one you name and does not walk.
+
+Unlike `make restore`, this one *does* choose for you, and the difference is the point:
+`restore` is given a file you are holding, and here you cannot see into the bucket at all.
+What it chose is printed beside everything it did not choose.
+
+**The artifact opens before anything is asked of you.** It is decrypted and checked to be a
+whole gzip stream *before* the destructive confirmation, so nobody types a database name to
+authorise a restore that was always going to fail. Every object it fetched is left in
+`backups/`, mode 0600, still encrypted.
+
+**What each failure says, because at 3am "it did not work" is the difference between five
+minutes and an hour.** Every one of them names which of the three inputs is wrong:
+
+| What is wrong | What you get |
+|---|---|
+| No container runtime, no compose plugin, or a daemon that is not answering | Three different sentences, each naming which one, and *"Nothing has been fetched and nothing has been changed"*. `git` and `make` cannot be the problem here — they are what put this checkout on the machine and what ran the command |
+| No `.env` | The copy-and-fill line, and why that file is deliberately in no backup |
+| The env file is one compose cannot parse | The file and the line number, never the line — see *When the backup runs* |
+| `HASHI_SECRET_KEY` missing from `.env` | The bootstrap refuses before anything is built, and never generates one |
+| `HASHI_RESTORE_AGE_IDENTITY` unset or not a file | Named as the private half you carry, with the form to supply it in |
+| The read credential is not in the command's environment | Named, with the reminder that the key in `.env` may only write and is not the one to reach for |
+| Endpoint, region or bucket unresolvable | Every missing name at once, and that three of them may come from the `HASHI_BACKUP_S3_` block instead |
+| The store refuses the credential | *"A restore needs a credential that may LIST and GET this bucket"* — the write-only key produces exactly this, and it is the most likely mistake on the list |
+| No such bucket | Named as the bucket and not the key, because the credential answered |
+| Nothing under the prefix | *"The credential works — this is the bucket or the prefix"* |
+| The identity is not the one these artifacts were written to | *"The artifact is intact; the identity is wrong."* It stops rather than walking the history: every object was written to the same public half |
+| The newest artifact is damaged | Says what did not open, and tries the one before it. Five, then it stops and tells you to name one |
+| The restore itself fails part-way | The database is left exactly as it was — one transaction, `ON_ERROR_STOP` — and the artifact is still in `backups/` |
+| `HASHI_SECRET_KEY` is the wrong one | **Nothing.** The restore succeeds: the rows arrive whatever the key is, and the columns holding node and user secrets stay shut. This is the one failure the command cannot see, so it ends by naming it — open the panel, and if the screens that touch a node or a user say *"The data is intact; the key is wrong."*, it is that one line and not another artifact |
+
+### What `make restore-from-bucket` does not do
+
+Everything on this list is an operator step. None of it is something a script may do on
+your behalf, and all of it is the difference between a control plane that is *back* and one
+that *serves somebody*.
+
+1. **It does not move DNS.** Nothing in this repository touches a record. Your delivery
+   name still points at the machine you lost, and until it points at this one, every user's
+   link resolves to a box that is gone — the tokens are alive and the address is not. This
+   is the one that leaves a perfectly restored control plane serving nobody.
+2. **It does not re-issue the delivery endpoint's certificate.** `caddy_data` is
+   deliberately not in the backup (see *What belongs in a backup, and what does not*): the
+   old host's private keys are to be presumed compromised. Caddy asks a public CA for a new
+   one the first time the name resolves *here* and inbound `:80`/`:443` reach this machine
+   — which cannot happen before 1, and cannot happen at all until `make up-panel` publishes
+   those ports, because the base stack publishes none. Until then `/sub/*` serves nothing.
+   The panel itself is unaffected: it is served by Caddy's own CA, which is new, so each of
+   your own devices is asked to trust the console once more. The costs and the issuance
+   limits are in *The `caddy_data` cost, stated rather than waved at*.
+3. **It tells no user anything.** No message goes to any user from this command or from the
+   control plane — there is no channel, and that is a charter decision rather than an
+   omission. If the delivery *name* is gone rather than merely pointing elsewhere, the
+   tokens survived and the URL they live in did not, and every user has to be handed a new
+   link by you.
+
+It also does not tell you whether `HASHI_SECRET_KEY` is the right one, and cannot: see the
+last row of the table above.
 
 ### Where the artifact goes, and the credential that sends it
 
@@ -1687,11 +1793,14 @@ second. The third is needed from the moment anything is in the bucket, which sin
 1. `HASHI_SECRET_KEY` — without it the dump is unreadable data.
 2. The **private half** of the age keypair whose public half is `HASHI_BACKUP_AGE_RECIPIENT`.
    Without it the artifact does not open at all, on any machine, including this one.
-3. A **read** credential for the backup bucket — and, to check the retention above, an
-   administrative one. The key in `.env` can only write, on purpose, so the box that is
-   seized cannot delete its own history; the direct consequence is that fetching an
-   artifact back out of the bucket, and asking that bucket whether versioning is on, are
-   both things only you can do. Neither is ever written into `.env` on this host.
+3. A **read** credential for the backup bucket — `ListBucket` and `GetObject` — and, to
+   check the retention above, an administrative one. The key in `.env` can only write, on
+   purpose, so the box that is seized cannot delete its own history; the direct consequence
+   is that fetching an artifact back out of the bucket, and asking that bucket whether
+   versioning is on, are both things only you can do. `make restore-from-bucket` does the
+   fetching *with the credential you hand it*, in its own environment, for the length of
+   one command — neither it nor the age identity is ever written into `.env` on this host,
+   and the command refuses rather than reading them from there.
 
 Plus the values needed to rewrite `.env` itself — hosts, ports, the operator password
 hash, the Postgres password. Everything else in that file comes from `.env.example`.

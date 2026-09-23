@@ -1,0 +1,57 @@
+# hashi — the restore overlay: where the READ credential lives, for one container.
+#
+# WHAT: hands `deploy/backup/fetch.py` the address of the object store and the credential
+#       that may read it, for the length of one `compose run`. It adds no service,
+#       publishes nothing and starts no application.
+# WHY:  this is the mirror of docker-compose.upload.yml, and the asymmetry between them is
+#       the point of the whole design.
+#
+#       A control plane keeps a WRITE-ONLY key: it can add to the backup history and can
+#       neither read it nor destroy it, because whoever seizes that box holds that key.
+#       The credential that can READ is carried by the operator and handed to the restore
+#       at the moment it runs — `HASHI_RESTORE_S3_ACCESS_KEY_ID` and
+#       `HASHI_RESTORE_S3_SECRET_ACCESS_KEY`, from the environment of the one command,
+#       never from a file on this host.
+#
+#       MEASURED, because the obvious assumption is wrong: compose's short pass-through
+#       form (`- VAR`) does NOT mean "the shell only". With `--env-file`, a value in the
+#       env file reaches the container exactly as a shell value would, and the shell only
+#       wins when both are set. So no shape of this file can enforce "never from the env
+#       file" on its own. That enforcement is a refusal in `scripts/backup.sh`, which
+#       stops when the env file contains any `HASHI_RESTORE_` name — and that refusal is
+#       load-bearing rather than tidy-minded, which is why it is written down here too.
+#
+#       The four NON-secret fields are a different case and fall back on purpose. Which
+#       store, which region, which bucket and which prefix are not secrets, they are
+#       already in the env file of a host that was taking backups, and making an operator
+#       retype them during a rebuild is the step that gets typed wrong. `fetch.py` reads
+#       `HASHI_RESTORE_S3_*` first and falls back to these; the two credentials fall back
+#       to nothing, ever.
+#
+#       What is deliberately NOT here: `HASHI_BACKUP_S3_ACCESS_KEY_ID` and
+#       `HASHI_BACKUP_S3_SECRET_ACCESS_KEY`. A program that reads has no use for the key
+#       that writes, and handing it one would put both halves of the bucket's access in a
+#       single container for the first time.
+#
+#       No `:?` guards, like the upload overlay and unlike the base file: these variables
+#       are required only while a restore is running, and `${VAR:?}` fires on an empty
+#       value too, so a guard here would refuse every ordinary `compose config` on a host
+#       that is not mid-restore. The conditional refusal lives where it can be
+#       conditional — in `fetch.py::configuration()`, which names every missing variable
+#       at once and refuses before a single byte is fetched.
+# HOW:  loaded by `scripts/backup.sh` alone, with `run --rm --no-deps --entrypoint
+#       python3`, so the control application is never started from it. No Make target
+#       loads it; tests/infra asserts that.
+services:
+  control:
+    environment:
+      HASHI_RESTORE_S3_ENDPOINT: ${HASHI_RESTORE_S3_ENDPOINT:-}
+      HASHI_RESTORE_S3_REGION: ${HASHI_RESTORE_S3_REGION:-}
+      HASHI_RESTORE_S3_BUCKET: ${HASHI_RESTORE_S3_BUCKET:-}
+      HASHI_RESTORE_S3_PREFIX: ${HASHI_RESTORE_S3_PREFIX:-}
+      HASHI_RESTORE_S3_ACCESS_KEY_ID: ${HASHI_RESTORE_S3_ACCESS_KEY_ID:-}
+      HASHI_RESTORE_S3_SECRET_ACCESS_KEY: ${HASHI_RESTORE_S3_SECRET_ACCESS_KEY:-}
+      HASHI_BACKUP_S3_ENDPOINT: ${HASHI_BACKUP_S3_ENDPOINT:-}
+      HASHI_BACKUP_S3_REGION: ${HASHI_BACKUP_S3_REGION:-}
+      HASHI_BACKUP_S3_BUCKET: ${HASHI_BACKUP_S3_BUCKET:-}
+      HASHI_BACKUP_S3_PREFIX: ${HASHI_BACKUP_S3_PREFIX:-}

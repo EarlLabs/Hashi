@@ -225,7 +225,8 @@ node-bootstrap:
 # is HASHI_BACKUP_AT in HASHI_BACKUP_TZ, decided by that script, so a box that was down at
 # 04:00 takes the day's backup when it comes back instead of skipping the day in silence.
 # `make backup-status` is what the record of all that says.
-.PHONY: backup backup-upload backup-schedule backup-unschedule backup-status restore checkers
+.PHONY: backup backup-upload backup-schedule backup-unschedule backup-status restore \
+        restore-from-bucket checkers
 
 # Goes through the recorder rather than straight to the script, so that a backup taken by
 # hand counts as the day's backup: without it the panel would report a host as un-backed-up
@@ -266,6 +267,34 @@ backup-upload:
 restore:
 	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz.age"; exit 2; }
 	@scripts/backup.sh restore "$(FROM)"
+
+# The one for the day the machine is gone, and the only verb here that is a whole rebuild
+# rather than a step of one. On a host that has never run this project it installs the
+# control plane, reads the bucket with a credential you are carrying, takes the newest
+# artifact that actually opens and restores it:
+#
+#   HASHI_RESTORE_AGE_IDENTITY=/path/to/identity \
+#   HASHI_RESTORE_S3_ACCESS_KEY_ID=... HASHI_RESTORE_S3_SECRET_ACCESS_KEY=... \
+#   make restore-from-bucket
+#
+# Three inputs, all carried by the operator and none of them on the host that was lost:
+# HASHI_SECRET_KEY, which goes in this machine's own .env because the control plane cannot
+# start without it; the age identity; and a READ credential for the bucket. The last two
+# are taken from this command's environment and are never written into an env file here —
+# that is what the HASHI_RESTORE_* names are for, and the command refuses rather than
+# reading them from anywhere else.
+#
+# OBJECT= names a specific artifact instead of the newest that opens. Unlike `restore`,
+# which deliberately makes the operator name a file, this one does choose — because the
+# operator cannot see into the bucket and the alternative is a restore that cannot be
+# started at all. What it chose is printed beside everything it did not choose.
+#
+# What it does NOT do — DNS, the delivery endpoint's certificate, telling any user
+# anything — it says on its last screen, and docs/deploy/runbook.md says it beside the
+# command. A restored control plane on a new address that the old name still does not
+# point at serves nobody.
+restore-from-bucket:
+	@scripts/backup.sh restore-from-bucket $(if $(OBJECT),"$(OBJECT)",)
 
 # Fetch the upstream data-plane checkers, so the validation tests stop skipping.
 checkers:

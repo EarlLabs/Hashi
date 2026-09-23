@@ -9,7 +9,12 @@ WHAT: fills a disposable stack, dumps it, restores the dump into a CLEAN stack, 
       the last four scenarios stand up a disposable S3-compatible endpoint and prove an
       object really landed, that a refused credential leaves the operator holding the
       artifact with an exit code of its own, and that a half-configured offsite block is
-      refused before the database is read.
+      refused before the database is read. Since M28.8 it also comes BACK: S13 runs the one
+      command on a THIRD compose project that nothing here installed — no stack, no image,
+      no database, an env file naming no object store — and the command itself installs the
+      control plane, reads the bucket with a credential handed to it at that moment, takes
+      the newest artifact that opens, restores it, and is measured by the user's own
+      subscription link resolving byte for byte on the rebuilt host.
 WHY:  the charter says a backup nobody has restored is not a backup, and that proving it
       belongs to the e2e set. Until this file, ``tests/infra/test_backup_script.py`` read
       the script's TEXT and said so honestly in its own header: "nothing here proves a
@@ -49,6 +54,10 @@ DEV_OVERLAY = REPO_ROOT / "deploy" / "docker-compose.dev.yml"
 RUN = uuid.uuid4().hex[:8]
 SOURCE_PROJECT = f"hashi-restore-src-{RUN}"
 TARGET_PROJECT = f"hashi-restore-dst-{RUN}"
+# The machine that has never run this project — M28.8. Its own compose project, its own
+# volumes, its own env file, and nothing installed on it by anything in this module: the
+# command under test is what brings it into existence.
+RESCUE_PROJECT = f"hashi-restore-new-{RUN}"
 
 # The key the source stack encrypts with. Fixed and obviously fake. The target stack is
 # given the SAME key for the successful restore and a DIFFERENT one for the failure.
@@ -96,6 +105,8 @@ OPERATOR_PASSWORD = "restore-proves-the-backup"
 # neither.
 SOURCE_PORT = 54300
 TARGET_PORT = 54301
+# The rescue host's, clear of the two above and of the `+2` the wrong-key scenario takes.
+RESCUE_PORT = 54305
 # Where the disposable store is published, so this suite can read an object back. The
 # control plane under test never uses this address: it reaches the store by container name
 # on the compose network, which is the only route a real one would have.
@@ -661,7 +672,122 @@ def _record(state: pathlib.Path) -> dict:
     return json.loads(path.read_text()) if path.is_file() else {}
 
 
-def offsite_scenarios(directory: pathlib.Path, path: pathlib.Path) -> dict:
+# --- the one command, on a machine that has never run this (M28.8) -------------
+
+def run_the_one_command(
+    path: pathlib.Path,
+    project: str,
+    *,
+    identity: pathlib.Path,
+    store: dict,
+    secret: str = STORE_SECRET_KEY,
+) -> subprocess.CompletedProcess:
+    """`make restore-from-bucket`, with exactly what an operator is carrying and no more.
+
+    Everything the bucket needs is in THIS PROCESS'S environment and in none of the files
+    on the host under test: its env file names no object store at all, which is what a
+    machine that has never run this project looks like. That is the contract — the read
+    credential and the age identity are handed over at the moment of the restore and are
+    never written onto a control-plane host.
+    """
+    return subprocess.run(
+        [str(BACKUP), "restore-from-bucket"],
+        capture_output=True, text=True, timeout=1800, cwd=REPO_ROOT,
+        stdin=subprocess.DEVNULL,
+        env={
+            **_docker_env(),
+            "ENV_FILE": str(path),
+            "COMPOSE_PROJECT_NAME": project,
+            "PANEL_HEALTH_TIMEOUT": "150",
+            "HASHI_RESTORE_AGE_IDENTITY": str(identity),
+            "HASHI_RESTORE_S3_ENDPOINT": store["endpoint"],
+            "HASHI_RESTORE_S3_REGION": "e2e-region-1",
+            "HASHI_RESTORE_S3_BUCKET": store["bucket"],
+            "HASHI_RESTORE_S3_PREFIX": store["prefix"],
+            "HASHI_RESTORE_S3_ACCESS_KEY_ID": STORE_ACCESS_KEY,
+            "HASHI_RESTORE_S3_SECRET_ACCESS_KEY": secret,
+            # The destructive confirmation is a `read` on a terminal there is not one of
+            # here. Deliberately an env var and not a flag, so skipping it is a decision.
+            "FORCE": "1",
+        },
+    )
+
+
+def rescue_scenarios(
+    directory: pathlib.Path, store: dict, fleet: dict, object_name: str
+) -> dict:
+    """Bring a control plane back on a host that has never run this — M28.8.
+
+    Two invocations, and the first one is not a warm-up. The disposable store lives on the
+    SOURCE stack's network, and the rescue stack's network does not exist until something
+    creates it — so the first run is the command meeting a store it cannot reach, which is
+    both a failure mode worth asserting and the only way to install this stack without
+    this file doing the installing the command is supposed to do. Afterwards the store is
+    connected to the network that first run created, and the second run is the real thing:
+    list, fetch, open, restore.
+
+    Nothing is asserted here; the scenarios below do that. The HTTP answers are collected
+    while the stack is up, because it is torn down before this fixture returns.
+    """
+    results: dict = {}
+    rescue = directory / "rescue"
+    rescue.mkdir(exist_ok=True)
+    path = env_file(rescue, key=KEY, port=RESCUE_PORT)
+    identity = identity_file(rescue)
+    results["env_file"] = path.read_text()
+    network = ""
+
+    try:
+        results["unreachable"] = run_the_one_command(
+            path, RESCUE_PROJECT, identity=identity, store=store
+        )
+        # The store joins the network the run above created. A real operator's bucket is on
+        # the internet and needs none of this; a disposable one on a compose network does.
+        network = stack_network(RESCUE_PROJECT, path)
+        connected = subprocess.run(
+            ["docker", "network", "connect", network, store["container"]],
+            capture_output=True, text=True, timeout=120, env=_docker_env(),
+        )
+        assert connected.returncode == 0, connected.stderr[-2000:]
+
+        results["restored"] = run_the_one_command(
+            path, RESCUE_PROJECT, identity=identity, store=store
+        )
+
+        # Published only now, and only so this process can speak to the panel: the command
+        # installs the base stack, which publishes nothing, exactly as a real one does.
+        published = compose(RESCUE_PROJECT, path, "up", "-d")
+        assert published.returncode == 0, published.stderr[-3000:]
+
+        with as_operator(RESCUE_PORT) as client:
+            results["nodes"] = client.get("/api/nodes").json()
+            results["users"] = client.get("/api/users").json()
+        with api(RESCUE_PORT) as anonymous:
+            answer = anonymous.get(f"/sub/{fleet['token']}")
+            results["subscription_status"] = answer.status_code
+            results["subscription"] = answer.text
+        # What the command left on the rescue host: the artifact it fetched, kept, still
+        # encrypted and not readable by anybody else on the box.
+        landed = REPO_ROOT / "backups" / object_name
+        results["fetched_exists"] = landed.is_file()
+        results["fetched_mode"] = oct(landed.stat().st_mode & 0o777) if landed.is_file() else ""
+        results["fetched_bytes"] = landed.read_bytes() if landed.is_file() else b""
+    finally:
+        # BEFORE the teardown, and this is the same trap the store itself carries: a
+        # container attached to a compose project's network stops compose removing it, so
+        # `down -v` leaves the network behind and the next run inherits it.
+        if network:
+            subprocess.run(
+                ["docker", "network", "disconnect", "-f", network, store["container"]],
+                capture_output=True, timeout=120, env=_docker_env(),
+            )
+        compose(RESCUE_PROJECT, path, "down", "-v")
+        # Read above, removed here: this lands in the checkout the suite is running in.
+        (REPO_ROOT / "backups" / object_name).unlink(missing_ok=True)
+    return results
+
+
+def offsite_scenarios(directory: pathlib.Path, path: pathlib.Path, fleet: dict) -> dict:
     """Drive every upload case once, while there is a stack and a store to drive it with.
 
     Kept in one place rather than four independent scenarios because all of it needs the
@@ -699,6 +825,11 @@ def offsite_scenarios(directory: pathlib.Path, path: pathlib.Path) -> dict:
         never = directory / "never-written.sql.gz.age"
         results["refused"] = run_backup(["dump", str(never)], half, SOURCE_PROJECT)
         results["never"] = never
+
+        # And the whole point of an offsite copy: getting it back onto a machine that has
+        # never run this. Here, because it needs the store still standing and the object
+        # already in it — M28.8.
+        results["rescue"] = rescue_scenarios(directory, store, fleet, uploaded.name)
     finally:
         # Before the stack comes down: a container attached to the project's network stops
         # compose from removing it.
@@ -767,7 +898,9 @@ def dumped(tmp_path_factory):
         fleet["schedule"] = schedule_scenarios(directory, path)
 
         # Everything about the upload, driven here because it needs this stack up — M28.3.
-        fleet["offsite"] = offsite_scenarios(directory, path)
+        # It ends by bringing a control plane back on a fresh host out of the object it
+        # just sent, which is what the whole offsite half exists for — M28.8.
+        fleet["offsite"] = offsite_scenarios(directory, path, fleet)
 
         # A restore onto a database with NO TABLES IN IT — M28.7. Last, and on this stack,
         # because it replaces a database that is about to be thrown away anyway: no second
@@ -1413,6 +1546,14 @@ def _every_stream(fleet: dict) -> dict[str, str]:
         for name in ("dump", "denied", "refused")
         if fleet["offsite"].get(name) is not None
     }
+    # The two longest-running things this module does, and the two that print the most:
+    # a whole rebuild that failed at the store and a whole rebuild that worked — M28.8.
+    rescue = fleet["offsite"].get("rescue") or {}
+    runs |= {
+        f"rescue:{name}": rescue[name]
+        for name in ("unreachable", "restored")
+        if rescue.get(name) is not None
+    }
     return {name: (run.stdout or "") + (run.stderr or "") for name, run in runs.items()}
 
 
@@ -1543,4 +1684,141 @@ def test_a_restore_onto_a_bare_database_prints_schema_and_never_a_row(dumped) ->
     assert "SET client_min_messages = warning;" in preamble, (
         "the artifact no longer raises client_min_messages, which is the ONLY reason a "
         "restore onto a bare database says nothing about the objects it did not find"
+    )
+
+
+# --- S13: one command, on a machine that has never run this (M28.8) ------------
+
+@pytest.fixture(scope="module")
+def rescue(dumped) -> dict:
+    """What the one command did on a fresh host, or a loud skip if there was no store."""
+    _, fleet = dumped
+    if fleet["offsite"].get("store") is None:
+        pytest.skip(
+            f"could not pull {STORE_IMAGE}, so nothing was in a bucket to come back out "
+            "of — this is a skip, not a pass"
+        )
+    return fleet["offsite"]["rescue"]
+
+
+def test_one_command_brings_the_control_plane_back_on_a_machine_that_never_ran_it(
+    dumped, rescue
+) -> None:
+    """S13a. The step the whole milestone is for, end to end and with nothing else run.
+
+    A host with no stack, no image, no database and an env file that names no object store
+    at all. One command, three inputs — HASHI_SECRET_KEY in that env file, the age identity
+    and a read credential, the last two handed over at the moment it runs — and what comes
+    out is a control plane serving the same users and driving the same nodes as the one
+    that was lost.
+
+    The assertion is not "rows arrived". It is the user's own subscription link, fetched
+    anonymously with the token they already hold, byte for byte what it was before the
+    dump. That is only possible if the object was found in the bucket, opened with the
+    identity, restored, and every encrypted column decrypted with the key in this new
+    machine's env file.
+    """
+    _, fleet = dumped
+    restored = rescue["restored"]
+    assert restored.returncode == 0, f"{restored.stdout[-4000:]}\n{restored.stderr[-4000:]}"
+
+    assert [node["id"] for node in rescue["nodes"]] == [fleet["node_id"]], rescue["nodes"]
+    assert rescue["nodes"][0]["state"] == "active"
+    assert [user["id"] for user in rescue["users"]] == [fleet["user_id"]], rescue["users"]
+
+    assert rescue["subscription_status"] == 200, (
+        "the user's link does not resolve on the rebuilt control plane — their access did "
+        "not survive the one command that exists to carry it"
+    )
+    assert rescue["subscription"] == fleet["subscription"], (
+        "the rebuilt control plane serves a different configuration than the one that was "
+        "backed up"
+    )
+
+
+def test_the_restore_host_holds_neither_of_the_two_credentials_it_was_given(
+    rescue,
+) -> None:
+    """S13b. What makes a restore cost two secrets that never meet.
+
+    The age identity and the bucket's read credential are handed to the command in its
+    environment and must be nowhere on the host when it is over — not in the env file it
+    installed from, and not in anything it wrote. `HASHI_SECRET_KEY` is the deliberate
+    exception and is asserted to be there, because the control plane cannot start without
+    it: that key is the restored machine's own, exactly as it was the lost machine's.
+    """
+    env = rescue["env_file"]
+    assert "HASHI_SECRET_KEY=" in env, (
+        "the env file has no secret key, so this test is not watching the thing it says"
+    )
+    for carried in ("HASHI_RESTORE_", BACKUP_IDENTITY, STORE_SECRET_KEY, STORE_ACCESS_KEY):
+        assert carried not in env, (
+            f"{carried!r} ended up in the env file on the rebuilt control plane, which is "
+            "the one place the design says it must never be"
+        )
+    # And the artifact it fetched is kept, still encrypted, readable by nobody else.
+    assert rescue["fetched_exists"], "the fetched artifact was not kept on the host"
+    assert rescue["fetched_mode"] == "0o600", rescue["fetched_mode"]
+    assert rescue["fetched_bytes"].startswith(b"age-encryption.org/v1"), (
+        "what was written to the rescue host's disk is not ciphertext"
+    )
+
+
+def test_a_store_it_cannot_reach_stops_before_anything_is_fetched_or_changed(
+    rescue,
+) -> None:
+    """S13c. The first run, and it is not a warm-up.
+
+    The store was on another network then, so this is the command meeting an endpoint that
+    does not resolve from inside the stack it has just installed. Two things have to be
+    true of that: the control plane must be UP anyway — which is what makes the command
+    safe to run again, and is how the second run had a network for the store to join — and
+    it must say that nothing was fetched and nothing was changed, because an operator who
+    cannot tell a failed fetch from a half-finished restore will go looking for another
+    artifact.
+    """
+    first = rescue["unreachable"]
+    assert first.returncode != 0, "a store that cannot be reached was reported as a success"
+    said = first.stdout + first.stderr
+    assert "does not resolve" in said, (
+        f"the refusal does not say the endpoint could not be reached: {said[-2000:]}"
+    )
+    assert "Nothing was fetched and nothing was changed" in said
+    assert "the control plane answers on /healthz" in said, (
+        "the run did not get as far as installing the control plane, so the failure is "
+        "somewhere other than the one this scenario is about"
+    )
+
+
+def test_the_run_says_what_it_chose_what_it_saw_and_what_it_did_not_do(
+    dumped, rescue
+) -> None:
+    """S13d. The output IS the product here: it is read once, under pressure, at 3am.
+
+    Three things have to be on that screen. What is in the bucket, so an operator can see
+    for themselves that the schedule did not stop six weeks ago. Which object was taken.
+    And the three things the command cannot do — DNS, the certificate, telling anybody —
+    because a restored control plane on a new address that the old name still points away
+    from serves nobody, and those are the sentences that turn a green run into a plan.
+    """
+    _, fleet = dumped
+    said = rescue["restored"].stdout + rescue["restored"].stderr
+    uploaded = fleet["offsite"]["artifact"]
+
+    assert "what is in the bucket, newest first" in said
+    assert uploaded.name in said, "the run never names the object it took"
+    assert "restored." in said
+
+    closing = said[said.index("did NOT do"):]
+    assert "DNS" in closing
+    assert "certificate" in closing
+    assert "Telling anybody" in closing
+    assert "The data is intact; the key is wrong." in closing, (
+        "the last screen does not say what a wrong HASHI_SECRET_KEY looks like — the one "
+        "failure here that leaves everything looking fine"
+    )
+    # The delivery name is read off the running control plane rather than out of the env
+    # file, so the sentence about DNS names the host this operator actually has to move.
+    assert "restore.invalid" in closing, (
+        "the DNS line does not name the delivery host, so it reads as generic advice"
     )
