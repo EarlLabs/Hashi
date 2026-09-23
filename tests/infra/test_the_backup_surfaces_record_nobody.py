@@ -85,8 +85,23 @@ def test_no_backup_surface_appends_to_anything() -> None:
     person to add one will not call it ``backup.log``. Every file these surfaces write —
     the artifact, the record, the lock, the two ``.partial`` files — is created whole and
     replaced whole, so an append is by construction something new.
+
+    Over SURFACES, and over nothing assembled a second time here. This test used to carry
+    its own tuple of three, and when M28.8's shared gate was added to SURFACES it landed
+    outside that copy — so the one file both scripts now depend on for exactly this class
+    of finding was swept for a log destination and not for an append. Nothing leaked,
+    because the library has no ``>>`` in it; what was wrong is that the audit said it had
+    looked and had not. One list.
     """
-    for script in (BACKUP, RUNNER, INSTALLER):
+    swept = []
+    for script in SURFACES:
+        if script.suffix != ".sh":
+            # `>>` is a shell redirection and in Python it is a right shift, so this shape
+            # says nothing about the uploader. What it writes is asserted directly by
+            # `test_the_uploader_writes_no_file_but_the_one_it_unlinks` below — excluded by
+            # a reason that is here to be read, rather than by being left off a list.
+            continue
+        swept.append(script.name)
         # Double-quoted literals go as well, and only for this one check: the crontab
         # block's own idempotency markers are `# >>> hashi backup schedule >>>` held in a
         # shell variable, which is a string this script PRINTS and not a redirection.
@@ -98,6 +113,10 @@ def test_no_backup_surface_appends_to_anything() -> None:
             "record of its own runs beyond backups/state/last-run.json, which is rewritten "
             "whole every time (CLAUDE.md — never log who connected to what)."
         )
+    # A sweep that swept nothing is this repository's signature defect, and it is how the
+    # gap above went unnoticed: name what was actually looked at.
+    assert swept == [script.name for script in SURFACES if script.suffix == ".sh"]
+    assert GATE.name in swept, "the surface both scripts share is not in the sweep"
 
 
 def test_no_backup_surface_reaches_for_a_log_the_host_keeps() -> None:
