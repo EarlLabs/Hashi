@@ -652,3 +652,144 @@ The gate's refusal opens **"the env file at <path>, at line N, is one compose ca
 read."** and says **"Nothing was dumped, written or sent."** It deliberately does **not**
 repeat what compose said; **a step that "improves" it by quoting compose reopens the
 leak.**
+
+## M28.8 — one command, two secrets that never meet, three things it will not do
+
+`make test-infra` **351 passed** (was 323); `make verify` green, e2e **214** (was 210).
+Two rounds plus one line. Round 1 found M28.7's leak living in a second script.
+
+1. **The command is a FOURTH VERB of `scripts/backup.sh`, never a new script**, and that
+   is structural rather than tidy: M28.7's gate runs in the dispatch before any verb is
+   entered, so a new verb inherits it and every compose call it can reach — including
+   those inside `scripts/panel-bootstrap.sh`, which it invokes — is behind it. **Add the
+   next verb the same way.**
+
+   ```
+   HASHI_RESTORE_AGE_IDENTITY=… HASHI_RESTORE_S3_ACCESS_KEY_ID=… \
+   HASHI_RESTORE_S3_SECRET_ACCESS_KEY=… make restore-from-bucket [OBJECT=<name>]
+   ```
+
+2. **The `HASHI_SECRET_KEY` tension is settled in one direction:** that key **does** go
+   into `.env` on the rebuilt host — the control plane cannot start or read one credential
+   without the right one, and it is the restored machine's own key exactly as it was the
+   lost machine's. **The age identity and the bucket's READ credential never do.** Do not
+   relitigate this as "nothing carried may touch the host".
+
+3. **The enforcement is a refusal in the shell, and it is load-bearing because compose
+   cannot do it — MEASURED, twice, independently.** Compose's short pass-through form
+   (`- VAR`) does **not** mean "from the shell only": with `--env-file` an env-file value
+   reaches the container exactly as a shell value would. So no shape of the overlay can
+   enforce it. The command requires both S3 names in its **own process environment**, so a
+   credential only in `.env` is a refusal naming where it belongs. **The script still
+   opens no env file** — that invariant was not traded for this check. Residual, stated: a
+   credential written into **both** is not detected.
+
+4. **The object is chosen by the STORE's `LastModified`, never by the name.** The name is
+   picked by whichever key wrote the object, and on a live control plane that is a key an
+   attacker would hold; the store's clock is the one value the lost host had no say in.
+   Both are printed. **Listing is PAGED** — a bucket passes 1000 objects in under three
+   years and a listing answers lexicographically, so one page of a long history is the
+   **oldest** names wearing the word "newest". Verified across two real pages with an
+   object named to sort newest and dated oldest.
+
+5. **A damaged artifact is walked past (five deep); a wrong identity is not.** Every
+   object was written to the same public half, so walking is a slower way to print the
+   same sentence. **Both are verified BEFORE the destructive confirmation** — decrypt,
+   `gunzip -t`, identity streamed on stdin, plaintext a pipe and never a file — extending
+   M28.2's rule one step.
+
+6. **The four non-secret S3 fields fall back to `HASHI_BACKUP_S3_*`; the two credentials
+   fall back to nothing, ever.** Falling back to the write-only key would turn the
+   clearest refusal — *"that key may only write"* — into a 403 that reads as the
+   operator's own key being wrong.
+
+7. **The install comes BEFORE the bucket is read**, mechanically: the program that speaks
+   to the store runs inside this project's control image, which is what keeps a rented
+   host from needing anything installed, and there is no image until something builds one.
+   It is also what makes the command safe to re-run after any failure.
+
+8. **`git` and `make` are not checked, deliberately** — they are what put the checkout on
+   the machine and what ran the command. Only the runtime, the compose plugin and a live
+   daemon are, each with its own sentence. **The command does not install a runtime**:
+   piping a vendor's script into a root shell on the day of a seizure is not a trade to
+   make on somebody's behalf.
+
+9. **`fetch.py` repeats `upload.py`'s SigV4 and cannot import it** — each is a single
+   `-c` argument. `test_the_two_programs_sign_a_request_identically` compares **computed
+   `Authorization` headers** under a fixed clock, not source text. Fix one and it goes red
+   rather than a store refusing a credential during a rebuild.
+
+### Round 1 — the same leak, one script over
+
+10. **`scripts/panel-bootstrap.sh` had M28.7's leak too**, reproduced live: one unclosed
+    quote on the `HASHI_SECRET_KEY` line and `compose up -d --build` printed
+    `unterminated quoted value "<the master key>"` — and the health-timeout path printed
+    it a **SECOND** time through `compose ps`, with a **three-minute wait between them**.
+    **The destination is what makes it its own finding**: this is not cron's mail, it is
+    the output of a **failed install**, which is exactly what somebody pastes into a chat
+    window when asking why their install did not work.
+
+11. **The gate is now ONE implementation in `scripts/lib/env-file-gate.sh`**, sourced by
+    both scripts, never copied. Two scrubbers drift. It uses the **caller's own `COMPOSE`
+    array** — a test asserts the body contains `"${COMPOSE[@]}" config --quiet` and **no
+    literal `docker compose`**, proven by injection — and refuses loudly if sourced
+    without `ENV_FILE` and `COMPOSE`, blaming the script that sourced it rather than the
+    operator. `ENV_GATE_NOTHING_HAPPENED` is the one per-caller sentence.
+    **Position, not a count, in both**: the dispatch in `backup.sh`, the top of section 1
+    in `panel-bootstrap.sh`. A test walks every `"${COMPOSE[@]}"` occurrence and requires
+    each to follow the call site — proven by moving one above it.
+
+### Round 2 — the audit that said it had looked
+
+12. **`SURFACES` existed and one test iterated its own copy.** The shared gate joined
+    `SURFACES`, but `test_no_backup_surface_appends_to_anything` walked a separate
+    `(BACKUP, RUNNER, INSTALLER)` — so the one file both scripts now depend on for exactly
+    this class of finding was swept for a log destination and **never for an append**.
+    Nothing leaked; **the audit claimed coverage it did not have**, which is the shape that
+    rots quietly. Now one list, with the uploader excluded by a **stated reason in code**
+    (`>>` is a shell redirection; in Python it is a right shift), and the loop closes by
+    asserting **what it actually swept**. Proven red-first, and the old tuple confirmed
+    blind to the same plant. **Add the next surface to `SURFACES`; do not build a second
+    list.**
+
+    *This last line landed on the reviewer's own verbatim prescription after round 2
+    returned clean, and was not independently re-reviewed. It changes one test's iteration
+    target and nothing else.*
+
+### Not proven, and do not imply otherwise
+
+- **No single invocation does install-from-nothing AND fetch.** The disposable store lives
+  on the source stack's network and the rescue project's network does not exist until
+  something creates it, so S13 runs the command **twice**: run one installs from zero and
+  then fails at an endpoint that does not resolve (a real failure mode, asserted); the
+  store is connected to the network run one created; run two does the real
+  list/fetch/open/restore.
+- **The four-field fallback to `HASHI_BACKUP_S3_*` is unit-tested only.**
+- **`OBJECT=` and the damaged-artifact walk are asserted statically only.**
+- **Nothing here runs on a genuinely bare host** — M28.9 is that walk, and the three
+  runtime refusals are text assertions, not exercised.
+- Retention and "the object is still there" remain M28.4's *"What this repository cannot
+  tell you, and never will"*. M28.8 did not widen it.
+
+### How to test what M28.8 built
+
+`tests/infra/test_the_restore_comes_from_the_bucket.py` (26 tests, no Docker) imports both
+`fetch.py` and `upload.py` with `importlib` and runs them in-process against a fake store.
+**Use a genuinely public address in any http test** — Python marks `198.51.100.0/24` and
+`203.0.113.0/24` as private, so a test written with one of those passes whatever the code
+does.
+
+S13 is a **third** compose project whose env file names no object store at all. The fetched
+artifact lands in the checkout's `backups/` — read what you need before the `finally`.
+**Disconnect the store before `down -v`** or the rescue network survives teardown.
+
+### Wording later steps must match
+
+**`make restore-from-bucket`**, **`OBJECT=<name>`**. Runbook headings **"Coming back from
+the bucket, on a machine that has never run this"** and **"What `make restore-from-bucket`
+does not do"**. Pinned: **"the artifact is intact; the identity is wrong."** (echoing
+M28.6's *"The data is intact; the key is wrong."*, which the closing screen quotes verbatim
+for the one failure the command cannot see), **"A restore needs a credential that may LIST
+and GET this bucket"**, **"The credential works — this is the bucket or the prefix"**,
+**"Nothing was fetched and nothing was changed"**, and the closing **"Three things it did
+NOT do"** naming DNS, the certificate and **"Telling anybody"**.
