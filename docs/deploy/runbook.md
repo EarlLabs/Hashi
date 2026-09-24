@@ -1768,12 +1768,18 @@ Nothing runs a backup on this host now."* **When** a run would be owed is a sepa
 distinction and says so instead — it reads one record and may not go looking — which is why
 the two channels word this differently and do not contradict each other.
 
-**A record dated ahead of this host's clock is said out loud on both channels**, because
-every age in it is then worthless: a backup taken weeks ago reads as one taken this morning.
-`scripts/backup-run.sh due` reports `clock=ahead` and exits **1** rather than 0, whatever
-the action on the same line turns out to be; `make backup-status` prints the same paragraph
-beside the ages it makes worthless and exits 0, because it is a screen rather than a
-verdict. Fix the clock; `make backup` takes one whatever the record says.
+**A record dated ahead of this host's clock is said out loud on both channels, and both
+say WHICH half of it is ahead** — because the two halves cost different things. A **run**
+dated after the moment the file was read makes every age printed beside it worthless: a
+backup taken weeks ago reads as one taken this morning. (All three run fields are asked
+here; the panel reads the last success and the last failure.) A **due date** this host has not
+reached does not: the run times in that record are exact, are printed as they are, and
+agree with the panel to the minute. One paragraph covering both would tell an operator to
+disbelieve a number that is right, which is the same defect one level down.
+`scripts/backup-run.sh due` reports `clock=ahead` and exits **1** rather than 0 for either,
+whatever the action on the same line turns out to be; `make backup-status` prints the same
+paragraph and exits 0, because it is a screen rather than a verdict. `make backup` takes
+one whatever the record says.
 
 **`scripts/backup-run.sh due` refuses a damaged record too**, exit **1**, naming the key —
 it used to answer `offsite=no missed=none` and *"no backup has ever been recorded on this
@@ -1814,18 +1820,22 @@ this was decided the tick waited — **exit 0, no output, no backup, at every ti
 calendar reached the date in the file** — and it now takes a backup instead, because the
 backup is what repairs the state: the run writes a record dated by this host's own clock, so
 the date that stopped the schedule is gone by the end of that run. One extra dump, once, and
-it happens whether the dump succeeds or fails. Fix the clock all the same, and `make backup`
-takes one now whatever the record says.
+it happens whether the dump succeeds or fails. Check this host's clock and `HASHI_BACKUP_TZ`
+all the same — one of the two moved — and `make backup` takes one now whatever the record
+says.
 
 **What the panel says about it, exactly, because the two halves differ.** The panel goes
-loud — a *clock ahead* banner — when a RUN in the record is dated ahead, which is what a
-clock that jumped forward leaves behind. It does **not** read the record's `due_date` at
+loud — a *clock ahead* banner — when the last **success** or the last **failure** in the
+record is dated ahead, which is what a clock that jumped forward leaves behind. Those two
+fields and no others: a record where only the last *attempt* is ahead is a hand edit, and
+it is said on the command line and nowhere else. It does **not** read the record's `due_date` at
 all, so the zone-moved-west shape gives it a quiet, healthy-looking screen — *last backup
 less than an hour ago*, no banner — about a record this host cannot reconcile with its own
-clock: `make backup-status` and `scripts/backup-run.sh due` are the only two channels that
-say anything about that half. The command line's warning says which half is which, so an
-operator reading one screen and then the other is not told two different things about one
-host.
+clock. (A record whose runs are also old is still loud there, but about their age, which is
+a different sentence about a different thing.) `make backup-status` and
+`scripts/backup-run.sh due` are the only two channels that say anything about the due-date
+half, and both of them now name which half they are talking about — so an operator reading
+one screen and then the other is not told two different things about one host.
 
 The decision, and the direction it can be reversed in, is in `docs/decisions.md` under
 2026-09-24: this is the owner's rule for a record the tick cannot READ carried to one it

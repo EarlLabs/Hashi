@@ -59,7 +59,7 @@ RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
 def _sourced_libraries(
     *scripts: pathlib.Path, root: pathlib.Path | None = None
 ) -> tuple[pathlib.Path, ...]:
-    """Every ``scripts/lib/*.sh`` any of these scripts sources, found by reading them.
+    """Every shell file under ``scripts/`` any of these scripts sources, by reading them.
 
     THE NAMED SCRIPTS ARE THIS AUDIT'S SCOPE AND THE LIBRARIES ARE NOT A SECOND LIST. The
     scope is the backup path — a glob over every shell surface in the project would sweep
@@ -86,11 +86,25 @@ def _sourced_libraries(
     green. The worklist below is the fix: every library found is itself read, until a pass
     finds nothing new.
 
+    AND THE SPELLING IS NOT THE POINT EITHER, which round 1's review found by planting it
+    twice more: ``. "$REPO_ROOT/scripts/lib/record-notes.sh"`` without braces, and the same
+    library at ``scripts/helpers/`` with them, both walked the whole sweep out of the door
+    while every test here stayed green. So the pattern takes braces or none and any path
+    under ``scripts/``, and the file has to resolve inside that directory — a discovery
+    that recognises one way of writing a name is a description of today's six call sites,
+    which is the same mistake as naming the files.
+
+    What it still does not see, and the list is short on purpose: a path built at runtime,
+    a relative ``. ./lib/x.sh``, and a source line inside a conditional it cannot evaluate.
+    All three would be caught by running the script instead of reading it, which is another
+    test's job — nothing in this project writes any of them, and the moment one does, this
+    sweep is the wrong tool rather than a leaky one.
+
     ``root`` is the tree the sourced names are resolved against, and it is a parameter for
     one reason: the transitivity above is a property of THIS function, and the only way to
     hold it is to hand it a chain and see whether it walks the whole thing. Planting that
     chain in the repository would be an audit checking work it had planted. Everything but
-    that one test passes the repository.
+    those tests passes the repository.
     """
     root = root or REPO
     found: list[pathlib.Path] = []
@@ -104,14 +118,22 @@ def _sourced_libraries(
         if script in seen:
             continue
         seen.add(script)
-        # `source` as well as `.`, although every caller in this project writes `.`: a
-        # discovery that only knows one spelling goes QUIET on the other, and a sweep that
-        # silently shrinks is the exact failure this function replaces.
+        # `source` as well as `.`, `${REPO_ROOT}` as well as `$REPO_ROOT`, and anywhere
+        # under `scripts/` rather than `scripts/lib/` alone: a discovery that only knows
+        # one spelling goes QUIET on the others, and a sweep that silently shrinks is the
+        # exact failure this function replaces.
         for name in re.findall(
-            r'^\s*(?:\.|source)\s+"\$\{REPO_ROOT\}/scripts/lib/([\w.-]+\.sh)"',
+            r'^\s*(?:\.|source)\s+"?\$\{?REPO_ROOT\}?/scripts/([\w./-]+\.sh)"?',
             script.read_text(), re.M,
         ):
-            library = root / "scripts" / "lib" / name
+            library = (root / "scripts" / name).resolve()
+            # Resolved and then checked to be inside `scripts/`, because the capture now
+            # allows `/` and `.`: `../../somewhere/else.sh` would otherwise take the sweep
+            # outside the tree it is auditing, and a sweep that can be pointed anywhere is
+            # not a sweep of anything.
+            assert library.is_relative_to((root / "scripts").resolve()), (
+                f"{script.name} sources something outside scripts/: {name}"
+            )
             assert library.is_file(), f"{script.name} sources a library that is not there: {name}"
             if library not in found:
                 found.append(library)
@@ -162,18 +184,30 @@ def test_a_library_sourced_by_a_library_is_swept_too(tmp_path) -> None:
     """
     scripts = tmp_path / "scripts"
     (scripts / "lib").mkdir(parents=True)
+    (scripts / "helpers").mkdir()
     (scripts / "caller.sh").write_text('. "${REPO_ROOT}/scripts/lib/first.sh"\n')
     (scripts / "lib" / "first.sh").write_text('. "${REPO_ROOT}/scripts/lib/second.sh"\n')
     # Sourced with `source` rather than `.`, so the spelling the project does not use is
     # walked on the hop the project does not make.
     (scripts / "lib" / "second.sh").write_text('source "${REPO_ROOT}/scripts/lib/third.sh"\n')
-    (scripts / "lib" / "third.sh").write_text("# the end of the chain\n")
+    # The two the reviewer planted in round 1, both of which walked the whole sweep out of
+    # the door: the braceless `$REPO_ROOT`, and a library that is simply not under `lib/`.
+    # Neither is a shape this project writes today, which is exactly why nothing was red.
+    (scripts / "lib" / "third.sh").write_text(
+        '. "$REPO_ROOT/scripts/lib/fourth.sh"\n'
+        '. "${REPO_ROOT}/scripts/helpers/fifth.sh"\n'
+    )
+    (scripts / "lib" / "fourth.sh").write_text("# no braces got it here\n")
+    (scripts / "helpers" / "fifth.sh").write_text("# and this one is not in lib/\n")
 
     found = _sourced_libraries(scripts / "caller.sh", root=tmp_path)
 
-    assert [path.name for path in found] == ["first.sh", "second.sh", "third.sh"], (
-        "a library sourced by a library is outside the sweep, so anything that moves one "
-        f"hop further from a named script is audited by nothing: {[p.name for p in found]}"
+    assert [path.name for path in found] == [
+        "first.sh", "second.sh", "third.sh", "fourth.sh", "fifth.sh",
+    ], (
+        "a library sourced by a library, or named in a spelling this project does not "
+        "happen to use, is outside the sweep — so anything that moves one hop further "
+        f"from a named script is audited by nothing: {[p.name for p in found]}"
     )
 
 

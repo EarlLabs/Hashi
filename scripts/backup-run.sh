@@ -39,11 +39,12 @@
 #       `due` and `status` are the two that SPEAK ABOUT the record, and both of them refuse
 #       it rather than repeat it when it is not the file this writes: exit 1, naming the key
 #       that failed and never its contents. Both also say out loud when the record is dated
-#       ahead of this host's clock, which is the state in which every age on the screen is
-#       worthless — and `due` exits 1 for it rather than 0, because it is not a state
-#       anything watching this verb should read as a working schedule. What it is NOT any
-#       more is a schedule that has stopped: since M28.19 a due date ahead of this clock
-#       makes the next tick take a backup and write the date this host is on.
+#       ahead of this host's clock, AND WHICH HALF OF IT IS — a run timestamp out of the
+#       future makes every age on the screen worthless, a due date out of the future leaves
+#       them exact — and `due` exits 1 for either, because neither is a state anything
+#       watching this verb should read as a working schedule. What a due date ahead is NOT
+#       any more is a schedule that has stopped: since M28.19 it makes the next tick take a
+#       backup and write the date this host is on.
 #       `tick` and `now` take backups and assert nothing to anybody, so neither refuses.
 #
 #       ALL FOUR READ THE RECORD THROUGH scripts/lib/backup-record.sh AND NOTHING ELSE
@@ -113,7 +114,8 @@ nothing owed exits 0 and prints nothing, so a schedule that is working is quiet.
 
 `due` and `status` exit 1 when the record is not the file this script writes, and neither
 reads anything out of it in that case. `due` also exits 1 on a record dated ahead of this
-host's clock — that one IS read, and every age in it is worthless until a run rewrites it.
+host's clock — that one IS read, and the answer says which half is ahead: a RUN out of the
+future makes every age in it worthless, a DUE DATE out of the future does not.
 USAGE
   exit 2
 }
@@ -369,18 +371,29 @@ failed_since_the_last_success() {
 # success: 2027-03-01 (ok)" and `due` printed `action=wait`, exit 0.
 #
 # WHAT IS LEFT FOR THIS SECTION TO DO, now that M28.19 has made `decide` answer `run` to a
-# due date ahead of this clock: say so. The schedule repairs itself, and the record it
-# repairs itself out of was read on a screen in the meantime — so the ages in it, which is
-# the whole of what `status` prints, are still worthless until the run that rewrites them.
-# `note_clock` is therefore about the READING and `decide` is about the ACTION, and they
-# answer different questions about one file rather than the same question twice: this one
-# is also true of a record whose RUN TIMESTAMPS are ahead while its due date is today's,
-# which `decide` correctly leaves alone (see the branch there for why it must).
+# due date ahead of this clock: say WHICH DATE is ahead, because the two cost different
+# things and a sentence covering both is true of neither.
 #
-# The panel goes loud on the run timestamps only (M28.11, M28.14, and it is by its own
-# documented design — `_ahead` never reads `due_date`). So on the due-date half these two
-# channels are the ONLY ones that say anything, which is the reason the warning below
-# spells out which half of it the panel can be expected to repeat.
+#   - A RUN dated after the moment the file was read makes every age printed beside it
+#     worthless, and no run repairs it but a later run of the same kind. `decide` leaves
+#     this one alone on purpose (see the branch there).
+#   - A DUE DATE this host has not reached leaves those times exact — the record is read
+#     and printed as it is — and the next tick repairs it by taking a backup.
+#
+# Round 1 of this step's review found the first version of the warning asserting the first
+# of those about a record that had only the second wrong: `status` printed a success from
+# half an hour earlier, correctly, and then told the operator not to believe it, while the
+# panel said "last backup less than an hour ago" about the same file. Two channels, one
+# file, two answers — written into the paragraph whose job is to stop exactly that.
+#
+# `note_clock` is therefore about the READING and `decide` about the ACTION, they answer
+# different questions, and `note_clock` answers its own in two parts.
+#
+# The panel goes loud on `last_success` and `last_failure` only (M28.11, M28.14, and by its
+# own documented design — `_ahead` never reads `due_date`, and never reads `last_attempt`
+# either). So on the due-date half these two verbs are the ONLY channels that say anything,
+# which is why the warning below spells out which half the panel can be expected to
+# repeat.
 
 # One minute, exactly as control/app/services/backups.py::CLOCK_AHEAD_GRACE. A second or
 # two between two clocks is ordinary and is not what this is about; what this catches is a
@@ -403,35 +416,68 @@ ahead_of_now() {
 }
 
 CLOCK_AHEAD=""
+# WHICH HALF, and the flags exist because the two halves are different faults with
+# different consequences — which round 1 of this step's review found out the expensive way.
+# A RUN dated after the moment it was read makes every age printed beside it worthless. A
+# DUE DATE this host has not reached does not: the run times in such a record are exact,
+# printed exactly, and agree with the panel to the minute. One sentence covering both told
+# an operator to disbelieve a number that was right, on a screen where the panel said the
+# opposite about the same file — the two-channels-disagree defect, written into the warning
+# whose own job is to stop it. So the reading is split here and the warning is composed
+# from it, rather than hedged into a sentence that is true of neither.
+CLOCK_AHEAD_RUN=""
+CLOCK_AHEAD_DUE=""
 
 # Set once, from the record that has already been read. Both the run timestamps and the due
 # date are asked, because they fail in different orders: a clock put back leaves timestamps
-# ahead of now, and a due date ahead of today's is what actually stops the schedule.
+# ahead of now, and a due date ahead of today's is what actually stops the schedule. Both
+# can be true at once — a clock that jumped forward and was put back leaves both — so these
+# are two independent questions and not a chain of `elif`.
 note_clock() {
-  CLOCK_AHEAD=""
+  CLOCK_AHEAD=""; CLOCK_AHEAD_RUN=""; CLOCK_AHEAD_DUE=""
   if ahead_of_now "${LAST_AT}" || ahead_of_now "${OK_AT}" || ahead_of_now "${BAD_AT}"; then
-    CLOCK_AHEAD="yes"
-  elif [ -n "${STATE_DUE}" ] && [[ "$(due_date)" < "${STATE_DUE}" ]]; then
-    CLOCK_AHEAD="yes"
+    CLOCK_AHEAD_RUN="yes"
   fi
+  if [ -n "${STATE_DUE}" ] && [[ "$(due_date)" < "${STATE_DUE}" ]]; then
+    CLOCK_AHEAD_DUE="yes"
+  fi
+  [ -z "${CLOCK_AHEAD_RUN}${CLOCK_AHEAD_DUE}" ] || CLOCK_AHEAD="yes"
 }
 
 # Said in the same words on both verbs, so an operator who reads one and then the other is
-# not told two different things about one host. Quoted heredoc: it names a command.
+# not told two different things about one host — and, since round 1, said about the half
+# that is actually wrong. The opening line is shared because it is true of both halves: a
+# date in this record is ahead of this host, whichever date it is. Quoted heredocs: they
+# name commands and a variable.
 clock_ahead_warning() {
   cat <<'MSG'
 THIS RECORD IS DATED AHEAD OF THIS HOST'S CLOCK.
+MSG
+  if [ -n "${CLOCK_AHEAD_RUN}" ]; then
+    cat <<'MSG'
 
-Something in it claims to have happened after the moment it was just read, so no age here
-can be believed: a backup taken weeks ago reads as one taken this morning. Fix the clock on
-this host.
+A RUN IN IT claims to have happened after the moment it was just read, so no age here can
+be believed: a backup taken weeks ago reads as one taken this morning. Fix the clock on
+this host. That timestamp stays in the record until a later run of the same kind replaces
+it — a success replaces the last success, a failure the last failure. The panel says the
+same thing about a last SUCCESS or a last FAILURE dated ahead; the last attempt is not a
+field it reads, so a record where only that one is ahead is said here and nowhere else.
+MSG
+  fi
+  if [ -n "${CLOCK_AHEAD_DUE}" ]; then
+    cat <<'MSG'
 
-A DUE DATE ahead of this clock no longer stops the schedule — the next scheduled run takes
-a backup and records the date this host is actually on, so that half repairs itself at the
-cost of one extra dump. The panel does not read the due date, so this may be the only place
-that half is said at all. A RUN dated ahead is the half the panel does go loud about, and
-it stays in this file until a later run of the same kind replaces it. `make backup` takes
-one now whatever the record says.
+ITS DUE DATE is a day this host has not reached, which is what a clock that moved or a
+HASHI_BACKUP_TZ moved west leaves behind. The run times in this record are NOT affected by
+that and are printed as they are. Nothing is stuck either: the next scheduled run takes a
+backup and records the day this host is on, which is one extra dump and then a record that
+reads normally. Check this host's clock and HASHI_BACKUP_TZ — one of the two moved. The
+panel does not read the due date at all, so this may be the only place this half is said.
+MSG
+  fi
+  cat <<'MSG'
+
+`make backup` takes one now whatever the record says.
 MSG
 }
 
@@ -478,8 +524,9 @@ decide() {
     # back to `wait`.
     #
     # AND IT IS KEYED ON THE DUE DATE, not on `note_clock`/`CLOCK_AHEAD`, although that is
-    # this script's other reading of "dated ahead" and `tick` is the one verb that never
-    # calls it. `note_clock` is also true when a RUN TIMESTAMP is ahead — and a successful
+    # this script's other reading of "dated ahead" — it is asked only by `due` and
+    # `status`, the two verbs that speak, and by neither of the two that take backups.
+    # `note_clock` is also true when a RUN TIMESTAMP is ahead — and a successful
     # run rewrites `last_attempt` and `last_success` but never `last_failure`, so a record
     # holding an ahead `last_failure` would satisfy it again after every run, for ever, and
     # this branch would dump every fifteen minutes on a host whose backups were working.
@@ -1050,7 +1097,8 @@ MSG
       echo "  days with no backup: ${MISSED_TOTAL} — this record no longer names which"
     fi
   fi
-  # Last of the reading and before the caveat, because it is about every age above it.
+  # Last of the reading and before the caveat, because what it says is about the reading
+  # above it — which half of it is ahead decides which paragraph comes out.
   note_clock
   if [ -n "${CLOCK_AHEAD}" ]; then
     echo

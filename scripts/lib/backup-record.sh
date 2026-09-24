@@ -22,9 +22,10 @@
 #       date ahead of the clock (M28.19), `due` exits 1, and the panel goes loud only when
 #       a RUN TIMESTAMP is ahead — `control/app/services/backups.py::_ahead` reads
 #       `last_success` and `last_failure` and never `due_date`, by its own documented
-#       design, so a record whose due date alone is ahead draws no banner at all. Verified
-#       by reading both records through that module. Do not read the paragraph above as
-#       having covered any of it.
+#       design, so a record whose due date alone is ahead draws no CLOCK banner at all —
+#       one whose runs are also old still goes loud about their age, which is a different
+#       sentence about a different thing. Verified by reading both records through that
+#       module. Do not read the paragraph above as having covered any of it.
 #
 #       That is the shape M28.12 named and M28.13 closed one level down, in
 #       `scripts/lib/env-value.sh`, and the lesson is the same: the defect was never one

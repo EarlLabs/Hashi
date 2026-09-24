@@ -3,9 +3,11 @@
 WHAT: the fifth and sixth surfaces of one defect, and the guards that keep them shut.
       ``make backup-status`` may not say a schedule exists without asking the thing that
       knows; ``scripts/backup-run.sh due`` may not read facts out of a record it could not
-      parse; both must say out loud that a record dated ahead of this host's clock makes
-      every age they print worthless, and the tick must take a backup rather than wait for
-      that date (M28.19); the exit-3 advice may not outlive the failure it is about; the
+      parse; both must say out loud that a record is dated ahead of this host's clock, and
+      say WHICH half is — a run out of the future makes every age they print worthless, a
+      due date out of the future does not — and the tick must take a backup rather than
+      wait for that date (M28.19); the exit-3 advice may not outlive the failure it is
+      about; the
       missed-days label may not be printed with nothing after it; a record that was merely
       re-indented is a good record; and ``HASHI_BACKUP_ENABLED`` is answered from the env
       file for the uploader exactly as it already is for the recorder.
@@ -48,11 +50,15 @@ RUNNER = REPO / "scripts" / "backup-run.sh"
 INSTALLER = REPO / "scripts" / "backup-schedule.sh"
 BACKUP = REPO / "scripts" / "backup.sh"
 RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
-# Every shell surface, the same list the other audits keep — the guards below sweep all
-# of them rather than the one script that holds the readers today.
-SHELL_SURFACES = sorted((REPO / "scripts").glob("*.sh")) + sorted(
-    (REPO / "scripts" / "lib").glob("*.sh")
-)
+# Every shell surface, the same reach the other audit has — the guards below sweep all of
+# them rather than the one script that holds the readers today.
+#
+# RECURSIVE SINCE M28.19 ROUND 1, and it is the same finding as the one over there: this
+# knew `scripts/` and `scripts/lib/` and nothing else, so a reader of the record placed in
+# any other subdirectory — `scripts/acceptance/` and `scripts/security/` both exist and
+# both hold shell — was outside every guard below. Three files join the sweep and none of
+# them mentions the record, so this is a widening rather than a change of verdict.
+SHELL_SURFACES = sorted((REPO / "scripts").glob("**/*.sh"))
 
 # A crontab of this account's own, in a file, under a `crontab` command that behaves like
 # the real one in the two ways anything here depends on: `-l` exits non-zero when there is
@@ -331,7 +337,22 @@ A_CLOCK_THAT_JUMPED = {
     "last_attempt": {**A_GOOD_RUN, "at": AHEAD},
     "last_success": {**A_GOOD_RUN, "at": AHEAD},
 }
-A_DUE_DATE_AHEAD_ON_ITS_OWN = {"due_date": "2099-03-01"}
+# A REAL RUN, RECENTLY, and it is what makes the shape below the reviewer's rather than a
+# convenient one: the times in that record are exact, and a warning printed over them has to
+# be true of exact times. Round 1 of this step's review found the sentence that was not.
+A_REAL_RUN_HALF_AN_HOUR_AGO = {
+    "at": (
+        datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "due_date": today_in("Etc/UTC"),
+    "exit_code": 0,
+    "outcome": "on-this-host-only",
+}
+A_DUE_DATE_AHEAD_ON_ITS_OWN = {
+    "due_date": "2099-03-01",
+    "last_attempt": A_REAL_RUN_HALF_AN_HOUR_AGO,
+    "last_success": A_REAL_RUN_HALF_AN_HOUR_AGO,
+}
 
 
 def test_due_reads_the_record_and_says_the_ages_in_it_are_worthless(tmp_path) -> None:
@@ -465,8 +486,9 @@ def test_a_run_timestamp_ahead_does_not_make_the_tick_dump(tmp_path) -> None:
     is keyed on the due date, the half that stops the schedule and the half every run
     rewrites.
 
-    Both channels still SAY it: the ages in the record are worthless either way, and that
-    is a statement about the reading rather than about the action.
+    Both channels still SAY it — and here the age sentence is the true one, because it is a
+    run that is ahead. What is being held apart is that speaking about a reading and
+    deciding an action are different questions about one file.
     """
     state = a_record(
         tmp_path, due_date=today_in("Etc/UTC"),
@@ -489,6 +511,70 @@ def test_a_run_timestamp_ahead_does_not_make_the_tick_dump(tmp_path) -> None:
     assert ticked.returncode == 0, (
         f"the tick reached the record's directory, so it decided to run:\n{ticked.stderr}"
     )
+
+
+def flowing(text: str) -> str:
+    """One invocation's output with its line wrapping collapsed, for reading a SENTENCE.
+
+    The warnings here are wrapped heredocs, so *"no age here can be believed"* is split
+    across two lines in the output and a literal substring search for it passes whatever
+    the text says — which is a negative assertion that cannot fail, the shape M28.16 spent
+    a step on. Found while writing round 1's fix: the first version of the test below was
+    green against the sentence it was written to forbid.
+    """
+    return " ".join(text.split())
+
+
+def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(tmp_path) -> None:
+    """Round 1's High, and it is this milestone's own defect written into the warning.
+
+    The first version of this step's message said, of every record it was printed over,
+    that *"something in it claims to have happened after the moment it was just read, so no
+    age here can be believed"*. That is a statement about a RUN TIMESTAMP. On the shape
+    this step is actually about — a due date ahead because a clock or a zone moved, with
+    real runs behind it — it is false: ``make backup-status`` printed a success timestamp
+    from half an hour ago, correctly, and then told the operator not to believe it, while
+    the panel reading the same file said *"Last backup less than an hour ago"*. One host,
+    one file, two channels, two answers — which is the thing `clock_ahead_warning` exists
+    to prevent, arriving inside `clock_ahead_warning`.
+
+    So the warning is composed from ``note_clock``'s two flags rather than hedged.
+    """
+    state = a_record(tmp_path, **A_DUE_DATE_AHEAD_ON_ITS_OWN)
+    said = run("status", an_env(tmp_path), state, a_host(tmp_path, crontab=True))
+
+    assert said.returncode == 0, said.stderr
+    printed = flowing(said.stdout)
+    assert A_REAL_RUN_HALF_AN_HOUR_AGO["at"] in printed, (
+        f"the record's own run time is not printed, so this test is not the shape:\n"
+        f"{said.stdout}"
+    )
+    assert "no age here can be believed" not in printed, (
+        "the times above that sentence are exact and agree with the panel to the minute, "
+        f"and this tells the operator to disbelieve them:\n{said.stdout}"
+    )
+    assert "ITS DUE DATE is a day this host has not reached" in printed, said.stdout
+    assert "The run times in this record are NOT affected by that" in printed, said.stdout
+
+
+def test_a_run_dated_ahead_still_says_no_age_can_be_believed(tmp_path) -> None:
+    """The other half, unchanged and still said — this is the half the sentence is about.
+
+    A record holding a run out of the future does make every age printed beside it
+    worthless, and the panel goes loud about exactly this one, so the two channels say the
+    same thing. Held here because narrowing a warning is one edit away from removing it.
+    """
+    state = a_record(tmp_path, **A_CLOCK_THAT_JUMPED)
+    said = run("status", an_env(tmp_path), state, a_host(tmp_path, crontab=True))
+
+    printed = flowing(said.stdout)
+    assert "A RUN IN IT claims to have happened after the moment it was just read" in (
+        printed
+    ), said.stdout
+    assert "no age here can be believed" in printed, said.stdout
+    # Both halves are wrong in this record — the clock jumped and was put back — so both
+    # paragraphs are printed. They are independent questions, not a chain.
+    assert "ITS DUE DATE is a day this host has not reached" in printed, said.stdout
 
 
 def test_an_ordinary_record_says_none_of_that(tmp_path) -> None:
