@@ -46,6 +46,8 @@ RUNNER = REPO / "scripts" / "backup-run.sh"
 BACKUP = REPO / "scripts" / "backup.sh"
 INSTALLER = REPO / "scripts" / "backup-schedule.sh"
 BOOTSTRAP = REPO / "scripts" / "panel-bootstrap.sh"
+TUNNEL = REPO / "scripts" / "management-tunnel.sh"
+ENV_VALUE = REPO / "scripts" / "lib" / "env-value.sh"
 FETCHER = REPO / "deploy" / "backup" / "fetch.py"
 ENV_EXAMPLE = REPO / ".env.example"
 RUNBOOK = REPO / "docs" / "deploy" / "runbook.md"
@@ -533,12 +535,14 @@ def drive(env_file: pathlib.Path, functions: str, call: str) -> subprocess.Compl
     Sliced out and RUN for the reason round 1 gave: the first version of both checks was
     string equality between whole lines, and reading the script would not have told
     anybody that a file with Windows line endings walks past them. ``env_value_of`` comes
-    along every time, because it is the half that does the work.
+    along every time, because it is the half that does the work — and it is SOURCED from
+    the library rather than sliced out of the bootstrap, because M28.13 moved it there.
+    Sourcing the real file is what keeps this a test of the parser those scripts use.
     """
     program = (
         "set -euo pipefail\n"
         'ENV_FILE="$1"\nTEMPLATE="$2"\n'
-        + sliced("env_value_of")
+        + f'. "{ENV_VALUE}"\n'
         + functions
         + call
     )
@@ -691,28 +695,66 @@ def test_a_hash_somebody_made_is_not_mistaken_for_the_placeholder(tmp_path, endi
     assert is_the_placeholder(path).stdout.strip() == "PROCEED"
 
 
-def test_one_env_file_parser_in_this_script_and_no_second_one(bootstrap: str) -> None:
+def test_one_env_file_parser_in_this_repository_and_no_second_one() -> None:
     """The defect round 1 found was one parser being weaker than the one beside it.
 
-    Both "is this still the template's value" checks are now the same call, and the third
-    reader in this file — the loopback bind address — went through it as well. What this
-    pins is that the next one does too: a second ``sed`` pulling a `HASHI_` value out of
-    the env file is how the pair drifts apart again, and it drifts silently, because the
+    Both "is this still the template's value" checks are the same call, and the third
+    reader in the bootstrap — the loopback bind address — went through it as well. What
+    this pins is that the next one does too: a second ``sed`` pulling a `HASHI_` value out
+    of an env file is how the pair drifts apart again, and it drifts silently, because the
     weaker parser gives the right answer on every file anybody tests with.
+
+    M28.13 widened it from one script to the repository, because there WAS a second one all
+    along — ``management-tunnel.sh`` kept the first-assignment-wins, no-``\r`` version, and
+    it wrote a carriage return into the host's own tunnel config and into every device
+    config an operator pastes onto a phone. Three scripts now share
+    ``scripts/lib/env-value.sh`` the way two share the env-file gate.
 
     ``has_value`` is excluded by shape and deliberately: it asks whether a key has any
     value at all, compares nothing, and a stray `\r` reads as empty there, which is the
     answer it should give.
     """
+    library = ENV_VALUE.read_text()
+    assert library.count("env_value_of() {") == 1, "two copies of the extraction"
+    for part in ("tail -n 1", "tr -d '\\r'", "[[:space:]]\\{1,\\}#.*$"):
+        assert part in library, f"the shared parser no longer does {part}"
+
     a_second_parser = (
-        r'sed -n "?\'?s/\^\[\[:space:\]\]\*(?:\$1|HASHI_)[^\n]*ENV_FILE'
+        r'sed -n "?\'?s/\^\[\[:space:\]\]\*(?:\$1|\$2|HASHI_)[^\n]*(?:ENV_FILE|"\$1")'
     )
-    readers = re.findall(a_second_parser, bootstrap)
-    assert readers == [], f"a second env-file value parser is back: {readers}"
-    assert bootstrap.count("env_value_of() {") == 1, "two copies of the extraction"
+    for script in (BOOTSTRAP, RUNNER, TUNNEL):
+        text = script.read_text()
+        assert '/scripts/lib/env-value.sh"' in text, f"{script.name} does not source it"
+        assert "env_value_of() {" not in text, (
+            f"{script.name} defines the parser again instead of sourcing it"
+        )
+        readers = re.findall(a_second_parser, text)
+        assert readers == [], f"a second env-file value parser is back in {script.name}"
+
+    bootstrap = BOOTSTRAP.read_text()
     for user in ("hash_is_the_placeholder", "mgmt_is_the_template", "PRIVATE_BIND="):
         assert "env_value_of" in bootstrap.split(user, 1)[1][:400] or user in bootstrap, user
     assert 'PRIVATE_BIND="$(env_value_of' in bootstrap
+
+    # The tunnel generator reads five values and every one of them lands in a file or in a
+    # printed device config, so every one of them goes through the shared parser.
+    tunnel = TUNNEL.read_text()
+    for key in (
+        "HASHI_MGMT_ADDRESS",
+        "HASHI_MGMT_PORT",
+        "HASHI_MGMT_ENDPOINT",
+        "HASHI_MGMT_MTU",
+        "HASHI_MGMT_PEERS",
+    ):
+        assert f'env_value_of "${{ENV_FILE}}" {key}' in tunnel, key
+
+    # The schedule's three-name whitelist is NOT the library's business and must not have
+    # followed the extraction out of the script it constrains (M28.5). It still refuses,
+    # and it still refuses BEFORE the read.
+    body = re.search(r"env_value\(\) \{\n((?:.*\n)*?)^\}$", RUNNER.read_text(), re.M).group(1)
+    assert body.index("exit 2") < body.index("env_value_of"), (
+        "the whitelist no longer stands in front of the read"
+    )
 
 
 def test_a_compose_that_cannot_be_asked_says_so_rather_than_going_quiet(

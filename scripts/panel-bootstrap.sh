@@ -107,20 +107,14 @@ has_value() {
 # above it, walking past it means the unfilled placeholder reaches the control plane and
 # an operator meets a three-minute health-check timeout about a container instead of a
 # one-second sentence naming the variable. A comparison a line ending can defeat is not a
-# comparison.
+# comparison. Used on BOTH sides of every such comparison, so the template may be written
+# either way too; it reads named values and never prints one, the rule for this file since
+# M6.5.
 #
-# The extraction is `scripts/backup-run.sh::env_value`'s, minus the name whitelist that
-# belongs to a script running unattended: last assignment wins, `\r` goes, a trailing
-# comment goes, surrounding quotes come off. Used on BOTH sides of every such comparison,
-# so the template may be written either way too. It reads named values and never prints
-# one — the rule for this file since M6.5.
-env_value_of() {
-  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" \
-    | tail -n 1 \
-    | tr -d '\r' \
-    | sed -e 's/[[:space:]]\{1,\}#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
-          -e 's/[[:space:]]*$//'
-}
+# THE IMPLEMENTATION IS THE LIBRARY'S, not this file's, since M28.13 found the same weak
+# parser a third time in `scripts/management-tunnel.sh`. The library says why.
+# shellcheck source=lib/env-value.sh
+. "${REPO_ROOT}/scripts/lib/env-value.sh"
 
 # THE refusal. Everything else in this script is about uptime; this is about a person.
 #

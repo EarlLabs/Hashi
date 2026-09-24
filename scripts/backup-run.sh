@@ -108,18 +108,20 @@ USAGE
 # minutes, with its output going wherever cron sends it.
 SCHEDULE_KEYS=" HASHI_BACKUP_AT HASHI_BACKUP_TZ HASHI_BACKUP_ENABLED "
 
+# shellcheck source=lib/env-value.sh
+. "${REPO_ROOT}/scripts/lib/env-value.sh"
+
 env_value() {
   case "${SCHEDULE_KEYS}" in
     *" $1 "*) ;;
     *) echo "scripts/backup-run.sh may not read ${1} out of an env file." >&2; exit 2 ;;
   esac
   [ -f "${ENV_FILE}" ] || return 0
-  # Last assignment wins, the way an env file is read; surrounding quotes and a trailing
-  # comment-free value only — these three are a time, a zone name and 0/1.
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "${ENV_FILE}" \
-    | tail -n 1 \
-    | sed -e 's/[[:space:]]\{1,\}#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
-          -e 's/[[:space:]]*$//'
+  # The whitelist above is this script's own and stays here, in front of the read. The
+  # EXTRACTION is the library's — last assignment wins, the way an env file is read, and
+  # since M28.13 a `\r` goes with it. Nothing this script reads changes: all three values
+  # pass through `sanitised` below, whose allowlist never admitted a carriage return.
+  env_value_of "${ENV_FILE}" "$1"
 }
 
 # Everything that reaches the record comes through here. The values are read from a file
