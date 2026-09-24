@@ -187,6 +187,22 @@ async def standing_of(path: pathlib.Path) -> console.BackupStanding:
     return console.backup_standing(await backups.read(path, now=NOW))
 
 
+def flowing(text: str) -> str:
+    """The same text with every run of whitespace collapsed to one space.
+
+    EVERY ASSERTION THAT SOMETHING IS ABSENT GOES THROUGH THIS. A negative assertion over
+    text that may wrap cannot fail: ``"no age here can be believed" not in body`` passes
+    whatever the sentence says the moment a line break lands inside it, and it passes
+    silently, for ever, while the suite is green. The infra zone grew the same helper for
+    the same reason and the class has now been found twice in this milestone; a rendered
+    page is markup with indentation in it, so this side needs it at least as much.
+
+    The positive direction is left alone on purpose: an assertion that a phrase IS present
+    fails loudly when it wraps, which is a bad day rather than a silent hole.
+    """
+    return " ".join(text.split())
+
+
 # --- the reading, and every way a file can disappoint -------------------------------
 
 async def test_no_record_at_all_is_nothing_recorded_and_not_an_error(
@@ -856,6 +872,200 @@ async def test_a_clock_a_moment_out_is_not_worth_a_sentence(written) -> None:
     assert outside.success_ahead is True
 
 
+# --- and the other date in the record, which nothing here used to read (M28.20) -----
+
+# A day no clock on Earth had reached when NOW was read, and the shape the plan seeded by
+# hand. Everything about this record except the due date is a healthy host: a success four
+# hours ago, no failure since, no missed day.
+A_DAY_NOBODY_HAS_REACHED = "2099-01-01"
+
+# The sentence the command line carried until M28.19 and had to have taken off it, because
+# the tick now takes a backup over a due date it does not trust and the run rewrites the
+# date whether or not the dump succeeds. It must not reappear on this screen: it would be
+# the same false claim, on the channel that has even less right to make it, since the panel
+# cannot see whether a schedule is installed at all.
+A_STOPPED_SCHEDULE = (
+    "nothing is backed up at all",
+    "the schedule has stopped",
+    "no backup is being taken",
+)
+# ...and what a panel that had grown a second copy of the schedule's reasoning would say.
+# It reads one file; when the next backup is owed, and what the next tick will do about a
+# record like this, are answered in scripts/backup-run.sh by CALLING `decide`, and a
+# restatement of that on a screen is the defect this milestone is made of.
+A_SECOND_COPY_OF_THE_SCHEDULE = (
+    "the next backup",
+    "the next run will",
+    "the next tick",
+    "will take a backup",
+)
+
+
+async def test_a_due_date_this_host_has_not_reached_is_not_the_quiet_state(
+    client, written
+) -> None:
+    """The eighth surface, and the only one where a channel said too LITTLE.
+
+    ``_ahead`` read the two run timestamps and never the record's own due date, which was
+    deliberate and documented — and so a record owed for a day in the next century, with an
+    ordinary recent success beside it, drew the muted note with no word over it. Measured
+    before the fix: ``success_ahead=False failure_ahead=False``, ``label=None``,
+    ``loud=False``, while ``scripts/backup-run.sh due`` exited 1 over the same file.
+    """
+    written(record(due_date=A_DAY_NOBODY_HAS_REACHED, last_success=live(4),
+                   last_attempt=live(4)))
+
+    body = (await client.get("/panel/")).text
+
+    assert ">clock ahead<" in body, "the quiet state is still where this hides"
+    assert A_DAY_NOBODY_HAS_REACHED in body, "the date it cannot place is not named"
+    assert "no timezone accounts for" in body
+
+
+async def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(
+    written,
+) -> None:
+    """The half that is NOT the run timestamps, and the distinction that cost M28.19 a round.
+
+    A record whose due date alone is ahead has exact run times: they are printed as they
+    are, and ``make backup-status`` prints the same ones to the minute. One sentence
+    covering both halves told an operator to disbelieve a number that was right, which is
+    the two-channels-disagree defect written into the very paragraph whose job is to stop
+    it. So the age is still an age here, and the "no age can be believed" clause is absent.
+    """
+    said = await standing_of(
+        written(record(due_date=A_DAY_NOBODY_HAS_REACHED, last_success=run(4),
+                       last_attempt=run(4)))
+    )
+
+    assert "Last backup 4 hours ago" in said.headline
+    assert console.BACKUP_AGE_UNKNOWABLE not in flowing(said.headline + said.detail)
+    assert "no age on this screen can be believed" not in flowing(said.detail)
+    assert "It does not touch the run times in it" in said.detail
+
+
+async def test_a_record_with_both_dates_ahead_says_both_things(written) -> None:
+    """A clock that jumped forward and was put back leaves both, so both are said.
+
+    Two independent conditions and not a chain of ``elif`` — the same shape
+    ``scripts/backup-run.sh::note_clock`` settled on one step earlier, where the flags are
+    ``CLOCK_AHEAD_RUN`` and ``CLOCK_AHEAD_DUE`` and are set by two separate ``if``s.
+    """
+    reading = await backups.read(
+        written(record(due_date=A_DAY_NOBODY_HAS_REACHED, last_success=run(-30),
+                       last_attempt=run(-30))),
+        now=NOW,
+    )
+    assert reading.success_ahead is True and reading.due_ahead is True
+
+    said = console.backup_standing(reading)
+    assert "no age on this screen can be believed" in said.detail
+    assert f"Its due date is {A_DAY_NOBODY_HAS_REACHED}" in said.detail
+    # One opening line over the two, said once, because it is the only thing true of both.
+    assert flowing(said.detail).count("is AHEAD of the clock this panel read it") == 1
+
+
+async def test_a_due_date_a_timezone_could_explain_is_left_alone(written) -> None:
+    """The grace is the width of the calendar, not a tolerance for skew.
+
+    The writer resolves the due date in the SCHEDULE'S zone and this reader has one clock,
+    in UTC. A host scheduled in Pacific/Kiritimati is honestly a day ahead of UTC for ten
+    hours out of every twenty-four, so a comparison without ``DUE_AHEAD_GRACE`` would put a
+    standing complaint about a clock on the front page of a host backing itself up
+    perfectly, every day — which is how a banner becomes furniture.
+
+    What that leaves unseen is stated rather than hidden: the day-ahead record a
+    ``HASHI_BACKUP_TZ`` moved west leaves behind is this same shape from this reader's
+    side, and telling the two apart needs the zone the host is set to NOW — which is in
+    ``.env`` and is not a file this panel may open.
+    """
+    tomorrow = (NOW + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    quiet = await backups.read(written(record(due_date=tomorrow)), now=NOW)
+    assert quiet.due_ahead is False
+    assert console.backup_standing(quiet).loud is False
+
+    over = (NOW + datetime.timedelta(days=2)).strftime("%Y-%m-%d")
+    assert (await backups.read(written(record(due_date=over)), now=NOW)).due_ahead is True
+
+
+@pytest.mark.parametrize(
+    "due_date",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("", id="empty"),
+        pytest.param("tomorrow", id="not-a-date"),
+        pytest.param(20990101, id="not-a-string"),
+        pytest.param("2099-1-1", id="no-leading-zeros"),
+    ],
+)
+async def test_a_due_date_this_panel_cannot_read_is_not_an_unreadable_record(
+    written, due_date
+) -> None:
+    """Lenient on purpose, and the reason is the other channel rather than this one.
+
+    ``scripts/lib/backup-record.sh`` reads ``due_date`` without validating it, deliberately
+    (M28.18): validating it there would refuse files the panel reads happily, which is the
+    two-channel disagreement arriving from the strict side. Refusing one HERE opens the
+    same seam from this end — a record ``make backup-status`` prints in full and this panel
+    calls unreadable. So an unreadable due date costs one sentence and nothing else.
+    """
+    reading = await backups.read(written(record(due_date=due_date)), now=NOW)
+
+    assert reading.standing is backups.Standing.FRESH
+    assert reading.record.due_date == ""
+    assert reading.due_ahead is False
+    assert console.backup_standing(reading).loud is False
+
+
+async def test_a_missing_due_date_is_not_a_damaged_record(written) -> None:
+    """The key absent altogether, which the closed key set says cannot happen and a hand
+    edit says can."""
+    without = record()
+    del without["due_date"]
+
+    reading = await backups.read(written(without), now=NOW)
+    assert reading.standing is backups.Standing.FRESH
+    assert reading.due_ahead is False
+
+
+async def test_the_due_date_half_never_says_the_schedule_has_stopped(written) -> None:
+    """The sentence M28.19 took OFF the command line, which must not reappear here.
+
+    A due date ahead used to stop the tick dead, so *"nothing is backed up at all"* was
+    true of it; the tick now takes a backup and the run rewrites the date whether or not
+    the dump succeeds, so it is false and the state clears itself. This panel has even less
+    standing to say it — it reads one record and cannot see whether a schedule is installed
+    at all — and it must not work out the answer for itself either: when a backup is next
+    owed is the schedule's own reasoning, stated in one place by calling ``decide``, and a
+    second copy of it on a screen is this milestone's defect in a new costume.
+
+    Swept over every standing with a record, because the clause is one helper and four
+    branches reach it.
+    """
+    for standing, body in _every_standing_with_a_record().items():
+        reading = await backups.read(
+            written({**body, "due_date": A_DAY_NOBODY_HAS_REACHED}), now=NOW
+        )
+        assert reading.standing is standing
+        assert reading.due_ahead is True
+
+        said = console.backup_standing(reading)
+        # Collapsed first: a claim that a sentence is absent, asserted over text that may
+        # wrap, is an assertion that cannot fail.
+        whole = flowing(said.headline + " " + said.detail).lower()
+        for phrase in A_STOPPED_SCHEDULE + A_SECOND_COPY_OF_THE_SCHEDULE:
+            assert phrase not in whole, f"{standing}: {phrase}"
+        # ...and it does say the thing the record does license, under all four.
+        assert f"Its due date is {A_DAY_NOBODY_HAS_REACHED}" in said.detail, standing
+        assert "check both on that host" in said.detail, standing
+        # The clause about the run times rides on there being some. NEVER has none, and a
+        # sentence about run times over a record with no run in it is the generalisation
+        # this milestone keeps paying for.
+        assert ("It does not touch the run times" in said.detail) is (
+            standing is not backups.Standing.NEVER
+        ), standing
+
+
 # --- the schedule this panel cannot see (M28.14) ------------------------------------
 
 def _every_standing_with_a_record() -> dict[backups.Standing, dict]:
@@ -936,6 +1146,7 @@ def test_nothing_this_panel_says_about_the_schedule_needs_a_second_source() -> N
                 zone="Europe/Belgrade",
                 zone_source="configured",
                 offsite="yes",
+                due_date="2026-09-23",
                 missed_dates=(),
                 missed_total=0,
                 last_attempt=None,
@@ -951,6 +1162,7 @@ def test_nothing_this_panel_says_about_the_schedule_needs_a_second_source() -> N
             missed_recently=0,
             success_ahead=False,
             failure_ahead=False,
+            due_ahead=False,
         )
     )
 
@@ -1359,9 +1571,10 @@ async def test_the_reading_that_reaches_a_screen_carries_no_request_and_no_perso
         "missed_recently",
         "success_ahead",
         "failure_ahead",
+        "due_ahead",
     ]
     assert [field.name for field in dataclasses.fields(backups.Record)] == [
-        "at", "at_source", "zone", "zone_source", "offsite", "missed_dates",
+        "at", "at_source", "zone", "zone_source", "offsite", "due_date", "missed_dates",
         "missed_total", "last_attempt", "last_success", "last_failure",
     ]
     assert [field.name for field in dataclasses.fields(backups.Run)] == [

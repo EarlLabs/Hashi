@@ -25,7 +25,18 @@ WHY:  the dangerous state is not "the backup failed", it is "the backup has been
       bucket was, by default, talking about a bucket that does not exist. The two claims
       are different and both are said now: where the run went, which this host recorded,
       and whether the artifact is still there, which nothing here will ever know.
-HOW:  the file is a bind mount, read-only, so there is no writer here and there is not
+
+      AND THE SAME MISTAKE FROM THE OTHER SIDE, which is M28.20. Every other correction in
+      this milestone was a channel asserting more than the record licensed; this one was
+      this module declining to read a field the record states plainly. ``due_date`` was
+      dropped as repeating what ``last_attempt`` already said — it does not — so a record
+      naming a day this host had not reached went past here without a word, and the panel
+      answered with the quietest sentence it has. What is read now is one bit, and the
+      sentence composed from it stays inside what one file can support: which day the
+      record says it is owed for, against the clock this reader already holds. What the
+      SCHEDULE will do about that is not asked here and may not be guessed at — see
+      ``Reading.due_ahead``.
+HOW:the file is a bind mount, read-only, so there is no writer here and there is not
       going to be one. It is parsed STRICTLY and every way it can disappoint degrades to
       one of two answers, ``ABSENT`` or ``UNREADABLE``: a mount that arrived empty, a
       shell script that wrote the file badly, a hand edit, or a path pointing at
@@ -122,6 +133,38 @@ A_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # wrong time, and that is worth a sentence because it makes every age on this screen wrong.
 CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
 
+# The same question for the record's DUE DATE, which is a calendar day rather than a moment
+# and so cannot be graced by a minute. M28.20: until then this module read the two run
+# timestamps and never the due date, so a record naming a day this host has not reached —
+# ``"due_date": "2099-01-01"`` — drew the quietest screen this feature has, permanently.
+#
+# WHY A WHOLE DAY OF GRACE, AND WHY IT IS NOT SLACK. The due date is resolved by the writer
+# in the SCHEDULE'S zone (``Record.zone``), and this reader has one clock, in UTC. The
+# inhabited zones run from UTC−12 to UTC+14, so a due date resolved honestly in any of them
+# is at most one day either side of this reader's own date, and a comparison without this
+# grace would put a standing complaint about a clock on the front page of every host
+# scheduled east of UTC, for ten hours out of every day, while that host was backing itself
+# up perfectly. A banner that appears daily on a healthy host is the ``RECENT_GAP`` mistake
+# in a new place: it becomes furniture and stops being read.
+#
+# So this is not a tolerance for skew, it is the width of the calendar. Over it, the
+# record names a day that has not begun anywhere on Earth, and NO timezone explains it —
+# which is the whole of what this reader is entitled to conclude from one file.
+#
+# WHAT THAT LEAVES UNSEEN, because it is the state the plan reproduced organically and it
+# is not caught here. Moving ``HASHI_BACKUP_TZ`` west across the date line leaves a record
+# due one day ahead of this reader, which is exactly the shape a host legitimately
+# scheduled in Pacific/Kiritimati writes every day. The two are indistinguishable from this
+# file: telling them apart needs the zone the host is set to NOW, and that lives in ``.env``
+# — which this panel may not open — while the record's own ``zone`` is the one the LAST RUN
+# used and so is the very thing that changed. ``scripts/backup-run.sh due`` reads the
+# configured zone and does catch it; this reads one file and says nothing about it rather
+# than guessing. Resolving ``Record.zone`` here instead was considered and refused: it is
+# filesystem I/O off a string from a disk file on the path that draws a screen, and it
+# needs a zone database this image is not asserted to carry, so it would fail by going
+# quiet.
+DUE_AHEAD_GRACE = datetime.timedelta(days=1)
+
 # How far back a day with no backup still counts as part of what is happening now.
 #
 # ``missed_total`` is cumulative and never falls, which is right — it is the record's whole
@@ -217,9 +260,11 @@ class Run:
     sentences are composed in ``services/console.py`` like every other thing this panel
     says.
 
-    The record carries a ``due_date`` on each entry as well. It is not read here: what it
-    answers — which day's backup this run was for — is the scheduler's own business, and
-    a field with no reader is a field that quietly goes wrong.
+    The record carries a ``due_date`` on each entry as well. THAT one is still not read:
+    what a per-run due date answers — which day's backup this particular run was for — is
+    the scheduler's own business, and a field with no reader is a field that quietly goes
+    wrong. The record's TOP-LEVEL ``due_date`` is a different field answering a different
+    question, and since M28.20 it is read — see ``Record.due_date``.
     """
 
     at: datetime.datetime
@@ -232,9 +277,16 @@ class Record:
     """The record's contents, as far as anything here has a use for them.
 
     A deliberate subset of M28.5's fifteen keys. ``schema`` is checked and not kept,
-    ``written_at`` and ``due_date`` say what ``last_attempt`` already says, and
-    ``attempts`` and ``retry_not_before`` are the scheduler's own working state. A field
-    nothing reads is a field nobody notices has gone wrong, so they are not carried.
+    ``written_at`` says what ``last_attempt`` already says, and ``attempts`` and
+    ``retry_not_before`` are the scheduler's own working state. A field nothing reads is a
+    field nobody notices has gone wrong, so they are not carried.
+
+    ``due_date`` WAS ON THAT LIST, on the same grounds — it was said to repeat what
+    ``last_attempt`` already carried — and that was the M28.20 defect. It does not repeat
+    it: ``last_attempt`` says when something last ran, and this says which day the record
+    considers the backup owed for, so a record can hold a run from an hour ago beside a day
+    no clock has reached. Nothing here noticed that, and the panel drew the quietest screen
+    it has over it.
 
     ``offsite`` USED TO BE ON THAT LIST and that was the M28.11 defect — see
     ``Destination``. The reason given for dropping it was that every run's ``outcome``
@@ -254,6 +306,19 @@ class Record:
     # MEANS is ``Reading.destination``; the raw word stays here so nothing is lost on the
     # way to a screen that may have to print a word this code does not recognise.
     offsite: str
+    # The day the record says the backup is owed for, ``YYYY-MM-DD`` as the writer resolved
+    # it IN THE SCHEDULE'S ZONE — which is why ``DUE_AHEAD_GRACE`` is a day wide.
+    #
+    # READ LENIENTLY, AND THAT IS LOAD-BEARING. Empty string for absent, ``null``, a
+    # non-string or anything that is not a date, and never ``_Malformed``. The shell's
+    # reader validates neither this field nor ``attempts`` nor ``retry_not_before``
+    # (M28.18, and deliberately, because refusing what the panel reads happily is the
+    # two-channel disagreement arriving from the strict side) — so refusing a file HERE for
+    # this field would open the same seam from the other end: a record ``make
+    # backup-status`` prints in full and the panel calls unreadable. A due date this reader
+    # cannot make sense of costs it one sentence it would otherwise have said, which is the
+    # direction every other degradation in this module goes.
+    due_date: str
     # Days the schedule noticed had no backup at all, and the cumulative count of them.
     # Both survive the run that ends a gap, so they are history rather than an alarm.
     #
@@ -319,6 +384,25 @@ class Reading:
     # nobody can get out of by waiting.
     success_ahead: bool
     failure_ahead: bool
+    # ...and whether the record's DUE DATE is a day this reader's own clock has not reached
+    # and no timezone can account for. The third part of the same finding and kept apart
+    # from the two above for the reason they are kept apart from each other: the three cost
+    # different things, so the screen says three different sentences and only the ones that
+    # are true of this record.
+    #
+    # It is NOT a seventh standing and it does not move ``standing`` at all. The six are
+    # about the backups — one succeeded, one failed, none has happened — and this is about
+    # a date the record and this reader cannot reconcile, which rides on whichever standing
+    # was already there exactly as the run-timestamp halves do.
+    #
+    # AND IT LICENSES NOTHING ABOUT THE SCHEDULE. A due date ahead used to stop the
+    # schedule dead; since M28.19 it does not — the next tick takes a backup and the run
+    # rewrites the date, whether or not the dump succeeds. So nothing composed from this
+    # may say the host has stopped backing up, and nothing composed from it may work out
+    # when the next backup is due either: that is the schedule's reasoning, it lives in
+    # ``scripts/backup-run.sh`` where it can be called rather than restated, and a second
+    # copy of it on a screen is this milestone's own defect in a new costume.
+    due_ahead: bool
 
 
 class _Malformed(Exception):
@@ -404,6 +488,23 @@ def _whole(raw: dict, key: str) -> int:
     return value
 
 
+def _a_date(raw: dict, key: str) -> str:
+    """A ``YYYY-MM-DD`` field as the writer wrote it, or ``""`` for anything else.
+
+    The one field read this way, and ``Record.due_date`` says why it is not ``_Malformed``:
+    the shell does not validate it either, and a panel stricter than the command line about
+    whether a record is readable at all is the two-channel disagreement this milestone is
+    made of.
+
+    The shape and not the calendar, exactly as ``missed_dates`` is checked: ``2026-13-45``
+    is kept, because what this reader does with the value is compare it as text against
+    another ``YYYY-MM-DD`` and print it back, and an absurd date in the record is the
+    record's own claim rather than something to be corrected on the way to a screen.
+    """
+    value = raw.get(key)
+    return value if isinstance(value, str) and A_DATE.match(value) else ""
+
+
 def _moment(value: object) -> datetime.datetime:
     if not isinstance(value, str):
         raise _Malformed("timestamp")
@@ -465,6 +566,7 @@ def _parse(data: bytes) -> Record:
         zone=_text(raw, "zone"),
         zone_source=_text(raw, "zone_source"),
         offsite=_text(raw, "offsite"),
+        due_date=_a_date(raw, "due_date"),
         # Newest first, whatever order the writer used — see ``Record.missed_dates``.
         missed_dates=tuple(sorted(dates, reverse=True)),
         missed_total=_whole(raw, "missed_total"),
@@ -512,6 +614,7 @@ def _judge(record: Record, now: datetime.datetime, path: pathlib.Path) -> Readin
         missed_recently=_missed_recently(record, now),
         success_ahead=_ahead(success, now),
         failure_ahead=_ahead(failure, now),
+        due_ahead=_due_ahead(record, now),
     )
 
 
@@ -553,6 +656,23 @@ def _ahead(run: Run | None, now: datetime.datetime) -> bool:
     that has never happened — is not ahead of anything.
     """
     return run is not None and run.at - now > CLOCK_AHEAD_GRACE
+
+
+def _due_ahead(record: Record, now: datetime.datetime) -> bool:
+    """Whether the record is owed for a day that had not begun anywhere when it was read.
+
+    ``DUE_AHEAD_GRACE`` says why the horizon is a whole day past this reader's own date and
+    what that deliberately cannot see. A record with no due date this reader recognises has
+    nothing to be ahead of, which is the same answer ``_ahead`` gives for a run that never
+    happened.
+
+    Compared as text. Both sides are ``YYYY-MM-DD`` — the record's is checked against
+    ``A_DATE`` before it gets here and this one is built by ``isoformat`` — so comparing
+    them as text is comparing them as dates, exactly as ``_missed_recently`` does.
+    """
+    if not record.due_date:
+        return False
+    return record.due_date > (now + DUE_AHEAD_GRACE).date().isoformat()
 
 
 async def read(
@@ -645,4 +765,7 @@ def _nothing(path: pathlib.Path, standing: Standing) -> Reading:
         missed_recently=0,
         success_ahead=False,
         failure_ahead=False,
+        # No record, so no due date to be unable to reconcile with anything. ABSENT and
+        # UNREADABLE are already the two loudest things this panel says about a file.
+        due_ahead=False,
     )

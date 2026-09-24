@@ -991,25 +991,86 @@ def _ago(delta: datetime.timedelta | None, *, ahead: bool = False) -> str:
     return f"{_how_long(delta)} ago" if delta is not None else "at no recorded time"
 
 
+# The line both halves below open on, and the only thing that is true of a record with
+# either of them. Split out because the sentence it used to open on was not: "…so no age on
+# this screen can be believed" is a statement about RUN TIMESTAMPS, and a record whose due
+# date alone is ahead has run times that are exact, printed exactly, and agree with
+# `make backup-status` to the minute. Telling an operator to disbelieve those would be this
+# milestone's own defect — a channel asserting something the record does not license — and
+# it is the shape the command line was caught in one step earlier (M28.19, round 1).
+BACKUP_CLOCK_OPENING = (
+    " A date in this record is AHEAD of the clock this panel read it against."
+)
+
+# Said when the last SUCCESS or the last FAILURE is the date that is ahead. Named that
+# precisely rather than "a run": the last ATTEMPT is a run too and this panel does not read
+# it, so a record where only that one is ahead is silent here and said on the command line.
+BACKUP_CLOCK_RUN_AHEAD = (
+    " The last success or the last failure in it is stamped after the moment it was read, "
+    "so no age on this screen can be believed: the machine that wrote it and the machine "
+    "drawing this disagree about the time, and until they agree a backup taken weeks ago "
+    "can read as one taken this morning. A later run of the same kind is what replaces "
+    "that stamp — a success replaces the last success, a failure the last failure — so fix "
+    "the clock on that host first, then read this again."
+)
+
+
 def _backup_clock(reading: backups.Reading) -> str:
-    """Said whenever a run in the record is dated ahead of the clock it was read against.
+    """Said when a date in the record is ahead of the clock this panel read it against.
 
     Not a seventh standing and not a second colour — the standings are about the backups
-    and this is about a clock, and one FRESH branch goes loud for it because that branch is
-    the only quiet one and the quiet one is where this hides. What it has to convey is that
-    every age on the screen is now worthless, which is worse than any single wrong number:
-    a host whose clock runs ahead reports its six-week-old backup as this morning's and
-    never stops.
+    and this is about a date, and one FRESH branch goes loud for it because that branch is
+    the only quiet one and the quiet one is where this hides.
+
+    TWO HALVES, NAMED SEPARATELY, because they cost different things and one sentence over
+    both is true of neither. ``scripts/backup-run.sh::note_clock`` answers the same
+    question in the same two parts, in the same order, and this is the panel's side of it
+    rather than a second opinion:
+
+    * a RUN dated after the moment the record was read makes every age on this screen
+      worthless — the six-week-old backup that reads as this morning's — and no run of a
+      different kind repairs it;
+    * a DUE DATE this reader has not reached does not touch those ages at all. They stay
+      exact. What it says is that the record and this reader disagree about what DAY it is.
+
+    Both halves can be set at once — a clock that jumped forward and was put back leaves
+    both — so they are two independent questions and not a chain of ``elif``, and a record
+    with both says both.
     """
-    if not (reading.success_ahead or reading.failure_ahead):
-        return ""
-    return (
-        " This record is dated AHEAD of the clock this panel read it against, so no age "
-        "on this screen can be believed: the machine that wrote it and the machine "
-        "drawing this disagree about the time, and until they agree a backup taken weeks "
-        "ago can read as one taken this morning. Fix the clock on that host, then read "
-        "this again."
-    )
+    said = ""
+    if reading.success_ahead or reading.failure_ahead:
+        said += BACKUP_CLOCK_RUN_AHEAD
+    if reading.due_ahead:
+        # WHAT THIS MAY NOT SAY, and it is the whole of why the sentence is worded around
+        # the day rather than around the schedule. Until M28.19 a due date ahead stopped
+        # the schedule dead, and "nothing is backed up at all" was true of it; the tick now
+        # takes a backup and the run rewrites the date whether or not the dump succeeds, so
+        # that sentence was removed from the command line for being false and must not be
+        # reinvented here. Nor may this work out when the next backup is owed, or what the
+        # next tick will do: that reasoning lives in one file, `due` states it by CALLING
+        # `decide` rather than by restating it, and this panel may not call anything. So it
+        # says what one record licenses — the day it names, and that nothing on the clock
+        # explains it — and leaves the rest to the channel that can ask.
+        said += (
+            f" Its due date is {reading.record.due_date}, a day this panel had not reached "
+            "when it read the record and one no timezone accounts for, so this panel and "
+            "whatever wrote that line disagree about what day it is."
+        )
+        # ...and the clause about the run times is said only where there ARE run times on
+        # the screen. Under NEVER there are none, and "the run times are not affected" read
+        # over a record with no run in it is a sentence about a state nobody had in mind —
+        # which is precisely the class of mistake this milestone has now paid for six times.
+        if reading.record.last_success or reading.record.last_failure:
+            said += (
+                " It does not touch the run times in it: those are printed here exactly as "
+                "the record has them."
+            )
+        said += (
+            " A clock that moved, or a HASHI_BACKUP_TZ moved west, is what leaves a record "
+            "in this state — check both on that host. What the schedule makes of that date "
+            "is not a question this record answers, and this record is all this panel reads."
+        )
+    return BACKUP_CLOCK_OPENING + said if said else ""
 
 
 def _backup_outcome(outcome: str) -> str:
@@ -1099,8 +1160,9 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
     six without a filesystem.
 
     WHAT IS NOT SAID, under any of them: that a backup exists. Every branch talks about
-    RUNS — one succeeded, one failed, none has happened — and closes with the caveat for
-    where that host sends. The good state is the one that matters here: "last backup
+    RUNS — one succeeded, one failed, none has happened — or about a DATE the record and
+    this reader cannot reconcile, and closes with the caveat for where that host sends.
+    Never about an artifact. The good state is the one that matters here: "last backup
     6 hours ago: written here, and the object store accepted it" is the strongest claim
     this host is entitled to, and it is a claim about an upload that was accepted, not
     about an object that is still there.
@@ -1248,7 +1310,27 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
             # waiting makes a future timestamp pass. Every other standing that can carry
             # an impossible date is already loud and already carries the clause; this one
             # would otherwise be a permanent reassurance about a host nobody is checking.
-            ahead = reading.success_ahead or reading.failure_ahead
+            #
+            # AND THE THIRD DATE THAT LANDS HERE, M28.20 and the same trap once more. A
+            # record whose DUE DATE alone is ahead has an ordinary recent success beside
+            # it, so it reads FRESH, and until this was added the panel drew no word and no
+            # frame over the one state `scripts/backup-run.sh due` exits 1 for. Two
+            # channels, one file, opposite answers.
+            #
+            # IT IS THE SAME LABEL AND DELIBERATELY NOT A SEVENTH ONE. The word over a
+            # banner names the FINDING, and the finding is the same in both: a date in this
+            # record is ahead of this clock, and the operator goes to the same host to look
+            # at the same two things. What differs is the consequence — a run ahead makes
+            # every age worthless and no waiting repairs it, a due date ahead leaves the
+            # ages exact — and the consequence is carried by the SENTENCE, which is this
+            # console's rule everywhere else (see ``BackupStanding``: one failed run and a
+            # schedule dead since August share one label and are separated by "19 hours
+            # ago" against "43 days ago"). A second word would put the difference where an
+            # operator learns the word instead of reading the sentence, and it would make
+            # this panel call by two names what `make backup-status` calls by one.
+            ahead = (
+                reading.success_ahead or reading.failure_ahead or reading.due_ahead
+            )
             # AND THE OTHER WAY THIS BRANCH CAN BE TOO QUIET, which is the same shape one
             # finding later: a recent success says nothing about the fortnight of days
             # before it that have no backup at all. The gap is stated in the detail under
@@ -1257,9 +1339,13 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
             # the days inside the window rather than from the cumulative count, so the
             # word clears when the gap does (see ``A_GAP_WORTH_A_LABEL``).
             #
-            # The clock takes precedence where both apply: a record dated ahead means no
-            # age on the screen can be believed, which is the larger thing to say, and the
-            # gap is still spelled out in the sentence underneath.
+            # The clock takes precedence where both apply, and the gap is still spelled out
+            # in the sentence underneath either way. For a RUN ahead the reason is that no
+            # age on the screen can be believed, which swallows the gap's own count of
+            # days; for a DUE DATE ahead it is narrower and still decides it — the count of
+            # missed days is derived from this reader's clock (``backups.RECENT_GAP``)
+            # against dates the writer resolved elsewhere, so a record this reader cannot
+            # place in the calendar is the thing to say first.
             gap = reading.missed_recently >= A_GAP_WORTH_A_LABEL
             return BackupStanding(
                 label="clock ahead" if ahead else "missed days" if gap else None,
