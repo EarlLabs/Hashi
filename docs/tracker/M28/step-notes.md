@@ -1361,3 +1361,58 @@ in this run and cost a discarded suite. If a step needs repeated `make test-cont
 another zone is live on the branch, take
 `HASHI_TEST_DATABASE_URL=postgresql+asyncpg://hashi:replace-me@127.0.0.1:54132/<own-db>`
 and `CREATE DATABASE` it.
+
+
+## From M28.17 — the ceiling is pinned by a test, and a shape is refused by name
+
+**The 64 KiB ceiling lives in two languages and is now held together by a test.**
+`tests/infra/test_the_command_line_says_what_the_panel_says.py` §8 reads
+`MOST_OF_A_RECORD` out of `control/app/services/backups.py` with `ast` (folding
+`64 * 1024` through a constants-only folder, because `ast.literal_eval` refuses a
+multiplication) and out of `scripts/backup-run.sh` with one anchored regex, and compares
+them. **Do not type the number anywhere else** — `MOST_OF_A_RECORD` is exported from that
+module and imported by the fixtures that position themselves relative to it.
+
+**The reader fails loudly, never by default**, which is what makes it a pin rather than a
+test that passes regardless. Verified by mutation in both directions and by every
+unfoldable form: a renamed constant says "no longer defines"; `64 * _KIB` says "no longer
+an integer over integers: _KIB"; `$((64*1024))` or a quoted value in the script says
+"defines it 0 times"; two assignments say "defines it 2 times". A pin that can go quiet is
+not a pin.
+
+**`refuse_damaged_record` takes a FAULT NAME, and two of them are not keys.** `shape` and
+`size` are faults; everything else passed to it is a real JSON key. A new fault that is not
+a key needs its own `case` branch and its own sentence, or the refusal accuses the record of
+a key it has never had — which is what this step fixed. The size case says *"it is N bytes,
+and this reads at most 65536"*, a fact statable without opening the file. It remains **one
+function and one heredoc**, so the shared opening line and the `NOTHING HAS BEEN ASSUMED
+FROM IT` paragraph are byte-identical across all three faults by construction, not by
+discipline — verified by md5 over all three rendered blocks.
+
+**A subshell trap worth knowing before you add a message that needs a fact.**
+`record_problem` is called as `problem="$(record_problem)"`, so every variable `load_record`
+sets inside it dies with the subshell. The `size` branch calls `load_record` again in the
+parent; that is safe only because it is idempotent and stops at `wc -c` without reading
+content. Anything else that wants a fact gathered during the read must do the same.
+
+**The shape at the record path is refused by name on all three surfaces** — `load_record`
+tests `-e` then `-f`, `record_problem` returns the fault `shape`, the absence guards in
+`command_status`/`command_due` moved from `-f` to `-e`, and `ensure_state_dir` refuses
+before anything is dumped. Parity with the panel was checked over six shapes and holds for
+all six: directory, symlink-to-directory, FIFO and socket all refuse where the panel says
+`unreadable`; a dangling symlink and a missing file both read as absence, where the panel
+says `absent`.
+
+**`tick` now exits 1 on a non-file shape, and that is deliberate.** `tick` and `now` take
+backups and assert nothing to anybody, so neither refuses — **this is the one exception**,
+and it is the same class as the pre-existing unwritable-directory refusal three lines below
+it. The blast radius is a cron mail every 15 minutes on a misconfigured host; what it
+replaces is a schedule taking a full backup every 15 minutes, reporting success, and
+recording nothing, for ever. Loud is right.
+
+**Test helpers added, reusable:** `oversized(tmp_path)` writes `MOST_OF_A_RECORD + 1` bytes
+at the record path; `a_directory_at_the_record_path(tmp_path)` makes the shape;
+`panel_number(name)` / `shell_number(name)` / `folded(node)` pin any other integer constant
+across the two channels. Note there are now two `run()` helpers in the infra tests — the
+3-argument one in `test_backup_schedule.py` and the 4-argument one with a fake crontab in
+`test_what_the_command_line_may_say_about_a_backup.py`.

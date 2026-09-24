@@ -142,3 +142,23 @@ own it. Worth its own step together with [[1]].
 
 **3. The cost of this being undocumented, measured once:** one flaky gate that verified this
 milestone twice, plus two assertions that could not fail. That is the argument for [[2]].
+
+
+## From M28.17
+
+**1. The runbook still writes "64 KiB" in prose, and nothing pins it.** The two code sides
+now move together; the runbook would go stale behind them silently — a smaller version of
+the defect this step closed. Either phrase it without the number or extend the parity
+section to read the runbook, the way §7 of the same file already greps it. **Folded into
+M28.18** rather than left here.
+
+**2. `shell_number`'s regex is anchored at the left margin**, so an *indented* later
+re-assignment of `MOST_OF_A_RECORD` inside a function would be invisible and the pin would
+keep comparing the margin value. Contrived — every constant in that script is at the margin
+— but it is the one silent hole in an otherwise loud reader. Counting
+`^[[:space:]]*MOST_OF_A_RECORD=` and still requiring exactly one would close it. **Folded
+into M28.18.**
+
+**3. The `size` and `shape` fault paragraphs wrap raggedly** — they carry hard newlines from
+the `fault=` assignment and sit next to evenly-wrapped shared paragraphs. Cosmetic, and
+acceptance judges this wording. **Folded into M28.18.**
