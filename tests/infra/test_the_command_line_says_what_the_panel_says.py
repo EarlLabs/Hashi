@@ -30,6 +30,12 @@ HOW:  the reading verbs are RUN, against records written the way the writer writ
       other zone's source is the same thing
       ``test_node_bootstrap_agrees_with_the_control_plane.py`` does, and for the same
       reason — the agreement is the subject.
+
+      Section 8 was added by M28.17 and is the same idea applied to a NUMBER rather than
+      to a sentence: the ceiling both channels refuse a record at, read out of
+      ``control/app/services/backups.py`` and out of ``scripts/backup-run.sh`` and
+      compared, plus the two refusals that used to be worded as though the fault were a
+      key of the record.
 """
 
 import ast
@@ -52,6 +58,7 @@ FETCHER = REPO / "deploy" / "backup" / "fetch.py"
 ENV_EXAMPLE = REPO / ".env.example"
 RUNBOOK = REPO / "docs" / "deploy" / "runbook.md"
 CONSOLE = REPO / "control" / "app" / "services" / "console.py"
+BACKUPS = REPO / "control" / "app" / "services" / "backups.py"
 
 # The three sentences the panel closes with, by their openings. M28.11 pinned them as the
 # contract for this step, and each is the first clause of one of ``BACKUP_CAVEATS``.
@@ -941,3 +948,154 @@ def test_the_runbook_says_which_second_run_is_not_safe() -> None:
     assert "HASHI_MGMT_" in section, (
         "the section does not mention that a tunnel is not generated from the template"
     )
+
+
+# --- 8. one ceiling, one shape, and nothing holding either of them ------------
+#
+# M28.17. Both channels refuse a record for its size at the same number and refuse a path
+# that is not a file at all — and until this section the agreement was PROSE: a comment in
+# the script saying "the same number as control/app/services/backups.py's
+# MOST_OF_A_RECORD", a runbook sentence saying "the same ceiling and the same answer as the
+# panel", and two fixtures with the number typed out again. Move either side and the two
+# channels give different verdicts about one file with nothing going red, which is the
+# defect this whole milestone exists to close, reintroduced as documentation.
+
+
+def folded(node: ast.AST) -> int:
+    """An integer written as an expression over integers, evaluated.
+
+    The panel writes ``64 * 1024`` and the script writes ``65536``: the same number said
+    two ways, so a text comparison would fail on a rewrite that changed nothing.
+    ``ast.literal_eval`` refuses a multiplication outright, so the folding is done here —
+    over constants only. Anything else fails by name rather than being guessed at, because
+    a constant this test cannot read is a parity it cannot claim.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mult, ast.Add)):
+        left, right = folded(node.left), folded(node.right)
+        return left * right if isinstance(node.op, ast.Mult) else left + right
+    raise AssertionError(
+        f"this is no longer an integer over integers: {ast.unparse(node)}"
+    )
+
+
+def panel_number(name: str) -> int:
+    """A module-level integer constant out of the panel's own source.
+
+    Parsed, not searched for, for section 2's reason: a substring match would be satisfied
+    by the number appearing in a comment or in a constant nothing reads.
+    """
+    for node in ast.parse(BACKUPS.read_text()).body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            if node.targets[0].id == name:
+                return folded(node.value)
+    raise AssertionError(f"{BACKUPS.name} no longer defines {name}")
+
+
+def shell_number(name: str) -> int:
+    """The same, from ``scripts/backup-run.sh``: one bare integer assignment, at the left
+    margin, which is how every constant in that script is written."""
+    found = re.findall(rf"^{name}=([0-9]+)$", RUNNER.read_text(), re.M)
+    assert len(found) == 1, (
+        f"scripts/backup-run.sh defines {name} {len(found)} times, so there is no one "
+        "number for the panel's to be compared against"
+    )
+    return int(found[0])
+
+
+# Read from the script rather than typed out, and exported for the fixtures in
+# ``test_what_the_command_line_may_say_about_a_backup.py`` that sit either side of it: a
+# record built to be "just under the ceiling" has to move when the ceiling does, and a
+# fixture carrying its own copy of the number silently stops testing the boundary it was
+# written for.
+MOST_OF_A_RECORD = shell_number("MOST_OF_A_RECORD")
+
+
+def test_both_channels_refuse_a_record_at_the_same_ceiling() -> None:
+    """The number itself, on both sides, compared — not two sentences claiming it is one.
+
+    This is the pin the comment asked for. It reads the panel's constant out of the
+    panel's source and the script's out of the script, so moving either one alone fails
+    here instead of being found by an operator who is told a file is fine on one screen
+    and refused on the other.
+    """
+    assert MOST_OF_A_RECORD == panel_number("MOST_OF_A_RECORD"), (
+        "the command line and the panel now refuse an over-large record at different "
+        "sizes, so there is a file the panel reads and make backup-status refuses, or "
+        "the other way round"
+    )
+
+
+def oversized(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A file one byte over the ceiling at the record's path.
+
+    One byte over, and the number comes from the script: the boundary is the subject, so a
+    fixture that is "comfortably too big" would go on passing after the ceiling moved.
+    Its contents are deliberately not a record — nothing reads them, which is the claim.
+    """
+    state = tmp_path / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "last-run.json").write_text("x" * (MOST_OF_A_RECORD + 1))
+    return state
+
+
+def test_the_size_refusal_does_not_name_a_key_the_record_has_never_had(tmp_path) -> None:
+    """*its "size" is not what scripts/backup-run.sh writes there* — and there is no such
+    key.
+
+    Every other argument this refusal takes is a real JSON key: ``schema``,
+    ``missed_dates``, ``last_success``. So an operator who was told the record's "size" was
+    wrong went looking through the file for a ``size`` key, found none, and was left
+    believing the message rather than the file. The size case says what is true of it
+    instead — how many bytes the file is, which it can say without opening it.
+    """
+    state = oversized(tmp_path)
+    result = run("status", env_file(tmp_path, HASHI_BACKUP_TZ="Etc/UTC"), state)
+
+    assert result.returncode == 1
+    assert '"size"' not in result.stderr, (
+        "the refusal still names `size` the way it names a key of the record"
+    )
+    assert str(MOST_OF_A_RECORD + 1) in result.stderr, (
+        "the refusal does not say how big the file it would not read is"
+    )
+    assert "NOTHING HAS BEEN ASSUMED FROM IT" in result.stderr
+    assert "last success:" not in result.stdout, (
+        "part of a file too big to be the record was read out as fact"
+    )
+
+
+def a_directory_at_the_record_path(tmp_path: pathlib.Path) -> pathlib.Path:
+    """The seventh surface: a path that is present and holds no record.
+
+    A ``mkdir`` of the record's own name, which is also what the docker daemon leaves if a
+    bind mount ever points at the file instead of the directory holding it.
+    """
+    state = tmp_path / "state"
+    (state / "last-run.json").mkdir(parents=True)
+    return state
+
+
+@pytest.mark.parametrize("verb", ["status", "due"])
+def test_a_directory_at_the_record_path_is_not_a_host_that_has_never_run(
+    tmp_path, verb
+) -> None:
+    """``[ -f ]`` is false for a directory, so this channel called it absence.
+
+    The panel's ``S_ISREG`` check calls the same path presence-with-nothing-legible and
+    answers UNREADABLE. One path, two verdicts, and the command line's was the one that
+    said everything is normal here — *"No backup has ever been recorded on this host"* is
+    what a fresh install prints, and the remedy it offers is to install the schedule that
+    is already installed.
+    """
+    state = a_directory_at_the_record_path(tmp_path)
+    result = run(verb, env_file(tmp_path, HASHI_BACKUP_TZ="Etc/UTC"), state)
+
+    assert result.returncode == 1
+    assert "No backup has ever been recorded on this host" not in result.stderr, (
+        "a path with something at it is still reported as a host that has never run one"
+    )
+    assert "not the file the schedule writes" in result.stderr
+    assert "a directory" in result.stderr, "the shape that is there is not named"
+    assert "NOTHING HAS BEEN ASSUMED FROM IT" in result.stderr

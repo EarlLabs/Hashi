@@ -1781,7 +1781,20 @@ pretty-prints — is not damaged and is read normally; the layout is the only th
 and a changed value, a truncated file or a schema from the future are refused as before. A
 file **larger than 64 KiB** is refused whole, for its size, without any of it being read —
 the same ceiling and the same answer as the panel, because the record is under a kilobyte
-and a file that big is a wrong path rather than a long history.
+and a file that big is a wrong path rather than a long history. (The two channels are held
+to that one number by `tests/infra/test_the_command_line_says_what_the_panel_says.py`,
+which reads it out of both sources rather than keeping a copy of it.) **Move the file aside
+before you go and look at it**: refusing to read it does not protect it, and the next
+scheduled run writes a new record at that path over whatever is there.
+
+**A directory at the record's path is refused by name**, on both channels and on the
+writing side too. It is what a `mkdir` of the file's own name leaves, and what the docker
+daemon creates if a bind mount ever points at the record instead of the directory holding
+it. `make backup-status` and `due` call it a record that is there and is not legible —
+which is what the panel calls it — rather than a host that has never run one, and a `tick`
+refuses before it dumps anything: moving the new record onto a directory does not fail, it
+drops `last-run.json.partial` *inside* it, so the schedule used to report success and leave
+no record at all, every fifteen minutes. Move the directory aside; nothing here deletes it.
 
 A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
 was written, **3** the artifact exists and did not leave this machine. Only **1** is retried

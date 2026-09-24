@@ -710,6 +710,34 @@ def test_a_tick_that_cannot_write_the_record_is_loud_and_not_silent(tmp_path) ->
     assert "chown" in result.stderr, "the operator is not told how to fix it"
 
 
+def test_a_tick_refuses_a_directory_where_the_record_goes_rather_than_writing_into_it(
+    tmp_path,
+) -> None:
+    """``mv`` onto a directory does not fail — it moves the file INSIDE it.
+
+    So a tick dumped the database, moved ``last-run.json.partial`` into the directory
+    sitting at the record's path, exited 0 and recorded nothing. Every fifteen minutes, for
+    ever, on a host whose backups were working: the schedule reporting success and leaving
+    no account of itself is the silent skip this script exists to refuse, wearing the same
+    hat as the read-only directory above. It refuses before anything is dumped, and it
+    refuses rather than repairing — nothing here deletes what an operator put on a disk.
+    """
+    state = tmp_path / "state"
+    (state / "last-run.json").mkdir(parents=True)
+
+    result = run("tick", env_file(tmp_path), state)
+
+    assert result.returncode == 1, (
+        f"a tick wrote its record into a directory and called it a success:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    assert "cannot write the backup record" in result.stderr
+    assert "a directory" in result.stderr, "the shape that is in the way is not named"
+    assert not list((state / "last-run.json").iterdir()), (
+        "the partial record was deposited inside the directory anyway"
+    )
+
+
 def test_the_record_directory_is_made_before_anything_locks_or_dumps(runner: str) -> None:
     """Regression: the lock is a directory inside the record's directory.
 

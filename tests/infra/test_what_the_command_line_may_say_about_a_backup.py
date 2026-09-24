@@ -36,6 +36,12 @@ import pytest
 
 from tests.infra.test_backup_schedule import PLANTED, env_file, seed, today_in
 
+# The ceiling, read out of the script rather than typed out here — and the module it comes
+# from is the one that pins it against the panel's own constant (M28.17). Both fixtures
+# below are positioned relative to it, one under and one over, so a copy of the number kept
+# here would stop testing the boundary the day the boundary moved.
+from tests.infra.test_the_command_line_says_what_the_panel_says import MOST_OF_A_RECORD
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 RUNNER = REPO / "scripts" / "backup-run.sh"
 INSTALLER = REPO / "scripts" / "backup-schedule.sh"
@@ -609,7 +615,9 @@ def test_one_unchanged_record_gets_the_same_verdict_every_time(tmp_path) -> None
     state = a_record(tmp_path, last_attempt=A_GOOD_RUN, last_success=A_GOOD_RUN)
     _compact(state, _dates(A_LEGAL_RECORD_THIS_BIG))
     size = (state / "last-run.json").stat().st_size
-    assert size < 65536, f"the fixture outgrew the ceiling and is no longer legal: {size}"
+    assert size < MOST_OF_A_RECORD, (
+        f"the fixture outgrew the ceiling and is no longer legal: {size}"
+    )
 
     env, host = an_env(tmp_path), a_host(tmp_path, crontab=True)
     answers = [
@@ -635,7 +643,8 @@ def test_a_file_too_large_to_be_the_record_is_refused_whole(tmp_path) -> None:
     """
     state = a_record(tmp_path, last_attempt=A_GOOD_RUN, last_success=A_GOOD_RUN)
     _compact(state, _dates(6000))
-    assert (state / "last-run.json").stat().st_size > 65536
+    size = (state / "last-run.json").stat().st_size
+    assert size > MOST_OF_A_RECORD
 
     env, host = an_env(tmp_path), a_host(tmp_path, crontab=True)
     answers = [run("status", env, state, host) for _ in range(10)]
@@ -643,7 +652,10 @@ def test_a_file_too_large_to_be_the_record_is_refused_whole(tmp_path) -> None:
         [answer.returncode for answer in answers]
     )
     assert all("NOTHING HAS BEEN ASSUMED FROM IT" in a.stderr for a in answers)
-    assert all('"size"' in a.stderr for a in answers), answers[0].stderr
+    # The file's SIZE, which is a fact about it that needs none of it read — and not
+    # `its "size"`, which M28.17 removed: every other fault this refusal names is a real
+    # key of the record and there has never been a `size` key for an operator to find.
+    assert all(str(size) in a.stderr for a in answers), answers[0].stderr
     assert all("last success:" not in a.stdout for a in answers), (
         "part of a file too big to be the record was read out as fact"
     )

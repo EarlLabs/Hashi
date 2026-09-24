@@ -241,6 +241,13 @@ due_date() {
 # parsed, and the answer then varied between runs of the same command. A comment describing
 # a refusal the code does not perform is the same defect as a screen describing a backup
 # that did not happen.
+#
+# "THE SAME NUMBER" IS NOW HELD BY A TEST rather than by this sentence:
+# tests/infra/test_the_command_line_says_what_the_panel_says.py reads the assignment below
+# and the panel's own `MOST_OF_A_RECORD` out of its source, and fails when they differ.
+# Until M28.17 the parity was a promise in a comment and in the runbook — move either side
+# and the two channels give different verdicts about one file, with nothing going red,
+# which is the defect this whole milestone is about, re-entering as documentation.
 MOST_OF_A_RECORD=65536
 
 # The record with every TOP-LEVEL key on a line of its own, whatever layout it is in on
@@ -316,11 +323,37 @@ record_as_lines() {
 RECORD=""
 RECORD_READ=""
 RECORD_TOO_BIG=""
+RECORD_SIZE=""
+RECORD_NOT_A_FILE=""
+
+# What is at the record's path when it is not the record, in the words an operator can act
+# on. A DIRECTORY is the one that really happens: `mkdir` of the file's own name, or a bind
+# mount in a compose file naming the FILE instead of the directory it is in, which the
+# docker daemon then creates as a directory. The other shapes are named generically because
+# the remedy is the same and the fault is not.
+what_is_at_the_record_path() {
+  if [ -d "${STATE_FILE}" ]; then
+    printf 'a directory'
+  else
+    printf 'something that is not a file'
+  fi
+}
 
 load_record() {
   if [ -n "${RECORD_READ}" ]; then return 0; fi
   RECORD_READ="yes"
-  [ -f "${STATE_FILE}" ] || return 0
+  # `-e` and then `-f`, not `-f` alone. A DIRECTORY at this path is presence, not absence,
+  # and `[ -f ]` reads it as absence — so this channel answered "no backup has ever been
+  # recorded on this host" about a path with something in it while the panel, whose
+  # `S_ISREG` check refuses a directory, a FIFO, a socket and a device alike, answered
+  # UNREADABLE about the same path. Two channels, one path, two verdicts (M28.17).
+  # A dangling symlink stays ABSENCE on both sides: `-e` follows it and finds nothing,
+  # exactly as the panel's `open()` raises FileNotFoundError.
+  [ -e "${STATE_FILE}" ] || return 0
+  if [ ! -f "${STATE_FILE}" ]; then
+    RECORD_NOT_A_FILE="yes"
+    return 0
+  fi
   # OVER THE CEILING IS NOT THE RECORD, and it is refused whole rather than read in part —
   # which is what control/app/services/backups.py does with the same number, so the two
   # channels answer a too-large file the same way. Reading the first 64 KiB and judging THAT
@@ -330,6 +363,10 @@ load_record() {
   size="$(wc -c < "${STATE_FILE}" | tr -cd '0-9')"
   if [ -n "${size}" ] && [ "${size}" -gt "${MOST_OF_A_RECORD}" ]; then
     RECORD_TOO_BIG="yes"
+    # Kept so the refusal can say HOW BIG rather than name a key that does not exist. A
+    # byte count is a fact about the file and not one of its contents, which is the line
+    # every message in this script stays on the safe side of.
+    RECORD_SIZE="${size}"
     return 0
   fi
   RECORD="$(record_as_lines < "${STATE_FILE}")"
@@ -618,6 +655,28 @@ record_missed() {
 # shape this whole script exists to refuse, so it is a loud exit rather than a skipped run.
 ensure_state_dir() {
   mkdir -p "${STATE_DIR}" 2>/dev/null || true
+  # The RECORD ITSELF has to be a file, and this is the only place that can find out before
+  # a database is dumped for nothing. `mv` onto a directory does not fail — it moves
+  # last-run.json.partial INSIDE it — so a tick took the backup, wrote no record, and
+  # exited 0, every fifteen minutes, on a host whose backups were working. A schedule that
+  # reports success and leaves nothing behind is the silent skip this whole script refuses,
+  # so it is a loud exit here rather than a run nobody can see the result of (M28.17).
+  #
+  # Refused, never repaired: nothing here deletes or moves what an operator put on their
+  # own disk. The reading verbs refuse the same shape by the same name.
+  if [ -e "${STATE_FILE}" ] && [ ! -f "${STATE_FILE}" ]; then
+    cat >&2 <<MSG
+cannot write the backup record at ${STATE_FILE}.
+
+Nothing was dumped. There is $(what_is_at_the_record_path) at that path and the record is
+a file, so a run would leave ${STATE_FILE}.partial inside it and record nothing at all —
+the schedule would go on reporting success and this host would go on having no record of
+a backup. Move it aside; the next run writes the record in its place.
+
+\`make backup-status\` and the panel both refuse to read that path for the same reason.
+MSG
+    exit 1
+  fi
   [ -d "${STATE_DIR}" ] && [ -w "${STATE_DIR}" ] && return 0
   cat >&2 <<MSG
 cannot write the backup record at ${STATE_DIR}.
@@ -742,7 +801,9 @@ command_due() {
   # has ever been recorded on this host" at exit 0, which is byte-for-byte what a host that
   # has genuinely never run one prints. Those are assertions out of a file this script
   # could not parse, and they are exactly the sentences an operator would act on.
-  if [ -f "${STATE_FILE}" ]; then
+  # `-e` for the same reason `status` uses it: a directory here is something to refuse,
+  # not a host that has never taken a backup.
+  if [ -e "${STATE_FILE}" ]; then
     local problem
     problem="$(record_problem)"
     if [ -n "${problem}" ]; then
@@ -875,8 +936,13 @@ entry_problem() {
 record_problem() {
   local raw problem key day
   load_record
-  # Nothing of an over-large file has been read, so there is no key to name and its SIZE is
-  # the fault: the record this script writes is under a kilobyte and cannot become this.
+  # The two faults that are not a key, first, because neither of them has one: nothing was
+  # read out of a directory and nothing was read out of an over-large file. Both are
+  # answered by their own sentence in `refuse_damaged_record` — `size` and `shape` are the
+  # names of faults here, not names of keys in the record, and a message that said
+  # `its "size" is not what scripts/backup-run.sh writes there` sent an operator looking
+  # through the JSON for a key that has never existed (M28.17).
+  [ -z "${RECORD_NOT_A_FILE}" ] || { printf 'shape'; return 0; }
   [ -z "${RECORD_TOO_BIG}" ] || { printf 'size'; return 0; }
   raw="$(raw_field schema)"
   [ "${raw}" = "${SCHEMA}" ] || { printf 'schema'; return 0; }
@@ -976,18 +1042,62 @@ schedule_answer() {
 # M28.12 and `due` since M28.15. One function rather than two copies for the reason the
 # whole milestone keeps finding: independently written sentences about one file are how two
 # channels come to say different things about it.
+#
+# THREE FAULTS, THREE SENTENCES, one function. What varies is the paragraph saying which
+# fact about the file made it unreadable, and what to do with the file; the opening, the
+# "nothing has been assumed" clause and the closing advice are shared, so `status` and `due`
+# still cannot drift about any of the three. The size and shape faults got their own
+# sentences in M28.17: both were forced through the key sentence and came out as
+# `its "size" is not what scripts/backup-run.sh writes there`, naming a key that does not
+# exist in a record — and every other argument this function takes (schema, missed_dates,
+# last_success) IS a real key, so an operator went looking for that one and found nothing.
 refuse_damaged_record() {
+  local fault keep
+  case "$1" in
+    shape)
+      # The size is not printed here and there is nothing to print: this never opened.
+      fault="${STATE_FILE} could not be read: there is $(what_is_at_the_record_path) at
+that path, and the record is a file. Nothing in it has been read and nothing of it could
+be — the panel refuses the same path for the same reason, so both channels call this a
+record that is there and is not legible rather than a host that has never run one."
+      keep="Move it aside rather than deleting it: nothing here knows what put it there, and
+while it is in the way nothing on this host can write the record either — a scheduled run
+leaves its half-written file INSIDE it and records nothing, every tick, silently."
+      ;;
+    size)
+      # IN THIS SHELL, on purpose. `record_problem` runs inside `$( )` — a subshell — so
+      # every variable it set while reading the file died with it, `RECORD_SIZE` included.
+      # `load_record` is idempotent and reads no content to answer this: it measures the
+      # file and stops.
+      load_record
+      fault="${STATE_FILE} could not be read: it is ${RECORD_SIZE} bytes, and this reads at
+most ${MOST_OF_A_RECORD}. Not one byte of it has been read, so nothing here is a statement
+about what is in it. The record this script writes is well under a kilobyte, so a file that
+size is a wrong path — a mount pointing somewhere else, a log — rather than a long history,
+and the panel refuses it at the same number."
+      keep="Move it aside rather than deleting it if you want to look at what is in it: the
+next scheduled run writes a new record at that path and what is there now is gone."
+      ;;
+    *)
+      fault="${STATE_FILE} could not be read: its \"$1\" is not what scripts/backup-run.sh
+writes there. Either the file is damaged, or it was written by a newer version of that
+script than this one."
+      keep="What is in it is a history of runs and nothing else can tell you what it said,
+so move it aside rather than deleting it if you want to look at it later. The next
+scheduled run writes a new record at that path."
+      ;;
+  esac
   cat >&2 <<MSG
 There is a backup record on this host and this is not the file the schedule writes.
 
-${STATE_FILE} could not be read: its "$1" is not what scripts/backup-run.sh
-writes there. Either the file is damaged, or it was written by a newer version of that
-script than this one. NOTHING HAS BEEN ASSUMED FROM IT — this is not telling you backups
-are working and not telling you they are failing, and the panel says exactly that about
-the same file, for the same reason.
+${fault}
 
-What is in it is a history of runs and nothing else can tell you what it said, so move it
-aside rather than deleting it if you want to look at it later. The next run rewrites it:
+NOTHING HAS BEEN ASSUMED FROM IT — this is not telling you backups are working and not
+telling you they are failing, and the panel says exactly that about the same file, for the
+same reason.
+
+${keep}
+
 \`make backup\` takes one now, on a host that still has what a backup needs in the env
 file — HASHI_BACKUP_AGE_RECIPIENT and the HASHI_BACKUP_S3_ block are in no backup by
 design, so a machine rebuilt out of the backup history has to have them put back first.
@@ -996,7 +1106,10 @@ MSG
 
 command_status() {
   resolve_schedule
-  if [ ! -f "${STATE_FILE}" ]; then
+  # `-e`, not `-f`: what is NOT here is absence, and a directory at this path is not
+  # absence. See load_record — this used to answer "no backup has ever been recorded"
+  # about a path the panel called unreadable.
+  if [ ! -e "${STATE_FILE}" ]; then
     cat >&2 <<MSG
 No backup has ever been recorded on this host.
 
