@@ -329,12 +329,18 @@ async def test_a_stale_apply_records_no_applied_digest(
     # ``lazy="selectin"``, so that call pulled this very row into this session's identity
     # map with ``applied_digest`` still ``None``. The apply wrote the digest through the
     # request's own session; a ``select`` here returns the identity map's copy whenever it
-    # is still alive, so ``first`` was ``None`` and the comparison below passed for the
-    # wrong reason. The map holds WEAK references and ``Node``↔``NodeTransport``
-    # back-populate each other into a reference cycle, so "still alive" means "the cyclic
-    # collector has not run yet" — which is why this test failed under `make test-control`
-    # and passed under `make verify` on the same commit. Reproduced deterministically by
-    # disabling the collector for the run.
+    # is still alive, so ``first`` read ``None`` while the second read — which already
+    # expired — read the digest the first apply really recorded, and the assertion at the
+    # end FAILED. When the collector had already taken the copy, both reads agreed and it
+    # passed. That is the flake, and the direction matters: the stale copy is what turns
+    # this test red, not what makes it green.
+    #
+    # The map holds WEAK references and ``Node``↔``NodeTransport`` back-populate each
+    # other into a reference cycle, so "still alive" means "the cyclic collector has not
+    # run yet" — which is why this test failed under `make test-control` and passed under
+    # `make verify` on the same commit. Reproduced deterministically by disabling the
+    # collector for the run: red 5 times out of 5 at the baseline with it off, green 5 out
+    # of 5 with it on.
     session.expire_all()
     first = (
         await session.execute(

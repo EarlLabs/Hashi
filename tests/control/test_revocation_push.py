@@ -211,8 +211,11 @@ async def test_a_pushed_node_is_left_active(
     await client.post(f"/api/users/{user_id}/revoke")
 
     # The note under ``fleet_with_user`` says why this line is not optional. Without it
-    # this test cannot fail: the copy in the map already says ``active``, so a revocation
-    # that degraded every node it pushed to would still be read back as untouched.
+    # this test cannot fail WHILE THE STALE COPY IS ALIVE: the copy in the map already
+    # says ``active``, so a revocation that degraded every node it pushed to would still
+    # be read back as untouched. Once the collector has taken that copy the read reaches
+    # the row and the same test does see the damage — which is the same lottery as the
+    # flake one file over, landing the other way. Expiring settles it in both directions.
     session.expire_all()
     for node_id in node_ids:
         node = await nodes.get_node(session, node_id)
