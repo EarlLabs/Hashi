@@ -3381,6 +3381,119 @@ asserting it — a structural test that fails if a second parser of the record a
 that file again, in the shape of `test_no_reader_of_the_record_feeds_it_through_a_pipe`.
 
 
+### M28.19 — `infra`: the schedule stops waiting for a date it does not trust, and the fences stop being wider than they read · 2026-09-24
+
+Five items. The first is a behaviour decision; the rest are the guards this milestone built
+turning out to have seams, which is the same lesson one level up.
+
+1. **A record dated ahead of this host's clock must not stop the schedule silently.**
+   Today `tick` exits 0, prints nothing and takes no backup until the calendar reaches the
+   date. `due` exits 1 and says *"NOTHING IS BACKED UP AT ALL"*; the panel says nothing at
+   all (item 2). This is not the two-readers defect — the record is **valid** and both
+   readers always agreed about it — it is `decide` answering `wait` where `note_clock`
+   answers `ahead`.
+
+   **Decided, and marked as the orchestrator's extension of the owner's rule rather than
+   the owner's own:** the owner settled that *a record `tick` cannot read is no record, and
+   `tick` takes a backup*. The same reasoning covers a record `tick` cannot **trust**, and
+   taking the backup is the answer that **repairs the state**: the new record carries
+   timestamps from this host's own clock, so it is no longer dated ahead and the next tick
+   behaves normally. One extra dump, once.
+
+   The rejected alternative, and why — **refuse loudly, exit 1, let cron mail the
+   operator.** It has a precedent: M28.17 made `tick` exit 1 on the `shape` fault and the
+   notes record *"Loud is right."* But `shape` refuses because writing the record is
+   **impossible** — there is a directory in its way. Here writing is possible and writing is
+   the cure, so refusing would leave the host with no backups until a human reads mail. The
+   precedent is about a case with no other move.
+
+   Record it in `docs/decisions.md`, appended, and say in the row that it is an extension of
+   the owner's rule and reversible.
+
+2. **Three files claim the panel draws a banner for such a record. It does not.**
+   `control/app/services/backups.py::_ahead()` reads only the `last_success`/`last_failure`
+   timestamps — by its own documented design — so a record whose `due_date` alone is ahead
+   gives `standing=SILENT` and no banner. Verified. It is reachable without a hand edit:
+   move `HASHI_BACKUP_TZ` west across the date line and `due` says `clock=ahead` while the
+   panel says `FRESH`. **Narrow the sentences in `docs/decisions.md`, `docs/deploy/runbook.md`
+   and `scripts/lib/backup-record.sh` to what is true** — the panel goes loud when a *run
+   timestamp* is ahead, and is silent when only the `due_date` is. Making the panel notice
+   is M28.20 and is not in this zone.
+
+   **This is the third false-prose finding inside one step.** The rewrite that removed a
+   claim about a fix that had not happened introduced a different untrue claim in its place.
+   Check every sentence you write here against behaviour you have actually run.
+
+3. **The "records nobody" audit is first hop only.** `_sourced_libraries` reads the three
+   named scripts and does not recurse into the libraries it finds. Proven by planting
+   `scripts/lib/record-notes.sh` with a `tee -a /var/log/…` in it, sourced from
+   `backup-record.sh`: **all 14 tests stayed green.** Record handling now lives in a library,
+   so the next move is library→library — the exact hop this misses, and the exact scenario
+   the test's own docstring describes. Make the discovery transitive: iterate a worklist
+   until no new `scripts/lib/*.sh` appears, same regex, same `is_file()` assertion.
+
+4. **Two seams in the fences, both planted and confirmed.**
+   - Process substitution under a command word not in the tool list passes the entry-point
+     fence: `done < <(sed -n 1p "${STATE_FILE}")`. Treat `<(` like `$(` in `_commands`, or
+     add the shape to the written seam list — but do not leave it both unfixed and unlisted.
+   - `_whole_pipelines` folds a **comment** line ending in `\` into the code line below it,
+     although bash does not continue comments — which hides that code line from the pipe
+     guard. Three such doc-comment continuations already exist in the tree. Do not carry a
+     continuation from a line whose stripped form starts with `#`.
+
+5. **The restore scenarios do not run on this machine, and the fixture is why.**
+   `object_store()` runs `docker pull` unconditionally and returns `None` on failure, so ten
+   scenarios — four upload, six bucket-restore — skip with *"could not obtain
+   quay.io/minio/minio:…"* while **that exact image is present locally**. quay.io answers
+   401 here.
+
+   **Fall back to `docker image inspect` when the pull fails**, and skip only when the image
+   is genuinely absent. This is not making the stand match the expectation — the scenarios
+   still run a real object store and really upload and restore; what changes is that a
+   registry outage stops disqualifying an image the host already has. The loud skip stays
+   for the case where it is truly missing.
+
+Gate: `make test-infra`, then `make verify`. **`make verify` must report e2e 224 passed / 0
+skipped.** A 214/10 run does not close this milestone: M28 is the offsite-backup-and-restore
+milestone, and `CLAUDE.md` records what it cost the last time scenarios were absent from the
+gate for eleven milestones.
+
+### M28.20 — `control`: the panel is the last channel that cannot see a stopped schedule · the eighth surface · 2026-09-24
+
+`control/app/services/backups.py::_ahead()` reads the `last_success` and `last_failure`
+timestamps and **never reads `due_date`**. That is deliberate and documented. The
+consequence is not: a record whose `due_date` is ahead of this host's clock stops the
+schedule completely, and the panel answers `standing=SILENT` — no banner, nothing said.
+
+Verified two ways. Hand-seeded, a `"due_date": "2099-01-01"` record gives
+`success_ahead=False, failure_ahead=False, standing=SILENT`. Organically, moving
+`HASHI_BACKUP_TZ` west across the date line gives `due` `clock=ahead` and *"NOTHING IS
+BACKED UP AT ALL"* while the panel reports `FRESH` — a **healthy** standing on a host that
+is taking no backups.
+
+**This is the eighth surface of this milestone's one defect and the last one found.** Every
+other instance was a channel asserting something the record did not license; this is a
+channel failing to assert something the record states plainly, which is the same disease
+read from the other side.
+
+The panel must notice. **What it must not do is grow a second copy of the schedule's
+reasoning** — that is the trap M28.18 avoided when `due` was taught to name what the next
+tick would do, and it avoided it by calling `decide` rather than restating it. The panel
+cannot call the shell, so work out what the *record itself* licenses the panel to say about
+a date it cannot reconcile with its own clock, and say no more than that.
+
+Constraints inherited and not re-decided: the panel does **no I/O** — no shell, no crontab,
+no clock beyond the one it already reads; `CLOCK_AHEAD_GRACE` already exists and is pinned
+against the shell's `CLOCK_AHEAD_GRACE_SECONDS`; the six standings and two weights stay, and
+`clock ahead` already wins where several apply; no apostrophe may reach a Jinja template.
+Whether this is the existing `clock ahead` standing widened or something the existing one
+should already have covered is the question the step has to answer — and if widening it is
+right, say why the two cases belong under one name.
+
+Gate: `make test-control` with a real Postgres — report the skip count — plus
+`tests/e2e/control`, then `make verify`.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
