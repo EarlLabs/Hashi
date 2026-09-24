@@ -571,6 +571,7 @@ A_DATE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 raw_field() {
   sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" "${STATE_FILE}" \
     | head -n 1 \
+    | tr -d '\r' \
     | sed -e 's/^[[:space:]]*//' -e 's/,[[:space:]]*$//' -e 's/[[:space:]]*$//'
 }
 

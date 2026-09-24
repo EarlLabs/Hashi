@@ -32,6 +32,7 @@ HOW:  the reading verbs are RUN, against records written the way the writer writ
       reason — the agreement is the subject.
 """
 
+import ast
 import pathlib
 import re
 import subprocess
@@ -228,21 +229,70 @@ def test_an_absent_record_and_an_unreadable_one_are_different_sentences(tmp_path
 # --- 2. where this host sends, and the three sentences that go with it --------
 
 
+def panel_caveats() -> dict[str, str]:
+    """The three sentences ``BACKUP_CAVEATS`` actually maps to, resolved from the source.
+
+    Parsed rather than searched for, and round 1 was right about why: a substring check
+    over the whole file would pass on one of these sentences sitting in a comment or in a
+    constant nothing renders, which is not the property being claimed. The dict is read,
+    each value followed to the constant it names, and what comes back is what a
+    ``Destination`` chooses — the thing an operator is shown.
+    """
+    tree = ast.parse(CONSOLE.read_text())
+    strings, caveats = {}, None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.targets[0], ast.Name):
+            continue
+        name = node.targets[0].id
+        # Implicit concatenation is folded by the parser, so a wrapped constant is one
+        # ``Constant`` and the width it was wrapped at is not asserted on.
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            strings[name] = node.value.value
+        elif name == "BACKUP_CAVEATS" and isinstance(node.value, ast.Dict):
+            caveats = node.value
+    assert caveats is not None, (
+        "console.py has no BACKUP_CAVEATS mapping, so the panel no longer chooses its "
+        "caveat by where the host sends and the two channels cannot be compared"
+    )
+    resolved = {}
+    for key, value in zip(caveats.keys, caveats.values, strict=True):
+        assert isinstance(value, ast.Name), (
+            f"a caveat is composed inline rather than named: {ast.dump(value)}"
+        )
+        resolved[ast.unparse(key)] = strings[value.id]
+    return resolved
+
+
 def test_the_panel_still_owns_the_three_caveats_this_matches() -> None:
     """The contract, checked against the other channel's source and not against a copy.
 
     M28.11 keyed the panel's caveat on where the HOST sends — the record's own ``offsite``
     — and pinned the three openings as the wording this step must match. Asserting them
     against a list written down here would pass on the day somebody rewords the panel,
-    which is the exact failure this is for.
+    which is the exact failure this is for; asserting them against the file's text would
+    pass on a sentence in a comment, which is round 1's own finding.
     """
-    console = flat(CONSOLE.read_text())
-    for opening in CAVEAT_OPENINGS:
-        assert opening in console, (
-            "the panel no longer says this, so the command line is now the only place it "
-            "is said and the two channels have drifted"
+    values = panel_caveats()
+    assert len(values) == len(CAVEAT_OPENINGS), (
+        f"the panel now has {len(values)} caveats and this channel has "
+        f"{len(CAVEAT_OPENINGS)}"
+    )
+    openings = set()
+    for destination, sentence in values.items():
+        said = flat(sentence)
+        matched = [line for line in CAVEAT_OPENINGS if said.startswith(line)]
+        assert matched, (
+            f"the caveat for {destination} no longer opens with any of the three "
+            f"sentences this command line says: {said[:120]}"
         )
-    assert console.count(ONLY_A_RESTORE) >= len(CAVEAT_OPENINGS)
+        openings.add(matched[0])
+        assert ONLY_A_RESTORE in said, (
+            f"the caveat for {destination} no longer closes on the one claim all three "
+            "of them make"
+        )
+    assert openings == set(CAVEAT_OPENINGS), (
+        "two destinations share a caveat, so one of the three is no longer said at all"
+    )
 
 
 @pytest.mark.parametrize(
@@ -468,6 +518,135 @@ def test_the_bootstrap_says_a_second_run_unpublishes_before_it_does_it(
     )
     warning = bootstrap[detect:converge]
     assert "make up-panel-over-ssh" in warning and "make up-panel" in warning
+
+
+def is_the_template(env_file: pathlib.Path) -> subprocess.CompletedProcess:
+    """``mgmt_is_the_template`` on its own, against a real env file.
+
+    Sliced out and RUN for the reason round 1 gave: the first version of this check was
+    string equality between whole lines, and reading the script would not have told
+    anybody that a file with Windows line endings walks past it. Two functions are taken —
+    the value extraction and the comparison that uses it — so what is exercised is what
+    the script does.
+    """
+    script = BOOTSTRAP.read_text()
+    pieces = [
+        "env_value_of() {" + script.split("env_value_of() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n",
+        'MGMT_TEMPLATE_LINES=""\nmgmt_is_the_template() {'
+        + script.split("mgmt_is_the_template() {", 1)[1].split("\n}\n", 1)[0]
+        + "\n}\n",
+    ]
+    program = (
+        "set -euo pipefail\n"
+        'ENV_FILE="$1"\nTEMPLATE="$2"\n'
+        + "".join(pieces)
+        + 'if mgmt_is_the_template; then echo "SKIP ${MGMT_TEMPLATE_LINES}"; '
+        'else echo GENERATE; fi'
+    )
+    return subprocess.run(
+        ["bash", "-c", program, "bash", str(env_file), str(ENV_EXAMPLE)],
+        capture_output=True, text=True, timeout=30,
+    )
+
+
+def template_env(tmp_path: pathlib.Path, name: str, transform) -> pathlib.Path:
+    path = tmp_path / name
+    path.write_text(transform(ENV_EXAMPLE.read_text()))
+    return path
+
+
+def a_real_tunnel(text: str) -> str:
+    """The same file with a tunnel somebody actually chose."""
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("HASHI_MGMT_ADDRESS="):
+            line = "HASHI_MGMT_ADDRESS=10.77.0.1/24"
+        elif line.startswith("HASHI_MGMT_ENDPOINT="):
+            line = "HASHI_MGMT_ENDPOINT=panel.invalid"
+        elif line.startswith("HASHI_MGMT_PEERS="):
+            line = "HASHI_MGMT_PEERS=laptop=10.77.0.2/32,phone=10.77.0.3/32"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize(
+    "name,transform",
+    [
+        # As the template ships, which is what `cp .env.example .env` leaves behind.
+        ("copied", lambda text: text),
+        # Edited on Windows. Every line ends `\r`, the values are untouched, and whole-line
+        # equality sees nothing: this is round 1's High, and it produced two fabricated
+        # device private keys on the terminal of a rebuild.
+        ("crlf", lambda text: text.replace("\n", "\r\n")),
+        # Quoted, which an env file may be and which compose reads the same way.
+        ("quoted", lambda text: text.replace(
+            "HASHI_MGMT_ENDPOINT=hashi.example.com",
+            'HASHI_MGMT_ENDPOINT="hashi.example.com"',
+        )),
+        # ...and with a comment after the value, which the same idiom one script over
+        # already strips.
+        ("commented", lambda text: text.replace(
+            "HASHI_MGMT_ENDPOINT=hashi.example.com",
+            "HASHI_MGMT_ENDPOINT=hashi.example.com   # from the template",
+        )),
+    ],
+)
+def test_the_templates_values_are_recognised_however_the_file_is_written(
+    tmp_path, name, transform
+) -> None:
+    """A comparison a line ending can defeat is not a comparison.
+
+    Values, not lines: the check reads each value the way an env file is read — last
+    assignment wins, `\r` goes, a trailing comment goes, surrounding quotes come off —
+    and does it to BOTH sides.
+    """
+    result = is_the_template(template_env(tmp_path, name, transform))
+    assert result.stdout.startswith("SKIP"), (
+        f"a {name} env file carrying the template's own tunnel block was treated as a "
+        f"configured one, so the generator runs: {result.stdout}{result.stderr}"
+    )
+    assert "HASHI_MGMT_ENDPOINT" in result.stdout, (
+        "the endpoint — the value nobody chooses for themselves — is not among the ones "
+        "it noticed"
+    )
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_a_tunnel_somebody_chose_is_still_generated(tmp_path, ending) -> None:
+    """The other direction, which is what makes the check worth having rather than a
+    refusal wearing a different name."""
+    text = a_real_tunnel(ENV_EXAMPLE.read_text()).replace("\n", ending)
+    path = tmp_path / f"real{len(ending)}"
+    path.write_text(text)
+    result = is_the_template(path)
+    assert result.stdout.strip() == "GENERATE", result.stdout + result.stderr
+
+
+def test_a_compose_that_cannot_be_asked_says_so_rather_than_going_quiet(
+    bootstrap: str,
+) -> None:
+    """Three answers and not two — round 1's second Medium.
+
+    ``ps --format json`` is not in every compose v2, and this project's rulebook names no
+    minimum. Reading a command that FAILED as "publishing nothing" is this warning going
+    silent in the one case it exists for, so the failure is its own answer and is said out
+    loud. An empty answer is still a real "no": a project with no containers exits 0.
+    """
+    assert 'PUBLISHED_BEFORE="unknown"' in bootstrap, (
+        "a compose that cannot answer is read as a host that publishes nothing"
+    )
+    detect = bootstrap.index('PUBLISHED_BEFORE="no"')
+    converge = bootstrap.index('BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${COMPOSE[@]}" up -d')
+    before = bootstrap[detect:converge]
+    assert "|| true" not in before, (
+        "the failure is swallowed again, so the three answers collapse back into two"
+    )
+    assert "COULD NOT ASK THIS HOST WHAT IT PUBLISHES" in before
+    assert "make up-panel-over-ssh" in before.split("COULD NOT ASK", 1)[1]
+    # ...and again at the end, on the same three-way split, because that is the screen the
+    # operator is left looking at.
+    closing = bootstrap[converge:]
+    assert "MAY HAVE TAKEN AWAY" in closing
 
 
 def test_no_management_tunnel_is_generated_from_the_templates_own_values(

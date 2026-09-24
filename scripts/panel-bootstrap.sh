@@ -376,11 +376,29 @@ mkdir -p "${REPO_ROOT}/backups/state"
 # with a shell pattern and no JSON parser — a published mapping carries a non-zero
 # PublishedPort and an unpublished one carries 0 — and the whole answer is captured first,
 # because a pipe closed early reads as a failed command under `pipefail`.
+#
+# THREE ANSWERS AND NOT TWO. `--format json` is not in every compose v2 (this project's
+# rulebook names no minimum), and a command that fails and is read as "publishing
+# nothing" is this warning going silent in exactly the case it exists for. A project with
+# no containers answers EMPTY and exits 0 — checked — so an empty answer is a real "no"
+# and only a non-zero exit is "could not tell". The third answer is said out loud rather
+# than assumed either way: "I could not ask" is useful, and silence is the failure.
 PUBLISHED_BEFORE="no"
-LISTED="$("${COMPOSE[@]}" ps --format json 2>/dev/null || true)"
-case "${LISTED}" in
-  *'"PublishedPort":'[1-9]*) PUBLISHED_BEFORE="yes" ;;
-esac
+if LISTED="$("${COMPOSE[@]}" ps --format json 2>/dev/null)"; then
+  case "${LISTED}" in
+    *'"PublishedPort":'[1-9]*) PUBLISHED_BEFORE="yes" ;;
+  esac
+else
+  PUBLISHED_BEFORE="unknown"
+fi
+if [ "${PUBLISHED_BEFORE}" = "unknown" ]; then
+  say "COULD NOT ASK THIS HOST WHAT IT PUBLISHES — \`compose ps --format json\` did not
+  answer here, which is what an older compose v2 does. So this cannot tell you whether
+  the step below takes a published port away, and it might: it converges the stack to
+  deploy/docker-compose.yml, which publishes nothing. If this host was serving on 80/443
+  or answering on the console port, publish it again when this finishes with
+  \`make up-panel\` or \`make up-panel-over-ssh\`. Nothing about the data is affected."
+fi
 if [ "${PUBLISHED_BEFORE}" = "yes" ]; then
   say "THIS HOST PUBLISHES PORTS TODAY, AND THIS RUN TAKES THEM AWAY. The step below
   converges the stack to deploy/docker-compose.yml, which publishes nothing — so the
@@ -495,21 +513,40 @@ say "the control plane answers on /healthz and routes /sub/{token}"
 # with no tunnel is a supported mode, it is the mode every restored machine is in, and
 # refusing here would stop a rebuild over a thing that is not needed to run a panel.
 #
-# THREE LINES RATHER THAN ONE, and it is not thoroughness: the address and the peer
+# THREE KEYS RATHER THAN ONE, and it is not thoroughness: the address and the peer
 # addresses are values somebody could genuinely choose, so skipping on the address alone
 # would refuse a real deployment. Any of the three still being the template's is an
 # unfinished block, and the message names which — so the operator is told what to change
 # rather than being told no.
+#
+# VALUES, NOT LINES, and that distinction is the whole of round 1's finding. The first
+# version compared whole lines for equality, which two ordinary env files defeat: one
+# edited on Windows (every line ends `\r`, and the literal template block then matches
+# nothing), and one whose values are quoted (the same value with "" around it). Either
+# of them walked straight past this check and got a tunnel generated out of the template
+# — two fabricated device private keys on the terminal of a rebuild, which is the exact
+# thing this exists to stop. A comparison that a line ending can defeat is not a
+# comparison. The extraction below is `scripts/backup-run.sh::env_value`'s idiom, applied
+# to BOTH sides so the template can be written either way too: last assignment wins, `\r`
+# goes, a trailing comment goes, surrounding quotes come off.
+env_value_of() {
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" \
+    | tail -n 1 \
+    | tr -d '\r' \
+    | sed -e 's/[[:space:]]\{1,\}#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+          -e 's/[[:space:]]*$//'
+}
+
 MGMT_TEMPLATE_LINES=""
 mgmt_is_the_template() {
-  local key want
+  local key want have
   MGMT_TEMPLATE_LINES=""
   [ -r "${TEMPLATE}" ] || return 1
   for key in HASHI_MGMT_ADDRESS HASHI_MGMT_ENDPOINT HASHI_MGMT_PEERS; do
-    want="$(sed -n "s/^${key}=//p" "${TEMPLATE}" | awk 'NR==1')"
+    want="$(env_value_of "${TEMPLATE}" "${key}")"
     [ -n "${want}" ] || continue
-    if awk -v want="${key}=${want}" \
-         '$0 == want { found = 1 } END { exit !found }' "${ENV_FILE}"; then
+    have="$(env_value_of "${ENV_FILE}" "${key}")"
+    if [ "${have}" = "${want}" ]; then
       MGMT_TEMPLATE_LINES="${MGMT_TEMPLATE_LINES}${MGMT_TEMPLATE_LINES:+ }${key}"
     fi
   done
@@ -558,6 +595,11 @@ if [ "${PUBLISHED_BEFORE}" = "yes" ]; then
   is not now — the stack has been converged to deploy/docker-compose.yml, which publishes
   none. The delivery endpoint and the console answer nothing until you publish them
   again, with \`make up-panel\` or \`make up-panel-over-ssh\` below."
+elif [ "${PUBLISHED_BEFORE}" = "unknown" ]; then
+  say "AND WHAT THIS RUN MAY HAVE TAKEN AWAY: this compose could not be asked what the
+  host was publishing before it ran, so if anything was, it is not now — the stack has
+  been converged to deploy/docker-compose.yml, which publishes none. Publish it again
+  with \`make up-panel\` or \`make up-panel-over-ssh\` below."
 fi
 say "NOT proven, and not yet true: nothing here is reachable from outside this host. This
   stack publishes no ports and this script adds none, so there is no panel address to
