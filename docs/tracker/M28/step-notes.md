@@ -467,9 +467,18 @@ database skips); `make verify` green, e2e **207** (was 203). Two rounds.
    **A blip and six weeks are the SAME standing**, separated only by *"19 hours ago"*
    versus *"43 days ago"* — a banner that shouts on the first failure is ignored by the
    fortieth. Do not add a second colour or a shouting threshold.
+   **Narrowed by M28.14:** still two weights and still no third colour, but a gap
+   that is *still running* may now take the neutral banner frame and a `missed days`
+   label even on a `fresh` standing. The frame moved; the palette did not.
 
 4. **`missed_total` is history, never an alarm.** Cumulative, survives the run that ends
    a gap, stated beside a healthy backup, changes the weight of nothing.
+   **Narrowed by M28.14, and read the distinction before you touch either:**
+   `missed_total` still triggers nothing — a cumulative number that never falls would
+   make a permanent badge, which is §3's own argument against it. What draws a label is
+   `missed_recently`, a count over `backups.RECENT_GAP` (8 weeks) that decays to zero on
+   its own once the gap ages out. Window, not total. The reader supplies the **count**,
+   `console.A_GAP_WORTH_A_LABEL` (5) owns the **threshold** — keep that split.
 
 5. **The bucket caveat is on all six, the good one included**, rendered outside the
    banner/note conditional, and it opens with the words `make backup-status` closes
@@ -1165,3 +1174,56 @@ re-saves the suite's own complete env file through a text transform and writes i
 whenever the assertion is about a byte.** Red-first was real: **3 failed, 1 passed**, and
 the one that passed (quoted values) did so *before* the fix — the old parser already
 stripped quotes, which was reported rather than counted as a win.
+
+
+## From M28.14 — the panel stopped promising a schedule it cannot see
+
+**Pinned wording. The panel may not say a backup is taken; only that one would be due.**
+*"A run would be due at {at} {zone}."* / *"That is the time the schedule would use if one
+is installed"* / *"so it cannot tell you whether anything on that host is taking these
+backups at all."* The `never` standing's opening was corrected the same way. A test,
+`test_no_standing_says_a_backup_is_taken_daily`, sweeps every standing that has a record,
+so a new standing cannot quietly reintroduce the claim.
+
+**Why the panel is not allowed to just go and look.** It renders from the one record it
+already reads: no subprocess, no crontab, no I/O. The record is written by the *run*, so
+it cannot attest that a *schedule* exists either — which is why M28.14 was forbidden from
+adding a `schedule_installed` field and told to say less instead. If a later milestone
+wants the panel to state a schedule as fact, something that actually knows has to write
+it down first. `test_nothing_this_panel_says_about_the_schedule_needs_a_second_source`
+builds the sentence from a hand-made `Reading` and holds that line.
+
+**New label `missed days`**, alongside `not recorded` / `not readable` / `no backup` /
+`silent` / `failing` / `clock ahead`, which still wins where both apply.
+
+**`backups.Reading` gained `missed_recently`**, between `failed_since` and
+`success_ahead`. The name-for-name field pin in
+`test_the_reading_that_reaches_a_screen_carries_no_request_and_no_person` was updated
+with it; a further field has to be justified there first.
+
+**`RECENT_GAP` is 8 weeks on purpose:** longer than the 30 dates
+`scripts/backup-run.sh` retains (`MISSED_KEPT=30`, newest-first), so the count can only
+ever undercount a long gap, never exaggerate one.
+
+**A good run can now be loud.** `fresh` with a label is the first standing where a
+*successful* last run draws a banner. Anything testing `loud is False` or `label is None`
+as "the backups are fine" is wrong — **test the standing, never the frame.** Nothing in
+the tree did that when M28.14 landed (swept: the only consumer of either is
+`control/app/templates/panel/overview_body.html`), but `scripts/backup-status` mirrors
+these rules and does **not** have this label, so the two channels differ in weight on the
+same record until an infra step closes it.
+
+**How to test dates that reach a screen.** `days_before(count, ending=…, base=…)` in
+`tests/control/test_a_backup_that_has_been_failing_says_so.py` builds consecutive missed
+dates. **Pass `base=datetime.datetime.now(datetime.UTC)` for anything that renders a
+page** — a rendered page reads the wall clock, so dates pinned to the fixed `NOW` age out
+of the window and the test then fails on a calendar rather than on a change. Same trap
+`live()` exists for. `_every_standing_with_a_record()` sweeps a claim over all four
+branches that have a record.
+
+**Red-first was argued, not observed, and that is a gap in the record rather than in the
+substance.** The two new e2e scenarios assert strings that did not exist before the fix,
+and the reviewer confirmed against the baseline source that neither can pass at
+`12f79a5` — but nobody watched them fail in a reverted tree, because that costs a third
+12-minute stand cycle. Said plainly here so the next reader is not told a check happened
+that did not.

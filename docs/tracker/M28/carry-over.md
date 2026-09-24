@@ -73,3 +73,27 @@ pre-existing 54300/54301/54305 the restore scenario already uses (recorded in
 `docs/tracker/M29/carry-over.md`, "From M29.3b"). Loopback-only and test-only. **This is
 a fourth instance of one known gap, not a new kind** — whoever decides the third-block
 convention decides all four together.
+
+
+## From M28.14
+
+**1. `test_a_stale_apply_records_no_applied_digest` is flaky, and it is in the gate.**
+`tests/control/test_apply_must_reach_the_daemon.py:325-334` reads `first` without a
+`session.expire_all()`, while the second read twelve lines later has one. SQLAlchemy's
+identity map holds **weak** references, so whether the stale `applied_digest=None` copy
+is still alive at that `select` depends on garbage collection — which is why it passes
+alone, fails under the full suite, and passed inside `make verify` on the same commit
+that failed `make test-control`. **Red two runs in three and green in the one the fleet
+reports on is worse than steadily red.** Pre-existing, not M28.14's, and carried into
+M28.16 rather than left here.
+
+**2. The Settings item is half closed.** `HASHI_BACKUP_RECORD` is now a row — it is the
+only backup setting `settings.py` has. The other half of acceptance's note, the Overview
+naming `HASHI_BACKUP_ENABLED` by hand and sending the owner to a markdown file, is
+unchanged and is **AST-pinned from the infra zone**, so moving it is cross-zone work and
+not a thing one diff may do.
+
+**3. `_missed_recently` uses `day >= horizon`**, so a date exactly `RECENT_GAP` old counts
+as recent. Tested at 1 day (in) and 57 days (out) but not at the 56-day edge itself,
+which is below this module's own habit — `SUCCESS_STALE_AFTER` is boundary-tested at 47h
+and 49h.
