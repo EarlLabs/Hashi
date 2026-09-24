@@ -3279,6 +3279,51 @@ different garbage collection.
 Gate: `make test-control` with a real Postgres, run repeatedly, then `make verify`.
 
 
+### M28.17 — `infra`: pin the parity that is currently only promised, and the last two-channel split · found reviewing M28.15, 2026-09-24
+
+Four small things, all the same subject: a claim that the two channels agree, with nothing
+holding them to it.
+
+1. **The 64 KiB ceiling is now a behavioural contract and no test pins it.** Both channels
+   refuse a file over `MOST_OF_A_RECORD` for its size, and that parity is asserted only in
+   prose — a script comment saying *"the same number as `control/app/services/backups.py`'s
+   `MOST_OF_A_RECORD`"* and a runbook sentence saying *"the same ceiling and the same answer
+   as the panel"*. The number is then written out a third and fourth time in the new
+   fixtures. **Move either side and the two channels give different verdicts about one
+   file, with nothing going red** — the exact defect class this milestone exists to close,
+   reintroduced as a documentation promise.
+   `tests/infra/test_the_command_line_says_what_the_panel_says.py` already AST-reads the
+   control zone's source for this kind of parity, and that is where this belongs. The
+   fixtures should read the number rather than repeat it.
+
+2. **`refuse_damaged_record "size"` names a key that does not exist.** It renders as
+   *its "size" is not what scripts/backup-run.sh writes there*, and every other argument to
+   that sentence — `schema`, `missed_dates`, `last_success` — is a real JSON key, so an
+   operator goes looking for a `size` key and finds nothing. Give the size case its own
+   sentence. It can name the file's size without reading any of it.
+
+3. **The runbook says an over-large file is refused whole and never says the next tick
+   replaces it.** The terminal refusal does say so; the runbook reader is the one who is
+   planning, and is the one not told. One clause: move the file aside first, because the
+   next scheduled run rewrites the record.
+
+4. **A directory at the record path splits the two channels** — pre-existing, and the
+   seventh surface of this milestone's one defect. The command line's `[ -f ]` reads it as
+   *"No backup has ever been recorded on this host"*; the panel classes the same shape as
+   presence-with-nothing-legible and answers `UNREADABLE`. Worse, `write_state`'s `mv` then
+   deposits `last-run.json.partial` **inside** that directory, so the schedule runs, reports
+   success and leaves no record at all — every tick, for ever. Refuse the shape by name,
+   matching the panel.
+
+**Why these are worth a step rather than a carry-over line.** Three of the four are one or
+two lines of code. The first is the one that matters: this milestone has been blocked twice
+for surfaces stating what the record does not license, and the fix for the last one ended by
+creating a fresh promise that the two channels agree, held up by a comment. A parity that
+only a human re-reading two files can check is the same thing as no parity.
+
+Gate: `make test-infra`, then `make verify`.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
