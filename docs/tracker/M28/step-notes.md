@@ -1311,3 +1311,53 @@ when the due date rolls over. **A `due_date` ahead of the clock does not:** `tic
 prints nothing, and waits until the calendar catches up — verified with `2099-01-01` — on
 the channel that actually takes backups, while `due` exits 1 and the panel draws a banner.
 That is the accurate version of the sixth surface.
+
+
+## From M28.16 — the identity-map trap, and the switch that makes it deterministic
+
+**The rule, for any new test in `tests/control/` that uses both `client` and `session`:**
+if a helper or fixture touched the row through `session` before the request under test,
+call `session.expire_all()` **before every read**, not just the second one. The long
+explanation lives under `fleet_with_user` in `tests/control/test_revocation_push.py` —
+point at it rather than re-deriving it.
+
+**The mechanism, confirmed against the code rather than assumed.** Fixtures call
+`nodes.set_node_state` through the *test's own* session; `Node.transports` is
+`lazy="selectin"` (`control/app/models/node.py:257`), so every `NodeTransport` lands in
+that session's identity map with `applied_digest=None` before any apply runs. Sessions are
+built `expire_on_commit=False` (`control/app/db.py:41-42`), so a later `select`/`get`
+returns that copy instead of the row. The map holds **weak** references, but `Node` and
+`NodeTransport` back-populate each other into a **reference cycle** — so "still alive"
+means "the cyclic collector has not run yet".
+
+**The direction matters and was written down backwards once already.** A surviving stale
+copy is what turns such a test **red**: the first read sees the fixture's `None` while the
+second, already expired, sees the digest the apply really wrote. When the collector has
+taken the copy, both reads agree and it passes. Anyone who records this as "the stale copy
+made it pass for the wrong reason" has it inverted.
+
+**The reproduction is the asset, not the fix.** Run pytest with a two-line plugin calling
+`gc.disable()` in `pytest_configure`, and any GC-timing-dependent test in this zone becomes
+deterministic: at the baseline the flake failed **5 of 5** with the collector off and passed
+**5 of 5** with it on. Costs one extra suite run (~7m30s). The plugin is a diagnostic and
+does not belong in the repository.
+
+**Running the whole zone with the collector off is the mechanical version of "does this
+shape repeat"** — it found three more instances in `test_revocation_push.py`.
+
+**What that sweep cannot find, and why it is not a complete audit.** It finds tests that
+*fail* on a stale copy. It cannot find one whose expectation happens to **equal** the stale
+value — those simply never flake and never fail. Two such were found by reading, not
+mechanically: `test_a_pushed_node_is_left_active` and
+`test_an_unexpected_error_after_the_push_leaves_the_node_alone` asserted `ACTIVE` /
+`state_detail is None`, which is exactly what the stale copy says, so a revocation that
+degraded every node it pushed to would still have read back as untouched. Both were
+confirmed blind by mutation — degrading the fleet through a separate engine and watching the
+pre-fix bodies pass anyway — and expiring made them real tests for the first time.
+
+**Two Postgres agents do not fit in one database.** `clean_database` drops and recreates
+every table, so two suites sharing one database silently corrupt each other — which happened
+in this run and cost a discarded suite. If a step needs repeated `make test-control` while
+another zone is live on the branch, take
+`HASHI_TEST_DATABASE_URL=postgresql+asyncpg://hashi:replace-me@127.0.0.1:54132/<own-db>`
+and `CREATE DATABASE` it.

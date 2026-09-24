@@ -121,3 +121,24 @@ reviewing M28.15. The command line's `[ -f ]` reads it as *"No backup has ever b
 recorded on this host"*, while the panel classes the same shape as presence-with-nothing-
 legible and answers UNREADABLE. `write_state`'s `mv` then deposits `last-run.json.partial`
 *inside* that directory, so the schedule runs and leaves no record. Carried into M28.17.
+
+
+## From M28.16
+
+**1. About 40 un-audited reads-through-a-populated-session remain in `tests/control/`.**
+All pass with the cyclic collector off, so none of them *flakes* — but that sweep cannot
+distinguish "this read is fresh" from "the stale copy happens to agree", which is exactly
+the class the two blind assertions belonged to. Separating them needs mutation testing,
+which is a piece of work rather than a line. `expire_all` already appears 104 times across
+23 files in the zone.
+
+**2. The identity-map trap is a zone-wide idiom documented only in per-file comments.**
+Both the implementer and the reviewer argue for one line in
+`.claude/projects/01-control-rulebook.md` §Testing, beside the existing `expire_on_commit=False`
+entry in §Traps — *a test that reads through the same session a fixture wrote through must
+`session.expire_all()` first; the identity map holds weak references, so a stale read is a
+garbage-collection lottery.* The rulebook was correctly not edited by a step that does not
+own it. Worth its own step together with [[1]].
+
+**3. The cost of this being undocumented, measured once:** one flaky gate that verified this
+milestone twice, plus two assertions that could not fail. That is the argument for [[2]].
