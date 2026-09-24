@@ -1416,3 +1416,84 @@ at the record path; `a_directory_at_the_record_path(tmp_path)` makes the shape;
 across the two channels. Note there are now two `run()` helpers in the infra tests — the
 3-argument one in `test_backup_schedule.py` and the 4-argument one with a fake crontab in
 `test_what_the_command_line_may_say_about_a_backup.py`.
+
+
+## From M28.18 — one reader of the record, and what the fence does not hold
+
+**`scripts/lib/backup-record.sh` is the only thing in this project that opens
+`backups/state/last-run.json`.** One entry point, `backup_record_read FILE`, **called in
+the caller's own shell and never as `$( )`** — `RECORD_SHAPE` and `RECORD_BYTES` are
+gathered during the read and would die with a subshell. It answers with either
+`RECORD_FAULT` (a refusal naming `shape`, `size` or the key that failed) or a validated
+reading in `READING_*`. To reuse it: source it, then
+`if backup_record_read "${PATH}"; then … READING_* … else … "${RECORD_FAULT}" … fi`.
+**Do not add a second public function** — the fence test fails by name.
+
+**`tick` and `now` adopt nothing from a refusal and take a backup** (owner's decision,
+2026-09-24, recorded in `docs/decisions.md`). Eleven damaged-key states that used to exit 0
+in silence now run. `status` and `due` refuse exactly as before.
+
+**`due` names what the next tick will do by calling `decide` over the same reading**, never
+by a second sentence kept in step by hand — a second copy of that logic would be this
+milestone's defect in a new costume. `decide`'s REASON is deliberately **not** printed
+beside it: on an empty reading that reason is *"no backup has ever been recorded on this
+host"*, the sentence M28.15 took off this verb, and a test fails if it comes back.
+
+**The library keeps more than one extractor on purpose.** `_record_field` and
+`_record_raw_field` differ for values containing `,` or `"` — `"offsite": "ye,s"`
+validates, and `_record_field` returns **empty**, so `status` says *the record says ""*.
+Unifying them would move that line on hand-edited records. One way *in*, not one regex.
+
+**`due_date`, `attempts` and `retry_not_before` are read but not validated, and that is
+load-bearing.** `control/app/services/backups.py::_parse` does not read them at all, so
+validating them here would refuse files the panel reads happily — the two-channel
+disagreement arriving from the strict side. Anyone "finishing" the validator reopens the
+defect this step closed.
+
+### The guards, and exactly where they end
+
+Three pattern-based fences plus the widened pipe guard, all sweeping `scripts/*.sh` and
+`scripts/lib/*.sh` rather than naming files. **Read the seams before trusting them:**
+
+- **Line-wise scanning is wrong for shell.** `_whole_pipelines()` folds backslash
+  continuations before anything scans, because the original guard caught **one** of the
+  three `<<<"${RECORD}" | head -n 1` occurrences this step removed — the other two put the
+  pipe on a continuation line carrying no `${RECORD}`. Folding takes the baseline count
+  1 → 3. A guard that reads one line at a time is a description of one day's formatting.
+- **Backticks are rewritten to `$( )` before walking**, because `` X="`sed -n 1p
+  "${STATE_FILE}"`" `` otherwise walks straight through; there is no `shellcheck` in the
+  Makefile or CI to catch SC2006.
+- **The redirect half matches `THE_RECORD_PATH`**, not `${STATE_FILE}` alone, so
+  `done < "${STATE_DIR}/last-run.json"` is caught.
+
+**What they still do not catch** — the list belongs in the source, and every addition to it
+belongs there too: a second parser written *inside* the library and reached through the
+entry point; a reader in another language or another zone; a path built from something
+other than `STATE_FILE` or the literal filename; a command in a trailing `#` comment;
+**process substitution under a command word not in the tool list** (`done < <(sed -n 1p
+"${STATE_FILE}")` passes); and a **doc comment ending in `\`**, which the folder joins into
+the code line below it although bash does not continue comments — it hides that line from
+the pipe guard.
+
+**The "records nobody" audit derives its list rather than naming files, and the rule is
+`sourced by a swept script`.** A bare `scripts/**.sh` glob was measured and rejected: it
+goes red on five unrelated scripts whose logging is legitimate (`node-bootstrap.sh` uses
+`tee`, `/var/log`, `syslog` to configure a node's own logging; `panel-bootstrap.sh`,
+`notify.sh`, `ask_owner.sh`, `management-tunnel.sh`), so the glob would have changed what
+the audit claims and "make it green" would have meant loosening a charter check.
+**Discovery matches both `source` and `.`.** It is currently **first hop only** — see the
+carry-over; a library sourced by a library is not swept.
+
+**The ceiling now has three homes and all three are pinned**: the library,
+`control/app/services/backups.py`, and the runbook's *"larger than 64 KiB"*. Do not type
+the number anywhere else.
+
+### Two harness techniques worth reusing
+
+- **Observing a `tick` decision without Docker:** `chmod 0o500` the record's directory. A
+  tick that decides to *wait* returns 0 before it looks at the directory; one that decides
+  to *run* reaches `ensure_state_dir` and exits 1 with `cannot write the backup record`,
+  having dumped nothing.
+- **Driving `tick`/`now` end to end without an engine:** a stub `docker` on `PATH` that
+  writes one line to stderr and exits 1. `env_file_must_be_readable` passes it through, and
+  the run records a deterministic exit-1 attempt.

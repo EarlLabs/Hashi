@@ -162,3 +162,40 @@ into M28.18.**
 **3. The `size` and `shape` fault paragraphs wrap raggedly** — they carry hard newlines from
 the `fault=` assignment and sit next to evenly-wrapped shared paragraphs. Cosmetic, and
 acceptance judges this wording. **Folded into M28.18.**
+
+
+## From M28.18
+
+**1. The panel does not notice a record whose `due_date` alone is ahead** — the eighth
+surface, and it invalidates a sentence three files now carry. `control/app/services/backups.py::_ahead()`
+reads only the `last_success`/`last_failure` timestamps, by its own documented design, so
+the 2099 record gives `standing=SILENT` and **no banner**, while `due` exits 1 saying
+*"NOTHING IS BACKED UP AT ALL"*. Reachable without a hand edit: moving `HASHI_BACKUP_TZ`
+west across the date line gives `due` `clock=ahead` and the panel `FRESH`. The claim that
+*"the panel draws a banner about the same file"* is true only of the organic clock-jump
+case, where the run timestamps are ahead too. Carried into M28.20 (`control`), with the
+prose narrowed in M28.19 (`infra`).
+
+**2. The "records nobody" audit is first hop only.** `_sourced_libraries` reads `BACKUP`,
+`RUNNER` and `INSTALLER` and does not recurse into what it finds. Proven by planting
+`scripts/lib/record-notes.sh` with a `tee -a /var/log/…` in it, sourced from
+`backup-record.sh`: **all 14 tests stayed green.** Since record handling now lives in a
+library, the next move is library→library — exactly the hop this rule does not cover, and
+exactly the scenario the test's own docstring describes. Carried into M28.19.
+
+**3. Two fence seams, both planted and confirmed.** Process substitution under a command
+word not in the tool list (`done < <(sed -n 1p "${STATE_FILE}")`) passes the entry-point
+fence; and `_whole_pipelines` folds a **comment** line ending in `\` into the code line
+below, although bash does not continue comments, hiding that line from the pipe guard.
+Three such doc-comment continuations already exist in the tree, all followed by more
+comment lines today, so nothing is hidden right now. Carried into M28.19.
+
+**4. THE RESTORE PATH IS UNPROVEN BY THE SUITE ON THIS MACHINE.** `make verify` gives e2e
+**214 passed / 10 skipped**: four upload and six bucket-restore scenarios skip because
+`object_store()` runs `docker pull` unconditionally and quay.io answers **401** here — the
+image is present locally (`cd04ea408e18`) and that does not help. Not caused by any diff in
+this milestone; the file's last change was M28.12. **M28 must not close on a 214/10 run** —
+it is the offsite-backup-and-restore milestone, and `CLAUDE.md` records the cost of exactly
+this: *"for eleven milestones nothing else included those scenarios, and one of them had
+been failing since the day it was written."* The six local-artifact restore scenarios did
+run and pass. Carried into M28.19.
