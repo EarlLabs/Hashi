@@ -44,6 +44,13 @@
 #       `action=wait` at exit 0 is what a working schedule answers 95 ticks out of 96.
 #       `tick` and `now` take backups and assert nothing to anybody, so neither refuses.
 #
+#       ALL FOUR READ THE RECORD THROUGH scripts/lib/backup-record.sh AND NOTHING ELSE
+#       DOES (M28.18). One reader, one answer: either a refusal naming what made the file
+#       unreadable, or a reading nothing was assumed into. A record this script cannot read
+#       is NO RECORD — `tick` and `now` proceed as if the host had none and take a backup,
+#       which is the fail-safe direction the owner settled on 2026-09-24 (docs/decisions.md);
+#       `status` and `due` refuse it, and `due` now also says what the tick will do about it.
+#
 #       ENV_FILE (default .env) selects which stack, exactly as scripts/backup.sh does,
 #       and is passed through to it. HASHI_BACKUP_STATE_DIR (default backups/state) moves
 #       the record; the control container is given a read-only view of the DEFAULT one —
@@ -67,9 +74,6 @@ STATE_DIR="${HASHI_BACKUP_STATE_DIR:-${REPO_ROOT}/backups/state}"
 STATE_FILE="${STATE_DIR}/last-run.json"
 LOCK_DIR="${STATE_DIR}/.tick.lock"
 
-# The record's own version. M28.6 reads this file; a reader that finds a number it does
-# not know should say so rather than guess at the fields.
-SCHEMA=1
 # How long a run that produced NOTHING (exit 1 — refused, or the stack was not up yet)
 # waits before the next tick tries again, and how many times per day it may. Exit 3 is
 # excluded on purpose: the artifact exists and is intact, re-dumping would fill the disk
@@ -230,171 +234,18 @@ due_date() {
 
 # --- the record -------------------------------------------------------------------------
 
-# The most of that file this will ever read, the same number as
-# control/app/services/backups.py's MOST_OF_A_RECORD and refused the same way: a file
-# larger than this is REFUSED WHOLE, naming its size, and not one byte of it is read out as
-# fact. The real thing is well under a kilobyte, so anything near this is a wrong path — a
-# mount pointing somewhere else, a log file — rather than a record with too much in it.
+# THE RECORD IS READ BY scripts/lib/backup-record.sh AND BY NOTHING ELSE HERE (M28.18).
+# Until this step this script held TWO readers of one file: a lenient one behind `tick` and
+# `now` which pulled fields out of whatever was at the path without checking any of them,
+# and a strict one behind `status` and `due` which refused the same file by name. So a
+# record dated 2099 made `tick` exit 0, print nothing and take no backup until the calendar
+# caught up, while `due` exited 1 and the panel drew a banner about the very same file —
+# and the channel that actually takes backups was the one that believed it. The library
+# says why the collapse is a library rather than a tidier function, and what a refusal now
+# means to each verb.
 #
-# It said "truncated at the ceiling and then refused for its missing end" until review
-# found that claim was not true: the truncation was silent, what survived it sometimes
-# parsed, and the answer then varied between runs of the same command. A comment describing
-# a refusal the code does not perform is the same defect as a screen describing a backup
-# that did not happen.
-#
-# "THE SAME NUMBER" IS NOW HELD BY A TEST rather than by this sentence:
-# tests/infra/test_the_command_line_says_what_the_panel_says.py reads the assignment below
-# and the panel's own `MOST_OF_A_RECORD` out of its source, and fails when they differ.
-# Until M28.17 the parity was a promise in a comment and in the runbook — move either side
-# and the two channels give different verdicts about one file, with nothing going red,
-# which is the defect this whole milestone is about, re-entering as documentation.
-MOST_OF_A_RECORD=65536
-
-# The record with every TOP-LEVEL key on a line of its own, whatever layout it is in on
-# disk. Read once into a variable; every reader below works on that text rather than on
-# the file, so there is exactly one place that decides what the bytes are.
-#
-# WHY IT EXISTS (M28.15, found in acceptance round 2). Every reader here is a `sed` over
-# lines, because a host that can run the stack is not assumed to have a JSON parser — the
-# control plane is the one machine that may have to be rebuilt from nothing. That is still
-# right, and it had one consequence nobody meant: a record that had merely been
-# RE-INDENTED — run through `jq .`, or opened and saved by anything that pretty-prints —
-# put each nested key on its own line, and this reader called a perfectly good record
-# damaged. The panel reads the same file with `json.loads`, which does not care where the
-# line breaks are, so the two channels disagreed about one file again, which is the whole
-# defect this milestone keeps meeting.
-#
-# LAYOUT IS THE ONLY THING THIS TOLERATES, and that is deliberate. Whitespace between
-# tokens is dropped and the spacing after `:` and `,` is made this script's own; nothing
-# else is interpreted, nothing is repaired, and no value is coerced. An unknown key, a
-# changed value, a truncated file and anything outside the fifteen keys the writer writes
-# stay exactly as damaged as they were — a lenient parser here would undo what M28.12 was
-# about.
-record_as_lines() {
-  # A character scanner rather than a regex: the only way to know whether a `{` or a `,`
-  # is structure or is text inside a value is to know whether a string is open, and a
-  # line-wise pattern cannot. Strings are copied through untouched, escapes included.
-  #
-  # LC_ALL=C makes that a scan of BYTES, which is what it is: every byte is copied through,
-  # so a multi-byte character comes out the way it went in, and a file that is not text at
-  # all — the wrong path, a log, a device — is refused below instead of making awk complain
-  # about the operator's locale on its way there. The NUL goes for the same reason and only
-  # that reason: JSON text has none, so this removes nothing a record could contain, and
-  # what it saves the operator is a line of bash's own warning printed over a refusal.
-  tr -d '\000' | LC_ALL=C awk '
-    { text = text $0 "\n" }
-    END {
-      depth = 0; instring = 0; escaped = 0; out = ""
-      total = length(text)
-      for (i = 1; i <= total; i++) {
-        c = substr(text, i, 1)
-        if (instring) {
-          out = out c
-          if (escaped) { escaped = 0 }
-          else if (c == "\\") { escaped = 1 }
-          else if (c == "\"") { instring = 0 }
-          continue
-        }
-        if (c == "\"") { instring = 1; out = out c; continue }
-        if (c == " " || c == "\t" || c == "\n" || c == "\r") { continue }
-        if (c == "{" || c == "[") {
-          depth++
-          out = out c
-          if (depth == 1) { out = out "\n  " }
-          continue
-        }
-        if (c == "}" || c == "]") {
-          depth--
-          if (depth == 0) { out = out "\n" c } else { out = out c }
-          continue
-        }
-        if (c == ":") { out = out ": "; continue }
-        if (c == ",") {
-          if (depth == 1) { out = out ",\n  " } else { out = out ", " }
-          continue
-        }
-        out = out c
-      }
-      print out
-    }
-  '
-}
-
-RECORD=""
-RECORD_READ=""
-RECORD_TOO_BIG=""
-RECORD_SIZE=""
-RECORD_NOT_A_FILE=""
-
-# What is at the record's path when it is not the record, in the words an operator can act
-# on. A DIRECTORY is the one that really happens: `mkdir` of the file's own name, or a bind
-# mount in a compose file naming the FILE instead of the directory it is in, which the
-# docker daemon then creates as a directory. The other shapes are named generically because
-# the remedy is the same and the fault is not.
-what_is_at_the_record_path() {
-  if [ -d "${STATE_FILE}" ]; then
-    printf 'a directory'
-  else
-    printf 'something that is not a file'
-  fi
-}
-
-load_record() {
-  if [ -n "${RECORD_READ}" ]; then return 0; fi
-  RECORD_READ="yes"
-  # `-e` and then `-f`, not `-f` alone. A DIRECTORY at this path is presence, not absence,
-  # and `[ -f ]` reads it as absence — so this channel answered "no backup has ever been
-  # recorded on this host" about a path with something in it while the panel, whose
-  # `S_ISREG` check refuses a directory, a FIFO, a socket and a device alike, answered
-  # UNREADABLE about the same path. Two channels, one path, two verdicts (M28.17).
-  # A dangling symlink stays ABSENCE on both sides: `-e` follows it and finds nothing,
-  # exactly as the panel's `open()` raises FileNotFoundError.
-  [ -e "${STATE_FILE}" ] || return 0
-  if [ ! -f "${STATE_FILE}" ]; then
-    RECORD_NOT_A_FILE="yes"
-    return 0
-  fi
-  # OVER THE CEILING IS NOT THE RECORD, and it is refused whole rather than read in part —
-  # which is what control/app/services/backups.py does with the same number, so the two
-  # channels answer a too-large file the same way. Reading the first 64 KiB and judging THAT
-  # is the worse of the two: it is a verdict about a file nobody has seen all of, and a
-  # record whose first 64 KiB happen to parse would be read out as fact.
-  local size
-  size="$(wc -c < "${STATE_FILE}" | tr -cd '0-9')"
-  if [ -n "${size}" ] && [ "${size}" -gt "${MOST_OF_A_RECORD}" ]; then
-    RECORD_TOO_BIG="yes"
-    # Kept so the refusal can say HOW BIG rather than name a key that does not exist. A
-    # byte count is a fact about the file and not one of its contents, which is the line
-    # every message in this script stays on the safe side of.
-    RECORD_SIZE="${size}"
-    return 0
-  fi
-  RECORD="$(record_as_lines < "${STATE_FILE}")"
-}
-
-# EVERY READER BELOW TAKES THE TEXT AS A HERESTRING, never `printf … | `, and that is a
-# correctness rule rather than a style (found in review, M28.15 round 1). Under `pipefail`
-# a `printf "%s\n" "${RECORD}" | grep -q …` pipeline returns 141 whenever grep matches
-# early and exits while printf still has bytes to write — which happens once the text is
-# larger than a pipe buffer. Measured on an unchanged, perfectly legal 64 KB record: six
-# refusals in twelve consecutive `status` runs, each naming a DIFFERENT valid key, because
-# `has_key` read 141 as "that key is not there". One host, one file, one minute, two
-# verdicts — the exact thing this milestone exists to stop, arriving through a pipe. A
-# herestring is written by the shell itself, so there is no writer to kill.
-
-# One field of the record, from the text above — one key per line, so this is a line-wise
-# read and still needs no JSON parser.
-field() {
-  load_record
-  sed -n "s/^[[:space:]]*\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" \
-    <<<"${RECORD}" | head -n 1
-}
-
-missed_dates() {
-  load_record
-  grep '"missed_dates"' <<<"${RECORD}" \
-    | grep -o '[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}' || true
-}
+# shellcheck source=lib/backup-record.sh
+. "${REPO_ROOT}/scripts/lib/backup-record.sh"
 
 json_entry() {
   # A nested object, or `null` when that thing has never happened. `null` and not an empty
@@ -417,7 +268,7 @@ write_state() {
   local tmp="${STATE_FILE}.partial"
   cat > "${tmp}" <<JSON
 {
-  "schema": ${SCHEMA},
+  "schema": ${RECORD_SCHEMA},
   "written_at": "$(now_utc)",
   "at": "${AT}",
   "at_source": "${AT_SOURCE}",
@@ -448,43 +299,32 @@ OK_AT=""; OK_DUE=""; OK_CODE=0; OK_OUTCOME=""
 BAD_AT=""; BAD_DUE=""; BAD_CODE=0; BAD_OUTCOME=""
 MISSED_LIST=""; MISSED_TOTAL=0
 
-# The two numbers that come back OUT of the record and then go into arithmetic. `$(( ))`
-# reads a leading zero as octal and dies on `08`, so anything that has been on a disk —
-# where a hand edit, a half-written file or a future writer can put one — is forced to
-# base 10 before it is counted with. The same trap as HASHI_BACKUP_AT's hour, one file over.
-as_number() {
-  local raw="${1//[^0-9]/}"
-  [ -n "${raw}" ] || { printf '0'; return; }
-  printf '%s' "$((10#${raw}))"
-}
-
-read_state() {
-  [ -f "${STATE_FILE}" ] || return 0
-  # Once, here, so every `field` below reads the same text out of this shell rather than
-  # re-scanning the file in its own subshell.
-  load_record
-  STATE_DUE="$(field due_date)"
-  STATE_ATTEMPTS="$(as_number "$(field attempts)")"
-  STATE_RETRY_AT="$(field retry_not_before)"
-  MISSED_LIST="$(missed_dates | tr '\n' ' ')"
-  MISSED_TOTAL="$(as_number "$(field missed_total)")"
-  # The three nested objects, read off their single lines.
-  local line
-  for line in last_attempt last_success last_failure; do
-    local raw at due code outcome
-    raw="$(sed -n "s/^[[:space:]]*\"${line}\": \(.*\),\{0,1\}$/\1/p" <<<"${RECORD}" \
-      | head -n 1)"
-    [ -n "${raw}" ] && [ "${raw}" != "null," ] && [ "${raw}" != "null" ] || continue
-    at="$(printf '%s' "${raw}" | sed -n 's/.*"at": "\([^"]*\)".*/\1/p')"
-    due="$(printf '%s' "${raw}" | sed -n 's/.*"due_date": "\([^"]*\)".*/\1/p')"
-    code="$(printf '%s' "${raw}" | sed -n 's/.*"exit_code": \([0-9]*\).*/\1/p')"
-    outcome="$(printf '%s' "${raw}" | sed -n 's/.*"outcome": "\([^"]*\)".*/\1/p')"
-    case "${line}" in
-      last_attempt) LAST_AT="${at}"; LAST_DUE="${due}"; LAST_CODE="$(as_number "${code}")"; LAST_OUTCOME="${outcome}" ;;
-      last_success) OK_AT="${at}"; OK_DUE="${due}"; OK_CODE="$(as_number "${code}")"; OK_OUTCOME="${outcome}" ;;
-      last_failure) BAD_AT="${at}"; BAD_DUE="${due}"; BAD_CODE="$(as_number "${code}")"; BAD_OUTCOME="${outcome}" ;;
-    esac
-  done
+# The record, read ONCE and adopted as this script's working state — or refused, in which
+# case nothing is adopted and the working state stays the one a host with no record has.
+#
+# THE ADOPTION IS THE WHOLE OF THE OWNER'S DECISION OF 2026-09-24 (docs/decisions.md): a
+# record this cannot read is no record. `tick` and `now` call this and carry on, so they
+# take a backup rather than concluding out of an unparseable file that the day's was taken;
+# `status` and `due` call it and refuse when it does. One answer, four verbs — which is the
+# thing that was not true before, and the reason a record dated 2099 stopped this host's
+# backups for months while the panel had a banner up about the same file.
+#
+# `READING_*` is what the library is prepared to be believed about; the names below are this
+# script's own working state, which `run_backup` then MOVES ON and `write_state` writes out.
+# The copy is what keeps the two apart: nothing writes back into a reading.
+read_the_record() {
+  backup_record_read "${STATE_FILE}" || return 1
+  STATE_DUE="${READING_DUE_DATE}"
+  STATE_ATTEMPTS="${READING_ATTEMPTS}"
+  STATE_RETRY_AT="${READING_RETRY_AT}"
+  MISSED_LIST="${READING_MISSED_DATES}"
+  MISSED_TOTAL="${READING_MISSED_TOTAL}"
+  LAST_AT="${READING_LAST_AT}"; LAST_DUE="${READING_LAST_DUE}"
+  LAST_CODE="${READING_LAST_CODE}"; LAST_OUTCOME="${READING_LAST_OUTCOME}"
+  OK_AT="${READING_OK_AT}"; OK_DUE="${READING_OK_DUE}"
+  OK_CODE="${READING_OK_CODE}"; OK_OUTCOME="${READING_OK_OUTCOME}"
+  BAD_AT="${READING_BAD_AT}"; BAD_DUE="${READING_BAD_DUE}"
+  BAD_CODE="${READING_BAD_CODE}"; BAD_OUTCOME="${READING_BAD_OUTCOME}"
 }
 
 # The exit-code contract of scripts/backup.sh, turned into one word the panel can show.
@@ -663,12 +503,14 @@ ensure_state_dir() {
   # so it is a loud exit here rather than a run nobody can see the result of (M28.17).
   #
   # Refused, never repaired: nothing here deletes or moves what an operator put on their
-  # own disk. The reading verbs refuse the same shape by the same name.
-  if [ -e "${STATE_FILE}" ] && [ ! -f "${STATE_FILE}" ]; then
+  # own disk. The reading verbs refuse the same shape by the same name — literally the same
+  # name now: this is the `shape` fault the one reader already reported, not a second test
+  # of the same path that could come to disagree with it.
+  if [ "${RECORD_FAULT}" = "shape" ]; then
     cat >&2 <<MSG
 cannot write the backup record at ${STATE_FILE}.
 
-Nothing was dumped. There is $(what_is_at_the_record_path) at that path and the record is
+Nothing was dumped. There is ${RECORD_SHAPE} at that path and the record is
 a file, so a run would leave ${STATE_FILE}.partial inside it and record nothing at all —
 the schedule would go on reporting success and this host would go on having no record of
 a backup. Move it aside; the next run writes the record in its place.
@@ -763,7 +605,19 @@ run_backup() {
 
 command_tick() {
   resolve_schedule
-  read_state
+  # A REFUSAL IS AN EMPTY READING HERE, and the tick then takes a backup — the owner's
+  # decision of 2026-09-24, in docs/decisions.md. A reader that cannot parse the file must
+  # not conclude the day's backup was taken, and the only other answer, refusing to run,
+  # stops backups on the strength of a file the product itself cannot understand. The cost
+  # is accepted knowingly: a damaged record triggers a dump rather than suppressing one, so
+  # a host in that state takes at most one extra backup per due period until the record is
+  # rewritten — which this same run does.
+  #
+  # The one refusal that does NOT end in a backup is `shape`, and not because this decides
+  # differently about it: `ensure_state_dir` below refuses a path that is not a file before
+  # anything is dumped, since `mv` onto a directory would deposit the half-written record
+  # INSIDE it and record nothing at all (M28.17).
+  read_the_record || true
   decide
   [ "${ACTION}" = "wait" ] && return 0
   ensure_state_dir
@@ -775,7 +629,12 @@ command_tick() {
 
 command_now() {
   resolve_schedule
-  read_state
+  # As `tick`: a record this cannot read is no record, so a hand-taken backup goes ahead
+  # and the record it writes replaces the one nothing could read. What that costs is stated
+  # rather than hidden — the history in the unreadable file is not carried forward, because
+  # carrying it forward means asserting values the validator refused, which is the laundering
+  # M28.15 took out of the over-large case.
+  read_the_record || true
   DUE="$(due_date)"
   ensure_state_dir
   take_lock || {
@@ -801,21 +660,16 @@ command_due() {
   # has ever been recorded on this host" at exit 0, which is byte-for-byte what a host that
   # has genuinely never run one prints. Those are assertions out of a file this script
   # could not parse, and they are exactly the sentences an operator would act on.
-  # `-e` for the same reason `status` uses it: a directory here is something to refuse,
-  # not a host that has never taken a backup.
-  if [ -e "${STATE_FILE}" ]; then
-    local problem
-    problem="$(record_problem)"
-    if [ -n "${problem}" ]; then
-      refuse_damaged_record "${problem}"
-      echo >&2
-      echo "Nothing is said above about what the next tick would do, because that answer is" >&2
-      echo "read out of this same file." >&2
-      return 1
-    fi
+  #
+  # Since M28.18 it is the SAME check `tick` makes, which is what lets the refusal end by
+  # saying what the next tick will do instead of saying that it cannot know.
+  if ! read_the_record; then
+    refuse_damaged_record "${RECORD_FAULT}"
+    echo >&2
+    what_a_tick_would_do >&2
+    return 1
   fi
 
-  read_state
   decide
   note_clock
   # The days this run would write down as having had no backup. Shown here, where nothing
@@ -843,135 +697,15 @@ command_due() {
   fi
 }
 
-# --- reading the record back, as strictly as the panel reads it -------------------------
-#
-# WHY THIS EXISTS AT ALL, because `status` used to have none of it and that was the
-# finding (M28.12). A record with `schema: 99`, or a thousand-character `outcome`, or a
-# `last_success` that is not a run, was printed VERBATIM as fact — "last success: never,
-# last attempt: never", a confident schedule line, exit 0 — which is byte-for-byte what a
-# machine that has simply never taken a backup prints. Meanwhile the panel, reading the
-# same file, called it unreadable and assumed nothing from it, and then sent the operator
-# here to find out more. The two channels have to agree about a damaged file or the
-# weaker one teaches the operator to disbelieve the other.
-#
-# The rules are control/app/services/backups.py's, deliberately, key for key: an unknown
-# `schema`, a missing key this reads, a timestamp that is not one, a number that is not
-# one, a missed date that is not a date, a nested entry that is not a run, or any string
-# over LONGEST_VALUE. And deliberately NOT unreadable, in both readers: an `outcome` this
-# version has no meaning for (it is named verbatim instead) and an `offsite` word it does
-# not know (it collapses into neither answer).
-LONGEST_VALUE=200
-# The two shapes every date in the record has. Checked rather than trusted because these
-# are printed on a terminal and because a file on a disk is where a hand edit goes.
-A_TIMESTAMP='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
-A_DATE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-
-# The raw text after `"key":`, trailing comma removed. Empty when the key is absent — the
-# two are told apart with `has_key`, because "no such key" and "an empty value" are
-# different faults and only one of them is this reader's business.
-raw_field() {
-  load_record
-  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" <<<"${RECORD}" \
-    | head -n 1 \
-    | tr -d '\r' \
-    | sed -e 's/^[[:space:]]*//' -e 's/,[[:space:]]*$//' -e 's/[[:space:]]*$//'
-}
-
-has_key() {
-  load_record
-  grep -q "^[[:space:]]*\"$1\"[[:space:]]*:" <<<"${RECORD}"
-}
+# --- putting a value out of the record on a terminal ------------------------------------
 
 # Anything out of the record that reaches the terminal goes through here first. The writer
 # already restricts what it writes to [A-Za-z0-9_+:/.-]; a hand edit does not, and an
 # escape sequence in a value is a record that rewrites the screen it is being read on. The
-# panel has autoescaping for the same job; this is the terminal's half of it.
+# panel has autoescaping for the same job; this is the terminal's half of it. The length it
+# cuts at is the library's own `LONGEST_VALUE`, which is also the length over which a value
+# makes the whole record unreadable — so this only ever trims what the validator let past.
 printable() { printf '%s' "$1" | tr -cd '[:print:]' | cut -c1-${LONGEST_VALUE}; }
-
-# One `"key": "value"` string, or a reason it is not one. Everything the panel's ``_text``
-# refuses is refused here: a missing key, and a value longer than it reads.
-string_problem() {
-  local raw
-  has_key "$1" || { printf '%s' "$1"; return 0; }
-  raw="$(raw_field "$1")"
-  case "${raw}" in
-    '"'*'"') ;;
-    *) printf '%s' "$1"; return 0 ;;
-  esac
-  raw="${raw#\"}"; raw="${raw%\"}"
-  [ "${#raw}" -le "${LONGEST_VALUE}" ] || printf '%s' "$1"
-}
-
-# One of the three nested entries: `null`, or a run with a timestamp, a whole exit code
-# and an outcome. `null` and a run are both statements the record is entitled to make;
-# "this line is not a run" is not, and it becomes the same refusal as a broken schema
-# rather than being reported as a host that has never had a successful backup.
-#
-# It reads the entry off ONE line and still does, which until M28.15 meant a record whose
-# nested entries had been pretty-printed over four lines was reported damaged while the
-# panel read it happily. That is `record_as_lines`'s job now, above, and none of the checks
-# here were loosened to do it: what arrives here is the same bytes with the whitespace
-# between them made this script's own.
-entry_problem() {
-  local raw at code outcome
-  has_key "$1" || { printf '%s' "$1"; return 0; }
-  raw="$(raw_field "$1")"
-  [ "${raw}" = "null" ] && return 0
-  case "${raw}" in
-    '{'*'}') ;;
-    *) printf '%s' "$1"; return 0 ;;
-  esac
-  case "${raw}" in *'"outcome":'*) ;; *) printf '%s' "$1"; return 0 ;; esac
-  at="$(printf '%s' "${raw}" | sed -n 's/.*"at": *"\([^"]*\)".*/\1/p')"
-  code="$(printf '%s' "${raw}" | sed -n 's/.*"exit_code": *\(-\{0,1\}[0-9]\{1,9\}\).*/\1/p')"
-  outcome="$(printf '%s' "${raw}" | sed -n 's/.*"outcome": *"\([^"]*\)".*/\1/p')"
-  [[ "${at}" =~ ${A_TIMESTAMP} ]] || { printf '%s' "$1"; return 0; }
-  [ -n "${code}" ] || { printf '%s' "$1"; return 0; }
-  [ "${#outcome}" -le "${LONGEST_VALUE}" ] || printf '%s' "$1"
-}
-
-# Which key made this file unreadable, or nothing at all. A KEY NAME and never a value:
-# the reason an operator needs is which field is wrong, and printing the field's contents
-# back at them is how a record starts being a place things leak from.
-record_problem() {
-  local raw problem key day
-  load_record
-  # The two faults that are not a key, first, because neither of them has one: nothing was
-  # read out of a directory and nothing was read out of an over-large file. Both are
-  # answered by their own sentence in `refuse_damaged_record` — `size` and `shape` are the
-  # names of faults here, not names of keys in the record, and a message that said
-  # `its "size" is not what scripts/backup-run.sh writes there` sent an operator looking
-  # through the JSON for a key that has never existed (M28.17).
-  [ -z "${RECORD_NOT_A_FILE}" ] || { printf 'shape'; return 0; }
-  [ -z "${RECORD_TOO_BIG}" ] || { printf 'size'; return 0; }
-  raw="$(raw_field schema)"
-  [ "${raw}" = "${SCHEMA}" ] || { printf 'schema'; return 0; }
-
-  for key in at at_source zone zone_source offsite; do
-    problem="$(string_problem "${key}")"
-    [ -z "${problem}" ] || { printf '%s' "${problem}"; return 0; }
-  done
-
-  for key in last_attempt last_success last_failure; do
-    problem="$(entry_problem "${key}")"
-    [ -z "${problem}" ] || { printf '%s' "${problem}"; return 0; }
-  done
-
-  has_key missed_total || { printf 'missed_total'; return 0; }
-  raw="$(raw_field missed_total)"
-  [[ "${raw}" =~ ^[0-9]{1,9}$ ]] || { printf 'missed_total'; return 0; }
-
-  has_key missed_dates || { printf 'missed_dates'; return 0; }
-  raw="$(raw_field missed_dates)"
-  case "${raw}" in
-    '['*']') ;;
-    *) printf 'missed_dates'; return 0 ;;
-  esac
-  raw="${raw#[}"; raw="${raw%]}"
-  for day in $(printf '%s' "${raw}" | tr -d '"' | tr ',' ' '); do
-    [[ "${day}" =~ ${A_DATE} ]] || { printf 'missed_dates'; return 0; }
-  done
-}
 
 # The three sentences the panel closes with, chosen the way the panel chooses them: by
 # where the RECORD says this host sends, never by how a run went and never by this script
@@ -1056,25 +790,24 @@ refuse_damaged_record() {
   case "$1" in
     shape)
       # The size is not printed here and there is nothing to print: this never opened.
-      fault="${STATE_FILE} could not be read: there is $(what_is_at_the_record_path) at
+      # Both facts — the shape that is there and, below, how big the file was — were
+      # gathered by `backup_record_read` during the read and are still here, because that
+      # runs in this shell. Until M28.18 the reader ran inside `$( )` and this branch had to
+      # go and measure the file a second time to be able to say anything about it.
+      fault="${STATE_FILE} could not be read: there is ${RECORD_SHAPE} at
 that path, and the record is a file. Nothing in it has been read and nothing of it could
 be — the panel refuses the same path for the same reason, so both channels call this a
 record that is there and is not legible rather than a host that has never run one."
-      keep="Move it aside rather than deleting it: nothing here knows what put it there, and
-while it is in the way nothing on this host can write the record either — a scheduled run
-leaves its half-written file INSIDE it and records nothing, every tick, silently."
+      keep="Move it aside rather than deleting it: nothing here knows what put it there, and while it
+is in the way nothing on this host can write the record either — a scheduled run leaves
+its half-written file INSIDE it and records nothing, every tick, silently."
       ;;
     size)
-      # IN THIS SHELL, on purpose. `record_problem` runs inside `$( )` — a subshell — so
-      # every variable it set while reading the file died with it, `RECORD_SIZE` included.
-      # `load_record` is idempotent and reads no content to answer this: it measures the
-      # file and stops.
-      load_record
-      fault="${STATE_FILE} could not be read: it is ${RECORD_SIZE} bytes, and this reads at
-most ${MOST_OF_A_RECORD}. Not one byte of it has been read, so nothing here is a statement
-about what is in it. The record this script writes is well under a kilobyte, so a file that
-size is a wrong path — a mount pointing somewhere else, a log — rather than a long history,
-and the panel refuses it at the same number."
+      fault="${STATE_FILE} could not be read: it is ${RECORD_BYTES} bytes, and
+this reads at most ${MOST_OF_A_RECORD}. Not one byte of it has been read, so nothing here is a
+statement about what is in it. The record this script writes is well under a kilobyte,
+so a file that size is a wrong path — a mount pointing somewhere else, a log — rather
+than a long history, and the panel refuses it at the same number."
       keep="Move it aside rather than deleting it if you want to look at what is in it: the
 next scheduled run writes a new record at that path and what is there now is gone."
       ;;
@@ -1104,12 +837,59 @@ design, so a machine rebuilt out of the backup history has to have them put back
 MSG
 }
 
+# What the NEXT TICK will do with the record `due` has just refused — the sentence the
+# collapse in M28.18 made possible, and the one this verb could not say before.
+#
+# It used to end with "Nothing is said above about what the next tick would do, because that
+# answer is read out of this same file", which was true while there were two readers: the
+# tick read leniently and this verb had no way of knowing what the lenient read would make
+# of the bytes. There is one reader now, so this verb is holding exactly the reading the
+# tick will hold.
+#
+# ASKED, NOT RESTATED. `decide` below is the same function `tick` calls, run over the same
+# empty reading `tick` will have — writing out "it will take a backup" in prose here would
+# be a second copy of the tick's rule, which is this milestone's own defect in a new
+# costume. The one refusal that is not `decide`'s to answer is `shape`, because `tick` never
+# reaches `decide`'s verdict on it: `ensure_state_dir` refuses a path that is not a file
+# before anything is dumped, and promising a backup there would be a promise nothing keeps.
+#
+# THE VERDICT ONLY, NEVER `decide`'s REASON. On an empty reading that reason is the words
+# "no backup has ever been recorded on this host" — which is byte-for-byte what a genuinely
+# fresh host is told, and printing it under a refusal would put the one sentence M28.15
+# took off this verb back on it. `action=` is the answer; the sentence beside it is about
+# THIS file and is written here.
+what_a_tick_would_do() {
+  if [ "${RECORD_FAULT}" = "shape" ]; then
+    cat <<MSG
+The next scheduled run will not take a backup either. It refuses this path before it dumps
+anything, for the reason above — a record cannot be written onto something that is not a
+file — and it says so every fifteen minutes until the path is a file again.
+MSG
+    return 0
+  fi
+  decide
+  cat <<MSG
+What the next scheduled run will do about it: action=${ACTION}. A record this could not
+read is no record, so the run decides as it does on a host that has none rather than
+concluding out of a file nobody could parse that the day's backup was taken — that answer
+came from the same code the run itself uses and from nothing in this file.
+
+The run writes a new record at that path. Move this file aside first if you want to keep
+what is in it.
+MSG
+}
+
 command_status() {
   resolve_schedule
-  # `-e`, not `-f`: what is NOT here is absence, and a directory at this path is not
-  # absence. See load_record — this used to answer "no backup has ever been recorded"
-  # about a path the panel called unreadable.
-  if [ ! -e "${STATE_FILE}" ]; then
+  if ! read_the_record; then
+    refuse_damaged_record "${RECORD_FAULT}"
+    return 1
+  fi
+  # ABSENCE IS THE LIBRARY'S ANSWER, not a second look at the path. `RECORD_PRESENT` is set
+  # from `-e` and then `-f`, so a directory here is presence-with-nothing-legible and has
+  # already been refused above — this used to answer "no backup has ever been recorded"
+  # about a path the panel called unreadable, because `[ -f ]` reads a directory as absence.
+  if [ -z "${RECORD_PRESENT}" ]; then
     cat >&2 <<MSG
 No backup has ever been recorded on this host.
 
@@ -1120,16 +900,8 @@ MSG
     return 1
   fi
 
-  local problem
-  problem="$(record_problem)"
-  if [ -n "${problem}" ]; then
-    refuse_damaged_record "${problem}"
-    return 1
-  fi
-
-  read_state
   local sends
-  sends="$(printable "$(field offsite)")"
+  sends="$(printable "${READING_OFFSITE}")"
 
   echo "Backups on this host, from ${STATE_FILE}:"
   echo

@@ -54,6 +54,7 @@ INSTALLER = REPO / "scripts" / "backup-schedule.sh"
 BOOTSTRAP = REPO / "scripts" / "panel-bootstrap.sh"
 TUNNEL = REPO / "scripts" / "management-tunnel.sh"
 ENV_VALUE = REPO / "scripts" / "lib" / "env-value.sh"
+RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
 FETCHER = REPO / "deploy" / "backup" / "fetch.py"
 ENV_EXAMPLE = REPO / ".env.example"
 RUNBOOK = REPO / "docs" / "deploy" / "runbook.md"
@@ -993,18 +994,38 @@ def panel_number(name: str) -> int:
     raise AssertionError(f"{BACKUPS.name} no longer defines {name}")
 
 
+# Every shell surface the number could be assigned in. The sweep below is over all of them
+# rather than over the one that holds it today: M28.18 moved ``MOST_OF_A_RECORD`` out of
+# ``scripts/backup-run.sh`` and into the library that reads the record, and a pin that named
+# one file would have gone quiet on the move instead of failing.
+SHELL_SURFACES = sorted((REPO / "scripts").glob("*.sh")) + sorted(
+    (REPO / "scripts" / "lib").glob("*.sh")
+)
+
+
 def shell_number(name: str) -> int:
-    """The same, from ``scripts/backup-run.sh``: one bare integer assignment, at the left
-    margin, which is how every constant in that script is written."""
-    found = re.findall(rf"^{name}=([0-9]+)$", RUNNER.read_text(), re.M)
+    """One bare integer assignment across every shell surface, and exactly one.
+
+    Leading whitespace is allowed rather than required to be absent. Anchored hard at the
+    left margin, an indented re-assignment inside a function would have been invisible and
+    this would have gone on comparing the margin value against the panel while the code
+    used another (found in review of M28.17). Contrived, and it was the one silent hole in
+    an otherwise loud reader — every other way of writing the constant already fails by
+    name.
+    """
+    found = [
+        (path.name, value)
+        for path in SHELL_SURFACES
+        for value in re.findall(rf"^[ \t]*{name}=([0-9]+)$", path.read_text(), re.M)
+    ]
     assert len(found) == 1, (
-        f"scripts/backup-run.sh defines {name} {len(found)} times, so there is no one "
+        f"the shell side defines {name} {len(found)} times ({found}), so there is no one "
         "number for the panel's to be compared against"
     )
-    return int(found[0])
+    return int(found[0][1])
 
 
-# Read from the script rather than typed out, and exported for the fixtures in
+# Read from the shell rather than typed out, and exported for the fixtures in
 # ``test_what_the_command_line_may_say_about_a_backup.py`` that sit either side of it: a
 # record built to be "just under the ceiling" has to move when the ceiling does, and a
 # fixture carrying its own copy of the number silently stops testing the boundary it was
@@ -1024,6 +1045,26 @@ def test_both_channels_refuse_a_record_at_the_same_ceiling() -> None:
         "the command line and the panel now refuse an over-large record at different "
         "sizes, so there is a file the panel reads and make backup-status refuses, or "
         "the other way round"
+    )
+
+
+def test_the_runbook_names_the_same_ceiling_as_the_two_channels_refuse_at() -> None:
+    """The third place that number lives, and until M28.18 nothing held it.
+
+    ``docs/deploy/runbook.md`` tells an operator that a file *larger than 64 KiB* is refused
+    whole. The two code sides are pinned to each other above, so they now move together —
+    and a runbook left behind by that move is the same defect one level out: a sentence an
+    operator reads and acts on, describing a refusal the product no longer performs. It is
+    read the way section 7 already reads that file, out of its own prose.
+    """
+    said = re.findall(r"larger than ([0-9]+) KiB", RUNBOOK.read_text())
+    assert len(said) == 1, (
+        f"the runbook states the record's ceiling {len(said)} times ({said}), so there is "
+        "no one sentence for the code's number to be compared against"
+    )
+    assert int(said[0]) * 1024 == MOST_OF_A_RECORD, (
+        f"the runbook promises an operator that a record over {said[0]} KiB is refused and "
+        f"the two channels refuse at {MOST_OF_A_RECORD} bytes"
     )
 
 

@@ -1783,9 +1783,27 @@ file **larger than 64 KiB** is refused whole, for its size, without any of it be
 the same ceiling and the same answer as the panel, because the record is under a kilobyte
 and a file that big is a wrong path rather than a long history. (The two channels are held
 to that one number by `tests/infra/test_the_command_line_says_what_the_panel_says.py`,
-which reads it out of both sources rather than keeping a copy of it.) **Move the file aside
-before you go and look at it**: refusing to read it does not protect it, and the next
-scheduled run writes a new record at that path over whatever is there.
+which reads it out of both sources — and out of the sentence above — rather than keeping a
+copy of it.) **Move the file aside before you go and look at it**: refusing to read it does
+not protect it, and the next scheduled run writes a new record at that path over whatever
+is there.
+
+**And the schedule does not stop for a record it cannot read — it takes a backup.** All
+four verbs read that file through one reader (`scripts/lib/backup-record.sh`), so `tick`
+and `now` get the same refusal `due` and the panel get, and a record this host cannot parse
+is treated as no record at all: a dump is taken and a new record written in its place. That
+is the fail-safe direction and it is deliberate — the alternative stops the backups on the
+strength of a file nothing here can understand — and `due` says which it will be, on an
+`action=` line under the refusal. What it costs, stated: a host with a damaged record takes
+at most one extra backup per due period until the same run rewrites the file, and a backup
+taken by hand over an unreadable record does not carry the old `last_success` or the
+missed-day count forward, because those are values nothing was able to check. Only a path
+that is **not a file** ends in no backup, and it is refused before anything is dumped — see
+below.
+
+Before this, the two sides of that file disagreed in the one direction that matters: a
+record dated in the future made `tick` exit 0 and take no backup at all until the calendar
+reached it, silently, while the panel had a banner up about the same file.
 
 **A directory at the record's path is refused by name**, on both channels and on the
 writing side too. It is what a `mkdir` of the file's own name leaves, and what the docker

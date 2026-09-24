@@ -46,6 +46,12 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 RUNNER = REPO / "scripts" / "backup-run.sh"
 INSTALLER = REPO / "scripts" / "backup-schedule.sh"
 BACKUP = REPO / "scripts" / "backup.sh"
+RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
+# Every shell surface, the same list the other audits keep — the guards below sweep all
+# of them rather than the one script that holds the readers today.
+SHELL_SURFACES = sorted((REPO / "scripts").glob("*.sh")) + sorted(
+    (REPO / "scripts" / "lib").glob("*.sh")
+)
 
 # A crontab of this account's own, in a file, under a `crontab` command that behaves like
 # the real one in the two ways anything here depends on: `-l` exits non-zero when there is
@@ -668,12 +674,258 @@ def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
     herestring is written by the shell itself and has no writer to kill. Structural, and
     aimed at the reintroduction rather than at the symptom — a behavioural test for this
     passes on the day the race happens not to fire.
+
+    Widened twice by M28.18. It sweeps every shell surface rather than one script, because
+    the readers moved into ``scripts/lib/backup-record.sh`` and a guard naming one file
+    would have gone quiet on the move — which is exactly how a rule gets evaded without
+    anybody meaning to. And it now names BOTH ends of the race: a writer that can be killed
+    (`printf`/`echo`/`cat` into a pipe) and a reader that exits early on the other end of
+    one (`| head`, `| grep -q`), which is the half `read_state` had all along in
+    ``sed … <<<"${RECORD}" | head -n 1``. The record needs enough lines matching one key for
+    that to fire, so it had never been seen — the same "narrow window, therefore green"
+    that hid the first half for eleven milestones.
     """
-    offenders = [
-        line.strip() for line in RUNNER.read_text().splitlines()
-        if "${RECORD}" in line and line.lstrip().startswith(("printf", "echo", "cat"))
-    ]
+    offenders = []
+    for path in SHELL_SURFACES:
+        for line in path.read_text().splitlines():
+            # Comments are skipped for the reason ``code_only`` exists one file over:
+            # every script here quotes the wrong version of a line beside the right one,
+            # and both of the shapes below are named in the library's own explanation of
+            # why they are forbidden. An assertion over raw text measures the prose.
+            if "${RECORD}" not in line or line.lstrip().startswith("#"):
+                continue
+            if line.lstrip().startswith(("printf", "echo", "cat")):
+                offenders.append(f"{path.name}: {line.strip()}")
+            elif re.search(r"\|\s*(head|tail|grep\s+-[a-z]*[qm]|read)\b", line):
+                offenders.append(f"{path.name}: {line.strip()}")
     assert not offenders, (
         "a reader of the record is feeding it through a pipe again, which returns 141 "
-        f"under pipefail whenever the reader exits early: {offenders}"
+        f"under pipefail whenever either end exits early: {offenders}"
     )
+
+
+# --- 8. one reader of the record, and nothing that can grow into a second one --------
+#
+# M28.18, and it is the defect the other six surfaces were symptoms of. ``backup-run.sh``
+# held TWO readers of one file: the lenient `field`/`read_state` path behind `tick` and
+# `now`, which pulled values out of whatever was at the path and checked none of them, and
+# the strict `record_problem` path behind `status` and `due`. Every fix in this milestone
+# was correct and none generalised, because each one taught ONE of them something.
+#
+# What these three tests are aimed at is the SECOND READER COMING BACK, not at today's
+# spelling: a `field`-alike appearing in any of these scripts would have to open the record
+# or take apart the text of it, and neither is reachable from outside the library any more.
+
+UNREADABLE = {
+    "schema": {"schema": 99},
+    "offsite": {"offsite": 3},
+    "last_attempt": {"last_attempt": {"at": "yesterday", "exit_code": 0, "outcome": "ok"}},
+    "missed_dates": {"missed_dates": ["yesterday"]},
+}
+
+
+@pytest.mark.parametrize("fault", sorted(UNREADABLE))
+def test_a_tick_takes_a_backup_rather_than_believing_a_record_it_cannot_read(
+    tmp_path, fault
+) -> None:
+    """The owner's decision of 2026-09-24, on the channel that actually takes backups.
+
+    A damaged ``last_attempt`` used to make the tick conclude the day's backup had been
+    taken — out of a file it could not parse, and byte-for-byte the opposite of what the
+    panel said about the same file. It reads through the same reader as ``due`` now, gets
+    the same refusal, and treats a record it cannot read as no record: it RUNS.
+
+    Observed without Docker, and this is the trick worth keeping: the record's directory is
+    made read-only, so a tick that decides to WAIT returns 0 before it ever looks at the
+    directory, while a tick that decides to RUN reaches ``ensure_state_dir`` and refuses
+    there, loudly, having dumped nothing. The two decisions are told apart by the exit code
+    without a database anywhere near it.
+    """
+    state = a_record(tmp_path, due_date=today_in("Etc/UTC"), **UNREADABLE[fault])
+    state.chmod(0o500)
+    try:
+        answered = run("tick", an_env(tmp_path), state)
+    finally:
+        state.chmod(0o700)
+
+    assert answered.returncode == 1, (
+        f"a tick read a record with a damaged {fault} and concluded the day's backup was "
+        "taken, which is what it did before this step and what the panel has never said "
+        f"about the same file:\n{answered.stdout}{answered.stderr}"
+    )
+    assert "cannot write the backup record" in answered.stderr, answered.stderr
+
+
+def test_due_says_what_the_tick_will_do_with_the_record_it_just_refused(tmp_path) -> None:
+    """The sentence the collapse made possible — and it is the tick's own verdict.
+
+    Until there was one reader this verb ended with *"Nothing is said above about what the
+    next tick would do, because that answer is read out of this same file"*, which was true:
+    the tick read that file leniently and this verb had no way of knowing what it would make
+    of the bytes. Both hold the same reading now, so the refusal can end by naming the
+    action — and the action comes from running ``decide``, not from a sentence somebody
+    keeps in step with it by hand.
+
+    ``decide``'s REASON is deliberately not printed with it: on an empty reading that reason
+    is *"no backup has ever been recorded on this host"*, which is what a genuinely fresh
+    host is told, and M28.15 took that sentence off this verb for exactly that reason.
+    """
+    refused = run("due", an_env(tmp_path), a_record(tmp_path, schema=99))
+    assert refused.returncode == 1
+    assert "action=run" in refused.stderr, (
+        f"the refusal does not say what the next tick will do with the file:\n{refused.stderr}"
+    )
+    assert "no record" in refused.stderr
+    assert "no backup has ever been recorded" not in refused.stderr, (
+        "the sentence a fresh host is told is back on a refusal about a damaged record"
+    )
+
+    # The one fault where the tick does NOT end in a backup, because it never reaches that
+    # verdict: `ensure_state_dir` refuses a path that is not a file before anything is
+    # dumped, and promising a backup there would be a promise nothing keeps.
+    state = tmp_path / "shape"
+    (state / "last-run.json").mkdir(parents=True)
+    shaped = run("due", an_env(tmp_path), state)
+    assert shaped.returncode == 1
+    assert "will not take a backup either" in shaped.stderr, shaped.stderr
+    assert "action=" not in shaped.stderr, (
+        "a backup is promised at a path a tick refuses before it dumps anything"
+    )
+
+
+# The record's own path, however it is spelled. ``last-run.json`` as well as the variable,
+# because a second reader that built the path out of ``STATE_DIR`` by hand would otherwise
+# walk straight past a guard that only knew the variable.
+THE_RECORD_PATH = re.compile(r"\$\{STATE_FILE\}|last-run\.json")
+# The commands that take text apart. In COMMAND POSITION only: these words appear in the
+# prose this script prints — *"could not be read"* has `read` in it, and the refusals talk
+# about files — and a guard that flagged prose would be turned off within a milestone.
+TAKES_TEXT_APART = re.compile(
+    r"^(?:sed|awk|grep|egrep|fgrep|cut|head|tail|tr|wc|jq|cat|xargs|source|\.)\b"
+)
+
+
+def _commands(line: str) -> list[str]:
+    """One shell line as the separate commands it runs.
+
+    Each ``$( )`` body is lifted out and judged on its own, then what is left of the line
+    is judged without it. That distinction is the whole reason this is not a substring
+    search: ``printf … "$(… | tr …)" "${STATE_FILE}"`` mentions a text tool and the record's
+    path on one line and reads nothing — the tool is inside a substitution that never sees
+    the path. Lifting them apart tells that from ``x="$(sed -n … "${STATE_FILE}")"``, which
+    is the thing being forbidden.
+    """
+    pieces, rest, depth, start = [], "", 0, 0
+    for index, char in enumerate(line):
+        if line.startswith("$(", index):
+            if depth == 0:
+                start = index + 2
+            depth += 1
+        elif char == ")" and depth:
+            depth -= 1
+            if depth == 0:
+                pieces += _commands(line[start:index])
+                continue
+        elif depth == 0:
+            rest += char
+    pieces.append(rest)
+    # `local x=`, `x=` and the leading whitespace go, so what is left starts with the word
+    # that is actually run.
+    return [
+        re.sub(r"^(?:local\s+)?[A-Za-z_][A-Za-z0-9_]*=", "", part).strip()
+        for piece in pieces
+        for part in re.split(r"\|\||&&|[|;&]", piece)
+    ]
+
+
+def test_only_the_library_ever_opens_the_record() -> None:
+    """No script but ``scripts/lib/backup-record.sh`` takes that file as input.
+
+    Two shapes, because a reader arrives as one or the other: a redirect of the file into
+    something, and a text tool with the file among its arguments. At the baseline of this
+    step ``backup-run.sh`` had both — ``wc -c < "${STATE_FILE}"`` and ``record_as_lines <
+    "${STATE_FILE}"`` — so this is red before the change and green after it, which is what
+    makes it a guard rather than a description.
+
+    What it deliberately does NOT forbid is writing there: ``mv``, ``chmod`` and the
+    heredoc that builds the record all name the path, and the writer is this script's own.
+    """
+    offenders = []
+    for path in SHELL_SURFACES:
+        if path == RECORD_LIB:
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if not THE_RECORD_PATH.search(line):
+                continue
+            for command in _commands(line):
+                if not THE_RECORD_PATH.search(command):
+                    continue
+                if re.search(r"<\s*\"?\$\{STATE_FILE\}", command) or TAKES_TEXT_APART.match(
+                    command
+                ):
+                    offenders.append(f"{path.name}:{number}: {command}")
+    assert not offenders, (
+        "something other than scripts/lib/backup-record.sh is reading the backup record, "
+        "which is the second reader this step exists to remove — two readers of one file "
+        f"is how one host gets two verdicts about it: {offenders}"
+    )
+
+
+def test_the_canonical_text_of_the_record_lives_in_one_place() -> None:
+    """``${RECORD}`` — the file's bytes, canonicalised — exists in the library and nowhere.
+
+    A second parser does not have to open the file: it only has to get hold of the text.
+    Keeping the text inside the library is what makes the entry point the only way in, and
+    it is also what keeps the pipe guard above honest, since that guard looks for this name.
+    """
+    elsewhere = [
+        f"{path.name}:{number}"
+        for path in SHELL_SURFACES
+        if path != RECORD_LIB
+        for number, line in enumerate(path.read_text().splitlines(), 1)
+        if "${RECORD}" in line
+    ]
+    assert not elsewhere, (
+        "the record's canonicalised text has escaped the library that reads it, so a "
+        f"second parser of it can be written without opening the file: {elsewhere}"
+    )
+
+
+def test_the_verbs_reach_the_record_only_through_the_one_entry_point() -> None:
+    """One function of that library is callable from outside it, and one only.
+
+    This is the fence rather than a description of today's code: a library that grows a
+    second public ``field()`` and a verb that calls it is the two-reader shape back, with
+    the file in the right place and the property gone. It fails on the SHAPE — any library
+    function reached from another script — and not on a list of the names that exist now.
+
+    The same for what the verbs may believe: they may read the values the library assigns
+    and may not assign one themselves, because a reading written back into is no longer a
+    reading of the file.
+    """
+    library = RECORD_LIB.read_text()
+    functions = set(re.findall(r"^(\w+)\(\) \{", library, re.M))
+    assert "backup_record_read" in functions, "the entry point is no longer a function"
+    assigned = set(re.findall(r"\b(RECORD|RECORD_[A-Z0-9_]+|READING_[A-Z0-9_]+)=", library))
+
+    for path in SHELL_SURFACES:
+        if path == RECORD_LIB:
+            continue
+        text = path.read_text()
+        called = {name for name in functions if re.search(rf"\b{name}\b", text)}
+        assert called <= {"backup_record_read"}, (
+            f"{path.name} reaches past the record's one entry point and into "
+            f"{sorted(called - {'backup_record_read'})}"
+        )
+        used = set(re.findall(r"\$\{(RECORD|RECORD_[A-Z0-9_]+|READING_[A-Z0-9_]+)\}", text))
+        assert used <= assigned, (
+            f"{path.name} reads {sorted(used - assigned)} out of the record's reader, which "
+            "no longer sets it"
+        )
+        written = re.findall(
+            r"^\s*(RECORD|RECORD_[A-Z0-9_]+|READING_[A-Z0-9_]+)=", text, re.M
+        )
+        assert not written, (
+            f"{path.name} writes back into the reading ({written}), so what the verbs act "
+            "on is no longer what the library read"
+        )
