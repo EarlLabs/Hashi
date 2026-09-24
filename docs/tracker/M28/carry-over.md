@@ -233,3 +233,64 @@ ${REPO_ROOT}/scripts/"lib/a.sh"`, and two `source` statements on one line (the p
 anchored at `^\s*`, so only the first is found). None is written in this tree today — which
 is exactly the argument that was made about the braceless form one round earlier. **Carried
 into M28.21.**
+
+
+## From M28.20 — and the convention this milestone actually earned
+
+**1. Five more instances of the prose class, four of which no test here could catch.** All
+in the `control` zone or in this tracker, all carried into M28.22:
+- `console.py:1072-1074` (+ its docstring `:1034-1036`, comment `:995-999`, and the wording
+  list in the step notes) — *"the run times … are printed here exactly as the record has
+  them"* and *"agree with `make backup-status` to the minute"*. **The panel never prints the
+  record's times**: `_ago`/`_how_long` print a coarse age, so the screen says "4 hours ago"
+  over a record holding `2026-09-23T08:00:00Z`. True of `make backup-status`, which prints
+  the ISO timestamp; carried to the channel that prints ages. **Introduced by the round-1
+  fix**, so it is a new instance rather than a reversal.
+- `console.py:1085-1086` — *"A clock that moved on that host **is what** leaves a record like
+  this behind"* names one cause exclusively where the residue note lists four (hand-seeded, a
+  moved clock, a hand edit, a record carried from another machine). Not round 1's finding
+  returning: that named an **impossible** cause, this names a **possible** one as if it were
+  the only one. The load-bearing half — *"and a timezone cannot"* — survives any fix.
+- `backups.py:145-148` — *"every host scheduled east of UTC … ten hours out of every day"*.
+  The ten hours is right for UTC+14 at 04:00 local; a host at UTC+1 resolving 04:00 writes a
+  due date equal to the UTC date and is never flagged. The argument for the grace is
+  untouched; only the scope overstates.
+- `tests/control/test_a_backup_that_has_been_failing_says_so.py:697-698` — the module rule
+  *"silent about keys it does not read, strict about keys it does"*, falsified by this very
+  step, in a file it edits. **The risk is not cosmetic:** a later reader "finishing" the
+  parser on the strength of that rule reopens the two-channel defect M28.18 closed.
+- `docs/tracker/M28/step-notes.md:1598-1600` — the residue note lists *"a host clock that
+  jumped back by a day or more"* among the shapes now caught. Measured against the real
+  `_due_ahead`: back 24 h → False, 36 h → False, 47 h → True. The grace is **strictly** more
+  than a day. Overstated twice, in fact, since a backward jump also leaves the run timestamps
+  ahead and is already loud via the run half.
+- `docs/tracker/M28/step-notes.md:1447-1449` — M28.18's *"`_parse` does not read them at
+  all"*, now false for `due_date`. The sweep hit that M28.21 missed: it lists the identical
+  sentence in `scripts/lib/backup-record.sh:131-133` and not this copy.
+
+**2. What to pin, and what pinning cannot do — the convention, as argued by the reviewer that
+measured it.** Keep pinning, but as the **regression net**, not the remedy.
+- **No test can tell a true sentence from a false one; it can only tell you which states a
+  sentence appears in.** Four of the six findings above are prose no conceivable test in this
+  repository would catch.
+- **A positive phrase assertion certifies nothing.** It tests that a string is present, while
+  a reader of a green suite takes it as "that sentence has been checked" — a human judgement
+  laundered into a machine result, then made expensive to revisit. That is exactly how
+  `assert "check both on that host" in detail` made a false clause load-bearing.
+- **Pin the gate, not the sentence.** `assert (PHRASE in detail) is (standing is not NEVER)`
+  fails in **both** directions and forces the state the sentence holds for to be written down
+  executably. **This is the house form.**
+- **The absence half carries the information**, and only through `flowing()`. A phrase list
+  the panel must never grow, swept over every standing, is worth more than every positive
+  assertion beside it.
+- **Never pin a sentence naming a cause, a mechanism, or another channel's behaviour** — a
+  moved `HASHI_BACKUP_TZ`, a base image carrying a zone database, what `make backup-status`
+  prints. Nothing in this repo determines those, so they can never go red; pinning them is
+  strictly worse than not.
+- **Pin by constant reference.** A literal in a test is a second copy of the sentence, and two
+  copies never disagree even when both are wrong.
+
+**The convention that actually closed the eight surfaces is the other one:** *a sentence about
+behaviour names the state it holds for, and when you narrow one you sweep the tree for it
+rather than reading the diff.* Pinning stops a corrected sentence reappearing in a state
+nobody had in mind. Billing it as the remedy is how a false phrase ends up load-bearing.
