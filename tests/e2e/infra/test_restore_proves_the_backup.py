@@ -353,16 +353,35 @@ def stack_network(project: str, path: pathlib.Path) -> str:
 def object_store(project: str, path: pathlib.Path) -> dict | None:
     """Start the disposable endpoint, or say why there is none and let the caller skip.
 
-    ``None`` when the image cannot be obtained — an offline machine, or one that has never
-    pulled it. The scenarios that need it skip loudly rather than failing: a suite that
-    goes red because a third-party registry is unreachable teaches everyone to ignore it.
+    ``None`` when the image cannot be obtained — an offline machine that has never pulled
+    it. The scenarios that need it skip loudly rather than failing: a suite that goes red
+    because a third-party registry is unreachable teaches everyone to ignore it.
+
+    THE PULL IS NOT THE QUESTION; HAVING THE IMAGE IS — M28.19. A pull ran here
+    unconditionally and its exit code decided, so ten scenarios (four upload, six
+    bucket-restore) skipped on a machine that had the image in its own store, because
+    quay.io answers 401 to an anonymous request for it. That is the whole restore path
+    unproven on the gate of the milestone whose subject is the restore path, reported as a
+    skip nobody reads. Asking the daemon what it already has is the fix, and it changes
+    NOTHING about what the scenarios do: the store that starts is a real MinIO, the
+    artifact is really signed, really uploaded and really read back. What stops being a
+    disqualification is a registry outage.
+
+    The pull still runs first, and it is still the thing that picks up a re-tagged or a
+    newer image where the registry can be reached; the local answer is a fallback rather
+    than a replacement, so a host with an out-of-date copy is not pinned to it.
     """
     pulled = subprocess.run(
         ["docker", "pull", STORE_IMAGE],
         capture_output=True, text=True, timeout=600, env=_docker_env(),
     )
     if pulled.returncode != 0:
-        return None
+        held = subprocess.run(
+            ["docker", "image", "inspect", STORE_IMAGE],
+            capture_output=True, text=True, timeout=120, env=_docker_env(),
+        )
+        if held.returncode != 0:
+            return None
 
     name = f"hashi-store-{RUN}"
     started = subprocess.run(
@@ -1300,9 +1319,9 @@ def offsite(dumped) -> dict:
     results = dumped[1]["offsite"]
     if results["store"] is None:
         pytest.skip(
-            f"could not obtain {STORE_IMAGE}, so no S3-compatible endpoint exists to send "
-            "an object to. The upload is UNPROVEN on this machine — this is a skip, not a "
-            "pass."
+            f"{STORE_IMAGE} could not be pulled and is not in this machine's own image "
+            "store either, so no S3-compatible endpoint exists to send an object to. The "
+            "upload is UNPROVEN on this machine — this is a skip, not a pass."
         )
     return results
 
@@ -1738,8 +1757,8 @@ def rescue(dumped) -> dict:
     _, fleet = dumped
     if fleet["offsite"].get("store") is None:
         pytest.skip(
-            f"could not pull {STORE_IMAGE}, so nothing was in a bucket to come back out "
-            "of — this is a skip, not a pass"
+            f"{STORE_IMAGE} is neither pullable nor on this machine, so nothing was in "
+            "a bucket to come back out of — this is a skip, not a pass"
         )
     return fleet["offsite"]["rescue"]
 

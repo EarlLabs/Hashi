@@ -39,9 +39,11 @@
 #       `due` and `status` are the two that SPEAK ABOUT the record, and both of them refuse
 #       it rather than repeat it when it is not the file this writes: exit 1, naming the key
 #       that failed and never its contents. Both also say out loud when the record is dated
-#       ahead of this host's clock, which is the state in which no backup is taken at all
-#       and every age on the screen is worthless — `due` exits 1 for it too, because
-#       `action=wait` at exit 0 is what a working schedule answers 95 ticks out of 96.
+#       ahead of this host's clock, which is the state in which every age on the screen is
+#       worthless — and `due` exits 1 for it rather than 0, because it is not a state
+#       anything watching this verb should read as a working schedule. What it is NOT any
+#       more is a schedule that has stopped: since M28.19 a due date ahead of this clock
+#       makes the next tick take a backup and write the date this host is on.
 #       `tick` and `now` take backups and assert nothing to anybody, so neither refuses.
 #
 #       ALL FOUR READ THE RECORD THROUGH scripts/lib/backup-record.sh AND NOTHING ELSE
@@ -109,8 +111,9 @@ Exit codes are scripts/backup.sh's, unchanged: 0 written (and sent, if that is o
 artifact, 2 usage, 3 the artifact exists and did not leave this machine. A `tick` with
 nothing owed exits 0 and prints nothing, so a schedule that is working is quiet.
 
-`due` and `status` exit 1 instead when the record is not the file this script writes, or
-when it is dated ahead of this host's clock. Neither reads anything out of it in that case.
+`due` and `status` exit 1 when the record is not the file this script writes, and neither
+reads anything out of it in that case. `due` also exits 1 on a record dated ahead of this
+host's clock — that one IS read, and every age in it is worthless until a run rewrites it.
 USAGE
   exit 2
 }
@@ -309,10 +312,11 @@ MISSED_LIST=""; MISSED_TOTAL=0
 # thing that was not true before, and the reason a damaged key could stop this host's
 # backups while the panel had a banner up about the same file.
 #
-# NOT COVERED BY THIS, still true, and written here because this is where somebody will
-# look for it: a record dated ahead of the clock is VALID, so it arrives as a reading and
-# `decide` answers `wait` — exit 0, in silence, until the calendar catches up. See the
-# library's header and docs/deploy/runbook.md; it is an owner decision in its own step.
+# NOT THE SAME STATE AS THIS, and written here because this is where somebody will look for
+# it: a record dated ahead of the clock is VALID, so it arrives as a reading rather than as
+# a refusal, and what happens to it is decided in `decide` and not here. Since M28.19 that
+# answer is also to take a backup (see the branch there, and docs/decisions.md) — by a
+# different route, for a different reason, and one that this function is not part of.
 #
 # `READING_*` is what the library is prepared to be believed about; the names below are this
 # script's own working state, which `run_backup` then MOVES ON and `write_state` writes out.
@@ -357,23 +361,26 @@ failed_since_the_last_success() {
 
 # --- a clock that ran ahead ---------------------------------------------------------------
 #
-# The state nothing said out loud until M28.15, and the one nobody gets out of by waiting.
-# A host whose clock jumped forward writes a record dated next March; the clock is then put
-# back; and from that moment `decide` answers "the record is for a day ahead of this clock"
-# — WAIT — at every tick, for as many months as it takes the calendar to catch up. No
-# backup is taken, and the two surfaces an operator reaches said nothing about it: `status`
-# printed "last success: 2027-03-01 (ok)" and `due` printed `action=wait`, exit 0.
+# The state nothing said out loud until M28.15. A host whose clock jumped forward writes a
+# record dated next March; the clock is then put back; and from that moment `decide` used
+# to answer "the record is for a day ahead of this clock" — WAIT — at every tick, for as
+# many months as it took the calendar to catch up. No backup was taken, and the two
+# surfaces an operator reaches said nothing about it either: `status` printed "last
+# success: 2027-03-01 (ok)" and `due` printed `action=wait`, exit 0.
 #
-# The panel already goes loud on the same file (M28.11, M28.14). These are the other two
-# channels saying the same thing about the same record.
+# WHAT IS LEFT FOR THIS SECTION TO DO, now that M28.19 has made `decide` answer `run` to a
+# due date ahead of this clock: say so. The schedule repairs itself, and the record it
+# repairs itself out of was read on a screen in the meantime — so the ages in it, which is
+# the whole of what `status` prints, are still worthless until the run that rewrites them.
+# `note_clock` is therefore about the READING and `decide` is about the ACTION, and they
+# answer different questions about one file rather than the same question twice: this one
+# is also true of a record whose RUN TIMESTAMPS are ahead while its due date is today's,
+# which `decide` correctly leaves alone (see the branch there for why it must).
 #
-# AND `tick` IS STILL SILENT ABOUT IT, which is the state of this as of M28.18. The record
-# is valid — one reader, one answer, and every channel agrees about the file — so it comes
-# back as a reading and `decide` says WAIT: exit 0, no output, no backup, until the
-# calendar catches up. M28.18 collapsed the two READERS and deliberately did not decide
-# this, because what the schedule should do with a record from the future is a choice
-# between two shapes that already exist here — refusing loudly the way a path that is not a
-# file is refused, or taking the backup — and that is the owner's, in its own step.
+# The panel goes loud on the run timestamps only (M28.11, M28.14, and it is by its own
+# documented design — `_ahead` never reads `due_date`). So on the due-date half these two
+# channels are the ONLY ones that say anything, which is the reason the warning below
+# spells out which half of it the panel can be expected to repeat.
 
 # One minute, exactly as control/app/services/backups.py::CLOCK_AHEAD_GRACE. A second or
 # two between two clocks is ordinary and is not what this is about; what this catches is a
@@ -416,11 +423,15 @@ clock_ahead_warning() {
 THIS RECORD IS DATED AHEAD OF THIS HOST'S CLOCK.
 
 Something in it claims to have happened after the moment it was just read, so no age here
-can be believed: a backup taken weeks ago reads as one taken this morning. It does not
-clear by waiting — the schedule asks whether the day's backup has been taken, this record
-answers for a day that has not arrived yet, and NOTHING IS BACKED UP AT ALL until this
-host's calendar reaches the date in it. Fix the clock on this host; the panel says the
-same thing about the same file. `make backup` takes one now whatever the record says.
+can be believed: a backup taken weeks ago reads as one taken this morning. Fix the clock on
+this host.
+
+A DUE DATE ahead of this clock no longer stops the schedule — the next scheduled run takes
+a backup and records the date this host is actually on, so that half repairs itself at the
+cost of one extra dump. The panel does not read the due date, so this may be the only place
+that half is said at all. A RUN dated ahead is the half the panel does go loud about, and
+it stays in this file until a later run of the same kind replaces it. `make backup` takes
+one now whatever the record says.
 MSG
 }
 
@@ -439,9 +450,43 @@ decide() {
   elif [[ "${STATE_DUE}" < "${DUE}" ]]; then
     ACTION="run"; REASON="the backup for ${DUE} has not been taken"
   elif [[ "${DUE}" < "${STATE_DUE}" ]]; then
-    # The record is ahead of the clock: the host's time moved backwards, or the zone was
-    # changed westward. Not an error and not a reason to dump again.
-    ACTION="wait"; REASON="the record is for ${STATE_DUE}, which is ahead of this clock"
+    # THE RECORD IS DATED AHEAD OF THIS CLOCK: the host's time moved backwards, or the zone
+    # was changed westward. The file is not damaged — every reader parses it and they agree
+    # about it — so this is a decision about the SCHEDULE rather than about a parser, and
+    # until M28.19 it was `wait`: exit 0, nothing printed, no backup taken, at every tick,
+    # for as long as the calendar takes to reach the date in the file. Months of a control
+    # plane with no backups at all, said out loud on every channel except the one that
+    # takes them.
+    #
+    # TAKING THE BACKUP IS WHAT REPAIRS IT, which is why it is the answer rather than a
+    # kindness: the run writes a record dated and timestamped by THIS host's clock, so the
+    # date that stopped the schedule is gone by the end of the same run and the next tick
+    # decides normally. One extra dump, once.
+    #
+    # THE REJECTED ALTERNATIVE — refuse loudly, exit 1, and let cron mail the operator —
+    # has a precedent further down this file: `ensure_state_dir` exits 1 on a path that is
+    # not a file, and M28.17 chose that deliberately for a tick. It refuses because writing
+    # the record there is IMPOSSIBLE and a run would dump a database for nothing. Here
+    # writing is possible and writing is the cure, so refusing would leave the host taking
+    # no backups until somebody reads mail — which is the state this is fixing, arriving by
+    # another road.
+    #
+    # THE OWNER SETTLED THE NEIGHBOURING CASE, not this one: a record `tick` cannot READ is
+    # no record and the tick takes a backup (2026-09-24). This is that rule carried to a
+    # record `tick` cannot TRUST, and docs/decisions.md records it as an extension made
+    # here rather than as the owner's own word. It is reversible in one line: this branch
+    # back to `wait`.
+    #
+    # AND IT IS KEYED ON THE DUE DATE, not on `note_clock`/`CLOCK_AHEAD`, although that is
+    # this script's other reading of "dated ahead" and `tick` is the one verb that never
+    # calls it. `note_clock` is also true when a RUN TIMESTAMP is ahead — and a successful
+    # run rewrites `last_attempt` and `last_success` but never `last_failure`, so a record
+    # holding an ahead `last_failure` would satisfy it again after every run, for ever, and
+    # this branch would dump every fifteen minutes on a host whose backups were working.
+    # The due date is both the half that stops the schedule and the half every run
+    # rewrites, which is why it is the half that decides here.
+    ACTION="run"
+    REASON="the record is for ${STATE_DUE}, which is ahead of this clock; this run rewrites it"
   elif [ "${LAST_CODE}" = "0" ]; then
     ACTION="wait"; REASON="the backup for ${DUE} was taken"
   elif [ "${LAST_CODE}" = "3" ]; then

@@ -56,7 +56,9 @@ BOOTSTRAP = REPO / "scripts" / "panel-bootstrap.sh"
 RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
 
 
-def _sourced_libraries(*scripts: pathlib.Path) -> tuple[pathlib.Path, ...]:
+def _sourced_libraries(
+    *scripts: pathlib.Path, root: pathlib.Path | None = None
+) -> tuple[pathlib.Path, ...]:
     """Every ``scripts/lib/*.sh`` any of these scripts sources, found by reading them.
 
     THE NAMED SCRIPTS ARE THIS AUDIT'S SCOPE AND THE LIBRARIES ARE NOT A SECOND LIST. The
@@ -74,9 +76,34 @@ def _sourced_libraries(*scripts: pathlib.Path) -> tuple[pathlib.Path, ...]:
     So the libraries are DISCOVERED rather than named: being sourced by a swept script is
     what puts a file in the sweep, which is the same fact that put the code there. A
     library that arrives by the next move arrives inside this list on the same commit.
+
+    AND THE DISCOVERY IS TRANSITIVE, because the next move is library→library. Until M28.19
+    this read the three named scripts and did not look inside what it found, which was the
+    exact hop the paragraph above describes: record handling had just moved into
+    ``scripts/lib/backup-record.sh``, so a second library sourced from THERE would have been
+    invisible. Proven rather than argued — a planted ``scripts/lib/record-notes.sh`` with a
+    ``tee -a /var/log/…`` in it, sourced from ``backup-record.sh``, left all fourteen tests
+    green. The worklist below is the fix: every library found is itself read, until a pass
+    finds nothing new.
+
+    ``root`` is the tree the sourced names are resolved against, and it is a parameter for
+    one reason: the transitivity above is a property of THIS function, and the only way to
+    hold it is to hand it a chain and see whether it walks the whole thing. Planting that
+    chain in the repository would be an audit checking work it had planted. Everything but
+    that one test passes the repository.
     """
+    root = root or REPO
     found: list[pathlib.Path] = []
-    for script in scripts:
+    # The scripts still to read. A library goes on it the moment it is discovered, so a
+    # chain of any length is walked and a cycle — a pair of libraries sourcing each other —
+    # terminates, because nothing is ever queued twice.
+    pending: list[pathlib.Path] = list(scripts)
+    seen: set[pathlib.Path] = set()
+    while pending:
+        script = pending.pop(0)
+        if script in seen:
+            continue
+        seen.add(script)
         # `source` as well as `.`, although every caller in this project writes `.`: a
         # discovery that only knows one spelling goes QUIET on the other, and a sweep that
         # silently shrinks is the exact failure this function replaces.
@@ -84,10 +111,11 @@ def _sourced_libraries(*scripts: pathlib.Path) -> tuple[pathlib.Path, ...]:
             r'^\s*(?:\.|source)\s+"\$\{REPO_ROOT\}/scripts/lib/([\w.-]+\.sh)"',
             script.read_text(), re.M,
         ):
-            library = REPO / "scripts" / "lib" / name
+            library = root / "scripts" / "lib" / name
             assert library.is_file(), f"{script.name} sources a library that is not there: {name}"
             if library not in found:
                 found.append(library)
+            pending.append(library)
     return tuple(found)
 
 
@@ -114,6 +142,55 @@ def _code(script: pathlib.Path) -> str:
     return "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
     )
+
+
+# --- the sweep finds what the sweep is for --------------------------------------------
+
+
+def test_a_library_sourced_by_a_library_is_swept_too(tmp_path) -> None:
+    """The hop the discovery did not make, held by a chain planted outside the repository.
+
+    Red at this step's baseline and green after it: the old discovery read the scripts it
+    was given and stopped, so the second hop below — the shape that arrives the moment a
+    library is refactored the way ``backup-run.sh`` was — was never opened, and a ``tee -a
+    /var/log/…`` in it was swept by nothing while every test in this file stayed green.
+
+    Planted in ``tmp_path`` rather than in ``scripts/lib/``, because an audit that plants
+    its own evidence in the tree it audits proves only that it can read its own work — and
+    because a file with that line in it has no business in this repository even for the
+    length of a test.
+    """
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "caller.sh").write_text('. "${REPO_ROOT}/scripts/lib/first.sh"\n')
+    (scripts / "lib" / "first.sh").write_text('. "${REPO_ROOT}/scripts/lib/second.sh"\n')
+    # Sourced with `source` rather than `.`, so the spelling the project does not use is
+    # walked on the hop the project does not make.
+    (scripts / "lib" / "second.sh").write_text('source "${REPO_ROOT}/scripts/lib/third.sh"\n')
+    (scripts / "lib" / "third.sh").write_text("# the end of the chain\n")
+
+    found = _sourced_libraries(scripts / "caller.sh", root=tmp_path)
+
+    assert [path.name for path in found] == ["first.sh", "second.sh", "third.sh"], (
+        "a library sourced by a library is outside the sweep, so anything that moves one "
+        f"hop further from a named script is audited by nothing: {[p.name for p in found]}"
+    )
+
+
+def test_the_discovery_terminates_on_a_cycle(tmp_path) -> None:
+    """Two libraries sourcing each other is a hang, and a hanging audit is a red gate.
+
+    Not a shape this project has — the sourcing here is a tree — but the worklist is what
+    makes it reachable, and a test suite that never returns is worse than one that fails.
+    """
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "caller.sh").write_text('. "${REPO_ROOT}/scripts/lib/one.sh"\n')
+    (scripts / "lib" / "one.sh").write_text('. "${REPO_ROOT}/scripts/lib/two.sh"\n')
+    (scripts / "lib" / "two.sh").write_text('. "${REPO_ROOT}/scripts/lib/one.sh"\n')
+
+    found = _sourced_libraries(scripts / "caller.sh", root=tmp_path)
+    assert sorted(path.name for path in found) == ["one.sh", "two.sh"]
 
 
 # --- nothing here keeps a log of its own ---------------------------------------------

@@ -1738,11 +1738,13 @@ exactly the belief that there is one.
 The missed days are printed newest first — the panel sorts them itself rather than taking
 the writer's order, so *"most recent"* points at now even during a gap that started weeks
 ago; the writer stores them newest first as well, so the two agree without either taking
-the other on trust. And a record dated **ahead** of the clock the panel reads it against is said so
-instead of being reported as a backup taken minutes ago: the age is still clamped for the
-arithmetic, so a disagreeing clock cannot turn a stale backup into a fresh one, but the
-screen goes loud with `clock ahead` and says no age on it can be believed until the two
-machines agree about the time.
+the other on trust. And a **run** in the record dated ahead of the clock the panel reads it
+against is said so instead of being reported as a backup taken minutes ago: the age is still
+clamped for the arithmetic, so a disagreeing clock cannot turn a stale backup into a fresh
+one, but the screen goes loud with `clock ahead` and says no age on it can be believed until
+the two machines agree about the time. A *run* and not the record's `due_date`, which this
+screen does not read at all — that half is said on the command line only, and the Backups
+section below says which is which.
 
 **`make backup-status` says the same three things on the command line, out of the same
 field, and refuses the same file.** It closes with whichever of the three caveats the
@@ -1766,12 +1768,12 @@ Nothing runs a backup on this host now."* **When** a run would be owed is a sepa
 distinction and says so instead — it reads one record and may not go looking — which is why
 the two channels word this differently and do not contradict each other.
 
-**A record dated ahead of this host's clock is said out loud on both channels**, and it is
-the state in which nothing is backed up at all: the schedule asks whether the day's backup
-has been taken, the record answers for a day that has not arrived, and every tick waits.
-`scripts/backup-run.sh due` reports `clock=ahead` and exits **1** rather than answering
-`action=wait` at exit 0 for ever; `make backup-status` prints the same paragraph beside the
-ages it makes worthless. Fix the clock; `make backup` takes one whatever the record says.
+**A record dated ahead of this host's clock is said out loud on both channels**, because
+every age in it is then worthless: a backup taken weeks ago reads as one taken this morning.
+`scripts/backup-run.sh due` reports `clock=ahead` and exits **1** rather than 0, whatever
+the action on the same line turns out to be; `make backup-status` prints the same paragraph
+beside the ages it makes worthless and exits 0, because it is a screen rather than a
+verdict. Fix the clock; `make backup` takes one whatever the record says.
 
 **`scripts/backup-run.sh due` refuses a damaged record too**, exit **1**, naming the key —
 it used to answer `offsite=no missed=none` and *"no backup has ever been recorded on this
@@ -1801,21 +1803,33 @@ missed-day count forward, because those are values nothing was able to check. On
 that is **not a file** ends in no backup, and it is refused before anything is dumped — see
 below.
 
-**Still open, and it is the one to know about: a record dated ahead of this host's clock
-stops the backups and `tick` says nothing.** That file is not damaged — every reader parses
-it, and they all agree about it — so it is not what the paragraph above is about. What
-happens is that `tick` asks whether the day's backup has been taken, the record answers for
-a day that has not arrived, and the tick waits: **exit 0, no output, no backup, at every
-tick, until the calendar reaches the date in the file.** `make backup-status` and
-`scripts/backup-run.sh due` both say so loudly and `due` exits 1, and the panel draws a
-banner about the same file — so the state is visible on every channel an operator looks at,
-and silent on the one that actually takes backups. Fix the clock, and `make backup` takes
-one now whatever the record says.
+**And a record dated ahead of this host's clock does not stop the backups either — the
+tick takes one.** That file is not damaged: every reader parses it and they all agree about
+it, so it is a different state from the paragraph above and it arrives by a different road.
+A host whose clock jumped forward wrote a record for a day that has not come; or
+`HASHI_BACKUP_TZ` was moved west far enough to put this host back on the previous day, which
+does the same thing to the due date and touches nothing else — a record due `2026-09-24`,
+read on `Pacific/Midway` before 04:00 there, answers `clock=ahead due=2026-09-23`. Until
+this was decided the tick waited — **exit 0, no output, no backup, at every tick, until the
+calendar reached the date in the file** — and it now takes a backup instead, because the
+backup is what repairs the state: the run writes a record dated by this host's own clock, so
+the date that stopped the schedule is gone by the end of that run. One extra dump, once, and
+it happens whether the dump succeeds or fails. Fix the clock all the same, and `make backup`
+takes one now whatever the record says.
 
-That is knowingly left open rather than overlooked. What the schedule should do with a
-record from the future is a decision about the schedule — refuse to run and say so, the way
-it does for a path that is not a file, or take the backup — and it is being taken in a step
-of its own rather than settled in passing here.
+**What the panel says about it, exactly, because the two halves differ.** The panel goes
+loud — a *clock ahead* banner — when a RUN in the record is dated ahead, which is what a
+clock that jumped forward leaves behind. It does **not** read the record's `due_date` at
+all, so the zone-moved-west shape gives it a quiet, healthy-looking screen — *last backup
+less than an hour ago*, no banner — about a record this host cannot reconcile with its own
+clock: `make backup-status` and `scripts/backup-run.sh due` are the only two channels that
+say anything about that half. The command line's warning says which half is which, so an
+operator reading one screen and then the other is not told two different things about one
+host.
+
+The decision, and the direction it can be reversed in, is in `docs/decisions.md` under
+2026-09-24: this is the owner's rule for a record the tick cannot READ carried to one it
+cannot TRUST, and it was taken by the orchestrator rather than by the owner.
 
 **A directory at the record's path is refused by name**, on both channels and on the
 writing side too. It is what a `mkdir` of the file's own name leaves, and what the docker

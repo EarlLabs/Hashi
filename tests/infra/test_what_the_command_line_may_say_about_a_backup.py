@@ -3,8 +3,9 @@
 WHAT: the fifth and sixth surfaces of one defect, and the guards that keep them shut.
       ``make backup-status`` may not say a schedule exists without asking the thing that
       knows; ``scripts/backup-run.sh due`` may not read facts out of a record it could not
-      parse; both must say out loud that a record dated ahead of this host's clock has
-      stopped the backups; the exit-3 advice may not outlive the failure it is about; the
+      parse; both must say out loud that a record dated ahead of this host's clock makes
+      every age they print worthless, and the tick must take a backup rather than wait for
+      that date (M28.19); the exit-3 advice may not outlive the failure it is about; the
       missed-days label may not be printed with nothing after it; a record that was merely
       re-indented is a good record; and ``HASHI_BACKUP_ENABLED`` is answered from the env
       file for the uploader exactly as it already is for the recorder.
@@ -300,33 +301,69 @@ def test_a_host_with_no_record_still_gets_an_answer(tmp_path) -> None:
     assert "action=run" in answered.stdout
 
 
-# --- 3. a clock that ran ahead has stopped the backups -------------------------
+# --- 3. a clock that ran ahead does not stop the backups any more ---------------
+#
+# M28.19 answered the question M28.18 left: a record dated ahead of this host's clock is
+# VALID — one reader, one answer, every channel agrees about the file — and until this step
+# `decide` answered `wait` to it, so the schedule took nothing for as long as the calendar
+# needed to reach the date. It now answers `run`, because the backup is what repairs the
+# state: the run writes a record dated by this host's own clock.
+#
+# The three things these tests hold apart, because the step is only right if all three are
+# true at once: the tick RUNS, the run RESOLVES the state rather than repeating it every
+# fifteen minutes, and the half of "dated ahead" that a run does NOT repair — a run
+# timestamp out of the future — still does not make the tick dump.
 
 
 AHEAD = "2099-03-01T04:00:00Z"
+# TWO SHAPES, AND THEY ARE NOT THE SAME STATE. A record written under a clock that ran
+# ahead and read back after the clock was put right has its RUN TIMESTAMPS ahead as well as
+# its due date. The due date ahead ON ITS OWN is the other one, and it needs no hand edit
+# either: moving HASHI_BACKUP_TZ west far enough to put the host back on the previous day
+# does it — measured, a record due 2026-09-24 read on Pacific/Midway before 04:00 there
+# answers `clock=ahead due=2026-09-23`. It is seeded here by dating the due date alone
+# rather than by moving a zone, so the test does not depend on the hour it runs at.
+#
+# The second shape is the one the panel cannot see at all: `_ahead` reads `last_success`
+# and `last_failure` and never `due_date`. Both are exercised below for that reason.
+A_CLOCK_THAT_JUMPED = {
+    "due_date": "2099-03-01",
+    "last_attempt": {**A_GOOD_RUN, "at": AHEAD},
+    "last_success": {**A_GOOD_RUN, "at": AHEAD},
+}
+A_DUE_DATE_AHEAD_ON_ITS_OWN = {"due_date": "2099-03-01"}
 
 
-def test_due_says_a_record_dated_ahead_has_stopped_the_backups(tmp_path) -> None:
-    """``action=wait`` for ever, at exit 0, is a backup system that silently stopped.
+def test_due_reads_the_record_and_says_the_ages_in_it_are_worthless(tmp_path) -> None:
+    """Exit 1 with the verdict still printed, because both halves have to be said.
 
-    A host whose clock jumped forward wrote a record for a day that has not arrived; the
-    clock is then put right and every tick from that moment answers "the record is ahead of
-    this clock" and takes nothing. Nothing is wrong with the record, so it is read — and
-    what is said about it is that no backup is being taken at all.
+    The record is not damaged, so it is read and the numbers in it are shown — and what is
+    said beside them is that a machine wrote them at a time that had not come. The exit
+    code is 1 rather than 0 because a host in this state is not a host with a working
+    schedule, and `action=wait` at exit 0 is what a working schedule answers 95 ticks out
+    of 96.
+
+    ``action=run`` here is not a second sentence kept in step by hand: this verb names what
+    the next tick will do by running ``decide``, so the day that answer changed, this line
+    changed with it.
     """
-    state = a_record(
-        tmp_path, due_date="2099-03-01",
-        last_attempt={**A_GOOD_RUN, "at": AHEAD}, last_success={**A_GOOD_RUN, "at": AHEAD},
-    )
+    state = a_record(tmp_path, **A_CLOCK_THAT_JUMPED)
     answered = run("due", an_env(tmp_path), state)
 
     assert answered.returncode != 0, (
-        f"the one state that cannot clear by waiting exits 0:\n{answered.stdout}"
+        f"a record nothing on this host can date-check exits 0:\n{answered.stdout}"
     )
     assert "clock=ahead" in answered.stdout, answered.stdout
-    assert "action=wait" in answered.stdout, "the verdict itself is still readable"
+    assert "action=run" in answered.stdout, (
+        "the verdict is stale: the tick takes a backup on this record since M28.19 and "
+        f"this verb reports the tick's own answer:\n{answered.stdout}"
+    )
     assert "DATED AHEAD OF THIS HOST'S CLOCK" in answered.stderr
-    assert "NOTHING IS BACKED UP AT ALL" in answered.stderr
+    assert "NOTHING IS BACKED UP AT ALL" not in answered.stderr, (
+        "the warning still tells the operator the schedule has stopped, which was true "
+        "until the tick was taught to take the backup and is the fourth time in this "
+        "milestone that prose outlived the behaviour it described"
+    )
 
 
 def test_status_says_it_too_beside_the_ages_it_makes_worthless(tmp_path) -> None:
@@ -344,6 +381,114 @@ def test_status_says_it_too_beside_the_ages_it_makes_worthless(tmp_path) -> None
     assert answered.returncode == 0, answered.stderr
     assert AHEAD in answered.stdout, "the record is readable and is still read"
     assert "DATED AHEAD OF THIS HOST'S CLOCK" in answered.stdout, answered.stdout
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param(A_CLOCK_THAT_JUMPED, id="a-clock-that-jumped-forward"),
+        pytest.param(A_DUE_DATE_AHEAD_ON_ITS_OWN, id="a-due-date-ahead-on-its-own"),
+    ],
+)
+def test_a_tick_takes_the_backup_rather_than_waiting_for_a_date_ahead_of_it(
+    tmp_path, record
+) -> None:
+    """The channel that takes backups stops being the one that says nothing.
+
+    Told apart without Docker by M28.18's trick: the record's directory is read-only, so a
+    tick that decides to WAIT returns 0 before it ever looks at the directory, while one
+    that decides to RUN reaches ``ensure_state_dir``, refuses there and has dumped nothing.
+    The exit code is the decision.
+    """
+    state = a_record(tmp_path, **record)
+    state.chmod(0o500)
+    try:
+        answered = run("tick", an_env(tmp_path), state)
+    finally:
+        state.chmod(0o700)
+
+    assert answered.returncode == 1, (
+        "the tick waited for a date ahead of this host's clock, which is a schedule that "
+        f"has silently stopped for as long as the calendar takes to get there:\n"
+        f"{answered.stdout}{answered.stderr}"
+    )
+    assert "cannot write the backup record" in answered.stderr, answered.stderr
+
+
+def test_the_tick_that_takes_it_leaves_a_record_this_clock_can_read(tmp_path) -> None:
+    """The whole argument for running rather than refusing: the run is the repair.
+
+    Driven end to end with no engine — a ``docker`` on ``PATH`` that writes a line and
+    exits 1, so ``scripts/backup.sh`` fails the way it does on a host whose stack is not
+    up. The dump failing is deliberate: the date in the record is rewritten by the RUN and
+    not by the run succeeding, so this is the weaker of the two cases and the one that has
+    to hold.
+
+    Then the state is asked again. If it came back ``clock=ahead`` the decision in
+    ``decide`` would be a dump every fifteen minutes for ever rather than one extra dump
+    once, which is the thing that would make refusing the better answer.
+    """
+    binaries = tmp_path / "bin"
+    binaries.mkdir(exist_ok=True)
+    (binaries / "docker").write_text(
+        "#!/usr/bin/env bash\necho 'no engine on this host' >&2\nexit 1\n"
+    )
+    (binaries / "docker").chmod(0o755)
+    host = {"PATH": f"{binaries}:{os.environ.get('PATH', '')}"}
+
+    env = an_env(tmp_path)
+    state = a_record(tmp_path, **A_DUE_DATE_AHEAD_ON_ITS_OWN)
+    ticked = run("tick", env, state, host)
+    assert ticked.returncode == 1, "the stub engine was supposed to fail the dump"
+
+    record = json.loads((state / "last-run.json").read_text())
+    assert record["due_date"] == today_in("Etc/UTC"), (
+        "the run did not rewrite the date that stopped the schedule, so the state repairs "
+        f"nothing and every later tick dumps again: {record['due_date']}"
+    )
+
+    after = run("due", env, state, host)
+    assert after.returncode == 0, (
+        f"the state did not clear, so this is a dump per tick:\n{after.stdout}{after.stderr}"
+    )
+    assert "clock=ok" in after.stdout, after.stdout
+    assert "action=wait" in after.stdout, after.stdout
+
+
+def test_a_run_timestamp_ahead_does_not_make_the_tick_dump(tmp_path) -> None:
+    """The other half of ``dated ahead``, and it is deliberately NOT a reason to run.
+
+    A successful run rewrites ``last_attempt`` and ``last_success`` and never
+    ``last_failure``, so a record holding a failure out of the future satisfies
+    ``note_clock`` again after every run. Keying the tick on that would be a dump every
+    fifteen minutes on a host whose backups are working, for ever — which is why ``decide``
+    is keyed on the due date, the half that stops the schedule and the half every run
+    rewrites.
+
+    Both channels still SAY it: the ages in the record are worthless either way, and that
+    is a statement about the reading rather than about the action.
+    """
+    state = a_record(
+        tmp_path, due_date=today_in("Etc/UTC"),
+        last_failure={"at": AHEAD, "due_date": "2099-03-01", "exit_code": 1,
+                      "outcome": "no-artifact"},
+    )
+    answered = run("due", an_env(tmp_path), state)
+    assert answered.returncode == 1, answered.stdout
+    assert "clock=ahead" in answered.stdout, answered.stdout
+    assert "action=wait" in answered.stdout, (
+        "a record whose due date is today's is being dumped for a timestamp no run "
+        f"rewrites, which is a backup every fifteen minutes for ever:\n{answered.stdout}"
+    )
+
+    state.chmod(0o500)
+    try:
+        ticked = run("tick", an_env(tmp_path), state)
+    finally:
+        state.chmod(0o700)
+    assert ticked.returncode == 0, (
+        f"the tick reached the record's directory, so it decided to run:\n{ticked.stderr}"
+    )
 
 
 def test_an_ordinary_record_says_none_of_that(tmp_path) -> None:
@@ -679,13 +824,21 @@ def _whole_pipelines(text: str) -> list[tuple[int, str]]:
 
     The number that comes back is the FIRST physical line, so an offender is still
     reported where a person can find it.
+
+    A COMMENT DOES NOT CONTINUE, and M28.19 fixed that here after planting it: bash ends a
+    ``#`` comment at the newline whatever the last character on the line was, so folding a
+    comment ending in ``\\`` into the line below it hides that line — the guards skip
+    anything whose folded form starts with ``#``. Three doc-comment continuations already
+    exist in this tree, all of them followed by more comment lines today, so nothing was
+    hidden; what was wrong is that the next one to be followed by code would have been, and
+    silently. The comment still comes back as its own entry, so the numbering is unchanged.
     """
     folded, number, carried, started = [], 0, "", 1
     for line in text.splitlines():
         number += 1
         if not carried:
             started = number
-        if line.endswith("\\"):
+        if line.endswith("\\") and not (not carried and line.lstrip().startswith("#")):
             carried += line[:-1] + " "
             continue
         folded.append((started, carried + line))
@@ -739,6 +892,29 @@ def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
     )
 
 
+def test_a_comment_ending_in_a_backslash_does_not_hide_the_line_below_it() -> None:
+    """The guard's own seam, planted — M28.19, and it was found by planting it.
+
+    ``_whole_pipelines`` folds continuations because shell does; it folded COMMENT lines
+    too, which shell does not, and the code line underneath one then arrived inside a
+    folded line starting with ``#`` — which both guards skip whole. The shape is in this
+    tree already: three doc comments end in ``\\``, every one of them followed by more
+    comment lines, so the hole was one edit away from mattering and would have opened in
+    silence.
+    """
+    hidden = (
+        "# a doc comment that wraps and ends in a backslash \\\n"
+        '  printf "%s\\n" "${RECORD}" | grep -q something\n'
+    )
+    folded = _whole_pipelines(hidden)
+    assert [number for number, _ in folded] == [1, 2], folded
+    code = [line for _, line in folded if not line.lstrip().startswith("#")]
+    assert code and "${RECORD}" in code[0], (
+        "a comment ending in a backslash swallowed the code line under it, so the pipe "
+        f"guard never looked at it: {folded}"
+    )
+
+
 # --- 8. one reader of the record, and nothing that can grow into a second one --------
 #
 # M28.18, and it is the defect the other six surfaces were symptoms of. ``backup-run.sh``
@@ -765,6 +941,14 @@ def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
 #     skipped whole (the scripts here quote the forbidden shapes while explaining them);
 #   * and these read the source. Nothing here proves the library BEHAVES as one reader; the
 #     tests above this section do that by running the verbs.
+#
+# TWO ENTRIES CAME OFF THIS LIST IN M28.19, and they came off by being fixed rather than by
+# being re-worded: a reader inside a process substitution (``done < <(sed -n 1p
+# "${STATE_FILE}")``), which ``_commands`` now lifts out exactly as it lifts a ``$( )``;
+# and a doc comment ending in ``\`` swallowing the code line below it, which
+# ``_whole_pipelines`` no longer does because bash does not continue a comment. Both were
+# planted before they were fixed and both have a test of their own, so the list above is
+# what is left rather than what was noticed.
 
 UNREADABLE = {
     "schema": {"schema": 99},
@@ -874,7 +1058,13 @@ def _commands(line: str) -> list[str]:
     line = re.sub(r"`([^`]*)`", r"$(\1)", line)
     pieces, rest, depth, start = [], "", 0, 0
     for index, char in enumerate(line):
-        if line.startswith("$(", index):
+        # PROCESS SUBSTITUTION IS LIFTED OUT EXACTLY AS A SUBSTITUTION IS, and M28.19 added
+        # it after planting it: `done < <(sed -n 1p "${STATE_FILE}")` is a reader of the
+        # record whose command word is inside `<( )`, so a walker that only knew `$( )`
+        # left `sed` sitting behind a `<` and the anchored match below never fired. The
+        # shape is not exotic — it is the idiom for feeding a loop without a subshell, and
+        # it is what somebody reaching for `while read` writes next.
+        if line.startswith("$(", index) or line.startswith("<(", index):
             if depth == 0:
                 start = index + 2
             depth += 1
@@ -917,6 +1107,10 @@ def test_only_the_library_ever_opens_the_record() -> None:
     reader in another language or in another zone; a path assembled at runtime out of
     pieces, since the literal has to appear somewhere in the line to be seen; and a command
     hidden in a trailing ``#`` comment on a code line.
+
+    What it DOES catch now and did not at M28.18: a reader inside a process substitution.
+    ``_commands`` lifts ``<( )`` out the way it lifts ``$( )``, and
+    ``test_the_fence_sees_a_reader_inside_a_process_substitution`` holds it.
     """
     offenders = []
     for path in SHELL_SURFACES:
@@ -943,6 +1137,26 @@ def test_only_the_library_ever_opens_the_record() -> None:
         "which is the second reader this step exists to remove — two readers of one file "
         f"is how one host gets two verdicts about it: {offenders}"
     )
+
+
+def test_the_fence_sees_a_reader_inside_a_process_substitution() -> None:
+    """The seam M28.18 wrote down and M28.19 closed, held by the shape that walked past.
+
+    ``done < <(sed -n 1p "${STATE_FILE}")`` is a second reader of the record in the form
+    somebody reaches for when they want a ``while read`` loop that does not run in a
+    subshell. The walker only lifted ``$( )`` out, so the command word stayed behind a
+    ``<`` where neither the redirect half nor the anchored tool match could see it.
+
+    Asserted through ``_commands`` rather than by planting the line in a script, because
+    the swept scripts are the thing under audit and a fence is not tested by breaking what
+    it guards.
+    """
+    commands = _commands('  done < <(sed -n 1p "${STATE_FILE}")')
+    reader = [command for command in commands if TAKES_TEXT_APART.match(command)]
+    assert reader == ['sed -n 1p "${STATE_FILE}"'], (
+        f"a reader inside a process substitution is invisible to the fence: {commands}"
+    )
+    assert THE_RECORD_PATH.search(reader[0])
 
 
 def test_the_canonical_text_of_the_record_lives_in_one_place() -> None:

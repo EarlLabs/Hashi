@@ -15,15 +15,16 @@
 #       the panel said in as many words that nothing could be assumed. The channel that
 #       actually takes backups was the one that believed the file.
 #
-#       WHAT THIS IS NOT, and the sentence is in the present tense because it is still
-#       true: a record dated AHEAD of this host's clock is not this defect and is not
-#       closed by this library. That record is valid — every reader parses it and they
-#       agree about it — so it arrives here as a reading, and `tick` then waits at exit 0
-#       and in silence until the calendar reaches the date in it, while `due` exits 1 and
-#       the panel draws a banner. The divergence there is between `decide` and
-#       `note_clock`, not between two parsers, and what the schedule should do about it is
-#       an owner decision taken in its own step. Do not read the paragraph above as having
-#       covered it.
+#       WHAT THIS IS NOT: a record dated AHEAD of this host's clock is not this defect and
+#       is not closed by this library. That record is valid — every reader parses it and
+#       they agree about it — so it arrives here as a reading, and everything that then
+#       happens to it happens in `scripts/backup-run.sh`: `decide` takes a backup on a due
+#       date ahead of the clock (M28.19), `due` exits 1, and the panel goes loud only when
+#       a RUN TIMESTAMP is ahead — `control/app/services/backups.py::_ahead` reads
+#       `last_success` and `last_failure` and never `due_date`, by its own documented
+#       design, so a record whose due date alone is ahead draws no banner at all. Verified
+#       by reading both records through that module. Do not read the paragraph above as
+#       having covered any of it.
 #
 #       That is the shape M28.12 named and M28.13 closed one level down, in
 #       `scripts/lib/env-value.sh`, and the lesson is the same: the defect was never one
