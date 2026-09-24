@@ -97,3 +97,27 @@ not a thing one diff may do.
 as recent. Tested at 1 day (in) and 57 days (out) but not at the 56-day edge itself,
 which is below this module's own habit — `SUCCESS_STALE_AFTER` is boundary-tested at 47h
 and 49h.
+
+
+## From M28.15
+
+**1. `tick` still reads the record leniently while `status` and `due` read it strictly.**
+The sixth surface, reproduced twice and deliberately left: `"last_attempt": "probably
+fine"` makes `tick` conclude the day's backup was taken (self-heals next day), and
+`"due_date": "2099-01-01"` makes it **exit 0, print nothing, and wait until 2099** — the
+taking channel silently stopped while both speaking channels say so. Fixing it needs a
+decision about what `tick` does with an unreadable record, which is the owner's.
+
+**2. The shared answer, specified and not built.** `scripts/backup-run.sh` contains **two
+readers of one file**. `scripts/lib/backup-record.sh` would hold the canonicaliser, the
+strict validator and the field readers behind one entry point returning either a refusal
+key or a validated reading — the same move `scripts/lib/env-value.sh` was in M28.13, and
+against the same lesson: *the defect was never one bad comparison; it was a second parser
+that gives the right answer on every file anybody tests with.* It is a refactor across a
+working feature and needs [[1]] decided first.
+
+**3. A directory at the record path splits the two channels** — pre-existing, found
+reviewing M28.15. The command line's `[ -f ]` reads it as *"No backup has ever been
+recorded on this host"*, while the panel classes the same shape as presence-with-nothing-
+legible and answers UNREADABLE. `write_state`'s `mv` then deposits `last-run.json.partial`
+*inside* that directory, so the schedule runs and leaves no record. Carried into M28.17.

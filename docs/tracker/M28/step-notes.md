@@ -1227,3 +1227,87 @@ and the reviewer confirmed against the baseline source that neither can pass at
 `12f79a5` — but nobody watched them fail in a reverted tree, because that costs a third
 12-minute stand cycle. Said plainly here so the next reader is not told a check happened
 that did not.
+
+
+## From M28.15 — the command line stopped promising a schedule, and one file stopped giving two answers
+
+**The command line may look; the panel may not.** `scripts/backup-schedule.sh show` gained a
+third exit code — 0 installed / 1 no entry / **3 no `crontab` on this host** — and
+`backup-status` prints one of three answers from it. The old single line split in two, and
+the split is the point: **`scheduled:` is about the crontab, `appointed:` is about the env
+file.** They answer different questions and used to be one sentence, which is how a host
+with no schedule was told a backup is taken daily. The family now agrees: install →
+`scheduled: yes`; `make backup-unschedule` → its own "removed…" and the next
+`backup-status` says `NO`, byte-identical to a host that never had one.
+
+Operator-facing wording acceptance will judge: `scheduled:    yes` / `scheduled:    NO —
+nothing on this host takes a backup.` / `scheduled:    NOT KNOWN — this host has no
+\`crontab\`…`; `appointed:    <at> <zone> (<source>), whenever something runs it` followed
+by `— from <env file> as it is now, not from this record`.
+
+**`due` refuses a damaged record**, exit 1, naming the key, printing no `action=` line at
+all — through `refuse_damaged_record`, **one function shared with `status` so the two
+cannot drift**. `due`'s line is `action=… clock=ok|ahead due=… …`, with `clock=` second,
+right after the verdict it qualifies. Cron runs `tick`, never `due`, so the exit-code
+change reaches no scheduler.
+
+**`HASHI_BACKUP_ENABLED` has one source: the env file.** The upload compose invocation is
+wrapped in `env -u HASHI_BACKUP_ENABLED` so a value in the calling shell cannot outrank it;
+`--env-file` is intact and compose's own interpolation is the fallback. No third precedence
+rule was invented, and none should be.
+
+### The pipe, and why the fix is one character wide
+
+Readers used to do `printf '%s\n' "${RECORD}" | grep -q …` under `set -o pipefail`. Past
+the 64 KiB pipe buffer `grep -q` exits on its first match, `printf` dies of SIGPIPE, and
+pipefail turns 141 into failure — **so a key that is present is reported absent**, and the
+script then accuses the operator of a damaged record while naming a key whose value is
+perfectly valid. Measured on one unchanged file: `0 0 1 0 1 0 0 1 1 0 1 1`, six refusals
+naming four different valid keys; after the fix, 60 consecutive runs, one md5.
+
+**All five readers take a herestring** (`grep -q … <<<"${RECORD}"`). **Never reintroduce a
+pipe over `${RECORD}`** — `test_no_reader_of_the_record_feeds_it_through_a_pipe` is
+structural for a reason worth understanding: at the baseline it failed 4 times out of 4,
+while the *behavioural* race test failed only 3 times out of 4. A behavioural test for a
+race passes on the run where the race does not fire, so the deterministic guard is the one
+that holds the line.
+
+**The window is narrow and that is why every earlier test was green.** The trap needs the
+*canonicalised text* over the pipe buffer, not the file: 2000 missed dates (26 KB text) →
+0/15 flakes, the race cannot fire; 4900 dates (64 187 bytes on disk, 69 162 of text) →
+flaky; 6000 dates → over the ceiling and deterministically refused. Every shipped test
+before this used sub-kilobyte records. `A_LEGAL_RECORD_THIS_BIG` and
+`ENOUGH_RUNS_TO_SEE_A_RACE = 12` exist to keep a regression test inside that window.
+
+### The ceiling, and the one behaviour change on the writing path
+
+A file over `MOST_OF_A_RECORD` (65 536) is **refused whole, naming `size`, with none of it
+read** — matching `control/app/services/backups.py`, which refuses any file over the same
+number unconditionally. The rejected alternative is written down because it is tempting:
+reading the first 64 KiB and judging *that* is a verdict about a file nobody has seen all
+of, and a file whose opening happens to parse would be read out as fact.
+
+**Consequence, and it is not new:** `tick`/`now` get an empty `RECORD` for an over-large
+file, treat it as *no record*, take a backup and overwrite it. The baseline destroyed that
+file too — it read the first 64 KiB and **salvaged** `last_success` and 30 missed dates out
+of it into a small, valid, authoritative record. The change is that the replacement no
+longer launders unverified bytes into an assertion. `STATE_DIR` comes from the **process
+environment only** and is not among the three names the script takes from an env file, so
+no env-file typo can redirect it, and the write is `mkdir -p` + `mv` to a file named
+`last-run.json` — it cannot truncate a file an operator named.
+
+### Two corrections to earlier claims, kept because both were wrong in the same way
+
+**The record reader does NOT refuse unknown keys, and must not.**
+`control/app/services/backups.py::_parse` ignores them *by documented design* — "a later
+version of the writer adding a sixteenth key must not make this panel go unreadable" —
+so teaching the shell to refuse them would manufacture the exact two-channels-disagree
+defect this step exists to close. The closed 15-key set is enforced on the **writer**, by
+`tests/infra/test_backup_schedule.py::RECORD_KEYS`. An instruction in M28.15's brief said
+otherwise; the instruction was wrong and was withdrawn.
+
+**`tick`'s lenient read does not always self-heal.** A damaged `last_attempt` self-heals
+when the due date rolls over. **A `due_date` ahead of the clock does not:** `tick` exits 0,
+prints nothing, and waits until the calendar catches up — verified with `2099-01-01` — on
+the channel that actually takes backups, while `due` exits 1 and the panel draws a banner.
+That is the accurate version of the sixth surface.
