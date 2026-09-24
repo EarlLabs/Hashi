@@ -3241,6 +3241,44 @@ The other half, and this side **can** check.
 
 Gate: `make test-infra`, then `make verify`.
 
+### M28.16 — `control`: a gate that is green in the run the fleet reports on · found reviewing M28.14, 2026-09-24
+
+Not a backup defect, and it is here because this milestone is the thing that found it
+and the thing it lies to.
+
+`tests/control/test_apply_must_reach_the_daemon.py::test_a_stale_apply_records_no_applied_digest`
+**is flaky.** It failed under `make test-control` at both `2b0eb6a` and the baseline
+`12f79a5` with the work stashed, and **passed inside `make verify` on the same commit.**
+So the milestone has been verified twice by a suite that disagrees with itself about one
+test depending on which command ran it.
+
+The cause is one line. At `:325-334` the test reads `first` **without**
+`session.expire_all()`, while the second read twelve lines later has one. SQLAlchemy's
+identity map holds **weak** references, so whether the stale `applied_digest=None` copy
+from `a_node_with_a_transport` is still alive at that `select` depends on garbage
+collection — which is exactly "passes alone, fails under the suite, passes sometimes".
+
+**Why it gets a step rather than a carry-over line.** `CLAUDE.md` says gate on
+`make verify`, and the whole claim of this pipeline is that nothing passes on the
+author's own word. A test that is red two runs in three and green in the one the fleet
+reports on is the one shape of red that never gets fixed: every reviewer sees it pass,
+and every implementer who hits it correctly concludes it is not theirs. It is also the
+cheapest fix in this milestone.
+
+Add `session.expire_all()` before the first `select`, matching the idiom the same test
+already uses at `:337`. **Prove it rather than asserting it**: the failure is
+GC-dependent, so a single green run is not evidence. Run the full `make test-control`
+several times and say how many, and say plainly if you cannot make it fail at the
+baseline on demand — an unreproducible fix to an intermittent test is a guess, and
+should be reported as one.
+
+Then check whether the shape repeats: any other test reading through a session that a
+fixture also populated, without expiring it first, is the same bug waiting for a
+different garbage collection.
+
+Gate: `make test-control` with a real Postgres, run repeatedly, then `make verify`.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
