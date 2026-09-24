@@ -3534,6 +3534,22 @@ true before it and are wrong now:
 Also check `docs/decisions.md:156`'s closing clause, which states the old behaviour as
 current fact.
 
+**Two more, found by the reviewer sweeping rather than by reading the diff**, and in neither
+the implementer's list nor this step's first draft:
+- `scripts/lib/backup-record.sh:22-25` — *"the panel goes loud only when a RUN TIMESTAMP is
+  ahead … so a record whose due date alone is ahead draws no CLOCK banner at all"*. False now
+  above the grace, and it needs the same conditional wording §C asks for everywhere else.
+- `scripts/lib/backup-record.sh:131-133` — *"THE SCHEDULE'S OWN THREE — `due_date`,
+  `attempts`, `retry_not_before` — … The panel does not read them at all"*. The premise is
+  now false for `due_date`. **The conclusion still stands but for a different reason** — the
+  panel reads it *leniently*, so validating it here would still refuse a file the panel reads
+  happily. Write the reason that is true, not the one that was.
+
+And one partial: `docs/deploy/runbook.md:1745-1747` (*"A **run** and not the record's
+`due_date`, which this screen does not read at all"*) sits inside the paragraph §B already
+claims for a different defect. **It is falsified by M28.20 as well**, so if §B is fixed
+without §C's wording in hand, this clause survives the edit. Fix them together.
+
 **The correct new wording has a condition in it, so write it carefully.** The panel now sees
 a due date ahead by **more than a day**; `DUE_AHEAD_GRACE` is one whole day because the writer
 resolves the due date in the schedule's zone while the panel has only UTC, and inhabited zones
