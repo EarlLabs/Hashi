@@ -324,6 +324,18 @@ async def test_a_stale_apply_records_no_applied_digest(
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
     await client.post(f"/api/nodes/{node_id}/apply")
+    # BOTH reads expire first, and this one used not to — M28.16. ``a_node_with_a_transport``
+    # calls ``set_node_state`` through THIS session, and ``Node.transports`` is
+    # ``lazy="selectin"``, so that call pulled this very row into this session's identity
+    # map with ``applied_digest`` still ``None``. The apply wrote the digest through the
+    # request's own session; a ``select`` here returns the identity map's copy whenever it
+    # is still alive, so ``first`` was ``None`` and the comparison below passed for the
+    # wrong reason. The map holds WEAK references and ``Node``↔``NodeTransport``
+    # back-populate each other into a reference cycle, so "still alive" means "the cyclic
+    # collector has not run yet" — which is why this test failed under `make test-control`
+    # and passed under `make verify` on the same commit. Reproduced deterministically by
+    # disabling the collector for the run.
+    session.expire_all()
     first = (
         await session.execute(
             select(NodeTransport).where(NodeTransport.node_id == node_id)

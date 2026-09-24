@@ -130,6 +130,20 @@ async def fleet_with_user(client, session, reality_params, ws_params):
     return node_ids, user_id
 
 
+# READ THIS BEFORE ADDING A TEST HERE — M28.16. ``fleet_with_user`` calls
+# ``set_node_state`` through the test's OWN session, and ``Node.transports`` is
+# ``lazy="selectin"``, so every node and every node-transport above lands in that
+# session's identity map as it was BEFORE the revocation ran. The revocation writes
+# through the request's own session, and with ``expire_on_commit=False`` a later ``get``
+# or ``select`` here hands back the copy in the map instead of the row — so an assertion
+# about what the push recorded is answered by a snapshot taken before it. The map holds
+# WEAK references and ``Node``↔``NodeTransport`` back-populate each other into a
+# reference cycle, so whether the stale copy is still there comes down to whether the
+# cyclic collector has run: the same read passes alone and fails under the suite. Expire
+# first, always — it costs one line and it is the difference between a test that can fail
+# and one that cannot.
+
+
 async def test_revoking_a_user_reports_instead_of_failing(
     client, session, reality_params, ws_params, accepting_nodes
 ) -> None:
@@ -168,6 +182,8 @@ async def test_a_successful_revocation_push_records_what_was_applied(
 
     await client.post(f"/api/users/{user_id}/revoke")
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     rows = (
         await session.execute(
             select(NodeTransport).where(NodeTransport.node_id.in_(node_ids))
@@ -194,6 +210,10 @@ async def test_a_pushed_node_is_left_active(
 
     await client.post(f"/api/users/{user_id}/revoke")
 
+    # The note under ``fleet_with_user`` says why this line is not optional. Without it
+    # this test cannot fail: the copy in the map already says ``active``, so a revocation
+    # that degraded every node it pushed to would still be read back as untouched.
+    session.expire_all()
     for node_id in node_ids:
         node = await nodes.get_node(session, node_id)
         assert node.state == NodeState.ACTIVE
@@ -283,6 +303,8 @@ async def test_an_unexpected_error_mid_push_is_reported_and_the_fan_out_continue
     # and must not stay in anyone's subscription. ``==`` not ``is`` — String column.
     from control.app.services import nodes
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.DEGRADED
     assert "MissingGreenlet" in (failed_node.state_detail or "")
@@ -315,6 +337,8 @@ async def test_an_unexpected_error_after_the_push_leaves_the_node_alone(
 
     from control.app.services import nodes
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.ACTIVE
     assert failed_node.state_detail is None
@@ -385,6 +409,8 @@ async def test_an_unexpected_error_never_carries_the_node_address_outward(
 
     from control.app.services import nodes
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.DEGRADED
     assert NODE_ADDRESS not in (failed_node.state_detail or ""), (
