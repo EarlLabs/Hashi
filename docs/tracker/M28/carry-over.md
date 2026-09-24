@@ -199,3 +199,37 @@ it is the offsite-backup-and-restore milestone, and `CLAUDE.md` records the cost
 this: *"for eleven milestones nothing else included those scenarios, and one of them had
 been failing since the day it was written."* The six local-artifact restore scenarios did
 run and pass. Carried into M28.19.
+
+
+## From M28.19
+
+**1. The sixth instance, in the paragraph written to fix the fifth** —
+`scripts/backup-run.sh:472-474`. The DUE paragraph promises *"one extra dump and then a
+record that reads normally"*. False when `last_failure` is **also** ahead — the organic shape
+when a clock jumps forward and the run under the jumped clock fails, which is the case the
+retry logic exists for. Measured: after the promised repairing run **succeeds**, the record
+is `due_date=today, last_success=now, last_failure=2099`, and that record still answers
+`clock=ahead`, `due` still exits 1, `status` still prints the whole block, the panel still
+reports `failure_ahead=True`. Permanently loud, not repaired. The code comment at `:530`
+states the consequence correctly; only this sentence promises otherwise, and it contradicts
+the RUN paragraph three lines above. **Carried into M28.21.**
+
+**2. The seventh, in the runbook's panel section** — `docs/deploy/runbook.md:1741-1747`,
+rewritten by this diff. *"And a **run** in the record dated ahead … the screen goes loud"* —
+the panel reads `last_success` and `last_failure` only, so an `last_attempt`-alone-ahead
+record is `FRESH` with no banner. The paragraph's qualifier corrects the wrong axis, and the
+true statement sits 85 lines further down where a reader of that section has no reason to go.
+**Carried into M28.21.**
+
+**3. One more negative assertion over wrapped output without `flowing()`** —
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py:383`. Fires today only
+because the phrase happens to fit one source line; re-added across a line break it would pass
+silently. The rest of `tests/infra/` and `tests/e2e/infra/` was swept and this is the only
+other one. **Carried into M28.21.**
+
+**4. The audit's seam list reads as exhaustive and is not.** Three further spellings walk the
+whole sweep out: `. "${REPO_ROOT}"/scripts/lib/a.sh` (quote closed after the variable), `.
+${REPO_ROOT}/scripts/"lib/a.sh"`, and two `source` statements on one line (the pattern is
+anchored at `^\s*`, so only the first is found). None is written in this tree today — which
+is exactly the argument that was made about the braceless form one round earlier. **Carried
+into M28.21.**

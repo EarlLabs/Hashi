@@ -1497,3 +1497,71 @@ the number anywhere else.
 - **Driving `tick`/`now` end to end without an engine:** a stub `docker` on `PATH` that
   writes one line to stderr and exits 1. `env_file_must_be_readable` passes it through, and
   the run records a deterministic exit-1 attempt.
+
+
+## From M28.19 — the schedule stops waiting for a date it does not trust
+
+**`decide`'s `DUE < STATE_DUE` branch answers `run`, not `wait`.** A record dated ahead of
+this host's clock no longer stops the schedule. The decision lives in `decide` alone, so
+`due` — which names the next tick's action **by calling `decide`** — changed with it and
+there is no second copy. Orchestrator's extension of the owner's rule (a record `tick`
+cannot *trust* is no record, as one it cannot *read* is no record), recorded in
+`docs/decisions.md` and reversible.
+
+**Why it keys on the due date and NOT on `CLOCK_AHEAD`, which is the reason this step is
+safe.** `note_clock` is also true when a *run timestamp* is ahead. `run_backup` sets
+`LAST_AT` always, `OK_AT` only on success and **`BAD_AT` only on failure** — so a record
+holding an ahead `last_failure` would satisfy `CLOCK_AHEAD` after every successful run, for
+ever, and keying the branch on it would dump every fifteen minutes on a working host. The
+due date is the half that stops the schedule and the half every run rewrites.
+
+**The record self-repairs, and it repairs on a failed dump too.** `run_backup` writes
+`STATE_DUE="${DUE}"` unconditionally, so the due date is rewritten by the run rather than by
+the run succeeding: a host whose dumps fail falls into the ordinary hourly retry, bounded by
+`MAX_ATTEMPTS=6`, not into a fifteen-minute loop. The only way to get a dump per tick is a
+clock that keeps jumping backwards across a day boundary — one dump per jump.
+
+**`note_clock` answers in two named parts: `CLOCK_AHEAD_RUN` and `CLOCK_AHEAD_DUE`**, set by
+two independent `if`s because a clock that jumped forward and was put back sets both.
+`CLOCK_AHEAD` remains the "either" flag, so `due`'s `clock=` field and both exit-1 paths are
+unchanged. **A later step wanting either half must read these rather than re-derive them.**
+
+**`due` can now read `action=run clock=ahead` and still exit 1**, where every other
+`clock=ahead` case reads `action=wait`. **The exit code is the field to key on**; nothing in
+the repo parses `action=` outside this file's own tests, and cron runs `tick`, never `due`.
+
+**The e2e fixture no longer skips on a registry 401.** `object_store()` falls back to
+`docker image inspect` when `docker pull` fails, so a present image is used and the loud skip
+is kept for genuine absence. **Expect e2e 224 passed / 0 skipped from now on, and treat any
+skip there as a real absence.**
+
+### The class this milestone paid for six times
+
+**"Prose asserts behaviour the code does not have."** Six instances in M28, and each of the
+last five was written by the fix for the one before. The mechanism is always the same:
+someone looks at one concrete state, sees something true of it, and writes it as a
+**generalisation**; it then applies itself to a state nobody had in mind and is false.
+
+*"Every age in it is worthless"* was true of a record whose **runs** are ahead, written while
+looking at one, and false of the due-date-only shape — so `make backup-status` printed an
+exact timestamp and told the operator not to believe it.
+
+**The discipline that follows, and it is cheap: a sentence about behaviour names the state it
+holds for.** Not "a record dated ahead" but "a record whose *last success or last failure* is
+ahead". When narrowing one, **sweep for the sentence rather than reading the diff** — two
+further copies were found that way, and a fifth instance was found by checking a clause
+before restoring it.
+
+**Prose is the only artifact in this pipeline that nothing executes**, which is why this
+survives review: a reviewer who agrees with what a sentence is *for* does not notice it is
+false in a state neither party had in mind. The two tests that hold the halves apart
+(`test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable` and
+`test_a_run_dated_ahead_still_says_no_age_can_be_believed`) are the shape of the only real
+remedy: **an assertion about what the product may say, checked against what it does say, in
+every state.**
+
+**`flowing()` exists because a negative assertion over wrapped heredoc output cannot fail.**
+The warning wraps, so a literal `"no age here can be believed" not in output` passes whatever
+the text says. Every absence assertion over a rendered paragraph goes through `flowing()`,
+which collapses whitespace. This class has appeared twice in this milestone and is invisible
+while green.
