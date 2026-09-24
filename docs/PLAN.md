@@ -3581,6 +3581,75 @@ Gate: `make test-infra`, then `make verify`, and **the e2e half must stay 224 pa
 skipped**.
 
 
+### M28.22 — `control`: the panel's own sentences, and the rule its parser no longer follows · 2026-09-24
+
+The `control` half of M28.21, split because `CLAUDE.md` does not let one diff cross zones.
+Five sentences, and **four of them no test in this repository could catch** — which is the
+point rather than an excuse.
+
+1. **`console.py:1072-1074`, its docstring `:1034-1036` and its comment `:995-999`** — *"the
+   run times … are printed here exactly as the record has them"* and *"agree with
+   `make backup-status` to the minute"*. **The panel never prints the record's times.**
+   `_ago`/`_how_long` print a coarse age: rendered over a record holding
+   `2026-09-23T08:00:00Z`, the screen says *"Last backup 4 hours ago"*. The sentence is true
+   of `make backup-status`, which prints the ISO timestamp, and was carried to the channel
+   that prints ages. **It was introduced by M28.20's round-1 fix** — a new instance, not a
+   reversal. Say what this screen does: the ages beside it are worked out from times this
+   panel has no reason to doubt.
+
+2. **`console.py:1085-1086`** — *"A clock that moved on that host **is what** leaves a record
+   like this behind"*. Names one cause exclusively where four are possible: the hand-seeded
+   shape, a moved clock, a hand edit, a record carried from another machine. **This is not
+   M28.20's round-1 finding returning** — that named a cause the grace makes *impossible*;
+   this names a *possible* cause as if it were the only one, and sends an operator whose
+   record was hand-edited to check a clock that is fine. Narrow the verb and keep the
+   contrast: the load-bearing half is *"and a timezone cannot"*, which survives any fix.
+
+3. **`backups.py:145-148`** — *"every host scheduled east of UTC … ten hours out of every
+   day"*. Ten hours is right for UTC+14 at 04:00 local; a host at UTC+1 resolving 04:00 local
+   writes a due date equal to the UTC date and would never be flagged. **The argument for
+   `DUE_AHEAD_GRACE` is untouched** — only the scope of the sentence overstates. Do not
+   weaken the constant.
+
+4. **`tests/control/test_a_backup_that_has_been_failing_says_so.py:697-698`** — the module
+   rule *"silent about keys it does not read, strict about keys it does"*, falsified by
+   M28.20 in the very file that states it. `due_date` is now a key it reads and deliberately
+   is **not** strict about, proved 350 lines below by that step's own tests. **The risk is not
+   cosmetic:** a later reader "finishing" the parser on the strength of that rule reopens the
+   two-channel defect M28.18 closed. State the exception where the rule is stated, and say
+   why — the shell does not validate that field either.
+
+5. **`docs/tracker/M28/step-notes.md`, two entries** (this file belongs to no zone and is in
+   reach):
+   - `:1598-1600` — the M28.20 residue note lists *"a host clock that jumped back by a day or
+     more"* among the shapes now caught. Measured against the real `_due_ahead`: back 24 h →
+     False, 36 h → False, 47 h → True. The grace is **strictly** more than a day. Overstated
+     twice over, since a backward jump also leaves the run timestamps ahead and is already
+     loud via the run half. **This is the milestone's own defect class landing in the place
+     its close-out reads from**, on the exact boundary the note is about.
+   - `:1447-1449` — M28.18's *"`_parse` does not read them at all"*, now false for
+     `due_date`. M28.21 §C lists the identical sentence in `scripts/lib/backup-record.sh` and
+     missed this copy. The conclusion still holds for a different reason: the panel reads it
+     **leniently**, so validating it in the shell would still refuse files the panel reads
+     happily. **Write the reason that is true, not the one that was.**
+
+**While you are here, adopt the form the reviewer argued for**, since this file is where it
+was demonstrated. The strongest assertion in M28.20 is a **biconditional** —
+`assert (PHRASE in detail) is (standing is not NEVER)` — which fails in both directions and
+writes the sentence's state down executably. Convert the presence-only pins on the clauses you
+touch, and **pin by constant reference** (`console.BACKUP_CLOCK_OPENING`,
+`BACKUP_CLOCK_RUN_AHEAD`) rather than by a literal: a literal in a test is a second copy of
+the sentence, and two copies never disagree even when both are wrong.
+
+**Do not add a pin to any sentence naming a cause, a mechanism or another channel's
+behaviour.** Nothing in this repository determines those, so such a pin can never go red — it
+converts an unverifiable claim into a green tick, which is how item 1 of M28.20's review came
+to be load-bearing.
+
+Gate: `make test-control` with a real Postgres — report the skip count, the real number is
+~992/2 — then `make verify`, with the e2e half at **224 passed / 0 skipped**.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
