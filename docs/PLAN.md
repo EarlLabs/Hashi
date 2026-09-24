@@ -3224,6 +3224,21 @@ The other half, and this side **can** check.
    is switched off. The env-file path is correct; the two readers disagree about where the
    answer comes from.
 
+5. **Three items M28.14 could not reach, traced to this zone with line numbers** rather
+   than left to be rediscovered. The panel's equivalent is already correct in each case,
+   so the shape of the answer exists — the point is that the two channels disagree about
+   one record:
+   - `scripts/backup-run.sh:766` — the exit-3 advice fires on `[ "${BAD_CODE}" = "3" ]`,
+     and `BAD_CODE` survives a later success, so *"it never left the machine, re-send
+     it"* prints under a run that exited 0 and did leave.
+   - `scripts/backup-run.sh:775` — `days with no backup: 12 — most recent:` with nothing
+     after it. The panel guards this (`tail = "." if not recent`); the shell does not.
+   - `scripts/backup-run.sh:606-620` — `entry_problem` requires each nested entry on one
+     line, so a record that is **only re-indented** is reported damaged. The control
+     reader is `json.loads` and accepts any layout, which is why acceptance saw this on
+     one channel and not the other. **Tolerate layout and nothing else:** unknown keys,
+     changed values and truncation stay damaged, and the closed 15-key set stays closed.
+
 Gate: `make test-infra`, then `make verify`.
 
 **Done when**
