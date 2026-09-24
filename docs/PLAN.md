@@ -3494,6 +3494,77 @@ Gate: `make test-control` with a real Postgres — report the skip count — plu
 `tests/e2e/control`, then `make verify`.
 
 
+### M28.21 — `infra`: the sentences the last three steps falsified, and the guards that read as exhaustive · 2026-09-24
+
+The cleanup step, and it exists because of a pattern rather than a bug. **This milestone has
+produced six findings of the form "prose asserts behaviour the code does not have", and five
+of them were written by the fix for the one before.** Two more arrived in M28.19's second
+round, and M28.20 falsified five sentences in this zone by changing what the panel does.
+
+Every item here is a sentence that is false at this commit, or a guard that describes itself
+as narrower than it is.
+
+**A. The sixth instance, in the paragraph written to fix the fifth** — `scripts/backup-run.sh:472-474`.
+The DUE paragraph promises *"one extra dump and then a record that reads normally"*. False
+when `last_failure` is **also** ahead: the organic shape when a clock jumps forward and the
+run under the jumped clock fails, which is what the retry logic exists for. Measured — after
+the promised repairing run **succeeds**, the record is `due_date=today, last_success=now,
+last_failure=2099`, and that record still answers `clock=ahead`, `due` still exits 1, and
+`status` still prints the whole block. Permanently loud, not repaired. Scope the promise to
+the half it is about; the code comment at `:530` already states the consequence correctly.
+
+**B. The seventh, in the runbook's panel section** — `docs/deploy/runbook.md:1741-1747`.
+*"And a **run** in the record dated ahead … the screen goes loud"* — the panel reads
+`last_success` and `last_failure` only, so a record whose `last_attempt` alone is ahead is
+`FRESH` with no banner. The paragraph's qualifier corrects the wrong axis, and the true
+statement sits 85 lines away where a reader of that section has no reason to go.
+
+**C. Five sentences M28.20 made false by teaching the panel to read `due_date`.** All were
+true before it and are wrong now:
+- `scripts/backup-run.sh:393-395` — *"`_ahead` never reads `due_date` … these two verbs are
+  the ONLY channels that say anything"*;
+- `scripts/backup-run.sh:475` — *"The panel does not read the due date at all, so this may be
+  the only place this half is said."* **This one is printed to an operator** by `due` and
+  `status`;
+- `docs/deploy/runbook.md:1831` and `:1836` — the same claim, twice;
+- `tests/infra/test_what_the_command_line_may_say_about_a_backup.py:333-334` — *"The second
+  shape is the one the panel cannot see at all"*. A comment, so the suite stays green, which
+  is exactly why it will not be caught by running anything.
+
+Also check `docs/decisions.md:156`'s closing clause, which states the old behaviour as
+current fact.
+
+**The correct new wording has a condition in it, so write it carefully.** The panel now sees
+a due date ahead by **more than a day**; `DUE_AHEAD_GRACE` is one whole day because the writer
+resolves the due date in the schedule's zone while the panel has only UTC, and inhabited zones
+span UTC−12…UTC+14. So the **timezone-moved-west shape is still invisible to the panel** and
+the command line really is still the only channel that sees *that* one. The old sentences are
+not simply wrong; they are right about the case an operator is most likely to hit and wrong in
+general. Say both halves, and name the states.
+
+**D. One more negative assertion over wrapped output without `flowing()`** —
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py:383`. It fires today only
+because the phrase happens to fit on one source line; re-added across a line break it would
+pass silently. The rest of `tests/infra/` and `tests/e2e/infra/` was swept and this is the
+only other one.
+
+**E. The audit's seam list reads as exhaustive and is not.** Three further spellings walk the
+whole sweep out, measured: `. "${REPO_ROOT}"/scripts/lib/a.sh` (quote closed after the
+variable), `. ${REPO_ROOT}/scripts/"lib/a.sh"`, and two `source` statements on one line (the
+pattern is anchored at `^\s*`, so only the first is found). None is written in this tree
+today — which is precisely the argument made about the braceless form one round earlier, and
+that one turned out to matter. Fix them or name them; the plan's standing rule is that a seam
+is never left both unfixed and unlisted.
+
+**The discipline, which is the actual deliverable.** Every sentence written or edited here
+**names the state it holds for**. When narrowing one, **sweep the tree for it** rather than
+reading the diff — two extra copies and a whole further instance were found that way in
+M28.19. Check each against behaviour actually run, not against the code as read.
+
+Gate: `make test-infra`, then `make verify`, and **the e2e half must stay 224 passed / 0
+skipped**.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
