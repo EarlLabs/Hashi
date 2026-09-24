@@ -1095,3 +1095,73 @@ writer's own layout with fields overridden **verbatim** — the seeded JSON must
 per line or the shell reader is right to call it damaged. `advice(refusal)` and
 `sliced()` + `drive()` slice functions out of the scripts and **run** them, which is how
 the three advice branches and both template checks are exercised without Docker.
+
+## M28.13 — the same weak parser, in the script that writes the tunnel
+
+`make test-infra` **426 → 431 (+5)**; `make verify` green, e2e **222**. The builder
+reported the baseline as 427 and the delta as +4; the reviewer measured the baseline twice
+on a clean worktree and it is **426**. **The fifth test is
+`test_no_operator_facing_heredoc_runs_a_command[env-value.sh]`** — a pre-existing
+parametrised sweep over `scripts/*.sh` + `scripts/lib/*.sh` that picked the new library up
+by itself. Recorded precisely because the notes are what later steps trust, and 427 would
+be exactly the class of wrong record M28.10 and M28.12 exist to catch.
+
+1. **There is now exactly ONE env-file value parser in this repository**:
+   `scripts/lib/env-value.sh::env_value_of FILE KEY`, sourced by `panel-bootstrap.sh`,
+   `management-tunnel.sh` and `backup-run.sh`. **Extracted, not copied a third time** —
+   M28.12's lesson was that the defect is a second parser, so fixing the second by writing
+   a third would have missed it. The guard test moved from "this script" to "this
+   repository" and was **proven by breaking it twice**: a planted second definition and a
+   planted raw `sed` each fail it by name.
+
+2. **The file is an ARGUMENT, not the caller's `ENV_FILE`**, unlike
+   `scripts/lib/env-file-gate.sh`. Deliberate and judged right: the gate *drives a command*
+   with the caller's own compose set, while this is pure extraction — and
+   `panel-bootstrap.sh` must read **two different files** (`.env` and `.env.example`) with
+   the same parser, which an implicit caller-variable convention would make actively wrong.
+   Cost, stated: a future library copying the gate's shape will not compose with this one.
+
+3. **`backup-run.sh`'s three-name whitelist did NOT follow the extraction out.** It stays
+   in the script it constrains, structurally in front of the call, and a test pins that
+   `exit 2` precedes `env_value_of` inside `env_value()`. **Attacked and held**: a planted
+   `env_value HASHI_SECRET_KEY` refuses with exit 2 and prints nothing of the file. The
+   library has no whitelist of its own **by design** — a shared reader holding every
+   caller's fence is one place to get them all wrong at once — and every other call site
+   passes a hardcoded non-secret key literal, never a variable.
+
+4. **Reading `\r` changed for `backup-run.sh` and no caller's value did.** Its old copy did
+   not strip `\r`; the library does. All three call sites pass through `sanitised()`, whose
+   `tr -cd 'A-Za-z0-9_+:/.-'` allowlist never admitted a carriage return. **That is the
+   proof, not the green suite.**
+
+5. **What was actually corrupted, reproduced byte-exact at baseline with `cat -A`**:
+   `Address = 10.77.0.1/24^M`, `ListenPort = 51821^M`, `MTU = 1420^M` in `awg-mgmt.conf`,
+   and `MTU = 1420^M` plus `Endpoint = panel.invalid^M:51821^M` in **both printed device
+   configs** — the ones an operator pastes onto a phone.
+
+6. **The plan's peer-address claim was FALSE and is corrected here.**
+   `PEER_SPECS=(${MGMT_PEERS})` does glue `\r` to the last spec, but the loop's
+   pre-existing `tr -d '[:space:]'` removes it, because POSIX `[:space:]` includes CR.
+   Confirmed at baseline as well as at HEAD. The test keeps the assertion as a **pin**, not
+   as a fix.
+
+7. **`text=True` HIDES the byte this step is about.** Python's universal-newline decoding
+   turns `Endpoint = panel.invalid\r:51821\r\n` into two separate lines and `'\r' in
+   stdout` reads **False** — verified. The suite's `run()` grew `raw=True`, and the CRLF
+   scenario uses it, plus `read_bytes()` for the conf. **A test that decodes cannot see
+   this defect**, which is worth remembering for any assertion about bytes.
+
+8. **The operator-facing contract is untouched.** No refusal text, progress line or
+   device-config layout changed; the generated `awg-mgmt.conf` holds exactly one
+   `PrivateKey` — the host's own — and peer stanzas carry only `PublicKey`/`PresharedKey`.
+   The script still prints each device's private key once and stores none.
+
+### How to test what M28.13 built
+
+`tests/infra/test_management_tunnel_script.py::edited_env(tmp_path, transform, **overrides)`
+re-saves the suite's own complete env file through a text transform and writes it as
+**bytes** — `write_text` would translate the line ending back.
+`lambda t: t.replace("\n", "\r\n")` is the Windows editor. **Use `run(..., raw=True)`
+whenever the assertion is about a byte.** Red-first was real: **3 failed, 1 passed**, and
+the one that passed (quoted values) did so *before* the fix — the old parser already
+stripped quotes, which was reported rather than counted as a win.
