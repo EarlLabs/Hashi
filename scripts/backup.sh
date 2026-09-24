@@ -121,7 +121,20 @@ COMPOSE_BACKUP=("${COMPOSE[@]}" -f deploy/docker-compose.backup.yml)
 # container. Separate from the recipient's overlay because the two are needed at different
 # moments and by different code, and because this one carries a bearer secret that must
 # never reach the long-running control plane — see that file's own header.
-COMPOSE_UPLOAD=("${COMPOSE[@]}" -f deploy/docker-compose.upload.yml)
+#
+# `env -u HASHI_BACKUP_ENABLED`, and it is the whole of M28.15's item 4. Compose
+# interpolates `${VAR}` from the CALLING SHELL FIRST and only falls back to --env-file, so
+# `HASHI_BACKUP_ENABLED=1 make backup` switched the upload on for the uploader — which
+# reads compose's environment — while scripts/backup-run.sh, which reads the env file and
+# only the env file, wrote `"offsite": "no"` into the record. The run said it had sent the
+# artifact and the screen then said the upload was switched off, about the same run.
+#
+# The env file is the right source and stays the source: it is where .env.example documents
+# this value, where the runbook sends the operator, and the only place BOTH readers can see.
+# Stripping the name from this one invocation's environment is what makes compose fall back
+# to it. No third precedence rule is invented here, and nothing else in the block is
+# touched — the S3 values have exactly one reader and so cannot disagree with anybody.
+COMPOSE_UPLOAD=(env -u HASHI_BACKUP_ENABLED "${COMPOSE[@]}" -f deploy/docker-compose.upload.yml)
 # The same stack plus the address of the bucket and the credential that may READ it, for
 # the length of one container. A separate file from the upload overlay for the sharpest
 # reason of the three: that credential is the one a control plane must never hold, and the

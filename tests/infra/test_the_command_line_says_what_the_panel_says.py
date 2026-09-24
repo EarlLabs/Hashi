@@ -346,11 +346,18 @@ def test_the_schedule_line_says_it_came_from_the_env_file(tmp_path) -> None:
     under it is what the record says happened. Printed side by side with no source, a
     confident *"scheduled: 04:00 Etc/UTC (configured)"* beside *"last success: never"*
     reads as a working schedule that has simply not fired yet.
+
+    M28.15 SPLIT THAT LINE IN TWO and this test followed it to the second half. *Whether*
+    anything runs is now asked of the crontab and printed under ``scheduled:``; *when* a
+    run would be owed is still resolved from the env file and is what ``appointed:`` says.
+    The property here is unchanged and is about the time: it is labelled with the file it
+    came from, and that file is not the record.
     """
     result = status(tmp_path, offsite="no")
-    scheduled = [line for line in result.stdout.splitlines() if "scheduled:" in line]
-    assert scheduled, result.stdout
-    where = result.stdout.splitlines()[result.stdout.splitlines().index(scheduled[0]) + 1]
+    lines = result.stdout.splitlines()
+    appointed = [line for line in lines if "appointed:" in line]
+    assert appointed, result.stdout
+    where = lines[lines.index(appointed[0]) + 1]
     assert "not from this record" in where, result.stdout
 
 

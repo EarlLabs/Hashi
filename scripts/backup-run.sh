@@ -36,6 +36,14 @@
 #       scripts/backup-run.sh due      # say what `tick` would do; change nothing
 #       scripts/backup-run.sh status   # what the record says, in words
 #
+#       `due` and `status` are the two that SPEAK ABOUT the record, and both of them refuse
+#       it rather than repeat it when it is not the file this writes: exit 1, naming the key
+#       that failed and never its contents. Both also say out loud when the record is dated
+#       ahead of this host's clock, which is the state in which no backup is taken at all
+#       and every age on the screen is worthless — `due` exits 1 for it too, because
+#       `action=wait` at exit 0 is what a working schedule answers 95 ticks out of 96.
+#       `tick` and `now` take backups and assert nothing to anybody, so neither refuses.
+#
 #       ENV_FILE (default .env) selects which stack, exactly as scripts/backup.sh does,
 #       and is passed through to it. HASHI_BACKUP_STATE_DIR (default backups/state) moves
 #       the record; the control container is given a read-only view of the DEFAULT one —
@@ -96,6 +104,9 @@ installs the cron entry that calls `tick`; `make backup-unschedule` removes it.
 Exit codes are scripts/backup.sh's, unchanged: 0 written (and sent, if that is on), 1 no
 artifact, 2 usage, 3 the artifact exists and did not leave this machine. A `tick` with
 nothing owed exits 0 and prints nothing, so a schedule that is working is quiet.
+
+`due` and `status` exit 1 instead when the record is not the file this script writes, or
+when it is dated ahead of this host's clock. Neither reads anything out of it in that case.
 USAGE
   exit 2
 }
@@ -219,17 +230,107 @@ due_date() {
 
 # --- the record -------------------------------------------------------------------------
 
-# One field of the record. Written one key per line precisely so this can be a line-wise
-# read with no JSON parser on a host that has none.
-field() {
+# The most of that file this will ever read, mirroring control/app/services/backups.py's
+# MOST_OF_A_RECORD. The real thing is well under a kilobyte; this is a ceiling on what a
+# wrong path — a mount pointing somewhere else, a log file — can pull into the scanner
+# below. Past it the record is truncated, which takes its closing brace with it, and the
+# reader then refuses it as damaged like any other unfinished file.
+MOST_OF_A_RECORD=65536
+
+# The record with every TOP-LEVEL key on a line of its own, whatever layout it is in on
+# disk. Read once into a variable; every reader below works on that text rather than on
+# the file, so there is exactly one place that decides what the bytes are.
+#
+# WHY IT EXISTS (M28.15, found in acceptance round 2). Every reader here is a `sed` over
+# lines, because a host that can run the stack is not assumed to have a JSON parser — the
+# control plane is the one machine that may have to be rebuilt from nothing. That is still
+# right, and it had one consequence nobody meant: a record that had merely been
+# RE-INDENTED — run through `jq .`, or opened and saved by anything that pretty-prints —
+# put each nested key on its own line, and this reader called a perfectly good record
+# damaged. The panel reads the same file with `json.loads`, which does not care where the
+# line breaks are, so the two channels disagreed about one file again, which is the whole
+# defect this milestone keeps meeting.
+#
+# LAYOUT IS THE ONLY THING THIS TOLERATES, and that is deliberate. Whitespace between
+# tokens is dropped and the spacing after `:` and `,` is made this script's own; nothing
+# else is interpreted, nothing is repaired, and no value is coerced. An unknown key, a
+# changed value, a truncated file and anything outside the fifteen keys the writer writes
+# stay exactly as damaged as they were — a lenient parser here would undo what M28.12 was
+# about.
+record_as_lines() {
+  # A character scanner rather than a regex: the only way to know whether a `{` or a `,`
+  # is structure or is text inside a value is to know whether a string is open, and a
+  # line-wise pattern cannot. Strings are copied through untouched, escapes included.
+  #
+  # LC_ALL=C makes that a scan of BYTES, which is what it is: every byte is copied through,
+  # so a multi-byte character comes out the way it went in, and a file that is not text at
+  # all — the wrong path, a log, a device — is refused below instead of making awk complain
+  # about the operator's locale on its way there. The NUL goes for the same reason and only
+  # that reason: JSON text has none, so this removes nothing a record could contain, and
+  # what it saves the operator is a line of bash's own warning printed over a refusal.
+  tr -d '\000' | LC_ALL=C awk '
+    { text = text $0 "\n" }
+    END {
+      depth = 0; instring = 0; escaped = 0; out = ""
+      total = length(text)
+      for (i = 1; i <= total; i++) {
+        c = substr(text, i, 1)
+        if (instring) {
+          out = out c
+          if (escaped) { escaped = 0 }
+          else if (c == "\\") { escaped = 1 }
+          else if (c == "\"") { instring = 0 }
+          continue
+        }
+        if (c == "\"") { instring = 1; out = out c; continue }
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") { continue }
+        if (c == "{" || c == "[") {
+          depth++
+          out = out c
+          if (depth == 1) { out = out "\n  " }
+          continue
+        }
+        if (c == "}" || c == "]") {
+          depth--
+          if (depth == 0) { out = out "\n" c } else { out = out c }
+          continue
+        }
+        if (c == ":") { out = out ": "; continue }
+        if (c == ",") {
+          if (depth == 1) { out = out ",\n  " } else { out = out ", " }
+          continue
+        }
+        out = out c
+      }
+      print out
+    }
+  '
+}
+
+RECORD=""
+RECORD_READ=""
+
+load_record() {
+  if [ -n "${RECORD_READ}" ]; then return 0; fi
+  RECORD_READ="yes"
   [ -f "${STATE_FILE}" ] || return 0
-  sed -n "s/^[[:space:]]*\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" "${STATE_FILE}" \
+  RECORD="$(head -c "${MOST_OF_A_RECORD}" "${STATE_FILE}" | record_as_lines)"
+}
+
+# One field of the record, from the text above — one key per line, so this is a line-wise
+# read and still needs no JSON parser.
+field() {
+  load_record
+  printf '%s\n' "${RECORD}" \
+    | sed -n "s/^[[:space:]]*\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" \
     | head -n 1
 }
 
 missed_dates() {
-  [ -f "${STATE_FILE}" ] || return 0
-  grep '"missed_dates"' "${STATE_FILE}" | grep -o '[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}' || true
+  load_record
+  printf '%s\n' "${RECORD}" \
+    | grep '"missed_dates"' \
+    | grep -o '[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}' || true
 }
 
 json_entry() {
@@ -296,6 +397,9 @@ as_number() {
 
 read_state() {
   [ -f "${STATE_FILE}" ] || return 0
+  # Once, here, so every `field` below reads the same text out of this shell rather than
+  # re-scanning the file in its own subshell.
+  load_record
   STATE_DUE="$(field due_date)"
   STATE_ATTEMPTS="$(as_number "$(field attempts)")"
   STATE_RETRY_AT="$(field retry_not_before)"
@@ -305,7 +409,8 @@ read_state() {
   local line
   for line in last_attempt last_success last_failure; do
     local raw at due code outcome
-    raw="$(sed -n "s/^[[:space:]]*\"${line}\": \(.*\),\{0,1\}$/\1/p" "${STATE_FILE}" | head -n 1)"
+    raw="$(printf '%s\n' "${RECORD}" \
+      | sed -n "s/^[[:space:]]*\"${line}\": \(.*\),\{0,1\}$/\1/p" | head -n 1)"
     [ -n "${raw}" ] && [ "${raw}" != "null," ] && [ "${raw}" != "null" ] || continue
     at="$(printf '%s' "${raw}" | sed -n 's/.*"at": "\([^"]*\)".*/\1/p')"
     due="$(printf '%s' "${raw}" | sed -n 's/.*"due_date": "\([^"]*\)".*/\1/p')"
@@ -329,6 +434,78 @@ outcome_for() {
     1) echo "no-artifact" ;;
     *) echo "refused" ;;
   esac
+}
+
+# Whether the failure in the record is the more recent of the two — the panel's
+# `failed_since`, in one place rather than written out at each of the two lines that ask it.
+# A record keeps `last_failure` for ever, so "there is a failure in here" is not the same
+# statement as "this host is failing", and everything an operator is told to DO belongs to
+# the second one.
+failed_since_the_last_success() {
+  [ -n "${BAD_AT}" ] || return 1
+  [ -n "${OK_AT}" ] || return 0
+  [[ "${OK_AT}" < "${BAD_AT}" ]]
+}
+
+# --- a clock that ran ahead ---------------------------------------------------------------
+#
+# The state nothing said out loud until M28.15, and the one nobody gets out of by waiting.
+# A host whose clock jumped forward writes a record dated next March; the clock is then put
+# back; and from that moment `decide` answers "the record is for a day ahead of this clock"
+# — WAIT — at every tick, for as many months as it takes the calendar to catch up. No
+# backup is taken, and the two surfaces an operator reaches said nothing about it: `status`
+# printed "last success: 2027-03-01 (ok)" and `due` printed `action=wait`, exit 0.
+#
+# The panel already goes loud on the same file (M28.11, M28.14). These are the other two
+# channels saying the same thing about the same record.
+
+# One minute, exactly as control/app/services/backups.py::CLOCK_AHEAD_GRACE. A second or
+# two between two clocks is ordinary and is not what this is about; what this catches is a
+# clock that MOVED, which is minutes to years.
+CLOCK_AHEAD_GRACE_SECONDS=60
+
+# Whether one moment out of the record is dated after the moment it is being read at.
+# Empty — a thing that never happened — is not ahead of anything.
+ahead_of_now() {
+  local when="$1" moment
+  [ -n "${when}" ] || return 1
+  # The record has been validated against A_TIMESTAMP before anything calls this, so `date`
+  # is being handed a shape it can read; a value it cannot is "not ahead" rather than a
+  # crash, because this is on the path that draws a screen for an operator.
+  moment="$(date -u -d "${when}" +%s 2>/dev/null)" || return 1
+  [ -n "${moment}" ] || return 1
+  # `-gt` compares as decimal without $(( ))'s octal reading, which is what the rest of this
+  # script needs `10#` for — and both sides here came from `date`, not off the disk.
+  [ "${moment}" -gt "$(( $(date -u +%s) + CLOCK_AHEAD_GRACE_SECONDS ))" ]
+}
+
+CLOCK_AHEAD=""
+
+# Set once, from the record that has already been read. Both the run timestamps and the due
+# date are asked, because they fail in different orders: a clock put back leaves timestamps
+# ahead of now, and a due date ahead of today's is what actually stops the schedule.
+note_clock() {
+  CLOCK_AHEAD=""
+  if ahead_of_now "${LAST_AT}" || ahead_of_now "${OK_AT}" || ahead_of_now "${BAD_AT}"; then
+    CLOCK_AHEAD="yes"
+  elif [ -n "${STATE_DUE}" ] && [[ "$(due_date)" < "${STATE_DUE}" ]]; then
+    CLOCK_AHEAD="yes"
+  fi
+}
+
+# Said in the same words on both verbs, so an operator who reads one and then the other is
+# not told two different things about one host. Quoted heredoc: it names a command.
+clock_ahead_warning() {
+  cat <<'MSG'
+THIS RECORD IS DATED AHEAD OF THIS HOST'S CLOCK.
+
+Something in it claims to have happened after the moment it was just read, so no age here
+can be believed: a backup taken weeks ago reads as one taken this morning. It does not
+clear by waiting — the schedule asks whether the day's backup has been taken, this record
+answers for a day that has not arrived yet, and NOTHING IS BACKED UP AT ALL until this
+host's calendar reaches the date in it. Fix the clock on this host; the panel says the
+same thing about the same file. `make backup` takes one now whatever the record says.
+MSG
 }
 
 # --- deciding ---------------------------------------------------------------------------
@@ -532,16 +709,51 @@ command_now() {
 
 command_due() {
   resolve_schedule
+
+  # THE RECORD IS CHECKED BEFORE A WORD OF IT IS REPEATED — M28.15, and it is round 1's
+  # discipline arriving at the one verb that missed it. `status` was taught to refuse a
+  # record it cannot read; this went on printing `offsite=no missed=none` and "no backup
+  # has ever been recorded on this host" at exit 0, which is byte-for-byte what a host that
+  # has genuinely never run one prints. Those are assertions out of a file this script
+  # could not parse, and they are exactly the sentences an operator would act on.
+  if [ -f "${STATE_FILE}" ]; then
+    local problem
+    problem="$(record_problem)"
+    if [ -n "${problem}" ]; then
+      refuse_damaged_record "${problem}"
+      echo >&2
+      echo "Nothing is said above about what the next tick would do, because that answer is" >&2
+      echo "read out of this same file." >&2
+      return 1
+    fi
+  fi
+
   read_state
   decide
+  note_clock
   # The days this run would write down as having had no backup. Shown here, where nothing
   # is changed, so an operator coming back to a box that was off can see what the next tick
   # is about to record before it records it.
   find_missed "${STATE_DUE}" "${DUE}"
-  printf 'action=%s due=%s at=%s at_source=%s zone=%s zone_source=%s offsite=%s missed=%s state=%s\n' \
-    "${ACTION}" "${DUE}" "${AT}" "${AT_SOURCE}" "${ZONE}" "${ZONE_SOURCE}" "${OFFSITE}" \
+  # `clock=` is the machine-readable half of the warning below, on the line every other
+  # answer this verb gives is already on. `offsite=` is what the NEXT run will do, read from
+  # the env file — which is where scripts/backup.sh now takes it from too, so the two no
+  # longer disagree about a run neither of them has taken yet.
+  local clock="ok"
+  if [ -n "${CLOCK_AHEAD}" ]; then clock="ahead"; fi
+  printf 'action=%s clock=%s due=%s at=%s at_source=%s zone=%s zone_source=%s offsite=%s missed=%s state=%s\n' \
+    "${ACTION}" "${clock}" "${DUE}" "${AT}" "${AT_SOURCE}" \
+    "${ZONE}" "${ZONE_SOURCE}" "${OFFSITE}" \
     "$(printf '%s' "${MISSED_NEW:-none}" | tr ' ' ',')" "${STATE_FILE}"
   printf '%s\n' "${REASON}"
+  # Exit 1, and the reason it is not 0: `action=wait` at exit 0 is the answer a working
+  # schedule gives 95 ticks out of 96, and this host is not taking backups at all. Anything
+  # watching this verb for a non-zero would have watched that state go by for months.
+  if [ -n "${CLOCK_AHEAD}" ]; then
+    echo >&2
+    clock_ahead_warning >&2
+    return 1
+  fi
 }
 
 # --- reading the record back, as strictly as the panel reads it -------------------------
@@ -571,13 +783,18 @@ A_DATE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 # two are told apart with `has_key`, because "no such key" and "an empty value" are
 # different faults and only one of them is this reader's business.
 raw_field() {
-  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" "${STATE_FILE}" \
+  load_record
+  printf '%s\n' "${RECORD}" \
+    | sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" \
     | head -n 1 \
     | tr -d '\r' \
     | sed -e 's/^[[:space:]]*//' -e 's/,[[:space:]]*$//' -e 's/[[:space:]]*$//'
 }
 
-has_key() { grep -q "^[[:space:]]*\"$1\"[[:space:]]*:" "${STATE_FILE}"; }
+has_key() {
+  load_record
+  printf '%s\n' "${RECORD}" | grep -q "^[[:space:]]*\"$1\"[[:space:]]*:"
+}
 
 # Anything out of the record that reaches the terminal goes through here first. The writer
 # already restricts what it writes to [A-Za-z0-9_+:/.-]; a hand edit does not, and an
@@ -603,6 +820,12 @@ string_problem() {
 # and an outcome. `null` and a run are both statements the record is entitled to make;
 # "this line is not a run" is not, and it becomes the same refusal as a broken schema
 # rather than being reported as a host that has never had a successful backup.
+#
+# It reads the entry off ONE line and still does, which until M28.15 meant a record whose
+# nested entries had been pretty-printed over four lines was reported damaged while the
+# panel read it happily. That is `record_as_lines`'s job now, above, and none of the checks
+# here were loosened to do it: what arrives here is the same bytes with the whitespace
+# between them made this script's own.
 entry_problem() {
   local raw at code outcome
   has_key "$1" || { printf '%s' "$1"; return 0; }
@@ -626,6 +849,7 @@ entry_problem() {
 # back at them is how a record starts being a place things leak from.
 record_problem() {
   local raw problem key day
+  load_record
   raw="$(raw_field schema)"
   [ "${raw}" = "${SCHEMA}" ] || { printf 'schema'; return 0; }
 
@@ -695,6 +919,53 @@ MSG
   esac
 }
 
+# Whether anything on this host actually runs a backup — ASKED, never assumed.
+#
+# WHY THIS IS NOT THE PANEL'S ANSWER. M28.14 forbade the panel from saying a schedule
+# exists, and rightly: it renders from the one record it reads, does no I/O, and the record
+# is written by a RUN, so it cannot attest that a SCHEDULE exists. This script is on the
+# host. It may look, and until M28.15 it did not — `make backup-status` printed
+# "scheduled: 04:00 <zone> (configured), checked every 15 minutes" on a host with no cron
+# entry at all, and printed the same line unchanged the minute after `make backup-unschedule`
+# answered "removed. Nothing runs a backup on this host now." Three commands in one family
+# and one of them contradicting another about the same host in the same minute.
+#
+# The exit code IS the answer, and there are three of them: 0 installed, 1 this account's
+# crontab has no entry, 3 no crontab on this host to tell from — which is the supported
+# systemd-timer shape and must not be reported as "nothing is backing this up".
+SCHEDULER="${REPO_ROOT}/scripts/backup-schedule.sh"
+
+schedule_answer() {
+  local status=0
+  # Output discarded on purpose: what `show` prints is the crontab block, and this is a
+  # yes/no/cannot-tell question whose answer is the exit code. Nothing of another file
+  # reaches this screen through here.
+  "${SCHEDULER}" show >/dev/null 2>&1 || status=$?
+  printf '%s' "${status}"
+}
+
+# One refusal, printed by both of the verbs that read the record back — `status` since
+# M28.12 and `due` since M28.15. One function rather than two copies for the reason the
+# whole milestone keeps finding: independently written sentences about one file are how two
+# channels come to say different things about it.
+refuse_damaged_record() {
+  cat >&2 <<MSG
+There is a backup record on this host and this is not the file the schedule writes.
+
+${STATE_FILE} could not be read: its "$1" is not what scripts/backup-run.sh
+writes there. Either the file is damaged, or it was written by a newer version of that
+script than this one. NOTHING HAS BEEN ASSUMED FROM IT — this is not telling you backups
+are working and not telling you they are failing, and the panel says exactly that about
+the same file, for the same reason.
+
+What is in it is a history of runs and nothing else can tell you what it said, so move it
+aside rather than deleting it if you want to look at it later. The next run rewrites it:
+\`make backup\` takes one now, on a host that still has what a backup needs in the env
+file — HASHI_BACKUP_AGE_RECIPIENT and the HASHI_BACKUP_S3_ block are in no backup by
+design, so a machine rebuilt out of the backup history has to have them put back first.
+MSG
+}
+
 command_status() {
   resolve_schedule
   if [ ! -f "${STATE_FILE}" ]; then
@@ -711,21 +982,7 @@ MSG
   local problem
   problem="$(record_problem)"
   if [ -n "${problem}" ]; then
-    cat >&2 <<MSG
-There is a backup record on this host and this is not the file the schedule writes.
-
-${STATE_FILE} could not be read: its "${problem}" is not what scripts/backup-run.sh
-writes there. Either the file is damaged, or it was written by a newer version of that
-script than this one. NOTHING HAS BEEN ASSUMED FROM IT — this is not telling you backups
-are working and not telling you they are failing, and the panel says exactly that about
-the same file, for the same reason.
-
-What is in it is a history of runs and nothing else can tell you what it said, so move it
-aside rather than deleting it if you want to look at it later. The next run rewrites it:
-\`make backup\` takes one now, on a host that still has what a backup needs in the env
-file — HASHI_BACKUP_AGE_RECIPIENT and the HASHI_BACKUP_S3_ block are in no backup by
-design, so a machine rebuilt out of the backup history has to have them put back first.
-MSG
+    refuse_damaged_record "${problem}"
     return 1
   fi
 
@@ -735,11 +992,41 @@ MSG
 
   echo "Backups on this host, from ${STATE_FILE}:"
   echo
-  # Named as coming from the env file, because it does: this line is what the schedule
-  # would resolve if it ran right now, while everything under it is what the record says
+  # WHETHER anything runs, asked of the thing that knows, and WHEN it would run if it does
+  # — two different questions with two different sources, so they are two lines. Printed as
+  # one confident sentence they read as a working schedule, which on a host with no cron
+  # entry is the sentence this whole milestone exists to stop.
+  case "$(schedule_answer)" in
+    0)
+      echo "  scheduled:    yes — this account's cron runs scripts/backup-run.sh every 15"
+      echo "                minutes; \`scripts/backup-schedule.sh show\` prints the entry"
+      ;;
+    1)
+      echo "  scheduled:    NO — nothing on this host takes a backup. This account's"
+      echo "                crontab has no entry for it; \`make backup-schedule\` installs"
+      echo "                one, and everything below is the history of runs before that"
+      ;;
+    3)
+      echo "  scheduled:    NOT KNOWN — this host has no \`crontab\`, so nothing here can"
+      echo "                say whether a backup is being taken. If you installed the"
+      echo "                systemd timer instead, ask systemctl:"
+      echo "                systemctl list-timers hashi-backup.timer"
+      ;;
+    *)
+      # Any other code is the installer itself failing to answer — it is not on this
+      # checkout, it is not executable, it refused the verb. "Could not tell" is the only
+      # honest reading of that, and reporting it as "nothing runs a backup here" would be
+      # this command inventing the very answer it was sent to go and find.
+      echo "  scheduled:    NOT KNOWN — scripts/backup-schedule.sh could not answer"
+      echo "                whether an entry is installed; ask it directly:"
+      echo "                scripts/backup-schedule.sh show"
+      ;;
+  esac
+  # Named as coming from the env file, because it does: this line is what a run would
+  # resolve if one happened right now, while everything under it is what the record says
   # happened. On a damaged or absent record the same line used to be printed with the same
   # confidence beside "last success: never", which reads as a fact about the backups.
-  echo "  scheduled:    ${AT} ${ZONE} (${ZONE_SOURCE}), checked every 15 minutes"
+  echo "  appointed:    ${AT} ${ZONE} (${ZONE_SOURCE}), whenever something runs it"
   echo "                — from ${ENV_FILE} as it is now, not from this record"
   case "${sends}" in
     yes) echo "  sending:      offsite — the record says the upload is switched on" ;;
@@ -756,14 +1043,20 @@ MSG
   fi
   echo "  last success: ${OK_AT:-never} ${OK_OUTCOME:+($(printable "${OK_OUTCOME}"))}"
   echo "  last attempt: ${LAST_AT:-never} ${LAST_OUTCOME:+($(printable "${LAST_OUTCOME}"), exit ${LAST_CODE})}"
-  if [ -n "${BAD_AT}" ] && { [ -z "${OK_AT}" ] || [[ "${OK_AT}" < "${BAD_AT}" ]]; }; then
+  if failed_since_the_last_success; then
     echo "  FAILED SINCE THE LAST SUCCESS: ${BAD_AT} ($(printable "${BAD_OUTCOME}"), exit ${BAD_CODE})"
   fi
   # 3 is a state with its own remedy rather than a failure to retry, and until now it was
   # shown as a digit and nowhere as what it means. The artifact of that run is on this
   # machine: dumping again would write a second copy of the same database and never fix
   # the reason the store refused the first.
-  if [ "${LAST_CODE}" = "3" ] || [ "${BAD_CODE}" = "3" ]; then
+  #
+  # ONLY WHILE IT IS STILL TRUE, which it was not until M28.15: `last_failure` is kept for
+  # ever, so `BAD_CODE` is still 3 under a run that succeeded and DID leave the machine
+  # this morning, and this advice was printed under it. The panel shows a failure only
+  # where it is the more recent of the two; so does this now, through the same test the
+  # line above it uses.
+  if [ "${LAST_CODE}" = "3" ] || { [ "${BAD_CODE}" = "3" ] && failed_since_the_last_success; }; then
     echo "                exit 3 means the artifact WAS written and did NOT leave this"
     echo "                machine. Nothing needs dumping again — send that same file with"
     echo "                make backup-upload FROM=${REPO_ROOT}/backups/<the artifact>"
@@ -772,8 +1065,25 @@ MSG
     # Newest first. The writer sorts them that way now and so does the panel; this sorts
     # what it read as well, because the order of dates in a file on a disk is not a thing
     # any reader may take on trust — and the label says "most recent".
-    echo "  days with no backup: ${MISSED_TOTAL} — most recent:" \
-         "$(printf '%s\n' ${MISSED_LIST} | sort -r | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    #
+    # THE LABEL IS ONLY PRINTED WHEN THERE IS SOMETHING TO PUT AFTER IT. `missed_total`
+    # counts every day ever missed and `missed_dates` keeps thirty of them, so a record old
+    # enough to have rolled over — or one whose list was emptied by hand — printed
+    # "days with no backup: 12 — most recent:" and then nothing at all. The panel guards
+    # this; this did not.
+    local recent
+    recent="$(printf '%s\n' ${MISSED_LIST} | sort -r | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    if [ -n "${recent}" ]; then
+      echo "  days with no backup: ${MISSED_TOTAL} — most recent: ${recent}"
+    else
+      echo "  days with no backup: ${MISSED_TOTAL} — this record no longer names which"
+    fi
+  fi
+  # Last of the reading and before the caveat, because it is about every age above it.
+  note_clock
+  if [ -n "${CLOCK_AHEAD}" ]; then
+    echo
+    clock_ahead_warning
   fi
   echo
   backup_caveat "${sends}"

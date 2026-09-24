@@ -1598,8 +1598,9 @@ last row of the table above.
 
 ### Where the artifact goes, and the credential that sends it
 
-With `HASHI_BACKUP_ENABLED=1`, `make backup` sends the artifact it has just written to the
-object store configured in the `HASHI_BACKUP_S3_*` block of `.env`: one `PutObject` to
+With `HASHI_BACKUP_ENABLED=1` **in `.env`**, `make backup` sends the artifact it has just
+written to the object store configured in the `HASHI_BACKUP_S3_*` block of the same file:
+one `PutObject` to
 `<endpoint>/<bucket>/<prefix><file>`, and nothing else. The store is addressed by the **S3
 protocol, never by a provider's name** — the same rule as a node's country and address
 living in a node record rather than in code, and for the same reason: a provider you cannot
@@ -1634,6 +1635,12 @@ make backup-upload FROM=backups/hashi-<...>.sql.gz.age
 Nothing is dumped a second time, and the database is not touched. Use `https`: over plain
 `http` the key id and the name of your bucket travel in the clear, and the upload refuses
 unless the endpoint resolves to a private address.
+
+**In the env file, and nowhere else.** `HASHI_BACKUP_ENABLED=1 make backup` on the command
+line does not switch the upload on: two things read this value — the uploader, and the
+thing that writes the backup record — and until M28.15 an exported one reached only the
+first, so a run uploaded the artifact and `make backup-status` then said the upload was
+switched off, about that same run. One file both of them can see is what stops that.
 
 `HASHI_BACKUP_ENABLED=0`, or unset, is a supported mode rather than an oversight — the
 artifact is written and stays on this host, and every run says so in as many words. It does
@@ -1748,6 +1755,30 @@ which is byte-for-byte what a machine that has never taken a backup prints. It e
 for both of the two bad answers now, assumes nothing from the file, and names which field
 it could not read — never what was in it. The line about the appointed time says that it
 came from `.env` as it is **now** rather than from the record, because it does.
+
+**Its first line is asked of the crontab, not assumed.** `scheduled:` has three answers —
+*yes*, *NO — nothing on this host takes a backup*, and *NOT KNOWN* on a host with no
+`crontab` for it to ask, which is the systemd-timer host above. It used to print
+*"scheduled: 04:00 Etc/UTC (configured), checked every 15 minutes"* whether or not anything
+was installed, including in the minute after `make backup-unschedule` answered *"removed.
+Nothing runs a backup on this host now."* **When** a run would be owed is a separate line,
+`appointed:`, because it has a separate source: the env file. The panel cannot make this
+distinction and says so instead — it reads one record and may not go looking — which is why
+the two channels word this differently and do not contradict each other.
+
+**A record dated ahead of this host's clock is said out loud on both channels**, and it is
+the state in which nothing is backed up at all: the schedule asks whether the day's backup
+has been taken, the record answers for a day that has not arrived, and every tick waits.
+`scripts/backup-run.sh due` reports `clock=ahead` and exits **1** rather than answering
+`action=wait` at exit 0 for ever; `make backup-status` prints the same paragraph beside the
+ages it makes worthless. Fix the clock; `make backup` takes one whatever the record says.
+
+**`scripts/backup-run.sh due` refuses a damaged record too**, exit **1**, naming the key —
+it used to answer `offsite=no missed=none` and *"no backup has ever been recorded on this
+host"* out of a file it could not parse, which is what a genuinely fresh host prints. A
+record that has merely been **re-indented** — opened in `jq`, or saved by something that
+pretty-prints — is not damaged and is read normally; the layout is the only thing tolerated,
+and a changed value, a truncated file or a schema from the future are refused as before.
 
 A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
 was written, **3** the artifact exists and did not leave this machine. Only **1** is retried

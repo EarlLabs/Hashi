@@ -37,6 +37,14 @@
 #       or: make backup-schedule / make backup-status / make backup-unschedule
 #
 #       Idempotent: install replaces its own block and touches no other crontab line.
+#
+#       `show` ANSWERS A QUESTION and has three exit codes for it: 0 the entry is there,
+#       1 this account's crontab has no entry, 3 nothing here can tell — the host has no
+#       `crontab` at all, which is the supported systemd-timer shape. `install` and
+#       `remove` keep the ordinary 1: they could not do the job, and there is no third
+#       answer to give. The third code exists because scripts/backup-run.sh asks this
+#       question on `make backup-status`, and collapsing "no" into "cannot tell" would
+#       have that command tell a host running the systemd timer that nothing backs it up.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,6 +68,9 @@ usage:
 The entry runs scripts/backup-run.sh every 15 minutes. It carries no hour: when the day's
 backup is owed is HASHI_BACKUP_AT and HASHI_BACKUP_TZ in the env file, and a box that was
 down at that hour takes the backup when it comes back rather than skipping the day.
+
+`show` exits 0 when the entry is installed, 1 when this account's crontab has none, and 3
+when this host has no `crontab` for anything to be installed in.
 USAGE
   exit 2
 }
@@ -68,6 +79,8 @@ have_crontab() {
   command -v crontab >/dev/null 2>&1
 }
 
+# The exit code is the caller's, because what "no crontab here" MEANS depends on what was
+# asked: install and remove could not act (1), and `show` could not find out (3).
 no_crontab() {
   cat >&2 <<'MSG'
 there is no `crontab` on this host, so there is nothing here to install into.
@@ -78,7 +91,7 @@ scripts/backup-run.sh, the same fifteen-minute tick — is written out in
 docs/deploy/runbook.md under "When the backup runs, and how you know it did". Install
 that instead; the schedule itself lives in the env file either way.
 MSG
-  exit 1
+  exit "${1:-1}"
 }
 
 # The current crontab, or nothing. `crontab -l` exits non-zero when the account has none,
@@ -139,7 +152,7 @@ MSG
 }
 
 command_show() {
-  have_crontab || no_crontab
+  have_crontab || no_crontab 3
   local block
   block="$(current | awk -v open="${OPEN}" -v ending="${CLOSE}" '
     $0 == open { keep = 1 }
