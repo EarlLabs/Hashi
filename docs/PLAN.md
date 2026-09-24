@@ -3324,6 +3324,63 @@ only a human re-reading two files can check is the same thing as no parity.
 Gate: `make test-infra`, then `make verify`.
 
 
+### M28.18 — `infra`: one reader of the backup record, and `tick` decides from it · the root of the seven surfaces · settled by the owner 2026-09-24
+
+**This is the defect the other surfaces were symptoms of.** M28 has been blocked by
+acceptance twice and reviewed into four more instances of one thing: several independent
+readers of one file, each deciding for itself what that file entitles it to say.
+`scripts/backup-run.sh` alone holds **two readers** — the lenient `field`/`read_state` path
+behind `tick` and `now`, and the strict `record_problem` path behind `status` and `due`.
+
+That is the same shape M28.12 named and M28.13 closed one level down, and the lesson is
+recorded in this milestone's own notes: *the defect was never one bad comparison; it was a
+second parser that gives the right answer on every file anybody tests with.*
+
+**What it costs today, verified twice:** a record with `"due_date": "2099-01-01"` makes
+`tick` exit 0, print nothing, and take no backup **until the calendar catches up** — the
+channel that actually takes backups silently stopped — while `due` exits 1 and the panel
+draws a banner about the very same file. A damaged `last_attempt` makes `tick` conclude the
+day's backup was taken; that one self-heals when the due date rolls over, and the
+clock-ahead one does not.
+
+### Settled by the owner, 2026-09-24
+
+**A record `tick` cannot read is no record, and `tick` takes a backup.**
+
+The fail-safe direction, and it follows the discipline the speaking channels already have:
+*nothing has been assumed from it.* A reader that cannot parse the file must not conclude
+the day's backup was taken, and the only other answer — refusing to run — stops backups on
+the strength of a file the product itself cannot understand, which is the failure this
+milestone exists to prevent. The cost is accepted knowingly: **a damaged record triggers a
+dump rather than suppressing one**, so a host in that state takes at most one extra backup
+per due period until the record is rewritten, which the same run does.
+
+Record it in `docs/decisions.md` in that file's existing format, appended and never
+rewriting what is there.
+
+**Build `scripts/lib/backup-record.sh`**, sourced the way `scripts/lib/env-value.sh` and
+`scripts/lib/env-file-gate.sh` are: the canonicaliser, the strict validator and the field
+readers behind **one entry point** that returns either a refusal key or a validated
+reading. Every verb — `tick`, `now`, `status`, `due` — reads through it. When it refuses,
+`tick` and `now` proceed as if the host had no record; `status` and `due` refuse as they do
+today, unchanged.
+
+**What this must not become.** Not a rewrite of what the verbs say — the wording of every
+refusal, caveat and headline is acceptance-judged and stays byte-identical. Not a
+loosening: changed values, truncation, a schema from the future, the wrong shape at the
+path and a file over the ceiling all stay refused by name. Not a new standing, and not a
+sixteenth key. The closed key set stays closed **on the writer**, where it is enforced; the
+reader keeps ignoring keys it does not know, by the panel's documented design.
+
+**`due` should gain what the collapse makes possible:** it can now state what `tick` *would*
+do with an unreadable record instead of only refusing, because both finally read the same
+answer.
+
+Gate: `make test-infra`, then `make verify`. Prove the two readers are gone rather than
+asserting it — a structural test that fails if a second parser of the record appears in
+that file again, in the shape of `test_no_reader_of_the_record_feeds_it_through_a_pipe`.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
