@@ -3166,6 +3166,66 @@ which is 435 lines and is why this did not ride along inside M28.12.
 
 Gate: `make test-infra`, then `make verify`.
 
+### M28.14 — `control`: the panel must not promise a schedule it cannot see · found in acceptance round 2, 2026-09-24
+
+**Round 2 confirmed all four of round 1's blockers fixed.** What blocks now is the same
+disease in a fifth surface, in a field the fixes did not touch.
+
+**The panel says "The host takes one a day at 04:00 Etc/UTC." on a host where no schedule
+is installed.** On the stand as shipped, `scripts/backup-schedule.sh show` prints *"no
+hashi backup schedule is installed for this account"* and exits 1, and the crontab holds no
+entry — while the Overview states the daily backup as fact. **The schedule is opt-in, so
+this is the state of every fresh install.**
+
+The panel reads one file and that file carries `at` and `zone`, which are what the
+scheduler **would** use — not evidence that anything runs. The panel cannot see a crontab
+and must not imply it can. Say what the record actually tells you: the time a run would be
+due, not that one is taken.
+
+**Also this round, not blocking, and cheap while you are here:**
+- The **exit-3 advice** — *"it never left the machine, re-send it"* — also prints under a
+  run that **exited 0 and did leave**. It is not conditioned on the exit code.
+- **Twelve missed days across seven weeks carries no badge; one failed run does.** A gap
+  that large is not a quiet fact.
+- **`days with no backup: 12 — most recent:`** with nothing after it, when the record the
+  product itself wrote has a count but no dates.
+- **A record that is only re-indented is reported as damaged.** The reader requires the
+  writer's exact layout; re-indentation changes no value.
+- **The Settings screen still lists no backup setting at all** (round 1's leftover,
+  unmoved), while the Overview names `HASHI_BACKUP_ENABLED` by hand and sends the owner to
+  a markdown file.
+
+Gate: `make test-control` with a real Postgres — **report the skip count** — plus
+`tests/e2e/control`, then `make verify`.
+
+### M28.15 — `infra`: the command line must not promise a schedule either, and `due` must stop assuming · found in acceptance round 2, 2026-09-24
+
+The other half, and this side **can** check.
+
+1. **`make backup-status` says *"scheduled: 04:00 Etc/UTC (configured), checked every 15
+   minutes"* whether or not a schedule exists.** Proven: the entry was installed, the
+   output diffed **byte-identical**; then `make backup-unschedule` answered *"removed.
+   Nothing runs a backup on this host now."* and the next `backup-status` printed the
+   schedule line again. **Three commands in one family, one of them contradicting another
+   the same minute.** Unlike the panel, this runs on the host and `backup-schedule.sh show`
+   already answers the question — use it.
+
+2. **`scripts/backup-run.sh due` is the one surface round 1's fix missed.** On a damaged
+   record it still says *"no backup has ever been recorded on this host"*, `offsite=no
+   missed=none`, **exit 0** — indistinguishable from a fresh host, asserting facts from a
+   file it could not parse. `status` was taught to refuse; `due` was not.
+
+3. **A clock that ran ahead stops backups silently.** The panel warns; `make backup-status`
+   says *"last success: 2027-03-01 (ok)"* with no mention; and **`due` answers
+   `action=wait` for ever at exit 0**. Nothing is taken and nothing says so.
+
+4. **`HASHI_BACKUP_ENABLED=1` in the process environment is honoured by the uploader and
+   ignored by the recorder**: the run uploads and says so, then the screen says the upload
+   is switched off. The env-file path is correct; the two readers disagree about where the
+   answer comes from.
+
+Gate: `make test-infra`, then `make verify`.
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
