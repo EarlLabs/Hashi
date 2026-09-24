@@ -963,6 +963,13 @@ async def test_a_record_with_both_dates_ahead_says_both_things(written) -> None:
     assert f"Its due date is {A_DAY_NOBODY_HAS_REACHED}" in said.detail
     # One opening line over the two, said once, because it is the only thing true of both.
     assert flowing(said.detail).count("is AHEAD of the clock this panel read it") == 1
+    # AND THE ONE CLAUSE THAT IS NOT TRUE HERE IS NOT SAID. "The run times are printed
+    # exactly as the record has them" holds of a due date ahead ON ITS OWN; with a run
+    # ahead as well there are no times on the screen at all — ``_ago`` prints
+    # ``BACKUP_AGE_UNKNOWABLE`` instead — so the sentence would be false, and read beside
+    # "no age on this screen can be believed" it would read as a retraction of it.
+    assert console.BACKUP_AGE_UNKNOWABLE in said.headline
+    assert "It does not touch the run times" not in flowing(said.detail)
 
 
 async def test_a_due_date_a_timezone_could_explain_is_left_alone(written) -> None:
@@ -1057,10 +1064,17 @@ async def test_the_due_date_half_never_says_the_schedule_has_stopped(written) ->
             assert phrase not in whole, f"{standing}: {phrase}"
         # ...and it does say the thing the record does license, under all four.
         assert f"Its due date is {A_DAY_NOBODY_HAS_REACHED}" in said.detail, standing
-        assert "check both on that host" in said.detail, standing
-        # The clause about the run times rides on there being some. NEVER has none, and a
-        # sentence about run times over a record with no run in it is the generalisation
-        # this milestone keeps paying for.
+        assert "Check the clock on that host" in said.detail, standing
+        # ...and it does NOT send the operator to look at a variable that cannot have
+        # produced what they are reading. Round 1's High: this clause was carried over from
+        # `scripts/backup-run.sh`, where "or a HASHI_BACKUP_TZ moved west" is true because
+        # that channel compares in the configured zone and has no grace. Past
+        # ``DUE_AHEAD_GRACE`` a moved timezone is the one cause that cannot be it.
+        assert "HASHI_BACKUP_TZ" not in flowing(said.detail), standing
+        # The clause about the run times rides on there being some AND on none of them
+        # being ahead — the second half is exercised in the both-ahead test above. NEVER
+        # has none, and a sentence about run times over a record with no run in it is the
+        # generalisation this milestone keeps paying for.
         assert ("It does not touch the run times" in said.detail) is (
             standing is not backups.Standing.NEVER
         ), standing

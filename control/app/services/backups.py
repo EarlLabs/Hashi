@@ -35,8 +35,9 @@ WHY:  the dangerous state is not "the backup failed", it is "the backup has been
       sentence composed from it stays inside what one file can support: which day the
       record says it is owed for, against the clock this reader already holds. What the
       SCHEDULE will do about that is not asked here and may not be guessed at — see
-      ``Reading.due_ahead``.
-HOW:the file is a bind mount, read-only, so there is no writer here and there is not
+      ``Reading.due_ahead``, and ``DUE_AHEAD_GRACE`` for the half of the shape this
+      deliberately still cannot see.
+HOW:  the file is a bind mount, read-only, so there is no writer here and there is not
       going to be one. It is parsed STRICTLY and every way it can disappoint degrades to
       one of two answers, ``ABSENT`` or ``UNREADABLE``: a mount that arrived empty, a
       shell script that wrote the file badly, a hand edit, or a path pointing at
@@ -159,10 +160,13 @@ CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
 # — which this panel may not open — while the record's own ``zone`` is the one the LAST RUN
 # used and so is the very thing that changed. ``scripts/backup-run.sh due`` reads the
 # configured zone and does catch it; this reads one file and says nothing about it rather
-# than guessing. Resolving ``Record.zone`` here instead was considered and refused: it is
-# filesystem I/O off a string from a disk file on the path that draws a screen, and it
-# needs a zone database this image is not asserted to carry, so it would fail by going
-# quiet.
+# than guessing. Resolving ``Record.zone`` here instead was considered and refused on three
+# counts: it is filesystem I/O off a string from a disk file, on the path that draws a
+# screen; it is a second copy of the schedule's own ``TZ=<zone> date +%F``, which is the one
+# thing this panel may not grow; and it needs a zone database. The base image happens to
+# carry one — measured, ``zoneinfo.ZoneInfo("Pacific/Kiritimati")`` resolves inside the
+# control container — and NOTHING IN THIS REPOSITORY ASSERTS THAT IT DOES, so the failure
+# mode is the silent one: a rebase drops the feature with every test still green.
 DUE_AHEAD_GRACE = datetime.timedelta(days=1)
 
 # How far back a day with no backup still counts as part of what is happening now.

@@ -1565,3 +1565,112 @@ The warning wraps, so a literal `"no age here can be believed" not in output` pa
 the text says. Every absence assertion over a rendered paragraph goes through `flowing()`,
 which collapses whitespace. This class has appeared twice in this milestone and is invisible
 while green.
+
+
+## From M28.20 — the panel reads the other date, and how far it can see with it
+
+**`control/app/services/backups.py` now reads the record's top-level `due_date`.**
+`Record.due_date`, `Reading.due_ahead`, and the new `_due_ahead`. The per-run `due_date`
+inside each entry is still not read and still should not be. `_ahead` is unchanged and
+still answers only about `last_success` and `last_failure`.
+
+**It is read LENIENTLY and that is load-bearing.** Absent, `null`, a non-string or anything
+that is not `YYYY-MM-DD` becomes `""` and **never** `_Malformed`. `scripts/lib/backup-record.sh`
+does not validate that field either, deliberately (M28.18) — and a panel stricter than the
+command line about whether a record is readable at all is the same two-channel defect
+arriving from this end. An unreadable due date costs one sentence and nothing else.
+
+**This is the existing `clock ahead` standing WIDENED, not a seventh standing and not a
+second label.** The word over the banner names the FINDING — a date in this record is ahead
+of this clock — which is true of both halves and sends the operator to the same host. The
+CONSEQUENCE differs and is carried by the sentence, as everywhere else in this console
+(`BackupStanding`: one failed run and a schedule dead since August share the label
+`failing`). A second word would also make the panel call by two names what
+`make backup-status` calls by one.
+
+**`_backup_clock` is additive, in the two named parts `note_clock` settled on.**
+`BACKUP_CLOCK_OPENING` once, then the run clause, then the due clause; a record with both
+prints both. Do not make it an `elif`.
+
+### THE EIGHTH SURFACE IS ONLY PARTLY CLOSED, and the milestone must not report otherwise
+
+**`DUE_AHEAD_GRACE` is one whole day, so the panel sees a due date only when it is MORE
+than a day past this reader's UTC date.** Caught: the hand-seeded `2099-01-01` shape, a host
+clock that jumped back by a day or more, a hand edit, a record carried from another machine.
+
+**NOT caught: the `HASHI_BACKUP_TZ` moved west shape** — the one an operator produces by
+editing one variable, and the one the plan reproduced organically. It leaves a due date
+exactly ONE day ahead, and measured against a record written by a real `tick`
+(`Pacific/Kiritimati` → `Pacific/Midway`) the panel answers `due_ahead=False`. **`due` and
+`status` remain the only two channels that see that half.**
+
+**Why it cannot be had honestly from this file, so that nobody "finishes" it.** The writer
+resolves the due date in the SCHEDULE'S zone; this reader has one clock, in UTC; the
+inhabited zones span UTC−12 to UTC+14. A due date one day ahead of UTC is therefore exactly
+what a healthy host scheduled in `Pacific/Kiritimati` writes every day, for ten hours out of
+twenty-four. Telling the two apart needs the zone the host is set to **now**, which lives in
+`.env` and is not a file the panel may open — and the record's own `zone` is the one the
+LAST RUN used, so **a host whose `HASHI_BACKUP_TZ` has just moved west presents a record
+byte-identical to the one it presented while healthy.** Narrowing the grace would put a
+standing `clock ahead` banner on every eastward-scheduled host, daily, while it backed
+itself up perfectly — the `RECENT_GAP` mistake again, a banner that becomes furniture.
+
+Resolving `Record.zone` with `zoneinfo` was considered and refused: filesystem I/O off a
+disk-file string on the page-draw path, a copy of the schedule's own `TZ=<zone> date +%F`,
+and a zone database. The base image does carry one — measured inside the control container —
+and **nothing in this repository asserts that it does**, so the failure mode is the silent
+one: a rebase drops the feature with every test still green.
+
+### Round 1's High — a true sentence carried into a context that falsifies it
+
+The first version of the due clause said *"A clock that moved, **or a HASHI_BACKUP_TZ moved
+west**, is what leaves a record in this state — check **both** on that host."* Carried from
+`scripts/backup-run.sh::clock_ahead_warning`, where it is TRUE: that channel compares in the
+configured zone and has no grace. Past `DUE_AHEAD_GRACE` a moved timezone is **by
+construction** the one cause that can never produce the state the sentence prints in, so it
+sent the operator to check a variable that cannot have caused what they were reading. A test
+pinned the false half, which would have made it permanent.
+
+It is the same mechanism as the five before it, with one addition worth carrying: **the
+sentence was true where it came from.** When a step moves prose between channels, each
+sentence has to be re-checked against the state it now prints in — the provenance is not
+evidence. Two more were found by re-sweeping the whole diff on that rule: *"the run times are
+printed here exactly as the record has them"* is false when a run is ALSO ahead (`_ago`
+prints `BACKUP_AGE_UNKNOWABLE` instead of a time), and false again under `NEVER` where there
+are no run times at all. Both are now gated.
+
+### How to test what M28.20 built
+
+- `record(due_date=...)` in `tests/control/test_a_backup_that_has_been_failing_says_so.py`.
+  `standing_of(written(...))` judges at the fixed `NOW`; `live()` runs are for anything
+  rendered through `client`, which reads the wall clock.
+- `_every_standing_with_a_record()` sweeps the four record-bearing standings — use it for
+  any new clause, because one helper reaches four branches.
+- **`flowing()` now exists in the control zone** and collapses whitespace. Every assertion
+  that something is ABSENT goes through it; the positive direction is left alone on purpose.
+- **Driving the shell end without a stack, for a genuine due-date-ahead record:** a stub
+  `docker` on `PATH` that exits 1, plus `ENV_FILE=` and `HASHI_BACKUP_STATE_DIR=` pointing
+  at a tmp dir. `tick` writes a real record; `HASHI_BACKUP_TZ=Pacific/Kiritimati` then
+  `Pacific/Midway` produces the moved-west shape with no hand editing.
+
+### Wording later steps must match
+
+No apostrophe reaches any of these — Jinja escapes `'` to `&#39;`. Label stays `clock ahead`.
+
+- opening, said once over either half: *"A date in this record is AHEAD of the clock this
+  panel read it against."*
+- the run half keeps *"no age on this screen can be believed"* and *"disagree about the
+  time"*.
+- the due half: *"Its due date is `<date>`, a day this panel had not reached when it read the
+  record and one no timezone accounts for…"*; *"A clock that moved on that host is what
+  leaves a record like this behind, and a timezone cannot… Check the clock on that host."*;
+  *"What the schedule makes of that date is not a question this record answers, and this
+  record is all this panel reads."*
+- said only where there is a run and no run is ahead: *"It does not touch the run times in
+  it: those are printed here exactly as the record has them."*
+
+**Nothing composed here says the schedule has stopped, and nothing works out when a backup
+is next owed.** The first was made false by M28.19; the second is the schedule's own
+reasoning, which `due` states by CALLING `decide` and this panel may not restate.
+`test_the_due_date_half_never_says_the_schedule_has_stopped` sweeps both phrase lists over
+all four standings.

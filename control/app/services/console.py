@@ -1030,8 +1030,10 @@ def _backup_clock(reading: backups.Reading) -> str:
     * a RUN dated after the moment the record was read makes every age on this screen
       worthless — the six-week-old backup that reads as this morning's — and no run of a
       different kind repairs it;
-    * a DUE DATE this reader has not reached does not touch those ages at all. They stay
-      exact. What it says is that the record and this reader disagree about what DAY it is.
+    * a DUE DATE this reader has not reached does not touch those ages. On a record where
+      only it is ahead they stay exact, are printed as the record has them, and agree with
+      ``make backup-status`` to the minute; what is wrong is that the record and this
+      reader disagree about what DAY it is.
 
     Both halves can be set at once — a clock that jumped forward and was put back leaves
     both — so they are two independent questions and not a chain of ``elif``, and a record
@@ -1056,19 +1058,35 @@ def _backup_clock(reading: backups.Reading) -> str:
             "when it read the record and one no timezone accounts for, so this panel and "
             "whatever wrote that line disagree about what day it is."
         )
-        # ...and the clause about the run times is said only where there ARE run times on
-        # the screen. Under NEVER there are none, and "the run times are not affected" read
-        # over a record with no run in it is a sentence about a state nobody had in mind —
-        # which is precisely the class of mistake this milestone has now paid for six times.
-        if reading.record.last_success or reading.record.last_failure:
+        # ...and the clause about the run times is said only where it is TRUE, which is
+        # neither of the two states it reads naturally over. Under NEVER there are no run
+        # times on the screen to be unaffected; and where a run is ahead as well, the ages
+        # are not printed at all — ``_ago`` puts ``BACKUP_AGE_UNKNOWABLE`` in their place —
+        # so "printed here exactly as the record has them" is false, and reads as a
+        # retraction of the clause three sentences above it. Both are the same mistake this
+        # milestone has now paid for seven times: a sentence true of the state it was
+        # written for, printed in a state nobody had in mind.
+        run_ahead = reading.success_ahead or reading.failure_ahead
+        if not run_ahead and (reading.record.last_success or reading.record.last_failure):
             said += (
                 " It does not touch the run times in it: those are printed here exactly as "
                 "the record has them."
             )
+        # AND THE CAUSE IS NAMED NARROWLY, which is where the first version of this clause
+        # went wrong. It said "a clock that moved, or a HASHI_BACKUP_TZ moved west" and sent
+        # the operator to check both — carried over from
+        # ``scripts/backup-run.sh::clock_ahead_warning``, where it is true because that
+        # channel compares in the configured zone and has no grace. Here it cannot be: this
+        # clause prints only past ``backups.DUE_AHEAD_GRACE``, and a moved timezone is
+        # BY CONSTRUCTION the one cause that never gets past it — measured, a record left by
+        # a real ``HASHI_BACKUP_TZ`` move west answers ``due_ahead=False``. So the sentence
+        # named a variable that cannot have produced what the operator was reading.
         said += (
-            " A clock that moved, or a HASHI_BACKUP_TZ moved west, is what leaves a record "
-            "in this state — check both on that host. What the schedule makes of that date "
-            "is not a question this record answers, and this record is all this panel reads."
+            " A clock that moved on that host is what leaves a record like this behind, and "
+            "a timezone cannot: a due date resolved anywhere on Earth is at most a day from "
+            "this one, which is why this is said at all. Check the clock on that host. What "
+            "the schedule makes of that date is not a question this record answers, and "
+            "this record is all this panel reads."
         )
     return BACKUP_CLOCK_OPENING + said if said else ""
 
@@ -1314,8 +1332,8 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
             # AND THE THIRD DATE THAT LANDS HERE, M28.20 and the same trap once more. A
             # record whose DUE DATE alone is ahead has an ordinary recent success beside
             # it, so it reads FRESH, and until this was added the panel drew no word and no
-            # frame over the one state `scripts/backup-run.sh due` exits 1 for. Two
-            # channels, one file, opposite answers.
+            # frame over a record `scripts/backup-run.sh due` exits 1 over. Two channels,
+            # one file, opposite answers.
             #
             # IT IS THE SAME LABEL AND DELIBERATELY NOT A SEVENTH ONE. The word over a
             # banner names the FINDING, and the finding is the same in both: a date in this
