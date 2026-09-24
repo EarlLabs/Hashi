@@ -361,6 +361,39 @@ fi
 # schedule runs as the operator and would then never be able to write the record.
 mkdir -p "${REPO_ROOT}/backups/state"
 
+# WHAT A SECOND RUN COSTS A DEPLOYED HOST, said HERE rather than in a document (M28.12).
+#
+# "A second run is safe" is true of the data and false of the publication. Every refusal
+# above ends with it, and the restore command repeats it — and on a host that is already
+# serving, `up -d --build` with the BASE file converges the stack to the base file's
+# shape, which publishes nothing. So 80, 443 and the console go away, and the operator who
+# re-ran the command they were told was safe loses the panel and the delivery endpoint at
+# once. The only warning was in the runbook under a heading they had no reason to open,
+# which is the same failure as every other thing this script now says out loud.
+#
+# Detected rather than assumed, so a fresh host is not warned about something that cannot
+# happen to it: the running stack is asked what it publishes. `ps --format json` is read
+# with a shell pattern and no JSON parser — a published mapping carries a non-zero
+# PublishedPort and an unpublished one carries 0 — and the whole answer is captured first,
+# because a pipe closed early reads as a failed command under `pipefail`.
+PUBLISHED_BEFORE="no"
+LISTED="$("${COMPOSE[@]}" ps --format json 2>/dev/null || true)"
+case "${LISTED}" in
+  *'"PublishedPort":'[1-9]*) PUBLISHED_BEFORE="yes" ;;
+esac
+if [ "${PUBLISHED_BEFORE}" = "yes" ]; then
+  say "THIS HOST PUBLISHES PORTS TODAY, AND THIS RUN TAKES THEM AWAY. The step below
+  converges the stack to deploy/docker-compose.yml, which publishes nothing — so the
+  delivery endpoint on 80/443 and the console both stop answering until they are
+  published again. The data is untouched; this is about reachability only. Publish them
+  again when this finishes:
+
+      make up-panel            with a management tunnel on this host
+      make up-panel-over-ssh   without one
+
+  This is said again at the end, so it does not have to be remembered from here."
+fi
+
 say "building and starting the stack (this is the slow part on a fresh host)"
 # A failure here does NOT end the run, and that is deliberate rather than lax.
 # `compose up -d` fails when a service it was told to wait for never becomes healthy —
@@ -446,7 +479,55 @@ say "the control plane answers on /healthz and routes /sub/{token}"
 # SSH fallback is a real and documented mode, and refusing to install a control plane
 # because its owner has not chosen a tunnel range yet would be this script deciding
 # something that is not its to decide. It says which mode it left the host in.
-if has_value HASHI_MGMT_ADDRESS; then
+#
+# AND IT IS SKIPPED WHEN THE BLOCK IS STILL THE TEMPLATE'S OWN (M28.12). `.env.example`
+# ships a complete HASHI_MGMT_* block — an address range, a port, an endpoint and two
+# example devices — so a host that copied the template and filled in the four values the
+# refusals above ask for arrives here with a block nobody chose. The generator then did
+# exactly what it is for: it wrote a tunnel config and printed a full device config,
+# private key included, for each of the template's example peers, at an operator who
+# asked for none of it and on a machine none of it points at. A private key on a terminal
+# is the class of thing M28.7 and M28.8 exist to prevent, and these were fabricated
+# credentials for an endpoint that is not this host.
+#
+# The comparison is against `.env.example`'s own lines, read out of the file exactly as
+# the password hash's is above, so the two cannot drift. Skipped and not refused: a host
+# with no tunnel is a supported mode, it is the mode every restored machine is in, and
+# refusing here would stop a rebuild over a thing that is not needed to run a panel.
+#
+# THREE LINES RATHER THAN ONE, and it is not thoroughness: the address and the peer
+# addresses are values somebody could genuinely choose, so skipping on the address alone
+# would refuse a real deployment. Any of the three still being the template's is an
+# unfinished block, and the message names which — so the operator is told what to change
+# rather than being told no.
+MGMT_TEMPLATE_LINES=""
+mgmt_is_the_template() {
+  local key want
+  MGMT_TEMPLATE_LINES=""
+  [ -r "${TEMPLATE}" ] || return 1
+  for key in HASHI_MGMT_ADDRESS HASHI_MGMT_ENDPOINT HASHI_MGMT_PEERS; do
+    want="$(sed -n "s/^${key}=//p" "${TEMPLATE}" | awk 'NR==1')"
+    [ -n "${want}" ] || continue
+    if awk -v want="${key}=${want}" \
+         '$0 == want { found = 1 } END { exit !found }' "${ENV_FILE}"; then
+      MGMT_TEMPLATE_LINES="${MGMT_TEMPLATE_LINES}${MGMT_TEMPLATE_LINES:+ }${key}"
+    fi
+  done
+  [ -n "${MGMT_TEMPLATE_LINES}" ]
+}
+
+if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
+  say "still .env.example's own value(s) in ${ENV_FILE}: ${MGMT_TEMPLATE_LINES}. NO
+  management tunnel was generated. Generating one from the template would have written a
+  tunnel here and printed a private key for each of the example devices in that file —
+  credentials nobody asked for, pointing at the example endpoint rather than at this
+  host.
+
+  Fill the HASHI_MGMT_* block in with this deployment's own address range, port, endpoint
+  and devices, then run this again; a second run is safe and generates the tunnel then.
+  Until then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
+  'Reaching the panel'. Nothing here published it either way."
+elif has_value HASHI_MGMT_ADDRESS; then
   say "generating the management tunnel the panel is reached over"
   "${REPO_ROOT}/scripts/management-tunnel.sh" --env-file "${ENV_FILE}"
 else
@@ -468,6 +549,16 @@ fi
 # So the run ends by naming exactly what it proved and exactly what is still missing.
 say "done. Proven: the control plane runs, answers /healthz and routes /sub/{token} —
   all of it asked from inside the compose network."
+# Said as something this run DID, not as a standing condition, when it is: an operator who
+# re-ran a command they were told was safe has had a working panel taken away by it, and
+# "nothing here is reachable from outside this host" reads as a description of a fresh
+# machine rather than as what just happened to a deployed one.
+if [ "${PUBLISHED_BEFORE}" = "yes" ]; then
+  say "AND WHAT THIS RUN TOOK AWAY: this host was publishing ports when it started, and
+  is not now — the stack has been converged to deploy/docker-compose.yml, which publishes
+  none. The delivery endpoint and the console answer nothing until you publish them
+  again, with \`make up-panel\` or \`make up-panel-over-ssh\` below."
+fi
 say "NOT proven, and not yet true: nothing here is reachable from outside this host. This
   stack publishes no ports and this script adds none, so there is no panel address to
   visit until Caddy's ports are published:

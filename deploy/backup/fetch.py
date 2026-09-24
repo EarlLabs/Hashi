@@ -202,6 +202,41 @@ def configuration() -> dict[str, str]:
     }
 
 
+def sources() -> str:
+    """Which name each non-secret field was taken from — its own, or the fallback.
+
+    THE BARE-HOST WALK'S OWN FINDING, and the last place an operator had to read something
+    other than the command. The four non-secret fields fall back to the
+    ``HASHI_BACKUP_S3_`` block of the env file on this host, which is the right default on
+    a machine that was taking backups — and on a machine rebuilt from ``.env.example`` it
+    is the TEMPLATE's example store, which belongs to nobody. The whole install then ran
+    and died at a host that does not resolve, one line under a sentence saying the
+    configuration resolved.
+
+    So each value says where it came from, before anything is asked of the store: a value
+    that came out of the env file on a host that has never taken a backup came out of the
+    template. The credentials are not listed — they have no fallback, they are in this
+    command's environment or the run has already refused, and naming them here would add a
+    line about a secret to every restore.
+    """
+    where = []
+    for name in (ENDPOINT, REGION, BUCKET, PREFIX):
+        if os.environ.get(name, "").strip():
+            where.append(f"{name} from this command")
+        elif os.environ.get(FALLBACK[name], "").strip():
+            where.append(f"{name} from {FALLBACK[name]} in the env file on this host")
+        else:
+            where.append(f"{name} unset, so the whole bucket")
+    said = "Where each of these came from:\n" + "".join(f"  {entry}\n" for entry in where)
+    if any("env file" in entry for entry in where):
+        said += (
+            "An env file on a machine rebuilt from .env.example holds that template's\n"
+            "example store and not yours — set the HASHI_RESTORE_S3_ names in this\n"
+            "command to read your own."
+        )
+    return said.rstrip("\n")
+
+
 def _hmac(key: bytes, message: str) -> bytes:
     return hmac.new(key, message.encode(), hashlib.sha256).digest()
 
@@ -318,7 +353,18 @@ def opened(config: dict[str, str], method: str, object_key: str, parameters: dic
         return connection, connection.getresponse()
     except (OSError, http.client.HTTPException) as unreachable:
         connection.close()
-        raise Refusal(f"the object store could not be reached: {unreachable}") from None
+        # Which VALUE this is about, because a name that does not resolve reads as a
+        # network fault and is almost always the endpoint being somebody else's. The
+        # preflight said where it came from; this says it again at the moment it failed,
+        # since that is the line an operator has in front of them.
+        raise Refusal(
+            f"the object store could not be reached: {unreachable}.\n"
+            f"That address is {config['endpoint']}, which is {ENDPOINT} in this "
+            f"command's environment or {FALLBACK[ENDPOINT]} in the env file on this "
+            "host. A host that does not resolve or does not answer is that value being "
+            "wrong, not the credential — and on a machine rebuilt from the template, "
+            "the env file's copy of it is the template's example store."
+        ) from None
 
 
 def refused(status: int, answer) -> Refusal:
@@ -434,9 +480,13 @@ def main(argv: list[str]) -> int:
         config = configuration()
         if mode == "preflight":
             say(
-                f"reading from {config['netloc']}/{config['bucket']}/{config['prefix']} — "
-                "the configuration resolves. Whether the credential is allowed to read it "
-                "is only known when the store is asked."
+                f"reading from {config['netloc']}/{config['bucket']}/{config['prefix']}"
+            )
+            say(sources())
+            say(
+                "Every value this needs has one. Whether that host answers, whether the "
+                "bucket is there and whether the credential may read it are only known "
+                "when the store is asked, which is the next thing that happens."
             )
             return DONE
         if mode == "list":

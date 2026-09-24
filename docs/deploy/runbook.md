@@ -173,7 +173,12 @@ Neither publishes the console on an address the internet can reach.
 **And remember it after every `make panel-bootstrap`.** That script uses the base file
 alone, on purpose — so a later run brings the stack back to the base file's shape and
 takes the published ports away again. Run `make up-panel` afterwards, or run it instead
-of the script once the box is installed.
+of the script once the box is installed. **The script says this itself now**, before it
+converges and again when it has finished, and only on a host that was in fact publishing
+something: it asks the running stack what it publishes rather than guessing. It is said
+there because "a second run is safe" is printed by every refusal in the restore path, and
+the one thing a second run is not safe for was written down only here — under a heading
+an operator re-running a command has no reason to open.
 
 ---
 
@@ -233,8 +238,8 @@ no `PostUp`, no `PostDown` and no `Table`, because it carries traffic **to** thi
 rather than **through** it, and forwarding rules would quietly turn your admin tunnel into
 an exit.
 
-Fill in the `HASHI_MGMT_*` keys and run the bootstrap. It prints one config per device,
-**once**:
+Fill in the `HASHI_MGMT_*` keys **with this deployment's own values** and run the
+bootstrap. It prints one config per device, **once**:
 
 ```bash
 make panel-bootstrap
@@ -247,6 +252,13 @@ the private half of a device's key exists in that scrollback and on the device, 
 nowhere else. A device whose config was lost gets a new entry in `HASHI_MGMT_PEERS` and a
 new key — a re-run says `already a peer of this tunnel` and prints nothing, because there
 is nothing left to print.
+
+**Left as `.env.example` ships them, those keys generate nothing**, and that is deliberate:
+the template's block is a complete one, so a machine rebuilt by copying that file used to
+get a tunnel and two printed private keys for devices nobody owns, aimed at the template's
+example endpoint. The bootstrap compares the block against `.env.example`'s own line, skips
+the generation and says which mode it left the host in — which for a freshly restored host
+is the SSH fallback below.
 
 The run ends with `NOT done, and not yet true: the tunnel is not up and this host is not
 listening.` That is accurate: it wrote a file and printed text. Bringing the tunnel up is
@@ -1419,16 +1431,35 @@ make hash-password      # prints the whole HASHI_OPERATOR_PASSWORD_HASH line to 
                         # nothing but the runtime it already has.
 
 # then fill in .env: HASHI_SECRET_KEY, the hostnames, that hash and the database
-# password. Nothing else is needed to run the command below.
+# password. That is what the control plane needs in order to START; where the BUCKET is
+# is the next four lines, and it is not in .env on a machine that has never run this.
 
 HASHI_RESTORE_AGE_IDENTITY=/path/to/hashi-backup-identity.txt \
+HASHI_RESTORE_S3_ENDPOINT=<your store's own endpoint, with a scheme> \
+HASHI_RESTORE_S3_REGION=<its region> \
+HASHI_RESTORE_S3_BUCKET=<the bucket these backups are in> \
+HASHI_RESTORE_S3_PREFIX=<the key prefix, if you set one> \
 HASHI_RESTORE_S3_ACCESS_KEY_ID=<a key that may list and get> \
 HASHI_RESTORE_S3_SECRET_ACCESS_KEY=<its secret> \
   make restore-from-bucket
 ```
 
 That installs the control plane on this machine, reads the bucket, takes the newest
-artifact that actually opens, and restores it. It is safe to run again after any failure.
+artifact that actually opens, and restores it. It is safe to run again after any failure —
+with one exception on a host that is already serving, three paragraphs down.
+
+**Why the four `HASHI_RESTORE_S3_` lines that are not credentials are there.** Endpoint,
+region, bucket and prefix fall back to the `HASHI_BACKUP_S3_` block of `.env` — the right
+default on a host that was taking backups, because that is where they already are. On a
+machine rebuilt from `.env.example` that block is **the template's example store**, which
+belongs to nobody: the walk of 2026-09-23 followed this section exactly, installed the
+whole control plane, and died at a hostname out of the template with `Name or service not
+known`. So either fill those four into `.env` beside the rest, or hand them to the command
+as above. Either way the command **prints which of the two each value came from** before
+it asks the store anything, so a value that came out of the template is visible before the
+failure rather than after it. The two credentials never fall back to anything: the key in
+`.env` may only write, and reaching for it silently would turn the clearest refusal there
+is into a 403 that reads as your own key being wrong.
 
 **`make hash-password` is here because the value could not be made on the machine that
 needs it.** The hash is a scrypt digest produced by this project's own code, so the
@@ -1451,7 +1482,27 @@ into a session that cannot answer it. `FORCE=1` skips the question and nothing e
 **Then publish the ports, and mind which command.** The command ends by naming them; the
 one to use on a freshly restored host is `make up-panel-over-ssh`, because `make up-panel`
 wants `HASHI_PRIVATE_BIND_ADDR` to be a management-tunnel address this machine does not
-have yet. See *The port-publication gap*.
+have yet. See *The port-publication gap*. The closing screen prints the `ssh -L` line with
+this deployment's own console port in it, read out of the running stack rather than left
+for you to find in `.env`.
+
+**"Safe to run again" is true of the data and false of the publication, on a host that is
+already serving.** The install step converges the stack to the base compose file, which
+publishes nothing — so re-running this (or `make panel-bootstrap`) on a host where
+`make up-panel` had published 80, 443 and the console takes all three away until you
+publish them again. Nothing is lost but reachability, and the database is untouched. The
+bootstrap now **says so before it does it and again when it has finished**, having asked
+the running stack what it publishes, so this paragraph is a second place rather than the
+only one.
+
+**No management tunnel is generated from the template's own values.** `.env.example` ships
+a complete `HASHI_MGMT_*` block, and a machine rebuilt by copying that file arrives with
+one. Generating a tunnel from it wrote a config here and printed a **full device config,
+private key included**, for each of the template's example devices, pointing at the
+template's example endpoint — credentials nobody asked for, for a host that is not this
+one. The bootstrap compares the block against `.env.example`'s own line and skips the
+generation, saying which mode it left the host in; fill the block in with this
+deployment's values and run it again to get a real one. See *The management tunnel*.
 
 **And the restored host is not backing anything up.** `HASHI_BACKUP_AGE_RECIPIENT` and the
 write-only `HASHI_BACKUP_S3_*` credential lived only in the `.env` that was lost — that
@@ -1507,6 +1558,7 @@ minutes and an hour.** Every one of them names which of the three inputs is wron
 | `HASHI_RESTORE_AGE_IDENTITY` unset or not a file | Named as the private half you carry, with the form to supply it in |
 | The read credential is not in the command's environment | Named, with the reminder that the key in `.env` may only write and is not the one to reach for |
 | Endpoint, region or bucket unresolvable | Every missing name at once, and that three of them may come from the `HASHI_BACKUP_S3_` block instead |
+| The endpoint is set, and it is the template's | Before anything is asked of the store, the command prints the endpoint, the bucket and the prefix it is about to use **and which name each came from** — its own, or the `HASHI_BACKUP_S3_` fallback in `.env`. If the store then cannot be reached, the refusal names that same value rather than leaving a DNS error to be read as a network fault |
 | The store refuses the credential | *"A restore needs a credential that may LIST and GET this bucket"* — the write-only key produces exactly this, and it is the most likely mistake on the list |
 | No such bucket | Named as the bucket and not the key, because the credential answered |
 | Nothing under the prefix | *"The credential works — this is the bucket or the prefix"* |
@@ -1678,18 +1730,33 @@ exactly the belief that there is one.
 **Two smaller things the screen now gets right, and both are about trusting the file less.**
 The missed days are printed newest first — the panel sorts them itself rather than taking
 the writer's order, so *"most recent"* points at now even during a gap that started weeks
-ago. And a record dated **ahead** of the clock the panel reads it against is said so
+ago; the writer stores them newest first as well, so the two agree without either taking
+the other on trust. And a record dated **ahead** of the clock the panel reads it against is said so
 instead of being reported as a backup taken minutes ago: the age is still clamped for the
 arithmetic, so a disagreeing clock cannot turn a stale backup into a fresh one, but the
 screen goes loud with `clock ahead` and says no age on it can be believed until the two
 machines agree about the time.
+
+**`make backup-status` says the same three things on the command line, out of the same
+field, and refuses the same file.** It closes with whichever of the three caveats the
+record's own `offsite` chooses, prints the missed days newest first, and — where the panel
+says *"there is a record and this panel could not read it"* — it now says that too,
+instead of printing a damaged record as fact. That was the other half of the same
+finding: a record with a `schema` this script has never seen, or a `last_success` that is
+not a run, was read out as *"last success: never, last attempt: never"* and exited **0**,
+which is byte-for-byte what a machine that has never taken a backup prints. It exits **1**
+for both of the two bad answers now, assumes nothing from the file, and names which field
+it could not read — never what was in it. The line about the appointed time says that it
+came from `.env` as it is **now** rather than from the record, because it does.
 
 A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
 was written, **3** the artifact exists and did not leave this machine. Only **1** is retried
 automatically, hourly, up to six times a day — a stack that had not finished booting is the
 usual cause and a retry costs nothing. **3 is not retried**, because the artifact is already
 on the disk and re-dumping would fill it with copies of the same database; the remedy is
-the `make backup-upload FROM=…` above, which the failing run prints.
+the `make backup-upload FROM=…` above, which the failing run prints — and which
+`make backup-status` prints too, beside the number, because a bare **3** on a screen says
+nothing about the artifact still being on the machine.
 
 A tick with nothing to do prints nothing, so a working schedule is silent and cron sends no
 mail. A tick that fails prints everything, and cron delivers that wherever it delivers mail

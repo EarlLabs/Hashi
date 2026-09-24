@@ -392,7 +392,16 @@ record_missed() {
     MISSED_TOTAL=$((MISSED_TOTAL + 1))
   done
   # Keep the most recent by date; the count above keeps the rest honest.
-  MISSED_LIST="$(printf '%s\n' ${MISSED_LIST} | tail -n ${MISSED_KEPT} | tr '\n' ' ')"
+  #
+  # NEWEST FIRST, and the sort is the whole of it (M28.12). Both readers label the first
+  # few of these "most recent", and until now the writer appended them in the order the
+  # walk found them — oldest first — so during a live gap the label pointed six weeks
+  # back. The panel sorts what it reads and keeps doing so (M28.11: the file is on a disk
+  # where a hand edit goes, so no reader may take the order on trust); this is the same
+  # invariant established at the source, so the two readers stop disagreeing about a file
+  # neither of them wrote badly. These are YYYY-MM-DD, so sorting them as text is sorting
+  # them as dates, and `head` then keeps the recent end rather than the ancient one.
+  MISSED_LIST="$(printf '%s\n' ${MISSED_LIST} | sort -r | head -n ${MISSED_KEPT} | tr '\n' ' ')"
 }
 
 # --- running ----------------------------------------------------------------------------
@@ -533,6 +542,156 @@ command_due() {
   printf '%s\n' "${REASON}"
 }
 
+# --- reading the record back, as strictly as the panel reads it -------------------------
+#
+# WHY THIS EXISTS AT ALL, because `status` used to have none of it and that was the
+# finding (M28.12). A record with `schema: 99`, or a thousand-character `outcome`, or a
+# `last_success` that is not a run, was printed VERBATIM as fact — "last success: never,
+# last attempt: never", a confident schedule line, exit 0 — which is byte-for-byte what a
+# machine that has simply never taken a backup prints. Meanwhile the panel, reading the
+# same file, called it unreadable and assumed nothing from it, and then sent the operator
+# here to find out more. The two channels have to agree about a damaged file or the
+# weaker one teaches the operator to disbelieve the other.
+#
+# The rules are control/app/services/backups.py's, deliberately, key for key: an unknown
+# `schema`, a missing key this reads, a timestamp that is not one, a number that is not
+# one, a missed date that is not a date, a nested entry that is not a run, or any string
+# over LONGEST_VALUE. And deliberately NOT unreadable, in both readers: an `outcome` this
+# version has no meaning for (it is named verbatim instead) and an `offsite` word it does
+# not know (it collapses into neither answer).
+LONGEST_VALUE=200
+# The two shapes every date in the record has. Checked rather than trusted because these
+# are printed on a terminal and because a file on a disk is where a hand edit goes.
+A_TIMESTAMP='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+A_DATE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+
+# The raw text after `"key":`, trailing comma removed. Empty when the key is absent — the
+# two are told apart with `has_key`, because "no such key" and "an empty value" are
+# different faults and only one of them is this reader's business.
+raw_field() {
+  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" "${STATE_FILE}" \
+    | head -n 1 \
+    | sed -e 's/^[[:space:]]*//' -e 's/,[[:space:]]*$//' -e 's/[[:space:]]*$//'
+}
+
+has_key() { grep -q "^[[:space:]]*\"$1\"[[:space:]]*:" "${STATE_FILE}"; }
+
+# Anything out of the record that reaches the terminal goes through here first. The writer
+# already restricts what it writes to [A-Za-z0-9_+:/.-]; a hand edit does not, and an
+# escape sequence in a value is a record that rewrites the screen it is being read on. The
+# panel has autoescaping for the same job; this is the terminal's half of it.
+printable() { printf '%s' "$1" | tr -cd '[:print:]' | cut -c1-${LONGEST_VALUE}; }
+
+# One `"key": "value"` string, or a reason it is not one. Everything the panel's ``_text``
+# refuses is refused here: a missing key, and a value longer than it reads.
+string_problem() {
+  local raw
+  has_key "$1" || { printf '%s' "$1"; return 0; }
+  raw="$(raw_field "$1")"
+  case "${raw}" in
+    '"'*'"') ;;
+    *) printf '%s' "$1"; return 0 ;;
+  esac
+  raw="${raw#\"}"; raw="${raw%\"}"
+  [ "${#raw}" -le "${LONGEST_VALUE}" ] || printf '%s' "$1"
+}
+
+# One of the three nested entries: `null`, or a run with a timestamp, a whole exit code
+# and an outcome. `null` and a run are both statements the record is entitled to make;
+# "this line is not a run" is not, and it becomes the same refusal as a broken schema
+# rather than being reported as a host that has never had a successful backup.
+entry_problem() {
+  local raw at code outcome
+  has_key "$1" || { printf '%s' "$1"; return 0; }
+  raw="$(raw_field "$1")"
+  [ "${raw}" = "null" ] && return 0
+  case "${raw}" in
+    '{'*'}') ;;
+    *) printf '%s' "$1"; return 0 ;;
+  esac
+  case "${raw}" in *'"outcome":'*) ;; *) printf '%s' "$1"; return 0 ;; esac
+  at="$(printf '%s' "${raw}" | sed -n 's/.*"at": *"\([^"]*\)".*/\1/p')"
+  code="$(printf '%s' "${raw}" | sed -n 's/.*"exit_code": *\(-\{0,1\}[0-9]\{1,9\}\).*/\1/p')"
+  outcome="$(printf '%s' "${raw}" | sed -n 's/.*"outcome": *"\([^"]*\)".*/\1/p')"
+  [[ "${at}" =~ ${A_TIMESTAMP} ]] || { printf '%s' "$1"; return 0; }
+  [ -n "${code}" ] || { printf '%s' "$1"; return 0; }
+  [ "${#outcome}" -le "${LONGEST_VALUE}" ] || printf '%s' "$1"
+}
+
+# Which key made this file unreadable, or nothing at all. A KEY NAME and never a value:
+# the reason an operator needs is which field is wrong, and printing the field's contents
+# back at them is how a record starts being a place things leak from.
+record_problem() {
+  local raw problem key day
+  raw="$(raw_field schema)"
+  [ "${raw}" = "${SCHEMA}" ] || { printf 'schema'; return 0; }
+
+  for key in at at_source zone zone_source offsite; do
+    problem="$(string_problem "${key}")"
+    [ -z "${problem}" ] || { printf '%s' "${problem}"; return 0; }
+  done
+
+  for key in last_attempt last_success last_failure; do
+    problem="$(entry_problem "${key}")"
+    [ -z "${problem}" ] || { printf '%s' "${problem}"; return 0; }
+  done
+
+  has_key missed_total || { printf 'missed_total'; return 0; }
+  raw="$(raw_field missed_total)"
+  [[ "${raw}" =~ ^[0-9]{1,9}$ ]] || { printf 'missed_total'; return 0; }
+
+  has_key missed_dates || { printf 'missed_dates'; return 0; }
+  raw="$(raw_field missed_dates)"
+  case "${raw}" in
+    '['*']') ;;
+    *) printf 'missed_dates'; return 0 ;;
+  esac
+  raw="${raw#[}"; raw="${raw%]}"
+  for day in $(printf '%s' "${raw}" | tr -d '"' | tr ',' ' '); do
+    [[ "${day}" =~ ${A_DATE} ]] || { printf 'missed_dates'; return 0; }
+  done
+}
+
+# The three sentences the panel closes with, chosen the way the panel chooses them: by
+# where the RECORD says this host sends, never by how a run went and never by this script
+# reading the env file for it. Both channels answer the same question from the same field,
+# so an operator who sees one and then the other is not told two different things.
+#
+# The middle one is the shipped default (HASHI_BACKUP_ENABLED=0). It is not the weaker
+# sentence: the upload being off is a supported mode, the artifact is still written, and
+# what this refuses is the inference the first one invites — a caveat about a bucket, on a
+# host with no bucket, hands over the belief it was meant to take away.
+backup_caveat() {
+  case "$1" in
+    yes)
+      cat <<'MSG'
+What this does NOT say: whether any of those artifacts is still in the bucket. The
+credential on this host may only write, so it cannot look — nothing here has ever read
+that store, and no test in this project asserts what it keeps. The only thing that proves
+a backup is a restore: docs/deploy/runbook.md, under "Backups".
+MSG
+      ;;
+    no)
+      cat <<'MSG'
+What this does NOT say: that this host is sending its backups anywhere. The record says
+the upload is switched off on it (HASHI_BACKUP_ENABLED), so an artifact it takes is
+written to the disk of that one machine and stays there — a copy that shares a disk with
+the thing it is a copy of is not a backup of it, and neither of them survives losing the
+machine. The only thing that proves a backup is a restore: docs/deploy/runbook.md, under
+"Backups", which is also where turning the upload on is.
+MSG
+      ;;
+    *)
+      cat <<'MSG'
+What this does NOT say: whether anything was sent anywhere. The record holds a word this
+script has no meaning for where it says whether this host sends its backups to a store,
+so nothing here claims an artifact reached one and nothing here claims none did. The only
+thing that proves a backup is a restore: docs/deploy/runbook.md, under "Backups".
+MSG
+      ;;
+  esac
+}
+
 command_status() {
   resolve_schedule
   if [ ! -f "${STATE_FILE}" ]; then
@@ -545,23 +704,76 @@ now with \`make backup\`.
 MSG
     return 1
   fi
+
+  local problem
+  problem="$(record_problem)"
+  if [ -n "${problem}" ]; then
+    cat >&2 <<MSG
+There is a backup record on this host and this is not the file the schedule writes.
+
+${STATE_FILE} could not be read: its "${problem}" is not what scripts/backup-run.sh
+writes there. Either the file is damaged, or it was written by a newer version of that
+script than this one. NOTHING HAS BEEN ASSUMED FROM IT — this is not telling you backups
+are working and not telling you they are failing, and the panel says exactly that about
+the same file, for the same reason.
+
+What is in it is a history of runs and nothing else can tell you what it said, so move it
+aside rather than deleting it if you want to look at it later. The next run rewrites it:
+\`make backup\` takes one now, on a host that still has what a backup needs in the env
+file — HASHI_BACKUP_AGE_RECIPIENT and the HASHI_BACKUP_S3_ block are in no backup by
+design, so a machine rebuilt out of the backup history has to have them put back first.
+MSG
+    return 1
+  fi
+
   read_state
+  local sends
+  sends="$(printable "$(field offsite)")"
 
   echo "Backups on this host, from ${STATE_FILE}:"
   echo
+  # Named as coming from the env file, because it does: this line is what the schedule
+  # would resolve if it ran right now, while everything under it is what the record says
+  # happened. On a damaged or absent record the same line used to be printed with the same
+  # confidence beside "last success: never", which reads as a fact about the backups.
   echo "  scheduled:    ${AT} ${ZONE} (${ZONE_SOURCE}), checked every 15 minutes"
-  echo "  last success: ${OK_AT:-never} ${OK_OUTCOME:+(${OK_OUTCOME})}"
-  echo "  last attempt: ${LAST_AT:-never} ${LAST_OUTCOME:+(${LAST_OUTCOME}, exit ${LAST_CODE})}"
+  echo "                — from ${ENV_FILE} as it is now, not from this record"
+  case "${sends}" in
+    yes) echo "  sending:      offsite — the record says the upload is switched on" ;;
+    no)  echo "  sending:      nowhere — the record says the upload is switched off" ;;
+    *)   echo "  sending:      unknown — the record says \"${sends}\", which this script" \
+              "has no meaning for" ;;
+  esac
+  # The one thing this channel can see and the panel cannot: the record says what was true
+  # when it was written, and the env file says what the next run will do. Said only when
+  # they differ, because that is a switch thrown between two runs rather than a fault.
+  if { [ "${sends}" = "yes" ] || [ "${sends}" = "no" ]; } && [ "${sends}" != "${OFFSITE}" ]; then
+    echo "                ${ENV_FILE} says the opposite now (HASHI_BACKUP_ENABLED), so it"
+    echo "                was changed after that run and the next one goes the other way"
+  fi
+  echo "  last success: ${OK_AT:-never} ${OK_OUTCOME:+($(printable "${OK_OUTCOME}"))}"
+  echo "  last attempt: ${LAST_AT:-never} ${LAST_OUTCOME:+($(printable "${LAST_OUTCOME}"), exit ${LAST_CODE})}"
   if [ -n "${BAD_AT}" ] && { [ -z "${OK_AT}" ] || [[ "${OK_AT}" < "${BAD_AT}" ]]; }; then
-    echo "  FAILED SINCE THE LAST SUCCESS: ${BAD_AT} (${BAD_OUTCOME}, exit ${BAD_CODE})"
+    echo "  FAILED SINCE THE LAST SUCCESS: ${BAD_AT} ($(printable "${BAD_OUTCOME}"), exit ${BAD_CODE})"
+  fi
+  # 3 is a state with its own remedy rather than a failure to retry, and until now it was
+  # shown as a digit and nowhere as what it means. The artifact of that run is on this
+  # machine: dumping again would write a second copy of the same database and never fix
+  # the reason the store refused the first.
+  if [ "${LAST_CODE}" = "3" ] || [ "${BAD_CODE}" = "3" ]; then
+    echo "                exit 3 means the artifact WAS written and did NOT leave this"
+    echo "                machine. Nothing needs dumping again — send that same file with"
+    echo "                make backup-upload FROM=${REPO_ROOT}/backups/<the artifact>"
   fi
   if [ "${MISSED_TOTAL}" -gt 0 ]; then
-    echo "  days with no backup: ${MISSED_TOTAL} — most recent: ${MISSED_LIST}"
+    # Newest first. The writer sorts them that way now and so does the panel; this sorts
+    # what it read as well, because the order of dates in a file on a disk is not a thing
+    # any reader may take on trust — and the label says "most recent".
+    echo "  days with no backup: ${MISSED_TOTAL} — most recent:" \
+         "$(printf '%s\n' ${MISSED_LIST} | sort -r | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   fi
   echo
-  echo "What this does NOT say: whether any of those artifacts is still in the bucket."
-  echo "The credential on this host may only write, so it cannot look. The only check is"
-  echo "a restore — see docs/deploy/runbook.md, \"Backups\"."
+  backup_caveat "${sends}"
 }
 
 case "${1:-tick}" in

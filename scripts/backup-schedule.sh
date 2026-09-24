@@ -104,7 +104,7 @@ ${OPEN}
 # (HASHI_BACKUP_AT, HASHI_BACKUP_TZ), not here: this entry carries no hour on purpose.
 # Output is NOT discarded. A tick with nothing to do prints nothing, so a working
 # schedule is silent; a failed run prints, and cron delivers that wherever it delivers
-# mail. The record at ${STATE_DIR} is the account that does not depend on mail existing.
+# mail. The record at ${STATE_DIR} is the channel that does not depend on mail existing.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */15 * * * * ${REPO_ROOT}/scripts/backup-run.sh tick
 ${CLOSE}

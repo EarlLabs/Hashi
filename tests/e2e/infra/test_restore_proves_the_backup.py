@@ -1512,6 +1512,14 @@ def test_a_box_that_was_down_takes_the_backup_late_and_names_the_days_it_lost(
     assert record["due_date"] not in record["missed_dates"], (
         "the day this very run backed up is listed as missed"
     )
+    # NEWEST FIRST, as written by a real tick over a real gap — M28.12. Both readers label
+    # the first few of these "most recent" and both sort what they read, because a record
+    # is a file on a disk where a hand edit goes; this is the other half, that the file
+    # this project writes needs no sorting to be right. The writer used to append them in
+    # the order it walked the gap, which is oldest first.
+    assert record["missed_dates"] == sorted(record["missed_dates"], reverse=True), (
+        f"the writer stored the missed days oldest first: {record['missed_dates']}"
+    )
     # And the record still answers M28.6's question after a successful catch-up: the days
     # that were lost survive the run that ends the gap.
     assert record["last_success"]["due_date"] == record["due_date"]

@@ -279,6 +279,87 @@ MSG
   exit 3
 }
 
+# What compose could not resolve, and the advice that belongs to THAT variable — M28.12.
+#
+# WHAT THIS REPLACED, because the shape of the mistake is worth keeping written down: the
+# whole "this needs the PUBLIC half of your backup keypair, generate one with age-keygen"
+# page was printed for ANY refusal out of `config --quiet`. That overlay carries the base
+# compose file, where every interpolation has a `:?` guard, so an empty POSTGRES_PASSWORD
+# — or any of eight other names — produced a page saying the backup recipient was
+# missing, and filling in the one it named moved the fault to the next one and printed
+# the same page again.
+#
+# It is not merely unhelpful. An operator who follows it generates a NEW KEYPAIR, and
+# every artifact already in the bucket is addressed to the public half they have just
+# replaced: this host cannot re-encrypt them, cannot read them, and no key on it ever
+# could. That is the whole backup history lost to a sentence about the wrong variable.
+#
+# `restore-from-bucket` has done the right thing next door since M28.8 — deploy/backup/
+# fetch.py names the exact variables it could not resolve — and this is that pattern on
+# the writing side.
+#
+# The name comes out of compose's own `required variable X is missing a value`, which
+# names VARIABLES and never values (M28.7), and is captured as a bare identifier, so
+# nothing that is not one can come back out of here. Compose stops at the FIRST name it
+# cannot resolve, which is why the text below says there may be another behind it.
+missing_value_advice() {
+  local named
+  named="$(printf '%s' "$1" \
+    | sed -n 's/.*required variable \([A-Za-z_][A-Za-z0-9_]*\) is missing a value.*/\1/p' \
+    | head -n 1)"
+
+  if [ "${named}" = "HASHI_BACKUP_AGE_RECIPIENT" ]; then
+    cat >&2 <<'MSG'
+
+This dump is encrypted before it is written, so it needs the PUBLIC half of your backup
+keypair in HASHI_BACKUP_AGE_RECIPIENT. Generate the pair somewhere that is not this host:
+
+  age-keygen -o hashi-backup-identity.txt
+
+Put the public key it prints in HASHI_BACKUP_AGE_RECIPIENT in your env file, and keep the
+identity file with you. It must never be copied onto this machine — a host that can read
+its own backups is a host whose seizure hands over every one of them.
+
+Generate a NEW pair only if there is no old one. Artifacts already in the store are
+addressed to the public half that wrote them, and nothing on this host can re-address
+them — if you are carrying an identity, the public key that belongs with it is the value
+this needs.
+MSG
+    return 0
+  fi
+
+  if [ -n "${named}" ]; then
+    cat >&2 <<MSG
+
+${named} has no value in ${ENV_FILE}, so compose would not resolve this stack and nothing
+was dumped. The database was not read and no file was written.
+
+THIS IS NOT ABOUT YOUR BACKUP KEYPAIR, and the difference matters more than the missing
+value does: generating a new pair to make this go away orphans every artifact already in
+the store, because each of them is addressed to the public half you would be replacing
+and no key on this host can open or re-address one. Fill ${named} in instead —
+.env.example says what each name is, and HASHI_OPERATOR_PASSWORD_HASH is the one value
+you cannot type, which \`make hash-password\` prints for you.
+
+Compose stops at the first name it cannot resolve, so there may be another behind this
+one. Run this again once ${named} has a value and it will say which.
+MSG
+    return 0
+  fi
+
+  cat >&2 <<MSG
+
+Nothing was dumped: compose would not resolve this stack's configuration, and what it
+said above is the whole of what it said. It names a variable whenever one is missing a
+value, so if it named none the fault is in the compose files or in ${ENV_FILE} itself
+rather than in one setting.
+
+Nothing here is a statement about your backup keypair. Do not generate a new one to make
+this go away — every artifact already in the store is addressed to the public half you
+have, and replacing the pair loses all of them at once.
+MSG
+}
+
 command_dump() {
   local output="${1:-}"
   if [ -z "${output}" ]; then
@@ -293,17 +374,7 @@ command_dump() {
   local refusal
   if ! refusal="$("${COMPOSE_BACKUP[@]}" config --quiet 2>&1)"; then
     echo "${refusal}" >&2
-    cat >&2 <<'MSG'
-
-This dump is encrypted before it is written, so it needs the PUBLIC half of your backup
-keypair in HASHI_BACKUP_AGE_RECIPIENT. Generate the pair somewhere that is not this host:
-
-  age-keygen -o hashi-backup-identity.txt
-
-Put the public key it prints in HASHI_BACKUP_AGE_RECIPIENT in your env file, and keep the
-identity file with you. It must never be copied onto this machine — a host that can read
-its own backups is a host whose seizure hands over every one of them.
-MSG
+    missing_value_advice "${refusal}"
     exit 1
   fi
 
@@ -604,16 +675,22 @@ machine that has age and restore the result — this script still accepts that s
 MSG
       exit 1
     fi
+    # --quiet, and psql's own output onto stderr with it (M28.12). A restore is watched by
+    # a person, and everything else this script says to them is on stderr: the ~90 command
+    # tags psql echoes were the one thing landing on stdout, which put six kilobytes
+    # between "restoring…" and the screen that says what the restore did not do. --quiet
+    # drops the tags rather than moving them; ON_ERROR_STOP and psql's errors are
+    # untouched by it, and they were always on stderr.
     "${COMPOSE[@]}" exec -T control age --decrypt --identity - "${STAGED}" < "${identity}" \
       | gunzip -c \
       | "${COMPOSE[@]}" exec -T "${SERVICE}" \
-        psql --username="${user}" --dbname="${name}" \
-          --set=ON_ERROR_STOP=on --single-transaction
+        psql --username="${user}" --dbname="${name}" --quiet \
+          --set=ON_ERROR_STOP=on --single-transaction >&2
     remove_staged
   else
     gunzip -c "${input}" | "${COMPOSE[@]}" exec -T "${SERVICE}" \
-      psql --username="${user}" --dbname="${name}" \
-        --set=ON_ERROR_STOP=on --single-transaction
+      psql --username="${user}" --dbname="${name}" --quiet \
+        --set=ON_ERROR_STOP=on --single-transaction >&2
   fi
 
   echo "restored." >&2
@@ -705,6 +782,18 @@ where age lives. Is the control plane running?"
 # every refresh.
 public_host() {
   "${COMPOSE[@]}" exec -T control printenv HASHI_PUBLIC_HOST 2>/dev/null | tr -d '\r\n' || true
+}
+
+# The port the console answers on, asked of the running stack for the same reason and in
+# the same way (M28.12). The closing screen printed `ssh -L <panel port>:…` and sent the
+# operator to find HASHI_PRIVATE_PORT in the env file — a file this script deliberately
+# does not open — while the answer was already in a container it was about to ask
+# something else of. A port is per-deployment data and is read, never written down here.
+#
+# From `caddy` and not from `control`: the private port is where Caddy listens for the
+# console, so that is the service the base compose file hands it to.
+private_port() {
+  "${COMPOSE[@]}" exec -T caddy printenv HASHI_PRIVATE_PORT 2>/dev/null | tr -d '\r\n' || true
 }
 
 command_restore_from_bucket() {
@@ -825,7 +914,12 @@ MSG
   echo "installing the control plane on this machine first — the program that reads the" >&2
   echo "bucket runs inside its image, so there is nothing to fetch with until it exists." >&2
   echo "" >&2
-  if ! "${REPO_ROOT}/scripts/panel-bootstrap.sh" --env-file "${ENV_FILE}"; then
+  # Its progress and its build go to stderr HERE, where this command owns the screen —
+  # the bootstrap writes them to stdout when it is run on its own, which is right there
+  # and wrong inside this. Everything this command says to the operator is on stderr, and
+  # a rebuild that puts a build log on the other stream makes the operator read one
+  # narrative out of two interleaved ones (M28.12).
+  if ! "${REPO_ROOT}/scripts/panel-bootstrap.sh" --env-file "${ENV_FILE}" 1>&2; then
     cat >&2 <<MSG
 
 the control plane did not come up, so there is nothing to restore into. Nothing was
@@ -991,9 +1085,11 @@ MSG
   # they reach afterwards. A restored control plane on a new address, with the delivery
   # name still pointing at the machine that was lost, serves nobody — and every one of
   # these three is a thing no script may do on somebody's behalf.
-  local delivery
+  local delivery console
   delivery="$(public_host)"
   [ -n "${delivery}" ] || delivery="<HASHI_PUBLIC_HOST>"
+  console="$(private_port)"
+  [ -n "${console}" ] || console="<HASHI_PRIVATE_PORT>"
 
   # A restored fleet is an UNBACKED-UP fleet, and until M28.10 nothing said so — not the
   # closing screen and not the runbook. The write-only key and the age recipient lived
@@ -1057,7 +1153,7 @@ publishes no ports, so there is no panel to log into until you open them:
                            tunnel yet — which is this one, unless you have
                            already built one here. The console then answers on
                            loopback only and you reach it from your own machine:
-                             ssh -L <panel port>:127.0.0.1:<panel port> you@here
+                             ssh -L ${console}:127.0.0.1:${console} you@here
 
 The tunnel that reached the old panel does not reach this one: its keys were on
 the machine you lost, and \`make up-panel\` on a host with no tunnel address
