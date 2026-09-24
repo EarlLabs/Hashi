@@ -3134,6 +3134,38 @@ one sentence rather than six places.**
 
 Gate: `make test-infra`, then `make verify`.
 
+### M28.13 — The same weak parser, in the script that writes the tunnel · found in review 2026-09-24
+
+`scripts/management-tunnel.sh::value_of` is the parser M28.12 replaced everywhere else:
+**no `\r` strip, and first-assignment-wins where an env file means the last.** Reproduced
+rather than inferred:
+
+```
+$ printf 'HASHI_MGMT_ENDPOINT=panel.invalid\r\nHASHI_MGMT_PORT=51821\r\n' > env
+$ echo "Endpoint = ${ENDPOINT}:${PORT}" | cat -A
+Endpoint = panel.invalid^M:51821^M$
+```
+
+Its output feeds `Address`, `ListenPort`, `MTU` and `Endpoint` straight into the host's own
+`awg-mgmt.conf` **and into every device config the script prints for an operator to paste
+onto a phone or a laptop**. `PEER_SPECS=(${MGMT_PEERS})` also leaves a `\r` glued to the
+last peer's address, because bash's default `IFS` does not include it.
+
+**It is a different failure class from M28.12's High and that is why it is its own step.**
+That one was a credential leak reachable by copying `.env.example` unedited. This is
+**config corruption of a genuinely configured tunnel** — it needs an operator who filled in
+real values on an editor that writes CRLF, and the symptom is "the tunnel does not come up"
+from a file that looks right. Not a lockout: `make up-panel-over-ssh` plus `ssh -L` does not
+depend on this generator. But it costs real debugging time, and it lands on **the exact
+reachability path M28 exists to protect** — the way an owner reaches the panel after a
+restore.
+
+Adopt `env_value_of`'s idiom, or extract it so both scripts share one implementation rather
+than a third copy. **Red-first against `tests/infra/test_management_tunnel_script.py`**,
+which is 435 lines and is why this did not ride along inside M28.12.
+
+Gate: `make test-infra`, then `make verify`.
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.

@@ -1006,3 +1006,92 @@ a restore"**. Future timestamps read **"at a time that had not come yet when thi
 read"** under the label **`clock ahead`**. The restored-host advice says **".env is in no
 backup by design"** and **"make backup refuses there"**, leading with **"start with make
 backup-status"**.
+
+## M28.12 — the command line must not be more confident than the panel
+
+`make test-infra` **426 passed** (was 379); `make verify` green, e2e **222** — the first
+independent run of M28.11's two new scenarios. Two rounds; round 1 found a High that
+reopened the very bug this step closed.
+
+1. **`make backup-status` applies the panel's rules key for key** — unknown `schema`, a
+   missing key it reads (`offsite` included), a malformed timestamp/count/date, a nested
+   entry that is not a run, any string over 200 characters → refuses, **naming the field
+   and never its contents**, exit 1. Verified with acceptance's own inputs: `schema: 99`
+   and a 1000-character `outcome` carrying `<script>` are both refused with the field
+   named and nothing echoed. **Still readable on both sides**: an unknown `outcome` word
+   (named verbatim) and an unknown `offsite` word.
+
+2. **The three caveats are pinned to `control/app/services/console.py` from the infra
+   zone**, and the pin parses rather than greps: `panel_caveats()` uses `ast` to read
+   `BACKUP_CAVEATS` and follow each value to its constant. A substring search over the
+   file would pass on a sentence sitting in a comment — **proven, by moving one there and
+   watching the test fail.** The cross-zone *read* was judged legitimate (precedented by
+   `test_node_bootstrap_agrees_with_the_control_plane.py`); it buys two channels that
+   cannot drift about whether an operator's backups are safe.
+
+3. **The caveat is chosen by the RECORD's `offsite`, never the live env file**, though
+   this channel can read both. Where they disagree it says so in one extra line — the one
+   fact the panel cannot have, additive rather than a different verdict.
+
+4. **`missed_dates` is stored NEWEST FIRST by the writer** (`sort -r` + `head`). Both
+   readers still sort: M28.11's reason stands, a record is a file a hand edit reaches.
+   `due`'s `missed=` stays chronological — it is a walk of the gap, not the record.
+
+5. **A compose refusal is attributed to the variable compose named.**
+   `missing_value_advice` captures `required variable X is missing a value` as a bare
+   identifier — the reviewer attacked it with odd characters, an embedded name, two
+   variables, a multi-line refusal and near-miss names and **could not defeat it**. The
+   `age-keygen` page appears only for `HASHI_BACKUP_AGE_RECIPIENT`; any other name gets
+   *"THIS IS NOT ABOUT YOUR BACKUP KEYPAIR"* and why a new pair orphans the store.
+
+6. **`compose ps --format json` has THREE answers.** Empty with exit 0 is a real
+   "publishes nothing"; a non-zero exit is **"could not tell"** and is said out loud before
+   the converge and again on the closing screen. `|| true` is gone and a test pins that it
+   has not come back — silence is the failure the warning exists to prevent.
+
+7. **A management tunnel is never generated from `.env.example`'s own values**, compared on
+   three keys because an address range is a value somebody could really choose. **Skipped,
+   not refused** — a restored host must not be stopped by it.
+
+8. **Everything a restore prints is on stderr**; the closing screen reads the private port
+   from the **caddy** container, since that port is Caddy's, not control's.
+
+### Round 1's High, and the class it belongs to
+
+9. **Three whole-line comparisons of operator-written text existed, and all three are
+   closed — plus a fourth thing that was not a comparison at all.** `mgmt_is_the_template`
+   and the placeholder-hash refusal both compared **lines** for equality, which a **CRLF
+   env file** (edited on Windows — an ordinary thing to do while rebuilding from a laptop)
+   and a **quoted value** each defeat. The first generated a tunnel out of the template and
+   printed two fabricated device private keys — **the exact bug this step exists to
+   close**; the second let an unfilled hash through and returned M28.10's three-minute
+   health-check timeout. Both now compare **values** through **`env_value_of`**, defined
+   once beside `has_value` and applied to **both** sides. `raw_field` in the record
+   validator strips `\r` for the same reason.
+
+   **The fourth was the real lesson**: `HASHI_PRIVATE_BIND_ADDR` had its own weaker parser
+   in the same file — first assignment instead of last, double quotes only, no `\r`, no
+   comment strip. **The defect was never one bad comparison; it was a second parser that
+   gives the right answer on every file anybody tests with.** There is now **exactly one
+   env-file value parser in `panel-bootstrap.sh` and a test enforces it**, proven red-first
+   by planting a second one. `backup-schedule.sh`'s `$0 ==` compares markers **it printed
+   itself** and is not this shape.
+
+10. **Known and deliberately not fixed here — now M28.13.**
+    `scripts/management-tunnel.sh::value_of` is the same weak parser (no `\r` strip,
+    first-assignment-wins). On a CRLF-edited, **genuinely configured** `.env` it splices a
+    carriage return into `Endpoint = <host>^M:<port>^M`, `Address`, `ListenPort`, `MTU` and
+    the last peer's address — in the host's own `awg-mgmt.conf` **and in every device
+    config an operator pastes onto a phone**. Reproduced, not inferred. Different failure
+    class from the High (config corruption of a real tunnel, not a credential leak) and it
+    has its own 435-line suite, so it wants its own red-first test.
+
+### How to test what M28.12 built
+
+`tests/infra/test_the_command_line_says_what_the_panel_says.py` (no Docker). It imports
+`env_file`, `run`, `seed` from `test_backup_schedule.py`, so every status invocation
+inherits M28.5's planted-secret assertion. `record_text(**fields)` writes a record in the
+writer's own layout with fields overridden **verbatim** — the seeded JSON must be one key
+per line or the shell reader is right to call it damaged. `advice(refusal)` and
+`sliced()` + `drive()` slice functions out of the scripts and **run** them, which is how
+the three advice branches and both template checks are exercised without Docker.
