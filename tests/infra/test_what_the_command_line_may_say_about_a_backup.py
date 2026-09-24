@@ -667,6 +667,34 @@ def test_a_file_too_large_to_be_the_record_is_refused_whole(tmp_path) -> None:
     )
 
 
+def _whole_pipelines(text: str) -> list[tuple[int, str]]:
+    """The script's commands, with backslash continuations folded onto one line.
+
+    Shell reads ``a \\\n  | b`` as ONE command and so must anything asking what that
+    command does. Both guards below look for a pattern that spans a pipe, and both were
+    blind to the continuation form until this went in front of them: at this step's
+    baseline the pipe guard reported ONE of the three ``<<<"${RECORD}" | head -n 1``
+    readers, because the other two carried the ``| head`` onto a continuation line that
+    holds no ``${RECORD}``.
+
+    The number that comes back is the FIRST physical line, so an offender is still
+    reported where a person can find it.
+    """
+    folded, number, carried, started = [], 0, "", 1
+    for line in text.splitlines():
+        number += 1
+        if not carried:
+            started = number
+        if line.endswith("\\"):
+            carried += line[:-1] + " "
+            continue
+        folded.append((started, carried + line))
+        carried = ""
+    if carried:
+        folded.append((started, carried))
+    return folded
+
+
 def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
     """The guard, because the fix is one character wide and reads like a style choice.
 
@@ -684,10 +712,17 @@ def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
     ``sed … <<<"${RECORD}" | head -n 1``. The record needs enough lines matching one key for
     that to fire, so it had never been seen — the same "narrow window, therefore green"
     that hid the first half for eleven milestones.
+
+    A PIPELINE IS JUDGED AS A PIPELINE, not as a line. Measured at this step's baseline,
+    the line-wise version of this test reported ONE of the three ``<<<"${RECORD}" | head
+    -n 1`` occurrences that were there: the other two — in ``raw_field`` and in
+    ``read_state`` — carried the ``| head -n 1`` onto a backslash continuation, which holds
+    no ``${RECORD}`` and so was never looked at. The continuation is the form the code
+    actually used twice, so a guard that cannot see it was guarding the rarer shape.
     """
     offenders = []
     for path in SHELL_SURFACES:
-        for line in path.read_text().splitlines():
+        for number, line in _whole_pipelines(path.read_text()):
             # Comments are skipped for the reason ``code_only`` exists one file over:
             # every script here quotes the wrong version of a line beside the right one,
             # and both of the shapes below are named in the library's own explanation of
@@ -695,9 +730,9 @@ def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
             if "${RECORD}" not in line or line.lstrip().startswith("#"):
                 continue
             if line.lstrip().startswith(("printf", "echo", "cat")):
-                offenders.append(f"{path.name}: {line.strip()}")
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
             elif re.search(r"\|\s*(head|tail|grep\s+-[a-z]*[qm]|read)\b", line):
-                offenders.append(f"{path.name}: {line.strip()}")
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
     assert not offenders, (
         "a reader of the record is feeding it through a pipe again, which returns 141 "
         f"under pipefail whenever either end exits early: {offenders}"
@@ -715,6 +750,21 @@ def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
 # What these three tests are aimed at is the SECOND READER COMING BACK, not at today's
 # spelling: a `field`-alike appearing in any of these scripts would have to open the record
 # or take apart the text of it, and neither is reachable from outside the library any more.
+#
+# WHERE THE FENCE ENDS, written here rather than in a review note, because a fence whose
+# seams are recorded somewhere else is one the next person trusts further than it goes:
+#
+#   * a second parser written INSIDE the library and reached through the entry point is not
+#     caught by any of these. It is the weakest remaining shape and it is deliberately out
+#     of reach of a structural check — what these protect is that no CALLER can get a value
+#     the validation refused, and a parser behind the entry point still cannot;
+#   * only shell is swept. A reader in Python, or in the control zone, is another test's;
+#   * the record's path has to appear literally — ``${STATE_FILE}`` or ``last-run.json`` —
+#     so a path assembled out of pieces at runtime walks past;
+#   * a command riding on a trailing ``#`` comment is not seen, because comment lines are
+#     skipped whole (the scripts here quote the forbidden shapes while explaining them);
+#   * and these read the source. Nothing here proves the library BEHAVES as one reader; the
+#     tests above this section do that by running the verbs.
 
 UNREADABLE = {
     "schema": {"schema": 99},
@@ -815,6 +865,13 @@ def _commands(line: str) -> list[str]:
     the path. Lifting them apart tells that from ``x="$(sed -n … "${STATE_FILE}")"``, which
     is the thing being forbidden.
     """
+    # BACKTICKS FIRST, and they are not a style question here. `` X="`sed -n 1p
+    # "${STATE_FILE}"`" `` is the same tool reading the same file through the older syntax,
+    # and a walker that only knows ``$( )`` leaves the fragment starting with a backtick, so
+    # the anchored match below never fires and the fence passes. There is no shellcheck in
+    # the Makefile or in CI, so nothing else in this project covers SC2006 either. One
+    # level of nesting, which is all the form supports without escaping.
+    line = re.sub(r"`([^`]*)`", r"$(\1)", line)
     pieces, rest, depth, start = [], "", 0, 0
     for index, char in enumerate(line):
         if line.startswith("$(", index):
@@ -849,20 +906,37 @@ def test_only_the_library_ever_opens_the_record() -> None:
 
     What it deliberately does NOT forbid is writing there: ``mv``, ``chmod`` and the
     heredoc that builds the record all name the path, and the writer is this script's own.
+
+    The redirect half matches the path HOWEVER IT IS SPELLED — ``while … done <
+    "${STATE_DIR}/last-run.json"`` reads the record as surely as the variable does, and an
+    earlier version of this only knew ``${STATE_FILE}``.
+
+    WHAT IT STILL DOES NOT CATCH, so that nobody trusts it further than it goes: a reader
+    written inside the library itself and reached through the entry point (both channels
+    would still agree, which is the property being protected, but it is a real seam); a
+    reader in another language or in another zone; a path assembled at runtime out of
+    pieces, since the literal has to appear somewhere in the line to be seen; and a command
+    hidden in a trailing ``#`` comment on a code line.
     """
     offenders = []
     for path in SHELL_SURFACES:
         if path == RECORD_LIB:
             continue
-        for number, line in enumerate(path.read_text().splitlines(), 1):
+        # Folded, exactly as the pipe guard is: ``sed -n '…' \\`` on one line and
+        # ``"${STATE_FILE}"`` on the next is a reader whose command word and whose file
+        # never appear together, and a line-wise scan sees neither half as an offence.
+        for number, line in _whole_pipelines(path.read_text()):
             if not THE_RECORD_PATH.search(line):
                 continue
             for command in _commands(line):
                 if not THE_RECORD_PATH.search(command):
                     continue
-                if re.search(r"<\s*\"?\$\{STATE_FILE\}", command) or TAKES_TEXT_APART.match(
-                    command
-                ):
+                redirected = [
+                    target
+                    for target in re.findall(r'<\s*"?([^\s"|;&<>]+)"?', command)
+                    if THE_RECORD_PATH.search(target)
+                ]
+                if redirected or TAKES_TEXT_APART.match(command):
                     offenders.append(f"{path.name}:{number}: {command}")
     assert not offenders, (
         "something other than scripts/lib/backup-record.sh is reading the backup record, "

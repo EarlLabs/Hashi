@@ -2,9 +2,10 @@
 
 WHAT: the audit of every surface this milestone put on a host that writes, prints or
       stores something: ``scripts/backup.sh``, ``scripts/backup-run.sh``,
-      ``scripts/backup-schedule.sh`` and the cron entry it installs, and
-      ``deploy/backup/upload.py``. What each of them emits, on success and on the failure
-      paths, and where that output ends up.
+      ``scripts/backup-schedule.sh`` and the cron entry it installs,
+      ``deploy/backup/upload.py``, and every ``scripts/lib/*.sh`` those scripts source —
+      discovered by reading them, never listed. What each of them emits, on success and on
+      the failure paths, and where that output ends up.
 WHY:  the charter's one absolute prohibition — no connection, traffic or DNS logs, at any
       level, including debug and including temporarily while debugging — applies to a
       backup job and a restore unchanged, and both are new. A backup dump is a copy of the
@@ -52,7 +53,47 @@ UPLOADER = REPO / "deploy" / "backup" / "upload.py"
 GATE = REPO / "scripts" / "lib" / "env-file-gate.sh"
 BOOTSTRAP = REPO / "scripts" / "panel-bootstrap.sh"
 
-SURFACES = (BACKUP, RUNNER, INSTALLER, UPLOADER, GATE)
+RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
+
+
+def _sourced_libraries(*scripts: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """Every ``scripts/lib/*.sh`` any of these scripts sources, found by reading them.
+
+    THE NAMED SCRIPTS ARE THIS AUDIT'S SCOPE AND THE LIBRARIES ARE NOT A SECOND LIST. The
+    scope is the backup path — a glob over every shell surface in the project would sweep
+    ``node-bootstrap.sh`` and ``notify.sh``, which configure a node's own logging and are
+    entitled to the words this file forbids, so it would be a different audit with a
+    different answer.
+
+    What has gone wrong twice is the other half: code from a surface MOVES INTO A LIBRARY
+    and the list does not follow. M28.8 put the env-file gate in one and it landed outside
+    a copy of this tuple; M28.18 put the whole of the record reading in another — 469 lines
+    of it — and swept a ``backup-run.sh`` that no longer holds any of it. Nothing leaked
+    either time; what was wrong is that the audit said it had looked and had not.
+
+    So the libraries are DISCOVERED rather than named: being sourced by a swept script is
+    what puts a file in the sweep, which is the same fact that put the code there. A
+    library that arrives by the next move arrives inside this list on the same commit.
+    """
+    found: list[pathlib.Path] = []
+    for script in scripts:
+        # `source` as well as `.`, although every caller in this project writes `.`: a
+        # discovery that only knows one spelling goes QUIET on the other, and a sweep that
+        # silently shrinks is the exact failure this function replaces.
+        for name in re.findall(
+            r'^\s*(?:\.|source)\s+"\$\{REPO_ROOT\}/scripts/lib/([\w.-]+\.sh)"',
+            script.read_text(), re.M,
+        ):
+            library = REPO / "scripts" / "lib" / name
+            assert library.is_file(), f"{script.name} sources a library that is not there: {name}"
+            if library not in found:
+                found.append(library)
+    return tuple(found)
+
+
+SURFACES = (BACKUP, RUNNER, INSTALLER, UPLOADER) + _sourced_libraries(
+    BACKUP, RUNNER, INSTALLER
+)
 
 
 @pytest.fixture(scope="module")
@@ -116,7 +157,15 @@ def test_no_backup_surface_appends_to_anything() -> None:
     # A sweep that swept nothing is this repository's signature defect, and it is how the
     # gap above went unnoticed: name what was actually looked at.
     assert swept == [script.name for script in SURFACES if script.suffix == ".sh"]
+    # The two libraries the backup path actually depends on, named as a floor under the
+    # discovery above: if `_sourced_libraries` ever stops finding them the list goes quiet
+    # rather than short, and quiet is the failure this whole assertion exists for.
     assert GATE.name in swept, "the surface both scripts share is not in the sweep"
+    assert RECORD_LIB.name in swept, (
+        "the library that holds every read of the backup record is not in the sweep, so "
+        "this audit is looking at a scripts/backup-run.sh the record no longer passes "
+        "through"
+    )
 
 
 def test_no_backup_surface_reaches_for_a_log_the_host_keeps() -> None:

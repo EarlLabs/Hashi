@@ -10,10 +10,20 @@
 #       it to say. `scripts/backup-run.sh` alone held two of them — a lenient one behind
 #       `tick` and `now`, which pulled fields out of whatever was at the path and never
 #       checked anything, and a strict one behind `status` and `due`, which refused the
-#       same file by name. So one record with `"due_date": "2099-01-01"` made `tick` exit
-#       0, print nothing and take no backup until the calendar caught up, while `due`
-#       exited 1 and the panel drew a banner about the very same file. The channel that
-#       actually takes backups was the one that believed it.
+#       same file by name. So a record with a damaged `last_attempt` made `tick` conclude
+#       the day's backup had been taken — out of a file it could not parse, and about which
+#       the panel said in as many words that nothing could be assumed. The channel that
+#       actually takes backups was the one that believed the file.
+#
+#       WHAT THIS IS NOT, and the sentence is in the present tense because it is still
+#       true: a record dated AHEAD of this host's clock is not this defect and is not
+#       closed by this library. That record is valid — every reader parses it and they
+#       agree about it — so it arrives here as a reading, and `tick` then waits at exit 0
+#       and in silence until the calendar reaches the date in it, while `due` exits 1 and
+#       the panel draws a banner. The divergence there is between `decide` and
+#       `note_clock`, not between two parsers, and what the schedule should do about it is
+#       an owner decision taken in its own step. Do not read the paragraph above as having
+#       covered it.
 #
 #       That is the shape M28.12 named and M28.13 closed one level down, in
 #       `scripts/lib/env-value.sh`, and the lesson is the same: the defect was never one
@@ -292,7 +302,17 @@ _record_first_line() {
 }
 
 # One field of the record — one key per line, so this is a line-wise read and still needs no
-# JSON parser. The value as an operator means it, quotes off.
+# JSON parser. The value with its quotes off.
+#
+# WHAT IT DOES NOT READ, and this is why it is not derived from `_record_raw_field`: the
+# capture is `[^",]*`, so a value holding a comma or a quote — `"offsite": "ye,s"` — does
+# not match the pattern at all and comes back EMPTY, although the validator passed it (a
+# quoted string under LONGEST_VALUE is all that check asks of it). The writer sanitises
+# every value it writes to [A-Za-z0-9_+:/.-], so only a hand edit can produce one, and an
+# empty answer sends `status` to its "the record says …" branch and the panel to
+# Destination.UNKNOWN — the same standing on both channels. Kept exactly as it was
+# through M28.18 for that reason: unifying the two extractors would give those records a
+# different sentence on one channel only, which is the drift this library exists to stop.
 _record_field() {
   _record_first_line "$(
     sed -n "s/^[[:space:]]*\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" \

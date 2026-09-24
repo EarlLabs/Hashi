@@ -238,11 +238,11 @@ due_date() {
 # Until this step this script held TWO readers of one file: a lenient one behind `tick` and
 # `now` which pulled fields out of whatever was at the path without checking any of them,
 # and a strict one behind `status` and `due` which refused the same file by name. So a
-# record dated 2099 made `tick` exit 0, print nothing and take no backup until the calendar
-# caught up, while `due` exited 1 and the panel drew a banner about the very same file —
-# and the channel that actually takes backups was the one that believed it. The library
-# says why the collapse is a library rather than a tidier function, and what a refusal now
-# means to each verb.
+# damaged `last_attempt` made `tick` conclude the day's backup had been taken, out of a file
+# it could not parse and about which the panel said nothing could be assumed — the channel
+# that actually takes backups was the one that believed it. The library says why the
+# collapse is a library rather than a tidier function, what a refusal now means to each
+# verb, and which neighbouring state it deliberately does NOT close.
 #
 # shellcheck source=lib/backup-record.sh
 . "${REPO_ROOT}/scripts/lib/backup-record.sh"
@@ -306,8 +306,13 @@ MISSED_LIST=""; MISSED_TOTAL=0
 # record this cannot read is no record. `tick` and `now` call this and carry on, so they
 # take a backup rather than concluding out of an unparseable file that the day's was taken;
 # `status` and `due` call it and refuse when it does. One answer, four verbs — which is the
-# thing that was not true before, and the reason a record dated 2099 stopped this host's
-# backups for months while the panel had a banner up about the same file.
+# thing that was not true before, and the reason a damaged key could stop this host's
+# backups while the panel had a banner up about the same file.
+#
+# NOT COVERED BY THIS, still true, and written here because this is where somebody will
+# look for it: a record dated ahead of the clock is VALID, so it arrives as a reading and
+# `decide` answers `wait` — exit 0, in silence, until the calendar catches up. See the
+# library's header and docs/deploy/runbook.md; it is an owner decision in its own step.
 #
 # `READING_*` is what the library is prepared to be believed about; the names below are this
 # script's own working state, which `run_backup` then MOVES ON and `write_state` writes out.
@@ -361,6 +366,14 @@ failed_since_the_last_success() {
 #
 # The panel already goes loud on the same file (M28.11, M28.14). These are the other two
 # channels saying the same thing about the same record.
+#
+# AND `tick` IS STILL SILENT ABOUT IT, which is the state of this as of M28.18. The record
+# is valid — one reader, one answer, and every channel agrees about the file — so it comes
+# back as a reading and `decide` says WAIT: exit 0, no output, no backup, until the
+# calendar catches up. M28.18 collapsed the two READERS and deliberately did not decide
+# this, because what the schedule should do with a record from the future is a choice
+# between two shapes that already exist here — refusing loudly the way a path that is not a
+# file is refused, or taking the backup — and that is the owner's, in its own step.
 
 # One minute, exactly as control/app/services/backups.py::CLOCK_AHEAD_GRACE. A second or
 # two between two clocks is ordinary and is not what this is about; what this catches is a

@@ -1801,9 +1801,21 @@ missed-day count forward, because those are values nothing was able to check. On
 that is **not a file** ends in no backup, and it is refused before anything is dumped — see
 below.
 
-Before this, the two sides of that file disagreed in the one direction that matters: a
-record dated in the future made `tick` exit 0 and take no backup at all until the calendar
-reached it, silently, while the panel had a banner up about the same file.
+**Still open, and it is the one to know about: a record dated ahead of this host's clock
+stops the backups and `tick` says nothing.** That file is not damaged — every reader parses
+it, and they all agree about it — so it is not what the paragraph above is about. What
+happens is that `tick` asks whether the day's backup has been taken, the record answers for
+a day that has not arrived, and the tick waits: **exit 0, no output, no backup, at every
+tick, until the calendar reaches the date in the file.** `make backup-status` and
+`scripts/backup-run.sh due` both say so loudly and `due` exits 1, and the panel draws a
+banner about the same file — so the state is visible on every channel an operator looks at,
+and silent on the one that actually takes backups. Fix the clock, and `make backup` takes
+one now whatever the record says.
+
+That is knowingly left open rather than overlooked. What the schedule should do with a
+record from the future is a decision about the schedule — refuse to run and say so, the way
+it does for a path that is not a file, or take the backup — and it is being taken in a step
+of its own rather than settled in passing here.
 
 **A directory at the record's path is refused by name**, on both channels and on the
 writing side too. It is what a `mkdir` of the file's own name leaves, and what the docker
