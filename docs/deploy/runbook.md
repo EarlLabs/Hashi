@@ -1778,7 +1778,10 @@ it used to answer `offsite=no missed=none` and *"no backup has ever been recorde
 host"* out of a file it could not parse, which is what a genuinely fresh host prints. A
 record that has merely been **re-indented** — opened in `jq`, or saved by something that
 pretty-prints — is not damaged and is read normally; the layout is the only thing tolerated,
-and a changed value, a truncated file or a schema from the future are refused as before.
+and a changed value, a truncated file or a schema from the future are refused as before. A
+file **larger than 64 KiB** is refused whole, for its size, without any of it being read —
+the same ceiling and the same answer as the panel, because the record is under a kilobyte
+and a file that big is a wrong path rather than a long history.
 
 A run that fails is reported by its exit code, unchanged from `make backup`: **1** nothing
 was written, **3** the artifact exists and did not leave this machine. Only **1** is retried

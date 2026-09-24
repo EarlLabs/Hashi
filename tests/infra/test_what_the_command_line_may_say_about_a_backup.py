@@ -25,6 +25,7 @@ HOW:  the verbs are RUN, against records written the way the writer writes them,
       a test that used it would depend on whoever is running it.
 """
 
+import datetime
 import json
 import os
 import pathlib
@@ -554,4 +555,113 @@ def test_the_env_file_is_named_as_the_one_place_that_value_is_read(tmp_path) -> 
     block = example.split("\nHASHI_BACKUP_ENABLED=0", 1)[0]
     assert "read from THIS FILE" in block, (
         ".env.example no longer says where HASHI_BACKUP_ENABLED is answered from"
+    )
+
+
+# --- 7. one file, one host, one minute, ONE verdict ----------------------------
+#
+# Found in review of this step, and it is this milestone's own thesis arriving through a
+# pipe: `printf "%s\n" "${RECORD}" | grep -q …` under `set -o pipefail` returns 141 when
+# grep matches early and exits while printf still has bytes to write. `has_key` read that
+# as "the key is not there" and refused a perfectly good record, naming a different valid
+# key each time. Measured before the fix on the record below: six refusals in twelve
+# consecutive runs — `0 0 1 0 1 0 0 1 1 0 1 1` — naming `at_source`, `zone`, `zone_source`
+# and `last_failure`, every one of them present and valid.
+
+# Enough missed days to put the canonicalised text over a pipe buffer while the FILE stays
+# under the ceiling — which is the whole trap: this record is legal, and every reader has
+# to give the same answer about it every time.
+A_LEGAL_RECORD_THIS_BIG = 4900
+# Runs per verdict. One green run is not evidence about a race; it is the same trap as a
+# test that turns on garbage collection.
+ENOUGH_RUNS_TO_SEE_A_RACE = 12
+
+
+def _dates(count: int) -> list[str]:
+    day = datetime.date(2005, 1, 1)
+    return sorted(
+        (day + datetime.timedelta(days=step)).isoformat() for step in range(count)
+    )[::-1]
+
+
+def _compact(state: pathlib.Path, dates: list[str]) -> None:
+    """The record with no spaces in it, which is what a layout-changing tool leaves.
+
+    Compact on purpose: canonicalising it puts back one space after every `:` and `,`, so
+    the text the readers work on is LARGER than the file, which is how a file under the
+    ceiling produces a string over a pipe buffer.
+    """
+    record = json.loads((state / "last-run.json").read_text())
+    record["missed_dates"] = dates
+    record["missed_total"] = len(dates)
+    (state / "last-run.json").write_text(json.dumps(record, separators=(",", ":")))
+
+
+def test_one_unchanged_record_gets_the_same_verdict_every_time(tmp_path) -> None:
+    """A legal record, read twelve times, must read the same way twelve times.
+
+    The failure this replaces was not "a wrong answer": it was a CONFIDENT, SPECIFIC
+    accusation — *"its \"zone_source\" is not what scripts/backup-run.sh writes there"* —
+    about a field whose value is exactly what it should be, on some runs and not others.
+    An operator told intermittently that their record is corrupt when it is not is worse
+    off than one told nothing.
+    """
+    state = a_record(tmp_path, last_attempt=A_GOOD_RUN, last_success=A_GOOD_RUN)
+    _compact(state, _dates(A_LEGAL_RECORD_THIS_BIG))
+    size = (state / "last-run.json").stat().st_size
+    assert size < 65536, f"the fixture outgrew the ceiling and is no longer legal: {size}"
+
+    env, host = an_env(tmp_path), a_host(tmp_path, crontab=True)
+    answers = [
+        run("status", env, state, host) for _ in range(ENOUGH_RUNS_TO_SEE_A_RACE)
+    ]
+    codes = [answer.returncode for answer in answers]
+    assert codes == [0] * ENOUGH_RUNS_TO_SEE_A_RACE, (
+        f"a {size}-byte record that is legal in every respect was refused on "
+        f"{codes.count(1)} of {len(codes)} runs: {codes}\n{answers[codes.index(1)].stderr}"
+    )
+    assert len({answer.stdout for answer in answers}) == 1, (
+        "the same file printed two different screens in the same minute"
+    )
+
+
+def test_a_file_too_large_to_be_the_record_is_refused_whole(tmp_path) -> None:
+    """The panel refuses anything over 64 KiB outright; so does this, for its size.
+
+    Reading the first 64 KiB and judging THAT is the other option and is worse: it is a
+    verdict about a file nobody has seen all of, and a file whose first 64 KiB happen to
+    parse would be read out as fact. The two channels now answer a too-large file the same
+    way, which is the entire point of this step.
+    """
+    state = a_record(tmp_path, last_attempt=A_GOOD_RUN, last_success=A_GOOD_RUN)
+    _compact(state, _dates(6000))
+    assert (state / "last-run.json").stat().st_size > 65536
+
+    env, host = an_env(tmp_path), a_host(tmp_path, crontab=True)
+    answers = [run("status", env, state, host) for _ in range(10)]
+    assert [answer.returncode for answer in answers] == [1] * 10, (
+        [answer.returncode for answer in answers]
+    )
+    assert all("NOTHING HAS BEEN ASSUMED FROM IT" in a.stderr for a in answers)
+    assert all('"size"' in a.stderr for a in answers), answers[0].stderr
+    assert all("last success:" not in a.stdout for a in answers), (
+        "part of a file too big to be the record was read out as fact"
+    )
+
+
+def test_no_reader_of_the_record_feeds_it_through_a_pipe() -> None:
+    """The guard, because the fix is one character wide and reads like a style choice.
+
+    `printf … | grep`/`sed` over the record is the shape that produced the race; a
+    herestring is written by the shell itself and has no writer to kill. Structural, and
+    aimed at the reintroduction rather than at the symptom — a behavioural test for this
+    passes on the day the race happens not to fire.
+    """
+    offenders = [
+        line.strip() for line in RUNNER.read_text().splitlines()
+        if "${RECORD}" in line and line.lstrip().startswith(("printf", "echo", "cat"))
+    ]
+    assert not offenders, (
+        "a reader of the record is feeding it through a pipe again, which returns 141 "
+        f"under pipefail whenever the reader exits early: {offenders}"
     )

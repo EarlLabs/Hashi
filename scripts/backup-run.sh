@@ -230,11 +230,17 @@ due_date() {
 
 # --- the record -------------------------------------------------------------------------
 
-# The most of that file this will ever read, mirroring control/app/services/backups.py's
-# MOST_OF_A_RECORD. The real thing is well under a kilobyte; this is a ceiling on what a
-# wrong path — a mount pointing somewhere else, a log file — can pull into the scanner
-# below. Past it the record is truncated, which takes its closing brace with it, and the
-# reader then refuses it as damaged like any other unfinished file.
+# The most of that file this will ever read, the same number as
+# control/app/services/backups.py's MOST_OF_A_RECORD and refused the same way: a file
+# larger than this is REFUSED WHOLE, naming its size, and not one byte of it is read out as
+# fact. The real thing is well under a kilobyte, so anything near this is a wrong path — a
+# mount pointing somewhere else, a log file — rather than a record with too much in it.
+#
+# It said "truncated at the ceiling and then refused for its missing end" until review
+# found that claim was not true: the truncation was silent, what survived it sometimes
+# parsed, and the answer then varied between runs of the same command. A comment describing
+# a refusal the code does not perform is the same defect as a screen describing a backup
+# that did not happen.
 MOST_OF_A_RECORD=65536
 
 # The record with every TOP-LEVEL key on a line of its own, whatever layout it is in on
@@ -309,27 +315,47 @@ record_as_lines() {
 
 RECORD=""
 RECORD_READ=""
+RECORD_TOO_BIG=""
 
 load_record() {
   if [ -n "${RECORD_READ}" ]; then return 0; fi
   RECORD_READ="yes"
   [ -f "${STATE_FILE}" ] || return 0
-  RECORD="$(head -c "${MOST_OF_A_RECORD}" "${STATE_FILE}" | record_as_lines)"
+  # OVER THE CEILING IS NOT THE RECORD, and it is refused whole rather than read in part —
+  # which is what control/app/services/backups.py does with the same number, so the two
+  # channels answer a too-large file the same way. Reading the first 64 KiB and judging THAT
+  # is the worse of the two: it is a verdict about a file nobody has seen all of, and a
+  # record whose first 64 KiB happen to parse would be read out as fact.
+  local size
+  size="$(wc -c < "${STATE_FILE}" | tr -cd '0-9')"
+  if [ -n "${size}" ] && [ "${size}" -gt "${MOST_OF_A_RECORD}" ]; then
+    RECORD_TOO_BIG="yes"
+    return 0
+  fi
+  RECORD="$(record_as_lines < "${STATE_FILE}")"
 }
+
+# EVERY READER BELOW TAKES THE TEXT AS A HERESTRING, never `printf … | `, and that is a
+# correctness rule rather than a style (found in review, M28.15 round 1). Under `pipefail`
+# a `printf "%s\n" "${RECORD}" | grep -q …` pipeline returns 141 whenever grep matches
+# early and exits while printf still has bytes to write — which happens once the text is
+# larger than a pipe buffer. Measured on an unchanged, perfectly legal 64 KB record: six
+# refusals in twelve consecutive `status` runs, each naming a DIFFERENT valid key, because
+# `has_key` read 141 as "that key is not there". One host, one file, one minute, two
+# verdicts — the exact thing this milestone exists to stop, arriving through a pipe. A
+# herestring is written by the shell itself, so there is no writer to kill.
 
 # One field of the record, from the text above — one key per line, so this is a line-wise
 # read and still needs no JSON parser.
 field() {
   load_record
-  printf '%s\n' "${RECORD}" \
-    | sed -n "s/^[[:space:]]*\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" \
-    | head -n 1
+  sed -n "s/^[[:space:]]*\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" \
+    <<<"${RECORD}" | head -n 1
 }
 
 missed_dates() {
   load_record
-  printf '%s\n' "${RECORD}" \
-    | grep '"missed_dates"' \
+  grep '"missed_dates"' <<<"${RECORD}" \
     | grep -o '[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}' || true
 }
 
@@ -409,8 +435,8 @@ read_state() {
   local line
   for line in last_attempt last_success last_failure; do
     local raw at due code outcome
-    raw="$(printf '%s\n' "${RECORD}" \
-      | sed -n "s/^[[:space:]]*\"${line}\": \(.*\),\{0,1\}$/\1/p" | head -n 1)"
+    raw="$(sed -n "s/^[[:space:]]*\"${line}\": \(.*\),\{0,1\}$/\1/p" <<<"${RECORD}" \
+      | head -n 1)"
     [ -n "${raw}" ] && [ "${raw}" != "null," ] && [ "${raw}" != "null" ] || continue
     at="$(printf '%s' "${raw}" | sed -n 's/.*"at": "\([^"]*\)".*/\1/p')"
     due="$(printf '%s' "${raw}" | sed -n 's/.*"due_date": "\([^"]*\)".*/\1/p')"
@@ -784,8 +810,7 @@ A_DATE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 # different faults and only one of them is this reader's business.
 raw_field() {
   load_record
-  printf '%s\n' "${RECORD}" \
-    | sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" \
+  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*://p" <<<"${RECORD}" \
     | head -n 1 \
     | tr -d '\r' \
     | sed -e 's/^[[:space:]]*//' -e 's/,[[:space:]]*$//' -e 's/[[:space:]]*$//'
@@ -793,7 +818,7 @@ raw_field() {
 
 has_key() {
   load_record
-  printf '%s\n' "${RECORD}" | grep -q "^[[:space:]]*\"$1\"[[:space:]]*:"
+  grep -q "^[[:space:]]*\"$1\"[[:space:]]*:" <<<"${RECORD}"
 }
 
 # Anything out of the record that reaches the terminal goes through here first. The writer
@@ -850,6 +875,9 @@ entry_problem() {
 record_problem() {
   local raw problem key day
   load_record
+  # Nothing of an over-large file has been read, so there is no key to name and its SIZE is
+  # the fault: the record this script writes is under a kilobyte and cannot become this.
+  [ -z "${RECORD_TOO_BIG}" ] || { printf 'size'; return 0; }
   raw="$(raw_field schema)"
   [ "${raw}" = "${SCHEMA}" ] || { printf 'schema'; return 0; }
 
