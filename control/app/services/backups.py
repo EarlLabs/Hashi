@@ -122,6 +122,24 @@ A_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # wrong time, and that is worth a sentence because it makes every age on this screen wrong.
 CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
 
+# How far back a day with no backup still counts as part of what is happening now.
+#
+# ``missed_total`` is cumulative and never falls, which is right — it is the record's whole
+# history — and is exactly why it cannot be the measure of whether a gap is current. A host
+# that was off for a fortnight in June carries fourteen for ever, and a screen that changes
+# its weight on that number changes it for ever too, which is how a warning becomes
+# furniture. What a reader can ask instead is how many of the days the record still NAMES
+# fall inside a window ending now, and that number falls back to nothing as the days age
+# out.
+#
+# Eight weeks, because a shorter window would have missed the seven acceptance was
+# looking at. It is longer than the thirty dates the writer keeps (M28.5), so this can
+# UNDERCOUNT — and the undercount is harmless in the one direction that matters: the dates
+# kept are the newest, so the count only ever comes out low, and it can only come out low
+# on a host that has missed more than thirty days, which is far past any number a screen
+# downstream calls a lot. It cannot hide a gap; it can only fail to exaggerate one.
+RECENT_GAP = datetime.timedelta(weeks=8)
+
 
 class Standing(enum.StrEnum):
     """Where the backups on this host stand, in the only six answers there are.
@@ -280,6 +298,15 @@ class Reading:
     # ``last_failure.at > last_success.at`` and is true of a failure with no success at
     # all beside it.
     failed_since: bool
+    # How many of the days the record names as having no backup at all fall inside
+    # ``RECENT_GAP`` of the moment this was read — that is, how much of the gap is now
+    # rather than history. Counted here because this is where the clock is read, and
+    # counted at all because ``missed_total`` cannot answer it: see ``RECENT_GAP``.
+    #
+    # It is a COUNT and not a verdict. What is a lot of days is a question about how loud a
+    # screen should be, which belongs beside the sentences in ``services/console.py`` with
+    # every other decision of that kind, and not in the module that reads a file.
+    missed_recently: int
     # Whether that run is stamped AHEAD of the clock this was read against, per run,
     # because a screen prints the two ages in separate sentences and only one of them may
     # be the impossible one.
@@ -482,9 +509,25 @@ def _judge(record: Record, now: datetime.datetime, path: pathlib.Path) -> Readin
         since_success=since_success,
         since_failure=since_failure,
         failed_since=failed_since,
+        missed_recently=_missed_recently(record, now),
         success_ahead=_ahead(success, now),
         failure_ahead=_ahead(failure, now),
     )
+
+
+def _missed_recently(record: Record, now: datetime.datetime) -> int:
+    """How many of the recorded missed days are inside ``RECENT_GAP`` of now.
+
+    The dates are ``YYYY-MM-DD`` and validated as such before they reach here, so the
+    horizon is compared as text and the comparison is a comparison of dates.
+
+    The day boundary is the reader clock's, in UTC, while the writer resolved those dates
+    in the schedule zone. Deliberately not corrected for: the two can disagree by at most
+    one day at one end of a window eight weeks long, and the answer this feeds is whether
+    a screen says a word, not an arithmetic an operator reads.
+    """
+    horizon = (now - RECENT_GAP).date().isoformat()
+    return sum(1 for day in record.missed_dates if day >= horizon)
 
 
 def _age(moment: datetime.datetime, now: datetime.datetime) -> datetime.timedelta:
@@ -597,6 +640,9 @@ def _nothing(path: pathlib.Path, standing: Standing) -> Reading:
         since_success=None,
         since_failure=None,
         failed_since=False,
+        # No record, so no day in it is named as missed — which is not the same as a host
+        # that has missed none, and nothing composed from this standing says it is.
+        missed_recently=0,
         success_ahead=False,
         failure_ahead=False,
     )

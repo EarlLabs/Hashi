@@ -535,6 +535,10 @@ async def test_missed_days_are_history_and_never_an_alarm(written) -> None:
     A fortnight of missed days in June is still fourteen in December, so escalating on it
     would mean a panel that never stops warning about something nobody can now act on. It
     is stated beside a healthy backup and changes nothing about how loud the screen is.
+
+    M28.14 narrowed that and did not reverse it: a gap that is HAPPENING now does get a
+    word (below). The dates here are months old — which is why this record is still the
+    quiet one, and why the count beside them is still not the thing that decides.
     """
     said = await standing_of(
         written(record(missed_total=14, missed_dates=["2026-06-01", "2026-06-02"]))
@@ -852,6 +856,213 @@ async def test_a_clock_a_moment_out_is_not_worth_a_sentence(written) -> None:
     assert outside.success_ahead is True
 
 
+# --- the schedule this panel cannot see (M28.14) ------------------------------------
+
+def _every_standing_with_a_record() -> dict[backups.Standing, dict]:
+    """One record per standing that has one, so a claim can be swept over all four.
+
+    ABSENT and UNREADABLE are left out because neither has a record to read a time out of,
+    which is the whole subject here.
+    """
+    return {
+        backups.Standing.NEVER: record(last_success=None, last_attempt=None),
+        backups.Standing.SILENT: record(
+            last_success=run(24 * 43), last_attempt=run(24 * 43)
+        ),
+        backups.Standing.FAILING: record(
+            last_failure=run(1, exit_code=1, outcome="no-artifact"),
+            last_attempt=run(1, exit_code=1, outcome="no-artifact"),
+        ),
+        backups.Standing.FRESH: record(),
+    }
+
+
+async def test_no_standing_says_a_backup_is_taken_daily(written) -> None:
+    """Acceptance round 2, the blocker: the panel promised a schedule it cannot see.
+
+    "The host takes one a day at 04:00 Etc/UTC." was drawn on a stand where
+    ``scripts/backup-schedule.sh show`` answered *no hashi backup schedule is installed
+    for this account* and the crontab held no entry — and installing it is opt-in, so that
+    is the state of every fresh install.
+
+    The record carries ``at`` and ``zone`` because they are what a scheduled run WOULD
+    use. They are resolved and written by a run, and a run is what ``make backup`` is, so
+    their presence is not evidence that anything is installed to call it. Swept over every
+    standing that has a record rather than asserted on one, because the sentence is one
+    helper and four branches reach it.
+    """
+    for standing, body in _every_standing_with_a_record().items():
+        reading = await backups.read(written(body), now=NOW)
+        assert reading.standing is standing
+
+        said = console.backup_standing(reading)
+        assert "takes one a day" not in said.detail, standing
+        assert "A run would be due at 04:00 Europe/Belgrade." in said.detail, standing
+        assert "if one is installed" in said.detail, standing
+        assert (
+            "cannot tell you whether anything on that host is taking these backups at all"
+            in said.detail
+        ), standing
+
+
+async def test_the_time_and_the_zone_are_still_printed_as_the_host_resolved_them(
+    written,
+) -> None:
+    """Saying less is not saying nothing. The two values stay, and so do their notes."""
+    said = await standing_of(
+        written(record(at="23:30", zone="UTC", zone_source="unset"))
+    )
+
+    assert "A run would be due at 23:30 UTC." in said.detail
+    assert "No zone is configured for the schedule" in said.detail
+
+
+def test_nothing_this_panel_says_about_the_schedule_needs_a_second_source() -> None:
+    """The fix is in what the panel may CLAIM from the record, never in a new source.
+
+    A panel that shelled out, read the crontab or reached the host would answer the
+    question properly and would also be the one thing this rendering path may not become.
+    So the sentence is built here from a ``Reading`` assembled by hand — no file, no
+    clock, no settings object — and if composing it ever needed a second source this would
+    be the test that could not run.
+    """
+    said = console.backup_standing(
+        backups.Reading(
+            path="/var/lib/hashi/backup/last-run.json",
+            standing=backups.Standing.FRESH,
+            record=backups.Record(
+                at="04:00",
+                at_source="configured",
+                zone="Europe/Belgrade",
+                zone_source="configured",
+                offsite="yes",
+                missed_dates=(),
+                missed_total=0,
+                last_attempt=None,
+                last_success=backups.Run(
+                    at=NOW, exit_code=0, outcome="offsite"
+                ),
+                last_failure=None,
+            ),
+            destination=backups.Destination.OFFSITE,
+            since_success=datetime.timedelta(hours=6),
+            since_failure=None,
+            failed_since=False,
+            missed_recently=0,
+            success_ahead=False,
+            failure_ahead=False,
+        )
+    )
+
+    assert "A run would be due at 04:00 Europe/Belgrade." in said.detail
+
+
+# --- a gap that is still happening is not a quiet fact (M28.14) ---------------------
+
+def days_before(
+    count: int, *, ending: float = 1.0, base: datetime.datetime = NOW
+) -> list[str]:
+    """``count`` consecutive dates, the most recent of them ``ending`` days before ``base``.
+
+    ``base`` is ``NOW`` for the tests that judge at ``NOW`` and the real clock for the ones
+    that render a screen — a rendered page reads the wall clock, so dates pinned to a fixed
+    constant would age out of the window this measures and the test would fail on a
+    calendar rather than on a change (M28.6, ``live()``).
+    """
+    first = base - datetime.timedelta(days=ending)
+    return [
+        (first - datetime.timedelta(days=offset)).strftime("%Y-%m-%d")
+        for offset in range(count)
+    ]
+
+
+async def test_a_gap_that_is_still_happening_is_not_the_quiet_state(written) -> None:
+    """Acceptance round 2: twelve missed days across seven weeks carried no word at all.
+
+    One failed run at 04:00 drew a banner labelled `failing`; twelve days with no backup
+    at all drew the muted note, because the last run happened to succeed. Both sentences
+    were true and the screen ranked them the wrong way round.
+
+    It is a LABEL and a frame, not a standing and not a colour: ``Standing`` is still
+    exactly six and this record is still FRESH.
+    """
+    reading = await backups.read(
+        written(record(missed_total=12, missed_dates=days_before(12))), now=NOW
+    )
+
+    assert reading.standing is backups.Standing.FRESH
+    assert reading.missed_recently == 12
+
+    said = console.backup_standing(reading)
+    assert said.loud is True
+    assert said.label == "missed days"
+    assert "Days with no backup at all since this record began: 12" in said.detail
+
+
+async def test_a_gap_that_has_aged_out_goes_quiet_again(written) -> None:
+    """And the word clears itself, which is why it is a window and not the total.
+
+    ``missed_total`` never falls, so a screen keyed on it would carry the word for ever on
+    a host that has not missed a day since June — and a word that is always there is one
+    nobody reads. The days are still stated; only the weight goes away.
+    """
+    reading = await backups.read(
+        written(
+            record(
+                missed_total=12,
+                missed_dates=days_before(12, ending=backups.RECENT_GAP.days + 1),
+            )
+        ),
+        now=NOW,
+    )
+
+    assert reading.missed_recently == 0
+
+    said = console.backup_standing(reading)
+    assert said.loud is False
+    assert said.label is None
+    assert "Days with no backup at all since this record began: 12" in said.detail
+
+
+@pytest.mark.parametrize(
+    ("recent", "labelled"),
+    [
+        pytest.param(console.A_GAP_WORTH_A_LABEL - 1, False, id="under"),
+        pytest.param(console.A_GAP_WORTH_A_LABEL, True, id="at"),
+    ],
+)
+async def test_where_a_gap_stops_being_quiet(written, recent: int, labelled: bool) -> None:
+    """A box off over a long weekend is not a host that is not being backed up."""
+    said = await standing_of(
+        written(record(missed_total=recent, missed_dates=days_before(recent)))
+    )
+
+    assert said.loud is labelled
+    assert said.label == ("missed days" if labelled else None)
+
+
+async def test_a_clock_from_the_future_is_still_the_thing_that_gets_said(written) -> None:
+    """Both can be true at once, and the clock is the larger of the two.
+
+    A record dated ahead means no age on the screen can be believed, which is worse than
+    any single number on it. The gap is spelled out in the sentence underneath either way.
+    """
+    said = await standing_of(
+        written(
+            record(
+                last_success=run(-5),
+                last_attempt=run(-5),
+                missed_total=12,
+                missed_dates=days_before(12),
+            )
+        )
+    )
+
+    assert said.loud is True
+    assert said.label == "clock ahead"
+    assert "Days with no backup at all since this record began: 12" in said.detail
+
+
 # --- the sentence that must not be inflated -----------------------------------------
 
 async def test_every_standing_says_what_it_does_not_know(written) -> None:
@@ -927,6 +1138,49 @@ async def test_the_overview_leads_with_where_the_backups_stand(client, written) 
         assert "43 days ago" in body, path
         assert ">failing<" in body, f"the standing's own word is missing from {path}"
         assert console.BACKUP_NOT_THE_BUCKET in body, path
+
+
+async def test_the_rendered_overview_does_not_state_a_daily_backup_as_fact(
+    client, written
+) -> None:
+    """Asserted on the SCREEN, because the screen is what acceptance read.
+
+    The healthy record is the case that was found, and it is the one where the false
+    sentence was most reassuring: a recent success above it, and under it a present-tense
+    claim that this host takes one every day — on a stand whose crontab was empty.
+    """
+    written(record(last_success=live(6), last_attempt=live(6)))
+
+    for path in ("/panel/", "/panel/overview/body"):
+        body = (await client.get(path)).text
+        assert "takes one a day" not in body, path
+        assert "A run would be due at 04:00 Europe/Belgrade." in body, path
+        assert "if one is installed" in body, path
+
+
+async def test_a_gap_that_is_still_happening_carries_a_word_on_the_screen(
+    client, written
+) -> None:
+    """The badge, rendered — the frame and the word, not a second colour.
+
+    ``banner-failure`` is reserved for a request the operator just made and that failed
+    (docs/decisions.md, 2026-09-10), and a gap is a standing condition, so this uses the
+    neutral frame every other standing uses and carries its severity in the word.
+    """
+    written(
+        record(
+            last_success=live(6),
+            last_attempt=live(6),
+            missed_total=12,
+            missed_dates=days_before(12, base=datetime.datetime.now(datetime.UTC)),
+        )
+    )
+
+    body = (await client.get("/panel/")).text
+
+    assert ">missed days<" in body
+    assert "Days with no backup at all since this record began: 12" in body
+    assert "banner-failure" not in body
 
 
 async def test_the_overview_says_so_when_nothing_has_been_recorded(client) -> None:
@@ -1102,6 +1356,7 @@ async def test_the_reading_that_reaches_a_screen_carries_no_request_and_no_perso
         "since_success",
         "since_failure",
         "failed_since",
+        "missed_recently",
         "success_ahead",
         "failure_ahead",
     ]

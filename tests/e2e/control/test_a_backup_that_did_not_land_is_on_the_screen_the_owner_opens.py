@@ -210,6 +210,62 @@ async def test_the_screen_says_what_it_does_not_know_even_when_all_is_well(
         assert word not in page.lower(), f"the screen says {word!r} about a backup"
 
 
+async def test_the_screen_does_not_promise_a_schedule_it_cannot_see(
+    operator, on_the_hosts_disk
+) -> None:
+    """M28.14, found in acceptance on a stand exactly like this one.
+
+    The panel said "The host takes one a day at 04:00 Europe/Belgrade." while no schedule
+    was installed on the host at all — the crontab was empty and the installer said so —
+    because the record carries the time a run WOULD use and nothing about whether anything
+    calls it. Installing the schedule is opt-in, so that was the state of every fresh
+    install, and it is the state of this stand: nothing here has ever run
+    ``make backup-schedule``, and the record below was put on the disk by this test.
+
+    Asserted here as well as in the zone's own tier because the record really is written
+    on the host and read through the mount here, which is the arrangement the false
+    sentence was drawn from.
+    """
+    write, _ = on_the_hosts_disk
+    write(a_record(last_success=a_run(0), last_attempt=a_run(0)))
+
+    page = (await operator.get("/panel/")).text
+
+    assert "takes one a day" not in page
+    assert "A run would be due at 04:00 Europe/Belgrade." in page
+    assert "if one is installed" in page
+
+
+async def test_a_gap_that_is_still_happening_is_not_drawn_as_a_quiet_note(
+    operator, on_the_hosts_disk
+) -> None:
+    """Twelve days with no backup at all, under a run that succeeded this morning.
+
+    Acceptance read that as the muted note with no word over it, while one failed run drew
+    a labelled banner. It is the same standing as before — the label and the frame are what
+    change, and the failure red is still spent on nothing standing.
+    """
+    today = datetime.datetime.now(datetime.UTC)
+    write, _ = on_the_hosts_disk
+    write(
+        a_record(
+            last_success=a_run(0),
+            last_attempt=a_run(0),
+            missed_total=12,
+            missed_dates=[
+                (today - datetime.timedelta(days=day)).strftime("%Y-%m-%d")
+                for day in range(1, 13)
+            ],
+        )
+    )
+
+    page = (await operator.get("/panel/")).text
+
+    assert ">missed days<" in page
+    assert "Days with no backup at all since this record began: 12" in page
+    assert "banner-failure" not in page
+
+
 async def test_an_empty_mount_reads_as_nothing_recorded_and_names_the_file(
     operator, on_the_hosts_disk
 ) -> None:

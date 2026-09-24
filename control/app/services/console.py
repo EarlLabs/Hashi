@@ -1017,10 +1017,23 @@ def _backup_outcome(outcome: str) -> str:
 
 
 def _backup_schedule(record: backups.Record) -> str:
-    """When the host says it takes one, and anything wrong with how it was configured.
+    """The time a run would be DUE, and anything wrong with how it was configured.
 
-    The time and the zone are printed exactly as the host resolved them. The zone is an
-    IANA name and stays one — see ``_BACKUP_ZONE_NOTES``.
+    IT IS NOT A STATEMENT THAT ANYTHING RUNS, and until M28.14 it read as one. "The host
+    takes one a day at 04:00 Etc/UTC" was drawn on a stand where no schedule was installed
+    at all — the crontab held no entry and the installer said so — which is the state of
+    every fresh install, because installing it is opt-in.
+
+    The record carries ``at`` and ``zone`` because they are what a scheduled run WOULD use:
+    they are resolved and written by a run, and a run happens when somebody types
+    ``make backup`` just as readily as when cron calls. Whether a crontab exists is not in
+    this file, and this panel may not shell out, read one or do any I/O to find out — it
+    renders from the record it already reads. So the sentence says what the record can
+    support and says out loud what it cannot, rather than implying a source this screen
+    does not have.
+
+    The time and the zone are still printed exactly as the host resolved them. The zone is
+    an IANA name and stays one — see ``_BACKUP_ZONE_NOTES``.
     """
     note = _BACKUP_ZONE_NOTES.get(record.zone_source, "")
     if record.at_source != "configured":
@@ -1028,7 +1041,35 @@ def _backup_schedule(record: backups.Record) -> str:
             " The time configured for it could not be read, so the schedule fell back "
             f"to {record.at}."
         )
-    return f"The host takes one a day at {record.at} {record.zone}.{note}"
+    return (
+        f"A run would be due at {record.at} {record.zone}.{note} That is the time the "
+        "schedule would use if one is installed — this panel reads this one record and "
+        "nothing else, so it cannot tell you whether anything on that host is taking "
+        "these backups at all."
+    )
+
+
+# How many days with no backup at all, inside the window ``backups.RECENT_GAP`` measures,
+# stop the quiet state from staying quiet.
+#
+# M28.14, found in acceptance: twelve missed days across seven weeks drew the muted note
+# with no word over it, while one failed run at 04:00 this morning drew a banner labelled
+# `failing`. Both sentences were true and the screen ranked them the wrong way round — a
+# fortnight of days with no backup at all is not a quiet fact, whatever the last run did.
+#
+# It NARROWS M28.6's "``missed_total`` is history, never an alarm" rather than reversing
+# it, and the difference is the whole of why this is a count over a window. ``missed_total``
+# is still never the trigger: it never falls, so a screen keyed on it would carry the word
+# for ever and the word would stop being read (M28.6's own argument against a shouting
+# threshold). This is keyed on days the record still names INSIDE the window, so it clears
+# itself as the gap ages out, and a host that was off for a fortnight in June is quiet
+# again in the autumn while still stating the fortnight.
+#
+# Five: a schedule that takes one a day is meant to miss none, a long weekend with the box
+# off is two or three, and five inside eight weeks is a host that is not really being
+# backed up. It changes the LABEL and the frame, never the standing and never the colour —
+# ``Standing`` is still exactly six and the failure red is still spent on nothing standing.
+A_GAP_WORTH_A_LABEL = 5
 
 
 def _backup_gap(record: backups.Record) -> str:
@@ -1148,8 +1189,8 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                 label="no backup",
                 headline="No backup has run on this host yet.",
                 detail=(
-                    "The schedule has been resolved and nothing has been recorded under "
-                    f"it. {_backup_schedule(record)}{_backup_gap(record)}"
+                    "A time has been resolved for the backups and nothing has been "
+                    f"recorded under it. {_backup_schedule(record)}{_backup_gap(record)}"
                     f"{_backup_clock(reading)} make backup-status on the host prints "
                     "this record in full, and make backup takes one now without waiting "
                     "for the appointed time — on a host that still has what a backup "
@@ -1208,8 +1249,20 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
             # an impossible date is already loud and already carries the clause; this one
             # would otherwise be a permanent reassurance about a host nobody is checking.
             ahead = reading.success_ahead or reading.failure_ahead
+            # AND THE OTHER WAY THIS BRANCH CAN BE TOO QUIET, which is the same shape one
+            # finding later: a recent success says nothing about the fortnight of days
+            # before it that have no backup at all. The gap is stated in the detail under
+            # every standing already; what it did not have here — and only here, because
+            # this is the one branch with no word over it — is a word. It gets one, from
+            # the days inside the window rather than from the cumulative count, so the
+            # word clears when the gap does (see ``A_GAP_WORTH_A_LABEL``).
+            #
+            # The clock takes precedence where both apply: a record dated ahead means no
+            # age on the screen can be believed, which is the larger thing to say, and the
+            # gap is still spelled out in the sentence underneath.
+            gap = reading.missed_recently >= A_GAP_WORTH_A_LABEL
             return BackupStanding(
-                label="clock ahead" if ahead else None,
+                label="clock ahead" if ahead else "missed days" if gap else None,
                 headline=(
                     f"Last backup {_ago(reading.since_success, ahead=reading.success_ahead)}: "
                     f"{_backup_outcome(success.outcome)}."
@@ -1219,7 +1272,7 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
                     f"{_backup_clock(reading)}"
                 ),
                 caveat=BACKUP_CAVEATS[reading.destination],
-                loud=ahead,
+                loud=ahead or gap,
             )
 
     # ``Standing`` is a closed enum one module over and every member of it is answered
@@ -3035,6 +3088,22 @@ def settings_rows(settings: Settings) -> list[SettingRow]:
                 "accepted, and no value means forever: a record with no end is the "
                 "thing this project is built not to keep. Nothing is swept while this "
                 "control plane is off."
+            ),
+        ),
+        SettingRow(
+            label="where this panel reads what the backups did",
+            value=str(settings.backup_record),
+            variables=("HASHI_BACKUP_RECORD",),
+            note=(
+                "The one file behind everything the Overview says about backups. It is "
+                "written on the host that takes them and mounted in here read-only, so "
+                "this control plane can neither invent a success nor erase a failure — "
+                "and on a machine where nothing has ever run one, or where the mount "
+                "arrived empty, there is no file here at all, which reads as nothing "
+                "recorded rather than as a fault. Whether that host sends an artifact "
+                "anywhere is HASHI_BACKUP_ENABLED beside its own schedule, in a file "
+                "this process never opens: all it has is what the record said was true "
+                "when it was written."
             ),
         ),
         SettingRow(
