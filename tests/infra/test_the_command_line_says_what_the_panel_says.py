@@ -520,28 +520,27 @@ def test_the_bootstrap_says_a_second_run_unpublishes_before_it_does_it(
     assert "make up-panel-over-ssh" in warning and "make up-panel" in warning
 
 
-def is_the_template(env_file: pathlib.Path) -> subprocess.CompletedProcess:
-    """``mgmt_is_the_template`` on its own, against a real env file.
-
-    Sliced out and RUN for the reason round 1 gave: the first version of this check was
-    string equality between whole lines, and reading the script would not have told
-    anybody that a file with Windows line endings walks past it. Two functions are taken —
-    the value extraction and the comparison that uses it — so what is exercised is what
-    the script does.
-    """
+def sliced(name: str) -> str:
+    """One shell function out of ``scripts/panel-bootstrap.sh``, verbatim."""
     script = BOOTSTRAP.read_text()
-    pieces = [
-        "env_value_of() {" + script.split("env_value_of() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n",
-        'MGMT_TEMPLATE_LINES=""\nmgmt_is_the_template() {'
-        + script.split("mgmt_is_the_template() {", 1)[1].split("\n}\n", 1)[0]
-        + "\n}\n",
-    ]
+    assert f"{name}() {{" in script, f"{name} is gone from the bootstrap"
+    return f"{name}() {{" + script.split(f"{name}() {{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+
+
+def drive(env_file: pathlib.Path, functions: str, call: str) -> subprocess.CompletedProcess:
+    """Run those functions against a real env file and the real template.
+
+    Sliced out and RUN for the reason round 1 gave: the first version of both checks was
+    string equality between whole lines, and reading the script would not have told
+    anybody that a file with Windows line endings walks past them. ``env_value_of`` comes
+    along every time, because it is the half that does the work.
+    """
     program = (
         "set -euo pipefail\n"
         'ENV_FILE="$1"\nTEMPLATE="$2"\n'
-        + "".join(pieces)
-        + 'if mgmt_is_the_template; then echo "SKIP ${MGMT_TEMPLATE_LINES}"; '
-        'else echo GENERATE; fi'
+        + sliced("env_value_of")
+        + functions
+        + call
     )
     return subprocess.run(
         ["bash", "-c", program, "bash", str(env_file), str(ENV_EXAMPLE)],
@@ -549,10 +548,42 @@ def is_the_template(env_file: pathlib.Path) -> subprocess.CompletedProcess:
     )
 
 
+def is_the_template(env_file: pathlib.Path) -> subprocess.CompletedProcess:
+    """``mgmt_is_the_template`` on its own, against a real env file."""
+    return drive(
+        env_file,
+        'MGMT_TEMPLATE_KEYS=""\n' + sliced("mgmt_is_the_template"),
+        'if mgmt_is_the_template; then echo "SKIP ${MGMT_TEMPLATE_KEYS}"; '
+        "else echo GENERATE; fi",
+    )
+
+
+def is_the_placeholder(env_file: pathlib.Path) -> subprocess.CompletedProcess:
+    """``hash_is_the_placeholder``, the other half of the same pair."""
+    return drive(
+        env_file,
+        sliced("hash_is_the_placeholder"),
+        "if hash_is_the_placeholder; then echo REFUSE; else echo PROCEED; fi",
+    )
+
+
 def template_env(tmp_path: pathlib.Path, name: str, transform) -> pathlib.Path:
     path = tmp_path / name
     path.write_text(transform(ENV_EXAMPLE.read_text()))
     return path
+
+
+PLACEHOLDER_LINE = next(
+    line
+    for line in ENV_EXAMPLE.read_text().splitlines()
+    if line.startswith("HASHI_OPERATOR_PASSWORD_HASH=")
+)
+
+
+def quoted_placeholder(text: str) -> str:
+    """The same file with the placeholder hash wrapped in quotes, which compose allows."""
+    name, value = PLACEHOLDER_LINE.split("=", 1)
+    return text.replace(PLACEHOLDER_LINE, f'{name}="{value}"')
 
 
 def a_real_tunnel(text: str) -> str:
@@ -620,6 +651,68 @@ def test_a_tunnel_somebody_chose_is_still_generated(tmp_path, ending) -> None:
     path.write_text(text)
     result = is_the_template(path)
     assert result.stdout.strip() == "GENERATE", result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "name,transform",
+    [
+        ("copied", lambda text: text),
+        # The same two shapes as the tunnel check's, because it is the same comparison:
+        # the pair used to be able to disagree about one env file, which is how a defect
+        # fixed in one of them survived in the other.
+        ("crlf", lambda text: text.replace("\n", "\r\n")),
+        ("quoted", quoted_placeholder),
+    ],
+)
+def test_an_unfilled_hash_is_recognised_however_the_file_is_written(
+    tmp_path, name, transform
+) -> None:
+    """M28.10's refusal, which round 1's finding had quietly reopened in a second place.
+
+    Not a key on a terminal this time: the placeholder reaches the control plane, which
+    refuses to boot on a hash that is not one, and the operator meets a three-minute
+    health-check timeout about a container instead of a one-second sentence naming the
+    variable. That is the failure M28.10 exists to remove.
+    """
+    result = is_the_placeholder(template_env(tmp_path, name, transform))
+    assert result.stdout.strip() == "REFUSE", (
+        f"a {name} env file still holding the template's placeholder hash was let "
+        f"through: {result.stdout}{result.stderr}"
+    )
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_a_hash_somebody_made_is_not_mistaken_for_the_placeholder(tmp_path, ending) -> None:
+    """The other direction: a real hash must not be refused, whatever wrote the file."""
+    made = "HASHI_OPERATOR_PASSWORD_HASH=scrypt$$32768$$8$$1$$c2FsdA==$$aGFzaA=="
+    text = ENV_EXAMPLE.read_text().replace(PLACEHOLDER_LINE, made).replace("\n", ending)
+    path = tmp_path / f"filled{len(ending)}"
+    path.write_text(text)
+    assert is_the_placeholder(path).stdout.strip() == "PROCEED"
+
+
+def test_one_env_file_parser_in_this_script_and_no_second_one(bootstrap: str) -> None:
+    """The defect round 1 found was one parser being weaker than the one beside it.
+
+    Both "is this still the template's value" checks are now the same call, and the third
+    reader in this file — the loopback bind address — went through it as well. What this
+    pins is that the next one does too: a second ``sed`` pulling a `HASHI_` value out of
+    the env file is how the pair drifts apart again, and it drifts silently, because the
+    weaker parser gives the right answer on every file anybody tests with.
+
+    ``has_value`` is excluded by shape and deliberately: it asks whether a key has any
+    value at all, compares nothing, and a stray `\r` reads as empty there, which is the
+    answer it should give.
+    """
+    a_second_parser = (
+        r'sed -n "?\'?s/\^\[\[:space:\]\]\*(?:\$1|HASHI_)[^\n]*ENV_FILE'
+    )
+    readers = re.findall(a_second_parser, bootstrap)
+    assert readers == [], f"a second env-file value parser is back: {readers}"
+    assert bootstrap.count("env_value_of() {") == 1, "two copies of the extraction"
+    for user in ("hash_is_the_placeholder", "mgmt_is_the_template", "PRIVATE_BIND="):
+        assert "env_value_of" in bootstrap.split(user, 1)[1][:400] or user in bootstrap, user
+    assert 'PRIVATE_BIND="$(env_value_of' in bootstrap
 
 
 def test_a_compose_that_cannot_be_asked_says_so_rather_than_going_quiet(

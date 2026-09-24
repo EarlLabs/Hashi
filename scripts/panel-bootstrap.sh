@@ -98,6 +98,30 @@ has_value() {
   grep -Eq "^[[:space:]]*$1=[[:space:]]*[^[:space:]]" "${ENV_FILE}"
 }
 
+# ONE VALUE out of an env file, by name — and the reason it exists is a defect this script
+# had twice (M28.12, round 1). Both places that ask "is this still the value .env.example
+# ships" used to compare whole LINES for equality, and two ordinary files defeat that: one
+# edited on Windows, where every line ends `\r` and nothing matches, and one whose values
+# are quoted. In the tunnel check below, walking past it generated a tunnel out of the
+# template and printed two fabricated device private keys; in the password-hash check
+# above it, walking past it means the unfilled placeholder reaches the control plane and
+# an operator meets a three-minute health-check timeout about a container instead of a
+# one-second sentence naming the variable. A comparison a line ending can defeat is not a
+# comparison.
+#
+# The extraction is `scripts/backup-run.sh::env_value`'s, minus the name whitelist that
+# belongs to a script running unattended: last assignment wins, `\r` goes, a trailing
+# comment goes, surrounding quotes come off. Used on BOTH sides of every such comparison,
+# so the template may be written either way too. It reads named values and never prints
+# one — the rule for this file since M6.5.
+env_value_of() {
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" \
+    | tail -n 1 \
+    | tr -d '\r' \
+    | sed -e 's/[[:space:]]\{1,\}#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+          -e 's/[[:space:]]*$//'
+}
+
 # THE refusal. Everything else in this script is about uptime; this is about a person.
 #
 # HASHI_SECRET_KEY decrypts every user's credentials and every node's private key. If
@@ -176,16 +200,20 @@ fi
 # existed there was no way to produce it on a host like this one (M28.10, finding 1).
 #
 # Read OUT OF .env.example rather than written here, so the two cannot drift, and
-# compared as a whole line rather than matched as a pattern. Only this key: the VALIDITY
-# of a value is control/app/settings.py's to judge, and this is not that — it is
+# compared as a VALUE on both sides rather than as a whole line — see `env_value_of`
+# above for what a line comparison lets through, which is this refusal not firing on an
+# env file that was edited on Windows or that quotes its values. Only this key: the
+# VALIDITY of a value is control/app/settings.py's to judge, and this is not that — it is
 # "nothing was put here at all", which no amount of validation downstream says plainly.
 TEMPLATE="${REPO_ROOT}/.env.example"
-PLACEHOLDER=""
-if [ -r "${TEMPLATE}" ]; then
-  PLACEHOLDER="$(sed -n 's/^HASHI_OPERATOR_PASSWORD_HASH=//p' "${TEMPLATE}" | awk 'NR==1')"
-fi
-if [ -n "${PLACEHOLDER}" ] && awk -v want="HASHI_OPERATOR_PASSWORD_HASH=${PLACEHOLDER}" \
-     '$0 == want { found = 1 } END { exit !found }' "${ENV_FILE}"; then
+hash_is_the_placeholder() {
+  local want
+  [ -r "${TEMPLATE}" ] || return 1
+  want="$(env_value_of "${TEMPLATE}" HASHI_OPERATOR_PASSWORD_HASH)"
+  [ -n "${want}" ] || return 1
+  [ "$(env_value_of "${ENV_FILE}" HASHI_OPERATOR_PASSWORD_HASH)" = "${want}" ]
+}
+if hash_is_the_placeholder; then
   fail "HASHI_OPERATOR_PASSWORD_HASH in ${ENV_FILE} is still the placeholder .env.example
   ships, so nobody has set an operator password and the panel would refuse to start.
 
@@ -249,8 +277,13 @@ fi
 # down (deploy/docker-compose.public.yml). Loopback for both makes docker refuse the
 # second bind with "port is already allocated", an error that names neither the cause
 # nor the cure. Checked here rather than left to be discovered during a deploy.
-PRIVATE_BIND="$(sed -n 's/^[[:space:]]*HASHI_PRIVATE_BIND_ADDR=[[:space:]]*//p' \
-  "${ENV_FILE}" | awk 'NR==1' | tr -d '"')"
+# Through `env_value_of` like every other value this file reads, rather than a parser of
+# its own. It was the third reader in one script and the weakest — first assignment
+# instead of last, double quotes only, no `\r`, no trailing comment — and while none of
+# that changes this check's ANSWER today (it is a prefix match, not an equality, so a
+# value wearing a `\r` still reads as loopback), two parsers in one file is how the defect
+# round 1 found gets reintroduced by somebody reasonably copying the nearest one.
+PRIVATE_BIND="$(env_value_of "${ENV_FILE}" HASHI_PRIVATE_BIND_ADDR)"
 case "${PRIVATE_BIND}" in
   127.*|localhost|::1)
     fail "HASHI_PRIVATE_BIND_ADDR is ${PRIVATE_BIND}, which is loopback.
@@ -519,42 +552,26 @@ say "the control plane answers on /healthz and routes /sub/{token}"
 # unfinished block, and the message names which — so the operator is told what to change
 # rather than being told no.
 #
-# VALUES, NOT LINES, and that distinction is the whole of round 1's finding. The first
-# version compared whole lines for equality, which two ordinary env files defeat: one
-# edited on Windows (every line ends `\r`, and the literal template block then matches
-# nothing), and one whose values are quoted (the same value with "" around it). Either
-# of them walked straight past this check and got a tunnel generated out of the template
-# — two fabricated device private keys on the terminal of a rebuild, which is the exact
-# thing this exists to stop. A comparison that a line ending can defeat is not a
-# comparison. The extraction below is `scripts/backup-run.sh::env_value`'s idiom, applied
-# to BOTH sides so the template can be written either way too: last assignment wins, `\r`
-# goes, a trailing comment goes, surrounding quotes come off.
-env_value_of() {
-  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" \
-    | tail -n 1 \
-    | tr -d '\r' \
-    | sed -e 's/[[:space:]]\{1,\}#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
-          -e 's/[[:space:]]*$//'
-}
-
-MGMT_TEMPLATE_LINES=""
+# VALUES, NOT LINES, through `env_value_of` at the top of this file — that is the whole
+# of round 1's finding, and the password-hash check up there is the other half of it.
+MGMT_TEMPLATE_KEYS=""
 mgmt_is_the_template() {
   local key want have
-  MGMT_TEMPLATE_LINES=""
+  MGMT_TEMPLATE_KEYS=""
   [ -r "${TEMPLATE}" ] || return 1
   for key in HASHI_MGMT_ADDRESS HASHI_MGMT_ENDPOINT HASHI_MGMT_PEERS; do
     want="$(env_value_of "${TEMPLATE}" "${key}")"
     [ -n "${want}" ] || continue
     have="$(env_value_of "${ENV_FILE}" "${key}")"
     if [ "${have}" = "${want}" ]; then
-      MGMT_TEMPLATE_LINES="${MGMT_TEMPLATE_LINES}${MGMT_TEMPLATE_LINES:+ }${key}"
+      MGMT_TEMPLATE_KEYS="${MGMT_TEMPLATE_KEYS}${MGMT_TEMPLATE_KEYS:+ }${key}"
     fi
   done
-  [ -n "${MGMT_TEMPLATE_LINES}" ]
+  [ -n "${MGMT_TEMPLATE_KEYS}" ]
 }
 
 if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
-  say "still .env.example's own value(s) in ${ENV_FILE}: ${MGMT_TEMPLATE_LINES}. NO
+  say "still .env.example's own value(s) in ${ENV_FILE}: ${MGMT_TEMPLATE_KEYS}. NO
   management tunnel was generated. Generating one from the template would have written a
   tunnel here and printed a private key for each of the example devices in that file —
   credentials nobody asked for, pointing at the example endpoint rather than at this
