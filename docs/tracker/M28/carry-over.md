@@ -294,3 +294,40 @@ measured it.** Keep pinning, but as the **regression net**, not the remedy.
 behaviour names the state it holds for, and when you narrow one you sweep the tree for it
 rather than reading the diff.* Pinning stops a corrected sentence reappearing in a state
 nobody had in mind. Billing it as the remedy is how a false phrase ends up load-bearing.
+
+
+## From M28.21, review round 1 — three absence assertions over wrapped output, and a count that was wrong
+
+**The reviewer's own claim in the plan — *"the rest of `tests/infra/` and `tests/e2e/infra/`
+was swept and this is the only other one"* (M28.21 §D) — was measured at a narrower scope
+and is false. There are three, not one.** Recorded here rather than fixed, because two of
+them are in a module this step's list does not reach, and because a seam is never left both
+unfixed and unlisted.
+
+1. **FIXED in M28.21.** `tests/infra/test_what_the_command_line_may_say_about_a_backup.py`,
+   the `"NOTHING IS BACKED UP AT ALL"` check in section 3 — the one §D named.
+2. **FIXED in M28.21 round 1**, and it is the one §D's count missed, one screen away in the
+   same file: `test_the_exit_three_advice_does_not_outlive_the_failure_it_is_about`, over the
+   three-line exit-3 advice block (`scripts/backup-run.sh`, the `did NOT leave this`/`machine.`
+   heredoc). **Proved rather than argued, and the proof is the shape worth reusing:** with the
+   advice's own defect reintroduced (keyed on `BAD_CODE` alone, dropping
+   `failed_since_the_last_success`) AND the phrase re-wrapped across the line break, the
+   assertion in its old form is **green over a live defect**; through `flowing()` it is red.
+   A rewrap alone proves nothing, because the phrase is correctly absent in that state either
+   way — the defect has to be present at the same time.
+3. **OPEN, and deliberately not fixed from here:**
+   `tests/infra/test_the_command_line_says_what_the_panel_says.py:347` —
+   `"NOTHING HAS BEEN ASSUMED" not in result.stdout + result.stderr`, the head of a wrapped
+   paragraph, so it is the same shape as (2); and `:235` —
+   `"No backup has ever been recorded on this host" not in broken.stderr`, weaker, since that
+   sentence is a standalone line in its heredoc and only a deliberate rewrap splits it.
+   **That module has no `flowing()` at all.** Widening it belongs with whichever step next
+   touches that file, not with a step whose list does not name it.
+
+**And the count is the point, not the three files.** M28.19's carry-over asserted one, M28.21
+found the second by mutation and the third by grep, and each earlier sweep had been run
+against the phrase rather than against the shape. **Sweep for the SHAPE — an absence
+assertion whose subject is a rendered paragraph — and confirm each hit by mutating the
+program, not by reading the test.** A positive assertion beside it is left alone on purpose
+(M28.20): the positive direction going red on a rewrap is brittleness, the negative direction
+going green on one is a hole.

@@ -175,14 +175,28 @@ def flowing(text: str) -> str:
     ``test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable`` was green
     against the sentence it was written to forbid.
 
-    EVERY assertion in this file that something is ABSENT from a rendered paragraph goes
+    EVERY assertion in this file that something is ABSENT **from a wrapped paragraph** goes
     through this, which is why it sits with the helpers rather than beside the test that
-    first needed it: M28.21 found one more that did not, three sections above, passing only
-    because the phrase happened to fit on one source line of the heredoc.
+    first needed it. M28.21 found two that did not — the ``NOTHING IS BACKED UP AT ALL``
+    check in section 3 and the exit-3 advice check in section 5 — each passing only because
+    its phrase happened to fit on one source line of a heredoc that is free to be rewrapped.
+
+    WHAT IS LEFT RAW, and the qualifier above is there for it rather than as hedging: a
+    verdict field or a label emitted by one ``printf`` (``action=``, ``scheduled:``, ``last
+    success:``), and a phrase that is a whole heredoc line of its own (*"No backup has ever
+    been recorded on this host."*). Neither can be split by re-wrapping a paragraph — only
+    by rewriting the line, which changes the sentence rather than its layout. The test is
+    the SHAPE of the source, not the length of the phrase, and the way to settle it is the
+    one M28.21 round 1 used: reintroduce the defect AND re-wrap. Still green means it
+    belongs here. A re-wrap on its own proves nothing, because the phrase is correctly
+    absent in that state either way.
+
+    THIS CLAIM IS ONE THIS FILE CAN ONLY MAKE ABOUT ITSELF. Sibling modules are not
+    covered — ``test_the_command_line_says_what_the_panel_says.py`` holds two of the same
+    shape and has no ``flowing()`` at all, recorded in ``docs/tracker/M28/carry-over.md``
+    rather than fixed from here.
     """
     return " ".join(text.split())
-
-
 
 
 # --- 1. the three commands in this family agree about one host ----------------
@@ -715,7 +729,7 @@ def test_the_exit_three_advice_does_not_outlive_the_failure_it_is_about(tmp_path
         host,
     )
     assert healed.returncode == 0, healed.stderr
-    assert "did NOT leave this" not in healed.stdout, (
+    assert "did NOT leave this" not in flowing(healed.stdout), (
         "a run that exited 0 and did leave the machine is reported as one that did not:\n"
         f"{healed.stdout}"
     )

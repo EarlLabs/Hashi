@@ -1743,11 +1743,14 @@ ahead of the clock the panel reads it against is said so instead of being report
 backup taken minutes ago: the age is still clamped for the arithmetic, so a disagreeing
 clock cannot turn a stale backup into a fresh one, but the screen goes loud with `clock
 ahead` and says no age on it can be believed until the two machines agree about the time.
-Those two run fields and no others — a record where only the last **attempt** is ahead is
-read as fresh here, with no banner, and is said on the command line and nowhere else. The
-record's `due_date` is read too, and read with a whole day of grace, so a due date more
-than a day past this screen's own UTC date is loud here and one no more than a day past is
-not. The Backups section below says which is which, and why that day is the width it is.
+Those two run fields and no others — a record where only the last **attempt** is ahead
+draws no `clock ahead` banner here at all, and is said on the command line and nowhere else.
+(What that record's *standing* is on this screen is a separate question, answered by the age
+of its runs: recent ones read as fresh, an eight-week-old last success is still loud, about
+its age.) The record's `due_date` is read too, and read with a whole day of grace, so a due
+date more than a day past this screen's own UTC date is loud here and one no more than a day
+past is not. The Backups section below says which is which, and why that day is the width it
+is.
 
 **`make backup-status` says the same three things on the command line, out of the same
 field, and refuses the same file.** It closes with whichever of the three caveats the
@@ -1838,8 +1841,14 @@ it is said on the command line and nowhere else.
 **The due date it reads too, and it reads it with a whole day of grace — which splits that
 half in two.** The grace is a day because the writer resolves the due date in the
 **schedule's** zone while that screen has only its own UTC date, and the inhabited zones
-run from UTC−12 to UTC+14; a narrower comparison would put a standing *clock ahead* banner
-on every host scheduled east of UTC while it backed itself up perfectly. So:
+run from UTC−12 to UTC+14; a narrower comparison would put a *clock ahead* banner on a host
+scheduled **far enough** east, for **part of every day**, while it backed itself up
+perfectly. Measured against the shipped 04:00 schedule, counting the UTC hours at which a
+zero-grace comparison would fire: none at all up to UTC+4 — a host there resolving 04:00
+local writes a due date equal to the UTC date and would never be flagged — then five hours
+out of twenty-four at UTC+9 and ten at UTC+14. A banner that appears daily on a healthy
+host is what the grace exists to prevent, and that argument is untouched by the arithmetic
+being smaller than "every east host, always". So:
 
 - a due date **more than a day** past that screen's UTC date — a hand-seeded `2099-01-01`,
   a record carried off another machine, a clock that jumped forward by more than a day — is

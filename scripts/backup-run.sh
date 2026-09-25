@@ -432,12 +432,14 @@ CLOCK_AHEAD=""
 # WHICH HALF, and the flags exist because the two halves are different faults with
 # different consequences — which round 1 of this step's review found out the expensive way.
 # A RUN dated after the moment it was read makes every age printed beside it worthless. A
-# DUE DATE this host has not reached does not: the run times in such a record are exact,
-# printed exactly, and agree with the panel to the minute. One sentence covering both told
-# an operator to disbelieve a number that was right, on a screen where the panel said the
-# opposite about the same file — the two-channels-disagree defect, written into the warning
-# whose own job is to stop it. So the reading is split here and the warning is composed
-# from it, rather than hedged into a sentence that is true of neither.
+# DUE DATE this host has not reached does not: the run times in such a record are exact and
+# are printed exactly, and the age the panel puts beside the same record is worked out from
+# them — this channel prints the timestamp and that screen prints an age, so the two agree
+# about the backup rather than about a string. One sentence covering both told an operator
+# to disbelieve a number that was right, on a screen where the panel said the opposite about
+# the same file — the two-channels-disagree defect, written into the warning whose own job
+# is to stop it. So the reading is split here and the warning is composed from it, rather
+# than hedged into a sentence that is true of neither.
 CLOCK_AHEAD_RUN=""
 CLOCK_AHEAD_DUE=""
 
