@@ -331,3 +331,40 @@ assertion whose subject is a rendered paragraph — and confirm each hit by muta
 program, not by reading the test.** A positive assertion beside it is left alone on purpose
 (M28.20): the positive direction going red on a rewrap is brittleness, the negative direction
 going green on one is a hole.
+
+
+## From M28.21 — OPEN, carried into M28.23
+
+**Stopped at the round cap with these three unresolved.** All prose, all the same class, all
+verified by the reviewer with measurements.
+
+**1. The eleventh instance: a claim that the code lacks something it has.**
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py:195-196` and
+`docs/tracker/M28/carry-over.md:324-326` both say the sibling module *"has no `flowing()` at
+all"*, and the carry-over builds an action item on it (*"widening it belongs with whichever
+step next touches that file"*). But `tests/infra/test_the_command_line_says_what_the_panel_says.py:75-82`
+defines `flat(text)` — the same whitespace collapse plus a concat-seam strip — and **already
+uses it** at `:325`. Literally true of the *name* `flowing`, false about the code, and it
+mis-scopes the work it hands to the next step: nothing needs widening, the three open
+assertions need only call the helper 160 lines above them.
+
+**2. The count is wrong again, in the entry whose own thesis is that the count keeps being
+wrong.** It says *"there are three, not one"*. There are **four**:
+`test_the_command_line_says_what_the_panel_says.py:1137` — `assert "No backup has ever been
+recorded on this host" not in result.stderr` — is byte-identical in phrase, source and shape
+to `:235`, which the entry does list. Both target `scripts/backup-run.sh:1019`. The entry's
+own instruction — *"sweep for the SHAPE, not the phrase"* — was not applied to the module it
+was written about.
+
+**3. The fix for a Low is false in a first-class state.** `docs/deploy/runbook.md:1748-1750`
+now says a record's standing is *"answered by the age of its runs: recent ones read as
+fresh"*. Measured against `_judge`: standing is answered by the age of the last success **and**
+whether anything failed after it. A record whose runs are all recent but whose
+`last_failure.at > last_success.at` is `FAILING`, `loud=True` — not fresh. `_judge`'s own
+docstring says so, and the same runbook section already enumerates *"backups are failing"* as
+one of the six standings.
+
+**Two Lows with them:** the `WHAT IS LEFT RAW` enumeration reads as exhaustive and omits the
+planted-secret assertion at `:147` (correctly raw — a runtime-interpolated value cannot be
+split by re-wrapping); and its example for "a whole heredoc line of its own" names a phrase no
+assertion in *that* file targets, where the real instance is `:618`'s `"DATED AHEAD"`.

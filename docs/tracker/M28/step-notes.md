@@ -1674,3 +1674,47 @@ is next owed.** The first was made false by M28.19; the second is the schedule's
 reasoning, which `due` states by CALLING `decide` and this panel may not restate.
 `test_the_due_date_half_never_says_the_schedule_has_stopped` sweeps both phrase lists over
 all four standings.
+
+
+## From M28.21 — the prose cleanup, and the step that hit its round cap
+
+**Outcome: stopped at the round cap with three Highs open**, all in prose, none in behaviour.
+The code is gated and clean — `make verify` exit 0, control 992/2, edge 911/3, infra 486,
+**e2e 224/0** — and every behavioural claim in the diff was re-derived by measurement in both
+rounds. The open items are carried into M28.23 rather than fixed in a third round.
+
+**The seven sentences are fixed and verified.** `"to the minute"` is gone from `scripts/` and
+`docs/deploy/` (one unrelated hit remains in an e2e comment); `"exactly one day"` is **zero
+tree-wide**; `"east of UTC"` survives only in the control file M28.22 owns.
+
+**The measured boundary, which every one of those sentences now states:** the panel is loud
+iff `due_date > (its own UTC date + 1 day)`. One day ahead is False, two is True — and this is
+hour-independent, because both sides are `.date()` of the same instant.
+
+**The moved-west offset is 0 or 1, never 2, and which one depends on the hour.** Measured
+organically across ten zones × three `HASHI_BACKUP_AT` values: at UTC 13:57 with `AT=04:00`,
+even `Pacific/Kiritimati` (+14) writes a due date **equal** to the UTC date; with `AT=00:30`
+it writes one day ahead. **Never write "exactly one day ahead"** — that sentence was written
+into the plan by the orchestrator and is the ninth instance of this milestone's defect class.
+
+**What a zero grace would actually cost, by offset, at `AT=04:00`** — the numbers to quote
+rather than a quantifier: UTC+0…+4 → **0 hours of 24**; +5→1, +6→2, +7→3, +8→4; +9 (Tokyo) →
+**5**; +12 (Auckland) → **8**; +14 (Kiritimati) → **10**. So it is neither *every* host east of
+UTC nor a *standing* banner, and both of those were written this milestone and corrected.
+**`DUE_AHEAD_GRACE` stays a whole day**; the correction is to the sentence, never to the
+constant.
+
+**The RUN and DUE paragraphs of `clock_ahead_warning` are deliberately asymmetric** — the due
+half has two behaviours (loud past a day, silent under it) and the run half has one. **A later
+step that "balances" them by trimming the due half deletes the boundary this step exists to
+state.**
+
+**`flowing()` lives with the helpers** and every absence assertion over a *wrapped* paragraph
+goes through it. The route matters, not the wording: proved by mutation, with the exit-3
+defect reintroduced *and* its phrase re-wrapped, the raw assertion is **green over a live
+defect** and the `flowing()` form is red.
+
+**A sentence about another channel gets no pin.** Nothing in the infra zone determines the
+panel's behaviour, so a pin on such a sentence could never go red — it would convert an
+unverifiable claim into a green tick. The absence half, swept over states, is the assertion
+that carries information.
