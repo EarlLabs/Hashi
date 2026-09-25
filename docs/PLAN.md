@@ -3641,6 +3641,30 @@ touch, and **pin by constant reference** (`console.BACKUP_CLOCK_OPENING`,
 `BACKUP_CLOCK_RUN_AHEAD`) rather than by a literal: a literal in a test is a second copy of
 the sentence, and two copies never disagree even when both are wrong.
 
+**Two corrections carried from M28.21, and both matter more than the items above.**
+
+**First, a sentence in M28.21's own text was wrong and it was mine.** §C said the moved-west
+shape is *"exactly one day ahead"*. Measured organically, the record that shape produces was
+**zero** days ahead of the panel's UTC date — the offset depends on the hour. M28.21 therefore
+writes **"no more than a day"** / **"more than a day"** everywhere, and so must this step.
+**Never write "exactly one day."** The boundary, measured: the panel is loud iff
+`due_date > (its own UTC date + 1 day)` — one day ahead is False, two days is True. That this
+error was written into the plan by the orchestrator, in the step whose subject is exactly this
+class, is the clearest example the milestone has produced: a true observation about one
+instance, written as a generalisation.
+
+**Second, two sentences that look like this defect and are NOT — do not touch them.**
+M28.21's implementer checked both and they are true; turning a true sentence false is the same
+defect in reverse:
+- `control/app/services/console.py:1006` — *"the last ATTEMPT is a run too and this panel does
+  not read it"*. `_ahead` reads `last_success` and `last_failure` only, so this holds.
+- `docs/tracker/M28/step-notes.md:1605` — *"`due` and `status` remain the only two channels
+  that see that half"*, where "that half" is the moved-west shape the panel is silent about.
+
+Item 5's two step-notes entries remain wrong and are still yours. Check every sentence you
+touch against behaviour you run, including the ones this plan tells you are broken — this
+plan has been wrong once already.
+
 **Do not add a pin to any sentence naming a cause, a mechanism or another channel's
 behaviour.** Nothing in this repository determines those, so such a pin can never go red — it
 converts an unverifiable claim into a green tick, which is how item 1 of M28.20's review came
