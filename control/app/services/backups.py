@@ -149,9 +149,12 @@ CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
 # HOW OFTEN, MEASURED, BECAUSE THE QUANTIFIER KEPT COMING OUT WRONG. It is not every host
 # east of UTC and it is not a standing banner. ``scripts/backup-run.sh::due_date`` names
 # the local day, less one before the configured hour has come round, so the hours of the
-# day at which a zero-grace comparison would fire are the zone's offset east of UTC minus
-# that hour rounded up, floored at zero. Swept over every whole offset from UTC−12 to
-# UTC+14 against the real ``date`` and the real zone database, with the schedule at 04:00:
+# day at which a zero-grace comparison would fire are ``floor(offset − at)``, never below
+# zero, with both in hours: exact for the half-hour and quarter-hour zones too, where
+# rounding either term separately is not — UTC+5:30 at 04:00 fires for 1 hour and not 1.5,
+# UTC+12:45 for 8, UTC+3:30 for none. Swept over every whole offset from UTC−12 to UTC+14,
+# and over those fractional zones, against the real ``date`` and the real zone database.
+# With the schedule at 04:00:
 # UTC+0 through UTC+4 would never be flagged at all, UTC+9 for 5 hours of every 24, UTC+12
 # for 8, UTC+14 for 10, and nowhere west of UTC ever. The hour is configuration, so it
 # moves every one of those numbers — the same sweep at 00:30 gives UTC+14 thirteen hours
@@ -167,12 +170,16 @@ CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
 #
 # WHAT THAT LEAVES UNSEEN, because it is the state the plan reproduced organically and it
 # is not caught here. Moving ``HASHI_BACKUP_TZ`` west across the date line leaves a record
-# due one day ahead of this reader, which is exactly the shape a host legitimately
-# scheduled in Pacific/Kiritimati writes every day. The two are indistinguishable from this
-# file: telling them apart needs the zone the host is set to NOW, and that lives in ``.env``
-# — which this panel may not open — while the record's own ``zone`` is the one the LAST RUN
-# used and so is the very thing that changed. ``scripts/backup-run.sh due`` reads the
-# configured zone and does catch it; this reads one file and says nothing about it rather
+# due NO MORE THAN A DAY ahead of this reader — zero or one, depending on the hour and on
+# ``HASHI_BACKUP_AT`` — which is the same shape a host legitimately scheduled far to the
+# east writes whenever the two disagree at all: at 04:00 a due date resolved at UTC+14
+# equals this reader's UTC date for 14 hours of the 24 and is one day ahead for the other
+# 10. Either way it is under the grace, so this file never sees it. The two are
+# indistinguishable from this file: telling them apart needs the zone the host is set to
+# NOW, and that lives in ``.env`` — which this panel may not open — while the record's own
+# ``zone`` is the one the LAST RUN used and so is the very thing that changed.
+# ``scripts/backup-run.sh due`` reads the configured zone and does catch it; this reads one
+# file and says nothing about it rather
 # than guessing. Resolving ``Record.zone`` here instead was considered and refused on three
 # counts: it is filesystem I/O off a string from a disk file, on the path that draws a
 # screen; it is a second copy of the schedule's own ``TZ=<zone> date +%F``, which is the one

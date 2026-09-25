@@ -984,10 +984,12 @@ async def test_a_record_with_both_dates_ahead_says_both_things(written) -> None:
     # One opening line over the two, said once, because it is the only thing true of both.
     assert flowing(said.detail).count("is AHEAD of the clock this panel read it") == 1
     # AND THE ONE CLAUSE THAT IS NOT TRUE HERE IS NOT SAID. The ages are undisturbed by a
-    # due date ahead ON ITS OWN; with a run ahead as well there is no age on the screen at
-    # all — ``_ago`` prints ``BACKUP_AGE_UNKNOWABLE`` where it would go — so the clause
-    # would be false, and read beside "no age on this screen can be believed" it would read
-    # as a retraction of it. The whole gate is swept in
+    # due date ahead ON ITS OWN; where a run is ahead as well, at least one age on the
+    # screen is ``BACKUP_AGE_UNKNOWABLE`` instead — BOTH of them in this record, since both
+    # runs here are ahead — and the run clause has already said no age on this screen can
+    # be believed, so the clause would be false and would read as a retraction of it. Not
+    # EVERY age: a record with one run ahead and one not still prints a real age for the
+    # other, which is round 1 of M28.22. The whole gate is swept in
     # ``test_the_run_times_clause_is_said_exactly_where_it_is_true``.
     assert console.BACKUP_AGE_UNKNOWABLE in said.headline
     assert console.BACKUP_CLOCK_RUNS_UNDISTURBED not in flowing(said.detail)
@@ -1014,8 +1016,10 @@ async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) ->
 
     Three things have to hold before that clause may be said, and two of them have been got
     wrong on this screen already: the due date has to be ahead, or there is nothing for it
-    not to touch; no run may be ahead, or there is no age on the screen for it to be about
-    — ``_ago`` puts ``BACKUP_AGE_UNKNOWABLE`` where the age would go; and there has to BE a
+    not to touch; no run may be ahead, because the run clause prints on that same condition
+    and has just said no age on this screen can be believed — at least one of them is
+    ``BACKUP_AGE_UNKNOWABLE`` in that state, though not necessarily all, since a record with
+    one run ahead and one not still prints a real age for the other; and there has to BE a
     run, which under NEVER there is not.
 
     A BICONDITIONAL AND NOT A PRESENCE CHECK. A presence check cannot fail in the direction
@@ -1053,18 +1057,20 @@ async def test_a_due_date_a_timezone_could_explain_is_left_alone(written) -> Non
 
     The writer resolves the due date in the SCHEDULE'S zone and this reader has one clock,
     in UTC. A host at UTC+14 whose schedule runs at 04:00 is honestly a day ahead of UTC
-    for ten hours out of every twenty-four — measured at that hour and no other, since the
-    count is the offset less the hour the schedule names, so the same host at 12:00 is
-    ahead for two. Either way a comparison without ``DUE_AHEAD_GRACE`` would put a
-    complaint about a clock on the front page of a host backing itself up perfectly, every
+    for ten hours out of every twenty-four — the count is ``floor(offset − at)``, never
+    below zero, so ten is what that host gives for an ``at`` anywhere above 03:00 and up to
+    04:00, nine from 04:01, and two at 12:00. Either way a comparison without
+    ``DUE_AHEAD_GRACE`` would put a complaint about a clock on the front page of a host
+    backing itself up perfectly, every
     day it happens at all — which is how a banner becomes furniture. The sweep behind those
-    two numbers, over every whole offset and three schedule hours, is written down at
-    ``backups.DUE_AHEAD_GRACE``.
+    numbers, over every whole offset, the fractional zones and several schedule hours, is
+    written down at ``backups.DUE_AHEAD_GRACE``.
 
-    What that leaves unseen is stated rather than hidden: the day-ahead record a
-    ``HASHI_BACKUP_TZ`` moved west leaves behind is this same shape from this reader's
-    side, and telling the two apart needs the zone the host is set to NOW — which is in
-    ``.env`` and is not a file this panel may open.
+    What that leaves unseen is stated rather than hidden: the record a ``HASHI_BACKUP_TZ``
+    moved west leaves behind is no more than a day ahead of this reader — zero or one, by
+    the hour and the schedule — so from this side it is this same shape, and telling the
+    two apart needs the zone the host is set to NOW, which is in ``.env`` and is not a file
+    this panel may open.
     """
     tomorrow = (NOW + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     quiet = await backups.read(written(record(due_date=tomorrow)), now=NOW)

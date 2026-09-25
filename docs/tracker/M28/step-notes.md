@@ -1635,12 +1635,14 @@ instance of this milestone's own defect class. **`due` and
 resolves the due date in the SCHEDULE'S zone; this reader has one clock, in UTC; the
 inhabited zones span UTC−12 to UTC+14. A due date one day ahead of UTC is therefore exactly
 what a healthy host scheduled in `Pacific/Kiritimati` writes every day — for ten hours out of
-twenty-four **with the schedule at 04:00**, which is the only hour that figure holds for: the
-count is the offset less the hour `at` names, so at 12:00 the same host writes it for two
-hours and a host at UTC+9 for none. Telling the two apart needs the zone the host is set
-to **now**, which lives in `.env` and is not a file the panel may open — and the record's
-own `zone` is the one the LAST RUN used, so **a host whose `HASHI_BACKUP_TZ` has just moved
-west presents a record byte-identical to the one it presented while healthy.** Narrowing the
+twenty-four **with the schedule at 04:00**, which is the hour that figure was measured at:
+the count is `floor(offset − at)`, so ten is what that host gives for an `at` anywhere above
+03:00 and up to 04:00 — measured, 03:01 and 03:30 also give ten and 04:01 gives nine — while
+12:00 gives it two hours and a host at UTC+9 none. Telling the two apart needs the zone the
+host is set to **now**, which lives in `.env` and is not a file the panel may open — and
+the record's own `zone` is the one the LAST RUN used, so **a host whose `HASHI_BACKUP_TZ`
+has just moved west presents a record byte-identical to the one it presented while
+healthy.** Narrowing the
 grace would put a `clock ahead` banner on a host that was backing itself up perfectly, for
 some hours of every day — **not** on *every* eastward-scheduled host and **not** standing,
 which is how this sentence read until M28.22: at 04:00 nothing from UTC+0 to UTC+4 would
@@ -1738,6 +1740,21 @@ added more of both, because a correction has to quote the sentence it corrects. 
 ASSERTIONS, not the occurrences.** A grep total over a tracker full of quoted-and-corrected
 prose is a number that cannot be right, and a published one has already been wrong more than
 once this milestone — `carry-over.md`, the M28.21 round-1 entry and its open item 2.
+
+**AND A PHRASE GREP CANNOT FIND A PARAPHRASE, which is the other half of the method and was
+paid for the same way.** M28.22 corrected *"exactly one day ahead"* everywhere its own grep
+table reached, published the counts, and left `control/app/services/backups.py` saying *"one
+day ahead"* — the identical claim, **fifteen lines below a block that step had just
+rewritten, in a file it was editing.** The sweep could not see it because the sweep was built
+out of the strings the sentence had been said with, and this copy was a paraphrase. **For
+each claim, enumerate the ways the FACT can be said and grep for its distinctive nouns** —
+`date line`, `day ahead`, `moved west`, `Kiritimati` for that one; `printed`, `exact`,
+`backup-status`, `timestamp` for what a screen shows of a run — never for the sentence you
+remember. A claim restated in different words is the normal case in prose, not the exception.
+
+**The two rules are one method.** Count assertions rather than occurrences, and sweep for the
+fact rather than for its wording; either alone leaves instances behind, and this milestone has
+now paid for both failures separately.
 
 **The measured boundary, which every one of those sentences now states:** the panel is loud
 iff `due_date > (its own UTC date + 1 day)`. One day ahead is False, two is True — and this is

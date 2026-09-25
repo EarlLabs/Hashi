@@ -1015,10 +1015,19 @@ BACKUP_CLOCK_RUN_AHEAD = (
 )
 
 # Said with the due clause and only where BOTH hold: no run in this record is ahead, and
-# there is a run to have an age at all. Under NEVER there is none; with a run ahead as well
-# there is no age on the screen either — ``_ago`` puts ``BACKUP_AGE_UNKNOWABLE`` where the
-# age would go — and a sentence about run times in either state is the generalisation this
-# milestone keeps paying for.
+# there is a run to have an age at all. Under NEVER there is none. Where ANY run is ahead
+# the run clause above prints — on the same condition — and has just said that no age on
+# this screen can be believed, so this clause would read as a retraction of it; measured
+# over every combination of the two runs this module reads, at least one age in that state
+# is ``BACKUP_AGE_UNKNOWABLE``.
+#
+# NOT every age, and that correction is round 1 of M28.22: this comment said there was "no
+# age on the screen" at all where a run is ahead, which is false the moment ONE run is
+# ahead and the other is not. Measured — due date ahead, last failure 30 h ahead, last
+# success 6 h old — the headline reads "The last one that succeeded was 6 hours ago", a
+# real age, in the state this comment claimed had none. The state is organic: a clock
+# jumps forward, the run under it fails, the clock is put back. A sentence about run times
+# in any of these states is the generalisation this milestone keeps paying for.
 #
 # IT SAYS AGE AND NOT TIME ON PURPOSE. The version M28.20 left here said the run times "are
 # printed here exactly as the record has them", which is true of ``make backup-status`` and
@@ -1026,8 +1035,10 @@ BACKUP_CLOCK_RUN_AHEAD = (
 # ``_how_long``, so what an operator reads is "4 hours ago" and the record's stamp is on no
 # line this feature writes — there is nothing here for it to be printed exactly as. (Other
 # parts of this panel do print times, ``_in_utc(...).strftime`` for a node probe among them;
-# this feature does not.) What survives the correction is the operator's actual question —
-# whether the "4 hours ago" beside this warning is still worth reading — and the answer this
+# this feature prints no RUN time that way. The schedule line does print ``record.at``, but
+# that is a time of day the record configures, not a moment a run happened.) What survives
+# the correction is the operator's actual question — whether the "4 hours ago" beside this
+# warning is still worth reading — and the answer this
 # state licenses, which is that the due date being ahead says nothing about those stamps.
 BACKUP_CLOCK_RUNS_UNDISTURBED = (
     " It does not touch the run times in it: the ages beside it are worked out from stamps "
@@ -1373,8 +1384,8 @@ def backup_standing(reading: backups.Reading) -> BackupStanding:
             # banner names the FINDING, and the finding is the same in both: a date in this
             # record is ahead of this clock, and the operator goes to the same host to look
             # at the same two things. What differs is the consequence — a run ahead makes
-            # every age worthless and no waiting repairs it, a due date ahead leaves the
-            # ages exact — and the consequence is carried by the SENTENCE, which is this
+            # every age worthless and no waiting repairs it, a due date ahead leaves them
+            # undisturbed — and the consequence is carried by the SENTENCE, which is this
             # console's rule everywhere else (see ``BackupStanding``: one failed run and a
             # schedule dead since August share one label and are separated by "19 hours
             # ago" against "43 days ago"). A second word would put the difference where an
