@@ -3687,6 +3687,68 @@ Gate: `make test-control` with a real Postgres — report the skip count, the re
 ~992/2 — then `make verify`, with the e2e half at **224 passed / 0 skipped**.
 
 
+### M28.23 — `infra`: what M28.21 left open at its round cap, and the counts that keep being wrong · 2026-09-25
+
+**M28.21 stopped at its round cap with three Highs open.** Its code is clean and gated — the
+seven sentences it was written for are fixed and every behavioural claim was re-derived by
+measurement in both rounds — but the fixes themselves wrote new prose, and that prose is what
+is open. This step takes it, plus one correction M28.22 found in text this plan repeats.
+
+**A. A claim that the code lacks something it has.** Both
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py:195-196` and
+`docs/tracker/M28/carry-over.md:324-326` say the sibling module *"has no `flowing()` at all"*,
+and the carry-over builds an action item on it — *"widening it belongs with whichever step next
+touches that file"*. But `tests/infra/test_the_command_line_says_what_the_panel_says.py:75-82`
+defines **`flat(text)`** — the same whitespace collapse plus a concat-seam strip — and already
+uses it at `:325`. Literally true of the *name*, false about the code, and it mis-scopes the
+work it hands on: nothing needs widening, the open assertions need only call the helper sitting
+160 lines above them.
+
+**B. The count is wrong again, in the entry whose own thesis is that the count keeps being
+wrong.** It says *"there are three, not one"*. There are **four**:
+`test_the_command_line_says_what_the_panel_says.py:1137` — `assert "No backup has ever been
+recorded on this host" not in result.stderr` — is byte-identical in phrase, source and shape to
+`:235`, which the entry does list. Both target `scripts/backup-run.sh:1019`. The entry's own
+instruction, *"sweep for the SHAPE, not the phrase"*, was not applied to the module it was
+written about.
+
+**Use M28.22's reframing here, because it is what makes these counts tractable:** **count
+assertions, not occurrences.** A phrase surviving inside the correction that replaced it, or
+inside a quotation of the defect, is not an instance. Three published counts in this milestone
+have been wrong by counting occurrences.
+
+**C. A fix for a Low that is false in a first-class state.** `docs/deploy/runbook.md:1748-1750`
+now says a record's standing is *"answered by the age of its runs: recent ones read as fresh"*.
+Measured against `_judge`: it is answered by the age of the last success **and** whether
+anything failed after it. A record whose runs are all recent but whose `last_failure.at >
+last_success.at` is `FAILING`, `loud=True`. `_judge`'s own docstring says so, and the same
+runbook section already lists *"backups are failing"* among the six standings.
+
+**D. A measurement this plan and the carry-over both repeat, which is hour-dependent.** Both
+state *"back 24 h → False, 36 h → False, 47 h → True"* for a clock that jumped backwards.
+Measured across all 24 hours by M28.22: 24 h → loud at **0** of 24, 36 h → **12**, 47 h →
+**23**, 48 h → **24**. **Write the date-boundary rule, not an hours figure** — and note the run
+half already carries that shape, since such a record also has `success_ahead=True`.
+
+**E. Two Lows from M28.21's second round.** The `WHAT IS LEFT RAW` enumeration reads as
+exhaustive and omits the planted-secret assertion at `:147` — correctly raw, since a
+runtime-interpolated value cannot be split by re-wrapping source. And its example for "a phrase
+that is a whole heredoc line of its own" names a phrase no assertion in that file targets; the
+real instance there is `:618`'s `"DATED AHEAD"`.
+
+**The method, which is the deliverable.** Every sentence names the state it holds for. Where
+one carries a number, **state the conditions it was measured under** — the east-host figures
+hold at `AT=04:00` and move with the schedule hour, and item D exists because an hours figure
+was published without its hour. Sweep the tree for a claim rather than reading the diff. Check
+each sentence against behaviour actually run.
+
+**Do not widen `flowing()` into the sibling module.** Item A's point is that the module already
+has `flat()`; the three open assertions there are for whichever step next touches that file.
+
+Gate: `make test-infra`, then `make verify`, with **e2e 224 passed / 0 skipped** reported
+explicitly.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
