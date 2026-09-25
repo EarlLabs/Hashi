@@ -368,3 +368,70 @@ one of the six standings.
 planted-secret assertion at `:147` (correctly raw — a runtime-interpolated value cannot be
 split by re-wrapping); and its example for "a whole heredoc line of its own" names a phrase no
 assertion in *that* file targets, where the real instance is `:618`'s `"DATED AHEAD"`.
+
+
+## From M28.22 — OPEN, and a decision about where this stops
+
+**Stopped at the round cap with three Highs open.** As with M28.21, the code is clean and
+gated (control 993/2, edge 911/3, infra 486, **e2e 224/0**, `make verify` exit 0) and every
+number in the new prose was re-derived and holds — the 7-state run-ahead sweep, the 14/10
+UTC+14 split with "behind for none", `floor(offset − at)` against four real fractional zones,
+and the `at` range (03:00→11, 03:01/03:30/04:00→10, 04:01→9).
+
+**The method worked and the sentences still drifted.** The corrected shape-sweep — by fact,
+over 21 distinctive nouns rather than by phrase — found **no** surviving paraphrase of the
+claims it was chasing. All three Highs are *new* sentences, written by the round-1 fixes.
+
+### Two that are NOT prose, carried into M28.24 (`control`)
+
+**1. A test's expected side rests on a false equivalence.** `has_a_run = standing is not
+backups.Standing.NEVER` in `test_the_run_times_clause_is_said_exactly_where_it_is_true`.
+`Standing.NEVER` means no backup ever **succeeded**, not that there is no run:
+`backup_standing` has a `case Standing.NEVER if reading.failed_since` branch that prints *"The
+last run was 6 hours ago…"*. Measured — `last_success: null`, `last_failure` 6 h old,
+`due_date` far ahead → standing `never`, a real age on screen, and
+`BACKUP_CLOCK_RUNS_UNDISTURBED` **is** said. The biconditional passes only because
+`_every_standing_with_a_record()`'s NEVER body happens to be the run-less shape, so its
+docstring's claim to sweep *"every state it could be said in"* is untrue. Derive `has_a_run`
+from the body (`body["last_success"] or body["last_failure"]`), and add the
+NEVER-with-a-failure body.
+
+**2. The mixed run-ahead state is unpinned on a stated ground that is false.** The reason
+given was that `_every_standing_with_a_record()` cannot reach it because no body carries both
+runs — measured, **the FAILING body does**: `record(last_failure=run(1, …))` keeps `record()`'s
+default `last_success=run(6)`. So it needs no purpose-built record, only a third value in the
+existing `runs_ahead` loop, guarded on the body having a failure. The reviewer's judgement,
+which I accept: leaving it is wrong, because this milestone's whole record is prose and pins
+drifting from behaviour, and **the gate's own justification was wrong about precisely this
+state one round ago**.
+
+### Prose accepted as debt, deliberately, and not fixed
+
+Three over-general sentences in comments and docstrings, all about the mixed run-ahead state:
+`console.py:1018` (*"under NEVER there is none"*), `:1025-1026` (*"false the moment ONE run is
+ahead and the other is not"* — measured true in 2 of the 4 mixed states; where the **success**
+is the ahead one the FRESH branch prints no failure age at all), `tests/…:988-990` (*"BOTH of
+them in this record"* — that record has no `last_failure`), plus two Lows (`step-notes:1715`'s
+unqualified *"this one does not"*, and `backups.py:154`'s *"fires for 1 hour"* which counts
+whole clock-hours over a 1.5 h window).
+
+**Why they stop here.** Fifteen instances of this class have been found in M28. The last four
+steps each removed several and wrote two or three more, because explaining a subtle state
+machine precisely takes **more** sentences and every new sentence is a fresh chance to
+generalise from the state in front of you. **None of these affects what the product does** —
+they are comments, docstrings and tracker notes, and acceptance walks the product. Continuing
+to rewrite them trades a real risk (a reader misled by a comment) against a measured one (each
+rewrite writing two more), and at this density the trade has stopped paying.
+
+**What a future milestone should do instead of another cleanup step:** delete, rather than
+refine. Every one of these sentences is an *explanation of a gate* sitting beside the gate. The
+gate is pinned by a biconditional that fails in both directions; the explanation is not pinned
+by anything and cannot be. Two of the three Highs above would not exist if the code said what
+the state is and stopped short of saying why the neighbouring state differs.
+
+**Two sentences examined and confirmed NOT instances:** `console.py:1061` and the rendered
+`BACKUP_CLOCK_RUN_AHEAD` (*"no age on this screen can be believed"*). Both stamps in a record
+come off the one host whose clock the reader has just caught disagreeing; the panel cannot know
+whether the skew was standing or a jump-and-return, so a surviving age is exactly as
+unverifiable as a clamped one. Claims about believability, not about what is printed, and they
+fail in the safe direction.
