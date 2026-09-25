@@ -993,9 +993,9 @@ def _ago(delta: datetime.timedelta | None, *, ahead: bool = False) -> str:
 
 # The line both halves below open on, and the only thing that is true of a record with
 # either of them. Split out because the sentence it used to open on was not: "…so no age on
-# this screen can be believed" is a statement about RUN TIMESTAMPS, and a record whose due
-# date alone is ahead has run times that are exact, printed exactly, and agree with
-# `make backup-status` to the minute. Telling an operator to disbelieve those would be this
+# this screen can be believed" is a statement about RUN TIMESTAMPS, and on a record whose
+# due date alone is ahead nothing has put those stamps in doubt — so the age this screen
+# works out from each of them stands. Telling an operator to disbelieve it would be this
 # milestone's own defect — a channel asserting something the record does not license — and
 # it is the shape the command line was caught in one step earlier (M28.19, round 1).
 BACKUP_CLOCK_OPENING = (
@@ -1012,6 +1012,26 @@ BACKUP_CLOCK_RUN_AHEAD = (
     "can read as one taken this morning. A later run of the same kind is what replaces "
     "that stamp — a success replaces the last success, a failure the last failure — so fix "
     "the clock on that host first, then read this again."
+)
+
+# Said with the due clause and only where BOTH hold: no run in this record is ahead, and
+# there is a run to have an age at all. Under NEVER there is none; with a run ahead as well
+# there is no age on the screen either — ``_ago`` puts ``BACKUP_AGE_UNKNOWABLE`` where the
+# age would go — and a sentence about run times in either state is the generalisation this
+# milestone keeps paying for.
+#
+# IT SAYS AGE AND NOT TIME ON PURPOSE. The version M28.20 left here said the run times "are
+# printed here exactly as the record has them", which is true of ``make backup-status`` and
+# false here: every run time this feature puts on the screen is rendered by ``_ago`` or
+# ``_how_long``, so what an operator reads is "4 hours ago" and the record's stamp is on no
+# line this feature writes — there is nothing here for it to be printed exactly as. (Other
+# parts of this panel do print times, ``_in_utc(...).strftime`` for a node probe among them;
+# this feature does not.) What survives the correction is the operator's actual question —
+# whether the "4 hours ago" beside this warning is still worth reading — and the answer this
+# state licenses, which is that the due date being ahead says nothing about those stamps.
+BACKUP_CLOCK_RUNS_UNDISTURBED = (
+    " It does not touch the run times in it: the ages beside it are worked out from stamps "
+    "this half gives no reason to doubt."
 )
 
 
@@ -1031,9 +1051,19 @@ def _backup_clock(reading: backups.Reading) -> str:
       worthless — the six-week-old backup that reads as this morning's — and no run of a
       different kind repairs it;
     * a DUE DATE this reader has not reached does not touch those ages. On a record where
-      only it is ahead they stay exact, are printed as the record has them, and agree with
-      ``make backup-status`` to the minute; what is wrong is that the record and this
-      reader disagree about what DAY it is.
+      only it is ahead they are worked out from stamps this half says nothing about, so
+      they stand; what is wrong is that the record and this reader disagree about what DAY
+      it is.
+
+    WHAT THIS FEATURE SHOWS OF A RUN IS AN AGE AND NEVER A STAMP, which is why neither half
+    here may say the record's times are printed or compare them with what another channel
+    prints. Every run time here is rendered by ``_ago`` or ``_how_long``, which give "less
+    than an hour", then hours up to two days, then days: measured, a record holding
+    ``2026-09-23T08:00:00Z`` read four hours later draws "Last backup 4 hours ago", and the
+    stamp itself reaches no line this feature writes. Until M28.22 both
+    this bullet and the clause below claimed the opposite — true of ``make backup-status``,
+    which prints the ISO timestamp, and carried here by M28.20 to the channel that prints
+    ages.
 
     Both halves can be set at once — a clock that jumped forward and was put back leaves
     both — so they are two independent questions and not a chain of ``elif``, and a record
@@ -1058,35 +1088,39 @@ def _backup_clock(reading: backups.Reading) -> str:
             "when it read the record and one no timezone accounts for, so this panel and "
             "whatever wrote that line disagree about what day it is."
         )
-        # ...and the clause about the run times is said only where it is TRUE, which is
-        # neither of the two states it reads naturally over. Under NEVER there are no run
-        # times on the screen to be unaffected; and where a run is ahead as well, the ages
-        # are not printed at all — ``_ago`` puts ``BACKUP_AGE_UNKNOWABLE`` in their place —
-        # so "printed here exactly as the record has them" is false, and reads as a
-        # retraction of the clause three sentences above it. Both are the same mistake this
-        # milestone has now paid for seven times: a sentence true of the state it was
-        # written for, printed in a state nobody had in mind.
+        # ...and the clause about the run times is said only where it is TRUE. The gate is
+        # the whole of it and is stated at the constant: a run to have an age, and none of
+        # them ahead. Over that gate, and not over the wording, is what
+        # ``test_the_run_times_clause_is_said_exactly_where_it_is_true`` pins.
         run_ahead = reading.success_ahead or reading.failure_ahead
         if not run_ahead and (reading.record.last_success or reading.record.last_failure):
-            said += (
-                " It does not touch the run times in it: those are printed here exactly as "
-                "the record has them."
-            )
-        # AND THE CAUSE IS NAMED NARROWLY, which is where the first version of this clause
-        # went wrong. It said "a clock that moved, or a HASHI_BACKUP_TZ moved west" and sent
-        # the operator to check both — carried over from
+            said += BACKUP_CLOCK_RUNS_UNDISTURBED
+        # AND NO CAUSE IS NAMED THAT THIS GRACE MAKES IMPOSSIBLE, which is where the first
+        # version of this clause went wrong. It said "a clock that moved, or a
+        # HASHI_BACKUP_TZ moved west" and sent the operator to check both — carried from
         # ``scripts/backup-run.sh::clock_ahead_warning``, where it is true because that
         # channel compares in the configured zone and has no grace. Here it cannot be: this
         # clause prints only past ``backups.DUE_AHEAD_GRACE``, and a moved timezone is
         # BY CONSTRUCTION the one cause that never gets past it — measured, a record left by
         # a real ``HASHI_BACKUP_TZ`` move west answers ``due_ahead=False``. So the sentence
         # named a variable that cannot have produced what the operator was reading.
+        #
+        # AND NO CAUSE IS NAMED EXCLUSIVELY EITHER, which is the other way round and is the
+        # correction M28.22 made. Until then it said a moved clock "is what" leaves a record
+        # like this behind — one cause out of four this file cannot tell apart, since a date
+        # seeded by hand, a clock that moved, an edit to the file and a record carried from
+        # another machine all arrive here as the same bytes. It sent an operator whose
+        # record had been hand-edited to check a clock that was fine. What survives both
+        # corrections is "a timezone cannot": a statement about the width of the calendar
+        # rather than about that host, and the reason this is said at all.
         said += (
-            " A clock that moved on that host is what leaves a record like this behind, and "
-            "a timezone cannot: a due date resolved anywhere on Earth is at most a day from "
-            "this one, which is why this is said at all. Check the clock on that host. What "
-            "the schedule makes of that date is not a question this record answers, and "
-            "this record is all this panel reads."
+            " A clock that moved on that host is one of the things that leaves a record "
+            "like this behind, and a timezone cannot: a due date resolved anywhere on "
+            "Earth is at most a day from this one, which is why this is said at all. Check "
+            "the clock on that host, and if it is right, where this record got that date — "
+            "a hand edit, a seeded date and a file carried from another machine all reach "
+            "this panel looking the same. What the schedule makes of that date is not a "
+            "question this record answers, and this record is all this panel reads."
         )
     return BACKUP_CLOCK_OPENING + said if said else ""
 

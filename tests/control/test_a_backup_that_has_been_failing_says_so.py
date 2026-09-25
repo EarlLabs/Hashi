@@ -697,6 +697,18 @@ async def test_a_record_with_no_offsite_field_is_not_read_as_a_record(written) -
     The distinction M28.6 drew and this keeps: silent about keys it does not read, strict
     about keys it does. A record missing one of those is not this writer's record, and
     "I cannot read this" is recoverable in a way "I assumed where your backups go" is not.
+
+    WITH ONE KEY EXEMPT, ON PURPOSE, AND IT IS NOT A GAP TO BE CLOSED. ``due_date`` has
+    been a key this reader READS since M28.20 and is read LENIENTLY: absent, ``null``, a
+    non-string, or a string that is not ``YYYY-MM-DD`` all become ``""`` and leave the
+    standing to the runs — measured in
+    ``test_a_due_date_this_panel_cannot_read_is_not_an_unreadable_record`` and
+    ``test_a_missing_due_date_is_not_a_damaged_record``, later in this file. The reason is
+    the one M28.18 paid for: ``scripts/lib/backup-record.sh`` does not validate that field
+    either, so a panel that refused the file over it would be stricter than the command
+    line about whether a record is readable at all — the two-channel disagreement, arriving
+    from this end. Anyone "finishing" the parser on the strength of the rule above reopens
+    it, which is why the exception is written where the rule is.
     """
     without = record()
     del without["offsite"]
@@ -927,11 +939,19 @@ async def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(
 ) -> None:
     """The half that is NOT the run timestamps, and the distinction that cost M28.19 a round.
 
-    A record whose due date alone is ahead has exact run times: they are printed as they
-    are, and ``make backup-status`` prints the same ones to the minute. One sentence
-    covering both halves told an operator to disbelieve a number that was right, which is
-    the two-channels-disagree defect written into the very paragraph whose job is to stop
-    it. So the age is still an age here, and the "no age can be believed" clause is absent.
+    A record whose due date alone is ahead has run stamps nothing has cast doubt on, so
+    the age this screen works out from them still means what it says. One sentence covering
+    both halves told an operator to disbelieve a number that was right, which is the
+    two-channels-disagree defect written into the very paragraph whose job is to stop it.
+    So the age is still an age here, and the "no age can be believed" clause is absent.
+
+    What this feature shows of a run is an AGE and never a stamp, which is why neither this
+    docstring nor the clause it checks may say the times are printed, or compare them with
+    what another channel prints of them: every one of them is rendered by ``_ago`` or
+    ``_how_long``, so a record holding ``2026-09-23T08:00:00Z`` read four hours later draws
+    "4 hours ago" and the stamp reaches no line this feature writes. Both claims were here
+    until M28.22 — true of ``make backup-status``, which prints the ISO timestamp, and
+    carried to the channel that prints ages.
     """
     said = await standing_of(
         written(record(due_date=A_DAY_NOBODY_HAS_REACHED, last_success=run(4),
@@ -941,7 +961,7 @@ async def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(
     assert "Last backup 4 hours ago" in said.headline
     assert console.BACKUP_AGE_UNKNOWABLE not in flowing(said.headline + said.detail)
     assert "no age on this screen can be believed" not in flowing(said.detail)
-    assert "It does not touch the run times in it" in said.detail
+    assert console.BACKUP_CLOCK_RUNS_UNDISTURBED in said.detail
 
 
 async def test_a_record_with_both_dates_ahead_says_both_things(written) -> None:
@@ -963,23 +983,83 @@ async def test_a_record_with_both_dates_ahead_says_both_things(written) -> None:
     assert f"Its due date is {A_DAY_NOBODY_HAS_REACHED}" in said.detail
     # One opening line over the two, said once, because it is the only thing true of both.
     assert flowing(said.detail).count("is AHEAD of the clock this panel read it") == 1
-    # AND THE ONE CLAUSE THAT IS NOT TRUE HERE IS NOT SAID. "The run times are printed
-    # exactly as the record has them" holds of a due date ahead ON ITS OWN; with a run
-    # ahead as well there are no times on the screen at all — ``_ago`` prints
-    # ``BACKUP_AGE_UNKNOWABLE`` instead — so the sentence would be false, and read beside
-    # "no age on this screen can be believed" it would read as a retraction of it.
+    # AND THE ONE CLAUSE THAT IS NOT TRUE HERE IS NOT SAID. The ages are undisturbed by a
+    # due date ahead ON ITS OWN; with a run ahead as well there is no age on the screen at
+    # all — ``_ago`` prints ``BACKUP_AGE_UNKNOWABLE`` where it would go — so the clause
+    # would be false, and read beside "no age on this screen can be believed" it would read
+    # as a retraction of it. The whole gate is swept in
+    # ``test_the_run_times_clause_is_said_exactly_where_it_is_true``.
     assert console.BACKUP_AGE_UNKNOWABLE in said.headline
-    assert "It does not touch the run times" not in flowing(said.detail)
+    assert console.BACKUP_CLOCK_RUNS_UNDISTURBED not in flowing(said.detail)
+
+
+def _with_the_runs_ahead(body: dict) -> dict:
+    """The same record with every run it HAS stamped after the moment it will be read.
+
+    Only the two ``_ahead`` reads — ``last_success`` and ``last_failure`` — decide the run
+    half, but ``last_attempt`` moves with them so the record stays one a writer could have
+    left: a success at this hour and an attempt six weeks earlier is not a shape
+    ``scripts/backup-run.sh`` can write, and a fixture nobody could produce proves nothing.
+    """
+    ahead = dict(body)
+    for key in ("last_success", "last_failure", "last_attempt"):
+        was = body.get(key)
+        if was is not None:
+            ahead[key] = run(-30, exit_code=was["exit_code"], outcome=was["outcome"])
+    return ahead
+
+
+async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) -> None:
+    """``BACKUP_CLOCK_RUNS_UNDISTURBED``, over every state it could be said in.
+
+    Three things have to hold before that clause may be said, and two of them have been got
+    wrong on this screen already: the due date has to be ahead, or there is nothing for it
+    not to touch; no run may be ahead, or there is no age on the screen for it to be about
+    — ``_ago`` puts ``BACKUP_AGE_UNKNOWABLE`` where the age would go; and there has to BE a
+    run, which under NEVER there is not.
+
+    A BICONDITIONAL AND NOT A PRESENCE CHECK. A presence check cannot fail in the direction
+    this milestone keeps failing in — a true sentence appearing in a state nobody had in
+    mind — so it reads as "this sentence has been checked" while checking the half that was
+    never in doubt. The expected side is written from the SCENARIO (due ahead, runs ahead,
+    a run at all) rather than from the reading, so it is not the implementation restated.
+
+    Pinned by constant, because a literal here would be a second copy of the sentence, and
+    two copies agree with each other even when both are wrong.
+    """
+    for standing, body in _every_standing_with_a_record().items():
+        has_a_run = standing is not backups.Standing.NEVER
+        for due_ahead in (True, False):
+            for runs_ahead in (True, False):
+                content = _with_the_runs_ahead(body) if runs_ahead else dict(body)
+                if due_ahead:
+                    content["due_date"] = A_DAY_NOBODY_HAS_REACHED
+
+                reading = await backups.read(written(content), now=NOW)
+                case = (standing, due_ahead, runs_ahead)
+                assert reading.due_ahead is due_ahead, case
+                assert (reading.success_ahead or reading.failure_ahead) is (
+                    runs_ahead and has_a_run
+                ), case
+
+                said = console.backup_standing(reading)
+                assert (
+                    console.BACKUP_CLOCK_RUNS_UNDISTURBED in flowing(said.detail)
+                ) is (due_ahead and not runs_ahead and has_a_run), case
 
 
 async def test_a_due_date_a_timezone_could_explain_is_left_alone(written) -> None:
     """The grace is the width of the calendar, not a tolerance for skew.
 
     The writer resolves the due date in the SCHEDULE'S zone and this reader has one clock,
-    in UTC. A host scheduled in Pacific/Kiritimati is honestly a day ahead of UTC for ten
-    hours out of every twenty-four, so a comparison without ``DUE_AHEAD_GRACE`` would put a
-    standing complaint about a clock on the front page of a host backing itself up
-    perfectly, every day — which is how a banner becomes furniture.
+    in UTC. A host at UTC+14 whose schedule runs at 04:00 is honestly a day ahead of UTC
+    for ten hours out of every twenty-four — measured at that hour and no other, since the
+    count is the offset less the hour the schedule names, so the same host at 12:00 is
+    ahead for two. Either way a comparison without ``DUE_AHEAD_GRACE`` would put a
+    complaint about a clock on the front page of a host backing itself up perfectly, every
+    day it happens at all — which is how a banner becomes furniture. The sweep behind those
+    two numbers, over every whole offset and three schedule hours, is written down at
+    ``backups.DUE_AHEAD_GRACE``.
 
     What that leaves unseen is stated rather than hidden: the day-ahead record a
     ``HASHI_BACKUP_TZ`` moved west leaves behind is this same shape from this reader's
@@ -1072,10 +1152,12 @@ async def test_the_due_date_half_never_says_the_schedule_has_stopped(written) ->
         # ``DUE_AHEAD_GRACE`` a moved timezone is the one cause that cannot be it.
         assert "HASHI_BACKUP_TZ" not in flowing(said.detail), standing
         # The clause about the run times rides on there being some AND on none of them
-        # being ahead — the second half is exercised in the both-ahead test above. NEVER
-        # has none, and a sentence about run times over a record with no run in it is the
-        # generalisation this milestone keeps paying for.
-        assert ("It does not touch the run times" in said.detail) is (
+        # being ahead. NEVER has none, and a sentence about run times over a record with no
+        # run in it is the generalisation this milestone keeps paying for. Only the first
+        # half is reachable here, where every record has its due date ahead and no run is;
+        # the whole gate is swept in
+        # ``test_the_run_times_clause_is_said_exactly_where_it_is_true``.
+        assert (console.BACKUP_CLOCK_RUNS_UNDISTURBED in flowing(said.detail)) is (
             standing is not backups.Standing.NEVER
         ), standing
 

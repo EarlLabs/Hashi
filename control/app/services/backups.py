@@ -143,10 +143,23 @@ CLOCK_AHEAD_GRACE = datetime.timedelta(minutes=1)
 # in the SCHEDULE'S zone (``Record.zone``), and this reader has one clock, in UTC. The
 # inhabited zones run from UTC−12 to UTC+14, so a due date resolved honestly in any of them
 # is at most one day either side of this reader's own date, and a comparison without this
-# grace would put a standing complaint about a clock on the front page of every host
-# scheduled east of UTC, for ten hours out of every day, while that host was backing itself
-# up perfectly. A banner that appears daily on a healthy host is the ``RECENT_GAP`` mistake
-# in a new place: it becomes furniture and stops being read.
+# grace would put a complaint about a clock on the front page of a host that was backing
+# itself up perfectly.
+#
+# HOW OFTEN, MEASURED, BECAUSE THE QUANTIFIER KEPT COMING OUT WRONG. It is not every host
+# east of UTC and it is not a standing banner. ``scripts/backup-run.sh::due_date`` names
+# the local day, less one before the configured hour has come round, so the hours of the
+# day at which a zero-grace comparison would fire are the zone's offset east of UTC minus
+# that hour rounded up, floored at zero. Swept over every whole offset from UTC−12 to
+# UTC+14 against the real ``date`` and the real zone database, with the schedule at 04:00:
+# UTC+0 through UTC+4 would never be flagged at all, UTC+9 for 5 hours of every 24, UTC+12
+# for 8, UTC+14 for 10, and nowhere west of UTC ever. The hour is configuration, so it
+# moves every one of those numbers — the same sweep at 00:30 gives UTC+14 thirteen hours
+# and reaches as far west as UTC+2, and at 12:00 only UTC+13 and UTC+14 are left with
+# anything, one hour and two. What survives every one of those numbers is the argument for
+# the grace, because on the hosts it does reach it fires every day — and a banner that
+# appears daily on a healthy host is the ``RECENT_GAP`` mistake in a new place: it becomes
+# furniture and stops being read.
 #
 # So this is not a tolerance for skew, it is the width of the calendar. Over it, the
 # record names a day that has not begun anywhere on Earth, and NO timezone explains it —
@@ -551,6 +564,13 @@ def _parse(data: bytes) -> Record:
     later version of the writer adding a sixteenth key must not make this panel go
     unreadable, while a key this code DOES read arriving as the wrong kind of thing must,
     because that is the case where a wrong answer would otherwise be composed from it.
+
+    ONE KEY IT READS IS DELIBERATELY EXEMPT, and it is not a gap to be closed: ``due_date``
+    goes through ``_a_date``, which answers ``""`` for absent, ``null``, a non-string or a
+    string that is not ``YYYY-MM-DD``, and never ``_Malformed``. ``_a_date`` says why —
+    ``scripts/lib/backup-record.sh`` does not validate that field either, so a panel that
+    refused the file would be the two-channel disagreement M28.18 closed, arriving from
+    the strict side. Anyone tightening the rule above onto it reopens that.
     """
     raw = json.loads(data.decode("utf-8"))
     if not isinstance(raw, dict):

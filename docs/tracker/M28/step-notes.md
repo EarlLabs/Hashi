@@ -1445,10 +1445,20 @@ validates, and `_record_field` returns **empty**, so `status` says *the record s
 Unifying them would move that line on hand-edited records. One way *in*, not one regex.
 
 **`due_date`, `attempts` and `retry_not_before` are read but not validated, and that is
-load-bearing.** `control/app/services/backups.py::_parse` does not read them at all, so
-validating them here would refuse files the panel reads happily — the two-channel
-disagreement arriving from the strict side. Anyone "finishing" the validator reopens the
-defect this step closed.
+load-bearing.** Validating them here would refuse files the panel reads happily — the
+two-channel disagreement arriving from the strict side. Anyone "finishing" the validator
+reopens the defect this step closed.
+
+**The conclusion is M28.18's and the reason is no longer M28.18's.** This said
+`control/app/services/backups.py::_parse` *"does not read them at all"*, which M28.20 made
+false for `due_date` and M28.21's sweep missed — it corrected the identical sentence in
+`scripts/lib/backup-record.sh` and not this copy. Measured now: `attempts` and
+`retry_not_before` that module still does not read, so there is nothing over there to
+disagree with; `due_date` it reads LENIENTLY — absent, `null`, a non-string or a string that
+is not `YYYY-MM-DD` all come back `""` and the standing is whatever the runs say — so
+refusing that field HERE would refuse a file the panel goes on printing in full. Same
+conclusion, opposite road. `scripts/lib/backup-record.sh:136-148` already says it this way;
+this was the copy left behind.
 
 ### The guards, and exactly where they end
 
@@ -1595,25 +1605,48 @@ prints both. Do not make it an `elif`.
 ### THE EIGHTH SURFACE IS ONLY PARTLY CLOSED, and the milestone must not report otherwise
 
 **`DUE_AHEAD_GRACE` is one whole day, so the panel sees a due date only when it is MORE
-than a day past this reader's UTC date.** Caught: the hand-seeded `2099-01-01` shape, a host
-clock that jumped back by a day or more, a hand edit, a record carried from another machine.
+than a day past this reader's UTC date** — `due_date > (its own UTC date + 1 day)`, and
+hour-independent, because both sides are `.date()` of one instant. Caught: the hand-seeded
+`2099-01-01` shape, a hand edit, a record carried from a machine whose calendar is two days
+past this one.
+
+**NOT "a host clock that jumped back by a day or more", which is what this note said until
+M28.22 and is wrong twice over.** Measured against the real `_due_ahead`, with the READER's
+clock behind the writer's: back 24 h is loud at **none** of the 24 hours of the day, back
+36 h at **12** of them, back 47 h at **23**, back 48 h at all 24. The size of the jump does
+not settle it — the number of date boundaries it crosses does, and that depends on the hour
+it happens at, so no figure in hours belongs in this sentence. And wherever THIS shape is
+loud the record is already loud through the run half, which is why it was never the due
+half that was carrying it: the reader is behind the run that wrote that due date by however
+far the clock fell, so if that run is the record's last success it is ahead of the reader
+too — measured on the same readings, `success_ahead=True` at every one of them.
 
 **NOT caught: the `HASHI_BACKUP_TZ` moved west shape** — the one an operator produces by
-editing one variable, and the one the plan reproduced organically. It leaves a due date
-exactly ONE day ahead, and measured against a record written by a real `tick`
-(`Pacific/Kiritimati` → `Pacific/Midway`) the panel answers `due_ahead=False`. **`due` and
+editing one variable, and the one the plan reproduced organically. It leaves a due date **no
+more than a day** ahead of this reader — zero or one, depending on the hour and on
+`HASHI_BACKUP_AT`, never two — so it is under the grace whichever it is. Measured against a
+record written by a real `tick` (`Pacific/Kiritimati` → `Pacific/Midway`) at UTC 13:57 with
+`AT=04:00` the offset was **zero** days, and the panel answers `due_ahead=False`. **Never
+write "exactly one day"**, which is what this line said until M28.22 and is the ninth
+instance of this milestone's own defect class. **`due` and
 `status` remain the only two channels that see that half.**
 
 **Why it cannot be had honestly from this file, so that nobody "finishes" it.** The writer
 resolves the due date in the SCHEDULE'S zone; this reader has one clock, in UTC; the
 inhabited zones span UTC−12 to UTC+14. A due date one day ahead of UTC is therefore exactly
-what a healthy host scheduled in `Pacific/Kiritimati` writes every day, for ten hours out of
-twenty-four. Telling the two apart needs the zone the host is set to **now**, which lives in
-`.env` and is not a file the panel may open — and the record's own `zone` is the one the
-LAST RUN used, so **a host whose `HASHI_BACKUP_TZ` has just moved west presents a record
-byte-identical to the one it presented while healthy.** Narrowing the grace would put a
-standing `clock ahead` banner on every eastward-scheduled host, daily, while it backed
-itself up perfectly — the `RECENT_GAP` mistake again, a banner that becomes furniture.
+what a healthy host scheduled in `Pacific/Kiritimati` writes every day — for ten hours out of
+twenty-four **with the schedule at 04:00**, which is the only hour that figure holds for: the
+count is the offset less the hour `at` names, so at 12:00 the same host writes it for two
+hours and a host at UTC+9 for none. Telling the two apart needs the zone the host is set
+to **now**, which lives in `.env` and is not a file the panel may open — and the record's
+own `zone` is the one the LAST RUN used, so **a host whose `HASHI_BACKUP_TZ` has just moved
+west presents a record byte-identical to the one it presented while healthy.** Narrowing the
+grace would put a `clock ahead` banner on a host that was backing itself up perfectly, for
+some hours of every day — **not** on *every* eastward-scheduled host and **not** standing,
+which is how this sentence read until M28.22: at 04:00 nothing from UTC+0 to UTC+4 would
+ever be flagged, while UTC+14 would be for ten hours of every twenty-four. Daily on the
+hosts it does reach is enough for the `RECENT_GAP` mistake again, a banner that becomes
+furniture.
 
 Resolving `Record.zone` with `zoneinfo` was considered and refused: filesystem I/O off a
 disk-file string on the page-draw path, a copy of the schedule's own `TZ=<zone> date +%F`,
@@ -1662,12 +1695,22 @@ No apostrophe reaches any of these — Jinja escapes `'` to `&#39;`. Label stays
 - the run half keeps *"no age on this screen can be believed"* and *"disagree about the
   time"*.
 - the due half: *"Its due date is `<date>`, a day this panel had not reached when it read the
-  record and one no timezone accounts for…"*; *"A clock that moved on that host is what
-  leaves a record like this behind, and a timezone cannot… Check the clock on that host."*;
+  record and one no timezone accounts for…"*; *"A clock that moved on that host is **one of
+  the things** that leaves a record like this behind, and a timezone cannot… Check the clock
+  on that host, and if it is right, where this record got that date…"* — narrowed by M28.22,
+  which found *"is what"* naming one cause exclusively out of four this panel cannot tell
+  apart (a seeded date, a moved clock, a hand edit, a file carried from another machine);
   *"What the schedule makes of that date is not a question this record answers, and this
   record is all this panel reads."*
-- said only where there is a run and no run is ahead: *"It does not touch the run times in
-  it: those are printed here exactly as the record has them."*
+- said only where there is a run and no run is ahead —
+  `console.BACKUP_CLOCK_RUNS_UNDISTURBED` since M28.22, which also corrected it: *"It does
+  not touch the run times in it: the ages beside it are worked out from stamps this half
+  gives no reason to doubt."* It said *"those are printed here exactly as the record has
+  them"* until then, which is true of `make backup-status` and false of this screen —
+  **no run time this feature prints is a timestamp**: every one is rendered by `_ago` or
+  `_how_long` and comes out a coarse age ("4 hours ago" over `2026-09-23T08:00:00Z` read
+  four hours later), so there is nothing here for another channel to agree with to the
+  minute. Other parts of the panel do print times; this one does not.
 
 **Nothing composed here says the schedule has stopped, and nothing works out when a backup
 is next owed.** The first was made false by M28.19; the second is the schedule's own
@@ -1683,9 +1726,18 @@ The code is gated and clean — `make verify` exit 0, control 992/2, edge 911/3,
 **e2e 224/0** — and every behavioural claim in the diff was re-derived by measurement in both
 rounds. The open items are carried into M28.23 rather than fixed in a third round.
 
-**The seven sentences are fixed and verified.** `"to the minute"` is gone from `scripts/` and
-`docs/deploy/` (one unrelated hit remains in an e2e comment); `"exactly one day"` is **zero
-tree-wide**; `"east of UTC"` survives only in the control file M28.22 owns.
+**The seven sentences are fixed and verified.** `"to the minute"` no longer ASSERTS anything
+in `scripts/` or `docs/deploy/` (one unrelated hit remains in an e2e comment), and nothing in
+the tree asserts `"exactly one day"` or `"every host east of UTC"`.
+
+**That sentence was a count and the count was wrong, which M28.22 corrected here.** It said
+`"exactly one day"` was *zero tree-wide* and `"east of UTC"` *survived only in the control
+file M28.22 owns* — while both phrases sat in this very section as it was written: the
+prohibition below quotes the first, and the offset table after it quotes the second. M28.22
+added more of both, because a correction has to quote the sentence it corrects. **Count the
+ASSERTIONS, not the occurrences.** A grep total over a tracker full of quoted-and-corrected
+prose is a number that cannot be right, and a published one has already been wrong more than
+once this milestone — `carry-over.md`, the M28.21 round-1 entry and its open item 2.
 
 **The measured boundary, which every one of those sentences now states:** the panel is loud
 iff `due_date > (its own UTC date + 1 day)`. One day ahead is False, two is True — and this is
