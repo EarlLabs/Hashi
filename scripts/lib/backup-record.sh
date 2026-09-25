@@ -19,13 +19,18 @@
 #       is not closed by this library. That record is valid — every reader parses it and
 #       they agree about it — so it arrives here as a reading, and everything that then
 #       happens to it happens in `scripts/backup-run.sh`: `decide` takes a backup on a due
-#       date ahead of the clock (M28.19), `due` exits 1, and the panel goes loud only when
-#       a RUN TIMESTAMP is ahead — `control/app/services/backups.py::_ahead` reads
-#       `last_success` and `last_failure` and never `due_date`, by its own documented
-#       design, so a record whose due date alone is ahead draws no CLOCK banner at all —
-#       one whose runs are also old still goes loud about their age, which is a different
-#       sentence about a different thing. Verified by reading both records through that
-#       module. Do not read the paragraph above as having covered any of it.
+#       date ahead of the clock (M28.19), `due` exits 1, and the panel goes loud on two
+#       halves that do not have the same reach. `control/app/services/backups.py::_ahead`
+#       reads `last_success` and `last_failure` and neither `last_attempt` nor anything
+#       else, so a record where ONLY the last attempt is ahead draws no CLOCK banner there
+#       at all. `_due_ahead` reads `due_date` as well since M28.20, but only past
+#       `DUE_AHEAD_GRACE`, a whole day — so a record whose due date alone is ahead is loud
+#       there when that date is MORE than a day past the panel's own UTC date and silent
+#       when it is no more than a day past, which is the most a HASHI_BACKUP_TZ moved west
+#       can leave. Measured against that module rather than read off it: one day ahead
+#       answers False, two days ahead answers True. A record whose runs are also old still
+#       goes loud about their age, which is a different sentence about a different thing.
+#       Do not read the paragraph above as having covered any of it.
 #
 #       That is the shape M28.12 named and M28.13 closed one level down, in
 #       `scripts/lib/env-value.sh`, and the lesson is the same: the defect was never one
@@ -129,10 +134,19 @@ RECORD_BYTES=""
 # are only ever assigned after the validation above has passed.
 #
 # THE SCHEDULE'S OWN THREE — `due_date`, `attempts`, `retry_not_before` — are read but NOT
-# validated, and that is deliberate rather than an omission. The panel does not read them at
-# all (control/app/services/backups.py::_parse), so validating them here would refuse a file
-# the panel reads happily, which is the two-channels-disagree defect arriving from the
-# strict side. They are coerced where they are used instead: a count through `_record_number`
+# validated, and that is deliberate rather than an omission. Validating them here would
+# refuse a file the panel reads happily, which is the two-channels-disagree defect arriving
+# from the strict side. THE CONCLUSION IS ONE AND THE REASON IS NO LONGER ONE, because
+# M28.20 moved half of it:
+#   * `attempts` and `retry_not_before` the panel does not read at all
+#     (control/app/services/backups.py::_parse), so there is nothing over there to disagree
+#     with — that is the old reason and it still holds for these two;
+#   * `due_date` it DOES read now, and reads LENIENTLY: absent, `null`, a non-string, or
+#     anything that is not `YYYY-MM-DD` becomes an empty string over there and never makes
+#     the record unreadable — measured by reading each of those shapes through that module.
+#     So the same conclusion arrives by the opposite road: refusing this field HERE would
+#     refuse a file the panel goes on printing in full.
+# They are coerced where they are used instead: a count through `_record_number`
 # because `$(( ))` reads `08` as octal and dies.
 READING_DUE_DATE=""
 READING_ATTEMPTS=0

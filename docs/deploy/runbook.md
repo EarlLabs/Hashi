@@ -1738,13 +1738,16 @@ exactly the belief that there is one.
 The missed days are printed newest first — the panel sorts them itself rather than taking
 the writer's order, so *"most recent"* points at now even during a gap that started weeks
 ago; the writer stores them newest first as well, so the two agree without either taking
-the other on trust. And a **run** in the record dated ahead of the clock the panel reads it
-against is said so instead of being reported as a backup taken minutes ago: the age is still
-clamped for the arithmetic, so a disagreeing clock cannot turn a stale backup into a fresh
-one, but the screen goes loud with `clock ahead` and says no age on it can be believed until
-the two machines agree about the time. A *run* and not the record's `due_date`, which this
-screen does not read at all — that half is said on the command line only, and the Backups
-section below says which is which.
+the other on trust. And the **last success** or the **last failure** in the record dated
+ahead of the clock the panel reads it against is said so instead of being reported as a
+backup taken minutes ago: the age is still clamped for the arithmetic, so a disagreeing
+clock cannot turn a stale backup into a fresh one, but the screen goes loud with `clock
+ahead` and says no age on it can be believed until the two machines agree about the time.
+Those two run fields and no others — a record where only the last **attempt** is ahead is
+read as fresh here, with no banner, and is said on the command line and nowhere else. The
+record's `due_date` is read too, and read with a whole day of grace, so a due date more
+than a day past this screen's own UTC date is loud here and one no more than a day past is
+not. The Backups section below says which is which, and why that day is the width it is.
 
 **`make backup-status` says the same three things on the command line, out of the same
 field, and refuses the same file.** It closes with whichever of the three caveats the
@@ -1773,8 +1776,10 @@ say WHICH half of it is ahead** — because the two halves cost different things
 dated after the moment the file was read makes every age printed beside it worthless: a
 backup taken weeks ago reads as one taken this morning. (All three run fields are asked
 here; the panel reads the last success and the last failure.) A **due date** this host has not
-reached does not: the run times in that record are exact, are printed as they are, and
-agree with the panel to the minute. One paragraph covering both would tell an operator to
+reached does not: the run times in that record are exact, are printed as they are, and the
+age the panel puts beside them is worked out from those same times — this channel prints
+the timestamp and that screen prints an age, so the two agree about the backup rather than
+about a string. One paragraph covering both would tell an operator to
 disbelieve a number that is right, which is the same defect one level down.
 `scripts/backup-run.sh due` reports `clock=ahead` and exits **1** rather than 0 for either,
 whatever the action on the same line turns out to be; `make backup-status` prints the same
@@ -1828,14 +1833,29 @@ says.
 loud — a *clock ahead* banner — when the last **success** or the last **failure** in the
 record is dated ahead, which is what a clock that jumped forward leaves behind. Those two
 fields and no others: a record where only the last *attempt* is ahead is a hand edit, and
-it is said on the command line and nowhere else. It does **not** read the record's `due_date` at
-all, so the zone-moved-west shape gives it a quiet, healthy-looking screen — *last backup
-less than an hour ago*, no banner — about a record this host cannot reconcile with its own
-clock. (A record whose runs are also old is still loud there, but about their age, which is
-a different sentence about a different thing.) `make backup-status` and
-`scripts/backup-run.sh due` are the only two channels that say anything about the due-date
-half, and both of them now name which half they are talking about — so an operator reading
-one screen and then the other is not told two different things about one host.
+it is said on the command line and nowhere else.
+
+**The due date it reads too, and it reads it with a whole day of grace — which splits that
+half in two.** The grace is a day because the writer resolves the due date in the
+**schedule's** zone while that screen has only its own UTC date, and the inhabited zones
+run from UTC−12 to UTC+14; a narrower comparison would put a standing *clock ahead* banner
+on every host scheduled east of UTC while it backed itself up perfectly. So:
+
+- a due date **more than a day** past that screen's UTC date — a hand-seeded `2099-01-01`,
+  a record carried off another machine, a clock that jumped forward by more than a day — is
+  loud on the panel as well, since M28.20;
+- a due date **no more than a day** ahead is not, and a day is the most `HASHI_BACKUP_TZ`
+  moved west can leave — which is the shape an operator actually produces, by editing one
+  variable. Measured end to end: a record written under `Pacific/Kiritimati` and read back
+  with the schedule moved to `Pacific/Midway` answers `clock=ahead` on the command line and
+  gives the panel a quiet, healthy-looking screen — *last backup less than an hour ago*, no
+  banner — about a file this host cannot reconcile with its own clock.
+
+(A record whose runs are also old is still loud there, but about their age, which is a
+different sentence about a different thing.) For that second shape `make backup-status`
+and `scripts/backup-run.sh due` really are the only two channels that say anything, and
+both of them name which half they are talking about — so an operator reading one screen and
+then the other is not told two different things about one host.
 
 The decision, and the direction it can be reversed in, is in `docs/decisions.md` under
 2026-09-24: this is the owner's rule for a record the tick cannot READ carried to one it

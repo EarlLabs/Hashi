@@ -165,6 +165,26 @@ A_GOOD_RUN = {
 }
 
 
+def flowing(text: str) -> str:
+    """One invocation's output with its line wrapping collapsed, for reading a SENTENCE.
+
+    The warnings here are wrapped heredocs, so *"no age here can be believed"* is split
+    across two lines in the output and a literal substring search for it passes whatever
+    the text says — which is a negative assertion that cannot fail, the shape M28.16 spent
+    a step on. Found while writing round 1's fix: the first version of
+    ``test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable`` was green
+    against the sentence it was written to forbid.
+
+    EVERY assertion in this file that something is ABSENT from a rendered paragraph goes
+    through this, which is why it sits with the helpers rather than beside the test that
+    first needed it: M28.21 found one more that did not, three sections above, passing only
+    because the phrase happened to fit on one source line of the heredoc.
+    """
+    return " ".join(text.split())
+
+
+
+
 # --- 1. the three commands in this family agree about one host ----------------
 
 
@@ -330,8 +350,17 @@ AHEAD = "2099-03-01T04:00:00Z"
 # answers `clock=ahead due=2026-09-23`. It is seeded here by dating the due date alone
 # rather than by moving a zone, so the test does not depend on the hour it runs at.
 #
-# The second shape is the one the panel cannot see at all: `_ahead` reads `last_success`
-# and `last_failure` and never `due_date`. Both are exercised below for that reason.
+# WHAT THE PANEL MAKES OF THE SECOND SHAPE, and the boundary moved under this comment in
+# M28.20 — until then it read no due date at all and this said so. `_ahead` still reads
+# `last_success` and `last_failure` and never `last_attempt`, so the attempt-alone-ahead
+# record is these two verbs and nothing else; `_due_ahead` now reads `due_date` too, past
+# `DUE_AHEAD_GRACE`, a whole day. Measured against that function: a due date one day past
+# the panel's own UTC date answers False and two days past answers True. So `2099-03-01`
+# below IS loud on the panel, while the record a moved HASHI_BACKUP_TZ leaves — no more
+# than a day ahead, which is the most that move can produce — is not, and that one really
+# is these two verbs alone. Both shapes are
+# exercised below because the two halves are repaired by different runs, which is what this
+# section is about, and not because either of them is invisible elsewhere.
 A_CLOCK_THAT_JUMPED = {
     "due_date": "2099-03-01",
     "last_attempt": {**A_GOOD_RUN, "at": AHEAD},
@@ -380,7 +409,7 @@ def test_due_reads_the_record_and_says_the_ages_in_it_are_worthless(tmp_path) ->
         f"this verb reports the tick's own answer:\n{answered.stdout}"
     )
     assert "DATED AHEAD OF THIS HOST'S CLOCK" in answered.stderr
-    assert "NOTHING IS BACKED UP AT ALL" not in answered.stderr, (
+    assert "NOTHING IS BACKED UP AT ALL" not in flowing(answered.stderr), (
         "the warning still tells the operator the schedule has stopped, which was true "
         "until the tick was taught to take the backup and is the fourth time in this "
         "milestone that prose outlived the behaviour it described"
@@ -513,18 +542,6 @@ def test_a_run_timestamp_ahead_does_not_make_the_tick_dump(tmp_path) -> None:
     )
 
 
-def flowing(text: str) -> str:
-    """One invocation's output with its line wrapping collapsed, for reading a SENTENCE.
-
-    The warnings here are wrapped heredocs, so *"no age here can be believed"* is split
-    across two lines in the output and a literal substring search for it passes whatever
-    the text says — which is a negative assertion that cannot fail, the shape M28.16 spent
-    a step on. Found while writing round 1's fix: the first version of the test below was
-    green against the sentence it was written to forbid.
-    """
-    return " ".join(text.split())
-
-
 def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(tmp_path) -> None:
     """Round 1's High, and it is this milestone's own defect written into the warning.
 
@@ -550,8 +567,9 @@ def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(tmp_pat
         f"{said.stdout}"
     )
     assert "no age here can be believed" not in printed, (
-        "the times above that sentence are exact and agree with the panel to the minute, "
-        f"and this tells the operator to disbelieve them:\n{said.stdout}"
+        "the times above that sentence are exact, and the age the panel puts beside the "
+        "same record is worked out from them, and this tells the operator to disbelieve "
+        f"them:\n{said.stdout}"
     )
     assert "ITS DUE DATE is a day this host has not reached" in printed, said.stdout
     assert "The run times in this record are NOT affected by that" in printed, said.stdout

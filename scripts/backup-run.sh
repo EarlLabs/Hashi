@@ -389,11 +389,24 @@ failed_since_the_last_success() {
 # `note_clock` is therefore about the READING and `decide` about the ACTION, they answer
 # different questions, and `note_clock` answers its own in two parts.
 #
-# The panel goes loud on `last_success` and `last_failure` only (M28.11, M28.14, and by its
-# own documented design — `_ahead` never reads `due_date`, and never reads `last_attempt`
-# either). So on the due-date half these two verbs are the ONLY channels that say anything,
-# which is why the warning below spells out which half the panel can be expected to
-# repeat.
+# WHICH HALF THE PANEL REPEATS IS NOT ONE ANSWER, and the warning below spells it out for
+# that reason. Both halves are stated as the state they hold for, because the generalised
+# version of each was true when it was written and false one step later.
+#
+#   - THE RUN HALF: `control/app/services/backups.py::_ahead` reads `last_success` and
+#     `last_failure` and neither `last_attempt` nor anything else, so a record where ONLY
+#     the last attempt is ahead draws no banner there — that one is these two verbs and
+#     nothing else.
+#   - THE DUE-DATE HALF: since M28.20 `_due_ahead` reads `due_date` too, but only past
+#     `DUE_AHEAD_GRACE`, which is a whole day — the writer resolves that date in the
+#     SCHEDULE'S zone and the panel has only its own UTC date, and the inhabited zones span
+#     UTC-12 to UTC+14. Measured against that function: a due date one day past the panel's
+#     UTC date answers False, two days past answers True. So a due date MORE than a day
+#     ahead is repeated on the panel; one NO MORE than a day ahead is not, and that is the
+#     most moving HASHI_BACKUP_TZ west can leave behind — measured end to end, a record
+#     written under Pacific/Kiritimati and read back under Pacific/Midway answers
+#     `clock=ahead` here and `due_ahead=False` there. That shape, the one an operator
+#     produces by editing one variable, is these two verbs and nothing else.
 
 # One minute, exactly as control/app/services/backups.py::CLOCK_AHEAD_GRACE. A second or
 # two between two clocks is ordinary and is not what this is about; what this catches is a
@@ -469,10 +482,15 @@ MSG
 
 ITS DUE DATE is a day this host has not reached, which is what a clock that moved or a
 HASHI_BACKUP_TZ moved west leaves behind. The run times in this record are NOT affected by
-that and are printed as they are. Nothing is stuck either: the next scheduled run takes a
-backup and records the day this host is on, which is one extra dump and then a record that
-reads normally. Check this host's clock and HASHI_BACKUP_TZ — one of the two moved. The
-panel does not read the due date at all, so this may be the only place this half is said.
+that and are printed as they are. THIS half is not stuck: the next scheduled run takes a
+backup and records the day this host is on, so one extra dump ends it. That dump repairs
+the due date and nothing else — if a run in this record is dated ahead as well, only a
+later run of the same kind replaces that one, and this record goes on reading loud after
+the extra dump. Check this host's clock and HASHI_BACKUP_TZ — one of the two moved. The
+panel reads this date too, but past a whole day of grace: it goes loud about a due date
+MORE than a day past the panel's own UTC date, and says nothing at all about one no more
+than a day past. A day is the most a HASHI_BACKUP_TZ moved west can leave, so THAT shape
+is said by `make backup-status` and `scripts/backup-run.sh due` and by nothing else.
 MSG
   fi
   cat <<'MSG'

@@ -56,6 +56,41 @@ BOOTSTRAP = REPO / "scripts" / "panel-bootstrap.sh"
 RECORD_LIB = REPO / "scripts" / "lib" / "backup-record.sh"
 
 
+# A `.` or a `source` IN COMMAND POSITION, and the word it is handed. Command position is
+# the start of a line or anything that ended the command before it, because `. a.sh; . b.sh`
+# is two readers and a pattern anchored at `^\s*` finds one of them (M28.21).
+_SOURCE_STATEMENT = re.compile(
+    r"(?:^|[;&|(]|\b(?:then|do|else)\b)\s*(?:\.|source)\s+([^\s;&|)]+)", re.M
+)
+# That word, once its quoting is off, as a name under `scripts/`. The quotes come off
+# rather than being written into the pattern because `"${REPO_ROOT}"/scripts/lib/a.sh` and
+# `${REPO_ROOT}/scripts/"lib/a.sh"` are one path written by two people, and a pattern that
+# knows one of them is a description of today's call sites — the same mistake as naming the
+# files.
+_UNDER_SCRIPTS = re.compile(r"^\$\{?REPO_ROOT\}?/scripts/([\w./-]+\.sh)$")
+
+
+def _sourced_names(script: str) -> list[str]:
+    """Every library under ``scripts/`` this text sources, by name, in the order written.
+
+    Whole-line comments go first: the statement pattern no longer anchors at the start of a
+    line, and these scripts quote the shapes they forbid, so a comment naming one would
+    otherwise be discovered as a real statement. That leaves the two places prose can still
+    sit beside code on one line — a quoted string and a trailing ``#`` comment — and a
+    statement written after a separator in either of those IS discovered. The docstring of
+    ``_sourced_libraries`` names that as the direction this deliberately errs in.
+    """
+    code = "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+    names = []
+    for word in _SOURCE_STATEMENT.findall(code):
+        under = _UNDER_SCRIPTS.match(word.replace('"', "").replace("'", ""))
+        if under:
+            names.append(under.group(1))
+    return names
+
+
 def _sourced_libraries(
     *scripts: pathlib.Path, root: pathlib.Path | None = None
 ) -> tuple[pathlib.Path, ...]:
@@ -94,11 +129,31 @@ def _sourced_libraries(
     that recognises one way of writing a name is a description of today's six call sites,
     which is the same mistake as naming the files.
 
+    AND M28.21 CLOSED THREE MORE SPELLINGS, measured rather than imagined, each of which
+    walked the whole sweep out of the door on its own: ``. "${REPO_ROOT}"/scripts/lib/a.sh``
+    closes the quote after the variable; ``. ${REPO_ROOT}/scripts/"lib/a.sh"`` opens one in
+    the middle of the path; and two source statements on one line — ``. a.sh; . b.sh`` —
+    where a pattern anchored at the start of a line finds the first and never looks for the
+    second. None of the three is written in this tree today, which is precisely the
+    argument that was made about the braceless form one round earlier and it turned out to
+    matter. So the quoting comes off the word before it is judged, and every command
+    position on the line is looked at rather than the first.
+
     What it still does not see, and the list is short on purpose: a path built at runtime,
     a relative ``. ./lib/x.sh``, and a source line inside a conditional it cannot evaluate.
     All three would be caught by running the script instead of reading it, which is another
     test's job — nothing in this project writes any of them, and the moment one does, this
     sweep is the wrong tool rather than a leaky one.
+
+    What it errs TOWARDS rather than away from, now that it no longer anchors at the start
+    of a line, and named as the state it holds for rather than as a worry: a source
+    statement written after a ``;``, ``&``, ``|`` or ``(`` **inside a quoted string, or in
+    a trailing ``#`` comment on a code line**, is read as a real one — measured, ``echo "a;
+    . ${REPO_ROOT}/scripts/lib/nope.sh"`` is discovered — and the ``is_file`` check below
+    then fails by name. Whole-line comments are dropped before any of this, so the prose
+    these scripts carry about the shapes they forbid is safe; prose on the same line as
+    code is not. A loud false positive is the right direction for an audit whose other
+    failure mode is going quiet.
 
     ``root`` is the tree the sourced names are resolved against, and it is a parameter for
     one reason: the transitivity above is a property of THIS function, and the only way to
@@ -118,14 +173,12 @@ def _sourced_libraries(
         if script in seen:
             continue
         seen.add(script)
-        # `source` as well as `.`, `${REPO_ROOT}` as well as `$REPO_ROOT`, and anywhere
-        # under `scripts/` rather than `scripts/lib/` alone: a discovery that only knows
-        # one spelling goes QUIET on the others, and a sweep that silently shrinks is the
-        # exact failure this function replaces.
-        for name in re.findall(
-            r'^\s*(?:\.|source)\s+"?\$\{?REPO_ROOT\}?/scripts/([\w./-]+\.sh)"?',
-            script.read_text(), re.M,
-        ):
+        # `source` as well as `.`, `${REPO_ROOT}` as well as `$REPO_ROOT`, quoted however
+        # the author felt like quoting it, anywhere under `scripts/` rather than
+        # `scripts/lib/` alone, and at every command position on the line rather than the
+        # first: a discovery that only knows one spelling goes QUIET on the others, and a
+        # sweep that silently shrinks is the exact failure this function replaces.
+        for name in _sourced_names(script.read_text()):
             library = (root / "scripts" / name).resolve()
             # Resolved and then checked to be inside `scripts/`, because the capture now
             # allows `/` and `.`: `../../somewhere/else.sh` would otherwise take the sweep
@@ -209,6 +262,72 @@ def test_a_library_sourced_by_a_library_is_swept_too(tmp_path) -> None:
         "happen to use, is outside the sweep — so anything that moves one hop further "
         f"from a named script is audited by nothing: {[p.name for p in found]}"
     )
+
+
+def test_the_discovery_reads_the_three_spellings_that_used_to_walk_it_out(tmp_path) -> None:
+    """M28.21's three, each of which took the WHOLE sweep with it and none of which is red.
+
+    Two are quoting — a project puts its quotes where it likes, and a pattern that knows
+    one placement is a description of today's six call sites rather than a rule. The third
+    is two statements on one line, which the old pattern could not see because it anchored
+    at the start of a line and stopped at the first.
+
+    Not one of the three is written in this tree today, and that is the argument for the
+    test rather than against it: the braceless ``$REPO_ROOT`` was not written here either
+    when round 1 of M28.19 planted it, and it walked every library out of the sweep.
+
+    Planted in ``tmp_path``, like the chain above: an audit that plants its evidence in the
+    tree it audits proves only that it can read its own work.
+    """
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "caller.sh").write_text(
+        # The quote closed after the variable rather than around the whole word.
+        '. "${REPO_ROOT}"/scripts/lib/first.sh\n'
+    )
+    (scripts / "lib" / "first.sh").write_text(
+        # A quote opened in the middle of the path.
+        '. ${REPO_ROOT}/scripts/"lib/second.sh"\n'
+    )
+    # Two statements on one line: the anchored pattern found the first and never looked for
+    # the second, so `third.sh` was swept and `fourth.sh` was audited by nothing.
+    (scripts / "lib" / "second.sh").write_text(
+        '. "${REPO_ROOT}/scripts/lib/third.sh"; . "${REPO_ROOT}/scripts/lib/fourth.sh"\n'
+    )
+    (scripts / "lib" / "third.sh").write_text("# reached by the first of the two\n")
+    (scripts / "lib" / "fourth.sh").write_text("# reached only by looking past it\n")
+
+    found = _sourced_libraries(scripts / "caller.sh", root=tmp_path)
+
+    assert [path.name for path in found] == [
+        "first.sh", "second.sh", "third.sh", "fourth.sh",
+    ], (
+        "a library named in a spelling this project does not happen to use, or sourced by "
+        "the second statement on a line, is outside the sweep — and a sweep that shrinks "
+        f"silently is the failure this discovery replaces: {[p.name for p in found]}"
+    )
+
+
+def test_a_source_statement_quoted_in_a_comment_is_not_a_library(tmp_path) -> None:
+    """The cost of not anchoring at the start of a line, and where it is paid.
+
+    These scripts quote the shapes they forbid, in comments, and the discovery would
+    otherwise walk off after a file that does not exist. Whole-line comments are dropped
+    for that reason. What is NOT dropped — a statement after a separator inside a quoted
+    string or a trailing comment — is named in ``_sourced_libraries``'s own seam list and
+    fails loudly there rather than quietly here, which is the safe direction.
+    """
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "caller.sh").write_text(
+        '# never write `. "${REPO_ROOT}/scripts/lib/nowhere.sh"` twice on one line\n'
+        '   #  . "${REPO_ROOT}/scripts/lib/alsonowhere.sh"\n'
+        '. "${REPO_ROOT}/scripts/lib/real.sh"\n'
+    )
+    (scripts / "lib" / "real.sh").write_text("# the only one there is\n")
+
+    found = _sourced_libraries(scripts / "caller.sh", root=tmp_path)
+    assert [path.name for path in found] == ["real.sh"], [p.name for p in found]
 
 
 def test_the_discovery_terminates_on_a_cycle(tmp_path) -> None:
