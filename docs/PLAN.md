@@ -3661,6 +3661,19 @@ defect in reverse:
 - `docs/tracker/M28/step-notes.md:1605` — *"`due` and `status` remain the only two channels
   that see that half"*, where "that half" is the moved-west shape the panel is silent about.
 
+**A third step-notes line, and it is the surviving copy of my error** —
+`docs/tracker/M28/step-notes.md:1603`: *"It leaves a due date **exactly ONE day ahead**"*. It
+sits **two lines above** `:1605`, which this brief tells you not to touch, so it is the one
+most likely to be skipped. Measured at UTC 13:57 with `AT=04:00` it is **zero** days ahead.
+Fix it with the rest of item 5.
+
+**And the measurement for item 3, so you do not have to take it on trust.** Counting the UTC
+hours per day at which a zero-grace comparison would fire, `AT=04:00`: `Europe/Berlin` (+2)
+**0/24**, `Europe/Moscow` (+3) **0/24**, `Asia/Tokyo` **5/24**, `Pacific/Auckland` **8/24**,
+`Pacific/Kiritimati` **10/24**. So it is neither *every* host east of UTC nor a *standing*
+banner. Write the numbers; the argument for `DUE_AHEAD_GRACE` is untouched by the correction
+and **the constant must not move.**
+
 Item 5's two step-notes entries remain wrong and are still yours. Check every sentence you
 touch against behaviour you run, including the ones this plan tells you are broken — this
 plan has been wrong once already.
