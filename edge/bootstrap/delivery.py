@@ -146,10 +146,15 @@ async def place_delivery(
 
     AN EMPTY ``artifacts`` IS NOT A NO-OP. It is how a host stops holding delivery
     material at all: the staged directory is empty, the swap makes it the live one,
-    and what was there is removed. That is the only removal path in this package, and
-    it reaches exactly the hosts an apply still runs against — a node the control
-    plane never applies again keeps whatever it was last given, which is true of every
-    file this package places and is not something this call can change.
+    and what was there is removed.
+
+    That is the only removal path in this package, and it removes material from one
+    host: the one this call was made for. Which hosts get called for is the caller's
+    and is not described here — ``control/app/services/apply`` is the only one, and
+    where it does and does not reach is recorded in ``docs/decisions.md`` under
+    M27.2 rather than paraphrased in this package, which cannot see it change. What
+    holds here is the narrow thing: a host nothing calls this for keeps whatever it
+    was last given, as it does for every other file this package places.
 
     0600 on every file, for the reason ``node_stack.place_config`` sets it: what is
     written here is a user's own configuration, and the account this runs as is not
