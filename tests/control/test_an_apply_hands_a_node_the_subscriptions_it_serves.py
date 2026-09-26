@@ -181,11 +181,11 @@ async def test_an_apply_hands_the_host_both_shapes_of_its_own_users_subscription
 ) -> None:
     """The step itself: the material a user would fetch is on the node after an apply."""
     boris = await add_user(client, "boris")
-    await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
+    node_id = await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
 
     session.expire_all()
     token = await the_token(session, boris)
-    name = delivery.artifact_name(token)
+    name = delivery.artifact_name(node_id, token)
 
     assert set(documents(handed)) == {name}, handed.artifacts
     assert set(archives(handed)) == {name}, (
@@ -284,8 +284,8 @@ async def test_a_user_who_stops_being_served_here_is_gone_from_the_next_push(
     node_id = await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
 
     session.expire_all()
-    gone = delivery.artifact_name(await the_token(session, boris))
-    stays = delivery.artifact_name(await the_token(session, kolya))
+    gone = delivery.artifact_name(node_id, await the_token(session, boris))
+    stays = delivery.artifact_name(node_id, await the_token(session, kolya))
     assert {gone, stays} <= set(documents(handed)), handed.artifacts
 
     # Revocation, which re-pushes every node the user was on — so the removal is
@@ -351,10 +351,23 @@ def test_a_derived_name_is_one_this_node_package_will_place() -> None:
     ``control`` derives it and ``edge`` decides what a name may be. A derivation that
     outgrew that rule would be refused on the node, per artifact, on every apply.
     """
-    name = delivery.artifact_name("a" * 43)
+    name = delivery.artifact_name("node-1", "a" * 43)
     assert ARTIFACT_NAME.match(name), name
-    assert delivery.artifact_name("a" * 43) == name, "the same token named two files"
-    assert delivery.artifact_name("b" * 43) != name
+    assert delivery.artifact_name("node-1", "a" * 43) == name, "the same token named two files"
+    assert delivery.artifact_name("node-1", "b" * 43) != name
+
+
+def test_one_subscription_is_a_different_name_on_every_host() -> None:
+    """M27.3's decision, asserted where it is derived.
+
+    The listener a delivery host runs serves the file its path names and hashes nothing,
+    so the name IS the credential that fetches the artifact. Without the node's own id
+    in the derivation, the names on a seized host would fetch the same users' artifacts
+    from every other delivery host — which is the cross-host narrowing this milestone is
+    for. See ``docs/decisions.md``, 2026-09-26.
+    """
+    token = "a" * 43
+    assert delivery.artifact_name("node-1", token) != delivery.artifact_name("node-2", token)
 
 
 async def test_a_node_with_nothing_enabled_is_refused_above_the_push(

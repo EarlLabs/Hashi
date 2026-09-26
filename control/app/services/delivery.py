@@ -27,19 +27,26 @@ the token is 32 bytes of this control plane's own entropy (``TOKEN_BYTES``), whi
 the same argument ``SecretBox.digest`` makes for not using a slow KDF, pointed the
 other way — there is no dictionary to run against these.
 
-UNKEYED, deliberately, and this is the part a later step depends on. A keyed digest
-(``SecretBox.digest``) would be stronger against an attacker who already holds a
-token and wants to know whether this host serves that user — and it would put the
-derivation out of reach of anything on the node, because the key is the master key.
-Whatever serves this directory can then never map ``/sub/{token}`` onto a file, so
-every user would have to be handed a second, differently-shaped URL. An unkeyed
-digest leaves both routes open: a server that hashes the path segment serves the URL
-a user already holds, and one that cannot serves the digest as the path. Which of
-those M27.3 builds is not decided here, and neither is foreclosed.
+UNKEYED, deliberately. A keyed digest (``SecretBox.digest``) would be stronger against
+an attacker who already holds a token and wants to know whether this host serves that
+user — and it would put the derivation out of reach of anything that does not hold the
+master key, which is every node and every future reader of this material, for ever.
 
-WHAT THIS MODULE DOES NOT DO: it does not decide which hosts serve delivery (M27.4),
-it does not stand up a listener, and nothing here is reachable by a user yet. What it
-produces is placed on the node by ``services/apply`` and read by nothing.
+AND PER HOST, which is M27.3's decision and the one this module's name derivation
+carries. The listener a delivery host runs is a file server: it answers the path it is
+given and hashes nothing, so the NAME is what a user's client sends and therefore the
+credential that fetches an artifact. Salted with the node's own id, one seized host's
+names fetch nothing on any other delivery host — which is the whole of what this
+milestone's narrowing is for, applied to the fetch as well as to the contents. What it
+costs is that a delivery URL is per host: the path a user holds for host H is not the
+path for host J, and it is not ``/sub/{token}`` either, so the two URLs a user may hold
+cannot be moved by changing a DNS record alone. That cost is M27.7's to carry, and is
+recorded in ``docs/decisions.md`` under 2026-09-26.
+
+WHAT THIS MODULE DOES NOT DO: it does not decide which hosts serve delivery (M27.4), it
+does not stand up a listener — that is ``edge.bootstrap.delivery_site``, which nothing
+wires in yet — and it does not put a delivery URL in front of a user (M27.7). What it
+produces is placed on the node by ``services/apply``.
 """
 
 import hashlib
@@ -61,21 +68,47 @@ from edge.registry import SubscriptionFormat
 # Domain separation, in the shape ``crypto.py``'s derivation labels use and for the
 # same reason: a digest computed here can then never coincide with a digest of the
 # same token computed anywhere else, now or later. It is not a secret — whatever
-# serves this material has to compute the same value from the same token, and it
-# cannot hold a key.
-_ARTIFACT_NAME_LABEL = b"hashi/delivery-artifact-name/v1"
+# serves this material has to be able to be handed the same value, and it cannot hold
+# a key.
+#
+# ``v2`` since M27.3, and the version in a label is exactly what it is for: the name is
+# now derived per HOST as well as per token, so the same subscription is a different
+# file on every delivery host. A host handed v2 names by an apply that follows a v1 one
+# is not a migration to worry about — the push REPLACES the directory, so the previous
+# names are gone in the same call (``edge.bootstrap.delivery.place_delivery``).
+_ARTIFACT_NAME_LABEL = b"hashi/delivery-artifact-name/v2"
 
 
-def artifact_name(token: str) -> str:
-    """The name one subscription's material is placed and fetched under.
+def artifact_name(node_id: str, token: str) -> str:
+    """The name one subscription's material is placed and fetched under on ONE host.
 
     One way: see this module's header for why the name is derived from the token
     rather than being it, and why the derivation is unkeyed.
 
-    Deterministic, so a user's artifact keeps the same name across applies and a push
-    replaces the file it replaced last time instead of accumulating one per apply.
+    PER HOST, and that is M27.3's decision rather than a detail of this function. The
+    name is what a request carries — the listener a delivery host runs serves the file
+    the path names and cannot hash anything — so the name IS the credential that fetches
+    the artifact. Without the node's own id in it, one seized host's names would fetch
+    the same users' artifacts from every other delivery host, which is the cross-host
+    narrowing this milestone exists to provide. The id is not a secret and is not
+    holding anything shut: what it buys is that two hosts' names for one subscription
+    are unrelatable without the token, which nothing outside this control plane has.
+
+    The node's ID and never its address: an address is operator-editable and a node
+    legitimately changes one, which would rename every artifact on that host on the
+    next apply and dead-link every URL a user holds for it.
+
+    Deterministic, so a user's artifact keeps the same name across applies on one host
+    and a push replaces the file it replaced last time instead of accumulating one per
+    apply.
+
+    The separator is what keeps the two fields from running together: a node id is
+    fixed-width today (``models.new_id``) and this does not depend on it, because a
+    byte that cannot occur in either field is cheaper than an assumption about one.
     """
-    return hashlib.sha256(_ARTIFACT_NAME_LABEL + token.encode()).hexdigest()
+    return hashlib.sha256(
+        _ARTIFACT_NAME_LABEL + node_id.encode() + b"\x00" + token.encode()
+    ).hexdigest()
 
 
 async def artifacts_for_node(
@@ -170,7 +203,7 @@ async def artifacts_for_node(
             await subscriptions.config_files_for(session, user, over=user_facing)
         )
         for subscription in held_subscriptions:
-            name = artifact_name(subscription.token)
+            name = artifact_name(node.id, subscription.token)
             artifacts.append(
                 delivery.Artifact(
                     name=name,
