@@ -153,9 +153,14 @@ def _matcher_for(shape: SubscriptionFormat) -> str:
 def _shape(
     shape: SubscriptionFormat, headers: Mapping[str, str], *, matcher: str | None = None
 ) -> dict:
+    name = matcher or _matcher_for(shape)
     return {
         "format": shape.value,
-        "matcher": matcher or _matcher_for(shape),
+        "matcher": name,
+        # The matcher that asks whether the artifact this request names is actually
+        # here. Its own name, because a Caddy matcher name is unique within a site and
+        # this is a second one per block.
+        "present": f"present_{name}",
         "pattern": _PATH_PATTERN,
         "extension": ARTIFACT_EXTENSION[shape],
         "headers": sorted(_checked_headers(headers).items()),
@@ -199,11 +204,20 @@ def render_delivery_site(
     a name at all is M27.6's question and which hosts are delivery hosts is M27.4's; a
     literal here would be an address the fleet could not rotate away from.
 
-    ``headers`` go on every response, 404s included, and ``shape_headers`` adds to them
-    for one shape — the archive's ``Content-Disposition``, in the one caller this is
-    written for. Both are the CONTROL PLANE's: its route decides what a subscription
+    ``headers`` go on every response that carries a document, and ``shape_headers`` adds
+    to them for one shape — the archive's ``Content-Disposition``, in the one caller this
+    is written for. Both are the CONTROL PLANE's: its route decides what a subscription
     response carries (``control/app/api/delivery.py``), and a document served from two
     hosts under two policies is two different answers to one link.
+
+    THEY DO NOT GO ON A 404, and that is not a saving. A fixed set of headers on an empty
+    body is a signature every delivery host would answer with, on the most scannable host
+    in the fleet — the argument `CLAUDE.md` makes about a shared decoy destination, one
+    layer up. The control plane answers an unknown token with a bare 404
+    (``control/app/api/delivery.py``) and its public site answers everything else with
+    one (``deploy/caddy/Caddyfile``), so a refusal here is the same bare answer as both.
+    That also means an unknown NAME and a path that is not a subscription are answered
+    identically, which is the property the control plane's own route is at pains to have.
 
     ONE BLOCK PER SUBSCRIPTION FORMAT, off ``ARTIFACT_EXTENSION`` — the same table the
     push writes the files with, so the request that arrives and the file that is on
@@ -224,18 +238,19 @@ def render_delivery_site(
     return _TEMPLATES.get_template("delivery-site.Caddyfile.j2").render(
         site_address=site_address,
         directory=DELIVERY_DIR,
-        headers=sorted(_checked_headers(headers).items()),
         # Sorted by the format's own value, so two fleets rendering the same shapes
         # render the same file. The default shape is passed separately because it gets
         # a SECOND block for a format that already has one above — a different matcher
         # name (two Caddy matchers may not share one) and a different condition: that
         # block answers a request carrying no ``format`` at all, and only that.
         shapes=[
-            _shape(shape, per_shape.get(shape, {}))
+            _shape(shape, {**headers, **per_shape.get(shape, {})})
             for shape in sorted(ARTIFACT_EXTENSION, key=lambda one: one.value)
         ],
         default_shape=_shape(
-            DEFAULT_SHAPE, per_shape.get(DEFAULT_SHAPE, {}), matcher=_NO_SHAPE_NAMED
+            DEFAULT_SHAPE,
+            {**headers, **per_shape.get(DEFAULT_SHAPE, {})},
+            matcher=_NO_SHAPE_NAMED,
         ),
     )
 

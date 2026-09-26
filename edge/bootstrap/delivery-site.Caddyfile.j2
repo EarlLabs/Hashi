@@ -45,17 +45,16 @@
 
 	root * {{ directory }}
 
-{% if headers %}
-	# On every response, 404s included. These are the control plane's own delivery
-	# headers, passed in rather than written here: the same document served from two
-	# hosts must not come back with two different cache rules, and this zone does not
-	# get to invent a policy for someone else's route.
-	header {
-{% for name, value in headers %}
-		{{ name }} `{{ value }}`
-{% endfor %}
-	}
-{% endif %}
+	# THE RESPONSE HEADERS BELOW GO ONLY WHERE THERE IS A DOCUMENT TO CARRY THEM, which
+	# is what each block's `file` matcher is for. They are the control plane's own — the
+	# same document served from two hosts must not come back with two different cache
+	# rules — and on an empty 404 they would be something else entirely: a fixed set of
+	# headers on an empty body is a signature, answered by every delivery host, on the
+	# most scannable machine in the fleet. That is the argument CLAUDE.md makes about a
+	# shared decoy destination, one layer up. The control plane answers an unknown token
+	# with a bare 404 and its public site answers everything else with one, so a refusal
+	# here is the same bare answer as both — and an unknown NAME is then indistinguishable
+	# from a path that was never a subscription.
 
 {% for shape in shapes %}
 	# The {{ shape.format }} shape, asked for the way the control plane's own route
@@ -66,10 +65,17 @@
 		query format={{ shape.format }}
 	}
 	handle @{{ shape.matcher }} {
-		rewrite * /{re.{{ shape.matcher }}.1}{{ shape.extension }}
+{% if shape.headers %}
+		# The response headers, and the `file` matcher is what keeps them off a 404 — see
+		# the comment above the first shape.
+		@{{ shape.present }} file /{re.{{ shape.matcher }}.1}{{ shape.extension }}
+		header @{{ shape.present }} {
 {% for name, value in shape.headers %}
-		header {{ name }} `{{ value }}`
+			{{ name }} `{{ value }}`
 {% endfor %}
+		}
+{% endif %}
+		rewrite * /{re.{{ shape.matcher }}.1}{{ shape.extension }}
 		file_server
 	}
 
@@ -84,18 +90,26 @@
 		not query format=*
 	}
 	handle @{{ default_shape.matcher }} {
-		rewrite * /{re.{{ default_shape.matcher }}.1}{{ default_shape.extension }}
+{% if default_shape.headers %}
+		# The response headers, and the `file` matcher is what keeps them off a 404 — see
+		# the comment above the first shape.
+		@{{ default_shape.present }} file /{re.{{ default_shape.matcher }}.1}{{ default_shape.extension }}
+		header @{{ default_shape.present }} {
 {% for name, value in default_shape.headers %}
-		header {{ name }} `{{ value }}`
+			{{ name }} `{{ value }}`
 {% endfor %}
+		}
+{% endif %}
+		rewrite * /{re.{{ default_shape.matcher }}.1}{{ default_shape.extension }}
 		file_server
 	}
 
-	# Everything else, including a name that is not an artifact's, a shape this host
-	# does not have, and the directory itself. The same answer for all of them and the
-	# same answer an unknown artifact gets from `file_server` above: a 404 tells a
-	# scanner nothing about what is here, and telling an unknown name apart from a
-	# known one would be the only thing on this host that could.
+	# Everything else, including a shape this host does not have and the directory
+	# itself. An empty 404 with no headers of ours on it — the same answer `file_server`
+	# above gives a name nothing is stored under, and the same one the control plane's
+	# own public site gives anything that is not a subscription. Identical answers are
+	# the point twice over: a scanner learns neither what else runs here nor whether a
+	# name it guessed exists.
 	handle {
 		respond 404
 	}

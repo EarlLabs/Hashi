@@ -189,6 +189,41 @@ def test_a_header_that_could_end_the_block_it_sits_in_is_refused(headers: dict) 
         a_site(headers=headers)
 
 
+def test_no_header_of_ours_is_set_on_a_refusal() -> None:
+    """A fixed header set on an empty 404 is a signature every delivery host answers
+    with, on the most scannable host in the fleet — the argument CLAUDE.md makes about a
+    shared decoy destination, one layer up.
+
+    Each shape's headers are guarded by a ``file`` matcher, so they reach a response that
+    carries a document and nothing else; the catch-all answers a bare ``respond 404``.
+    That is what the control plane does at both ends — a bare 404 for an unknown token,
+    a bare 404 from the public site for everything that is not a subscription.
+    """
+    site = a_site()
+    refusal = site.rsplit("handle {", 1)[1]
+    assert "header" not in refusal, (
+        f"the catch-all refusal sets a header of ours:\n{refusal}"
+    )
+    for name in HEADERS:
+        # Once per shape block and never outside one. Three blocks: the two formats and
+        # the request that names no format.
+        assert site.count(f"{name} `") == 3, site
+
+
+def test_the_headers_are_set_only_where_the_artifact_is_really_there() -> None:
+    """The ``file`` matcher is what makes the assertion above true of an unknown NAME.
+
+    Without it the headers would land on `file_server`'s own 404 — so a name that exists
+    and a name that does not would be answered differently, which is the one thing a
+    delivery host must not disclose.
+    """
+    site = a_site()
+    for shape, extension in ARTIFACT_EXTENSION.items():
+        matcher = delivery_site._matcher_for(shape)
+        assert f"@present_{matcher} file /{{re.{matcher}.1}}{extension}" in site, site
+        assert f"header @present_{matcher} {{" in site, site
+
+
 def test_a_header_that_would_answer_with_the_request_itself_is_refused() -> None:
     """Braces, and this one is not about quoting at all.
 
