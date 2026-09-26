@@ -1,7 +1,8 @@
 """Does the tag we pinned actually exist?
 
-WHAT: resolves every upstream data-plane image pinned in ``edge/bootstrap/node_stack.py``
-      against a real container registry.
+WHAT: resolves every upstream image a node is told to run — the data planes pinned in
+      ``edge/bootstrap/node_stack.py`` and the delivery listener pinned in
+      ``edge/bootstrap/delivery_site.py`` — against a real container registry.
 WHY:  it is the one class of value in this repository that no unit test can check. A
       pinned tag is a string; a string that resolves and a string that does not are
       indistinguishable until something asks a registry. And the consequence is not
@@ -31,10 +32,17 @@ import subprocess
 
 import pytest
 
+from edge.bootstrap.delivery_site import DELIVERY_IMAGE
 from edge.bootstrap.node_stack import DATA_PLANES
 
-# One entry per config format. Sorted so a failure names the same pin on every run.
-PINS = sorted({data_plane.image for data_plane in DATA_PLANES.values()})
+# One entry per config format, plus the delivery listener — which is NOT in that table
+# and cannot be, because the table answers "which daemon runs a transport's config" and
+# a file server runs none. It is named here explicitly for the reason this whole file
+# exists: a pin nothing resolves is a container that never starts, discovered on a real
+# host, and the 2026-09-26 rows named that as the cost of declaring the service.
+#
+# Sorted so a failure names the same pin on every run.
+PINS = sorted({data_plane.image for data_plane in DATA_PLANES.values()} | {DELIVERY_IMAGE})
 
 # A tag that cannot exist, on a repository that does. The red half of this file: without
 # it, a `docker manifest inspect` that succeeded on everything — a wrapper that swallowed

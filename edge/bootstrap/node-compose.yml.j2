@@ -81,3 +81,45 @@ services:
         max-size: "10m"
         max-file: "2"
 {% endfor %}
+{% if delivery %}
+
+  # The delivery listener — M27.3. Serves the directory the control plane placed, and
+  # is the one container here that answers a request from a person rather than from a
+  # client of a transport. What it may write down is the whole of that step: see
+  # edge/bootstrap/delivery_site.py.
+  {{ delivery.name }}:
+    image: {{ delivery.image }}
+    restart: unless-stopped
+    # Same reason as the data planes above: it has to answer on the node's real
+    # interface, on whatever port its site address names, and a bridge would mean
+    # naming that port a second time in a published mapping.
+    network_mode: host
+    command: {{ delivery.command | tojson }}
+    labels:
+      # The digest of the SITE CONFIGURATION this container was created with, for the
+      # reason each transport above carries one: `up -d` compares the service
+      # definition and a bind-mounted file's contents are not part of it, so without
+      # this a host handed a changed site would go on serving the previous one.
+      {{ digest_label }}: "{{ delivery.config_digest }}"
+    volumes:
+      # Read-only, both of them, and neither is the config directory. The listener has
+      # no reason to write anywhere, and the directory it serves is REPLACED wholesale
+      # by the next apply — a process that could write into it would be writing into
+      # something with an owner.
+      - {{ delivery.site_path }}:{{ delivery.site_path }}:ro
+      - {{ delivery.directory }}:{{ delivery.directory }}:ro
+    logging:
+      # NOTHING IS RETAINED, and this is not the bounded json-file the data planes
+      # above get. A request to this container carries the name of one person's
+      # artifact, which is how that artifact is fetched; Caddy discards its own
+      # loggers, and this is what makes that true of anything it prints anyway — a
+      # panic, a configuration it will not load, a directive that logs by default in
+      # some later version. Measured on engine 29.4.0: with json-file, the three lines
+      # Caddy writes before it applies its own logging configuration are kept in the
+      # node's journal, and with this they are not.
+      #
+      # The cost is real and is the smaller one: this container's startup diagnostics
+      # are gone, and an operator debugging a listener that will not start runs the
+      # image by hand on the node instead.
+      driver: none
+{% endif %}
