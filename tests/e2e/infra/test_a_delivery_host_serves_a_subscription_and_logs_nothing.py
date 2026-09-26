@@ -251,6 +251,13 @@ def test_every_refusal_is_the_same_bare_answer(host: DeliveryHost) -> None:
     a name nothing is stored under is answered EXACTLY as a path that was never a
     subscription — otherwise a scanner learns which names exist, which is the one thing
     the control plane's own 404 is written to hide.
+
+    What a refusal here matches is a stock Caddy's, which is what the control plane's
+    PUBLIC site answers anything that is not a subscription with. It deliberately does
+    not match the control plane's own ``/sub/`` refusal: measured on 2026-09-26, that one
+    carries ``cache-control``, a CSP, ``referrer-policy``, ``x-content-type-options`` and
+    ``x-frame-options`` from the application's middleware, and answering like it would
+    put the header set that identifies a hashi control plane on every delivery host.
     """
     refusals = {
         path: header_names(answered(host, path))
@@ -267,8 +274,9 @@ def test_every_refusal_is_the_same_bare_answer(host: DeliveryHost) -> None:
     for path, names in refusals.items():
         for header in HEADERS:
             assert header.lower() not in names, (
-                f"{path} is refused with {header!r} on it, which is a header no 404 of "
-                f"the control plane's carries: {names}"
+                f"{path} is refused with {header!r} on it — a header this host puts on a "
+                "DOCUMENT, so a refusal carrying it tells a scanner what kind of machine "
+                f"refused and, between two refusals, which names exist: {names}"
             )
 
 
