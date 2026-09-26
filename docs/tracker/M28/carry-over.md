@@ -407,6 +407,21 @@ state one round ago**.
 
 ### Prose accepted as debt, deliberately, and not fixed
 
+**Added 2026-09-26, found reviewing M28.24 — and one of these is no longer merely
+over-general.** `console.py:1018`'s *"under NEVER there is none"* is now **measured false**:
+a record with `last_success: null`, a failure 6 h old and a due date far ahead reads
+`standing=never` and puts a real age on the screen, and `BACKUP_CLOCK_RUNS_UNDISTURBED` is
+said over it. Its twin at `tests/…:1216-1218` (*"NEVER has none"*, in
+`test_the_due_date_half_never_says_the_schedule_has_stopped`) carries the same claim and was
+**not** on this list — an unlisted known-false sentence is exactly the gap the list exists to
+close, so it is here now.
+
+Neither is being fixed, for the reason the rest of this section gives. Both are comments; the
+behaviour they sit beside is pinned by a biconditional that fails in both directions, and
+`CLAUDE.md` gained a convention this session that would have prevented both: **a comment
+describes the code it sits on and records why — never what a neighbouring branch does.**
+
+
 Three over-general sentences in comments and docstrings, all about the mixed run-ahead state:
 `console.py:1018` (*"under NEVER there is none"*), `:1025-1026` (*"false the moment ONE run is
 ahead and the other is not"* — measured true in 2 of the 4 mixed states; where the **success**
