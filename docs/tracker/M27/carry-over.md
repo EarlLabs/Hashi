@@ -41,3 +41,41 @@ in the first report was just that run's draw, not a fixed location. A session-sc
 wait-for-Postgres, or a hard failure rather than a skip once the URL is explicitly configured,
 would close it. Same family as everything M28 was about: a check that goes quiet rather than
 red.
+
+
+## From M27.2 — open
+
+**1. A recorded log-exposure claim that is probably false.** The M27.2 deferral row says an
+SFTP failure reaches `logger.exception` *"carrying asyncssh's own message, which names the
+remote path — the first time a per-subscription identifier can land in this control plane's
+log."* Review could not substantiate it: asyncssh builds `SFTPError` from the server's
+FXP_STATUS `reason`, and OpenSSH's sftp-server sends generic reasons (`Permission denied`, `No
+such file`) with no path; the only asyncssh site that interpolates a path is `rmtree`, which is
+not on this route; and `apply.py`'s generic arm uses `type(exc).__name__`, never `str(exc)`.
+**The row hands M27.3 an exposure that may not exist.** Errs conservative, which is why it was
+not blocking. Measure it — force an SFTP failure, read the log record — and record what was
+observed, or soften the claim to what was actually checked.
+
+**2. The `DNS =` discriminator in the seizure inventory is wrong.** The row qualifies it as
+*"on a node with no hop"*. Hop-ness is right for the **VLESS** server config, but a WireGuard
+user transport is `Egress.LOCAL` with or without a hop, and `edge/egress.py` renders a resolver
+exception into the server config's `PostUp` for every resolver that is **off the internet**. So
+on a no-hop node with a **private** resolver — the case `resolver_problem` deliberately allows,
+and the one an operator copying from `/etc/resolv.conf` lands in — the address is already in
+the node's own server config and the `DNS =` line is not a widening at all. The real
+discriminator is public-vs-private resolver.
+
+**3. A fourth state the taxonomy presents as exhaustive.** A node in a **non-serving** state
+(degraded, or draft-but-previously-applied) is skipped by the revocation fan-out, which calls
+`apply_node(..., only_if_serving=True)`, so it keeps a revoked user's artifact until it is
+repaired. Neither "an apply runs on it" nor "no apply reaches it again". Temporary, and matched
+by the config residual, so a completeness point about the row rather than a new defect.
+
+**4. The pin test asserts `409` but not which 409.** A future change refusing the apply for a
+different reason would keep it green while the pinned state silently stopped being reachable.
+Assert the error code or the sentence.
+
+**5. An exclusivity claim `edge` cannot see.** `edge/bootstrap/delivery.py` says
+`control/app/services/apply` is *"the only one"* that calls `place_delivery`. True today,
+unverifiable from that package, and rots silently — the class the convention exists to prevent.
+Drop *"the only one"*, keep the name.

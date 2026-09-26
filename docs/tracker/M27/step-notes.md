@@ -71,3 +71,77 @@ product as not having.
 **M27's done-when is not satisfied by writing this down:** it requires what a seized delivery
 host yields to be *no wider than today* **or** the widening to be a recorded decision. No
 non-control host holds a token today, so any token store is strictly a widening.
+
+
+## From M27.2 — the push, and no token on a node
+
+**Converged clean in two rounds.** control 1011/2, edge 929/3, infra 486, **e2e 224/0**.
+
+**No token is written to a node, ever.** An artifact is named
+`sha256(b"hashi/delivery-artifact-name/v1" + token)` — `control.app.services.delivery.artifact_name`.
+Swept and verified: name, both file contents, the staging path, the two shell strings, the
+logs and the audit trail all carry no token.
+
+**Unkeyed is the load-bearing half.** `Subscription(` is constructed at exactly **one** site,
+`subscriptions.issue`, with `secrets.token_urlsafe(32)` — 256 bits, no operator-chosen or
+imported path — so there is no dictionary to run against a digest. A *keyed* digest would buy
+unlinkability only against someone who already holds a token, and would cost the ability to
+recompute the name without the master key, so nothing could ever map `/sub/{token}` onto a
+file. **Do not "improve" this into a keyed digest.**
+
+**The derivation carries no per-host component, and that is now a constraint on M27.3.** Under
+the *hash-the-path-segment* route the digests on a seized host are inert. Under
+*serve-the-digest-as-the-path* the digest **is** the fetch credential, and one seized host's
+digests open the same users' artifacts on **every** delivery host. Salting with the node's own
+id closes that and costs the hash-the-path route, because a node cannot hash what it has not
+been told. **The route choice is a security decision.**
+
+**Layout:** `/opt/hashi/delivery/<digest>.txt` (base64 v1 document) and `<digest>.zip`
+(archive), files 0600, directory 0700, **a sibling of `conf/`** — never under it, because the
+rendered node compose bind-mounts `conf/` into every data-plane container. `place_delivery`
+stages into `delivery.incoming`, swaps, removes the previous directory. **Nothing else is ever
+in that directory.**
+
+**One renderer, not two.** `entries_for` / `config_files_for` / `render` take `over=<rows>`,
+which **replaces** the fleet-wide serving filter; `services/delivery` is the only caller. A
+second renderer here would be this project's recorded second-parser defect in a new place.
+
+**Position in apply:** the read is a database question above the connection; the push is the
+last step **inside** it. `confirm_serving` **measures** — the verdict is computed after the
+connection block — so a node whose data plane did not come back is handed fresh material and
+*then* marked degraded. Deliberate: the material is a function of the database, and
+withholding it would leave the **staler** directory on a host about to be repaired.
+
+**Content widening, recorded rather than silent:** a WireGuard-family *client* file carries a
+`PrivateKey` the node's own server config does not hold. `Credential` is unique per
+`(user_id, node_transport_id)`, so it impersonates that user only to the host the seizer
+already has.
+
+### The state that is NOT closed, and why reaching it was rejected
+
+`apply_node` raises `NothingToApply` **above** the push. So disabling a host's last transport
+and pressing Apply never reaches it, and the host keeps its ex-users' material. **Three
+reasons reaching the push there was wrong, all verified:**
+
+1. All three `_nothing_to_apply` sentences say *"nothing was pushed and nothing on the node was
+   changed"* — M18.1's answer, walked at M18's acceptance.
+2. `prepare` has not run. It exists **precisely** to replace a failing `mkdir` with a sentence
+   (`test -d` / `test -w` → `HOST_NOT_PREPARED`), so pushing there would create `NODE_ROOT`
+   where the account can — crossing M13's privilege boundary — or reintroduce the raw
+   `Permission denied` that sentence was written to eliminate.
+3. Its failure has nowhere to go: degrading contradicts M18.1, swallowing is the silent
+   failure this codebase punishes hardest, raising replaces the sentence that explains the host
+   keeps serving.
+
+**What makes the residual defensible:** `NOTHING_STOPS_A_SERVING_HOST` — a host can only hold a
+delivery directory if an apply once ran, and nothing since removes the config or stops the
+daemon. So that box is **still terminating those people's tunnels**; the directory's marginal
+contribution is the client-side lines. **A test pins the state and goes red the day anything
+reaches that host.** The removal path is M27.4's, in its text since 2026-09-26.
+
+**No image pin was added and no service declared.** A site block needs an address and a port:
+hardcoding either is forbidden, an operator-set port is M27.4's forbidden flag, the name and
+certificate are M27.6's, and what may be recorded there is M27.3's subject.
+`test_every_image_pin_resolves` builds from `DATA_PLANES`, so a pin added now would be
+unchecked. **Cost, recorded: until M27.3, every applied node holds material no user can
+fetch.**
