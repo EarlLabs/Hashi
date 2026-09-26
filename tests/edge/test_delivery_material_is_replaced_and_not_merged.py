@@ -1,9 +1,10 @@
 """What a push of delivery material does to a host's directory — M27.2.
 
-WHAT: the path one artifact is written under, the names this package refuses, and the
+WHAT: the path one artifact is written under, the names this package refuses, the
       order of the commands ``edge.bootstrap.delivery.place_delivery`` runs — which is
       what makes a push a REPLACEMENT of the host's delivery material rather than an
-      addition to it.
+      addition to it — and, since M27.4, what ``remove_delivery`` leaves behind, which
+      is nothing at all.
 WHY:  an artifact is somebody's rendered subscription. Merging would mean a host goes
       on holding — and, once something serves the directory, on handing out — a
       document for a person who no longer holds a credential on it, with no path in
