@@ -29,9 +29,9 @@ FAKE_PRIVATE_KEY = "wEJ0aXpBQlFtNVFDbEZLTFVqRXFRUlRLZXJhcXZJZ0k"
 FAKE_PUBLIC_KEY = "0Rf8h2v0aFVQVGxLZ0VNQmxwQVVCMFJmOGgydjBhRlY"
 
 # RFC 5737 documentation address, standing in for the resolver a node's record names —
-# M16, and since M23 the fallback a friend's own config file names when the transport
+# M16, and since M23 the fallback a user's own config file names when the transport
 # sets none (``egress.client_resolvers``). Outside every tunnel range in this file on
-# purpose: a resolver inside one is an address some friend's device holds, and the
+# purpose: a resolver inside one is an address some user's device holds, and the
 # renderer refuses it.
 FAKE_RESOLVER = "192.0.2.53"
 
@@ -50,7 +50,7 @@ def node() -> NodeView:
 
 @pytest.fixture
 def vless_reality_credentials() -> list[Credential]:
-    """Two friends, so a rendered client list is provably a list and ordered."""
+    """Two users, so a rendered client list is provably a list and ordered."""
     return [
         Credential(subject="aaaaaaaa-0000-4000-8000-000000000001"),
         Credential(subject="bbbbbbbb-0000-4000-8000-000000000002"),
@@ -74,7 +74,7 @@ def vless_reality_params() -> dict[str, object]:
 
 @pytest.fixture
 def vless_ws_tls_credentials(vless_reality_credentials) -> list[Credential]:
-    """The same two friends. A VLESS client needs nothing but its subject.
+    """The same two users. A VLESS client needs nothing but its subject.
 
     Named after the transport rather than shared under a generic name, so the
     convention in ``transport_fixture`` holds without exception — an exception there
@@ -188,7 +188,7 @@ FAKE_WG_PUBLIC_KEY = "Z2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0w="
 FAKE_WG_PRESHARED_KEY = "bW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QUVI="
 
 # A peer's own private key, DISTINCT from the node's. Distinct on purpose rather than
-# for tidiness: reusing the node's value here made the assertion "a friend's config
+# for tidiness: reusing the node's value here made the assertion "a user's config
 # file never carries the SERVER's private key" compare a string to itself, so it could
 # not fail. The test found this fixture, which is the right order of events.
 FAKE_WG_PEER_PRIVATE_KEY = "cGVlckFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMDE="
@@ -234,7 +234,7 @@ def amneziawg_params() -> dict[str, object]:
 def amneziawg_credentials() -> list[Credential]:
     """Two peers for the AmneziaWG hop, each with its own keypair.
 
-    Peers rather than friends: this transport runs between our own nodes. The contract
+    Peers rather than users: this transport runs between our own nodes. The contract
     calls the scope CLIENT and does not need to know the difference.
     """
     return [
@@ -284,10 +284,10 @@ def wireguard_params() -> dict[str, object]:
 
 @pytest.fixture
 def wireguard_credentials() -> list[Credential]:
-    """Two friends, each with their own keypair and their own tunnel address.
+    """Two users, each with their own keypair and their own tunnel address.
 
     Their own addresses, unlike the AmneziaWG hop fixture's fallback: this transport is
-    friend-facing only, and two friends sharing an address is the state the renderer
+    user-facing only, and two users sharing an address is the state the renderer
     refuses (see backlog item 33 for why nothing allocates them yet).
     """
     return [

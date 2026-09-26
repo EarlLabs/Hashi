@@ -16,15 +16,15 @@
         {{ value }} inside quotes in this file.
 
   One more thing is load-bearing, and it is the whole of M3: the OUTBOUND. This node
-  originates every connection a friend makes, so where that connection is opened FROM is
-  where the friend appears to be. On an entry node with a hop there is exactly one
+  originates every connection a user makes, so where that connection is opened FROM is
+  where the user appears to be. On an entry node with a hop there is exactly one
   outbound and it is bound to the hop's near address (`sendThrough`) — so there is no
   outbound left that could reach the internet by this node's own route, and when the hop
   is down the connection cannot be opened at all. Decision 3, fail closed, as a property
   of the file rather than as a rule someone has to remember.
 
   And M16, the half of the same question `sendThrough` cannot reach: WHERE A NAME IS
-  LOOKED UP. A friend's client hands this node a hostname, and the outbound has to turn it
+  LOOKED UP. A user's client hands this node a hostname, and the outbound has to turn it
   into an address before it can open anything — which, left alone, it does through the
   host's own resolver: on an entry node, inside the network the hop exists to leave, one
   query per site visited. So on a node with a hop this file carries a resolver of its own,
@@ -49,9 +49,9 @@
   container log, the one record the charter says must not exist.
 
   And M23's ninth round, which is the same finding as the kernel tunnels' but on the other
-  side of the topology: not where a friend's traffic LEAVES, but WHAT THEY MAY ASK THIS
+  side of the topology: not where a user's traffic LEAVES, but WHAT THEY MAY ASK THIS
   NODE TO DIAL. `sendThrough` binds the address a connection is opened from and says
-  nothing about the address it is opened to, so a friend on an entry node could hand this
+  nothing about the address it is opened to, so a user on an entry node could hand this
   proxy the leaf's own address on the hop and be answered by its SSH daemon — an RFC 1918
   address nothing on the open internet can reach, reached from the one address the leaf's
   peer entry authorises. No packet of theirs is forwarded by this node's kernel, so no
@@ -69,7 +69,7 @@
       working — which is the whole of M16, and M16 is why the record is allowed to name a
       private one at all. Scoped by WHOSE connection it is rather than by an address and a
       port, so unlike an address exception it can never open a hole for an address a
-      friend's own device could hold.
+      user's own device could hold.
     - THE HOP ITSELF. What carries this node's traffic abroad is another transport's
       interface and another process; the entry dials the leaf through the kernel and never
       through this file, so nothing here can take it away.
@@ -87,7 +87,7 @@
   FIRST, THE RULE IS NOT ONLY FOR A NODE WITH A HOP. It used to be rendered inside the same
   branch as `sendThrough` and the resolver, so a LEAF refused nothing at all — and a leaf's
   neighbourhood is the wider one: the far end of the hop (whose near end is the Russian
-  entry), the provider's LAN, the metadata service, this node's own loopback. Every friend
+  entry), the provider's LAN, the metadata service, this node's own loopback. Every user
   this project has who is served directly by a leaf had all of it. So the refusal sits
   outside that branch now, and the only thing the exit policy still decides is WHERE what
   is carried goes — `hop`, bound to the hop's near address, or `direct` by this node's own
@@ -97,7 +97,7 @@
   NODE's traffic — can never reach this file.
 
   SECOND, `routing.domainStrategy: "IpOnDemand"`, which is what makes an address rule mean
-  anything. Left at Xray's default (`AsIs`) the rules see the destination as the friend
+  anything. Left at Xray's default (`AsIs`) the rules see the destination as the user
   sent it, so `127.0.0.1` was refused and the NAME `localhost` was reached: any name
   resolving into one of these ranges walked straight past the rule, and a wildcard DNS
   service makes such a name out of any address. `IpIfNonMatch` is a MEASURED no-op here —

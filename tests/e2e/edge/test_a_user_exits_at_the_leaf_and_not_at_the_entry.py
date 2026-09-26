@@ -4,10 +4,10 @@ WHAT: builds one real entry→leaf hop out of ``edge.relay.render_hop`` — two 
       two rendered configs, freshly minted keys, a real AmneziaWG handshake — and then
       asks two questions of it that no rendered config can answer. First, of a third host
       which is only reachable past the leaf and also reachable directly from the entry:
-      **which address did it see**. Then, with a friend's own client dialling the entry's
-      friend-facing proxy and asking for a NAME: **which address did the RESOLVER see**.
+      **which address did it see**. Then, with a user's own client dialling the entry's
+      user-facing proxy and asking for a NAME: **which address did the RESOLVER see**.
 WHY:  M3, and then M16 — the same failure asked twice, because the first answer hid the
-      second. Before M3, every signal this product has was green while every friend
+      second. Before M3, every signal this product has was green while every user
       exited in Russia: two ``active`` nodes, ``healthy: true``, ``drifted: []``,
       ``stale: []``, a hop with both ends and a nine-second-old handshake. Reading the
       rendered config would have shown the cause and not the fault. As the field proof
@@ -16,12 +16,12 @@ WHY:  M3, and then M16 — the same failure asked twice, because the first answe
       M16 is what that proof did not cover, found by M3's own reviewer minutes after it
       landed. "What address does the internet see" and "who resolved the name" are
       different questions, and only the first had ever been asked: the exit moved to
-      Amsterdam while the list of names a friend asked for, in order and with timing,
+      Amsterdam while the list of names a user asked for, in order and with timing,
       was still resolved by a resolver on the Russian side of the hop. A proxy hands the
       name to its host's resolver before it dials, and ``sendThrough`` binds the dial.
       So the second half of this file watches WHERE THE LOOKUP GOES, and it is built so
       that the config which leaks and the config which does not are indistinguishable
-      from the friend's seat — same page, same exit address, same everything except the
+      from the user's seat — same page, same exit address, same everything except the
       one packet the resolver saw.
 
       Both halves are deliberately built so that a wrong render produces a WRONG ADDRESS
@@ -31,19 +31,19 @@ WHY:  M3, and then M16 — the same failure asked twice, because the first answe
       topology.
 HOW:  two networks the scenario creates and destroys. The hop runs over the first, whose
       subnet is docker's own choice so that nothing on the host can collide; the
-      destination, the resolver and the friend sit on the second, which BOTH nodes can
+      destination, the resolver and the user sit on the second, which BOTH nodes can
       reach and which is addressed in ``THE_INTERNET`` — reserved, and globally routable,
-      because since M23's tenth round a friend's proxy refuses what is not. The exit
+      because since M23's tenth round a user's proxy refuses what is not. The exit
       measurement is made from inside the entry container with its own ``nc``, bound to
       the address the entry's config says its way out is (``relay.exit_via``) — the
       kernel path the field proof measured on the live host. The lookup measurement needs
-      a friend, because only a friend's connection carries a name into the proxy: an Xray
+      a user, because only a user's connection carries a name into the proxy: an Xray
       client configured from the product's OWN ``render_client`` output, handed a name
       rather than an address, dialling a proxy whose config is the product's own
       ``render_server`` under ``Egress.HOP``.
 
 Nothing here logs, records or infers who connected to what. The only requests made are
-this scenario's own, from containers it started, about a synthetic friend that does not
+this scenario's own, from containers it started, about a synthetic user that does not
 exist. The destination is configured to discard its access log (``log { output
 discard }``) and the resolver is configured with ``access: none`` and ``dnsLog: false``,
 precisely so that observing traffic does not create the one record the charter forbids.
@@ -81,8 +81,8 @@ it is easy to over-read:
     acceptance walk, on the owner's two hosts.
 
 What it does prove is the two things M3 and M16 shipped without: that these rendered
-configs, run, carry a friend's traffic out at the far end and never out of the near one
-— that when the far end stops, nothing comes out at all — and that a friend who asks for
+configs, run, carry a user's traffic out at the far end and never out of the near one
+— that when the far end stops, nothing comes out at all — and that a user who asks for
 a NAME has that name looked up from the far end too, where a config one key different
 looks identical from every seat but the resolver's.
 """
@@ -125,7 +125,7 @@ HOP_TRANSPORTS = sorted(
 # the lookup question is even about. Derived from the same declaration ``HOP_TRANSPORTS``
 # reads, and its exact complement: a tool that takes its interface name from a config file
 # makes an INTERFACE, and the kernel routes whatever leaves it, lookup and traffic alike.
-# A proxy terminates a friend's connection and opens its own, so it must turn the name
+# A proxy terminates a user's connection and opens its own, so it must turn the name
 # into an address ITSELF before it dials — which is the whole of M16, and is true of no
 # kernel tunnel.
 PROXY_TRANSPORTS = sorted(
@@ -134,15 +134,15 @@ PROXY_TRANSPORTS = sorted(
     if not node_stack.DATA_PLANES[meta.config_format].interface_from_config_filename
 )
 
-# Of those, the ones a friend cannot be dialled into HERE, each with the reason. Written
+# Of those, the ones a user cannot be dialled into HERE, each with the reason. Written
 # down rather than skipped: ``test_every_proxy_transport_is_measured_or_excused`` holds
 # this against ``PROXY_TRANSPORTS``, so a proxy transport added later is either measured
 # by arriving or turns this file red until somebody says why it cannot be.
-NO_FRIEND_HERE = {
+NO_USER_HERE = {
     "vless-reality": (
         "a Reality server dials its decoy `dest` for every connection and fails the "
         "connection when that dial fails — including for a client holding CORRECT keys. "
-        "So no friend can be dialled into one here without also standing up a TLS 1.3 "
+        "So no user can be dialled into one here without also standing up a TLS 1.3 "
         "host for it to borrow: a second instrument, and a different question. "
         "MEASURED, not recalled, against the pinned binary in .tools/xray (1.8.24, the "
         "same version DATA_PLANES pins) on loopback, because an excuse resting on "
@@ -155,13 +155,13 @@ NO_FRIEND_HERE = {
         "authentication in the code. It does not need to be: what excuses this transport "
         "is that the decoy is required at all.) What this scenario measures with packets "
         "is asserted for this transport too, on the rendered config, by "
-        "tests/edge/test_a_friends_lookup_leaves_through_the_hop.py, which is "
+        "tests/edge/test_a_users_lookup_leaves_through_the_hop.py, which is "
         "parametrised over every transport rather than over this shortlist."
     ),
 }
 
-# The proxy transports a friend is actually dialled into below.
-FRIEND_TRANSPORTS = [name for name in PROXY_TRANSPORTS if name not in NO_FRIEND_HERE]
+# The proxy transports a user is actually dialled into below.
+USER_TRANSPORTS = [name for name in PROXY_TRANSPORTS if name not in NO_USER_HERE]
 
 # The destination — "the internet", for the length of one test. Pinned to the exact tag
 # ``deploy/docker/caddy.Dockerfile`` already pins, so this scenario introduces no
@@ -169,21 +169,21 @@ FRIEND_TRANSPORTS = [name for name in PROXY_TRANSPORTS if name not in NO_FRIEND_
 # part of a node: it exists to answer the one question a rendered config cannot.
 ECHO_IMAGE = "caddy:2.8.4-alpine"
 
-# The friend's own device — a container with a shell and a ``nc``, standing in for a
+# The user's own device — a container with a shell and a ``nc``, standing in for a
 # phone. The same image as the destination and pinned for the same reason; named
 # separately because it plays a different part, and because a reader replacing one of
 # them should not silently replace the other. It holds the network namespace its Xray
-# client runs in, so that a request can be made from the friend's seat with ``docker
+# client runs in, so that a request can be made from the user's seat with ``docker
 # exec`` — the client's own image ships no shell at all.
 DEVICE_IMAGE = ECHO_IMAGE
 
-# The name a friend asks for, and the ONLY name anything in this file ever looks up. A
+# The name a user asks for, and the ONLY name anything in this file ever looks up. A
 # reserved example domain (RFC 2606) belonging to nobody, like every fixture in this zone.
 #
 # It is also registered as the destination container's network alias, which is what makes
 # the negative half of the lookup measurement sharp rather than merely red: with the
 # product's ``domainStrategy`` taken out, the proxy asks its HOST's resolver — here
-# docker's embedded one, which knows this name — and the friend's page still loads, from
+# docker's embedded one, which knows this name — and the user's page still loads, from
 # the leaf's address, with nothing anywhere saying the lookup went home. That is M16's
 # bug reproduced exactly, not approximated.
 LOOKUP_NAME = "destination.example.com"
@@ -195,21 +195,21 @@ LOOKUP_NAME = "destination.example.com"
 # a counter cannot hold a name.
 LOOKUP_COUNTERS = "lookups"
 
-# The port a friend's own client listens on inside its own network namespace, and the
+# The port a user's own client listens on inside its own network namespace, and the
 # port the proxy under test serves on. Fixed here because they are this fixture's choice
 # and nothing else's; on a node both are operator data (``params.port``).
-FRIEND_PORT = 1080
+USER_PORT = 1080
 PROXY_PORT = 8443
 
 # The range the "internet" of this scenario is addressed in, and the ONE address range
 # this file writes down. Everything else still comes from the subnet docker chose.
 #
-# It has to be written down, and M23's tenth round is why. A friend's proxy now REFUSES
+# It has to be written down, and M23's tenth round is why. A user's proxy now REFUSES
 # every destination off the public internet (``edge.egress.NOT_THE_INTERNET``) and, since
 # the same round, resolves a name before it decides — so a destination inside docker's own
 # pool, which is RFC 1918 and therefore squarely inside that list, is a destination a
-# friend can no longer reach. Left as it was, this scenario would go on passing for the
-# wrong reason for exactly as long as it took somebody to notice: the friend's half asks
+# user can no longer reach. Left as it was, this scenario would go on passing for the
+# wrong reason for exactly as long as it took somebody to notice: the user's half asks
 # for a NAME, and at the routing strategy this file's configs used to carry, a name was
 # never compared against an address at all.
 #
@@ -229,11 +229,11 @@ THE_INTERNET = "192.88.99.0/24"
 # in well under a second on an idle engine; this is generous.
 PROXY_SECONDS = 3
 
-# How many times a friend's request is attempted before it is believed to have failed.
+# How many times a user's request is attempted before it is believed to have failed.
 # A retry rather than a longer sleep because the first attempt after a container starts
 # is the one that races, and because a lookup that succeeded is cached by the proxy — so
 # extra attempts cost nothing and prove nothing extra either way.
-FRIEND_ATTEMPTS = 3
+USER_ATTEMPTS = 3
 
 # It answers with the source address it saw, and writes NOTHING down. Both halves matter:
 # the address is the whole measurement, and a server that logged it would be the
@@ -445,7 +445,7 @@ def measured(request, engine, tmp_path_factory, hop_tunnel) -> dict:
     try:
         # The transit link keeps docker's own pool: it is the path the hop itself runs
         # over, carried by a kernel tunnel no routing rule of ours is anywhere near. The
-        # other one is where a friend's traffic goes, so it has to BE the internet.
+        # other one is where a user's traffic goes, so it has to BE the internet.
         transit, transit_subnet = fleet.network("transit")
         internet, internet_subnet = fleet.network("internet", THE_INTERNET)
         addresses = {
@@ -461,7 +461,7 @@ def measured(request, engine, tmp_path_factory, hop_tunnel) -> dict:
             # can reach it perfectly well by its own route, and a proxy that resolved at
             # home would be seen doing exactly that rather than seen failing.
             "resolver": str(internet_subnet[30]),
-            "friend": str(internet_subnet[40]),
+            "user": str(internet_subnet[40]),
         }
 
         entry_private, entry_public = keypair()
@@ -529,7 +529,7 @@ def measured(request, engine, tmp_path_factory, hop_tunnel) -> dict:
             [
                 "--network", internet,
                 "--ip", addresses["destination"],
-                # Registered under the name a friend asks for, so that a proxy which
+                # Registered under the name a user asks for, so that a proxy which
                 # resolves through its HOST — the M16 leak — finds it and succeeds.
                 # Nothing in the exit half uses this; see ``LOOKUP_NAME``.
                 "--network-alias", LOOKUP_NAME,
@@ -560,7 +560,7 @@ def measured(request, engine, tmp_path_factory, hop_tunnel) -> dict:
             ).stdout,
         }
 
-        # Decision 3, measured: the far end goes away beneath a friend mid-session.
+        # Decision 3, measured: the far end goes away beneath a user mid-session.
         run(["docker", "stop", "-t", "5", nodes["leaf"]], timeout=120)
         measurements["while_the_hop_is_down"] = address_seen_by(
             fleet, nodes["entry"], addresses["destination"], exit_via
@@ -636,7 +636,7 @@ def test_the_nodes_own_traffic_never_enters_the_hop(measured) -> None:
     """``Table = off`` plus source-based routing — the switch that saved the SSH session.
 
     The entry's peer is allowed ``0.0.0.0/0``, which is the only width that can carry a
-    friend's traffic. What keeps that from swallowing the node itself is that wg-quick
+    user's traffic. What keeps that from swallowing the node itself is that wg-quick
     installs no routes: the main table still leaves by the node's own gateway, and only
     what is sourced from the tunnel's own address is diverted. On the field host this was
     the difference between a working apply and a node the control plane could no longer
@@ -654,7 +654,7 @@ def test_the_nodes_own_traffic_never_enters_the_hop(measured) -> None:
 
 
 def test_a_hop_that_is_down_takes_the_exit_with_it(measured) -> None:
-    """Decision 3, fail closed: the friend loses their exit and gets NOTHING.
+    """Decision 3, fail closed: the user loses their exit and gets NOTHING.
 
     The alternative — falling back to the entry's own route — is the failure this
     topology exists to prevent, and it would be invisible: pages would load.
@@ -666,7 +666,7 @@ def test_a_hop_that_is_down_takes_the_exit_with_it(measured) -> None:
         f"{measured['while_the_hop_is_down']!r}"
     )
     assert measured["while_the_hop_is_down"] != addresses["entry_internet"], (
-        "with its hop down, the entry answered with its OWN address — a friend in "
+        "with its hop down, the entry answered with its OWN address — a user in "
         "Russia exiting in Russia, with every screen still green"
     )
     assert measured["after_the_hop_returns"] == addresses["leaf_internet"], (
@@ -684,11 +684,11 @@ def test_there_is_a_hop_capable_transport_to_measure() -> None:
 
 
 def test_the_internet_in_this_scenario_is_actually_the_internet() -> None:
-    """The assumption the friend half rests on since M23's tenth round, held not assumed.
+    """The assumption the user half rests on since M23's tenth round, held not assumed.
 
-    A friend's proxy refuses every destination in ``NOT_THE_INTERNET`` and, since the same
+    A user's proxy refuses every destination in ``NOT_THE_INTERNET`` and, since the same
     round, resolves a NAME to an address before it decides — so if this scenario's
-    "internet" were addressed out of docker's own pool, which is RFC 1918, the friend
+    "internet" were addressed out of docker's own pool, which is RFC 1918, the user
     would be refused by the product and every assertion about the lookup would be about a
     request that never happened. That is not hypothetical: it is what this file did until
     that round, and it passed, because a name was never compared against an address.
@@ -696,18 +696,18 @@ def test_the_internet_in_this_scenario_is_actually_the_internet() -> None:
     Asserted against the same list the proxy refuses rather than against ``is_global``
     alone, so a range added to that list which happened to cover this one turns this file
     red here — with a sentence — instead of turning it red four fixtures later with a
-    friend who cannot reach anything.
+    user who cannot reach anything.
     """
     internet = ipaddress.ip_network(THE_INTERNET)
 
     assert internet.is_global, (
-        f"{THE_INTERNET} is not globally routable, so a friend's proxy is entitled to "
+        f"{THE_INTERNET} is not globally routable, so a user's proxy is entitled to "
         "refuse everything this scenario calls the internet"
     )
     for refused in NOT_THE_INTERNET:
         assert not internet.overlaps(ipaddress.ip_network(refused)), (
             f"this scenario's internet ({THE_INTERNET}) is inside {refused}, which every "
-            "friend-facing config this project renders refuses. Nothing below measures "
+            "user-facing config this project renders refuses. Nothing below measures "
             "what it claims to"
         )
 
@@ -724,9 +724,9 @@ def resolver_config(answer: str) -> str:
     INSTRUMENT and never part of a node.
 
     It ANSWERS, which matters more than it looks. A resolver that stayed silent would
-    make the two halves of this measurement differ in what a friend sees — one page
+    make the two halves of this measurement differ in what a user sees — one page
     loading and one not — and the whole point of M16 is that the leak is invisible from
-    the friend's seat. It also leaves Xray in the timeout-and-fall-back path, which is
+    the user's seat. It also leaves Xray in the timeout-and-fall-back path, which is
     behaviour nobody wants a proof to depend on. So it answers, from ``hosts``, in
     memory, for exactly one name, with no upstream configured and nothing to forward to.
 
@@ -739,7 +739,7 @@ def resolver_config(answer: str) -> str:
             "log": {"loglevel": "warning", "access": "none", "dnsLog": False},
             # One name, one answer, held in memory for the length of one test. Every
             # other name would fall through to this container's own resolver, which is a
-            # path nothing here ever takes: ``LOOKUP_NAME`` is the only name a friend in
+            # path nothing here ever takes: ``LOOKUP_NAME`` is the only name a user in
             # this scenario ever asks for.
             "dns": {"hosts": {LOOKUP_NAME: answer}, "queryStrategy": "UseIPv4"},
             "inbounds": [
@@ -897,9 +897,9 @@ def without_the_keys_that_resolve_a_name_here(config: str) -> tuple[str, int]:
 
 
 def ask_for_the_name(device: str) -> str:
-    """One request from the friend's seat, for a NAME rather than for an address.
+    """One request from the user's seat, for a NAME rather than for an address.
 
-    The distinction is the entire scenario. The friend's client is given a name and no
+    The distinction is the entire scenario. The user's client is given a name and no
     way to resolve it — it forwards the name itself — so the proxy on the entry is the
     first thing in the chain that has to turn it into an address, which is the moment
     M16 is about.
@@ -907,12 +907,12 @@ def ask_for_the_name(device: str) -> str:
     Returns the body the destination answered with, which is the address IT saw, or an
     empty string when nothing came back.
     """
-    for _ in range(FRIEND_ATTEMPTS):
+    for _ in range(USER_ATTEMPTS):
         request = run(
             [
                 "docker", "exec", device, "sh", "-c",
                 "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | "
-                f"nc -w {REQUEST_SECONDS} 127.0.0.1 {FRIEND_PORT}",
+                f"nc -w {REQUEST_SECONDS} 127.0.0.1 {USER_PORT}",
             ],
             timeout=REQUEST_SECONDS + 30,
         )
@@ -924,7 +924,7 @@ def ask_for_the_name(device: str) -> str:
 
 @pytest.fixture(scope="module")
 def vless_ws_tls_proxy_params() -> dict[str, object]:
-    """What one friend-facing VLESS-over-WebSocket proxy runs with, other than its keys.
+    """What one user-facing VLESS-over-WebSocket proxy runs with, other than its keys.
 
     Named after the transport, by the same convention ``amneziawg_hop_params`` above and
     ``tests/edge/conftest.py`` use: a proxy transport that arrives later brings its own
@@ -945,12 +945,12 @@ def vless_ws_tls_proxy_params() -> dict[str, object]:
 
 @pytest.fixture(scope="module")
 def vless_ws_tls_client_config():
-    """Build a friend's client out of the product's OWN client entry, and nothing else.
+    """Build a user's client out of the product's OWN client entry, and nothing else.
 
-    A real friend is handed a URI by the subscription and pastes it into a client; what
+    A real user is handed a URI by the subscription and pastes it into a client; what
     this builds is that client, from that URI, parsed the way one would. Deriving it from
     ``serialise`` rather than from the parameters beside it is what makes the measurement
-    a statement about the product: if the entry a friend is given did not actually dial
+    a statement about the product: if the entry a user is given did not actually dial
     the config a node is given, every assertion below would fail rather than silently
     measure a connection this test had arranged by hand.
 
@@ -971,7 +971,7 @@ def vless_ws_tls_client_config():
                     {
                         "tag": "device",
                         "listen": "0.0.0.0",
-                        "port": FRIEND_PORT,
+                        "port": USER_PORT,
                         "protocol": "dokodemo-door",
                         "settings": {"address": LOOKUP_NAME, "port": 80, "network": "tcp"},
                     }
@@ -1016,9 +1016,9 @@ def vless_ws_tls_client_config():
     return build
 
 
-@pytest.fixture(scope="module", params=FRIEND_TRANSPORTS)
+@pytest.fixture(scope="module", params=USER_TRANSPORTS)
 def looked_up(request, measured, material_a_config_names) -> dict:
-    """A friend on the hop ``measured`` already built, asking for a name — twice.
+    """A user on the hop ``measured`` already built, asking for a name — twice.
 
     Added to THAT fleet rather than to one of its own: the question M16 asks is about
     this hop, and a second one would cost two more images, two more keypairs and another
@@ -1029,7 +1029,7 @@ def looked_up(request, measured, material_a_config_names) -> dict:
     Twice, because one measurement proves nothing. The first run is the product's own
     rendered config. The second is that config with ``domainStrategy`` removed from its
     outbound and NOTHING else changed, which is the shape M16 found in the field. The
-    two runs are the same friend, the same name, the same hop and the same resolver.
+    two runs are the same user, the same name, the same hop and the same resolver.
     """
     transport_name = request.param
     key = transport_name.replace("-", "_")
@@ -1044,7 +1044,7 @@ def looked_up(request, measured, material_a_config_names) -> dict:
     directory.mkdir()
 
     # The node's record, as the control plane would hold it for an entry that dials a
-    # hop: its friend-facing address, and a resolver. The resolver is REQUIRED here and
+    # hop: its user-facing address, and a resolver. The resolver is REQUIRED here and
     # is never defaulted — a hop-dialling node without one does not render at all (M16.1,
     # ``EgressNotRenderable(NO_RESOLVER)``), which is asserted in ``tests/edge/``.
     node = dataclasses.replace(
@@ -1055,7 +1055,7 @@ def looked_up(request, measured, material_a_config_names) -> dict:
     credential = Credential(subject=str(uuid.uuid4()))
 
     # The product's own two outputs, from one node record and one credential: what the
-    # node is given, and what the friend is given.
+    # node is given, and what the user is given.
     proxy_config = transport.profile.render_server(
         node, params, [credential], egress=Egress.HOP, exit_via=measured["exit_via"]
     )
@@ -1089,15 +1089,15 @@ def looked_up(request, measured, material_a_config_names) -> dict:
         resolver_config(addresses["destination"]),
         ["--network", internet, "--ip", addresses["resolver"]],
     )
-    # The friend's device holds the namespace; its client runs inside it. The same shape
+    # The user's device holds the namespace; its client runs inside it. The same shape
     # a node has — a container with the tools and a container with the daemon — and the
-    # only way to make a request from the friend's seat, because the client's own image
+    # only way to make a request from the user's seat, because the client's own image
     # ships no shell.
     device = fleet.start(
         "device",
         [
             "--network", internet,
-            "--ip", addresses["friend"],
+            "--ip", addresses["user"],
             "--entrypoint", "sh",
             DEVICE_IMAGE, "-c", "tail -f /dev/null",
         ],
@@ -1145,10 +1145,10 @@ def looked_up(request, measured, material_a_config_names) -> dict:
     }
 
     # Given back, because this fixture BORROWS the single ``Fleet`` that ``measured``
-    # built rather than owning one. It is parametrised over ``FRIEND_TRANSPORTS``, and
+    # built rather than owning one. It is parametrised over ``USER_TRANSPORTS``, and
     # every instantiation shares that one fleet's tag, its container names and its
     # addresses — so three containers left standing are three collisions for the next
-    # friend-facing transport to be added, which is exactly the day
+    # user-facing transport to be added, which is exactly the day
     # ``test_every_proxy_transport_is_measured_or_excused`` exists to bring about.
     #
     # Removing them is the fix rather than giving each a per-transport NAME, and the
@@ -1175,21 +1175,21 @@ def test_the_lookup_leaves_by_the_leaf_and_not_by_the_entry(looked_up) -> None:
         "the resolver on this node's record was never asked anything from the far end of "
         f"the hop. It saw {lookups['entry']} lookup(s) from the entry's own address "
         f"({addresses['entry_internet']}) and {lookups[ELSEWHERE]} from elsewhere — a "
-        "friend's destination names being resolved on the near side of the hop is M16 "
+        "user's destination names being resolved on the near side of the hop is M16 "
         "exactly, and it is invisible from every screen this product has"
     )
     assert lookups["entry"] == 0, (
         f"{lookups['entry']} lookup(s) reached the resolver from the entry's own address "
-        f"({addresses['entry_internet']}) rather than through the hop. Some of a friend's "
+        f"({addresses['entry_internet']}) rather than through the hop. Some of a user's "
         "names are being resolved from the network the hop exists to leave"
     )
 
 
-def test_the_friend_still_reaches_the_name_they_asked_for(looked_up) -> None:
+def test_the_user_still_reaches_the_name_they_asked_for(looked_up) -> None:
     """The control for the test above, and the reason the measurement is not vacuous.
 
     A lookup that left by the leaf and then resolved to nothing would satisfy the
-    counters and serve the friend a blank page. This asserts the whole chain instead: the
+    counters and serve the user a blank page. This asserts the whole chain instead: the
     name was resolved, the connection was opened through the hop, and the address the
     destination saw is the leaf's — which is M3's claim, now made about a request that
     began as a NAME rather than as an address.
@@ -1198,7 +1198,7 @@ def test_the_friend_still_reaches_the_name_they_asked_for(looked_up) -> None:
     seen = looked_up["product"]["seen_by_the_destination"]
 
     assert seen == addresses["leaf_internet"], (
-        f"a friend asking for {LOOKUP_NAME!r} was answered by {seen!r}. It should have "
+        f"a user asking for {LOOKUP_NAME!r} was answered by {seen!r}. It should have "
         f"been the leaf's address ({addresses['leaf_internet']}); the entry's own is "
         f"{addresses['entry_internet']}, and an empty answer means the name never "
         "resolved at all"
@@ -1213,7 +1213,7 @@ def test_the_entry_could_have_resolved_it_at_home_and_did_not(looked_up) -> None
     hands the name to its host's resolver — here docker's, which knows this name — and
     dials the address that comes back through the hop exactly as before.
 
-    So this asserts what the product's own screens would show: the friend's page still
+    So this asserts what the product's own screens would show: the user's page still
     loads, from the leaf's address, and the resolver the node's record names was not
     asked anything at all. Everything green, and the list of names gone home.
     """
@@ -1223,7 +1223,7 @@ def test_the_entry_could_have_resolved_it_at_home_and_did_not(looked_up) -> None
     assert mutated["seen_by_the_destination"] == addresses["leaf_internet"], (
         "the mutated config did not keep working, so this test is no longer the "
         "comparison it claims to be: the point is that removing the lookup wiring is "
-        f"INVISIBLE to a friend. It answered {mutated['seen_by_the_destination']!r}"
+        f"INVISIBLE to a user. It answered {mutated['seen_by_the_destination']!r}"
     )
     assert sum(mutated["lookups"].values()) == 0, (
         "with the outbound's domainStrategy removed, the resolver on the node's record "
@@ -1258,7 +1258,7 @@ def test_no_lookup_arrived_from_anywhere_this_scenario_did_not_expect(looked_up)
     """The measurement is about two addresses, so a third one invalidates it.
 
     Nothing else in this fleet is configured to ask this resolver anything. A count here
-    means something is — the friend's own client, the destination, a stray container —
+    means something is — the user's own client, the destination, a stray container —
     and the two counts above are then not the two facts they are read as.
     """
     for half in ("product", "mutated"):
@@ -1274,7 +1274,7 @@ def test_every_proxy_transport_is_measured_or_excused() -> None:
     """A proxy transport added later must not be silently unmeasured — which is M16.
 
     The milestone exists because a question was never asked, not because an answer was
-    wrong. A new transport that terminates a friend's connection has the same question to
+    wrong. A new transport that terminates a user's connection has the same question to
     answer, and the way this file could stop asking it is by quietly parametrising over a
     list the transport is not in.
     """
@@ -1282,10 +1282,10 @@ def test_every_proxy_transport_is_measured_or_excused() -> None:
         "no installed transport has a proxy data plane, so nothing above ran and this "
         "file is green about a lookup it never made"
     )
-    unaccounted = set(PROXY_TRANSPORTS) - set(FRIEND_TRANSPORTS) - set(NO_FRIEND_HERE)
+    unaccounted = set(PROXY_TRANSPORTS) - set(USER_TRANSPORTS) - set(NO_USER_HERE)
     assert not unaccounted, (
-        f"{sorted(unaccounted)} terminate a friend's connection and so must resolve a "
-        "name before dialling, but no friend is dialled into them here and no reason is "
+        f"{sorted(unaccounted)} terminate a user's connection and so must resolve a "
+        "name before dialling, but no user is dialled into them here and no reason is "
         "written down. Give each a `<name>_proxy_params` and a `<name>_client_config` "
-        "fixture, or add it to NO_FRIEND_HERE saying what a lab cannot build for it"
+        "fixture, or add it to NO_USER_HERE saying what a lab cannot build for it"
     )

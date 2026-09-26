@@ -73,11 +73,11 @@ script per host, ending by printing what the operator types into the panel.
 | from | commands | panel actions |
 |---|---|---|
 | bare host → node serving | 1 | 3 — add node, enable transport, apply |
-| bare host → a friend's packets moving | 1 | 5 — those three, add the user, apply again |
+| bare host → a user's packets moving | 1 | 5 — those three, add the user, apply again |
 | two bare hosts → an established entry→leaf hop | 2 | 6 |
 | bare host → the control plane | 13 (14 on a truly bare box) | 0 |
 
-**Walk 3 carried a friend across a hop built this way** — hop `established`, both
+**Walk 3 carried a user across a hop built this way** — hop `established`, both
 ends handshaking, a stock client built from the subscription URL alone fetching
 `http=200`, the leaf's MASQUERADE counter moving 0 → 2 packets. The charter's
 overstatements (*"from a bare host to serving traffic"*, *"the node answers a
@@ -85,7 +85,7 @@ health probe"*) are gone, and criterion 2 no longer claims a replacement is
 bootstrapped from the panel.
 
 **Four walks, three fix rounds landed and pushed.** Closed and re-verified by a
-later independent walk: the charter's two overstatements; a friend added but not
+later independent walk: the charter's two overstatements; a user added but not
 applied (now announced on all four surfaces, the claim true, all four silent
 after the apply); a probe finding erased by a page reload; the apply's check
 racing in both directions; the apply measuring container liveness instead of
@@ -109,12 +109,12 @@ no caller yet. Its control half was discarded rather than left half-applied.
    nothing. *The fix `36d6b1b` starts: only the transport knows what serving
    means for its own protocol — a wg-family node is serving when its interface
    holds the peers that were rendered into its config.*
-2. **blocker — a condemned node empties every friend's link.** A ~20-second false
+2. **blocker — a condemned node empties every user's link.** A ~20-second false
    red on the entry made `GET /sub/{token}` return **nothing at all**, while on
    that host Xray was listening, the tunnel daemon held its port and the hop
-   handshake was 27 seconds old. **A slow VPS silently takes every friend
+   handshake was 27 seconds old. **A slow VPS silently takes every user
    offline.** Rule to build on: a health verdict may warn the operator, it may
-   never be why a friend's link comes back empty.
+   never be why a user's link comes back empty.
 3. **high — an apply that could not take the reading says the same words as one
    that took it and passed.** With `ss` removed from the host, the success line
    was byte-identical to the healthy run. The state is right (it clears nothing);
@@ -123,7 +123,7 @@ no caller yet. Its control half was discarded rather than left half-applied.
    hard; 35 seconds after a refusal the node was serving at 0% loss and the panel
    still read `degraded`. Nothing re-measures until a human presses probe.
 5. **low** — the Users screen warns about withdrawn access with zero revoked
-   friends (M23's note firing on any behind-node; three walks have tripped on
+   users (M23's note firing on any behind-node; three walks have tripped on
    it). **low** — 14 hand-typed numbers per hop remain, `port` the one new
    candidate for a defensible default.
 
@@ -142,7 +142,7 @@ code path is where it lives.
 ### Also open
 
 - **M24** — the panel never shows `?format=client-config-file`, so an operator
-  following the panel hands a WireGuard-family friend a link that returns an
+  following the panel hands a WireGuard-family user a link that returns an
   empty document. Not started. Its open design question: one link that answers by
   what the node serves, or one URL per shape. *The first keeps "one link, every
   serving node" true and quietly makes a subscription token polymorphic.*
@@ -160,7 +160,7 @@ Hosting Centre, Ubuntu 22.04, 1 vCPU, 957 Mi RAM. Runbook **Shape A**: control
 plane, panel, delivery endpoint and one node on the same box.
 
 **Works, verified over the public internet:** `panel-bootstrap.sh` → Let's Encrypt
-certificate → panel login → register node → enable transport → `apply` → friend →
+certificate → panel login → register node → enable transport → `apply` → user →
 subscription → a real client connects and carries traffic. Operator auth fails
 closed (401 unauthenticated). The API returns public keys and withholds private
 and preshared ones.
@@ -175,7 +175,7 @@ established this.
 **leaf** and exits traffic. A second host — 3.9 Gi RAM, in Russia — is the
 **entry**, and carries the control plane and the panel as well. That moves the
 control plane off the 957 Mi box, which had 463 Mi free while running control,
-Postgres, Caddy and a node together. It also puts every node key and every friend
+Postgres, Caddy and a node together. It also puts every node key and every user
 credential on a Russian host: deliberate, and the reason M7 stops being optional.
 
 **Does not work:** everything in M1–M3 below. The pattern is worth stating once,
@@ -2330,7 +2330,7 @@ questions*, and *verifies before reporting success*.
 
 acceptance: yes
 Take a bare host. Using only what the product tells you, get it to the point
-where a friend's traffic flows through it. Count what you had to do, and say
+where a user's traffic flows through it. Count what you had to do, and say
 whether the charter's sentence is true.
 
 **How this milestone runs, by the owner's instruction (2026-09-16):** tested by an
@@ -2340,9 +2340,10 @@ way M23 was run.
 
 ---
 
-## → M29 — One word for the person who uses this, and the product already picked a different one than the code did · asked for by the owner 2026-09-22 · PROPOSED
+## ✅ M29 — One word for the person who uses this, and the product already picked a different one than the code did · asked for by the owner 2026-09-22 · done 2026-09-23 (acceptance: stand walk good on everything a stand can reach; 2 checklist lines it cannot observe were lifted by the owner 2026-09-23; the real-host walk passed and found 2 runbook defects, fixed in M29.9)
 
-**Not started.**
+**Done.** Thirteen steps, 37 commits, every step converged clean under an
+independent reviewer. `make verify` green.
 
 ### The premise is better than "the owner prefers a different word"
 
@@ -2380,53 +2381,379 @@ Most of that count is comments and docstrings. The identifiers are few and known
 **That asymmetry is the plan: `edge`'s change is one method and a read-through of
 its comments; `control`'s is a migration.**
 
-### What the milestone has to decide, before it writes code
+### Settled by the owner, 2026-09-22
 
-1. **Whether the word is `user`, and this is the one question worth answering
-   before anything else.** This codebase already uses `user` for two other things:
-   `ssh_user` on a node record, and `HASHI_OPERATOR_USERNAME` for the person who
-   logs into the panel — plus `--user` in `scripts/node-bootstrap.sh`. Adopting it
-   for the consumer makes **three** meanings of one word, and the two existing ones
-   are both about accounts that log in somewhere. A sentence like *"the user the
-   node is driven as"* beside *"the users on this transport"* is the kind of
-   ambiguity that costs an hour at 3am. `subscriber` has none of that collision and
-   is what `subscriptions` already implies. **The owner asked for `user`; this
-   milestone must put the collision in front of them and take the answer, rather
-   than discover it half-way through a 239-file rename.**
+Three of this milestone's open questions were put to the owner before any work
+started, and answered. They are facts below rather than questions, and they are
+recorded in `docs/decisions.md` rather than re-argued inside a diff:
 
-2. **What `friends` was doing that `users` does not.** The charter says *"for the
-   owner and ~30–50 friends"*, and the word carries three of its non-goals at once:
-   no public signup, no billing, no advertising. *Users* is what a service has.
-   Changing the code is mechanical; changing **the charter's own sentence** is a
-   product decision and belongs to the owner explicitly, not to a find-and-replace.
+- **The word is `user`** — everywhere a person can read it, **including the
+  charter's own sentence**, which becomes *"for the owner and ~30–50 users"*.
+  The owner accepts knowingly that this leaves **three** meanings of `user` in one
+  codebase: the person who uses the product, a node's `ssh_user`, and
+  `HASHI_OPERATOR_USERNAME` (plus `--user` in `scripts/node-bootstrap.sh`). The
+  collision was put in front of them with `subscriber` as the alternative that has
+  none of it; they chose `user`. What `friends` was carrying — no public signup,
+  no billing, no advertising — stays the charter's business, stated there as
+  non-goals rather than implied by a noun.
+- **The API breaks cleanly.** `/api/friends/*` and `/panel/friends/*` become
+  `/api/users/*` and `/panel/users/*`, with **no aliases and no deprecation
+  window**. Anything scripted against the old paths stops working the day this
+  lands, and the runbook says so in those words.
+- **It is three tasks, not one** (decision 7 above), so the steps below are
+  ordered `edge` → `control` → the documents, each gated on its own
+  `make test-<zone>` with `make verify` across the seam. Nothing here lands as a
+  single cross-zone diff.
 
-3. **The history is not rewritten.** `docs/tracker/**` is a record of what happened
-   and what was said at the time; so are the completed milestones above in this
-   file and the entries in `docs/decisions.md`. **Changing the words in a record
-   falsifies it.** Only living documents move: the charter, `docs/deploy/runbook.md`,
-   `CLAUDE.md`, `README.md`, and this plan's *open* milestones. Decide the line and
-   write it down, because the naive `sed -i` over `docs/` crosses it.
+### M29.1 — Draw the line between record and living document, and write the decisions down
 
-4. **The database migration, on live data.** `friends` → the new name, plus every
-   `friend_id` column and its foreign keys. It must be reversible, and it must be
-   run forward **and back** against a copy of real data before it is run against the
-   owner's. There is no way to delete a node record today; this milestone should not
-   add a second irreversible act to the same product.
+Before a single occurrence changes, decide in writing which files may be reworded
+and which may not, because the naive `sed -i` over `docs/` crosses that line and
+cannot be un-crossed by a second `sed`.
 
-5. **`/api/friends/*` is a breaking change for whatever the owner has scripted.**
-   The runbook already documents calling the API by hand (`POST
-   /api/nodes/<id>/resolver`), so assume something exists. Decide: break cleanly and
-   say so, or keep the old paths as aliases for a while. Do not decide it silently.
+**Records, never touched:** `docs/tracker/**`, `docs/decisions.md`'s existing
+entries, and every completed (`✅`) milestone in this file. They say what happened
+and what was said at the time; changing the words in a record falsifies it.
 
-6. **Nothing on anybody's device may change.** `/sub/{token}` contains no such word,
-   so no subscription needs reissuing and nobody has to be told anything. **If this
-   milestone ends with a single person having to re-import a config, it was done
-   wrong.** This is the cheapest thing to get right and the most expensive to get
-   wrong.
+**Living documents, which move:** the charter, `docs/deploy/runbook.md`,
+`CLAUDE.md`, `README.md`, and this plan's *open* milestones.
 
-7. **It is three tasks, not one.** `CLAUDE.md`: cross-zone work stays in separate
-   tasks and never in one diff. So `edge`, then `control`, then the documents —
-   each gated on its own `make test-<zone>`, with `make verify` across the seam.
+The step ends with new entries appended to `docs/decisions.md` recording the word,
+the accepted three-way collision, and the clean API break — appended, never
+rewriting what is already there.
+
+### M29.2 — `edge`: the one public name, and a read-through of its prose
+
+`edge` is almost clean and that asymmetry is why it goes first — it is the
+cheapest half and it proves the vocabulary before `control` commits a migration to
+it. Its public surface is `NodeView` and `Credential`, neither named for a person.
+The work is `registry.py:718 serves_friends_through_a_hop`, the private
+`egress.py:468 _friend_rules`, and reading through the remaining prose of edge's
+306 occurrences. No I/O, no schema, nothing that can break a device.
+
+Gate: `make test-edge`.
+
+### M29.2b — `edge`'s own e2e scenarios speak the same vocabulary · added mid-run 2026-09-22, see below
+
+**Not in the original seven steps, and it should have been.** `CLAUDE.md`'s zone
+table puts `tests/e2e/edge/**` in the `edge` zone, but M29.2's work was fenced to
+`edge/**` and `tests/edge/**`, and M29.7's E2E note named only
+`tests/e2e/control/`. So nothing claimed this directory — while the milestone's
+own "Done when" says *no identifier … in `control` or `edge` still carries the old
+one*. **The checklist the owner approved could not be satisfied by the steps the
+decomposition wrote.** This step exists to close that, and it is the same work in
+the same zone, not new scope.
+
+Measured: **94 occurrences**, independently counted twice. A file name —
+`test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py` — and four identifiers:
+`NO_FRIEND_HERE`, `FRIEND_TRANSPORTS`, `FRIEND_PORT`, `FRIEND_ATTEMPTS`.
+
+Two things travel with it. `tests/edge/test_a_tunnel_carries_traffic_off_the_node.py:583`
+cites that file by path and must move in the same commit, or it names a file that
+no longer exists. And the scenario at `tests/e2e/edge/…:158` holds a stale prose
+reference to a `tests/edge/` file M29.2 already renamed — a string in an assertion
+message, so nothing is red today, which is exactly why it would otherwise be missed.
+
+Gate: `make test-edge`. The e2e half of this zone cannot be green until M29.4
+migrates `control`'s callers — see `docs/tracker/M29/step-notes.md`, item 2, for
+how red the tree is between M29.2 and M29.4 and why a green-looking summary before
+M29.4 means nothing.
+
+### M29.3 — `control`: the table, the columns and a migration that goes both ways
+
+`friends` → `users`, every `friend_id` column, and the foreign keys, indexes and
+constraints that name them, together with the SQLAlchemy model (`models/friend.py:25`
+`Friend`) that must match the table it maps. **Reversible is the requirement, not a
+nicety**: there is no way to delete a node record in this product today, and this
+milestone must not add a second irreversible act to it.
+
+Gate: `make test-control`.
+
+### M29.3b — `infra`: the scenario that counts rows in a table that no longer exists · added mid-run 2026-09-22
+
+`tests/e2e/infra/test_restore_proves_the_backup.py:389` asserts
+`rows_in(project, path, "friends") == 1`. M29.3 renamed that table, so the
+scenario is broken — confirmed by the reviewer, not merely predicted.
+
+It is one word. It gets its own step because it is the **`infra`** zone and M29.3
+is `control`: `CLAUDE.md` says cross-zone work stays in separate tasks and never in
+one diff, so the step that broke it was right not to reach over and fix it. That
+rule is the reason this exists, and it is worth one step rather than one exception.
+
+Whether the scenario should assert on a table name at all — rather than on what the
+restore actually restored — is a fair question, but it is not this milestone's.
+Change the word, keep the scenario's shape.
+
+Gate: `make test-infra`. It is red for a second, unrelated reason until M29.7
+(the runbook quotes an `edge` string M29.2 reworded), so read which test fails.
+
+### M29.4 — `control`: the API and the panel, broken cleanly
+
+`FriendCreate` / `FriendResponse` (`api/schemas.py:183,189`), `FriendRow`
+(`services/console.py:370`), the routes, and the template file names —
+`friends_table.html` included, the file whose own contents already say `users`.
+`/api/users/*` and `/panel/users/*`, no aliases, per the decision above.
+
+The eight panel templates that already say `users` stop being a lie about the code
+underneath them at this step, which is the whole premise of the milestone.
+
+Gate: `make test-control`.
+
+### M29.4a — `infra`: the restore scenario calls the routes that now exist · added mid-run 2026-09-22
+
+M29.4 breaks `/api/friends/*` cleanly, with no aliases — the owner's decision. Five
+call sites in `tests/e2e/infra/test_restore_proves_the_backup.py` still post to the
+old path, and M29.3b deliberately left them because `control` was still serving
+them at the time.
+
+The moment M29.4 lands they are calls to a route that returns 404, and **no static
+target will notice**: `make test-infra` runs `pytest tests/infra`, which does not
+reach `tests/e2e/infra/`. The scenario has to be run.
+
+**Widened 2026-09-22, measured during M29.4: it is ten call sites, not five.**
+`scripts/security/seed.py` has five more — lines 157, 160, 166, 173, 188, plus
+`friend_id` locals. `scripts/**` is the `infra` zone too, nothing static runs it
+either, and it 404s from `e02fbe5` onward. It seeds the identities the security
+audit's hunter attacks, so a broken seed does not fail loudly — it produces an audit
+that finds nothing and looks like good news.
+
+Its own step for the same reason M29.3b had one: this is the `infra` zone and M29.4
+is `control`, and `CLAUDE.md` does not allow the two in one diff. That is twice now
+that a `control` change has landed work in `infra`, which is worth noticing rather
+than working around — the zone split is doing exactly what it exists to do.
+
+Gate: run the scenario, `pytest tests/e2e/infra/test_restore_proves_the_backup.py`.
+`make test-infra` is not evidence here and cannot be.
+
+### M29.4b — `control`: the transport purpose a person reads is still the old word · added mid-run 2026-09-22
+
+`TransportPurpose.FRIENDS = "friends"` (`control/app/models/node.py:114,134`) is a
+persisted column **value**, not a name — the Python default and `server_default` for
+`node_transports.purpose`. M29.3 could not take it: a rename there is a **data**
+migration touching every existing row, and `0008` is renames-only on purpose.
+
+It is in scope because of the milestone's first "Done when": *one word for the
+concept everywhere a person can read it — screens, API, code*. This value is
+returned by the API and shown in the panel, so a person reads it. Leaving it means
+closing M29 against a checklist it does not meet, which is the same error M29.2b
+was added to correct.
+
+**Widened 2026-09-22, found during M29.4: there are TWO of these, not one.**
+`AuditAction.FRIEND_ADDED = "friend-added"` and `FRIEND_REVOKED = "friend-revoked"`
+(`control/app/models/audit.py:59-60`) are stored in `audit_entries.action`,
+`VARCHAR(32)` since migration `0003`, and read back through `EnumText`. Same shape,
+same data-migration requirement — and **an operator reads these on the audit
+screen**, which is the argument for taking them. Both enums move in this step or
+neither does; splitting them leaves the milestone half-closed against the same
+Done-when twice.
+
+Two things to get right:
+
+- **The identifier and the value both move**, for both enums —
+  `TransportPurpose.FRIENDS` → `USERS` with `"friends"` → `"users"`, and
+  `AuditAction.FRIEND_ADDED` / `FRIEND_REVOKED` → `USER_ADDED` / `USER_REVOKED` with
+  `"friend-added"` / `"friend-revoked"` → `"user-added"` / `"user-revoked"` — and
+  every comparison against them.
+- **It is a data migration and therefore reversible in both directions**, on top of
+  `0008`. `UPDATE … SET purpose='users' WHERE purpose='friends'` going forward and
+  the exact inverse coming back, with the enum's own type updated if Postgres holds
+  it as one. M29's plan text is explicit that this milestone must not add a second
+  irreversible act to a product that cannot delete a node record.
+
+**This is the one step in M29 that writes to rows rather than renaming names.** It
+carries the risk the rest of the milestone deliberately does not, which is why it
+is a step of its own and why M29.5 rehearses it against a copy of real data along
+with `0008`.
+
+Gate: `make test-control`, with a real database — a green run whose ~670
+database-backed tests were skipped proves nothing about a data migration.
+
+### M29.4c — `infra`: the scripts, and the test that reaches into `control` by AST · added mid-run 2026-09-22
+
+Two things `scripts/**` and `tests/infra/**` are owed, found by M29.4a and confirmed
+by its reviewer. Both are the `infra` zone, which is why neither could ride along
+with the `control` step that caused them.
+
+**1. A test that reaches into `control` by AST, which no grep would find.**
+`tests/infra/test_deploy_runbook.py:1107` walks the AST of `relay.establish_hop`
+looking for calls to `nodes.friend_facing_on`. M29.4 renamed that to
+`user_facing_on`, so the set comes back empty and
+`test_the_growth_path_sends_the_box_that_already_serves_friends_to_the_leaf_end`
+fails — loudly, which is the only good thing about it. **A symbol a test reaches by
+`ast` or `inspect` is invisible to a grep for its call site.** The test's own name
+and docstring move with the string.
+
+**2. `scripts/**` prose, which no step owned.** M29.7 is `docs/` only, so as
+decomposed this milestone would close with `backup.sh`, `panel-bootstrap.sh`,
+`node-bootstrap.sh`, `acceptance/query.py`, `acceptance/stand.sh`,
+`security/stand.sh` and `security/role.sh` still saying the old word — against a
+"Done when" that says *one word for the concept everywhere a person can read it —
+screens, API, **code***. A script an operator runs during an emergency is code they
+read.
+
+**The security stand's names are a cross-file contract and move together or not at
+all.** `scripts/security/seed.py` deliberately left its `FRIENDS` constant, the role
+keys `friend_a` / `friend_b` / `friend_revoked`, the nicknames `audit-friend-*` and
+the `roles.json` key `friend_id`, because `role.sh` and `stand.sh` read them by those
+names and `aikit.yml`'s `security.roles` block names the roles too. This step takes
+all of it in one diff, `aikit.yml` included, or leaves all of it — **a half-renamed
+contract is a stand that seeds nothing and an audit that finds nothing**, which is
+the failure that looks like good news.
+
+A stale `.acceptance/security/roles.json` from an older stand still carries the old
+key, so the step re-seeds rather than reusing one.
+
+Gate: `make test-infra` — and this is the one step in M29 where that gate can
+finally go from 2 failures to 1, the last being M29.7's runbook quotation. Then run
+what the gate cannot: the security stand up, the seed, the identities read back
+through `scripts/acceptance/query.py`, and down.
+
+### M29.5 — Run the migration forward and back against a copy of real data
+
+Not against a fixture. Take a dump of a real control plane, restore it onto a
+disposable stand, migrate forward, confirm the panel works, migrate back, confirm
+the panel still works. **Testing a migration needs no decryption**, so
+`HASHI_SECRET_KEY` is not required and is not used: the encrypted columns travel
+as ciphertext and are never opened. The copy is destroyed when the step ends.
+
+### M29.6 — Prove that nothing on anybody's device changed
+
+`/sub/{token}` contains no such word, so no subscription needs reissuing and
+nobody has to be told anything — but "should not have changed" and "did not
+change" are different claims and only one of them is worth having. A scenario
+asserts that a subscription issued **before** the migration still resolves, still
+returns the same material, and still carries the same token afterwards.
+
+**If this milestone ends with a single person having to re-import a config, it was
+done wrong.**
+
+### M29.7 — The living documents, including the charter's own sentence · widened mid-run 2026-09-22
+
+**Widened to carry the assertions that read those documents, and the last prose
+residuals.** `docs/**` belongs to no zone, so a diff may hold the documents and the
+`infra`-zone tests that quote them without breaking `CLAUDE.md`'s cross-zone rule —
+and it **must**, because they cannot move apart:
+
+- `tests/infra/test_deploy_runbook.py:779` and `:1187` do `if "friend-facing" in step`
+  over `docs/deploy/runbook.md`'s own text, and
+  `tests/infra/test_the_charter_states_what_the_scripts_deliver.py` quotes the
+  charter's *"a friend's packets move…"*. **Reword either side alone and the gate goes
+  red against the other.**
+- `test_the_runbook_quotes_the_refusal_a_node_without_a_resolver_gets` imports
+  `edge.egress.NO_RESOLVER` and asserts the runbook quotes it verbatim. M29.2 reworded
+  the string; this is the **last red test in the tree** and closing it is what makes
+  `make verify` green.
+- Pure docstrings still saying the old word in `tests/infra/test_backup_script.py`,
+  `test_panel_bootstrap_script.py`, `test_management_tunnel_script.py`,
+  `test_caddyfile.py` and `test_drive.py` — swept here. `test_drive.py:194` says "a
+  friendly", which is English and stays.
+- `aikit.yml` :191, :194 and :268, and `deploy/docker-compose.e2e.yml:40` (*"no real
+  friends in it"*) — the last two prose residuals M29.4c named and could not take.
+
+The runbook also states the API break in the owner's own words — *anything scripted
+against the old paths stops working* — naming `/api/users/*` and `/panel/users/*`.
+
+The charter, the runbook, `CLAUDE.md`, `README.md` and this plan's open
+milestones. The charter's *"for the owner and ~30–50 friends"* becomes
+*"~30–50 users"*, per the decision above — and the three non-goals that the word
+`friends` was carrying get stated plainly there, because the noun no longer
+carries them.
+
+The records listed in M29.1 are verified untouched at the end of this step, by
+diff and not by intention.
+
+### M29.8 — The last places a person reads the old word · added mid-run 2026-09-22
+
+M29.7 closed the gate but not the first "Done when". Six things still say *friend*
+where a person reads it, each found and measured by an earlier step and owned by none
+of them.
+
+**The charter's own sentence disagrees with itself in three places.** `project.json:3`
+and `deploy/warden/warden.py:320` both still carry *"for its owner and ~30-50
+friends"*, and **no test compares the three copies**. The owner settled that sentence;
+having it say two different things in one repository is the half-finished state this
+milestone exists to end.
+
+**Two living documents M29.1 classified and M29.7's fence did not reach:**
+`.claude/projects/00-core-invariants.md` (2) and `docs/security/threat-model.md` (5).
+The first is a fleet instruction file — leaving it stale reproduces the old noun in
+new code, which is the one residual with a way of spreading.
+
+**`docs/product/backlog.md` (8), and its classification must be settled first.** This
+is M29.1's open carry-over: the file is living, but its own `## Журнал решений` is a
+dated decision journal in the same shape as `docs/decisions.md` and is therefore a
+**record**. Row `2026-08-01 (ohno-6)` contains the old word inside a recorded
+decision. **Settle the carve-out in `docs/records-and-living-documents.md` before
+touching the file**, then move only the mutable backlog above the journal.
+
+**`docs/PLAN.md`'s `## Where things stand` (10)** is in neither the living list nor the
+records table. By the document's own test it reads living — it says what is open now,
+not what was said then — so classify it there and reword it.
+
+**The infra zone's remaining prose:** `deploy/caddy/Caddyfile` (5), `.env.example` (4),
+`deploy/e2e.env` (1), `.gitignore` (1). All comments.
+
+**Deliberately NOT in this step, and each for a stated reason.** `pyproject.toml` (3)
+is architect territory — `CLAUDE.md` says a developer who needs it asks. `design/**`
+(42) and `docs/research/**` (11) are dated artefacts of what was designed and
+researched at a time, which is the record test, and `design/VPN Admin.dc.html` is a
+tool export nobody hand-edits. All three are named for the owner to decide rather than
+swept.
+
+Gate: `make verify`. It is green as of M29.7 and **must still be green** — this step is
+the last thing in the milestone and may not be what breaks it.
+
+### M29.9 — Two things the real-host walk disproved · found in the walk 2026-09-22
+
+The walk on real hosts passed M29's central claim: a subscription issued by the
+pre-M29 code into the pre-M29 schema, fetched from a second machine before and after
+both migrations, came back with **the same URL, the same token, the same status and
+headers, a byte-identical VLESS body, and an AmneziaWG config whose every functional
+line is byte-identical**. `0008` and `0009` reversed exactly. The panel worked in all
+three states.
+
+It also disproved two sentences M29.7 wrote into the runbook. Both are the milestone's
+own text, and both mislead an operator at the worst moment.
+
+**1. The rollback procedure cannot be executed as written, and attempting it takes the
+delivery endpoint down.** The runbook says *roll the image back first, then the
+schema*. That was inferred from M29.5's finding that the entrypoint's
+`alembic upgrade head` is unconditional, and it is **wrong**: the pre-M29 image
+contains only `0001`–`0007`, so it holds no downgrade path from `0009`. Measured, the
+old image crash-loops on `Can't locate revision identified by '0009'`, `make up-panel`
+exits `dependency failed to start: container hashi-control-1 is unhealthy`, **Caddy
+never starts at all**, and `/sub/*` is unreachable for every user for the whole of that
+state — the one route the charter says must stay up. The runbook's own recovery
+commands cannot be run either, because a restarting container cannot be `exec`'d into.
+
+The order that works, and it was walked: **downgrade under the NEW image**, then
+`stop` it before anything can restart it, then swap the tree and bring the old image
+up — whose `upgrade head` is then `0007`, a no-op. The restart trap M29.5 documented
+is real and was reproduced deliberately, but it is a reason to stop the container, not
+a reason to roll the image back first.
+
+**2. "Nothing on anybody's device changes" is true of the URL and not of the file.**
+The subscription URL and token are byte-identical, and so is the VLESS body. But the
+rendered WireGuard-family config differs by one line — a `#` comment `wg-quick`
+ignores — because M29 reworded the rendered server text too. The consequence is
+visible and unannounced: **every node carrying a WireGuard-family transport reads as
+drifted immediately after the upgrade**, the Overview carries *"not running the
+configuration this panel would give it"* until each is re-applied, and the same
+happens in reverse after a downgrade. Drift is `applied_digest != digest_of(rendered)`,
+so a comment is enough to trip it.
+
+That is harmless in itself and it is **indistinguishable on screen from a real
+configuration change**, arriving exactly when an operator is watching for trouble.
+Either the sentence narrows to the URL and the functional config, or the upgrade
+section tells the operator to expect a fleet-wide re-apply. Do both.
+
+Gate: `make verify`. `tests/infra/` reads the runbook and pins some of its sentences,
+so a rewrite here is executed by the suite the moment it runs.
+
+**E2E:** `tests/e2e/control/` — every existing scenario stays green with its own
+names updated, and M29.6 adds the one that asserts a pre-migration subscription
+survives. `make verify` across the seam, because this milestone touches two zones
+and the documents between them.
 
 **Done when**
 - [ ] One word for the concept everywhere a person can read it — screens, API,
@@ -2448,9 +2775,28 @@ confirm the panel still works.
 
 ---
 
-## → M28 — The control plane must be restorable on a machine it has never run on · asked for by the owner 2026-09-22 · PROPOSED
+## ✅ M28 — The control plane must be restorable on a machine it has never run on · asked for by the owner 2026-09-22 · done 2026-09-26 (acceptance: good — 3 rounds, 24 steps, the restore performed rather than described)
 
-**Not started.**
+**Done.** 22 steps landed, one withdrawn. Acceptance rounds 1 and 2 both blocked on the same
+defect in new surfaces — a reader of the backup record asserting what the record did not
+license — and round 3 passed with six `clumsy` findings and none blocking. The walk destroyed
+a working fleet and rebuilt it from one bucket object plus the two carried secrets: the
+existing user's **existing** token returned a byte-identical body on the restored control
+plane. `file` reads the artifact as *age encrypted file, X25519 recipient*, decryption without
+an identity refuses, and the node address, node name, country, username, transport and SQL
+keywords all grep to **zero** in it. The host issued 9 PUT and 0 DELETE.
+
+**What the walk could not prove, recorded rather than implied:** the bare host was a fresh
+clone on the same Docker engine, not a second machine; the object store was a minimal
+S3-protocol server, so bucket versioning, object lock and the provider-side write-only
+credential are documented decisions and not exercised; applying the restored node could not
+complete because no leaf host exists on a stand; the daily run was proven by installing the
+real cron entry and running the tick as cron runs it, not by waiting out 04:00; and **nothing
+here says anything about surviving a Russian mobile whitelist shutdown** — that is a field
+observation on a real network.
+
+**The real-host restore walk was NOT performed.** It needs read-only bucket credentials at
+`~/.hashi/restore.env`, which do not exist. Reported as not performed rather than described.
 
 ### What the owner asked for
 
@@ -2461,7 +2807,7 @@ confirm the panel still works.
 
 Today none of the three exists. `scripts/backup.sh` dumps and restores, by hand,
 to a file beside the repository — `make backup`, `make restore FROM=…`. There is no
-schedule, nothing leaves the host, and the one machine that holds every friend's
+schedule, nothing leaves the host, and the one machine that holds every user's
 access and every node's credentials is also the only machine holding its own backup.
 
 ### The finding that shapes this milestone, measured before it was planned
@@ -2473,82 +2819,17 @@ columns* (`EncryptedText`, `control/app/models/base.py:86`) —
 | encrypted | in the clear |
 |---|---|
 | node `ssh_private_key`, node_transport `secrets` | node `address`, `ssh_port`, `ssh_host_key` |
-| friend `token`, `subject`, `secrets`, `tunnel_address` | `transport_name`, ports, states, every timestamp |
+| user `token`, `subject`, `secrets`, `tunnel_address` | `transport_name`, ports, states, every timestamp |
 
 **So a reader of the bucket who never obtains `HASHI_SECRET_KEY` still gets a map of
-the fleet**: every node's real address — including the leaf addresses a friend is
+the fleet**: every node's real address — including the leaf addresses a user is
 never shown, which is the one thing the entry/leaf topology exists to hide — plus
-how many friends there are and when each arrived.
+how many users there are and when each arrived.
 
 `scripts/backup.sh:82` prints *"this dump is encrypted with HASHI_SECRET_KEY"*. That
 sentence is false as written and is how this was nearly planned wrong: an operator
 reading it concludes the artifact is safe to put anywhere. **Correcting that line is
 in scope, whatever else this milestone decides.**
-
-### What the milestone has to decide, before it writes code
-
-1. **What "everything the control plane generates" actually is.** The database is
-   the source of truth and a node holds nothing that cannot be regenerated from it —
-   so `/opt/hashi` on a node is explicitly **not** backup material. What else is:
-   Caddy's ACME state and private keys (`caddy_data`), the management tunnel config
-   under `~/.hashi/management/`, and `.env` itself. Decide each. `.env` is the
-   dangerous one — see the next point.
-
-2. **The key paradox, and it cannot be engineered away.** The dump's encrypted
-   columns are worthless without `HASHI_SECRET_KEY`, and putting the key in the
-   bucket beside them defeats the encryption entirely — `scripts/backup.sh:84`
-   already says so. **Therefore "restore by one command" is one command PLUS a
-   secret the operator carries in their head or their pocket.** The milestone must
-   state that plainly rather than build a command that silently needs something the
-   owner does not have with them at 3am. The honest target is: one command, two
-   inputs — the key, and read credentials for the bucket.
-
-3. **Whether the artifact is encrypted before it is uploaded, given the finding
-   above.** Two candidate answers. Encrypt the whole dump with a separate passphrase
-   (age, gpg) so the bucket holds an opaque blob — which adds a *second* secret the
-   operator must not lose, and losing it loses everything. Or upload as-is and accept
-   that the bucket is a fleet map to whoever can read it. **Recommend the first, but
-   it is a decision with a real cost and it gets recorded in `docs/decisions.md`
-   either way.**
-
-4. **The bucket is in Russia, and this is a decision, not a detail.** Yandex Object
-   Storage sits in the jurisdiction the project exists to keep working around, and
-   the account is tied to the owner's identity through payment. Combined with point 3
-   left undone, that is a fleet map, in Russia, attributable to a named person. The
-   owner asked for Yandex specifically and that is their call to make; the milestone's
-   job is to make sure it is made knowingly and written down, and to make the storage
-   backend a field rather than a hardcoded provider — `CLAUDE.md`'s rule about never
-   hardcoding a provider applies here exactly as it does to a node.
-
-5. **An attacker who holds the control-plane box holds its bucket credentials.**
-   They can then delete the backup history, which turns a seizure into a total loss.
-   So the credentials written onto the host must be **write-only** — no delete, no
-   overwrite — with retention enforced on the bucket side by versioning, object lock
-   or a lifecycle rule. Decide which of those Yandex actually offers and what the
-   fallback is if it offers none.
-
-6. **What runs at 04:00, and 04:00 where.** Cron, a systemd timer, or a service in
-   the compose stack: pick one, and note that adding a scheduler is a dependency and
-   therefore an architect decision (`CLAUDE.md`). Then decide what 04:00 means on a
-   host whose clock is UTC and whose owner is not, and what happens to the day's
-   backup when the box was down at 04:00 — a schedule that silently skips is the
-   failure mode that is only discovered during a restore.
-
-7. **A failure to back up must be visible somewhere the owner actually looks.** The
-   dangerous state is not "the backup failed", it is "the backup has been failing for
-   six weeks and nothing said so". Decide where that surfaces — the panel has a
-   Nodes screen that already carries banners, and this is the same kind of fact.
-
-8. **What restore does NOT do, said out loud.** It brings back the database and
-   whatever else point 1 decided. It does not move DNS, it does not re-issue the
-   delivery endpoint's certificate, and it does not tell friends anything. A restored
-   control plane on a new address with the old `HASHI_PUBLIC_HOST` pointed elsewhere
-   serves nobody. Whether the one command can fix any of that, and what the operator
-   must do by hand, belongs in the runbook beside the command.
-
-9. **Nothing here may record who connected to what.** A backup job is a new thing
-   that writes files and may log; the charter's one absolute prohibition applies to
-   it unchanged.
 
 ### Why "one command" is the requirement and not a nicety
 
@@ -2559,12 +2840,993 @@ step that is not in the command is a step that gets skipped or done wrong. **The
 measure of this milestone is not that a restore is possible — it already is — but
 that it is possible by someone frightened and in a hurry.**
 
+### Settled by the owner, 2026-09-22
+
+- **Decision 3 is taken: the whole dump is encrypted before it leaves the host**,
+  with `age`, and with a **keypair rather than a passphrase**. The control-plane
+  host holds only the public recipient (`HASHI_BACKUP_AGE_RECIPIENT`), so it can
+  write a backup and cannot read one back. The private identity never touches that
+  machine; it is what the operator carries beside `HASHI_SECRET_KEY`. That is the
+  answer to the second secret the milestone worried about: there are still two
+  things to carry, but neither of them is ever on the box that gets seized.
+- **Already landed, so plan around it rather than repeating it:** `.env.example`
+  now carries the offsite-backup block — `HASHI_BACKUP_ENABLED`,
+  `HASHI_BACKUP_S3_ENDPOINT` / `_REGION` / `_BUCKET` / `_PREFIX`,
+  `HASHI_BACKUP_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`,
+  `HASHI_BACKUP_AGE_RECIPIENT`, `HASHI_BACKUP_AT`, `HASHI_BACKUP_TZ` — plus a
+  comment recording that the restore-side `HASHI_RESTORE_*` credentials are
+  deliberately **not** stored on the control host. `make test-infra` is green with
+  it. The names are S3-protocol names, never a provider's, per decision 4.
+
+### M28.1 — Say what the artifact is, and stop the script claiming it is something else
+
+Decide and write down what "everything the control plane generates" means, item by
+item: the database, Caddy's ACME state and private keys (`caddy_data`), the
+management tunnel config under `~/.hashi/management/`, and `.env` itself — each an
+explicit yes or no with its reason. `/opt/hashi` on a node is explicitly **not**
+backup material: the database is the source of truth and a node holds nothing that
+cannot be regenerated from it.
+
+In the same step, `scripts/backup.sh:82` stops saying *"this dump is encrypted with
+HASHI_SECRET_KEY"*. That sentence is false as written — `backup.sh:72` is
+`pg_dump --format=plain | gzip`, and what is encrypted is a subset of columns — and
+it is how an operator concludes the artifact is safe to put anywhere. **Correcting
+it is in scope whatever else this milestone decides**, and it is first because it is
+the one thing that is wrong today rather than merely missing.
+
+### M28.2 — The artifact is encrypted on the host that makes it, to a key that host cannot read back
+
+`age`, the recipient from configuration, before anything leaves the machine.
+Without this, a reader of the bucket who never obtains `HASHI_SECRET_KEY` still
+gets every node's real address — **including the leaf addresses a user is never
+shown, which is the one thing the entry/leaf topology exists to hide** — plus how
+many users there are and when each arrived.
+
+`age` is a new dependency on the control-plane host and therefore an **architect
+decision** (`CLAUDE.md`). Confirm it before adding it; if it is refused, stop and
+ask rather than substituting something.
+
+What a reader of the bucket learns after this step is written down in
+`docs/decisions.md` — together with decision 4, that the bucket sits in the
+jurisdiction the project exists to work around and is tied to the owner's identity
+through payment, accepted knowingly.
+
+### M28.3 — The upload uses a credential that cannot delete, and the storage backend is a field
+
+S3-protocol configuration, never a hardcoded provider — `CLAUDE.md`'s rule about
+never hardcoding a provider applies here exactly as it does to a node, and for the
+same reason: a provider you cannot rotate away from is one you are stuck with on
+the day you need to leave it.
+
+The credential written onto the host is **write-only** — `PutObject` and nothing
+else. An attacker who holds the control-plane box holds this key, and a key that
+can delete turns a seizure into a total loss of the backup history as well as the
+machine.
+
+### M28.4 — Retention the host's own credential cannot reach
+
+The write-only key is half of it; the other half is enforced bucket-side, where
+that key has no authority. Decide which of versioning, object lock or a lifecycle
+rule the storage actually offers, and what the fallback is if it offers none —
+then write down which one is in force. A write-only key against a bucket with no
+retention still loses the history to anyone who obtains a better credential.
+
+### M28.5 — Something runs it every day, and says which day it missed
+
+Cron, a systemd timer, or a service in the compose stack — pick one, and note that
+**adding a scheduler is a dependency and therefore an architect decision**
+(`CLAUDE.md`); confirm it before adding it.
+
+Then decide what `04:00` means on a host whose clock is UTC and whose owner is not
+— `HASHI_BACKUP_AT` and `HASHI_BACKUP_TZ` exist for exactly that — and what
+happens to the day's backup when the box was down at 04:00. **A schedule that
+silently skips is the failure mode that is only discovered during a restore.**
+
+### M28.6 — A backup that has been failing for six weeks says so where the owner already looks
+
+The dangerous state is not "the backup failed", it is "the backup has been failing
+for six weeks and nothing said so". The panel's Nodes screen already carries
+banners and this is the same kind of fact; decide whether it belongs there or
+somewhere of its own, and make a run that does not land visible without anyone
+going to look for it.
+
+### M28.7 — Nothing in any of this records who connected to what
+
+A backup job is a new thing that writes files and may log, and a restore command is
+another. The charter's one absolute prohibition applies to both unchanged — no
+connection, traffic or DNS logs, at any level, including debug and including
+temporarily while debugging. Checked on every new surface this milestone adds,
+rather than assumed because nobody meant to add one.
+
+### M28.8 — One command, two inputs, and an honest list of what it does not do
+
+The restore: given `HASHI_SECRET_KEY`, the `age` identity and read credentials for
+the bucket, on a machine that has never run this project, it produces a control
+plane serving the same users and driving the same nodes as the one that was lost.
+The restore-side credentials are supplied to the command at the moment it runs, on
+the new machine, and are never written onto a control-plane host — that is what
+`HASHI_RESTORE_*` is for.
+
+Beside it in the runbook, what it does **not** do, said out loud: it does not move
+DNS, it does not re-issue the delivery endpoint's certificate, and it does not tell
+users anything. A restored control plane on a new address with the old
+`HASHI_PUBLIC_HOST` pointed elsewhere serves nobody. Whatever the command cannot
+fix is an operator step, written where the operator will be looking.
+
+**The measure of this step is not that a restore is possible — it already is — but
+that it is possible by someone frightened and in a hurry.**
+
+### M28.9 — Perform the restore on a bare host
+
+Not describe it. `make verify` cannot rent a machine, so this step is walked: a
+host with nothing but the repository, the key, the identity and read credentials,
+and the one command. **A restore that was described rather than performed does not
+count**, and the step is not done until the panel on the new host is logged into
+and the existing nodes are there.
+
+**E2E:** `tests/infra/` for what the backup and restore commands assert, and
+`tests/e2e/infra/` beside `test_panel_bootstrap.py` for the job running against a
+disposable stack. An object store for the stand to talk to is a dependency
+decision of its own — if it is refused, the suite gate narrows to `tests/infra/`
+and the real proof is M28.9's walk, which is a field observation and is reported
+as one.
+
+### M28.10 — What the bare-host walk found · walked 2026-09-23
+
+**The restore works.** A control plane built on a Russian box and killed without a
+graceful stop came back on a machine that had never run this project: one command plus
+the three carried inputs, the existing node applied from the rebuilt panel in 3.8s, and
+the existing user's subscription returned **byte for byte identical** — same token, same
+path, `sha256 14b0d1fb…`, 336 bytes. The age layer holds: a bucket reader gets
+`age-encryption.org/v1` and a refusal, while the decrypted dump carries the leaf address
+in the clear, which is precisely what that layer exists to cover. The scheduled path fired
+unattended at the appointed minute and recorded `outcome: offsite`.
+
+**It fails the milestone's own measure**, which is not "a restore is possible" but *"the
+walk fails if the operator had to read anything other than the command to get there"*.
+Six things made that untrue, in the order they bite.
+
+1. **`HASHI_OPERATOR_PASSWORD_HASH` cannot be produced on a bare host, and the runbook
+   says it can.** The first refusal sends the operator to `.env.example`, which sends them
+   to `python -m control.cli hash-password`. Ubuntu 22.04 ships Python 3.10; `make setup`
+   wants 3.14 and fails. The runbook's restore block says *"fill in HASHI_SECRET_KEY, the
+   hostnames, the operator password hash and the database password. Nothing else is
+   needed"* — and one of those four cannot be made on the machine. **This is the gap
+   between "the operator reads the command" and "the operator needs a second working
+   checkout."** The hash is computable inside the control image, which the command builds
+   anyway.
+
+2. **The one command is interactive and says nothing when it cannot be.** Over a
+   non-interactive session it prints the confirmation prompt, reads EOF, and exits 2 with
+   no sentence — **after** installing the control plane and fetching the artifact. Nothing
+   in the runbook's command block says a terminal is needed. And on a bare host the
+   prompt's own text is false: *"Every current node, user and credential is overwritten"*
+   describes nothing, in exactly the case the command exists for.
+
+3. **The closing screen's first instruction is the one the Makefile warns against.** It
+   says *"Restart the control plane so it reconnects: `make down && make up`"*. Followed
+   literally that yields a stack publishing **no ports** — `make up` converges to the base
+   shape, which the Makefile itself flags. Two paragraphs later the same screen says
+   `make up-panel`. Between "restored" and "logged in", the screen contradicts itself.
+
+4. **`make up-panel` needs a non-loopback address a fresh restore does not have.**
+   `HASHI_PRIVATE_BIND_ADDR` is refused if it is loopback, and with no management tunnel
+   there is no other address on the box. The walker had to invent one. The refusal points
+   at the runbook, which is documented — and is one more step the command does not carry.
+
+5. **A restored fleet is an unbacked-up fleet, and nothing says so.** The write-only S3
+   key and the age recipient lived only in the lost `.env`, which is deliberately not in
+   the backup. On the restored host `make backup` fails outright:
+   `required variable HASHI_BACKUP_AGE_RECIPIENT is missing a value`. Neither the closing
+   screen nor the runbook's restore section mentions re-establishing the offsite block.
+   **The panel is honest about what it records and silent about the fact that nothing will
+   be recorded.**
+
+6. **`scripts/backup.sh` calls `age-keygen` in a diagnostic, and a bare host has none.**
+   The wrong-identity path prints `age-keygen: command not found` — a raw shell error on
+   the operator's screen — and loses the public key the sentence meant to show. It
+   degrades on precisely the machine the command is designed for.
+
+**Not in this step, and recorded rather than fixed:** with a wrong `HASHI_SECRET_KEY` the
+panel answers every page with **409 and a raw JSON body** rather than a screen (the
+message inside it is exactly right), and `/sub/{token}` returns **404 with zero bytes**,
+indistinguishable from a revoked token — the same signature as M26's open blocker 2. Both
+are `control`'s and neither is M28's to widen into. `HASHI_PUBLIC_HTTPS` is settable in
+`settings.py` and the Settings screen but is in neither `.env.example` nor
+`deploy/docker-compose.yml`.
+
+Gate: `make verify`. The proof of 1–4 is a second walk, not a suite.
+
+### M28.11 — `control`: the panel must not say a backup left the machine when it did not · found in acceptance 2026-09-23
+
+Three things the panel says that are not true. All four of acceptance's blocking
+findings have a panel half and a script half; this step is the panel's, M28.12 is the
+script's, and they are separate because `CLAUDE.md` does not allow one diff to cross
+zones.
+
+1. **A backup that never left the machine reads exactly like one that reached the
+   store.** Two records identical but for `offsite` — `yes` against `no`, both with a
+   success today — render **byte-identical** screens: *"Last backup 17 hours ago: the run
+   reported "ok"."* `cmp` reports no difference. The caveat below then talks about
+   *"whether any of those artifacts is still in the bucket"*, which for a host that sends
+   nothing is worse than silence. **This is the shipped default** — `.env.example` carries
+   `HASHI_BACKUP_ENABLED=0`, and its own comment states the rule being broken: *a backup
+   that never left the machine is not an offsite backup and must not be reported as one.*
+   The record carries the field; the panel drops it. **It goes straight at the milestone's
+   first "Done when" and at the complaint that started M28.**
+
+2. **"Most recent" missed days prints the oldest ones.** With eight days stored, three in
+   August and three this week, the panel printed *"8 — most recent 2026-08-12,
+   2026-08-13, 2026-08-14"*. In the long-outage state — the exact case that sentence
+   exists to distinguish — it points six weeks back instead of at now. Neither surface
+   sorts; both trust the writer's order, so one of the two labels is wrong whatever that
+   order is, and nothing enforces it.
+
+3. **A record dated in the future reads as the quiet reassuring state and can never leave
+   it.** Clock skew gives *"Last backup less than an hour ago"* for ever. M28.6 clamps a
+   future age to zero rather than reporting it; clamping is right for arithmetic and wrong
+   for the sentence.
+
+Gate: `make test-control` with a real Postgres — **report the skip count** — plus
+`tests/e2e/control`, then `make verify`.
+
+### M28.12 — `infra`: the command line must not be more confident than the panel · found in acceptance 2026-09-23
+
+The other half of the same four findings.
+
+1. **`make backup-status` reads a damaged record as a fresh host.** The panel refuses to
+   assume anything from it — *"Nothing has been assumed from it"* — and then sends the
+   operator to `make backup-status`, which prints *"last success: never / last attempt:
+   never"* plus a confident *"scheduled: 04:00 Etc/UTC (configured)"* and exits **0**,
+   indistinguishable from a machine that has never run one. It can clearly do better: with
+   the file **absent** it prints a proper "no record" page and exits 1. It validates
+   nothing — `schema: 99`, or a 1000-character `outcome` carrying a `<script>` tag, is
+   printed verbatim as fact while the panel calls the same file unreadable.
+
+2. **The same `offsite` blindness, in `make backup-status`**, and the same missed-days
+   ordering. Whatever M28.11 settles for the panel's wording, this must match it — and the
+   **writer** is here too, so if the order of `missed_dates` is the thing to fix, fix it
+   at the source and let both readers stop guessing.
+
+3. **`make backup` blames the backup keypair for failures that have nothing to do with
+   it, and the remedy would orphan every existing artifact.** With
+   `HASHI_BACKUP_AGE_RECIPIENT` set and non-empty, `make backup` still printed the whole
+   *"it needs the PUBLIC half of your backup keypair … `age-keygen -o …`"* page; supplying
+   the variable it named moved the cause to the next one and printed the same advice
+   again. So the guard says "your recipient is missing" for **any** env-interpolation
+   failure. An operator who follows it generates a new keypair — after which every
+   artifact already in the store is addressed to an identity they have just replaced.
+   **`make restore-from-bucket` meets the same class of failure and names the exact keys:
+   the good pattern is already next door.**
+
+4. **Smaller, same file:** exit 3 is shown as a number and never as what it means — the
+   artifact is still on the machine and `make backup-upload` is the remedy; and the
+   crontab block says *"is the **account** that does not depend on mail existing"* where
+   it means *channel*.
+
+**Widened by the second bare-host walk, 2026-09-23.** Five of M28.10's six fixes were
+confirmed working on real machines — `make hash-password` in 46s on Ubuntu 22.04 with
+Python 3.10 and no images; the placeholder refused in 1s instead of 180; the prompt
+asked nothing on a bare target and named `FORCE=1` on a populated one; no address had to
+be invented; `make restart-control` left the ports published. **The measure now fails on
+one sentence rather than six places.**
+
+5. **The runbook's restore block is wrong about what `.env` needs, and it costs a whole
+   failed run.** It says *"fill in `.env`: `HASHI_SECRET_KEY`, the hostnames, that hash
+   and the database password. **Nothing else is needed** to run the command below."*
+   Following it exactly installed the entire control plane and then died at
+   `storage.example.net` — because `deploy/backup/fetch.py` falls back to the
+   `HASHI_BACKUP_S3_*` block, and on a rebuilt host that block is `.env.example`'s fakes.
+   **`HASHI_RESTORE_S3_ENDPOINT` / `_REGION` / `_BUCKET` / `_PREFIX` are named nowhere in
+   that block**, and the walker had to read a trailing comment in `.env.example` to learn
+   they exist. **This is now the only remaining place an operator must read something
+   other than the command.** Good half: the command prints the endpoint it used, so you
+   can see it is not yours. Bad half: *"the configuration resolves"* one line above
+   `Name or service not known` reads as a contradiction.
+
+6. **"A second run is safe" is true for the data and false for the panel.** Re-running the
+   command runs `panel-bootstrap.sh`, which converges to the base compose file — after
+   which nothing is published on 80, 443 or the console port, and Caddy is back to
+   unpublished. **This is M28.10's finding 3 arriving through a different door**: the
+   operator re-runs the command they were told was safe to re-run and loses the console
+   and the delivery endpoint. The only warning is in the runbook, under a different
+   heading — which is again "something other than the command".
+
+7. **The restore generated a management tunnel from the template and printed two device
+   private keys into the rebuild's scrollback.** `.env.example` ships a complete
+   `HASHI_MGMT_*` block, so panel-bootstrap wrote `~/.hashi/management/awg-mgmt.conf` and
+   printed two full device configs — `PrivateKey = …`, `Endpoint = hashi.example.com:51821`
+   — at an operator who asked for none of it. They are fabricated credentials pointing at
+   the template's example host, and a private key on a terminal is the class of thing
+   M28.7 and M28.8 exist to prevent. It also puts the closing screen at odds with the
+   machine: the screen says the old tunnel's keys were lost, while a tunnel config now
+   exists here and `make up-panel` fails for a different reason than the screen gives.
+
+8. **Smaller:** `.env.example`'s placeholder *value* still reads
+   `run-python--m-control.cli-hash-password-and-paste-the-output` — the route that cannot
+   run on a bare host — even though the comment above it and the refusal both name
+   `make hash-password`; the closing screen's `ssh -L` line makes the operator go and find
+   `HASHI_PRIVATE_PORT` in `.env` although the script already reads `HASHI_PUBLIC_HOST`
+   out of the running container; and a successful restore puts ~6.7 KB on **stdout** (the
+   build log and ~90 lines of raw `psql` tags) between "restoring…" and the closing
+   screen, which is on stderr.
+
+Gate: `make test-infra`, then `make verify`.
+
+### M28.13 — The same weak parser, in the script that writes the tunnel · found in review 2026-09-24
+
+`scripts/management-tunnel.sh::value_of` is the parser M28.12 replaced everywhere else:
+**no `\r` strip, and first-assignment-wins where an env file means the last.** Reproduced
+rather than inferred:
+
+```
+$ printf 'HASHI_MGMT_ENDPOINT=panel.invalid\r\nHASHI_MGMT_PORT=51821\r\n' > env
+$ echo "Endpoint = ${ENDPOINT}:${PORT}" | cat -A
+Endpoint = panel.invalid^M:51821^M$
+```
+
+Its output feeds `Address`, `ListenPort`, `MTU` and `Endpoint` straight into the host's own
+`awg-mgmt.conf` **and into every device config the script prints for an operator to paste
+onto a phone or a laptop**. `PEER_SPECS=(${MGMT_PEERS})` also leaves a `\r` glued to the
+last peer's address, because bash's default `IFS` does not include it.
+
+**It is a different failure class from M28.12's High and that is why it is its own step.**
+That one was a credential leak reachable by copying `.env.example` unedited. This is
+**config corruption of a genuinely configured tunnel** — it needs an operator who filled in
+real values on an editor that writes CRLF, and the symptom is "the tunnel does not come up"
+from a file that looks right. Not a lockout: `make up-panel-over-ssh` plus `ssh -L` does not
+depend on this generator. But it costs real debugging time, and it lands on **the exact
+reachability path M28 exists to protect** — the way an owner reaches the panel after a
+restore.
+
+Adopt `env_value_of`'s idiom, or extract it so both scripts share one implementation rather
+than a third copy. **Red-first against `tests/infra/test_management_tunnel_script.py`**,
+which is 435 lines and is why this did not ride along inside M28.12.
+
+Gate: `make test-infra`, then `make verify`.
+
+### M28.14 — `control`: the panel must not promise a schedule it cannot see · found in acceptance round 2, 2026-09-24
+
+**Round 2 confirmed all four of round 1's blockers fixed.** What blocks now is the same
+disease in a fifth surface, in a field the fixes did not touch.
+
+**The panel says "The host takes one a day at 04:00 Etc/UTC." on a host where no schedule
+is installed.** On the stand as shipped, `scripts/backup-schedule.sh show` prints *"no
+hashi backup schedule is installed for this account"* and exits 1, and the crontab holds no
+entry — while the Overview states the daily backup as fact. **The schedule is opt-in, so
+this is the state of every fresh install.**
+
+The panel reads one file and that file carries `at` and `zone`, which are what the
+scheduler **would** use — not evidence that anything runs. The panel cannot see a crontab
+and must not imply it can. Say what the record actually tells you: the time a run would be
+due, not that one is taken.
+
+**Also this round, not blocking, and cheap while you are here:**
+- The **exit-3 advice** — *"it never left the machine, re-send it"* — also prints under a
+  run that **exited 0 and did leave**. It is not conditioned on the exit code.
+- **Twelve missed days across seven weeks carries no badge; one failed run does.** A gap
+  that large is not a quiet fact.
+- **`days with no backup: 12 — most recent:`** with nothing after it, when the record the
+  product itself wrote has a count but no dates.
+- **A record that is only re-indented is reported as damaged.** The reader requires the
+  writer's exact layout; re-indentation changes no value.
+- **The Settings screen still lists no backup setting at all** (round 1's leftover,
+  unmoved), while the Overview names `HASHI_BACKUP_ENABLED` by hand and sends the owner to
+  a markdown file.
+
+Gate: `make test-control` with a real Postgres — **report the skip count** — plus
+`tests/e2e/control`, then `make verify`.
+
+### M28.15 — `infra`: the command line must not promise a schedule either, and `due` must stop assuming · found in acceptance round 2, 2026-09-24
+
+The other half, and this side **can** check.
+
+1. **`make backup-status` says *"scheduled: 04:00 Etc/UTC (configured), checked every 15
+   minutes"* whether or not a schedule exists.** Proven: the entry was installed, the
+   output diffed **byte-identical**; then `make backup-unschedule` answered *"removed.
+   Nothing runs a backup on this host now."* and the next `backup-status` printed the
+   schedule line again. **Three commands in one family, one of them contradicting another
+   the same minute.** Unlike the panel, this runs on the host and `backup-schedule.sh show`
+   already answers the question — use it.
+
+2. **`scripts/backup-run.sh due` is the one surface round 1's fix missed.** On a damaged
+   record it still says *"no backup has ever been recorded on this host"*, `offsite=no
+   missed=none`, **exit 0** — indistinguishable from a fresh host, asserting facts from a
+   file it could not parse. `status` was taught to refuse; `due` was not.
+
+3. **A clock that ran ahead stops backups silently.** The panel warns; `make backup-status`
+   says *"last success: 2027-03-01 (ok)"* with no mention; and **`due` answers
+   `action=wait` for ever at exit 0**. Nothing is taken and nothing says so.
+
+4. **`HASHI_BACKUP_ENABLED=1` in the process environment is honoured by the uploader and
+   ignored by the recorder**: the run uploads and says so, then the screen says the upload
+   is switched off. The env-file path is correct; the two readers disagree about where the
+   answer comes from.
+
+5. **Three items M28.14 could not reach, traced to this zone with line numbers** rather
+   than left to be rediscovered. The panel's equivalent is already correct in each case,
+   so the shape of the answer exists — the point is that the two channels disagree about
+   one record:
+   - `scripts/backup-run.sh:766` — the exit-3 advice fires on `[ "${BAD_CODE}" = "3" ]`,
+     and `BAD_CODE` survives a later success, so *"it never left the machine, re-send
+     it"* prints under a run that exited 0 and did leave.
+   - `scripts/backup-run.sh:775` — `days with no backup: 12 — most recent:` with nothing
+     after it. The panel guards this (`tail = "." if not recent`); the shell does not.
+   - `scripts/backup-run.sh:606-620` — `entry_problem` requires each nested entry on one
+     line, so a record that is **only re-indented** is reported damaged. The control
+     reader is `json.loads` and accepts any layout, which is why acceptance saw this on
+     one channel and not the other. **Tolerate layout and nothing else:** unknown keys,
+     changed values and truncation stay damaged, and the closed 15-key set stays closed.
+
+Gate: `make test-infra`, then `make verify`.
+
+### M28.16 — `control`: a gate that is green in the run the fleet reports on · found reviewing M28.14, 2026-09-24
+
+Not a backup defect, and it is here because this milestone is the thing that found it
+and the thing it lies to.
+
+`tests/control/test_apply_must_reach_the_daemon.py::test_a_stale_apply_records_no_applied_digest`
+**is flaky.** It failed under `make test-control` at both `2b0eb6a` and the baseline
+`12f79a5` with the work stashed, and **passed inside `make verify` on the same commit.**
+So the milestone has been verified twice by a suite that disagrees with itself about one
+test depending on which command ran it.
+
+The cause is one line. At `:325-334` the test reads `first` **without**
+`session.expire_all()`, while the second read twelve lines later has one. SQLAlchemy's
+identity map holds **weak** references, so whether the stale `applied_digest=None` copy
+from `a_node_with_a_transport` is still alive at that `select` depends on garbage
+collection — which is exactly "passes alone, fails under the suite, passes sometimes".
+
+**Why it gets a step rather than a carry-over line.** `CLAUDE.md` says gate on
+`make verify`, and the whole claim of this pipeline is that nothing passes on the
+author's own word. A test that is red two runs in three and green in the one the fleet
+reports on is the one shape of red that never gets fixed: every reviewer sees it pass,
+and every implementer who hits it correctly concludes it is not theirs. It is also the
+cheapest fix in this milestone.
+
+Add `session.expire_all()` before the first `select`, matching the idiom the same test
+already uses at `:337`. **Prove it rather than asserting it**: the failure is
+GC-dependent, so a single green run is not evidence. Run the full `make test-control`
+several times and say how many, and say plainly if you cannot make it fail at the
+baseline on demand — an unreproducible fix to an intermittent test is a guess, and
+should be reported as one.
+
+Then check whether the shape repeats: any other test reading through a session that a
+fixture also populated, without expiring it first, is the same bug waiting for a
+different garbage collection.
+
+Gate: `make test-control` with a real Postgres, run repeatedly, then `make verify`.
+
+
+### M28.17 — `infra`: pin the parity that is currently only promised, and the last two-channel split · found reviewing M28.15, 2026-09-24
+
+Four small things, all the same subject: a claim that the two channels agree, with nothing
+holding them to it.
+
+1. **The 64 KiB ceiling is now a behavioural contract and no test pins it.** Both channels
+   refuse a file over `MOST_OF_A_RECORD` for its size, and that parity is asserted only in
+   prose — a script comment saying *"the same number as `control/app/services/backups.py`'s
+   `MOST_OF_A_RECORD`"* and a runbook sentence saying *"the same ceiling and the same answer
+   as the panel"*. The number is then written out a third and fourth time in the new
+   fixtures. **Move either side and the two channels give different verdicts about one
+   file, with nothing going red** — the exact defect class this milestone exists to close,
+   reintroduced as a documentation promise.
+   `tests/infra/test_the_command_line_says_what_the_panel_says.py` already AST-reads the
+   control zone's source for this kind of parity, and that is where this belongs. The
+   fixtures should read the number rather than repeat it.
+
+2. **`refuse_damaged_record "size"` names a key that does not exist.** It renders as
+   *its "size" is not what scripts/backup-run.sh writes there*, and every other argument to
+   that sentence — `schema`, `missed_dates`, `last_success` — is a real JSON key, so an
+   operator goes looking for a `size` key and finds nothing. Give the size case its own
+   sentence. It can name the file's size without reading any of it.
+
+3. **The runbook says an over-large file is refused whole and never says the next tick
+   replaces it.** The terminal refusal does say so; the runbook reader is the one who is
+   planning, and is the one not told. One clause: move the file aside first, because the
+   next scheduled run rewrites the record.
+
+4. **A directory at the record path splits the two channels** — pre-existing, and the
+   seventh surface of this milestone's one defect. The command line's `[ -f ]` reads it as
+   *"No backup has ever been recorded on this host"*; the panel classes the same shape as
+   presence-with-nothing-legible and answers `UNREADABLE`. Worse, `write_state`'s `mv` then
+   deposits `last-run.json.partial` **inside** that directory, so the schedule runs, reports
+   success and leaves no record at all — every tick, for ever. Refuse the shape by name,
+   matching the panel.
+
+**Why these are worth a step rather than a carry-over line.** Three of the four are one or
+two lines of code. The first is the one that matters: this milestone has been blocked twice
+for surfaces stating what the record does not license, and the fix for the last one ended by
+creating a fresh promise that the two channels agree, held up by a comment. A parity that
+only a human re-reading two files can check is the same thing as no parity.
+
+Gate: `make test-infra`, then `make verify`.
+
+
+### M28.18 — `infra`: one reader of the backup record, and `tick` decides from it · the root of the seven surfaces · settled by the owner 2026-09-24
+
+**This is the defect the other surfaces were symptoms of.** M28 has been blocked by
+acceptance twice and reviewed into four more instances of one thing: several independent
+readers of one file, each deciding for itself what that file entitles it to say.
+`scripts/backup-run.sh` alone holds **two readers** — the lenient `field`/`read_state` path
+behind `tick` and `now`, and the strict `record_problem` path behind `status` and `due`.
+
+That is the same shape M28.12 named and M28.13 closed one level down, and the lesson is
+recorded in this milestone's own notes: *the defect was never one bad comparison; it was a
+second parser that gives the right answer on every file anybody tests with.*
+
+**What it costs today, verified twice:** a record with `"due_date": "2099-01-01"` makes
+`tick` exit 0, print nothing, and take no backup **until the calendar catches up** — the
+channel that actually takes backups silently stopped — while `due` exits 1 and the panel
+draws a banner about the very same file. A damaged `last_attempt` makes `tick` conclude the
+day's backup was taken; that one self-heals when the due date rolls over, and the
+clock-ahead one does not.
+
+### Settled by the owner, 2026-09-24
+
+**A record `tick` cannot read is no record, and `tick` takes a backup.**
+
+The fail-safe direction, and it follows the discipline the speaking channels already have:
+*nothing has been assumed from it.* A reader that cannot parse the file must not conclude
+the day's backup was taken, and the only other answer — refusing to run — stops backups on
+the strength of a file the product itself cannot understand, which is the failure this
+milestone exists to prevent. The cost is accepted knowingly: **a damaged record triggers a
+dump rather than suppressing one**, so a host in that state takes at most one extra backup
+per due period until the record is rewritten, which the same run does.
+
+Record it in `docs/decisions.md` in that file's existing format, appended and never
+rewriting what is there.
+
+**Build `scripts/lib/backup-record.sh`**, sourced the way `scripts/lib/env-value.sh` and
+`scripts/lib/env-file-gate.sh` are: the canonicaliser, the strict validator and the field
+readers behind **one entry point** that returns either a refusal key or a validated
+reading. Every verb — `tick`, `now`, `status`, `due` — reads through it. When it refuses,
+`tick` and `now` proceed as if the host had no record; `status` and `due` refuse as they do
+today, unchanged.
+
+**What this must not become.** Not a rewrite of what the verbs say — the wording of every
+refusal, caveat and headline is acceptance-judged and stays byte-identical. Not a
+loosening: changed values, truncation, a schema from the future, the wrong shape at the
+path and a file over the ceiling all stay refused by name. Not a new standing, and not a
+sixteenth key. The closed key set stays closed **on the writer**, where it is enforced; the
+reader keeps ignoring keys it does not know, by the panel's documented design.
+
+**`due` should gain what the collapse makes possible:** it can now state what `tick` *would*
+do with an unreadable record instead of only refusing, because both finally read the same
+answer.
+
+Gate: `make test-infra`, then `make verify`. Prove the two readers are gone rather than
+asserting it — a structural test that fails if a second parser of the record appears in
+that file again, in the shape of `test_no_reader_of_the_record_feeds_it_through_a_pipe`.
+
+
+### M28.19 — `infra`: the schedule stops waiting for a date it does not trust, and the fences stop being wider than they read · 2026-09-24
+
+Five items. The first is a behaviour decision; the rest are the guards this milestone built
+turning out to have seams, which is the same lesson one level up.
+
+1. **A record dated ahead of this host's clock must not stop the schedule silently.**
+   Today `tick` exits 0, prints nothing and takes no backup until the calendar reaches the
+   date. `due` exits 1 and says *"NOTHING IS BACKED UP AT ALL"*; the panel says nothing at
+   all (item 2). This is not the two-readers defect — the record is **valid** and both
+   readers always agreed about it — it is `decide` answering `wait` where `note_clock`
+   answers `ahead`.
+
+   **Decided, and marked as the orchestrator's extension of the owner's rule rather than
+   the owner's own:** the owner settled that *a record `tick` cannot read is no record, and
+   `tick` takes a backup*. The same reasoning covers a record `tick` cannot **trust**, and
+   taking the backup is the answer that **repairs the state**: the new record carries
+   timestamps from this host's own clock, so it is no longer dated ahead and the next tick
+   behaves normally. One extra dump, once.
+
+   The rejected alternative, and why — **refuse loudly, exit 1, let cron mail the
+   operator.** It has a precedent: M28.17 made `tick` exit 1 on the `shape` fault and the
+   notes record *"Loud is right."* But `shape` refuses because writing the record is
+   **impossible** — there is a directory in its way. Here writing is possible and writing is
+   the cure, so refusing would leave the host with no backups until a human reads mail. The
+   precedent is about a case with no other move.
+
+   Record it in `docs/decisions.md`, appended, and say in the row that it is an extension of
+   the owner's rule and reversible.
+
+2. **Three files claim the panel draws a banner for such a record. It does not.**
+   `control/app/services/backups.py::_ahead()` reads only the `last_success`/`last_failure`
+   timestamps — by its own documented design — so a record whose `due_date` alone is ahead
+   gives `standing=SILENT` and no banner. Verified. It is reachable without a hand edit:
+   move `HASHI_BACKUP_TZ` west across the date line and `due` says `clock=ahead` while the
+   panel says `FRESH`. **Narrow the sentences in `docs/decisions.md`, `docs/deploy/runbook.md`
+   and `scripts/lib/backup-record.sh` to what is true** — the panel goes loud when a *run
+   timestamp* is ahead, and is silent when only the `due_date` is. Making the panel notice
+   is M28.20 and is not in this zone.
+
+   **This is the third false-prose finding inside one step.** The rewrite that removed a
+   claim about a fix that had not happened introduced a different untrue claim in its place.
+   Check every sentence you write here against behaviour you have actually run.
+
+3. **The "records nobody" audit is first hop only.** `_sourced_libraries` reads the three
+   named scripts and does not recurse into the libraries it finds. Proven by planting
+   `scripts/lib/record-notes.sh` with a `tee -a /var/log/…` in it, sourced from
+   `backup-record.sh`: **all 14 tests stayed green.** Record handling now lives in a library,
+   so the next move is library→library — the exact hop this misses, and the exact scenario
+   the test's own docstring describes. Make the discovery transitive: iterate a worklist
+   until no new `scripts/lib/*.sh` appears, same regex, same `is_file()` assertion.
+
+4. **Two seams in the fences, both planted and confirmed.**
+   - Process substitution under a command word not in the tool list passes the entry-point
+     fence: `done < <(sed -n 1p "${STATE_FILE}")`. Treat `<(` like `$(` in `_commands`, or
+     add the shape to the written seam list — but do not leave it both unfixed and unlisted.
+   - `_whole_pipelines` folds a **comment** line ending in `\` into the code line below it,
+     although bash does not continue comments — which hides that code line from the pipe
+     guard. Three such doc-comment continuations already exist in the tree. Do not carry a
+     continuation from a line whose stripped form starts with `#`.
+
+5. **The restore scenarios do not run on this machine, and the fixture is why.**
+   `object_store()` runs `docker pull` unconditionally and returns `None` on failure, so ten
+   scenarios — four upload, six bucket-restore — skip with *"could not obtain
+   quay.io/minio/minio:…"* while **that exact image is present locally**. quay.io answers
+   401 here.
+
+   **Fall back to `docker image inspect` when the pull fails**, and skip only when the image
+   is genuinely absent. This is not making the stand match the expectation — the scenarios
+   still run a real object store and really upload and restore; what changes is that a
+   registry outage stops disqualifying an image the host already has. The loud skip stays
+   for the case where it is truly missing.
+
+Gate: `make test-infra`, then `make verify`. **`make verify` must report e2e 224 passed / 0
+skipped.** A 214/10 run does not close this milestone: M28 is the offsite-backup-and-restore
+milestone, and `CLAUDE.md` records what it cost the last time scenarios were absent from the
+gate for eleven milestones.
+
+### M28.20 — `control`: the panel is the last channel that cannot see a stopped schedule · the eighth surface · 2026-09-24
+
+`control/app/services/backups.py::_ahead()` reads the `last_success` and `last_failure`
+timestamps and **never reads `due_date`**. That is deliberate and documented. The
+consequence is not: a record whose `due_date` is ahead of this host's clock stops the
+schedule completely, and the panel answers `standing=SILENT` — no banner, nothing said.
+
+Verified two ways. Hand-seeded, a `"due_date": "2099-01-01"` record gives
+`success_ahead=False, failure_ahead=False, standing=SILENT`. Organically, moving
+`HASHI_BACKUP_TZ` west across the date line gives `due` `clock=ahead` and *"NOTHING IS
+BACKED UP AT ALL"* while the panel reports `FRESH` — a **healthy** standing on a host that
+is taking no backups.
+
+**This is the eighth surface of this milestone's one defect and the last one found.** Every
+other instance was a channel asserting something the record did not license; this is a
+channel failing to assert something the record states plainly, which is the same disease
+read from the other side.
+
+The panel must notice. **What it must not do is grow a second copy of the schedule's
+reasoning** — that is the trap M28.18 avoided when `due` was taught to name what the next
+tick would do, and it avoided it by calling `decide` rather than restating it. The panel
+cannot call the shell, so work out what the *record itself* licenses the panel to say about
+a date it cannot reconcile with its own clock, and say no more than that.
+
+Constraints inherited and not re-decided: the panel does **no I/O** — no shell, no crontab,
+no clock beyond the one it already reads; `CLOCK_AHEAD_GRACE` already exists and is pinned
+against the shell's `CLOCK_AHEAD_GRACE_SECONDS`; the six standings and two weights stay, and
+`clock ahead` already wins where several apply; no apostrophe may reach a Jinja template.
+Whether this is the existing `clock ahead` standing widened or something the existing one
+should already have covered is the question the step has to answer — and if widening it is
+right, say why the two cases belong under one name.
+
+Gate: `make test-control` with a real Postgres — report the skip count — plus
+`tests/e2e/control`, then `make verify`.
+
+
+### M28.21 — `infra`: the sentences the last three steps falsified, and the guards that read as exhaustive · 2026-09-24
+
+The cleanup step, and it exists because of a pattern rather than a bug. **This milestone has
+produced six findings of the form "prose asserts behaviour the code does not have", and five
+of them were written by the fix for the one before.** Two more arrived in M28.19's second
+round, and M28.20 falsified five sentences in this zone by changing what the panel does.
+
+Every item here is a sentence that is false at this commit, or a guard that describes itself
+as narrower than it is.
+
+**A. The sixth instance, in the paragraph written to fix the fifth** — `scripts/backup-run.sh:472-474`.
+The DUE paragraph promises *"one extra dump and then a record that reads normally"*. False
+when `last_failure` is **also** ahead: the organic shape when a clock jumps forward and the
+run under the jumped clock fails, which is what the retry logic exists for. Measured — after
+the promised repairing run **succeeds**, the record is `due_date=today, last_success=now,
+last_failure=2099`, and that record still answers `clock=ahead`, `due` still exits 1, and
+`status` still prints the whole block. Permanently loud, not repaired. Scope the promise to
+the half it is about; the code comment at `:530` already states the consequence correctly.
+
+**B. The seventh, in the runbook's panel section** — `docs/deploy/runbook.md:1741-1747`.
+*"And a **run** in the record dated ahead … the screen goes loud"* — the panel reads
+`last_success` and `last_failure` only, so a record whose `last_attempt` alone is ahead is
+`FRESH` with no banner. The paragraph's qualifier corrects the wrong axis, and the true
+statement sits 85 lines away where a reader of that section has no reason to go.
+
+**C. Five sentences M28.20 made false by teaching the panel to read `due_date`.** All were
+true before it and are wrong now:
+- `scripts/backup-run.sh:393-395` — *"`_ahead` never reads `due_date` … these two verbs are
+  the ONLY channels that say anything"*;
+- `scripts/backup-run.sh:475` — *"The panel does not read the due date at all, so this may be
+  the only place this half is said."* **This one is printed to an operator** by `due` and
+  `status`;
+- `docs/deploy/runbook.md:1831` and `:1836` — the same claim, twice;
+- `tests/infra/test_what_the_command_line_may_say_about_a_backup.py:333-334` — *"The second
+  shape is the one the panel cannot see at all"*. A comment, so the suite stays green, which
+  is exactly why it will not be caught by running anything.
+
+Also check `docs/decisions.md:156`'s closing clause, which states the old behaviour as
+current fact.
+
+**Two more, found by the reviewer sweeping rather than by reading the diff**, and in neither
+the implementer's list nor this step's first draft:
+- `scripts/lib/backup-record.sh:22-25` — *"the panel goes loud only when a RUN TIMESTAMP is
+  ahead … so a record whose due date alone is ahead draws no CLOCK banner at all"*. False now
+  above the grace, and it needs the same conditional wording §C asks for everywhere else.
+- `scripts/lib/backup-record.sh:131-133` — *"THE SCHEDULE'S OWN THREE — `due_date`,
+  `attempts`, `retry_not_before` — … The panel does not read them at all"*. The premise is
+  now false for `due_date`. **The conclusion still stands but for a different reason** — the
+  panel reads it *leniently*, so validating it here would still refuse a file the panel reads
+  happily. Write the reason that is true, not the one that was.
+
+And one partial: `docs/deploy/runbook.md:1745-1747` (*"A **run** and not the record's
+`due_date`, which this screen does not read at all"*) sits inside the paragraph §B already
+claims for a different defect. **It is falsified by M28.20 as well**, so if §B is fixed
+without §C's wording in hand, this clause survives the edit. Fix them together.
+
+**The correct new wording has a condition in it, so write it carefully.** The panel now sees
+a due date ahead by **more than a day**; `DUE_AHEAD_GRACE` is one whole day because the writer
+resolves the due date in the schedule's zone while the panel has only UTC, and inhabited zones
+span UTC−12…UTC+14. So the **timezone-moved-west shape is still invisible to the panel** and
+the command line really is still the only channel that sees *that* one. The old sentences are
+not simply wrong; they are right about the case an operator is most likely to hit and wrong in
+general. Say both halves, and name the states.
+
+**D. One more negative assertion over wrapped output without `flowing()`** —
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py:383`. It fires today only
+because the phrase happens to fit on one source line; re-added across a line break it would
+pass silently. The rest of `tests/infra/` and `tests/e2e/infra/` was swept and this is the
+only other one.
+
+**E. The audit's seam list reads as exhaustive and is not.** Three further spellings walk the
+whole sweep out, measured: `. "${REPO_ROOT}"/scripts/lib/a.sh` (quote closed after the
+variable), `. ${REPO_ROOT}/scripts/"lib/a.sh"`, and two `source` statements on one line (the
+pattern is anchored at `^\s*`, so only the first is found). None is written in this tree
+today — which is precisely the argument made about the braceless form one round earlier, and
+that one turned out to matter. Fix them or name them; the plan's standing rule is that a seam
+is never left both unfixed and unlisted.
+
+**The discipline, which is the actual deliverable.** Every sentence written or edited here
+**names the state it holds for**. When narrowing one, **sweep the tree for it** rather than
+reading the diff — two extra copies and a whole further instance were found that way in
+M28.19. Check each against behaviour actually run, not against the code as read.
+
+Gate: `make test-infra`, then `make verify`, and **the e2e half must stay 224 passed / 0
+skipped**.
+
+
+### M28.22 — `control`: the panel's own sentences, and the rule its parser no longer follows · 2026-09-24
+
+The `control` half of M28.21, split because `CLAUDE.md` does not let one diff cross zones.
+Five sentences, and **four of them no test in this repository could catch** — which is the
+point rather than an excuse.
+
+1. **`console.py:1072-1074`, its docstring `:1034-1036` and its comment `:995-999`** — *"the
+   run times … are printed here exactly as the record has them"* and *"agree with
+   `make backup-status` to the minute"*. **The panel never prints the record's times.**
+   `_ago`/`_how_long` print a coarse age: rendered over a record holding
+   `2026-09-23T08:00:00Z`, the screen says *"Last backup 4 hours ago"*. The sentence is true
+   of `make backup-status`, which prints the ISO timestamp, and was carried to the channel
+   that prints ages. **It was introduced by M28.20's round-1 fix** — a new instance, not a
+   reversal. Say what this screen does: the ages beside it are worked out from times this
+   panel has no reason to doubt.
+
+2. **`console.py:1085-1086`** — *"A clock that moved on that host **is what** leaves a record
+   like this behind"*. Names one cause exclusively where four are possible: the hand-seeded
+   shape, a moved clock, a hand edit, a record carried from another machine. **This is not
+   M28.20's round-1 finding returning** — that named a cause the grace makes *impossible*;
+   this names a *possible* cause as if it were the only one, and sends an operator whose
+   record was hand-edited to check a clock that is fine. Narrow the verb and keep the
+   contrast: the load-bearing half is *"and a timezone cannot"*, which survives any fix.
+
+3. **`backups.py:145-148`** — *"every host scheduled east of UTC … ten hours out of every
+   day"*. Ten hours is right for UTC+14 at 04:00 local; a host at UTC+1 resolving 04:00 local
+   writes a due date equal to the UTC date and would never be flagged. **The argument for
+   `DUE_AHEAD_GRACE` is untouched** — only the scope of the sentence overstates. Do not
+   weaken the constant.
+
+4. **`tests/control/test_a_backup_that_has_been_failing_says_so.py:697-698`** — the module
+   rule *"silent about keys it does not read, strict about keys it does"*, falsified by
+   M28.20 in the very file that states it. `due_date` is now a key it reads and deliberately
+   is **not** strict about, proved 350 lines below by that step's own tests. **The risk is not
+   cosmetic:** a later reader "finishing" the parser on the strength of that rule reopens the
+   two-channel defect M28.18 closed. State the exception where the rule is stated, and say
+   why — the shell does not validate that field either.
+
+5. **`docs/tracker/M28/step-notes.md`, two entries** (this file belongs to no zone and is in
+   reach):
+   - `:1598-1600` — the M28.20 residue note lists *"a host clock that jumped back by a day or
+     more"* among the shapes now caught. Measured against the real `_due_ahead`: back 24 h →
+     False, 36 h → False, 47 h → True. The grace is **strictly** more than a day. Overstated
+     twice over, since a backward jump also leaves the run timestamps ahead and is already
+     loud via the run half. **This is the milestone's own defect class landing in the place
+     its close-out reads from**, on the exact boundary the note is about.
+   - `:1447-1449` — M28.18's *"`_parse` does not read them at all"*, now false for
+     `due_date`. M28.21 §C lists the identical sentence in `scripts/lib/backup-record.sh` and
+     missed this copy. The conclusion still holds for a different reason: the panel reads it
+     **leniently**, so validating it in the shell would still refuse files the panel reads
+     happily. **Write the reason that is true, not the one that was.**
+
+**While you are here, adopt the form the reviewer argued for**, since this file is where it
+was demonstrated. The strongest assertion in M28.20 is a **biconditional** —
+`assert (PHRASE in detail) is (standing is not NEVER)` — which fails in both directions and
+writes the sentence's state down executably. Convert the presence-only pins on the clauses you
+touch, and **pin by constant reference** (`console.BACKUP_CLOCK_OPENING`,
+`BACKUP_CLOCK_RUN_AHEAD`) rather than by a literal: a literal in a test is a second copy of
+the sentence, and two copies never disagree even when both are wrong.
+
+**Two corrections carried from M28.21, and both matter more than the items above.**
+
+**First, a sentence in M28.21's own text was wrong and it was mine.** §C said the moved-west
+shape is *"exactly one day ahead"*. Measured organically, the record that shape produces was
+**zero** days ahead of the panel's UTC date — the offset depends on the hour. M28.21 therefore
+writes **"no more than a day"** / **"more than a day"** everywhere, and so must this step.
+**Never write "exactly one day."** The boundary, measured: the panel is loud iff
+`due_date > (its own UTC date + 1 day)` — one day ahead is False, two days is True. That this
+error was written into the plan by the orchestrator, in the step whose subject is exactly this
+class, is the clearest example the milestone has produced: a true observation about one
+instance, written as a generalisation.
+
+**Second, two sentences that look like this defect and are NOT — do not touch them.**
+M28.21's implementer checked both and they are true; turning a true sentence false is the same
+defect in reverse:
+- `control/app/services/console.py:1006` — *"the last ATTEMPT is a run too and this panel does
+  not read it"*. `_ahead` reads `last_success` and `last_failure` only, so this holds.
+- `docs/tracker/M28/step-notes.md:1605` — *"`due` and `status` remain the only two channels
+  that see that half"*, where "that half" is the moved-west shape the panel is silent about.
+
+**A third step-notes line, and it is the surviving copy of my error** —
+`docs/tracker/M28/step-notes.md:1603`: *"It leaves a due date **exactly ONE day ahead**"*. It
+sits **two lines above** `:1605`, which this brief tells you not to touch, so it is the one
+most likely to be skipped. Measured at UTC 13:57 with `AT=04:00` it is **zero** days ahead.
+Fix it with the rest of item 5.
+
+**And the measurement for item 3, so you do not have to take it on trust.** Counting the UTC
+hours per day at which a zero-grace comparison would fire, `AT=04:00`: `Europe/Berlin` (+2)
+**0/24**, `Europe/Moscow` (+3) **0/24**, `Asia/Tokyo` **5/24**, `Pacific/Auckland` **8/24**,
+`Pacific/Kiritimati` **10/24**. So it is neither *every* host east of UTC nor a *standing*
+banner. Write the numbers; the argument for `DUE_AHEAD_GRACE` is untouched by the correction
+and **the constant must not move.**
+
+Item 5's two step-notes entries remain wrong and are still yours. Check every sentence you
+touch against behaviour you run, including the ones this plan tells you are broken — this
+plan has been wrong once already.
+
+**Do not add a pin to any sentence naming a cause, a mechanism or another channel's
+behaviour.** Nothing in this repository determines those, so such a pin can never go red — it
+converts an unverifiable claim into a green tick, which is how item 1 of M28.20's review came
+to be load-bearing.
+
+Gate: `make test-control` with a real Postgres — report the skip count, the real number is
+~992/2 — then `make verify`, with the e2e half at **224 passed / 0 skipped**.
+
+
+### M28.23 — WITHDRAWN 2026-09-26, folded into the accepted prose debt · was: `infra`, what M28.21 left open at its round cap
+
+**Not built, and the reason is the same judgement that closed M28.22's prose work.** Every
+item below is a sentence in a comment, a tracker note or a runbook paragraph. None changes
+what the product does. Two consecutive cleanup steps hit their round cap by removing several
+such sentences and writing two or three new ones, and at fifteen instances the trade has
+stopped paying: the risk being bought down is a reader misled by a comment, and the price is
+measured at two or three fresh instances per step.
+
+It is recorded in `docs/tracker/M28/carry-over.md` as debt, with the standing recommendation
+for whoever takes it: **delete rather than refine.** These sentences explain gates that are
+already pinned by biconditionals failing in both directions; the explanations are pinned by
+nothing and cannot be.
+
+The items, kept here so the debt is legible:
+
+#### The original text — M28.23 — `infra`: what M28.21 left open at its round cap, and the counts that keep being wrong · 2026-09-25
+
+**M28.21 stopped at its round cap with three Highs open.** Its code is clean and gated — the
+seven sentences it was written for are fixed and every behavioural claim was re-derived by
+measurement in both rounds — but the fixes themselves wrote new prose, and that prose is what
+is open. This step takes it, plus one correction M28.22 found in text this plan repeats.
+
+**A. A claim that the code lacks something it has.** Both
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py:195-196` and
+`docs/tracker/M28/carry-over.md:324-326` say the sibling module *"has no `flowing()` at all"*,
+and the carry-over builds an action item on it — *"widening it belongs with whichever step next
+touches that file"*. But `tests/infra/test_the_command_line_says_what_the_panel_says.py:75-82`
+defines **`flat(text)`** — the same whitespace collapse plus a concat-seam strip — and already
+uses it at `:325`. Literally true of the *name*, false about the code, and it mis-scopes the
+work it hands on: nothing needs widening, the open assertions need only call the helper sitting
+160 lines above them.
+
+**B. The count is wrong again, in the entry whose own thesis is that the count keeps being
+wrong.** It says *"there are three, not one"*. There are **four**:
+`test_the_command_line_says_what_the_panel_says.py:1137` — `assert "No backup has ever been
+recorded on this host" not in result.stderr` — is byte-identical in phrase, source and shape to
+`:235`, which the entry does list. Both target `scripts/backup-run.sh:1019`. The entry's own
+instruction, *"sweep for the SHAPE, not the phrase"*, was not applied to the module it was
+written about.
+
+**Use M28.22's reframing here, because it is what makes these counts tractable:** **count
+assertions, not occurrences.** A phrase surviving inside the correction that replaced it, or
+inside a quotation of the defect, is not an instance. Three published counts in this milestone
+have been wrong by counting occurrences.
+
+**C. A fix for a Low that is false in a first-class state.** `docs/deploy/runbook.md:1748-1750`
+now says a record's standing is *"answered by the age of its runs: recent ones read as fresh"*.
+Measured against `_judge`: it is answered by the age of the last success **and** whether
+anything failed after it. A record whose runs are all recent but whose `last_failure.at >
+last_success.at` is `FAILING`, `loud=True`. `_judge`'s own docstring says so, and the same
+runbook section already lists *"backups are failing"* among the six standings.
+
+**D. A measurement this plan and the carry-over both repeat, which is hour-dependent.** Both
+state *"back 24 h → False, 36 h → False, 47 h → True"* for a clock that jumped backwards.
+Measured across all 24 hours by M28.22: 24 h → loud at **0** of 24, 36 h → **12**, 47 h →
+**23**, 48 h → **24**. **Write the date-boundary rule, not an hours figure** — and note the run
+half already carries that shape, since such a record also has `success_ahead=True`.
+
+**E. Two Lows from M28.21's second round.** The `WHAT IS LEFT RAW` enumeration reads as
+exhaustive and omits the planted-secret assertion at `:147` — correctly raw, since a
+runtime-interpolated value cannot be split by re-wrapping source. And its example for "a phrase
+that is a whole heredoc line of its own" names a phrase no assertion in that file targets; the
+real instance there is `:618`'s `"DATED AHEAD"`.
+
+**The method, which is the deliverable.** Every sentence names the state it holds for. Where
+one carries a number, **state the conditions it was measured under** — the east-host figures
+hold at `AT=04:00` and move with the schedule hour, and item D exists because an hours figure
+was published without its hour. Sweep the tree for a claim rather than reading the diff. Check
+each sentence against behaviour actually run.
+
+**Do not widen `flowing()` into the sibling module.** Item A's point is that the module already
+has `flat()`; the three open assertions there are for whichever step next touches that file.
+
+Gate: `make test-infra`, then `make verify`, with **e2e 224 passed / 0 skipped** reported
+explicitly.
+
+
+### M28.24 — `control`: a gate test whose expected side is a false equivalence · 2026-09-26
+
+**The one finding from M28.22's cap that is not prose.** Two items, both about whether a test
+means what it says.
+
+1. **`has_a_run = standing is not backups.Standing.NEVER` is false.** `Standing.NEVER` means no
+   backup ever **succeeded**, not that no run exists — `backup_standing` has a
+   `case Standing.NEVER if reading.failed_since` branch printing *"The last run was 6 hours
+   ago…"*. Measured: `last_success: null`, `last_failure` 6 h old, a due date far ahead →
+   standing `never`, a real age on screen, and `BACKUP_CLOCK_RUNS_UNDISTURBED` **is** said.
+
+   So `test_the_run_times_clause_is_said_exactly_where_it_is_true` passes only because
+   `_every_standing_with_a_record()`'s NEVER body happens to be the run-less shape, and its
+   docstring's claim to sweep *"every state it could be said in"* is untrue. **Derive
+   `has_a_run` from the body** (`body["last_success"] or body["last_failure"]`), not from the
+   standing, and add the NEVER-with-a-failure body to the sweep.
+
+2. **The mixed run-ahead state is unpinned on a ground that is factually wrong.** The reason
+   recorded was that `_every_standing_with_a_record()` cannot reach it because no body carries
+   both runs. It does: the FAILING body is `record(last_failure=run(1, …))`, which keeps
+   `record()`'s default `last_success=run(6)`. Reaching the state needs one more value in the
+   existing `runs_ahead` loop, guarded on the body having a failure — not a purpose-built
+   record.
+
+   **Pin it.** This milestone's record is prose and pins drifting from behaviour, and the
+   gate's own justification was wrong about *precisely this state* one round ago. A state that
+   is measured but unpinned is where the next edit reintroduces the defect.
+
+**Do not rewrite the surrounding comments.** The over-general sentences beside this gate are
+recorded as accepted debt in `docs/tracker/M28/carry-over.md` and are deliberately out of
+scope — this step is about the test, not the prose. If a comment you touch becomes false
+because of an edit you make, fix that one and say so; do not widen.
+
+Gate: `make test-control` with a real Postgres — report the skip count, the real number is
+~993/2 — then `make verify`, with **e2e 224 passed / 0 skipped** reported explicitly.
+
+
 **Done when**
 - [ ] A backup lands in the bucket every day without anyone touching it, and a run
       that does not land is visible where the owner already looks.
 - [ ] On a machine that has never run this project, one command — given the key and
       read credentials for the bucket — produces a control plane serving the same
-      friends and driving the same nodes as the one that was lost.
+      users and driving the same nodes as the one that was lost.
 - [ ] What a reader of the bucket learns **without** `HASHI_SECRET_KEY` is written
       down, and is either nothing or a recorded decision in `docs/decisions.md`.
 - [ ] An attacker holding the control-plane box cannot destroy the backup history.
@@ -2573,11 +3835,11 @@ that it is possible by someone frightened and in a hurry.**
 - [ ] The restore has been **performed** on a bare host, not described.
 
 acceptance: yes
-Take a fleet with at least one node and one friend, both working. Destroy the
+Take a fleet with at least one node and one user, both working. Destroy the
 control-plane box — do not stop it gracefully, take it away. On a genuinely bare
 machine, with nothing but the repository, `HASHI_SECRET_KEY` and read credentials
 for the bucket, run the one command. Then: log into the panel, apply the existing
-node, and confirm the existing friend's subscription still works on the device it
+node, and confirm the existing user's subscription still works on the device it
 was already on. The walk fails if the operator had to read anything other than the
 command to get there.
 
@@ -2590,7 +3852,7 @@ command to get there.
 ### The coupling, stated plainly
 
 `deploy/caddy/Caddyfile` serves the public site and the private site as two blocks
-in **one** Caddy container, on **one** box. So `/sub/*` — the endpoint a friend
+in **one** Caddy container, on **one** box. So `/sub/*` — the endpoint a user
 refreshes a config from — lives wherever the panel and the database live. The
 runbook admits it in one sentence at the end of *Shape C*: *"today you choose one
 location for both."*
@@ -2600,8 +3862,8 @@ location for both."*
 
 | | wants to be | why |
 |---|---|---|
-| `/sub/{token}` | **inside Russia** | its entire purpose is being reachable at the moment a node was blocked and a friend needs a new config. A whitelist shutdown is exactly when it is needed and exactly when a foreign address is unreachable |
-| `HASHI_SECRET_KEY` | **outside Russia** | it decrypts every friend's credential and every node's private key, and `scripts/panel-bootstrap.sh:94` requires it in the env file on the host it installs |
+| `/sub/{token}` | **inside Russia** | its entire purpose is being reachable at the moment a node was blocked and a user needs a new config. A whitelist shutdown is exactly when it is needed and exactly when a foreign address is unreachable |
+| `HASHI_SECRET_KEY` | **outside Russia** | it decrypts every user's credential and every node's private key, and `scripts/panel-bootstrap.sh:94` requires it in the env file on the host it installs |
 
 Today the operator picks one and pays for the other:
 
@@ -2631,85 +3893,6 @@ It is the first idea everyone has and it fails twice:
 The direction that already exists and already works is **control plane → node over
 SSH, on apply**. Anything this milestone builds should ride it.
 
-### What the milestone has to decide, before it writes code
-
-1. **What travels — the endpoint, or the artifacts?** Rendering a subscription
-   needs the database, so the endpoint cannot move on its own. The candidate is:
-   the control plane pre-renders each friend's subscription and **pushes it to the
-   entry on apply**, where something small and stateless serves `/sub/{token}`.
-   Decide whether that something is Caddy, the node stack, or a new thing — and
-   whether it is a transport-like row or a property of the node.
-2. **Staleness, and whether the operator is told.** A pushed subscription is a
-   snapshot. The panel already knows how to say *"this node is not running what
-   this panel would give them"* (M25). Decide whether delivery inherits that
-   sentence or needs one of its own, and what a friend gets when they refresh
-   against an entry that is three applies behind.
-3. **Every arrangement of the three roles must work, and none of them may be a
-   different product.** *Owner's requirement, 2026-09-22, broadened the same day.*
-   The three roles — control plane, entry, leaf — are placed on one, two or three
-   machines in any combination, and **the country each one sits in is not the
-   product's business.** That is the charter's own rule about nodes applied one
-   level up: nodes are data, so the arrangement of them is data too.
-
-   | machines | arrangement | what delivery does |
-   |---|---|---|
-   | 1 | C + E + L together | already served from that box |
-   | 2 | C + E \| L | already served from that box |
-   | 2 | C + L \| E | the case that needs the work |
-   | 3 | C \| E \| L | the case that needs the work |
-
-   **Where the roles are co-located the feature must be ABSENT, not merely inert.**
-   No second domain, no second certificate, no second listener, no extra key in
-   `.env` — and no flag the operator has to know to leave off, because a flag like
-   that is a way to get it wrong. Whatever is built works this out from what the
-   fleet already knows, and an operator who has never read this milestone cannot
-   arrive at the wrong shape by following the panel.
-
-   **The test of this point is the runbook, not the code.** Today `docs/deploy/runbook.md`
-   carries three shapes with three procedures and a migration section between them.
-   If this milestone lands and that structure survives unchanged, the point was
-   missed: the shapes should collapse into one installation with a field in it.
-4. **What a seized delivery host then yields, and this is the sharpest question
-   here.** A
-   subscription does not name only the node serving it — it names **every node that
-   friend may use**. Pushing rendered subscriptions to the entry therefore puts the
-   fleet's leaf addresses on the box most likely to be seized, which the current
-   design deliberately never does: a friend holds the entry's address and the leaf
-   is invisible to them. Decide whether the pushed artifact is narrowed to the
-   entry's own material, and if it is not, decide that knowingly and write down
-   what is lost.
-5. **Bearer-token rules are inherited, not re-decided.** `/sub/{token}` is a bearer
-   credential in a URL path; access logging is off in uvicorn and discarded in
-   Caddy. A second listener on a second host is **a second place a path can be
-   recorded**, and it is on a host whose logs the owner does not read daily. Every
-   new surface gets the same treatment, checked rather than assumed.
-6. **The certificate, on whichever host ends up serving delivery.** A public CA will
-   not issue for a bare address, so every host that serves `/sub/*` needs a real
-   name, a real record and a real certificate — issued and renewed from wherever
-   that host happens to be, on a machine the control plane drives but does not live
-   on. Decide who renews it, and what happens when renewal fails while the border is
-   shut.
-
-7. **Moving the delivery endpoint is the one change that cannot be announced
-   through the thing being moved.** A friend's subscription URL names a host. Change
-   which host serves it and every friend is holding a dead address — and the only
-   channel the product has for telling them is the address that just died. It works
-   if you move *before* a block and is impossible if you move *because* of one,
-   which is when you will actually want to.
-
-   So this milestone cannot treat the delivery host as freely rotatable the way a
-   node is, unless it decides one of these deliberately:
-   - a subscription carries **more than one** delivery URL from the day it is
-     issued, and a client falls back — which doubles the number of places a bearer
-     token can be recorded, and puts a Russian-side address into every foreign
-     artifact and the reverse;
-   - or moving delivery is defined as an **out-of-band event**, said so plainly in
-     the runbook, and the operator is expected to have a channel that is not this
-     product. That is the honest cheap answer and it is not obviously the wrong one.
-
-   Either way it is a decision with a cost, and the milestone is not done while it
-   is implied rather than recorded.
-
 ### Why this is worth building rather than living with
 
 It is the one change that collapses a dilemma the charter cannot resolve and the
@@ -2718,8 +3901,132 @@ refresh path that survives a shutdown **and** a master key that survives a seizu
 and it leaves the third box doing nothing but holding secrets — which is the only
 job that actually wants to be abroad.
 
+### Settled by the owner, 2026-09-22
+
+**Real-host acceptance walks the two two-machine arrangements** — `C+L | E`, the
+case that needs the work, and the co-located `C+E | L`, the case that fails if the
+feature was built as a switch. The three-machine arrangement stays on the stand and
+is **reported as unproven on real hosts**, not quietly counted as walked.
+
+### M27.1 — Decide what travels, and how narrow the pushed artifact is
+
+Two decisions that cannot be taken apart, because the second is the cost of the
+first.
+
+**What travels.** Rendering a subscription needs the database, so the endpoint
+cannot move on its own. The candidate is: the control plane pre-renders each
+user's subscription and **pushes it to the entry on apply**, where something small
+and stateless serves `/sub/{token}`. Decide whether that something is Caddy, the
+node stack, or a new thing — and whether it is a transport-like row or a property
+of the node.
+
+**And what is in it, which is the sharpest question in this milestone.** A
+subscription does not name only the node serving it — it names **every node that
+user may use**. Pushing rendered subscriptions to the entry therefore puts the
+fleet's leaf addresses on the box most likely to be seized, which the current
+design deliberately never does: a user holds the entry's address and the leaf is
+invisible to them. Decide whether the pushed artifact is narrowed to the entry's
+own material, and if it is not, decide that knowingly and write down in
+`docs/decisions.md` what is lost.
+
+**What is not built, recorded so it is not proposed again:** a reverse proxy on the
+entry forwarding `/sub/*` to the control plane abroad. It inverts the project's one
+directional invariant — *control plane → node, always* — and it does not even work:
+under a shutdown the proxy cannot reach the control plane either, so the refresh
+fails exactly as before with one more moving part.
+
+### M27.2 — The control plane pushes delivery material to a node on apply
+
+Riding the direction that already exists and already works: control plane → node
+over SSH, on apply. Nothing in this milestone makes a node dial the control plane,
+at any point, under any name.
+
+Gate: `make test-edge` for what is rendered, `make test-control` for what is
+pushed — separate diffs, as `CLAUDE.md` requires.
+
+### M27.3 — Whatever serves `/sub/{token}` on a delivery host records no token
+
+`/sub/{token}` is a bearer credential in a URL path; access logging is off in
+uvicorn and discarded in Caddy, and those rules are **inherited here, not
+re-decided**. A second listener on a second host is a second place a path can be
+recorded — and it is on a host whose logs the owner does not read daily. Every new
+surface gets the same treatment, checked rather than assumed, including whatever
+the node stack writes by default.
+
+### M27.4 — Co-location makes the feature absent, not inert
+
+*Owner's requirement, 2026-09-22, broadened the same day.* The three roles —
+control plane, entry, leaf — are placed on one, two or three machines in any
+combination, and **the country each one sits in is not the product's business**.
+That is the charter's own rule about nodes applied one level up: nodes are data, so
+the arrangement of them is data too.
+
+| machines | arrangement | what delivery does |
+|---|---|---|
+| 1 | C + E + L together | already served from that box |
+| 2 | C + E \| L | already served from that box |
+| 2 | C + L \| E | the case that needs the work |
+| 3 | C \| E \| L | the case that needs the work |
+
+**Where the roles are co-located the feature must be ABSENT, not merely inert.**
+No second domain, no second certificate, no second listener, no extra key in
+`.env` — and **no flag the operator has to know to leave off**, because a flag like
+that is a way to get it wrong. Whatever is built works this out from what the fleet
+already knows, and an operator who has never read this milestone cannot arrive at
+the wrong shape by following the panel.
+
+### M27.5 — A user refreshing against an entry three applies behind is not lied to
+
+A pushed subscription is a snapshot. The panel already knows how to say *"this node
+is not running what this panel would give them"* (M25). Decide whether delivery
+inherits that sentence or needs one of its own, and decide what a user actually
+gets when they refresh against an entry that is stale — which is a product answer,
+not an error path.
+
+### M27.6 — The certificate, on whichever host ends up serving delivery
+
+A public CA will not issue for a bare address, so every host that serves `/sub/*`
+needs a real name, a real record and a real certificate — issued and renewed from
+wherever that host happens to be, on a machine the control plane drives but does
+not live on. Decide who renews it, and **what happens when renewal fails while the
+border is shut**, which is the moment the endpoint exists for.
+
+### M27.7 — How delivery moves, and what users must be told, written down rather than implied
+
+Moving the delivery endpoint is the one change that cannot be announced through the
+thing being moved. A subscription URL names a host; change which host serves it and
+every user is holding a dead address, and the only channel the product has for
+telling them is the address that just died. It works if you move *before* a block
+and is impossible if you move *because* of one — which is when you will actually
+want to.
+
+So one of these is decided deliberately and recorded:
+
+- a subscription carries **more than one** delivery URL from the day it is issued,
+  and a client falls back — which doubles the number of places a bearer token can
+  be recorded, and puts a Russian-side address into every foreign artifact and the
+  reverse;
+- or moving delivery is defined as an **out-of-band event**, said so plainly in the
+  runbook, and the operator is expected to have a channel that is not this product.
+  That is the honest cheap answer and it is not obviously the wrong one.
+
+The milestone is not done while this is implied rather than recorded.
+
+### M27.8 — The runbook collapses its three shapes into one installation with a field in it
+
+**The test of this milestone is the runbook, not the code.** Today
+`docs/deploy/runbook.md` carries three shapes with three procedures and a migration
+section between them, and ends *Shape C* with *"today you choose one location for
+both."* If this milestone lands and that structure survives unchanged, the point
+was missed.
+
+**E2E:** `tests/e2e/control/` for what is pushed on apply and `tests/e2e/infra/`
+for what a delivery host serves and does not log. The arrangements themselves need
+two machines, so they are a real-host walk and are reported as one — the stand can
+show the feature is absent when co-located, and cannot show a border.
+
 **Done when**
-- [ ] With the control plane's box unreachable from Russia, a friend inside Russia
+- [ ] With the control plane's box unreachable from Russia, a user inside Russia
       fetches a refreshed subscription and connects on it.
 - [ ] **All four arrangements in the table above install by one procedure**, and the
       co-located ones need no second domain, no second certificate and no additional
@@ -2729,7 +4036,7 @@ job that actually wants to be abroad.
       every host that can serve delivery, not only on the control plane's.
 - [ ] What a seized delivery host yields is written down and is no wider than it is
       today, or the widening is a recorded decision in `docs/decisions.md`.
-- [ ] How the delivery endpoint is moved, and what friends have to be told when it
+- [ ] How the delivery endpoint is moved, and what users have to be told when it
       moves, is decided and written down rather than left implied.
 - [ ] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
       for both"* **and its three-shape structure**, because neither is true any more.
@@ -2738,7 +4045,7 @@ acceptance: yes
 Walk it on the two arrangements that differ, not only on the one that motivated it.
 
 1. **Three boxes.** Control plane on its own box; block that box at the firewall so
-   it is unreachable from the entry's network. Then, as a friend: refresh a
+   it is unreachable from the entry's network. Then, as a user: refresh a
    subscription and connect on what comes back.
 2. **Control plane on the entry.** Install the same way, from the same procedure.
    Confirm that nothing extra was configured, that no second name or certificate
@@ -2768,7 +4075,7 @@ valid `awg-probe-1.conf` with `[Interface]`, `PrivateKey`, `Address`, `MTU`.
 
 **So the route exists. What is missing is that no screen ever shows it.**
 `control/app/api/routes.py:225` composes `{public_base_url}/sub/{token}` — the
-plain shape only. An operator following the panel hands a friend a link that, for
+plain shape only. An operator following the panel hands a user a link that, for
 a node serving only WireGuard-family transports, returns an empty document.
 
 ### Both sentences the product shows are wrong, in opposite directions
@@ -2789,14 +4096,14 @@ would have been green either way.*
 
 ### What the milestone has to decide, before it writes code
 
-1. **What URL does the operator get handed?** The plain one, with the friend
+1. **What URL does the operator get handed?** The plain one, with the user
    expected to know about `?format=`? One URL per shape? One URL that answers
    correctly based on what the node actually serves? The last sounds obviously
    right and is the one that quietly changes what a token means.
 2. **What does "one link, every serving node" mean when a node serves both
    families?** A base64 URI list and a zip archive are not the same kind of
    document, and the subscription promise is currently written as if they were.
-3. **What does the friend do with a `.conf`?** A URI pastes into a client. A file
+3. **What does the user do with a `.conf`?** A URI pastes into a client. A file
    has to be imported. Whatever is shown must match the client the runbook tells
    people to install.
 4. **Bearer-token rules are inherited, not re-decided.** `/sub/{token}` is a
@@ -2806,14 +4113,14 @@ would have been green either way.*
    history, a bookmark or a chat log.
 
 **Done when**
-- [ ] An operator following only what the panel shows can give a friend on a
+- [ ] An operator following only what the panel shows can give a user on a
       WireGuard-family-only node something that works.
 - [ ] Every sentence the panel says about what a link contains is true for every
       combination of enabled transports.
 - [ ] No new surface records a token, an address, or who fetched what.
 
 acceptance: yes
-Take a friend on a node serving only `amneziawg`. Follow exactly what the panel
+Take a user on a node serving only `amneziawg`. Follow exactly what the panel
 hands the operator — nothing learned from the source — and get a working
 configuration onto a device.
 

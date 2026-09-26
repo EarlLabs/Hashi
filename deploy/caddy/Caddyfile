@@ -15,10 +15,10 @@
 #       M7 turned one site block into three, and "remember to add the log block" is
 #       not a control.
 #
-#       The split is M7. The panel holds every node key and every friend
+#       The split is M7. The panel holds every node key and every user
 #       credential, and `control/app/auth.py` deliberately has no lockout on failed
 #       logins, so password length was the entire defence for a surface anyone on
-#       the internet could reach. `/sub/{token}` cannot move with it: a friend
+#       the internet could reach. `/sub/{token}` cannot move with it: a user
 #       refreshes their config from inside Russia at the exact moment a node was
 #       blocked, so that route stays on the public name, unchanged.
 # HOW:  the admin endpoint stays on loopback so the healthcheck can reach it
@@ -70,7 +70,7 @@
 	# ones below. Without this, any request that does not match a site block —
 	# by IP, or by another name resolving here — is written to stderr with its
 	# full URI, and so is every http.log.error (a 502 while the control plane
-	# restarts is exactly when a friend is refreshing a subscription). Both
+	# restarts is exactly when a user is refreshing a subscription). Both
 	# paths end up in the container log on disk, and the URI contains a live
 	# subscription token.
 	log {
@@ -92,7 +92,7 @@ http://{$HASHI_PUBLIC_HOST} {
 
 # PUBLIC — the delivery endpoint, and nothing else.
 #
-# A friend inside Russia reaches this and only this. Anything that is not a
+# A user inside Russia reaches this and only this. Anything that is not a
 # subscription is 404, including `/`, `/healthz` and `/panel/…`: a 404 says the
 # same thing to a scanner as it does to a mistyped URL, and it says nothing about
 # what else this host runs.
@@ -140,7 +140,7 @@ http://{$HASHI_PUBLIC_HOST} {
 	tls internal
 
 	# `/static/*` belongs here rather than on the public site: it is the panel's
-	# own stylesheet, fonts and one script, and nothing a friend fetches.
+	# own stylesheet, fonts and one script, and nothing a user fetches.
 	@console path /panel/* /api/* /static/*
 	handle @console {
 		reverse_proxy control:8000

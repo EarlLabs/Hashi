@@ -1,7 +1,9 @@
 # hashi — what a deployed panel host publishes.
 #
 # WHAT: the overlay that opens ports on a real host: the delivery endpoint to the
-#       whole internet, and the console to the management tunnel and to loopback.
+#       whole internet, and the console on loopback — the `ssh -L` way in. The console
+#       on the management tunnel's address is one mapping further, in
+#       docker-compose.tunnel.yml, because that one needs an address this host has.
 # WHY:  this file used to be a heredoc in docs/deploy/runbook.md that the operator
 #       typed onto the box. That was tolerable while the answer was "Caddy, 80 and
 #       443". M7 makes it three mappings whose CORRECTNESS IS THE MILESTONE — the
@@ -14,9 +16,11 @@
 #       in the base file cannot be taken back, and would follow every `make up-dev`
 #       and every `make e2e-up` onto a laptop. See the runbook, "The port-publication
 #       gap".
-# HOW:  `make up-panel`, which is `make up` plus this file. Never `make up` alone on
-#       a deployed host — that converges the stack back to the base file's shape and
-#       takes these ports away again.
+# HOW:  `make up-panel`, which is `make up` plus this file and docker-compose.tunnel.yml
+#       — or `make up-panel-over-ssh`, which is `make up` plus this file alone, for a
+#       host with no management tunnel yet. Never `make up` alone on a deployed host:
+#       that converges the stack back to the base file's shape and takes these ports
+#       away again.
 
 services:
   caddy:
@@ -28,16 +32,12 @@ services:
       # (deploy/caddy/Caddyfile).
       - "80:80"
       - "443:443"
-      # The console, on the management tunnel's own address on this host. This
-      # mapping is the whole of "the panel is off the public internet": Caddy inside
-      # the container listens on every interface it has, and this line is what
-      # decides that the only interface the port appears on is the tunnel's.
+      # The console on the management tunnel's address is NOT here: it is the one
+      # mapping that needs an address this host actually has, and a machine restored
+      # from a bucket has no tunnel yet — so it lives in docker-compose.tunnel.yml and
+      # `make up-panel` loads both (M28.10, finding 4). What is left in this file is
+      # everything a deployed host publishes whether or not a tunnel exists.
       #
-      # Required with no default, and NEVER loopback here — the mapping below
-      # already claims loopback for that port, and docker refuses the second bind
-      # with "port is already allocated". scripts/panel-bootstrap.sh checks for that
-      # and says so, because the raw error names neither cause nor cure.
-      - "${HASHI_PRIVATE_BIND_ADDR:?set HASHI_PRIVATE_BIND_ADDR in .env — the management tunnel address on this host}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}"
       # The way back in when the management tunnel is unavailable, which is the day
       # an emergency rotation is needed. Loopback only: nothing off this host can
       # reach it, and an operator who can already open an SSH session forwards it to

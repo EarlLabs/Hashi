@@ -4,7 +4,7 @@ WHAT: that generation is keyed by cryptographic KIND, produces the right shapes,
       never repeats itself.
 WHY:  item 6a existed because generation was assumed by items 7, 8 and 9 and assigned
       to nobody. These tests pin the two properties everything downstream relies on:
-      the material is the shape the data plane expects, and no two nodes or friends
+      the material is the shape the data plane expects, and no two nodes or users
       ever share any of it.
 HOW:  pure unit tests. No database, no application.
 """
@@ -95,7 +95,7 @@ def test_a_keypair_without_a_declared_public_name_is_refused() -> None:
 
 
 def test_a_non_secret_value_is_not_encrypted() -> None:
-    """A Reality short id travels to every friend in their URI; encrypting it is wrong."""
+    """A Reality short id travels to every user in their URI; encrypting it is wrong."""
     spec = KeySpec(name="short_id", kind=KeyKind.SHORT_ID, scope=KeyScope.NODE, secret=False)
     minted = keymaterial.mint([spec], KeyScope.NODE)
     assert "short_id" in minted.params
@@ -103,7 +103,7 @@ def test_a_non_secret_value_is_not_encrypted() -> None:
 
 
 def test_scope_filtering_keeps_node_and_client_material_apart() -> None:
-    """Mixing them would mean re-keying a node every time a friend is added."""
+    """Mixing them would mean re-keying a node every time a user is added."""
     specs = [
         KeySpec(name="node_value", kind=KeyKind.TOKEN_32, scope=KeyScope.NODE),
         KeySpec(name="client_value", kind=KeyKind.UUID4, scope=KeyScope.CLIENT),
@@ -157,7 +157,7 @@ def test_every_installed_transports_declaration_can_actually_be_minted() -> None
 
 
 def test_rotation_produces_different_material() -> None:
-    """Item 23's premise: rotating must actually change what friends are using."""
+    """Item 23's premise: rotating must actually change what users are using."""
     specs = [
         KeySpec(
             name="private_key",

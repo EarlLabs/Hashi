@@ -2,10 +2,18 @@
 
 ## One-liner
 
-A self-hosted, multi-protocol VPN for its owner and ~30–50 friends: a Russian
+A self-hosted, multi-protocol VPN for its owner and ~30–50 users: a Russian
 entry node fronting foreign exit nodes, where both **nodes and protocols are
 data** — either can be added, swapped or destroyed in minutes, by one script,
 without a user touching their device.
+
+**Those ~30–50 people are the owner's own circle, and the noun no longer says so.**
+*friends* carried three things on its own that *users* does not, so they are stated
+here rather than left to a word: there is **no public signup**, there are **no
+payments and no billing**, and the service is **never advertised** — the last of the
+three is an offence for the owner under art. 14.3 KoAP rather than a preference. All
+three are in *Non-goals* below; this paragraph exists because the one-liner used to
+imply them and now does not.
 
 Surviving Russian DPI is **phase 2**, not phase 1 — see *Success criteria*. The
 topology is built for it from day one; the transports that defeat it are not
@@ -16,9 +24,9 @@ shipped first.
 | User | Job |
 |---|---|
 | Owner (operator) | Add/remove nodes and transports, watch node health, issue and revoke access, rotate anything that gets blocked — all from one admin panel |
-| Friends (~30–50) | Paste one subscription URL into a standard client (Amnezia / Hiddify / v2rayNG / streisand) once, and thereafter just connect; pick an exit country |
+| Users (~30–50) | Paste one subscription URL into a standard client (Amnezia / Hiddify / v2rayNG / streisand) once, and thereafter just connect; pick an exit country |
 
-Friends never receive raw configs and never re-add anything. The subscription URL
+Users never receive raw configs and never re-add anything. The subscription URL
 is the only artefact they hold — that is what makes "swap a protocol in minutes"
 real rather than theoretical.
 
@@ -34,7 +42,7 @@ real rather than theoretical.
   `docs/product/backlog.md`): a v1 subscription is a base64 list of client-entry
   URIs, and **AmneziaWG has no URI form** — it is a config file, not a link.
   Shipping WireGuard and AmneziaWG as first-class transports therefore needs an
-  answer to *how they reach a friend in one link*. Either the target client
+  answer to *how they reach a user in one link*. Either the target client
   (Happ) accepts a richer subscription than a base64 URI list, or the delivery
   endpoint serves per-client config files behind the same token, or criterion 5
   ("onboarding is one link") weakens for these transports. **Which one is a
@@ -58,7 +66,7 @@ multi-protocol VPN first; make it survive Russian DPI second. The criteria are
 
 | Phase | Criteria | Means |
 |---|---|---|
-| **1 — it works** | 2, 3, 4, 5, 6 | A friend connects with a stock client, picks an exit, and any node or protocol can be swapped without them touching anything. Verified on an unrestricted network |
+| **1 — it works** | 2, 3, 4, 5, 6 | A user connects with a stock client, picks an exit, and any node or protocol can be swapped without them touching anything. Verified on an unrestricted network |
 | **2 — it survives** | **1** | The same system keeps working from a Russian mobile network under whitelist restriction and TSPU inspection |
 
 Nothing in phase 1 may make phase 2 unreachable: the entry→leaf topology, the
@@ -107,7 +115,7 @@ does **not** require is that any given transport survive DPI today.
    core, the subscription renderer, or any other transport.
 
 5. **Onboarding is one link.**
-   *Given* a new friend,
+   *Given* a new user,
    *when* I issue them a subscription URL,
    *then* they connect from Russia with an unmodified stock client and can choose
    an exit country.
@@ -129,7 +137,7 @@ proven data-plane software; the data plane itself is upstream code we configure.
 | Admin panel | Server-rendered Jinja + HTMX | An internal panel for one operator. Keeps the panel inside the `control` zone instead of buying a frontend zone, a build pipeline and two more agents |
 | Data plane, **phase 1** | **WireGuard** and **AmneziaWG**, both first-class and both shipped | Owner's call, 2026-08-02. They are the fastest route to a working multi-protocol fleet: mature, scriptable, and a client the owner already uses speaks them. Neither survives TSPU — see the row below — and that is accepted while criterion 1 is deferred |
 | Data plane, **phase 2** | Xray-core: **VLESS + Reality + XTLS-Vision**; VLESS+WS+TLS behind a camouflage site | The only family reported working reliably against TSPU in 2026: Reality borrows a real third-party TLS handshake, so active probing sees the decoy site, not us. This is what criterion 1 will be built on |
-| Plain WireGuard **from Russia** | Known-blocked, shipped anyway in phase 1 | TSPU protocol-blocks it, so it will not carry traffic from a restricted Russian network. It works everywhere else, and phase 1 is explicitly not about the restricted case. **Never present it to a friend as though it will work from a Russian mobile network** |
+| Plain WireGuard **from Russia** | Known-blocked, shipped anyway in phase 1 | TSPU protocol-blocks it, so it will not carry traffic from a restricted Russian network. It works everywhere else, and phase 1 is explicitly not about the restricted case. **Never present it to a user as though it will work from a Russian mobile network** |
 | Entry→leaf hop | **Never plain WireGuard**, in any phase | That hop crosses the border by definition, so a protocol-blocked transport there defeats the topology even in phase 1 |
 | Reverse proxy | **Caddy** — control plane + node camouflage fronts; **never in front of Reality** | Automatic ACME and a tiny config where a proxy helps. Reality *is* the TLS terminator; fronting it breaks the property that makes it work |
 | Node bootstrap | SSH + Ansible-style idempotent bootstrap; nodes run docker compose | Nodes are cattle with fixed identity, not a scheduling pool |
@@ -144,7 +152,7 @@ component hardcodes a country or a provider.
   latency.
 - **Leaf nodes**: outside Russia, any provider reachable over SSH.
 - **Delivery endpoint** (subscription URLs): must be reachable *from inside
-  Russia* — otherwise friends cannot refresh their configs at exactly the moment
+  Russia* — otherwise users cannot refresh their configs at exactly the moment
   a node has been blocked and they most need to. It may be co-located on the
   entry node.
 - **Database and admin panel**: owner's choice at deploy time. If placed inside
@@ -198,8 +206,8 @@ nodes, a node never dials control).
 | From | Commands | Panel actions |
 |---|---|---|
 | bare host → a node **serving** | 1 | 3 — add node, enable a transport, apply |
-| bare host → **a friend's packets moving** | 1 | 5 — those 3, then add the user, then **apply again** |
-| two bare hosts → an established **entry→leaf hop** | 2 | 6 — register ×2, a friend-facing transport on the entry, establish the hop, apply ×2 |
+| bare host → **a user's packets moving** | 1 | 5 — those 3, then add the user, then **apply again** |
+| two bare hosts → an established **entry→leaf hop** | 2 | 6 — register ×2, a user-facing transport on the entry, establish the hop, apply ×2 |
 | bare host → **the control plane** | 13, of which `panel-bootstrap.sh` is one | 0 |
 
 The control plane is the row to read twice: **it is not brought up by one script.**
@@ -213,19 +221,19 @@ three presses.
 
 **The fifth row is the one that surprised the walk**, and it is why *apply again* is
 in bold: adding a user changes what the panel would push and touches no host, so the
-friend's link is complete and correct before any node has heard of them. The panel
+user's link is complete and correct before any node has heard of them. The panel
 says so since 2026-09-16 (`docs/decisions.md`); the sequence itself is unchanged.
 
 ## Backups
 
 Owner's requirement, 2026-08-02. Absent from the first version of this charter,
-which was a hole: the control plane's database holds every friend's credential
+which was a hole: the control plane's database holds every user's credential
 and every node key, and losing it means re-issuing to all 30–50 people by hand.
 
 | What | Why it must survive |
 |---|---|
-| Control-plane database | friend records, node inventory, which transports are enabled where |
-| Node and transport secrets | Reality private keys, WG keys, SSH keys — encrypted at rest, and the backup is encrypted with a key **not stored beside it** |
+| Control-plane database | user records, node inventory, which transports are enabled where |
+| Node and transport secrets | Reality private keys, WG keys, SSH keys — encrypted at rest, and the whole backup artifact is encrypted again to a public key whose **private half never touches the host that writes it** |
 | Panel configuration | so the panel script can rebuild a working install, not an empty one |
 
 Rules:
@@ -242,7 +250,7 @@ Rules:
 
 | Data | Real? | Notes |
 |---|---|---|
-| Friend records | nickname + credentials + expiry only | No names, no emails, no phone numbers, no payment data |
+| User records | nickname + credentials + expiry only | No names, no emails, no phone numbers, no payment data |
 | Node inventory | real | Host, SSH key, location label, enabled transports |
 | Node & transport secrets | real from day one | Reality private keys, WG keys, SSH keys — encrypted at rest, never in git |
 | Traffic logs, DNS logs, connection history | **never collected** | Absent by construction. Health checks report liveness, not who connected |

@@ -60,7 +60,7 @@ class Params(BaseModel):
     tunnel_address: str = Field(description="this end's tunnel address, e.g. 10.x.y.1/24")
     # Dual-use, and the description says so because the establish-hop dialog and the
     # enable dialog both show it: on a hop this is the single far end's address, and on
-    # a transport offered to friends it is the FIRST address given out — the pool starts
+    # a transport offered to users it is the FIRST address given out — the pool starts
     # here and runs as far as the operator sized it.
     #
     # IT ALSO SAYS WHAT THE VALUE LOOKS LIKE, since M25. The field is required, declares
@@ -74,7 +74,7 @@ class Params(BaseModel):
     peer_tunnel_address: str = Field(
         description=(
             "the far end's tunnel address on a hop; the FIRST address given out when "
-            "this transport is offered to friends, the pool counting up from it one per "
+            "this transport is offered to users, the pool counting up from it one per "
             "person. An address with its prefix, in the same range as this end's own "
             "tunnel address and never that address itself — e.g. 10.x.y.2/24 where this "
             "end is 10.x.y.1/24."
@@ -86,12 +86,12 @@ class Params(BaseModel):
     public_key: str
     preshared_key: str = Field(repr=False)
 
-    # Resolvers to write into a FRIEND's config file. Empty by default and never
+    # Resolvers to write into a USER's config file. Empty by default and never
     # defaulted to an address: a hardcoded resolver is an address this fleet could
     # never rotate away from, which `CLAUDE.md` forbids for exactly that reason.
     #
     # Empty is a real state rather than a missing feature, but it is NOT the state the
-    # comment in ``client.j2`` used to describe. A friend's config routes every address
+    # comment in ``client.j2`` used to describe. A user's config routes every address
     # into the tunnel, their own resolver included, so "the device keeps its own resolver
     # and its queries do not enter the tunnel" was false for every destination — M23,
     # measured. Empty now falls back to the NODE's own resolver
@@ -103,9 +103,9 @@ class Params(BaseModel):
     client_dns: tuple[str, ...] = Field(
         default=(),
         description=(
-            "the resolver a FRIEND's device is told to use inside the tunnel. Not used "
+            "the resolver a USER's device is told to use inside the tunnel. Not used "
             "at a hop end. An address, not a name. Left empty this node's own resolver "
-            "is written instead; with neither, a friend's device keeps asking a "
+            "is written instead; with neither, a user's device keeps asking a "
             "resolver it can no longer reach and no name resolves."
         ),
     )
@@ -183,7 +183,7 @@ class Params(BaseModel):
     def _each_resolver_is_one_a_device_could_reach(
         cls, value: tuple[str, ...]
     ) -> tuple[str, ...]:
-        """Each entry must be an address a friend's device can actually ask — M23.
+        """Each entry must be an address a user's device can actually ask — M23.
 
         ``egress.client_resolver_problem`` decides, and this validator only raises what it
         answers. The rule is not a property of this protocol — what makes a resolver

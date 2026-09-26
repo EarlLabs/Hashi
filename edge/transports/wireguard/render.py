@@ -2,10 +2,10 @@
 
 Three functions, and the middle one is the interesting one:
 
-* ``render_server`` — this node's interface, authorising exactly the given friends.
+* ``render_server`` — this node's interface, authorising exactly the given users.
 * ``render_client`` — REFUSES. There is no URI form of this protocol, and the contract
   requires that refusal to be explicit rather than a quietly malformed entry.
-* ``render_client_config`` — the friend-facing form that does exist: a complete
+* ``render_client_config`` — the user-facing form that does exist: a complete
   wg-quick file, delivered by the second subscription format (items 26 and 27).
 
 Deliberately close to the AmneziaWG package in shape and deliberately NOT shared with
@@ -77,7 +77,7 @@ def _interface_name(display_name: str) -> str:
     serialisation rather than cosmetics. Linux caps an interface name at 15 characters,
     and a node's name is free text, so it is slugged and truncated.
 
-    Derived from the node, never from the friend: a friend holding three files needs to
+    Derived from the node, never from the user: a user holding three files needs to
     tell the exits apart, and nothing about which person this is belongs in a filename.
     """
     slug = "".join(
@@ -109,7 +109,7 @@ def render_server(
     decision and not a branch here.
 
     An empty sequence renders a valid interface that authorises nobody — the correct
-    state for a node whose last friend was just revoked, and not an error. If it were,
+    state for a node whose last user was just revoked, and not an error. If it were,
     the final revocation would produce a config the daemon refuses and the node would
     fail to restart, taking out everyone still on its other transports.
     """
@@ -117,7 +117,7 @@ def render_server(
         egress,
         str(params["tunnel_address"]),
         exit_via,
-        # What a FRIEND's own file tells their device to ask, so this node's rules can let
+        # What a USER's own file tells their device to ask, so this node's rules can let
         # exactly that through and nothing else that is not on the internet — M23. The
         # same two sources ``render_client_config`` reads, passed to one function
         # (``egress.client_resolvers``) so the file and the firewall cannot disagree.
@@ -162,13 +162,13 @@ def render_server(
                 "public_key": public_key,
                 # THIS PEER's pre-shared key. A pre-shared key is an attribute of a pair,
                 # and rendering the node's own for every peer — which is what this file did
-                # until M23 — gave every friend on a node the same symmetric key, so one
+                # until M23 — gave every user on a node the same symmetric key, so one
                 # leaked config exposed the layer protecting everyone else's handshake and
-                # revoking that friend rotated nothing. Measured on the real leaf, on the
+                # revoking that user rotated nothing. Measured on the real leaf, on the
                 # obfuscated member of this family, from this identical line.
                 #
                 # The fallback is for a credential minted before the per-pair declaration
-                # existed and nothing else: that friend's device already holds a file
+                # existed and nothing else: that user's device already holds a file
                 # naming the node's key, so refusing here would cut them off at the next
                 # apply rather than at the next issue. ``render_client_config`` refuses
                 # for them instead, which stops the shared key being handed out again.
@@ -195,16 +195,16 @@ def render_client_config(
     params: Mapping[str, object],
     credential: Credential,
 ) -> ClientConfig:
-    """One friend's complete WireGuard configuration file.
+    """One user's complete WireGuard configuration file.
 
-    Pure, like every renderer here: the friend's own keypair arrives in ``credential``,
+    Pure, like every renderer here: the user's own keypair arrives in ``credential``,
     the node's public half in ``params``, and nothing is generated inside.
     """
     secrets = credential.secrets
     private_key = secrets.get("peer_private_key")
     if not private_key:
         # Named rather than rendered blank: a file with an empty PrivateKey is
-        # syntactically fine and produces a tunnel that never comes up, which a friend
+        # syntactically fine and produces a tunnel that never comes up, which a user
         # reports as "your VPN does not work" with nothing to go on.
         raise MissingPeerMaterial(
             f"this credential carries no 'peer_private_key', so no {META.name} config "
@@ -215,7 +215,7 @@ def render_client_config(
     preshared_key = secrets.get("peer_preshared_key")
     if not preshared_key:
         # Named rather than filled in from the node's own key. ``render_server`` still
-        # does fall back for this credential, so the file the friend already holds keeps
+        # does fall back for this credential, so the file the user already holds keeps
         # working — but handing the shared key out AGAIN is the defect itself, and a
         # download is the moment to stop doing it. M23.
         raise MissingPeerMaterial(
@@ -223,7 +223,7 @@ def render_client_config(
             "can be built for it. The transport declares that material at CLIENT scope "
             "because a pre-shared key belongs to a PAIR; a credential minted before that "
             "declaration carries the node's own key, which is shared with every other "
-            "friend on it. Rotate this credential's material rather than reissuing that."
+            "user on it. Rotate this credential's material rather than reissuing that."
         )
 
     tunnel_address = str(secrets.get("peer_tunnel_address") or params["peer_tunnel_address"])
@@ -246,7 +246,7 @@ def render_client_config(
             ),
             # Which addresses this device sends into the tunnel, decided in the same
             # place as the resolver above and for the same reason — it is the node's own
-            # egress policy, read from the friend's end. See ``CLIENT_ROUTES``: the IPv6
+            # egress policy, read from the user's end. See ``CLIENT_ROUTES``: the IPv6
             # half names a family this node cannot carry, on purpose.
             routes=CLIENT_ROUTES,
             endpoint=_endpoint(node.address, params["port"]),

@@ -49,7 +49,7 @@ from control.app.services import transports as transports_service
 # no two buttons are ever on screen together. This file is about the pairs that are.
 CREATION_DIALOGS = (
     ("/panel/nodes", "/panel/nodes/new"),
-    ("/panel/friends", "/panel/friends/new"),
+    ("/panel/users", "/panel/users/new"),
     ("/panel/hops", "/panel/hops/new"),
 )
 
@@ -154,8 +154,8 @@ async def a_fleet_with_a_row_on_every_screen(client, reality_params) -> None:
     )
     assert hop.status_code == 201, hop.text
 
-    friend = await client.post("/api/friends", json={"nickname": "mira"})
-    assert friend.status_code == 201, friend.text
+    user = await client.post("/api/users", json={"nickname": "mira"})
+    assert user.status_code == 201, user.text
 
 
 # What every dialog's two closing buttons are called. They are excluded from the
@@ -225,10 +225,10 @@ async def test_the_confirmation_dialogs_do_not_share_their_rows_name(
     """
     await a_fleet_with_a_row_on_every_screen(client, reality_params)
 
-    friends = await client.get("/panel/friends")
-    friend_id = re.search(r"/panel/friends/([0-9a-f-]{36})/revoke", friends.text)
-    assert friend_id, "no revoke button was rendered, so this test proves nothing"
-    revoke = await client.get(f"/panel/friends/{friend_id.group(1)}/revoke")
+    users = await client.get("/panel/users")
+    user_id = re.search(r"/panel/users/([0-9a-f-]{36})/revoke", users.text)
+    assert user_id, "no revoke button was rendered, so this test proves nothing"
+    revoke = await client.get(f"/panel/users/{user_id.group(1)}/revoke")
 
     hops = await client.get("/panel/hops")
     hop_id = re.search(r"/panel/hops/([0-9a-f-]{36})/dissolve", hops.text)
@@ -236,7 +236,7 @@ async def test_the_confirmation_dialogs_do_not_share_their_rows_name(
     tear_down = await client.get(f"/panel/hops/{hop_id.group(1)}/dissolve")
 
     for screen, dialog, what in (
-        (friends, revoke, "revoke"),
+        (users, revoke, "revoke"),
         (hops, tear_down, "tear down"),
     ):
         collisions = also_addresses(button_names(dialog.text), button_names(screen.text))

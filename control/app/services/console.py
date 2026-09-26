@@ -1,6 +1,6 @@
 """What the redesigned console puts on screen, and nothing more.
 
-WHAT: the Overview's four stat cards, the node rows they summarise, the friend rows
+WHAT: the Overview's four stat cards, the node rows they summarise, the user rows
       the Users screen lists, the hop rows the Hops screen lists, the capability row
       the Transports screen lists per protocol this image ships, and the key row the
       Keys & configs screen lists per transport enabled on a node, and the offer row
@@ -24,13 +24,13 @@ HOW:  every figure here is derived from configuration rows: node states, credent
       refuse.
 
 The one figure that looks like a measurement and is not: ``transports_served``. It counts
-the credentials WE minted for a friend against the node-transports currently serving —
+the credentials WE minted for a user against the node-transports currently serving —
 "is this person covered", a property of our own configuration. It does not move when
-they connect, it does not move when they do not, and it is identical for a friend whose
+they connect, it does not move when they do not, and it is identical for a user whose
 device is in a drawer. It was called ``nodes_served`` and the column above it read
 *nodes served* until M23's eighth round, which found the two disagreeing on the real
 hosts: one node serving two protocols reads ``2 / 2``, and what is being counted is the
-node-transport — the unit a friend's link actually carries an entry for.
+node-transport — the unit a user's link actually carries an entry for.
 """
 
 import dataclasses
@@ -47,23 +47,24 @@ from control.app.errors import NotFound
 from control.app.models import (
     AuditAction,
     Credential,
-    Friend,
     Node,
     NodeState,
     NodeTransport,
     Subscription,
     TransportPurpose,
+    User,
 )
 from control.app.services import (
     addresses,
     apply,
     audit,
-    friends,
+    backups,
     keymaterial,
     nodes,
     relay,
     rotation,
     transports,
+    users,
 )
 from control.app.settings import (
     AUDIT_RETENTION_MAX_DAYS,
@@ -90,7 +91,7 @@ NOTHING_ENABLED = "nothing enabled"
 UNRENDERABLE = "cannot render"
 
 # And what the cell says about a node this control plane will never push to again — M23,
-# round 8, which read ``retired`` beside ``in sync`` on the real hosts with five friends
+# round 8, which read ``retired`` beside ``in sync`` on the real hosts with five users
 # revoked since that node's last apply.
 #
 # The comparison the other four answers come from is arithmetic on two digests, and for
@@ -126,7 +127,7 @@ TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
 # TRUE — found while fixing M20's acceptance finding about the sentence one screen over.
 # It was written before item 27 landed and describes the world it was written in. Item 27
 # landed: ``GET /sub/{token}?format=client-config-file`` answers the same bearer token
-# with an archive of this friend's configuration files (``control/app/api/delivery.py``,
+# with an archive of this user's configuration files (``control/app/api/delivery.py``,
 # which says so in its own docstring), and the delivery endpoint is this same
 # application. So the product hands it over; what is true is only that it is not IN the
 # base64 link, which is exactly what ``subscription_expressible`` measures and all this
@@ -219,7 +220,7 @@ KEY_NOT_IN_THIS_IMAGE = (
 # Who the material on one row is for. A hop end's second holder is the far NODE rather
 # than a person, which is a distinction the operator has to be able to make before they
 # press rotate: re-keying a hop end takes a tunnel down until both ends are applied,
-# and re-keying a friend-facing transport re-mints credentials people are holding.
+# and re-keying a user-facing transport re-mints credentials people are holding.
 KEY_SCOPE_NODE = "this node"
 KEY_SCOPE_HOP = "this node, and the far end of the hop"
 
@@ -329,14 +330,14 @@ class TransportChip:
     when this node runs more than one of it — the console compares it to nothing, and the
     template that renders these prints it without ever naming one.
     ``offered`` is the operator's own answer to "is this in a subscription", and
-    ``for_friends`` distinguishes a friend-facing transport from one end of a hop, so a
+    ``for_users`` distinguishes a user-facing transport from one end of a hop, so a
     tunnel between two of our own nodes cannot be misread as something a person is
     being offered.
     """
 
     name: str
     offered: bool
-    for_friends: bool
+    for_users: bool
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -361,14 +362,14 @@ class NodeRow:
     # needs no network; this one is what the HOST last said, and only a press gets it.
     probe: str | None = None
     # What this node runs. A configuration fact and nothing else: it moves when the
-    # OPERATOR enables or withdraws a protocol and never when a friend connects, which
+    # OPERATOR enables or withdraws a protocol and never when a user connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
     transports: tuple[TransportChip, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class FriendRow:
-    """A friend as the console lists them. The visible label is "user" — decision 9."""
+class UserRow:
+    """A user as the console lists them. The visible label is "user", and so is this."""
 
     id: str
     nickname: str
@@ -378,7 +379,7 @@ class FriendRow:
     # NAMED FOR WHAT THEY COUNT since M23's eighth round, which read ``2 / 2`` under a
     # column headed *nodes served* on a fleet with one node in service. The unit is the
     # NODE-TRANSPORT, and it is the right unit rather than the convenient one: it is what
-    # a friend's link carries one entry per, so a person missing the second protocol on
+    # a user's link carries one entry per, so a person missing the second protocol on
     # the only node in the fleet is a fault this column can show. Counting distinct nodes
     # instead would have read ``1 / 1`` over exactly that fault.
     transports_served: int
@@ -398,7 +399,7 @@ class HopRow:
     precisely so that removing one end leaves the other visible instead of silently
     disappearing with it.
 
-    Nothing here moves when a friend connects. A hop's state moves when the operator
+    Nothing here moves when a user connects. A hop's state moves when the operator
     establishes it, applies it or tears it down, which is the test docs/decisions.md
     sets for whether a cell may be on a screen at all.
     """
@@ -519,7 +520,7 @@ class KeyRow:
     pushed: datetime.datetime | None
     holders: int
     holders_of_pool: str
-    for_friends: bool
+    for_users: bool
     # Whether rotating THIS row also re-keys the far end of the hop, because the
     # transport declared material both ends must hold the same copy of. It used to mean
     # that rotating BROKE that value at the far end; the rotation now carries it across
@@ -569,15 +570,15 @@ class KeyRow:
 #
 # WHAT THE SECOND SENTENCE MAY NOT SAY IS THAT IT IS UNDELIVERED, which is where the
 # obvious wording would have gone and would have been the same defect pointed the other
-# way. The same bearer token answers ``?format=`` with an archive of this friend's
+# way. The same bearer token answers ``?format=`` with an archive of this user's
 # configuration files (``control/app/api/delivery.py``, item 27), so "this panel cannot
 # hand it over" is false about this product — see ``TRANSPORT_NOT_IN_THE_LINK``, which
 # said exactly that and has been corrected with it.
 #
-# NOR MAY IT SAY THE FRIEND SIMPLY GETS IT, which is the other way to be wrong here and
+# NOR MAY IT SAY THE USER SIMPLY GETS IT, which is the other way to be wrong here and
 # the more dangerous one: nothing in this panel hands the operator the URL that asks for
-# the file shape, so an operator told "delivered from that same link" would tell a friend
-# to open the link they already have and the friend would meet an empty page. That gap is
+# the file shape, so an operator told "delivered from that same link" would tell a user
+# to open the link they already have and the user would meet an empty page. That gap is
 # its own milestone and is not closed here. So the sentence says ONLY BY ASKING for the
 # shape — three facts, all true today, and none of them a decision that milestone has to
 # make: the host is told to serve it, it is not in the link itself, and the shape it
@@ -683,7 +684,7 @@ NODE_STATE_MEANS = {
 # it, so a short pool on the node usually refuses the move.
 #
 # USUALLY, and the sentence is written for the case where it does not. ``grant_everywhere``
-# skips a row a friend already holds a credential on, so on the field's own row — a
+# skips a row a user already holds a credential on, so on the field's own row — a
 # pre-pool row counted as one address with two people already on it — nothing is minted,
 # nothing is refused, and the node would go into service carrying a transport with no room
 # for the fleet. Withholding is still right there, and is the only reason that row gets
@@ -707,7 +708,7 @@ class OfferRow:
     address — the same id the Keys screen's rotations use, because it is the same row.
 
     ``offered`` is the operator's own answer to "is this in a subscription" and
-    ``for_friends`` is whether it could ever be: a hop end's consumer is the far NODE,
+    ``for_users`` is whether it could ever be: a hop end's consumer is the far NODE,
     so it has no offer to withdraw and the screen says so rather than showing a button
     whose only outcome is a refusal.
 
@@ -727,7 +728,7 @@ class OfferRow:
     node: str
     transport: str
     offered: bool
-    for_friends: bool
+    for_users: bool
     # Which of the three sentences above this row is in, composed here so no template
     # chooses between them and no route writes one.
     standing: str
@@ -799,11 +800,653 @@ class StateChoice:
     withheld: str | None = None
 
 
+# --- the backups this host took, as the Overview says it (M28.6) -------------------
+
+# THE SENTENCE THIS SCREEN EXISTS NOT TO INFLATE — one of three, and one of them is said
+# under every one of the six standings including the good one. This is the one for a host
+# whose record says it uploads. It opens with the same words `make backup-status` closes
+# with, deliberately: the operator meets this fact in two channels and they must not be
+# two different strengths of claim.
+#
+# The distinction it is defending: a successful upload proves the store received exactly
+# those bytes and accepted them (the payload's digest is inside the signature), and proves
+# nothing about a minute later. The credential this host holds may only WRITE — there is
+# no GET, LIST or DELETE code path in the product at all — so nothing here can look in the
+# bucket, and nothing in this repository asserts its retention or ever can: that is a
+# setting in somebody else's account, checked by the owner with an administrative
+# credential this code has no standing to hold (docs/deploy/runbook.md, "The retention
+# this host's own key cannot reach").
+#
+# Which is why this screen says how the RUNS went and never that a backup exists. A green
+# tick is exactly how the difference gets lost.
+BACKUP_NOT_THE_BUCKET = (
+    "What this does NOT say: whether any of those artifacts is still in the bucket. The "
+    "credential on this host may only write, so it cannot look — nothing in this panel "
+    "has ever read that store, and no test in this project asserts what it keeps. The "
+    "only thing that proves a backup is a restore: docs/deploy/runbook.md, under "
+    "“Backups”."
+)
+
+# AND THE ONE FOR A HOST THAT SENDS NOTHING ANYWHERE, which is the shipped default.
+#
+# M28.11: until it, there was one caveat and it was the sentence above, said on every host
+# whether or not that host had a bucket. Two records differing only in `offsite` drew
+# byte-identical screens, and the one that sends nothing closed by telling its operator
+# that what it could not vouch for was whether the artifact was still in a bucket — which
+# invites exactly the belief that there is one. A caveat is meant to take a claim away; a
+# caveat about the wrong thing hands one over.
+#
+# It is NOT a weaker sentence than the one above and must not become one. The upload being
+# off is a supported mode — the artifact is written, the schedule keeps taking it, and that
+# is worth having — so this is not an alarm and does not make the screen loud. What it does
+# is refuse the inference the other caveat's wording invites, and it refuses the same final
+# claim: only a restore proves a backup.
+#
+# Phrased about the HOST and not about the run above it, deliberately. A record can
+# honestly hold a run whose outcome is `offsite` under a host whose `offsite` is now `no`
+# — the operator switched it off between two runs — and a caveat reading "none of this
+# left the machine" would then flatly contradict the true sentence directly above it. What
+# is always true is what the setting says the host does today.
+BACKUP_NEVER_LEFT_THIS_HOST = (
+    "What this does NOT say: that this host is sending its backups anywhere. The record "
+    "says the upload is switched off on it (HASHI_BACKUP_ENABLED), so an artifact it "
+    "takes is written to the disk of that one machine and stays there — a copy that "
+    "shares a disk with the thing it is a copy of is not a backup of it, and neither of "
+    "them survives losing the machine. Nothing in this panel has ever read any store. "
+    "The only thing that proves a backup is a restore: docs/deploy/runbook.md, under "
+    "“Backups”, which is also where turning the upload on is."
+)
+
+# And the one for when there is nothing to ask. No record, or a record whose `offsite`
+# holds a word this panel has no meaning for.
+#
+# A third sentence rather than defaulting to either of the other two, for the reason
+# ``backups.Destination.UNKNOWN`` gives: defaulting to the bucket is the M28.11 bug with an
+# extra step, and defaulting to "nothing left the machine" would tell an operator whose
+# uploads are working that they are not. Saying "this panel could not tell" is the only one
+# of the three that is true here.
+BACKUP_WHERE_IT_WENT_IS_UNKNOWN = (
+    "What this does NOT say: whether anything was sent anywhere. This panel could not "
+    "read whether that host sends its backups to a store at all, so it is not claiming "
+    "an artifact reached one and not claiming none did — and it has never read any store "
+    "either way. The only thing that proves a backup is a restore: "
+    "docs/deploy/runbook.md, under “Backups”."
+)
+
+# NONE OF THE THREE CONTAINS AN APOSTROPHE, and that is not a style choice. Jinja
+# autoescaping is on and turns one into `&#39;`, so a constant carrying one cannot be
+# asserted verbatim against a rendered page — and asserting it against the composed object
+# instead is exactly the test that does not notice a template dropping the line.
+#
+# Which of the three a standing closes with. Keyed on where the HOST sends, never on how a
+# run went: a run's outcome is about one artifact at one moment, and this is about the
+# machine as it is set up now. The two may honestly disagree — an operator who switched the
+# upload on this morning has yesterday's run saying it stayed here and a host that now
+# sends — and neither of them is the record being damaged.
+BACKUP_CAVEATS = {
+    backups.Destination.OFFSITE: BACKUP_NOT_THE_BUCKET,
+    backups.Destination.THIS_HOST: BACKUP_NEVER_LEFT_THIS_HOST,
+    backups.Destination.UNKNOWN: BACKUP_WHERE_IT_WENT_IS_UNKNOWN,
+}
+
+# What each of the writer's outcome words means, in a clause that goes after a colon.
+# M28.3's own pinned wording, so the panel, the script's output and the runbook say the
+# same thing about the same run.
+#
+# NOT a closed match statement, and the fallback is the reason: the set is closed today
+# and asserted in the infra zone, but a later step adding a sixth word must not turn this
+# screen into "the record is unreadable". An unknown word is named verbatim instead, which
+# is honest and is the smallest thing that can go wrong here.
+_BACKUP_OUTCOMES = {
+    "offsite": "written here, and the object store accepted it",
+    "on-this-host-only": "written, and this artifact is on this host and nowhere else",
+    "not-sent": "written, and it did NOT leave this machine",
+    "no-artifact": "no artifact was produced",
+    "refused": "refused before anything was dumped",
+}
+
+# Why the appointed time is in the zone it is in. ``configured`` says itself and gets
+# nothing. The other three all resolved to UTC, and the difference between them is what
+# the operator has to fix, so each says which one happened.
+#
+# No entry maps a zone to a place, here or anywhere: the zone is an IANA NAME and this
+# panel prints the name it was given. Turning "Europe/Moscow" into a country on a screen
+# is the panel deciding where its operator is, which is not its business and is a fact
+# about a person sitting in the one record a seizure reads.
+_BACKUP_ZONE_NOTES = {
+    "configured": "",
+    "unset": " No zone is configured for the schedule, so that is the host clock's own "
+             "time.",
+    "unknown": " The zone configured is not one that host's zone database has, so UTC "
+               "was used instead.",
+    "no-zone-database": " That host has no zone database at all, so UTC was used "
+                        "instead.",
+}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BackupStanding:
+    """Where the backups stand, as the Overview draws it.
+
+    ``loud`` is the whole of the styling decision and it is a boolean rather than a
+    severity, because this console has exactly two weights for a standing fact: the
+    bordered banner frame, and a muted note. It is deliberately NOT the failure banner's
+    red — UI-PATTERNS §4 licenses that hue for a request that was refused or failed, which
+    is an answer to something the operator just pressed, and widening it to a standing
+    condition is how the one colour that means "you did that and it did not work" stops
+    meaning anything. §4's own rule is that the severity is carried by the WORD, and
+    ``label`` is that word. (The console's banner scan enforces the other half of the same
+    pairing: the neutral frame takes ``role="status"``, and ``role="alert"`` belongs to the
+    failure frame alone — so the choice of frame settles the role too.)
+
+    Which leaves the escalation from a blip to six weeks to the sentence, and that is
+    where it belongs: one failed run and a schedule that has been dead since August are
+    the same standing, and what separates them is "the last one that succeeded was 19
+    hours ago" against "43 days ago". A second colour would have to pick a day on which
+    the panel starts shouting, and the operator would learn the shout rather than the
+    number.
+    """
+
+    # The word over the sentence, ``None`` in the one state that is not drawn as a banner.
+    label: str | None
+    headline: str
+    detail: str
+    # One of ``BACKUP_CAVEATS``, chosen by where the host sends and never by the
+    # standing — carried on the object rather than pulled in by the template, for the
+    # reason every other console sentence is composed here: so a test asserts one of the
+    # three appears under every standing rather than trusting a template to include it.
+    caveat: str
+    loud: bool
+
+
+def _how_long(delta: datetime.timedelta) -> str:
+    """"5 hours" / "43 days" — a gap, in the coarsest unit that still says something.
+
+    Hours up to two days and days after that, which is the same boundary
+    ``backups.SUCCESS_STALE_AFTER`` sits on: everything this panel calls recent is said in
+    hours, and everything it does not is said in days. "less than an hour" rather than
+    "0 hours" for the first sixty minutes, because a backup taken twenty minutes ago is
+    the one case where the number would read as none.
+    """
+    hours = int(delta.total_seconds() // 3600)
+    if hours < 1:
+        return "less than an hour"
+    if hours < 48:
+        return _plural(hours, "hour", "").strip()
+    return _plural(hours // 24, "day", "").strip()
+
+
+# What a screen says instead of an age, for a run the record dates AFTER the moment the
+# record was read. M28.11: the age is clamped to zero for the arithmetic, which is right
+# and which on its own printed "less than an hour ago" — the most reassuring phrase this
+# feature has — about a record from next week, permanently. There is no number to print
+# here, because the two clocks disagree and this panel has no way to say by how much.
+BACKUP_AGE_UNKNOWABLE = "at a time that had not come yet when this was read"
+
+
+def _ago(delta: datetime.timedelta | None, *, ahead: bool = False) -> str:
+    """The same gap, as a moment in the past. ``None`` never reaches here."""
+    if ahead:
+        return BACKUP_AGE_UNKNOWABLE
+    return f"{_how_long(delta)} ago" if delta is not None else "at no recorded time"
+
+
+# The line both halves below open on, and the only thing that is true of a record with
+# either of them. Split out because the sentence it used to open on was not: "…so no age on
+# this screen can be believed" is a statement about RUN TIMESTAMPS, and on a record whose
+# due date alone is ahead nothing has put those stamps in doubt — so the age this screen
+# works out from each of them stands. Telling an operator to disbelieve it would be this
+# milestone's own defect — a channel asserting something the record does not license — and
+# it is the shape the command line was caught in one step earlier (M28.19, round 1).
+BACKUP_CLOCK_OPENING = (
+    " A date in this record is AHEAD of the clock this panel read it against."
+)
+
+# Said when the last SUCCESS or the last FAILURE is the date that is ahead. Named that
+# precisely rather than "a run": the last ATTEMPT is a run too and this panel does not read
+# it, so a record where only that one is ahead is silent here and said on the command line.
+BACKUP_CLOCK_RUN_AHEAD = (
+    " The last success or the last failure in it is stamped after the moment it was read, "
+    "so no age on this screen can be believed: the machine that wrote it and the machine "
+    "drawing this disagree about the time, and until they agree a backup taken weeks ago "
+    "can read as one taken this morning. A later run of the same kind is what replaces "
+    "that stamp — a success replaces the last success, a failure the last failure — so fix "
+    "the clock on that host first, then read this again."
+)
+
+# Said with the due clause and only where BOTH hold: no run in this record is ahead, and
+# there is a run to have an age at all. Under NEVER there is none. Where ANY run is ahead
+# the run clause above prints — on the same condition — and has just said that no age on
+# this screen can be believed, so this clause would read as a retraction of it; measured
+# over every combination of the two runs this module reads, at least one age in that state
+# is ``BACKUP_AGE_UNKNOWABLE``.
+#
+# NOT every age, and that correction is round 1 of M28.22: this comment said there was "no
+# age on the screen" at all where a run is ahead, which is false the moment ONE run is
+# ahead and the other is not. Measured — due date ahead, last failure 30 h ahead, last
+# success 6 h old — the headline reads "The last one that succeeded was 6 hours ago", a
+# real age, in the state this comment claimed had none. The state is organic: a clock
+# jumps forward, the run under it fails, the clock is put back. A sentence about run times
+# in any of these states is the generalisation this milestone keeps paying for.
+#
+# IT SAYS AGE AND NOT TIME ON PURPOSE. The version M28.20 left here said the run times "are
+# printed here exactly as the record has them", which is true of ``make backup-status`` and
+# false here: every run time this feature puts on the screen is rendered by ``_ago`` or
+# ``_how_long``, so what an operator reads is "4 hours ago" and the record's stamp is on no
+# line this feature writes — there is nothing here for it to be printed exactly as. (Other
+# parts of this panel do print times, ``_in_utc(...).strftime`` for a node probe among them;
+# this feature prints no RUN time that way. The schedule line does print ``record.at``, but
+# that is a time of day the record configures, not a moment a run happened.) What survives
+# the correction is the operator's actual question — whether the "4 hours ago" beside this
+# warning is still worth reading — and the answer this
+# state licenses, which is that the due date being ahead says nothing about those stamps.
+BACKUP_CLOCK_RUNS_UNDISTURBED = (
+    " It does not touch the run times in it: the ages beside it are worked out from stamps "
+    "this half gives no reason to doubt."
+)
+
+
+def _backup_clock(reading: backups.Reading) -> str:
+    """Said when a date in the record is ahead of the clock this panel read it against.
+
+    Not a seventh standing and not a second colour — the standings are about the backups
+    and this is about a date, and one FRESH branch goes loud for it because that branch is
+    the only quiet one and the quiet one is where this hides.
+
+    TWO HALVES, NAMED SEPARATELY, because they cost different things and one sentence over
+    both is true of neither. ``scripts/backup-run.sh::note_clock`` answers the same
+    question in the same two parts, in the same order, and this is the panel's side of it
+    rather than a second opinion:
+
+    * a RUN dated after the moment the record was read makes every age on this screen
+      worthless — the six-week-old backup that reads as this morning's — and no run of a
+      different kind repairs it;
+    * a DUE DATE this reader has not reached does not touch those ages. On a record where
+      only it is ahead they are worked out from stamps this half says nothing about, so
+      they stand; what is wrong is that the record and this reader disagree about what DAY
+      it is.
+
+    WHAT THIS FEATURE SHOWS OF A RUN IS AN AGE AND NEVER A STAMP, which is why neither half
+    here may say the record's times are printed or compare them with what another channel
+    prints. Every run time here is rendered by ``_ago`` or ``_how_long``, which give "less
+    than an hour", then hours up to two days, then days: measured, a record holding
+    ``2026-09-23T08:00:00Z`` read four hours later draws "Last backup 4 hours ago", and the
+    stamp itself reaches no line this feature writes. Until M28.22 both
+    this bullet and the clause below claimed the opposite — true of ``make backup-status``,
+    which prints the ISO timestamp, and carried here by M28.20 to the channel that prints
+    ages.
+
+    Both halves can be set at once — a clock that jumped forward and was put back leaves
+    both — so they are two independent questions and not a chain of ``elif``, and a record
+    with both says both.
+    """
+    said = ""
+    if reading.success_ahead or reading.failure_ahead:
+        said += BACKUP_CLOCK_RUN_AHEAD
+    if reading.due_ahead:
+        # WHAT THIS MAY NOT SAY, and it is the whole of why the sentence is worded around
+        # the day rather than around the schedule. Until M28.19 a due date ahead stopped
+        # the schedule dead, and "nothing is backed up at all" was true of it; the tick now
+        # takes a backup and the run rewrites the date whether or not the dump succeeds, so
+        # that sentence was removed from the command line for being false and must not be
+        # reinvented here. Nor may this work out when the next backup is owed, or what the
+        # next tick will do: that reasoning lives in one file, `due` states it by CALLING
+        # `decide` rather than by restating it, and this panel may not call anything. So it
+        # says what one record licenses — the day it names, and that nothing on the clock
+        # explains it — and leaves the rest to the channel that can ask.
+        said += (
+            f" Its due date is {reading.record.due_date}, a day this panel had not reached "
+            "when it read the record and one no timezone accounts for, so this panel and "
+            "whatever wrote that line disagree about what day it is."
+        )
+        # ...and the clause about the run times is said only where it is TRUE. The gate is
+        # the whole of it and is stated at the constant: a run to have an age, and none of
+        # them ahead. Over that gate, and not over the wording, is what
+        # ``test_the_run_times_clause_is_said_exactly_where_it_is_true`` pins.
+        run_ahead = reading.success_ahead or reading.failure_ahead
+        if not run_ahead and (reading.record.last_success or reading.record.last_failure):
+            said += BACKUP_CLOCK_RUNS_UNDISTURBED
+        # AND NO CAUSE IS NAMED THAT THIS GRACE MAKES IMPOSSIBLE, which is where the first
+        # version of this clause went wrong. It said "a clock that moved, or a
+        # HASHI_BACKUP_TZ moved west" and sent the operator to check both — carried from
+        # ``scripts/backup-run.sh::clock_ahead_warning``, where it is true because that
+        # channel compares in the configured zone and has no grace. Here it cannot be: this
+        # clause prints only past ``backups.DUE_AHEAD_GRACE``, and a moved timezone is
+        # BY CONSTRUCTION the one cause that never gets past it — measured, a record left by
+        # a real ``HASHI_BACKUP_TZ`` move west answers ``due_ahead=False``. So the sentence
+        # named a variable that cannot have produced what the operator was reading.
+        #
+        # AND NO CAUSE IS NAMED EXCLUSIVELY EITHER, which is the other way round and is the
+        # correction M28.22 made. Until then it said a moved clock "is what" leaves a record
+        # like this behind — one cause out of four this file cannot tell apart, since a date
+        # seeded by hand, a clock that moved, an edit to the file and a record carried from
+        # another machine all arrive here as the same bytes. It sent an operator whose
+        # record had been hand-edited to check a clock that was fine. What survives both
+        # corrections is "a timezone cannot": a statement about the width of the calendar
+        # rather than about that host, and the reason this is said at all.
+        said += (
+            " A clock that moved on that host is one of the things that leaves a record "
+            "like this behind, and a timezone cannot: a due date resolved anywhere on "
+            "Earth is at most a day from this one, which is why this is said at all. Check "
+            "the clock on that host, and if it is right, where this record got that date — "
+            "a hand edit, a seeded date and a file carried from another machine all reach "
+            "this panel looking the same. What the schedule makes of that date is not a "
+            "question this record answers, and this record is all this panel reads."
+        )
+    return BACKUP_CLOCK_OPENING + said if said else ""
+
+
+def _backup_outcome(outcome: str) -> str:
+    return _BACKUP_OUTCOMES.get(outcome, f"the run reported “{outcome}”")
+
+
+def _backup_schedule(record: backups.Record) -> str:
+    """The time a run would be DUE, and anything wrong with how it was configured.
+
+    IT IS NOT A STATEMENT THAT ANYTHING RUNS, and until M28.14 it read as one. "The host
+    takes one a day at 04:00 Etc/UTC" was drawn on a stand where no schedule was installed
+    at all — the crontab held no entry and the installer said so — which is the state of
+    every fresh install, because installing it is opt-in.
+
+    The record carries ``at`` and ``zone`` because they are what a scheduled run WOULD use:
+    they are resolved and written by a run, and a run happens when somebody types
+    ``make backup`` just as readily as when cron calls. Whether a crontab exists is not in
+    this file, and this panel may not shell out, read one or do any I/O to find out — it
+    renders from the record it already reads. So the sentence says what the record can
+    support and says out loud what it cannot, rather than implying a source this screen
+    does not have.
+
+    The time and the zone are still printed exactly as the host resolved them. The zone is
+    an IANA name and stays one — see ``_BACKUP_ZONE_NOTES``.
+    """
+    note = _BACKUP_ZONE_NOTES.get(record.zone_source, "")
+    if record.at_source != "configured":
+        note += (
+            " The time configured for it could not be read, so the schedule fell back "
+            f"to {record.at}."
+        )
+    return (
+        f"A run would be due at {record.at} {record.zone}.{note} That is the time the "
+        "schedule would use if one is installed — this panel reads this one record and "
+        "nothing else, so it cannot tell you whether anything on that host is taking "
+        "these backups at all."
+    )
+
+
+# How many days with no backup at all, inside the window ``backups.RECENT_GAP`` measures,
+# stop the quiet state from staying quiet.
+#
+# M28.14, found in acceptance: twelve missed days across seven weeks drew the muted note
+# with no word over it, while one failed run at 04:00 this morning drew a banner labelled
+# `failing`. Both sentences were true and the screen ranked them the wrong way round — a
+# fortnight of days with no backup at all is not a quiet fact, whatever the last run did.
+#
+# It NARROWS M28.6's "``missed_total`` is history, never an alarm" rather than reversing
+# it, and the difference is the whole of why this is a count over a window. ``missed_total``
+# is still never the trigger: it never falls, so a screen keyed on it would carry the word
+# for ever and the word would stop being read (M28.6's own argument against a shouting
+# threshold). This is keyed on days the record still names INSIDE the window, so it clears
+# itself as the gap ages out, and a host that was off for a fortnight in June is quiet
+# again in the autumn while still stating the fortnight.
+#
+# Five: a schedule that takes one a day is meant to miss none, a long weekend with the box
+# off is two or three, and five inside eight weeks is a host that is not really being
+# backed up. It changes the LABEL and the frame, never the standing and never the colour —
+# ``Standing`` is still exactly six and the failure red is still spent on nothing standing.
+A_GAP_WORTH_A_LABEL = 5
+
+
+def _backup_gap(record: backups.Record) -> str:
+    """Days the schedule found had no backup at all — history, and never an alarm.
+
+    ``missed_total`` is cumulative and survives the run that ends a gap, so a host that
+    was off for a fortnight in June still carries fourteen in December. Stating it beside
+    a fresh backup is a fact about this record's whole life; ESCALATING on it would mean
+    a panel that never stops warning about a fortnight nobody can now do anything about.
+    """
+    if record.missed_total <= 0:
+        return ""
+    # ``missed_dates`` arrives newest first — the reader sorts it, and does not take the
+    # writer's word for the order. M28.11: this used to take the first three of whatever
+    # order was on disk and label them "most recent", which during a running gap printed
+    # three days in August under a label whose entire job is to point at now.
+    recent = ", ".join(record.missed_dates[:3])
+    tail = f" — most recent {recent}." if recent else "."
+    return f" Days with no backup at all since this record began: {record.missed_total}{tail}"
+
+
+def backup_standing(reading: backups.Reading) -> BackupStanding:
+    """The six answers, in the words the operator reads.
+
+    Composed from a ``Reading`` and nothing else — no clock, no file, no settings object —
+    so every sentence here is a pure function of what was read, and the tests drive all
+    six without a filesystem.
+
+    WHAT IS NOT SAID, under any of them: that a backup exists. Every branch talks about
+    RUNS — one succeeded, one failed, none has happened — or about a DATE the record and
+    this reader cannot reconcile, and closes with the caveat for where that host sends.
+    Never about an artifact. The good state is the one that matters here: "last backup
+    6 hours ago: written here, and the object store accepted it" is the strongest claim
+    this host is entitled to, and it is a claim about an upload that was accepted, not
+    about an object that is still there.
+
+    AND THE TWO CLAIMS ARE KEPT APART, which is M28.11's whole correction. Whether a run
+    reached a store at all is something this host recorded and this screen now says, in
+    the run's outcome clause and in the caveat that follows it. Whether what reached the
+    store is still there is something nothing in this product can know, and no branch
+    here says it. The second was already right; the first was missing, so a host that
+    sends nothing anywhere read exactly like one that uploads every night.
+    """
+    record = reading.record
+    match reading.standing:
+        case backups.Standing.ABSENT:
+            # WHAT THIS BRANCH MAY TELL AN OPERATOR TO RUN, which a walk on a real
+            # rebuilt host found it getting wrong. It used to end "make backup takes one
+            # now", and on a machine restored out of the backup history that command
+            # refuses: the age recipient and the write-only key lived only in the `.env`
+            # that was lost, deliberately, because `.env` is in no backup.
+            #
+            # And the panel CANNOT TELL THE TWO APART. "Never configured" and "configured
+            # but never run" both arrive here as the same thing — no file at the record
+            # path — because a record is the only thing this panel reads, and the
+            # settings a backup needs are in a file it has no business opening. So it
+            # does not guess: it names the command that runs in either case and prints
+            # the truth, and it says plainly that the rest is something it cannot see.
+            #
+            # Deliberately NOT the restore command's closing screen in other words. That
+            # screen ran on the host and MEASURED whether the recipient is there, so it
+            # is entitled to a verdict; this reads one file and is not. Two surfaces with
+            # different knowledge saying the same sentence is how the weaker one starts
+            # being believed.
+            return BackupStanding(
+                label="not recorded",
+                headline="No backup has ever been recorded on this host.",
+                detail=(
+                    f"There is nothing at {reading.path}. Either the schedule was never "
+                    "installed, or this control plane is not running on the machine that "
+                    "takes the backups — a mount that arrives empty reads exactly like a "
+                    "host that has never run one, so this is “nothing recorded” rather "
+                    "than “something is broken”. On that host, start with "
+                    "make backup-status: it runs whatever state the machine is in and "
+                    "prints what is really set up there, which this panel cannot see. "
+                    "What a backup needs in order to run at all is in .env, and .env is "
+                    "in no backup by design — so a machine rebuilt out of the backup "
+                    "history has none of it, and make backup refuses there until it is "
+                    "put back. make backup-schedule installs the schedule once it is."
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=True,
+            )
+        case backups.Standing.UNREADABLE:
+            return BackupStanding(
+                label="not readable",
+                headline=(
+                    "There is a backup record on this host and this panel could not "
+                    "read it."
+                ),
+                detail=(
+                    f"{reading.path} is not the file the backup schedule writes: either "
+                    "it is damaged, or it was written by a newer version of that script "
+                    "than this panel knows. Nothing has been assumed from it — this "
+                    "screen is not telling you backups are working and not telling you "
+                    "they are failing. Read it on the host with make backup-status."
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=True,
+            )
+        case backups.Standing.NEVER if reading.failed_since:
+            failure = record.last_failure
+            return BackupStanding(
+                label="no backup",
+                headline="No backup has ever succeeded on this host.",
+                detail=(
+                    f"The last run was {_ago(reading.since_failure, ahead=reading.failure_ahead)}: "
+                    f"{_backup_outcome(failure.outcome)}, exit {failure.exit_code}. "
+                    f"{_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)} "
+                    "make backup-status on the host prints this record in full."
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=True,
+            )
+        case backups.Standing.NEVER:
+            return BackupStanding(
+                label="no backup",
+                headline="No backup has run on this host yet.",
+                detail=(
+                    "A time has been resolved for the backups and nothing has been "
+                    f"recorded under it. {_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)} make backup-status on the host prints "
+                    "this record in full, and make backup takes one now without waiting "
+                    "for the appointed time — on a host that still has what a backup "
+                    "needs in .env, which is in no backup and so is not on a machine "
+                    "rebuilt out of one."
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=True,
+            )
+        case backups.Standing.SILENT:
+            success = record.last_success
+            return BackupStanding(
+                label="silent",
+                headline=(
+                    "Nothing has been backed up on this host for "
+                    f"{_how_long(reading.since_success)}, and nothing has failed either "
+                    "— so nothing has been trying."
+                ),
+                detail=(
+                    "The last run that succeeded was "
+                    f"{_ago(reading.since_success, ahead=reading.success_ahead)}: "
+                    f"{_backup_outcome(success.outcome)}. {_backup_schedule(record)}"
+                    f"{_backup_gap(record)}{_backup_clock(reading)} Check on that host "
+                    "that the schedule is still installed — make backup-schedule is "
+                    "idempotent, and make backup-status prints this record in full."
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=True,
+            )
+        case backups.Standing.FAILING:
+            failure = record.last_failure
+            return BackupStanding(
+                label="failing",
+                headline=(
+                    "Backups on this host are failing. The last one that succeeded was "
+                    f"{_ago(reading.since_success, ahead=reading.success_ahead)}, and "
+                    "every run since has failed."
+                ),
+                detail=(
+                    f"The last run was {_ago(reading.since_failure, ahead=reading.failure_ahead)}: "
+                    f"{_backup_outcome(failure.outcome)}, exit {failure.exit_code}. "
+                    f"{_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)} make "
+                    "backup-status on the host prints this record in full."
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=True,
+            )
+        case backups.Standing.FRESH:
+            success = record.last_success
+            # THE ONE PLACE A CLOCK CHANGES THE WEIGHT, and it is the whole of M28.11's
+            # third finding. A record dated in the future clamps to an age of zero, which
+            # lands here — the muted note, the quietest thing this feature can say — and
+            # stays there for as long as the two machines disagree, because nothing about
+            # waiting makes a future timestamp pass. Every other standing that can carry
+            # an impossible date is already loud and already carries the clause; this one
+            # would otherwise be a permanent reassurance about a host nobody is checking.
+            #
+            # AND THE THIRD DATE THAT LANDS HERE, M28.20 and the same trap once more. A
+            # record whose DUE DATE alone is ahead has an ordinary recent success beside
+            # it, so it reads FRESH, and until this was added the panel drew no word and no
+            # frame over a record `scripts/backup-run.sh due` exits 1 over. Two channels,
+            # one file, opposite answers.
+            #
+            # IT IS THE SAME LABEL AND DELIBERATELY NOT A SEVENTH ONE. The word over a
+            # banner names the FINDING, and the finding is the same in both: a date in this
+            # record is ahead of this clock, and the operator goes to the same host to look
+            # at the same two things. What differs is the consequence — a run ahead makes
+            # every age worthless and no waiting repairs it, a due date ahead leaves them
+            # undisturbed — and the consequence is carried by the SENTENCE, which is this
+            # console's rule everywhere else (see ``BackupStanding``: one failed run and a
+            # schedule dead since August share one label and are separated by "19 hours
+            # ago" against "43 days ago"). A second word would put the difference where an
+            # operator learns the word instead of reading the sentence, and it would make
+            # this panel call by two names what `make backup-status` calls by one.
+            ahead = (
+                reading.success_ahead or reading.failure_ahead or reading.due_ahead
+            )
+            # AND THE OTHER WAY THIS BRANCH CAN BE TOO QUIET, which is the same shape one
+            # finding later: a recent success says nothing about the fortnight of days
+            # before it that have no backup at all. The gap is stated in the detail under
+            # every standing already; what it did not have here — and only here, because
+            # this is the one branch with no word over it — is a word. It gets one, from
+            # the days inside the window rather than from the cumulative count, so the
+            # word clears when the gap does (see ``A_GAP_WORTH_A_LABEL``).
+            #
+            # The clock takes precedence where both apply, and the gap is still spelled out
+            # in the sentence underneath either way. For a RUN ahead the reason is that no
+            # age on the screen can be believed, which swallows the gap's own count of
+            # days; for a DUE DATE ahead it is narrower and still decides it — the count of
+            # missed days is derived from this reader's clock (``backups.RECENT_GAP``)
+            # against dates the writer resolved elsewhere, so a record this reader cannot
+            # place in the calendar is the thing to say first.
+            gap = reading.missed_recently >= A_GAP_WORTH_A_LABEL
+            return BackupStanding(
+                label="clock ahead" if ahead else "missed days" if gap else None,
+                headline=(
+                    f"Last backup {_ago(reading.since_success, ahead=reading.success_ahead)}: "
+                    f"{_backup_outcome(success.outcome)}."
+                ),
+                detail=(
+                    f"{_backup_schedule(record)}{_backup_gap(record)}"
+                    f"{_backup_clock(reading)}"
+                ),
+                caveat=BACKUP_CAVEATS[reading.destination],
+                loud=ahead or gap,
+            )
+
+    # ``Standing`` is a closed enum one module over and every member of it is answered
+    # above. A member added there and not here would otherwise fall out of this function
+    # as ``None`` and reach a template, so it says so on screen instead — the same refusal
+    # to guess the UNREADABLE branch makes about a file, one layer up. It does not claim
+    # the record was bad: it was read, and the fault is this function's.
+    return BackupStanding(
+        label="not readable",
+        headline="This panel has nothing to say about the backups on this host.",
+        detail=(
+            f"The record at {reading.path} was read and this panel has no sentence for "
+            "what it found, which is a fault in the panel and not in the backups. Read "
+            "it on the host with make backup-status."
+        ),
+        caveat=BACKUP_CAVEATS[reading.destination],
+        loud=True,
+    )
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Overview:
     stats: list[Stat]
     nodes: list[NodeRow]
-    friends: list[FriendRow]
+    users: list[UserRow]
     # What the four counts above do not know — M26's first acceptance walk. Up to two
     # sentences, empty on a fleet this panel has nothing to correct about, and composed
     # from the rows beside them so the cards and the warning cannot disagree.
@@ -814,6 +1457,11 @@ class Overview:
     # No default, like every field above it: this screen is built in one place, and a
     # default here would be a second place the sentence could come from.
     limit: str
+    # Where the backups on this host stand — M28.6. On this screen and not on a screen of
+    # its own because the criterion is that a run which does not land is seen WITHOUT
+    # anybody going to look for it, and this is the screen the panel opens on. See
+    # ``backup_standing``.
+    backup: BackupStanding
 
 
 async def drift_of(session: AsyncSession, node: Node) -> str:
@@ -939,7 +1587,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
                     offered=row.enabled,
-                    for_friends=row.purpose == TransportPurpose.FRIENDS,
+                    for_users=row.purpose == TransportPurpose.USERS,
                 )
                 # Sorted by name: this is a relationship load, and a column that
                 # reshuffles itself between reloads reads as the fleet changing.
@@ -957,7 +1605,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
 #
 # IT IS A FLEET SENTENCE AND NOT A PER-PERSON ONE, and that is forced rather than chosen.
 # A revocation DELETES the credential rows — which is the property that makes revocation
-# total (``friends.revoke``) — so the moment it commits, nothing in this database records
+# total (``users.revoke``) — so the moment it commits, nothing in this database records
 # which nodes that person was on. Naming them per row would need a record this schema does
 # not carry and the charter would not obviously want; what is knowable is which hosts this
 # panel cannot say are running what it would give them, which is the same set for
@@ -1044,7 +1692,7 @@ def withdrawn_cell(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
 
     So the cell says nothing while that note is up. NOTHING, and not a hedge of its own:
     what a per-row sentence would have to claim is which nodes THIS person was on, and a
-    revocation deletes exactly the rows that would say (``friends.revoke``) — so there is
+    revocation deletes exactly the rows that would say (``users.revoke``) — so there is
     no per-row answer to give, which is the finding round 2 got right and this does not
     reopen. An empty cell is the honest amount, and the doubt is stated once, above the
     table, where it names the nodes and the two controls that resolve it.
@@ -1133,9 +1781,9 @@ def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
 # WHAT ADDING A USER DOES NOT DO — M26's first acceptance walk, and the finding is the
 # shape this project keeps producing: every signal green and nothing carried.
 #
-# The walk added a friend and fetched their configuration file. It was complete and
+# The walk added a user and fetched their configuration file. It was complete and
 # correct — the node's real public key, an address out of that row's pool — while on the
-# host the rendered config held ZERO peer blocks and the daemon listed none. A friend's
+# host the rendered config held ZERO peer blocks and the daemon listed none. A user's
 # client would have handshaked into nothing. Only a SECOND apply, three minutes later, put
 # the peer on the node and made the traffic flow.
 #
@@ -1173,7 +1821,7 @@ FLEET_NOT_PUSHED = (
 # nodes are running what they were told to — M26's first acceptance walk, the other half
 # of the same finding. The walk stopped a daemon, probed, read the correct answer, and
 # then watched the Overview go on reporting "nodes active 2 … transports serving 2" while
-# the friend's ping was 100% loss.
+# the user's ping was 100% loss.
 #
 # It does not repeat the finding itself. The finding is on the node's own row, where probe
 # and apply are, and a full diagnosis in a banner on another screen is a second copy of a
@@ -1273,33 +1921,33 @@ def fleet_doubt(rows: Sequence[NodeRow]) -> list[str]:
     ]
 
 
-async def friend_rows(session: AsyncSession) -> list[FriendRow]:
-    """Every friend, with how much of the fleet they are covered on.
+async def user_rows(session: AsyncSession) -> list[UserRow]:
+    """Every user, with how much of the fleet they are covered on.
 
-    ``transports_serving`` is the denominator every active friend shares, so a row reading
+    ``transports_serving`` is the denominator every active user shares, so a row reading
     ``2 / 3`` says "this person is missing one of the protocols being served", which is an
     actionable fault in OUR configuration and the reason the column exists.
 
-    ``serving_transports`` is friend-facing rows only, so the denominator never counts one
+    ``serving_transports`` is user-facing rows only, so the denominator never counts one
     end of a hop — a tunnel between two of our own nodes is not something a person holds a
     credential on.
     """
     serving = await nodes.serving_transports(session)
     serving_ids = {row.id for row in serving}
     return [
-        FriendRow(
-            id=friend.id,
-            nickname=friend.nickname,
-            is_active=friend.is_active,
-            added=friend.created_at,
+        UserRow(
+            id=user.id,
+            nickname=user.nickname,
+            is_active=user.is_active,
+            added=user.created_at,
             transports_served=sum(
                 1
-                for credential in friend.credentials
+                for credential in user.credentials
                 if credential.node_transport_id in serving_ids
             ),
             transports_serving=len(serving_ids),
         )
-        for friend in await friends.list_friends(session)
+        for user in await users.list_users(session)
     ]
 
 
@@ -1396,7 +2044,7 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
             node=node.name,
             transport=placed_as(row.transport_name, row.config_name),
             offered=row.enabled,
-            for_friends=row.purpose == TransportPurpose.FRIENDS,
+            for_users=row.purpose == TransportPurpose.USERS,
             standing=_standing(
                 row.purpose,
                 row.enabled,
@@ -1498,7 +2146,7 @@ def _standing(
     link" claims nothing about having been in one, so it is true of both kinds and stays
     one sentence.
     """
-    if purpose != TransportPurpose.FRIENDS:
+    if purpose != TransportPurpose.USERS:
         return OFFER_HOP_END
     if enabled:
         return OFFER_IN_EVERY_LINK if deliverable else OFFER_NOT_IN_THE_LINK
@@ -1724,13 +2372,13 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
             fingerprint = (
                 keymaterial.fingerprint(meta.key_material, row.params) if meta else None
             )
-            for_friends = row.purpose == TransportPurpose.FRIENDS
+            for_users = row.purpose == TransportPurpose.USERS
             rows.append(
                 KeyRow(
                     id=row.id,
                     node=node.name,
                     transport=placed_as(row.transport_name, row.config_name),
-                    scope=KEY_SCOPE_NODE if for_friends else KEY_SCOPE_HOP,
+                    scope=KEY_SCOPE_NODE if for_users else KEY_SCOPE_HOP,
                     fingerprint=fingerprint,
                     # The rule, printed exactly where a value could otherwise have gone.
                     held=(
@@ -1751,10 +2399,10 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                         if addresses.spec_for(row.transport_name) is not None
                         else None,
                     ),
-                    for_friends=for_friends,
+                    for_users=for_users,
                     shared_with_peer=bool(
                         meta
-                        and not for_friends
+                        and not for_users
                         and any(
                             spec.shared_between_peers and spec.scope is KeyScope.NODE
                             for spec in meta.key_material
@@ -1778,7 +2426,7 @@ async def key_rows(session: AsyncSession) -> list[KeyRow]:
                                 )
                             )
                         )
-                        if meta and for_friends
+                        if meta and for_users
                         else None
                     ),
                 )
@@ -1811,7 +2459,7 @@ def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     where an operator finishes a push.)
 
     A HOP END COSTS NOBODY A LINK, and now says so. Every other string on this screen
-    branches on ``for_friends``, including the confirmation the operator just read —
+    branches on ``for_users``, including the confirmation the operator just read —
     *"No user holds anything on it: this is a tunnel between two of our own nodes"* — so
     an answer that then reports what users will pick up contradicts the sentence they
     confirmed. The far end is named instead, because that is the only holder a hop end
@@ -1827,7 +2475,7 @@ def rotation_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     """
     if not outcome.complete:
         return _unpushed(row, outcome, "its keys were re-minted here")
-    if not row.for_friends:
+    if not row.for_users:
         return (
             f"keys rotated on {row.node} — {row.transport} and at the far end of the "
             "hop; no user holds anything on it, and both nodes have taken the new "
@@ -1846,13 +2494,13 @@ def replacement_summary(row: KeyRow, outcome: rotation.RotationOutcome) -> str:
     operator typed themselves, so naming them back is how they confirm the right box
     landed. Nothing minted can be in this list — the form has no box for one.
 
-    Branched on ``for_friends`` for the reason ``rotation_summary`` above is: a hop end
+    Branched on ``for_users`` for the reason ``rotation_summary`` above is: a hop end
     has no user on it to be told about, and the dialog behind this answer says so.
     """
     changed = ", ".join(outcome.rotated)
     if not outcome.complete:
         return _unpushed(row, outcome, f"{changed} replaced here")
-    if not row.for_friends:
+    if not row.for_users:
         return (
             f"replaced {changed} on {row.node} — {row.transport}, at this end of the "
             "hop; no user holds anything on it, and the far end has been applied with "
@@ -1878,7 +2526,7 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     both ends and pushes two nodes, so one node taking it and the other not is a tunnel
     that is down, while neither taking it is a tunnel that is untouched. Reporting both
     as "the node is still running the old material" would be right about one of them and
-    a false reassurance about the other. A friend-facing row has one node and people on
+    a false reassurance about the other. A user-facing row has one node and people on
     the old material, who are unaffected.
 
     THE TWO HOP CLAUSES ARE NOT WRITTEN HERE. They are ``HOP_ONE_END_TOOK_IT`` and
@@ -1888,7 +2536,7 @@ def _unpushed(row: KeyRow, outcome: rotation.RotationOutcome, what: str) -> str:
     of them as fact, in the same words, so the pair cannot drift into contradicting each
     other again.
     """
-    if row.for_friends:
+    if row.for_users:
         standing = (
             "the node is still running the old material and users on it are unaffected"
         )
@@ -1999,7 +2647,7 @@ def withdrawal_summary(node: str, transport: str, *, nothing_left_enabled: bool)
     was the worst place in the console for it to be wrong. Withdrawing the node's last
     enabled row leaves ``render_for_node`` with nothing, so the apply this sentence sent
     the operator to answers "nothing to push" and the host keeps serving the row — which
-    still authorises every friend who holds a credential on it, since a withdrawal mints
+    still authorises every user who holds a credential on it, since a withdrawal mints
     nothing away. The only way out is to offer a transport there again, so the sentence
     says that, and says what it costs: the offered row goes back into every user's link.
     """
@@ -2065,7 +2713,7 @@ def offer_summary(node: str, transport: str, *, deliverable: bool) -> str:
     the same words: this one is read after the press and has to say what just happened.
 
     It says the material is MINTED rather than that nothing reaches anybody, because
-    something does: the same token answers with this friend's configuration file, so the
+    something does: the same token answers with this user's configuration file, so the
     honest report of this press is that everyone was granted and the link did not move.
     """
     if not deliverable:
@@ -2097,12 +2745,18 @@ def tear_down_summary(affected: list[str]) -> str:
     )
 
 
-async def overview(session: AsyncSession) -> Overview:
+async def overview(session: AsyncSession, *, backup: backups.Reading) -> Overview:
     """The Overview screen's whole content, in one call.
+
+    ``backup`` is read by the CALLER and handed in, which is the only thing on this screen
+    that does not come out of the database. It is a file on a read-only mount, so reading
+    it is I/O of a kind this module does none of anywhere else, and a route that wants the
+    Overview has to have gone and got it — see ``panel/routes.py``. What arrives here is
+    already a value, so everything below stays a pure function of what was read.
 
     The four stat cards are decision 6's replacements, in the design's own order:
     nodes active, active users, hops established, transports serving. Each is a fact
-    about the FLEET. How many friends exist is not a record of what any of them did.
+    about the FLEET. How many users exist is not a record of what any of them did.
 
     THE FIRST KICKER WAS "nodes online" AND COUNTED NEITHER — M18's acceptance. The value
     is the number of nodes in the ACTIVE state, which is an operator-settable column: a
@@ -2117,7 +2771,7 @@ async def overview(session: AsyncSession) -> Overview:
 
     AND THE FOURTH KICKER WAS "transports enabled" AND COUNTED SOMETHING NARROWER —
     M20's acceptance, which is the identical defect one card over. The value has always
-    been ``nodes.serving_transports``: distinct protocols enabled for friends ON A NODE
+    been ``nodes.serving_transports``: distinct protocols enabled for users ON A NODE
     THAT IS SERVING. The walk watched it read 0 with four rows at ``enabled=true``,
     because every node holding them was still draft — a true number whose meaning was
     nowhere on the screen. The label now names the state, exactly as "nodes active" and
@@ -2125,7 +2779,7 @@ async def overview(session: AsyncSession) -> Overview:
     to its left is showing for the same reason.
     """
     rows = await node_rows(session)
-    people = await friend_rows(session)
+    people = await user_rows(session)
     hops = await relay.list_hops(session)
 
     in_state = [row for row in rows if row.state == NodeState.ACTIVE]
@@ -2139,14 +2793,14 @@ async def overview(session: AsyncSession) -> Overview:
         for entry, leaf in hops
         if leaf is not None and entry.applied_at and leaf.applied_at
     ]
-    # Distinct protocols a user could be routed onto right now: enabled, friend-facing,
+    # Distinct protocols a user could be routed onto right now: enabled, user-facing,
     # and on a node in a state that reaches a subscription at all. NAMED for what it
     # measures since M20's acceptance, because the kicker beside it now says the same
     # word — see this function's own docstring.
     serving = {
         row.transport_name
         for row in await nodes.serving_transports(session)
-        if row.purpose == TransportPurpose.FRIENDS
+        if row.purpose == TransportPurpose.USERS
     }
     installed = discover()
     # What the panel would let the operator enable today — services/transports.py's own
@@ -2161,6 +2815,7 @@ async def overview(session: AsyncSession) -> Overview:
     return Overview(
         doubts=fleet_doubt(rows),
         limit=COUNTERS_COUNT_CONFIGURATION,
+        backup=backup_standing(backup),
         stats=[
             Stat(
                 kicker="nodes active",
@@ -2202,7 +2857,7 @@ async def overview(session: AsyncSession) -> Overview:
             ),
         ],
         nodes=rows,
-        friends=people,
+        users=people,
     )
 
 
@@ -2329,23 +2984,23 @@ def _plural(count: int, noun: str, tail: str) -> str:
 
 
 async def subscription_url(
-    session: AsyncSession, base_url: str, friend: Friend
+    session: AsyncSession, base_url: str, user: User
 ) -> str | None:
-    """The one URL a friend holds, or ``None`` if they have no live subscription.
+    """The one URL a user holds, or ``None`` if they have no live subscription.
 
     Built here rather than in a route so there is a single place that composes a
     bearer credential into a string. Every caller of this function is displaying it
     inside a dialog and nowhere else: it must not reach a query string, a log line,
     an error message or a ``title`` attribute (CLAUDE.md).
 
-    Queried rather than read off ``friend.subscriptions``, and that is not a style
-    choice. The add-user flow calls this with a friend created moments ago in the same
+    Queried rather than read off ``user.subscriptions``, and that is not a style
+    choice. The add-user flow calls this with a user created moments ago in the same
     transaction, whose relationship has never been LOADED — so touching the collection
     triggers lazy I/O, which in async SQLAlchemy is not a slow query but an immediate
-    MissingGreenlet crash. The same trap is documented in services/friends.py.
+    MissingGreenlet crash. The same trap is documented in services/users.py.
     """
     result = await session.execute(
-        select(Subscription).where(Subscription.friend_id == friend.id)
+        select(Subscription).where(Subscription.user_id == user.id)
     )
     live = [row for row in result.scalars().unique() if row.is_active]
     return f"{base_url}/sub/{live[0].token}" if live else None
@@ -2585,6 +3240,22 @@ def settings_rows(settings: Settings) -> list[SettingRow]:
             ),
         ),
         SettingRow(
+            label="where this panel reads what the backups did",
+            value=str(settings.backup_record),
+            variables=("HASHI_BACKUP_RECORD",),
+            note=(
+                "The one file behind everything the Overview says about backups. It is "
+                "written on the host that takes them and mounted in here read-only, so "
+                "this control plane can neither invent a success nor erase a failure — "
+                "and on a machine where nothing has ever run one, or where the mount "
+                "arrived empty, there is no file here at all, which reads as nothing "
+                "recorded rather than as a fault. Whether that host sends an artifact "
+                "anywhere is HASHI_BACKUP_ENABLED beside its own schedule, in a file "
+                "this process never opens: all it has is what the record said was true "
+                "when it was written."
+            ),
+        ),
+        SettingRow(
             label="key that encrypts stored node credentials",
             value=SETTING_CONFIGURED,
             variables=("HASHI_SECRET_KEY",),
@@ -2700,7 +3371,7 @@ async def trail_entries(session: AsyncSession, *, limit: int = TRAIL_LIMIT) -> l
     uses the service (``docs/decisions.md``, 2026-09-09): the time is when a change
     committed, the action is one of the declared changes, and a label is a name the
     operator chose or the registry holds. The delivery endpoint writes no row at all, so
-    there is nothing on this screen for a friend's client to move — asserted in
+    there is nothing on this screen for a user's client to move — asserted in
     ``tests/control/test_the_audit_trail.py`` and again against the real stack.
 
     The timestamp is normalised to UTC here rather than in the template, because the
@@ -2837,9 +3508,9 @@ POOL_BOX_RESIZE_HINT = (
 # _LINK`` and its sibling), which is why it is here rather than left for a later pass: a
 # row's standing is read afterwards, and this is read while the operator is choosing. An
 # operator who enables a config-file transport on this sentence's word walks away
-# believing every friend has it.
+# believing every user has it.
 #
-# The second arm may not say the friend cannot have it, and may not say they simply get
+# The second arm may not say the user cannot have it, and may not say they simply get
 # it — the same two failures ``OFFER_NOT_IN_THE_LINK`` names at length, and the same
 # wording is used here so the operator reads one fact in both places. Nothing in this
 # panel yet hands the operator the URL that asks for the file shape; closing that is its
@@ -2898,7 +3569,7 @@ async def pool_boxes(
     number of people this control plane already has, because every one of them is granted
     a credential on this transport the moment the node serves — read from
     ``addresses.fleet_size``, which is the same call ``nodes.sized_pool`` refuses below
-    and the same one the add-a-friend refusal measures against, so the box and the two
+    and the same one the add-a-user refusal measures against, so the box and the two
     refusals cannot disagree about who is in the fleet.
 
     Asked of the transport's own declaration (``TransportMeta.peer_address``) rather than
@@ -2993,7 +3664,7 @@ async def full_pools(session: AsyncSession) -> list[str]:
     """Every serving pool that could not hold one more person, named — M17.2.
 
     ``extra=1`` is the person the operator is about to add, which is exactly the question
-    ``friends.create_friend`` asks before it writes anything — the same call, so the
+    ``users.create_user`` asks before it writes anything — the same call, so the
     dialog cannot offer a button the service is certain to refuse, and cannot withhold
     one the service would have accepted.
 

@@ -21,6 +21,13 @@ DEV = DEPLOY / "docker-compose.dev.yml"
 # management tunnel. It was a heredoc an operator typed onto the box until getting a
 # bind address wrong became the difference between a private console and a public one.
 PUBLIC = DEPLOY / "docker-compose.public.yml"
+# The second half of that shape, M28.10: the console on the management tunnel's own
+# address. Split out because it is the only mapping that needs an address THIS HOST
+# HOLDS, and a machine restored from a bucket holds none — `make up-panel-over-ssh` is
+# the same publication without it. Every exposure rule below applies to both files: a
+# mapping with no bind address is exactly as dangerous in one as in the other.
+TUNNEL = DEPLOY / "docker-compose.tunnel.yml"
+PANEL_OVERLAYS = [PUBLIC, TUNNEL]
 
 # Ports the host is likely to already be using. Publishing on one is how two
 # projects collide on the same laptop, and the collision shows up as a confusing
@@ -197,22 +204,26 @@ def split_mapping(mapping: str) -> list[str]:
     return fields
 
 
-def test_only_the_reverse_proxy_is_published_on_a_deployed_host() -> None:
+@pytest.mark.parametrize("overlay", PANEL_OVERLAYS, ids=lambda p: p.name)
+def test_only_the_reverse_proxy_is_published_on_a_deployed_host(overlay: pathlib.Path) -> None:
     """Caddy, and never the database.
 
     The base file publishes nothing and cannot be made to unpublish (``ports:`` is a
     sequence and Compose appends), so this overlay is the only place a real host opens
     anything — which makes it the only place a database can be opened by accident.
     """
-    services = load(PUBLIC)["services"]
+    services = load(overlay)["services"]
     publishing = sorted(name for name, svc in services.items() if svc.get("ports"))
     assert publishing == ["caddy"], (
-        f"the deployed overlay publishes {publishing}; only the reverse proxy belongs "
+        f"{overlay.name} publishes {publishing}; only the reverse proxy belongs "
         "on a host that faces the internet"
     )
 
 
-def test_the_console_is_published_on_an_address_and_never_on_everything() -> None:
+@pytest.mark.parametrize("overlay", PANEL_OVERLAYS, ids=lambda p: p.name)
+def test_the_console_is_published_on_an_address_and_never_on_everything(
+    overlay: pathlib.Path,
+) -> None:
     """M7, stated as the property the milestone is actually made of.
 
     Caddy inside the container listens on every interface it has; the console is
@@ -225,7 +236,7 @@ def test_the_console_is_published_on_an_address_and_never_on_everything() -> Non
     else (deploy/caddy/Caddyfile).
     """
     delivery = {"80", "443"}
-    for mapping in load(PUBLIC)["services"]["caddy"]["ports"]:
+    for mapping in load(overlay)["services"]["caddy"]["ports"]:
         fields = split_mapping(str(mapping))
         if len(fields) == 2 and fields[0] in delivery:
             continue
@@ -241,7 +252,8 @@ def test_the_console_is_published_on_an_address_and_never_on_everything() -> Non
         )
 
 
-def test_the_deployed_overlay_fails_loudly_on_a_missing_value() -> None:
+@pytest.mark.parametrize("overlay", PANEL_OVERLAYS, ids=lambda p: p.name)
+def test_the_deployed_overlay_fails_loudly_on_a_missing_value(overlay: pathlib.Path) -> None:
     """Same rule as the base file, and it matters more here.
 
     Without ``:?`` an unset ``HASHI_PRIVATE_BIND_ADDR`` interpolates to the empty
@@ -249,7 +261,7 @@ def test_the_deployed_overlay_fails_loudly_on_a_missing_value() -> None:
     every interface. The stack comes up, the panel works, and it is public.
     """
     bad = []
-    for line in PUBLIC.read_text().splitlines():
+    for line in overlay.read_text().splitlines():
         if line.lstrip().startswith("#"):
             continue
         without_escapes = line.replace("$$", "")

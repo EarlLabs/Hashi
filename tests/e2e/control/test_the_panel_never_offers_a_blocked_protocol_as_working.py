@@ -6,8 +6,8 @@ WHAT: what the panel and the operator API say about a transport that declares it
 WHY:  the charter ships plain WireGuard first-class AND says it is protocol-blocked from
       Russia. Both halves are true and the second one is only useful if it reaches the
       owner at the moment they are choosing. A panel that lists it beside the obfuscated
-      transports with no distinction is a panel that will hand a friend in Russia a
-      protocol that cannot come up — and the friend reports it as "hashi is broken",
+      transports with no distinction is a panel that will hand a user in Russia a
+      protocol that cannot come up — and the user reports it as "hashi is broken",
       which is the most expensive bug report this project can generate.
 HOW:  read the Transports screen, the establish-hop dialog, the enable dialog and
       /api/transports as the operator, against the booted stack.

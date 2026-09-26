@@ -7,7 +7,7 @@ WHY:  measured on the owner's real hosts, round 8. The table read
           ams-leaf | 172.20.0.6 | active  | 2 / 2 drifted
           old-leaf | 172.20.0.7 | retired | in sync
 
-      with five friends revoked since ``old-leaf``'s last apply. The cell is not merely
+      with five users revoked since ``old-leaf``'s last apply. The cell is not merely
       unaware — a node nothing was ever pushed to reads ``nothing enabled``, and a live
       node with an unapplied change reads ``2 / 2 drifted``. For the one host this control
       plane can never push to again it printed the reassuring answer, on the screen the
@@ -31,7 +31,7 @@ from .conftest import GENERATED_SSH_KEY
 # RFC 5737 documentation address, as everywhere in this zone. Never dialled.
 NODE_ADDRESS = "192.0.2.80"
 
-FRIEND_TRANSPORT = "vless-reality"
+USER_TRANSPORT = "vless-reality"
 
 # The answer this cell may not give about a host nothing reaches. Written out rather than
 # imported, because it is the word an operator read on the real fleet.
@@ -58,7 +58,7 @@ async def an_applied_node(client, reality_params, *, name: str) -> str:
     node_id = await a_node(client, name=name)
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     applied = await client.post(f"/api/nodes/{node_id}/apply")
@@ -141,7 +141,7 @@ async def test_the_cells_the_finding_measured_as_correct_do_not_move(
 
     # One more person, so the applied node's rendered config no longer matches the bytes
     # it was given: a peer block the host has not been told about.
-    added = await client.post("/api/friends", json={"nickname": "kolya"})
+    added = await client.post("/api/users", json={"nickname": "kolya"})
     assert added.status_code == 201, added.text
 
     session.expire_all()

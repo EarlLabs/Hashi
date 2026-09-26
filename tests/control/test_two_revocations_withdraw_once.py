@@ -1,11 +1,11 @@
 """Two revocations of one person withdraw once, and only one of them says it did — M23.
 
-WHAT: what ``revocation.revoke_friend`` answers when the access it is withdrawing has
+WHAT: what ``revocation.revoke_user`` answers when the access it is withdrawing has
       already been withdrawn by something else that is still in flight.
-WHY:  round 8, on the owner's real hosts: two revocations of one friend at the same
+WHY:  round 8, on the owner's real hosts: two revocations of one user at the same
       instant both answered ``withdrew: true``. Only one of them withdrew anything — the
       other pushed nothing, could confirm nothing, and told its caller it had cut somebody
-      off. Whether a request withdrew access was read off ``friend.is_active``, which is
+      off. Whether a request withdrew access was read off ``user.is_active``, which is
       the copy the caller's session is holding and not the row, and these sessions keep
       what they loaded (``expire_on_commit=False``).
 
@@ -14,7 +14,7 @@ WHY:  round 8, on the owner's real hosts: two revocations of one friend at the s
       turns the retry's answer from a reassurance into "this press pushed nothing"; true
       on a second call is the reassurance the whole round is removing.
 HOW:  two sessions against one real Postgres, which is what a race here is. The test's own
-      session holds the friend, the other revocation arrives through the API in the
+      session holds the user, the other revocation arrives through the API in the
       request's own session, and the claim is asserted against the ROW — read as a column,
       because a session holding the object would answer from its own copy and agree with
       the defect.
@@ -27,18 +27,18 @@ HOW:  two sessions against one real Postgres, which is what a race here is. The 
 
 from sqlalchemy import select
 
-from control.app.models import AuditAction, AuditEntry, Friend, NodeState
-from control.app.services import friends, nodes, revocation
+from control.app.models import AuditAction, AuditEntry, NodeState, User
+from control.app.services import nodes, revocation, users
 
 # RFC 5737 documentation address, as everywhere in this zone. Never dialled: the node
 # below has no SSH key, so every push is refused before a connection is attempted.
 NODE_ADDRESS = "192.0.2.95"
 
-FRIEND_TRANSPORT = "vless-reality"
+USER_TRANSPORT = "vless-reality"
 
 
-async def a_friend_on_a_node(client, session, reality_params) -> str:
-    """One active friend holding one credential on one serving node."""
+async def a_user_on_a_node(client, session, reality_params) -> str:
+    """One active user holding one credential on one serving node."""
     created = await client.post(
         "/api/nodes",
         json={"name": "leaf-1", "address": NODE_ADDRESS, "location_label": "Testland"},
@@ -47,27 +47,27 @@ async def a_friend_on_a_node(client, session, reality_params) -> str:
     node_id = created.json()["id"]
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend = await client.post("/api/friends", json={"nickname": "kolya"})
-    assert friend.status_code == 201, friend.text
-    return friend.json()["id"]
+    user = await client.post("/api/users", json={"nickname": "kolya"})
+    assert user.status_code == 201, user.text
+    return user.json()["id"]
 
 
-async def withdrawn_at(session, friend_id: str):
+async def withdrawn_at(session, user_id: str):
     """The withdrawal time as the database holds it, whatever this session is holding."""
     return (
-        await session.execute(select(Friend.revoked_at).where(Friend.id == friend_id))
+        await session.execute(select(User.revoked_at).where(User.id == user_id))
     ).scalar_one()
 
 
 async def revocations_recorded(session) -> int:
     """How many times the trail says this operator withdrew somebody's access."""
     entries = await session.execute(
-        select(AuditEntry.action).where(AuditEntry.action == AuditAction.FRIEND_REVOKED)
+        select(AuditEntry.action).where(AuditEntry.action == AuditAction.USER_REVOKED)
     )
     return len(list(entries.scalars().all()))
 
@@ -81,18 +81,18 @@ async def test_the_second_of_two_revocations_does_not_claim_to_have_withdrawn_an
     it ``summary()`` composed the incomplete-revocation sentence about a push this call
     never made, instead of saying that this press changed nothing.
     """
-    friend_id = await a_friend_on_a_node(client, session, reality_params)
+    user_id = await a_user_on_a_node(client, session, reality_params)
     # Bound, and it has to be: the identity map holds its objects WEAKLY, so an
-    # unreferenced friend is collected and the next read goes to the database by accident.
+    # unreferenced user is collected and the next read goes to the database by accident.
     # A test that does not hold the copy proves nothing about a session holding one.
-    held = await friends.get_friend(session, friend_id)
+    held = await users.get_user(session, user_id)
     assert held.is_active
 
-    first = await client.post(f"/api/friends/{friend_id}/revoke")
+    first = await client.post(f"/api/users/{user_id}/revoke")
     assert first.status_code == 200, first.text
     assert first.json()["withdrew"] is True, first.text
 
-    second = await revocation.revoke_friend(session, friend_id=friend_id)
+    second = await revocation.revoke_user(session, user_id=user_id)
 
     assert second.withdrew is False, (
         "a revocation that arrived after the access was already withdrawn reported that "
@@ -111,17 +111,17 @@ async def test_the_withdrawal_keeps_the_time_it_actually_happened(
     ``revoked_at`` as NULL, the second call wrote its own. The column would then say the
     access was withdrawn at the moment of the press that withdrew nothing.
     """
-    friend_id = await a_friend_on_a_node(client, session, reality_params)
-    held = await friends.get_friend(session, friend_id)
+    user_id = await a_user_on_a_node(client, session, reality_params)
+    held = await users.get_user(session, user_id)
     assert held.is_active
 
-    assert (await client.post(f"/api/friends/{friend_id}/revoke")).status_code == 200
-    when = await withdrawn_at(session, friend_id)
+    assert (await client.post(f"/api/users/{user_id}/revoke")).status_code == 200
+    when = await withdrawn_at(session, user_id)
     assert when is not None
 
-    await revocation.revoke_friend(session, friend_id=friend_id)
+    await revocation.revoke_user(session, user_id=user_id)
 
-    assert await withdrawn_at(session, friend_id) == when
+    assert await withdrawn_at(session, user_id) == when
 
 
 async def test_the_trail_records_one_withdrawal_and_not_two(
@@ -129,15 +129,15 @@ async def test_the_trail_records_one_withdrawal_and_not_two(
 ) -> None:
     """One thing happened, so the audit log says it once.
 
-    ``revoke_friend`` records the entry only for the call that withdrew access, which was
+    ``revoke_user`` records the entry only for the call that withdrew access, which was
     already the intent — "a trail that grows on a retried request is a trail that says a
     thing happened twice". It was a stale read away from doing it anyway.
     """
-    friend_id = await a_friend_on_a_node(client, session, reality_params)
-    held = await friends.get_friend(session, friend_id)
+    user_id = await a_user_on_a_node(client, session, reality_params)
+    held = await users.get_user(session, user_id)
     assert held.is_active
 
-    assert (await client.post(f"/api/friends/{friend_id}/revoke")).status_code == 200
-    await revocation.revoke_friend(session, friend_id=friend_id)
+    assert (await client.post(f"/api/users/{user_id}/revoke")).status_code == 200
+    await revocation.revoke_user(session, user_id=user_id)
 
     assert await revocations_recorded(session) == 1

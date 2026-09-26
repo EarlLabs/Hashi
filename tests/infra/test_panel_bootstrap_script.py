@@ -96,7 +96,7 @@ def test_it_asks_no_questions(script: str) -> None:
 def test_it_never_generates_the_secret_key(script: str) -> None:
     """THE rule. It may TELL the operator how to make one; it may not make one.
 
-    ``HASHI_SECRET_KEY`` decrypts every friend's credentials and every node's private
+    ``HASHI_SECRET_KEY`` decrypts every user's credentials and every node's private
     key. Generated on the host being installed — which may be the Russian entry node — it
     would sit on the machine most likely to be seized, beside the data it opens.
 
@@ -194,7 +194,7 @@ def test_it_probes_the_running_plane_rather_than_declaring_victory(script: str) 
     """The charter's third requirement: it verifies BEFORE it reports success.
 
     Both questions matter. ``/healthz`` proves the process is serving; the 404 on the
-    delivery route proves the route a friend uses is actually wired — a live process with
+    delivery route proves the route a user uses is actually wired — a live process with
     an unrouted ``/sub`` is a panel that looks up and delivers nothing.
     """
     assert "/healthz" in script
@@ -267,6 +267,48 @@ def test_it_refuses_an_env_file_with_an_unescaped_dollar(script: str) -> None:
     assert not re.search(r"sed -i", script), "the script edits the env file in place"
 
 
+def test_it_refuses_an_env_file_compose_cannot_parse_before_it_prints_anything(
+    script: str,
+) -> None:
+    """M28.7's leak, one script over, found and reproduced by M28.8.
+
+    When ``docker compose`` cannot PARSE an env file it quotes the offending line's whole
+    value straight back — ``failed to read <path>: line N: unterminated quoted value
+    "<the value>"``. Section 2 of this script prints ``compose up -d --build``'s output as
+    it comes, and the failure path then prints ``compose ps``, so one unclosed quote on the
+    ``HASHI_SECRET_KEY`` line put the master key on the terminal TWICE and then waited
+    three minutes. Reproduced live against this script before it was fixed.
+
+    That is not cron's mail, and it is worse in a different way: the output of a failed
+    INSTALL is exactly what somebody pastes into a chat window when asking why their
+    install did not work.
+
+    The fix is the gate ``scripts/backup.sh`` already had, moved into a library and sourced
+    by both — one implementation, because two scrubbers drift and the next printer added
+    here would be behind only one of them. Its POSITION is the property: before every
+    compose call this script can reach, so there is nothing to remember when one is added.
+    """
+    assert '. "${REPO_ROOT}/scripts/lib/env-file-gate.sh"' in script, (
+        "the script does not source the env-file gate, so compose's own complaint about a "
+        "file it cannot parse reaches the terminal with the offending value in it"
+    )
+    assert not re.search(r"^env_file_must_be_readable\(\) \{", script, re.M), (
+        "the script defines a second copy of the gate instead of sourcing the one"
+    )
+    # Before every compose call, which is the whole of it.
+    called = re.search(r"^env_file_must_be_readable$", script, re.M)
+    assert called, "the gate is sourced and never called"
+    for match in re.finditer(r'"\$\{COMPOSE\[@\]\}"', script):
+        assert match.start() > called.start(), (
+            "a compose call comes before the env-file gate, so its complaint about a file "
+            "it cannot parse is printed with the line's value in it"
+        )
+    # And it says what was NOT done in this script's own terms rather than the backup
+    # script's — the library takes that one sentence from the caller.
+    assert "ENV_GATE_NOTHING_HAPPENED=" in script
+    assert "Nothing was installed, started or changed." in script
+
+
 def test_the_e2e_env_file_does_not_still_claim_env_files_are_not_interpolated() -> None:
     """A comment that is wrong about a hazard is worse than no comment.
 
@@ -335,7 +377,7 @@ def test_it_refuses_a_host_whose_firewall_is_recording_connections(
 
     ``ufw enable`` turns logging on by default and writes a source address for every
     refused packet — 5840 bytes of it within minutes on the fleet's own leaf
-    (docs/decisions.md, decision 5). This host is the one friends dial for a subscription,
+    (docs/decisions.md, decision 5). This host is the one users dial for a subscription,
     so its firewall log is a list of who asked for a config and when.
 
     Checked, never changed: turning it off belongs to ``scripts/node-bootstrap.sh``, which

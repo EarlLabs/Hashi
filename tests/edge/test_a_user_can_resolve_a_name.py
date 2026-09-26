@@ -1,6 +1,6 @@
-"""A friend's device has somewhere to send a lookup — M23.
+"""A user's device has somewhere to send a lookup — M23.
 
-WHAT: the ``DNS`` line in the configuration file a friend imports, where its value comes
+WHAT: the ``DNS`` line in the configuration file a user imports, where its value comes
       from, and what the file says when there is no value to write.
 WHY:  measured on the owner's real leaf on 2026-09-14, with two real clients:
 
@@ -8,7 +8,7 @@ WHY:  measured on the owner's real leaf on 2026-09-14, with two real clients:
           $ ip route get 10.129.0.2    10.129.0.2 dev awg0 table 51820 src 10.99.7.2
 
       Handshake green, exit at the leaf confirmed, five megabytes downloaded by each
-      friend — and not one name resolved, for both of them, identically. The config
+      user — and not one name resolved, for both of them, identically. The config
       carried no ``DNS`` line and ``AllowedIPs = 0.0.0.0/0, ::/0``, so every address went
       into the tunnel INCLUDING the resolver the device already used, which on that
       network was a private address unreachable from Amsterdam.
@@ -20,7 +20,7 @@ WHY:  measured on the owner's real leaf on 2026-09-14, with two real clients:
       resolver is written when there is one, and that the absence is described truthfully
       when there is not.
 HOW:  pure renders over the family DERIVED from what a transport declares — the set that
-      serialises a friend's material into a config FILE. Every address is from a
+      serialises a user's material into a config FILE. Every address is from a
       documentation range.
 
 What this does NOT prove is that a name resolves. That is a field observation with a real
@@ -35,7 +35,7 @@ from edge.egress import EgressNotRenderable, client_resolvers
 from edge.registry import SubscriptionFormat, discover, profile
 
 # Derived the way tests/edge/test_golden_configs.py derives it: the transports that hand
-# a friend a whole file. Never a hardcoded transport name.
+# a user a whole file. Never a hardcoded transport name.
 CONFIG_FILE_TRANSPORTS = sorted(
     name
     for name, meta in discover().items()
@@ -59,7 +59,7 @@ THE_CLAIM_THAT_WAS_FALSE = "keeps its own resolver"
 
 
 def rendered(name: str, node, request, **params_overrides) -> str:
-    """One friend's configuration file, for the first fixture credential."""
+    """One user's configuration file, for the first fixture credential."""
     transport = profile(name)
     fixture = request.getfixturevalue("transport_fixture")
     params = transport.validate({**fixture(name, "params"), **params_overrides})
@@ -71,7 +71,7 @@ def rendered(name: str, node, request, **params_overrides) -> str:
 def prose(config: str) -> str:
     """Every comment in the file as one line of running text.
 
-    The templates wrap at eighty columns, so a sentence a friend reads as one sentence is
+    The templates wrap at eighty columns, so a sentence a user reads as one sentence is
     several lines in the bytes. Asserting on the raw text would make these tests pass or
     fail on where a word happened to wrap, which is not the property — what the file SAYS
     is.
@@ -92,14 +92,14 @@ def resolvers_in(config: str) -> list[str]:
 # --- there is a resolver, and it comes from the operator's own record ----------------
 
 @pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
-def test_a_friends_config_names_the_resolver_the_node_record_holds(
+def test_a_users_config_names_the_resolver_the_node_record_holds(
     name: str, node, request
 ) -> None:
     """The fallback, and the one an operator actually reaches for.
 
     The owner set the node's resolver during the walk and the rendered file was
     byte-identical afterwards — the field existed, the panel offered it, and nothing
-    friend-facing read it. It is the same question M16 already answered for this node
+    user-facing read it. It is the same question M16 already answered for this node
     ("where are the names this node's traffic asks for looked up"), asked one consumer
     further out, so it gets the same answer rather than a second field to keep in step.
     """
@@ -113,7 +113,7 @@ def test_the_transports_own_setting_wins_over_the_nodes(name: str, node, request
     ``client_dns`` is per node × transport, so an operator who answered it has said
     something more particular than the node's record does and must not be overruled by
     it. Two values rather than one, because a renderer that wrote only the first would
-    take a friend's fallback resolver away with nobody noticing.
+    take a user's fallback resolver away with nobody noticing.
     """
     chosen = (ANOTHER_RESOLVER, "203.0.113.53")
 
@@ -146,9 +146,9 @@ def test_a_config_with_no_resolver_anywhere_says_what_that_costs(
     """The lie, pinned as the exact words that may not come back.
 
     Nobody can write a resolver the operator has not given — there is no default and
-    there may not be one — so the only honest thing left is to say what the friend is
+    there may not be one — so the only honest thing left is to say what the user is
     holding. The file used to say the opposite as a deliberate reassurance, and the
-    reassurance is what made the failure hard to find: the friend reads that their
+    reassurance is what made the failure hard to find: the user reads that their
     lookups stay at home, so nothing about the tunnel looks responsible.
     """
     config = rendered(name, dataclasses.replace(node, resolver=None), request)
@@ -157,11 +157,11 @@ def test_a_config_with_no_resolver_anywhere_says_what_that_costs(
     assert ROUTES_EVERYTHING in config, "the file no longer routes everything"
     said = prose(config)
     assert THE_CLAIM_THAT_WAS_FALSE not in said, (
-        "the file tells a friend their own resolver stays outside a tunnel that routes "
+        "the file tells a user their own resolver stays outside a tunnel that routes "
         "every address into it"
     )
     assert "no name will resolve" in said, (
-        "the file leaves the friend to discover the consequence from nslookup"
+        "the file leaves the user to discover the consequence from nslookup"
     )
 
 
@@ -170,7 +170,7 @@ def test_the_answer_is_never_a_narrower_route(name: str, node, request) -> None:
     """The fix that would have been wrong, refused in advance.
 
     Keeping the device's own resolver reachable by leaving its network outside
-    ``AllowedIPs`` is a split tunnel, and the charter's whole point is that a friend's
+    ``AllowedIPs`` is a split tunnel, and the charter's whole point is that a user's
     traffic exits abroad. So the route stays wide in every branch, and the resolver is
     what changes.
     """
@@ -187,9 +187,9 @@ def test_the_answer_is_never_a_narrower_route(name: str, node, request) -> None:
 def test_a_resolver_inside_the_tunnels_own_range_is_refused(
     name: str, node, request
 ) -> None:
-    """Every address in that range is one a friend's device holds.
+    """Every address in that range is one a user's device holds.
 
-    So a resolver there sends every friend's lookups to whichever person was given it —
+    So a resolver there sends every user's lookups to whichever person was given it —
     the one record this project must never create, produced by a field nobody typed for
     that purpose. The transport's own model already refuses it where it is TYPED; this is
     the value arriving from the node record instead, where nothing had checked it against

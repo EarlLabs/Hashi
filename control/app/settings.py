@@ -9,6 +9,8 @@ HOW:  ``Settings()`` raises when a required value is absent. Nothing else in the
       codebase may read the environment directly.
 """
 
+import pathlib
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -101,7 +103,7 @@ class Settings(BaseSettings):
     # An apply used to look ONCE, straight after `docker compose up -d`, and a container
     # sampled in the first second of its first start is running and not yet restarting.
     # The walk read a node as serving while its container was in a crash loop, and read
-    # another as degraded while its friend's ping was 0% loss. Both readings were true
+    # another as degraded while its user's ping was 0% loss. Both readings were true
     # about the instant they were taken and meant nothing about the node.
     #
     # Settings rather than constants for ``node_connect_timeout``'s reason: they are what
@@ -130,6 +132,21 @@ class Settings(BaseSettings):
         ge=AUDIT_RETENTION_MIN_DAYS,
         le=AUDIT_RETENTION_MAX_DAYS,
     )
+
+    # Where this control plane READS the backup record from — M28.6. The file is written
+    # on the host by scripts/backup-run.sh after every run and mounted in here read-only
+    # (deploy/docker-compose.yml), which is what lets the panel report what the host
+    # recorded while being unable to invent a success or erase a failure.
+    #
+    # The default IS the mount point, so nothing has to be added to an env file for the
+    # panel to answer — and a machine where the mount arrived empty, or where this
+    # process is not running beside the backups at all, is a file that is not there,
+    # which the panel reads as "nothing recorded" rather than as an error.
+    #
+    # A setting rather than a constant for the reason the two node ceilings above are
+    # settings: the suite points it at a record it wrote itself, which is how it stays
+    # honest that the value is read at all.
+    backup_record: pathlib.Path = pathlib.Path("/var/lib/hashi/backup/last-run.json")
 
     @field_validator("operator_password_hash")
     @classmethod
@@ -170,6 +187,6 @@ class Settings(BaseSettings):
 
     @property
     def public_base_url(self) -> str:
-        """The origin a friend's client dials. Built here, so nothing hardcodes it."""
+        """The origin a user's client dials. Built here, so nothing hardcodes it."""
         scheme = "https" if self.public_https else "http"
         return f"{scheme}://{self.public_host}"

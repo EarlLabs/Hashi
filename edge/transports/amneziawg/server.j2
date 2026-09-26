@@ -22,7 +22,7 @@ MTU = {{ params.mtu }}
 
 # This interface's routes are ours to install, so the tool installs none — M3. The peer
 # below is allowed every address, because AllowedIPs is WireGuard's crypto-routing table
-# as well as its authorisation list and a narrower one drops a friend's traffic on the
+# as well as its authorisation list and a narrower one drops a user's traffic on the
 # way out. What made that dangerous was never AllowedIPs but the DEFAULT ROUTE wg-quick
 # would derive from it: with `Table = off` nothing is installed in the main table, so the
 # node's own traffic — the SSH session the control plane manages it over above all —
@@ -36,7 +36,7 @@ Table = {{ table }}
 # of two things and the renderer decides which: the forwarding and NAT that let a
 # decrypted packet leave this node (without them the handshake completes, the interface
 # is up, and nothing moves), or the source-routed way OUT through this tunnel that an
-# entry node's friend traffic takes. Written here rather than into host state because a
+# entry node's user traffic takes. Written here rather than into host state because a
 # node holds nothing that cannot be regenerated, and because a rule the interface did not
 # add is a rule its removal will not take away.
 #

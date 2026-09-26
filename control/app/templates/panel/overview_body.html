@@ -10,7 +10,7 @@
   dialog that changes nothing on it.
 #}
 <div id="overview-body" class="overview-body"
-     hx-get="/panel/overview/body" hx-trigger="friends-changed from:body"
+     hx-get="/panel/overview/body" hx-trigger="users-changed from:body"
      hx-target="this" hx-swap="outerHTML" hx-indicator="this"
      hx-disinherit="hx-indicator">
 
@@ -21,6 +21,49 @@
   </div>
 
   <div class="loaded stack-8">
+
+    {#
+      WHERE THE BACKUPS STAND — M28.6, and the first thing on the screen the panel opens
+      on, above the fleet's own counts.
+
+      Here rather than on a screen of its own because the plan's criterion is that a run
+      which does not land is seen WITHOUT anybody going to look for it, and a screen
+      nobody opens is where a six-week silence goes unnoticed. Above the four cards rather
+      than under them because it is the only thing on this screen that can be six weeks
+      out of date: the counts are configuration and are true the instant they are drawn.
+      Not the Nodes screen either — every row there is about one node, and whether this
+      control plane's own database is being copied is not a fact about any of them.
+
+      TWO WEIGHTS AND NO THIRD. A standing that wants the eye gets the same bordered
+      `.banner` frame the Overview's notes use, with the severity in the LABEL, per
+      UI-PATTERNS §4; the good state gets a muted note. It is deliberately not
+      `.banner-failure`: that red belongs to a request the operator just made and that
+      was refused or failed (see panel/banner.html), and spending it on a standing
+      condition is how it stops meaning anything. `role="status"` follows from that and
+      is not a second decision — the console's own banner scan pairs `alert` with the
+      failure frame and `status` with this one, and nothing here went wrong in the
+      request that drew the screen. What separates one failed run from six weeks of them
+      is the sentence — "19 hours ago" against "43 days ago" — which is composed in
+      services/console.py like every other word on this screen.
+
+      The caveat under it is drawn under EVERY standing including the good one, and it is
+      the one line here that must never be trimmed for looks: this host's record says how
+      its own runs went and knows nothing about whether an artifact is still in the
+      bucket. A green line on a screen is exactly how that gets read as "backups are
+      fine".
+    #}
+    {% if overview.backup.loud %}
+    <div class="banner" role="status">
+      <span class="banner-label">{{ overview.backup.label }}</span>
+      <span>{{ overview.backup.headline }} {{ overview.backup.detail }}</span>
+    </div>
+    {% else %}
+    <p class="text-muted section-note">
+      {{ overview.backup.headline }} {{ overview.backup.detail }}
+    </p>
+    {% endif %}
+    <p class="text-muted section-note">{{ overview.backup.caveat }}</p>
+
     <div class="grid-4">
       {% for stat in overview.stats %}
       <div class="card blueprint">
@@ -35,9 +78,9 @@
     {#
       WHAT THE FOUR COUNTS DO NOT KNOW — M26's first acceptance walk, and the screen
       whose own subtitle promises to say "whether the nodes are running what you told
-      them to". The walk stopped a node's friend-facing daemon, probed it, read the
+      them to". The walk stopped a node's user-facing daemon, probed it, read the
       correct finding, and then read "nodes active 2 … transports serving 2" here while
-      the friend's ping was 100% loss.
+      the user's ping was 100% loss.
 
       A NOTICE and not a failure banner: nothing went wrong in the request that drew
       this screen, and the failure slot above belongs to the action the operator just
@@ -62,12 +105,12 @@
     #}
     <p class="text-muted section-note">{{ overview.limit }}</p>
 
-    {% if not overview.nodes and not overview.friends %}
+    {% if not overview.nodes and not overview.users %}
     {#
       The first thing a new operator ever sees. It says what to do next rather than
       reporting an absence — and it says NODE first, deliberately: a subscription
       only resolves to nodes that are serving, so a link handed out before there is
-      one is a link that hands the friend an empty configuration.
+      one is a link that hands the user an empty configuration.
     #}
     <div class="empty">
       <div class="empty-title">Nothing is configured yet</div>
@@ -92,32 +135,32 @@
       <section class="card blueprint">
         <div class="card-head">
           <h4>Users</h4>
-          <a class="all-link" href="/panel/friends"
-             hx-get="/panel/friends" hx-target="#main" hx-swap="innerHTML"
+          <a class="all-link" href="/panel/users"
+             hx-get="/panel/users" hx-target="#main" hx-swap="innerHTML"
              hx-push-url="true">all users</a>
         </div>
-        {% if overview.friends %}
+        {% if overview.users %}
         <div class="table-scroll">
           <table class="table">
             <thead><tr><th>nickname</th><th>status</th><th>added</th><th></th></tr></thead>
             <tbody>
-              {% for friend in overview.friends[:5] %}
-              <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
+              {% for user in overview.users[:5] %}
+              <tr {% if not user.is_active %}class="row-inert"{% endif %}>
                 {# `.wraps` — operator text, the one cell in the row allowed to
                    break a word. app.css says why the whole row may not. #}
-                <td class="wraps">{{ friend.nickname }}</td>
+                <td class="wraps">{{ user.nickname }}</td>
                 <td>
                   {# UI-PATTERNS §4: status is a tag, never coloured text, and there is
                      no red — "revoked" is inert, so it is neutral. #}
-                  <span class="tag {{ 'tag-accent' if friend.is_active else 'tag-neutral' }}">
-                    {{ "active" if friend.is_active else "revoked" }}
+                  <span class="tag {{ 'tag-accent' if user.is_active else 'tag-neutral' }}">
+                    {{ "active" if user.is_active else "revoked" }}
                   </span>
                 </td>
-                <td class="text-muted nowrap">{{ friend.added.strftime("%d %b %Y") }}</td>
+                <td class="text-muted nowrap">{{ user.added.strftime("%d %b %Y") }}</td>
                 <td class="right">
-                  {% if friend.is_active %}
+                  {% if user.is_active %}
                   <button class="btn btn-ghost" type="button"
-                          hx-get="/panel/friends/{{ friend.id }}/subscription"
+                          hx-get="/panel/users/{{ user.id }}/subscription"
                           hx-target="#dialog-slot" hx-swap="innerHTML">link</button>
                   {% endif %}
                 </td>

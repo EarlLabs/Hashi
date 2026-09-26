@@ -27,9 +27,9 @@ INSTALLED = sorted(discover())
 # design — see tests/edge/test_transport_contract.py.
 DELIVERABLE = sorted(name for name, meta in discover().items() if meta.subscription_expressible)
 
-# Transports that serialise a friend's material into a FILE instead (item 26). Their
+# Transports that serialise a user's material into a FILE instead (item 26). Their
 # artefact is pinned by the same argument as a client entry, and more sharply: a
-# config file is the whole of what a friend imports, so a dropped line there is a
+# config file is the whole of what a user imports, so a dropped line there is a
 # tunnel that silently never comes up rather than one setting that changed.
 CONFIG_FILE_TRANSPORTS = sorted(
     name
@@ -70,10 +70,10 @@ def test_server_config_matches_its_golden_file(name: str, node, request) -> None
 
 @pytest.mark.parametrize("name", DELIVERABLE)
 def test_client_entry_matches_its_golden_file(name: str, node, request) -> None:
-    """One friend's subscription entry, byte for byte.
+    """One user's subscription entry, byte for byte.
 
     Pinned separately from the server config because this string goes to a
-    friend's device: a change here is a change to the only artefact they hold, and
+    user's device: a change here is a change to the only artefact they hold, and
     the charter says that must never require them to re-import anything.
     """
     transport = profile(name)
@@ -95,10 +95,10 @@ def test_client_entry_matches_its_golden_file(name: str, node, request) -> None:
 
 @pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
 def test_client_config_file_matches_its_golden_file(name: str, node, request) -> None:
-    """One friend's whole configuration file, byte for byte.
+    """One user's whole configuration file, byte for byte.
 
     The second serialisation shape (item 26). Pinned rather than merely spot-checked
-    because this file goes onto a friend's device in full: every line is either
+    because this file goes onto a user's device in full: every line is either
     load-bearing or a comment they will read, and neither kind should change by
     accident. In particular the obfuscation values have to match the node exactly, and
     a template that dropped one would produce a file that parses and never connects.

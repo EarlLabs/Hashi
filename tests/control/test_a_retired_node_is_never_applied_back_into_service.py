@@ -10,9 +10,9 @@ WHY:  ``apply_node`` writes ``node.state = ACTIVE`` itself instead of going thro
 
       Retired is the state an operator moves a node to when its host is gone:
       decommissioned, handed back, or seized. Bringing the record back put an address
-      that may now answer for a stranger into every friend's subscription at their next
+      that may now answer for a stranger into every user's subscription at their next
       fetch — and since this milestone's fan-out it did so having first minted key
-      material for every active friend on it, because an apply that puts a node into
+      material for every active user on it, because an apply that puts a node into
       service grants everybody BEFORE it renders.
 
       So one button, pressed on a row an operator has already written off, put the whole
@@ -33,7 +33,7 @@ from sqlalchemy import func, select
 from control.app.errors import NodeCannotServe
 from control.app.models import Credential, NodeState, NodeTransport
 from control.app.panel import wording
-from control.app.services import apply, friends, nodes, revocation, subscriptions
+from control.app.services import apply, nodes, revocation, subscriptions, users
 
 from .conftest import GENERATED_SSH_KEY
 
@@ -108,7 +108,7 @@ async def applied_at(session, node_transport_id: str):
 @pytest.fixture
 async def a_user_who_is_still_here(client) -> str:
     """One active user, who must not be granted anything on a node that is gone."""
-    created = await client.post("/api/friends", json={"nickname": "boris"})
+    created = await client.post("/api/users", json={"nickname": "boris"})
     assert created.status_code == 201, created.text
     return created.json()["id"]
 
@@ -148,7 +148,7 @@ async def test_the_refusal_mints_nothing_for_anybody(
 ) -> None:
     """The half that made this worse than a wrong state column.
 
-    An apply that puts a node into service hands every active friend a credential on it
+    An apply that puts a node into service hands every active user a credential on it
     before it renders. On a retired node that is the fleet being moved onto a host the
     operator has written off — so the refusal has to happen above the fan-out, not beside
     it, and the proof is that nobody holds anything afterwards.
@@ -167,8 +167,8 @@ async def test_the_refusal_mints_nothing_for_anybody(
     )
     # And the half a person actually receives: their link still resolves to nothing,
     # which is the honest answer while no node serves.
-    friend = await friends.get_friend(session, a_user_who_is_still_here)
-    assert not await subscriptions.entries_for(session, friend), (
+    user = await users.get_user(session, a_user_who_is_still_here)
+    assert not await subscriptions.entries_for(session, user), (
         "a retired node is back in a user's subscription"
     )
 
@@ -229,8 +229,8 @@ async def test_a_revocation_does_not_bring_a_retired_node_back(
     assert await credentials_on(session, node_id) == 1
     await retire(client, node_id)
 
-    outcome = await revocation.revoke_friend(
-        session, friend_id=a_user_who_is_still_here
+    outcome = await revocation.revoke_user(
+        session, user_id=a_user_who_is_still_here
     )
 
     assert not outcome.complete, "the fan-out reported a retired node as updated"
@@ -317,7 +317,7 @@ def test_the_refusal_sends_a_script_nowhere_and_an_operator_somewhere() -> None:
     on_the_console = wording.for_the_page(written)
 
     assert apply.WHERE_TO_RETRY in on_the_console, on_the_console
-    # Decision 9's half of the same seam: the code says friend, the page says user.
+    # And the word this product stopped using never reaches a page (M29).
     assert "friend" not in on_the_console.lower(), on_the_console
     # What does NOT move between the two: the substance is one fact for both readers.
     for held in ("Nothing was pushed, nobody was granted anything",):
@@ -346,8 +346,8 @@ async def test_the_revocation_banner_names_no_button_this_node_refuses(
     assert applied.status_code == 200, applied.text
     await retire(client, node_id)
 
-    outcome = await revocation.revoke_friend(
-        session, friend_id=a_user_who_is_still_here
+    outcome = await revocation.revoke_user(
+        session, user_id=a_user_who_is_still_here
     )
     banner = outcome.summary()
 

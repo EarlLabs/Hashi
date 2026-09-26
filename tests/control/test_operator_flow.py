@@ -1,4 +1,4 @@
-"""The operator's whole path: create a node, enable a transport, add a friend.
+"""The operator's whole path: create a node, enable a transport, add a user.
 
 WHAT: the API-level behaviour of backlog items 5, 6, 6a, 7 and 8, against a real
       database.
@@ -46,7 +46,7 @@ async def activate(session, node_id: str) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["/api/nodes", "/api/friends", "/api/transports"],
+    ["/api/nodes", "/api/users", "/api/transports"],
 )
 async def test_api_is_closed_to_anyone_without_a_session(anonymous, path: str) -> None:
     """The operator API answers 401 to a stranger, not data.
@@ -58,7 +58,7 @@ async def test_api_is_closed_to_anyone_without_a_session(anonymous, path: str) -
     response = await anonymous.get(path)
     assert response.status_code == 401
     body = response.text.lower()
-    for leak in ("node", "friend", "postgres", "traceback"):
+    for leak in ("node", "user", "postgres", "traceback"):
         assert leak not in body, f"a 401 leaked {leak!r}: {response.text[:200]}"
 
 
@@ -184,7 +184,7 @@ async def test_a_second_instance_of_one_transport_is_refused_only_over_the_port(
 
     M15. The rule used to be one row per ``(node, transport_name)``, and it made the
     runbook's own advice impossible to follow: AmneziaWG is mandated for the entry→leaf
-    hop and recommended for friends on the same box. The refusal moved onto what
+    hop and recommended for users on the same box. The refusal moved onto what
     actually collides — the data planes run with ``network_mode: host``, so one port is
     one bind — and the answer is still a 409, so no API caller's envelope moved.
 
@@ -237,9 +237,9 @@ async def test_invalid_parameters_are_refused_by_the_transports_own_model(
     assert "traceback" not in response.text.lower()
 
 
-# --- friends and subscriptions (items 7, 8; criterion 5) ---------------------
+# --- users and subscriptions (items 7, 8; criterion 5) ---------------------
 
-async def test_a_new_friend_gets_a_subscription_covering_every_serving_node(
+async def test_a_new_user_gets_a_subscription_covering_every_serving_node(
     client, session, reality_params
 ) -> None:
     """Charter criterion 5: onboarding is one link, and it already has the fleet in it."""
@@ -250,16 +250,16 @@ async def test_a_new_friend_gets_a_subscription_covering_every_serving_node(
     )
     await activate(session, node_id)
 
-    friend = await client.post("/api/friends", json={"nickname": "kolya"})
-    assert friend.status_code == 201, friend.text
-    friend_id = friend.json()["id"]
+    user = await client.post("/api/users", json={"nickname": "kolya"})
+    assert user.status_code == 201, user.text
+    user_id = user.json()["id"]
 
-    issued = await client.get(f"/api/friends/{friend_id}/subscription")
+    issued = await client.get(f"/api/users/{user_id}/subscription")
     assert issued.status_code == 200
     url = issued.json()["url"]
     assert "/sub/" in url
 
-    # Fetched the way a friend's client fetches it: no session, just the token.
+    # Fetched the way a user's client fetches it: no session, just the token.
     token = url.rsplit("/", 1)[-1]
     delivered = await client.get(f"/sub/{token}")
     assert delivered.status_code == 200
@@ -267,7 +267,7 @@ async def test_a_new_friend_gets_a_subscription_covering_every_serving_node(
     document = base64.b64decode(delivered.text).decode()
     assert document.strip(), "the subscription is empty"
     assert document.startswith("vless://")
-    # The country label is what a friend picks an exit by, and it must be in the
+    # The country label is what a user picks an exit by, and it must be in the
     # fragment the client displays.
     assert "Netherlands" in document
 
@@ -289,8 +289,8 @@ async def test_a_second_transport_appears_in_the_subscription_with_no_code_chang
         assert response.status_code == 201, response.text
     await activate(session, node_id)
 
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
     document = base64.b64decode(
         (await client.get(f"/sub/{url.rsplit('/', 1)[-1]}")).text
     ).decode()
@@ -303,16 +303,16 @@ async def test_a_second_transport_appears_in_the_subscription_with_no_code_chang
     assert any("type=ws" in line for line in lines)
 
 
-async def test_a_friend_added_before_a_node_still_reaches_it(
+async def test_a_user_added_before_a_node_still_reaches_it(
     client, session, reality_params
 ) -> None:
     """Charter criterion 2's user-facing half: a replacement node needs no user action.
 
-    The friend existed first, the node came later, and their EXISTING subscription URL
+    The user existed first, the node came later, and their EXISTING subscription URL
     resolves to it — nothing was re-issued and nothing was re-imported.
     """
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
     token = url.rsplit("/", 1)[-1]
 
     # Nothing to reach yet.
@@ -328,7 +328,7 @@ async def test_a_friend_added_before_a_node_still_reaches_it(
 
     # The SAME url, unchanged, now carries the new node.
     document = base64.b64decode((await client.get(f"/sub/{token}")).text).decode()
-    assert "Iceland" in document, "the friend's existing link did not pick up the new node"
+    assert "Iceland" in document, "the user's existing link did not pick up the new node"
 
 
 async def test_a_draft_or_degraded_node_reaches_nobody(
@@ -344,8 +344,8 @@ async def test_a_draft_or_degraded_node_reaches_nobody(
     )
     await activate(session, node_id)
 
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
     token = url.rsplit("/", 1)[-1]
 
     assert base64.b64decode((await client.get(f"/sub/{token}")).text).decode().strip()
@@ -354,10 +354,10 @@ async def test_a_draft_or_degraded_node_reaches_nobody(
         session, node_id=node_id, state=NodeState.DEGRADED, detail="test"
     )
     after = base64.b64decode((await client.get(f"/sub/{token}")).text).decode()
-    assert after == "", "a degraded node was still offered to a friend"
+    assert after == "", "a degraded node was still offered to a user"
 
 
-async def test_two_friends_never_share_an_entry(client, session, reality_params) -> None:
+async def test_two_users_never_share_an_entry(client, session, reality_params) -> None:
     """Shared credentials would make individual revocation impossible."""
     node_id = await create_active_node(client)
     await client.post(
@@ -368,8 +368,8 @@ async def test_two_friends_never_share_an_entry(client, session, reality_params)
 
     documents = []
     for nickname in ("kolya", "masha"):
-        friend_id = (await client.post("/api/friends", json={"nickname": nickname})).json()["id"]
-        url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+        user_id = (await client.post("/api/users", json={"nickname": nickname})).json()["id"]
+        url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
         documents.append(
             base64.b64decode((await client.get(f"/sub/{url.rsplit('/', 1)[-1]}")).text).decode()
         )
@@ -395,8 +395,8 @@ async def test_the_delivery_response_is_never_cacheable(
         json={"transport_name": "vless-reality", "params": reality_params},
     )
     await activate(session, node_id)
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    url = (await client.get(f"/api/friends/{friend_id}/subscription")).json()["url"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    url = (await client.get(f"/api/users/{user_id}/subscription")).json()["url"]
 
     response = await client.get(f"/sub/{url.rsplit('/', 1)[-1]}")
     assert "no-store" in response.headers["cache-control"]
@@ -404,5 +404,5 @@ async def test_the_delivery_response_is_never_cacheable(
 
 async def test_a_duplicate_nickname_is_refused(client) -> None:
     """Revoking "the right one" must be unambiguous at the moment it matters."""
-    assert (await client.post("/api/friends", json={"nickname": "kolya"})).status_code == 201
-    assert (await client.post("/api/friends", json={"nickname": "kolya"})).status_code == 409
+    assert (await client.post("/api/users", json={"nickname": "kolya"})).status_code == 201
+    assert (await client.post("/api/users", json={"nickname": "kolya"})).status_code == 409

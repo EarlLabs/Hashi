@@ -111,13 +111,13 @@ def test_key_material_uses_only_the_shared_vocabulary(name: str) -> None:
 def test_every_transport_needs_a_per_client_secret(name: str) -> None:
     """Charter criterion 6 is only expressible with client-scoped material.
 
-    If a transport's only material were node-scoped, every friend on that node
-    would share one credential — and revoking one friend would mean re-keying
+    If a transport's only material were node-scoped, every user on that node
+    would share one credential — and revoking one user would mean re-keying
     everyone else, or not revoking at all.
     """
     scopes = {spec.scope for spec in discover()[name].key_material}
     assert KeyScope.CLIENT in scopes, (
-        f"{name}: no client-scoped key material, so one friend cannot be revoked "
+        f"{name}: no client-scoped key material, so one user cannot be revoked "
         "without affecting the others"
     )
 
@@ -252,7 +252,7 @@ def test_render_server_authorises_exactly_the_given_clients(name: str, node, req
 
 @pytest.mark.parametrize("name", INSTALLED)
 def test_render_server_with_no_clients_authorises_nobody(name: str, node, request) -> None:
-    """A node with no friends yet — or whose last friend was just revoked — is a real state."""
+    """A node with no users yet — or whose last user was just revoked — is a real state."""
     assert authorised_subjects(name, render(name, node, request, [])) == set()
 
 
@@ -284,7 +284,7 @@ def test_rendered_server_never_records_who_connected(name: str, node, request) -
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_a_rendered_config_never_names_a_friend(name: str, node, request) -> None:
+def test_a_rendered_config_never_names_a_user(name: str, node, request) -> None:
     """Labels in a node's config are opaque subjects, never nicknames.
 
     A node can be seized. Anything in a file on it that identifies a person by a name
@@ -328,7 +328,7 @@ def test_client_entry_carries_no_display_fragment(name: str, node, request) -> N
 
 @pytest.mark.parametrize("name", DELIVERABLE)
 def test_client_entry_never_leaks_the_server_private_key(name: str, node, request) -> None:
-    """A client entry goes to a friend's device. Node secrets must not ride along."""
+    """A client entry goes to a user's device. Node secrets must not ride along."""
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
     entry = transport.profile.render_client(node, validated, clients_for(name, request)[0])
@@ -338,7 +338,7 @@ def test_client_entry_never_leaks_the_server_private_key(name: str, node, reques
 
 
 @pytest.mark.parametrize("name", DELIVERABLE)
-def test_two_friends_get_different_entries(name: str, node, request) -> None:
+def test_two_users_get_different_entries(name: str, node, request) -> None:
     """Shared entries would make individual revocation impossible."""
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
@@ -359,7 +359,7 @@ def test_an_inexpressible_transport_refuses_loudly(name: str, node, request) -> 
 
     This is the charter's open question answered honestly (amendment A, and the debt
     named when AmneziaWG moved to M4). Emitting something URI-shaped would put a line in
-    a friend's subscription their client cannot parse, and the symptom would be "the
+    a user's subscription their client cannot parse, and the symptom would be "the
     whole subscription is broken" rather than "one entry is unsupported".
 
     Parametrised over the registry, so it holds for any future transport that declares
@@ -386,7 +386,7 @@ def test_an_inexpressible_transport_still_renders_a_server_config(
 #
 # The contract used to carry one boolean: "expressible in the v1 subscription, yes or
 # no". For every transport that is not a URI the answer was no, and "no" was the end of
-# the conversation — which is precisely what kept AmneziaWG's friend-facing form
+# the conversation — which is precisely what kept AmneziaWG's user-facing form
 # unbuildable rather than merely undelivered (backlog item 25). A transport now declares
 # the SET of shapes it produces, and the assertions below are about the two halves of
 # that: the declaration means something, and it obliges something.
@@ -430,7 +430,7 @@ def test_expressibility_is_derived_from_the_declared_formats(name: str) -> None:
     ``subscription_expressible`` is now a property over the format set. It has to keep
     answering exactly "does this ride in the v1 URI list" — if it drifted into "is this
     deliverable at all", the panel would start offering a transport whose delivery does
-    not exist yet, and a friend would get a subscription one node short with nothing
+    not exist yet, and a user would get a subscription one node short with nothing
     saying so.
     """
     meta = discover()[name]
@@ -483,7 +483,7 @@ def test_a_package_that_declares_a_format_it_cannot_produce_is_refused() -> None
     vacuously with respect to the FAILURE. This provokes the failure directly, because
     the value of the check is entirely in what it rejects — and what it rejects is the
     worst shape available: a transport that looks deliverable in the panel and raises
-    an AttributeError deep inside one friend's subscription render at refresh time.
+    an AttributeError deep inside one user's subscription render at refresh time.
     """
     from types import SimpleNamespace
 
@@ -539,7 +539,7 @@ def test_a_client_config_file_is_complete_and_named(name: str, node, request) ->
 
     assert produced.content.strip(), f"{name}: an empty config file is not a config file"
     assert produced.media_type, f"{name}: no media type, so delivery has to guess"
-    # A plain name: it reaches an HTTP header and a friend's filesystem, and one family
+    # A plain name: it reaches an HTTP header and a user's filesystem, and one family
     # derives the interface name from it and rejects a name it considers invalid.
     assert produced.safe_filename() == produced.filename
     assert produced.node_id == node.id
@@ -553,7 +553,7 @@ def test_a_client_config_file_never_carries_the_servers_private_key(
     """The same rule as for a client entry, and it matters more in a file.
 
     A file is saved, synced and forwarded. The node's own private key in it would be a
-    seizure of one friend's phone compromising the node for everybody on it.
+    seizure of one user's phone compromising the node for everybody on it.
     """
     transport = profile(name)
     raw = params_for(name, request)
@@ -565,7 +565,7 @@ def test_a_client_config_file_never_carries_the_servers_private_key(
 
 
 @pytest.mark.parametrize("name", CONFIG_FILE_TRANSPORTS)
-def test_two_friends_get_different_config_files(name: str, node, request) -> None:
+def test_two_users_get_different_config_files(name: str, node, request) -> None:
     """Otherwise one revocation cannot be told from another, and neither is total."""
     transport = profile(name)
     validated = transport.validate(params_for(name, request))
@@ -593,7 +593,7 @@ def test_a_filename_with_a_path_component_is_refused() -> None:
 
     A transport is trusted code in this image, so this is not a defence against a
     hostile package — it is a defence against a plausible mistake reaching an HTTP
-    header and a friend's filesystem.
+    header and a user's filesystem.
     """
     for bad in ("../etc/passwd", "sub/dir.conf", "", ".", ".."):
         with pytest.raises(ValueError):
@@ -685,7 +685,7 @@ def test_the_declared_datapath_is_the_one_the_renderer_expresses(name: str) -> N
     """A package's ``datapath`` against what its own render module actually does — M25.
 
     This is the assertion that makes the declaration worth reading. `control` refuses two
-    operations on the strength of it — offering this transport to the friends of a node
+    operations on the strength of it — offering this transport to the users of a node
     that dials a hop, and giving such a node a hop — and a package whose declaration
     disagreed with its renderer would move that refusal onto the wrong transport in
     whichever direction it lied: a kernel tunnel claiming to re-originate is accepted at
@@ -703,7 +703,7 @@ def test_the_declared_datapath_is_the_one_the_renderer_expresses(name: str) -> N
 
 
 @pytest.mark.parametrize("name", INSTALLED)
-def test_only_a_re_originating_transport_may_carry_friends_through_a_hop(name: str) -> None:
+def test_only_a_re_originating_transport_may_carry_users_through_a_hop(name: str) -> None:
     """The derived answer `control` reads, pinned to the declaration it comes from.
 
     Derived in ``edge`` and asked there by both doors, so that neither service holds an
@@ -712,6 +712,6 @@ def test_only_a_re_originating_transport_may_carry_friends_through_a_hop(name: s
     ``True`` for everything would take both of them off without failing anything else.
     """
     meta = discover()[name]
-    assert meta.serves_friends_through_a_hop == (
+    assert meta.serves_users_through_a_hop == (
         meta.datapath is Datapath.RE_ORIGINATING
     )

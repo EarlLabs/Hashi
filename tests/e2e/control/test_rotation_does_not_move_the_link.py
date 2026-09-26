@@ -7,7 +7,7 @@ WHY:  "rotate anything that gets blocked, all from one admin panel" is the owner
       thirty people holding a link. The two halves are asserted together here because
       they are only true together: the URL must not move, and what it serves must
       change.
-HOW:  the friend's subscription is fetched anonymously before and after, exactly as
+HOW:  the user's subscription is fetched anonymously before and after, exactly as
       their client would.
 
 Boundary: real control + postgres. No node is contacted, so every rotation here reports
@@ -43,7 +43,7 @@ async def operator(client):
 
 
 async def fleet(operator, unique: str, port: int):
-    """A serving node, one friend, and the friend's token."""
+    """A serving node, one user, and the user's token."""
     node_id = (await operator.post(
         "/api/nodes",
         json={"name": f"leaf-{unique}", "address": "192.0.2.10",
@@ -64,10 +64,10 @@ async def fleet(operator, unique: str, port: int):
     assert enabled.status_code == 201, enabled.text
     await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
 
-    friend_id = (await operator.post(
-        "/api/friends", json={"nickname": f"kolya-{unique}"}
+    user_id = (await operator.post(
+        "/api/users", json={"nickname": f"kolya-{unique}"}
     )).json()["id"]
-    token = (await operator.get(f"/api/friends/{friend_id}/subscription")).json()[
+    token = (await operator.get(f"/api/users/{user_id}/subscription")).json()[
         "url"
     ].rsplit("/", 1)[-1]
     return node_id, enabled.json()["id"], token
@@ -118,7 +118,7 @@ async def test_a_key_rotation_changes_the_config_behind_the_same_link(
 
     # The push could not land (no reachable node), so the node is now DEGRADED and has
     # correctly dropped out of every subscription. Put it back into service before
-    # asserting on what friends receive — otherwise "the document changed" would pass
+    # asserting on what users receive — otherwise "the document changed" would pass
     # for the wrong reason: it changed because the node disappeared from it.
     assert (await operator.post(
         f"/api/nodes/{node_id}/state", json={"state": "active"}
@@ -126,11 +126,11 @@ async def test_a_key_rotation_changes_the_config_behind_the_same_link(
 
     after = await mine(client, token, unique)
     assert len(after) == 1, after
-    assert after != before, "the friend would re-fetch their link and get the old key"
+    assert after != before, "the user would re-fetch their link and get the old key"
     assert (await client.get(f"/sub/{token}")).status_code == 200
 
 
-async def test_replacing_a_blocked_decoy_reaches_the_friends_entry(
+async def test_replacing_a_blocked_decoy_reaches_the_users_entry(
     operator, client, unique: str
 ) -> None:
     """Item 24's real case, driven the way the owner would drive it."""

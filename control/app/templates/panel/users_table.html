@@ -8,7 +8,7 @@
   `serving` is how many node-transports are currently serving. It is the denominator
   of the coverage column and it is also what decides the "no node is serving yet"
   warning — a link handed out with nothing serving resolves to an empty config, and
-  the friend reports a broken client rather than a fleet with no nodes.
+  the user reports a broken client rather than a fleet with no nodes.
 #}
 {#
   `hx-disinherit="hx-indicator"`: the skeleton belongs to THIS element's own refresh
@@ -18,8 +18,8 @@
   nothing about the list. Disinheriting leaves each button its own default
   indicator, which is the button itself (see .btn.htmx-request in app.css).
 #}
-<div id="friends-table" class="stack-6"
-     hx-get="/panel/friends/table" hx-trigger="friends-changed from:body"
+<div id="users-table" class="stack-6"
+     hx-get="/panel/users/table" hx-trigger="users-changed from:body"
      hx-target="this" hx-swap="outerHTML" hx-indicator="this"
      hx-disinherit="hx-indicator">
 
@@ -30,7 +30,7 @@
   </div>
 
   <div class="loaded stack-6">
-    {% if friends %}
+    {% if users %}
     {% if not serving %}
     {#
       A NOTICE, not a failure: nothing went wrong, there is simply nothing serving
@@ -50,7 +50,7 @@
     {% if material_doubt %}
     {#
       WHAT ADDING A USER DID NOT DO — M26's first acceptance walk. The walk added a
-      friend, opened their link, and got a complete, correct, importable configuration
+      user, opened their link, and got a complete, correct, importable configuration
       for a node that held no peer for them: the file was right, the node had never
       heard of them, and their client would have handshaked into nothing. A second
       apply, three minutes later, is what made it true.
@@ -98,7 +98,7 @@
             <th>added</th>
             {# THE UNIT IS THE NODE-TRANSPORT and the header says so since M23's eighth
                round, which read `2 / 2` here with ONE node in service. The cell counts
-               what a friend's link carries an entry for — one per protocol per node —
+               what a user's link carries an entry for — one per protocol per node —
                so a person missing the second protocol on the only node in the fleet is
                a fault this column can still show. See services/console.py. #}
             <th>transports served</th>
@@ -106,18 +106,18 @@
           </tr>
         </thead>
         <tbody>
-          {% for friend in friends %}
-          <tr {% if not friend.is_active %}class="row-inert"{% endif %}>
+          {% for user in users %}
+          <tr {% if not user.is_active %}class="row-inert"{% endif %}>
             {# `.wraps`: a nickname is the operator's own text and may be one
                unbroken 64-character run, so this is the cell that gives way. No
                other cell in the row may break a word — see .table td.wraps. #}
-            <td class="wraps">{{ friend.nickname }}</td>
+            <td class="wraps">{{ user.nickname }}</td>
             <td>
-              <span class="tag {{ 'tag-accent' if friend.is_active else 'tag-neutral' }}">
-                {{ "active" if friend.is_active else "revoked" }}
+              <span class="tag {{ 'tag-accent' if user.is_active else 'tag-neutral' }}">
+                {{ "active" if user.is_active else "revoked" }}
               </span>
             </td>
-            <td class="text-muted nowrap">{{ friend.added.strftime("%d %b %Y") }}</td>
+            <td class="text-muted nowrap">{{ user.added.strftime("%d %b %Y") }}</td>
             {#
               Coverage, not activity: how many of the serving node-transports this
               person holds a credential on. It is a fact about OUR configuration —
@@ -126,15 +126,15 @@
               A row reading 2 / 3 is a fault in the fleet, not a habit of a person.
             #}
             <td class="mono nowrap">
-              {% if friend.is_active %}
-                {{ friend.transports_served }} / {{ friend.transports_serving }}
+              {% if user.is_active %}
+                {{ user.transports_served }} / {{ user.transports_serving }}
               {% else %}—{% endif %}
             </td>
             <td class="right">
-              {% if friend.is_active %}
+              {% if user.is_active %}
               <span class="row-actions">
                 <button class="btn btn-secondary" type="button"
-                        hx-get="/panel/friends/{{ friend.id }}/subscription"
+                        hx-get="/panel/users/{{ user.id }}/subscription"
                         hx-target="#dialog-slot" hx-swap="innerHTML">show link</button>
                 {#
                   UI-PATTERNS §3: a destructive action is not coloured red and it
@@ -144,7 +144,7 @@
                   confirm dialog and a disabled row state. This is that.
                 #}
                 <button class="btn btn-secondary" type="button"
-                        hx-get="/panel/friends/{{ friend.id }}/revoke"
+                        hx-get="/panel/users/{{ user.id }}/revoke"
                         hx-target="#dialog-slot" hx-swap="innerHTML">revoke</button>
               </span>
               {% else %}

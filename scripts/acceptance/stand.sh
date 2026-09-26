@@ -41,7 +41,7 @@ E2E_PROJECT="${E2E_PROJECT:-hashi-e2e}"
 
 # The read-only role the acceptance agent reads through. Fixed and obviously fake,
 # and committed on the same grounds as deploy/e2e.env: it guards a stack with no
-# real nodes and no real friends in it, whose volume is destroyed on the way out.
+# real nodes and no real users in it, whose volume is destroyed on the way out.
 # Nothing here may ever be copied into .env.
 RO_ROLE="${ACCEPTANCE_DB_ROLE:-acceptance_ro}"
 RO_PASSWORD="${ACCEPTANCE_DB_PASSWORD:-acceptance-ro-not-a-real-password}"
@@ -126,7 +126,7 @@ up() {
 Plain HTTP on purpose: the e2e overlay sets HASHI_PUBLIC_HTTPS=false, so the
 operator's session cookie is not https-only and the panel actually logs in.
 
-The control plane is empty — no nodes, no transports, no friends, no hops.
+The control plane is empty — no nodes, no transports, no users, no hops.
 EOF
 }
 

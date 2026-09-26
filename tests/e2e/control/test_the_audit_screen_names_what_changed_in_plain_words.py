@@ -37,8 +37,8 @@ OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 # them may appear on the screen — the sentence is rendered, and a machine key in front
 # of the operator is the design's own failure mode.
 STORED_KEYS = (
-    "friend-added",
-    "friend-revoked",
+    "user-added",
+    "user-revoked",
     "node-added",
     "node-state-changed",
     "node-applied",
@@ -94,10 +94,10 @@ async def test_two_changes_are_named_in_plain_words_and_nothing_else_is(
         },
     )
     assert node.status_code == 201, node.text
-    friend = await operator.post("/api/friends", json={"nickname": nickname})
-    assert friend.status_code == 201, friend.text
+    user = await operator.post("/api/users", json={"nickname": nickname})
+    assert user.status_code == 201, user.text
     url = (
-        await operator.get(f"/api/friends/{friend.json()['id']}/subscription")
+        await operator.get(f"/api/users/{user.json()['id']}/subscription")
     ).json()["url"]
     token = url.rsplit("/", 1)[-1]
     assert len(token) > 16, "the premise: a real bearer token was issued"
@@ -113,12 +113,12 @@ async def test_two_changes_are_named_in_plain_words_and_nothing_else_is(
     assert f"user {nickname} added" in reads, (
         "the audit screen does not name the user that was just added in plain words"
     )
-    # And it says "user", not the word the code uses (decision 9) — asserted on the
-    # sentence this panel composed, above, rather than by sweeping the page for the
-    # word. A blanket sweep is WRONG here and was proven wrong by this stack: another
-    # scenario adds a user nicknamed ``hopfriend-…``, and that name is the operator's
-    # own text, handed back untouched on purpose. The panel translates its own words,
-    # never theirs.
+    # And it says "user", never the word this product stopped using (M29) — asserted
+    # on the sentence this panel composed, above, rather than by sweeping the page for
+    # the word. A blanket sweep is WRONG here and was proven wrong by this stack:
+    # another scenario adds a user nicknamed ``hopuser-…``, and that name is the
+    # operator's own text, handed back untouched on purpose. The panel composes its own
+    # words, never theirs.
     assert f"friend {nickname}" not in reads.lower()
     for key in STORED_KEYS:
         assert key not in reads, f"the screen printed the stored key {key!r}"

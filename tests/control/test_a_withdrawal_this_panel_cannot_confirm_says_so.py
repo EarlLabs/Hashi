@@ -67,7 +67,7 @@ async def a_served_fleet(client, reality_params, *, names=("leaf-nl", "leaf-is")
         assert applied.status_code == 200, applied.text
         node_ids.append(node_id)
 
-    created = await client.post("/api/friends", json={"nickname": "anna"})
+    created = await client.post("/api/users", json={"nickname": "anna"})
     assert created.status_code == 201, created.text
     return node_ids
 
@@ -102,13 +102,13 @@ async def test_a_confirmed_fleet_says_only_what_the_operator_did(
     the day it means something.
     """
     await a_served_fleet(client, reality_params)
-    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    user_id = (await client.get("/api/users")).json()[0]["id"]
 
-    revoked = await client.post(f"/api/friends/{friend_id}/revoke")
+    revoked = await client.post(f"/api/users/{user_id}/revoke")
     assert revoked.status_code == 200, revoked.text
     assert revoked.json()["complete"] is True, revoked.text
 
-    table = await client.get("/panel/friends/table")
+    table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
@@ -129,14 +129,14 @@ async def test_a_withdrawal_that_could_not_be_pushed_is_not_reported_as_no_acces
     in a banner that had already gone.
     """
     node_ids = await a_served_fleet(client, reality_params)
-    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    user_id = (await client.get("/api/users")).json()[0]["id"]
     a_node_that_stops_answering()
 
-    revoked = await client.post(f"/api/friends/{friend_id}/revoke")
+    revoked = await client.post(f"/api/users/{user_id}/revoke")
     assert revoked.status_code == 200, revoked.text
     assert revoked.json()["complete"] is False, revoked.text
 
-    table = await client.get("/panel/friends/table")
+    table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
@@ -215,13 +215,13 @@ async def test_a_node_no_press_can_finish_is_not_sent_to_probe_and_apply(
     own gesture.
     """
     node_ids = await a_served_fleet(client, reality_params, names=("old-leaf",))
-    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    user_id = (await client.get("/api/users")).json()[0]["id"]
     await retire(client, node_ids[0])
 
-    revoked = await client.post(f"/api/friends/{friend_id}/revoke")
+    revoked = await client.post(f"/api/users/{user_id}/revoke")
     assert revoked.status_code == 200, revoked.text
 
-    table = await client.get("/panel/friends/table")
+    table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
@@ -259,17 +259,17 @@ async def test_a_fleet_with_both_kinds_of_doubt_says_which_node_is_which(
     instruction from the half where it works.
     """
     node_ids = await a_served_fleet(client, reality_params)
-    friend_id = (await client.get("/api/friends")).json()[0]["id"]
+    user_id = (await client.get("/api/users")).json()[0]["id"]
     await retire(client, node_ids[1])
     a_node_that_stops_answering()
 
-    revoked = await client.post(f"/api/friends/{friend_id}/revoke")
+    revoked = await client.post(f"/api/users/{user_id}/revoke")
     assert revoked.status_code == 200, revoked.text
 
     session.expire_all()
     still_pushable = (await nodes.get_node(session, node_ids[0])).name
     written_off = (await nodes.get_node(session, node_ids[1])).name
-    said = " ".join((await client.get("/panel/friends/table")).text.split())
+    said = " ".join((await client.get("/panel/users/table")).text.split())
 
     # Each host under the sentence whose instruction is true of it, asserted by the join
     # between the two rather than by both merely being on the page.

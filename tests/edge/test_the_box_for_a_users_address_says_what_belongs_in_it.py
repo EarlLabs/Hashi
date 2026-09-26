@@ -7,7 +7,7 @@ WHAT: that every transport declaring each consumer needs an address of its own g
 WHY:  M25's walk, on the enable dialog. ``peer_tunnel_address`` is required, declares no
       default and has no bounds, so ``TuningField`` has nothing to put in the box's
       placeholder — it renders empty. The sentence under it said what the value was for
-      ("the first address given out when this transport is offered to friends") and
+      ("the first address given out when this transport is offered to users") and
       never what to type, so an operator meeting the family for the first time had one
       empty box, one sentence about hops, and a refusal that pointed back at the same
       box. The same finding M20 answered for the obfuscation headers, one field over:

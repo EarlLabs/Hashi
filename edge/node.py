@@ -1,8 +1,8 @@
-"""What a renderer is allowed to know about a node and a friend.
+"""What a renderer is allowed to know about a node and a user.
 
 WHAT: the two immutable value objects every transport renderer takes as input —
       ``NodeView`` (one node, as configuration sees it) and ``Credential`` (one
-      friend's material for one node × transport).
+      user's material for one node × transport).
 WHY:  ``edge`` is a pure library and must never import ``control``, so it cannot
       take a SQLAlchemy model as a parameter. Something has to describe the shape
       of a node, and it has to live on this side of the boundary. These types are
@@ -61,42 +61,42 @@ class NodeView:
     # on an entry node sits inside the network the hop exists to leave.
     #
     # On the node rather than in a transport's parameters because it belongs to the node's
-    # WAY OUT, and a node has one of those (``egress.HOP_ROUTE_TABLE``): two friend-facing
+    # WAY OUT, and a node has one of those (``egress.HOP_ROUTE_TABLE``): two user-facing
     # transports on one entry must look names up in the same place, and a copy per
     # transport is two places to disagree.
     #
     # **M23 widened what it answers, and the widening is the point.** It said "while its
-    # traffic leaves through a hop" because a proxy was the only consumer. A friend's
-    # kernel-tunnel config is the second, and it asks the identical question: a friend's
+    # traffic leaves through a hop" because a proxy was the only consumer. A user's
+    # kernel-tunnel config is the second, and it asks the identical question: a user's
     # traffic leaves through this node, so the names it asks for are looked up wherever
     # this node looks names up. The real leaf proved the field was the one an operator
     # reaches for — the owner set it, and nothing used it, and no name resolved. So a node
-    # that never dials a hop now renders this into the config its friends import
+    # that never dials a hop now renders this into the config its users import
     # (``egress.client_resolvers``), and a transport that wants its own answer overrides
     # it with ``client_dns``.
     #
     # What follows for `control`, and it is a wording change rather than a schema one: the
     # panel still says "leave it empty on a node that will never dial a hop", which is now
-    # the sentence that costs a friend their DNS.
+    # the sentence that costs a user their DNS.
     resolver: str | None
 
 
 @dataclass(frozen=True)
 class Credential:
-    """One friend's material for exactly one node × one transport.
+    """One user's material for exactly one node × one transport.
 
     Scoped that narrowly on purpose: the charter's sixth criterion is that
-    revoking a friend stops them on *every* node and *every* protocol. That is
-    only expressible if each (friend, node, transport) triple has its own
+    revoking a user stops them on *every* node and *every* protocol. That is
+    only expressible if each (user, node, transport) triple has its own
     material, so removing one row cannot leave a working copy elsewhere.
     """
 
-    # Opaque per-friend, per-node, per-transport identity. What it *means* is the
+    # Opaque per-user, per-node, per-transport identity. What it *means* is the
     # transport's business (for VLESS it is the client UUID); `control` stores it
     # and hands it back without interpreting it.
     subject: str
 
-    # The rest of this friend's material for this transport, keyed by the name
+    # The rest of this user's material for this transport, keyed by the name
     # the transport's own ``Params`` / URI builder expects. Values are already
     # decrypted by `control` at the point of use — a renderer never decrypts,
     # because decryption is I/O and this zone is pure.

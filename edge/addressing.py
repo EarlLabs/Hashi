@@ -7,10 +7,10 @@ WHAT: the arithmetic behind a pool of tunnel addresses. ``pool`` enumerates one,
       and ``networks_overlap`` answers whether two tunnels would share a range.
 WHY:  M17, found in the field. ``peer_tunnel_address`` was a single operator parameter,
       so a WireGuard-family transport had exactly one address to give out and therefore
-      exactly one friend — against a charter scale of ~30-50. The renderers' refusal to
+      exactly one user — against a charter scale of ~30-50. The renderers' refusal to
       put two peers on one address (``AmbiguousPeerRoute``) is right and is untouched:
       on a WireGuard server ``AllowedIPs`` is the authorisation list AND the routing
-      table, so a shared address is a silent hijack of the first friend's return path.
+      table, so a shared address is a silent hijack of the first user's return path.
       What was missing is where the second address comes from.
 
       **The second argued exception to "a transport is one directory", beside
@@ -110,7 +110,7 @@ def pool_problem(first: str, within: str, size: int) -> str | None:
     interface that comes up:
 
     * **a pool of fewer than one** hands nobody an address, so the transport serves the
-      friends it is offered to by giving them nothing.
+      users it is offered to by giving them nothing.
     * **values that do not parse** — refused here rather than at render, where the
       operator is no longer looking.
     * **IPv6** — the forwarding rules this project renders are IPv4 only

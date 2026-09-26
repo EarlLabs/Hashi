@@ -37,7 +37,7 @@ services:
       HASHI_SECRET_KEY: e2e-not-a-real-secret-key-0000000000000000000
       HASHI_OPERATOR_USERNAME: owner
       # scrypt hash of "e2e-operator-password". Committed deliberately: it guards a
-      # disposable stack with no real nodes and no real friends in it. Regenerate
+      # disposable stack with no real nodes and no real users in it. Regenerate
       # with `python -m control.cli hash-password` if the scenarios change it.
       #
       # Every `$` is DOUBLED. `$` starts an interpolation in compose, so the real

@@ -1,7 +1,7 @@
 """A revocation whose push SUCCEEDS still reports, rather than 500 — M4.2.
 
 WHAT: the half of ``apply_node`` that runs after the node accepted the new config,
-      reached the way an operator reaches it: ``POST /api/friends/{id}/revoke``.
+      reached the way an operator reaches it: ``POST /api/users/{id}/revoke``.
 WHY:  every other test in this zone drives the apply path to a FAILURE — the fixture
       nodes have no SSH key, so ``target_for`` refuses before anything is dialled.
       That leaves the success half of ``apply_node`` unexercised on the one path it
@@ -86,8 +86,8 @@ def a_refused_connection() -> OSError:
     )
 
 
-async def fleet_with_friend(client, session, reality_params, ws_params):
-    """Two reachable nodes, three transports between them, one friend on all of them.
+async def fleet_with_user(client, session, reality_params, ws_params):
+    """Two reachable nodes, three transports between them, one user on all of them.
 
     Deliberately close to ``test_revocation.py``'s fixture, with one difference that is
     the whole point: these nodes carry an SSH address and key, so the push half runs to
@@ -126,11 +126,25 @@ async def fleet_with_friend(client, session, reality_params, ws_params):
     for node_id in node_ids:
         await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
-    return node_ids, friend_id
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    return node_ids, user_id
 
 
-async def test_revoking_a_friend_reports_instead_of_failing(
+# READ THIS BEFORE ADDING A TEST HERE — M28.16. ``fleet_with_user`` calls
+# ``set_node_state`` through the test's OWN session, and ``Node.transports`` is
+# ``lazy="selectin"``, so every node and every node-transport above lands in that
+# session's identity map as it was BEFORE the revocation ran. The revocation writes
+# through the request's own session, and with ``expire_on_commit=False`` a later ``get``
+# or ``select`` here hands back the copy in the map instead of the row — so an assertion
+# about what the push recorded is answered by a snapshot taken before it. The map holds
+# WEAK references and ``Node``↔``NodeTransport`` back-populate each other into a
+# reference cycle, so whether the stale copy is still there comes down to whether the
+# cyclic collector has run: the same read passes alone and fails under the suite. Expire
+# first, always — it costs one line and it is the difference between a test that can fail
+# and one that cannot.
+
+
+async def test_revoking_a_user_reports_instead_of_failing(
     client, session, reality_params, ws_params, accepting_nodes
 ) -> None:
     """The operator gets the outcome, on the operation whose whole purpose is reporting.
@@ -140,9 +154,9 @@ async def test_revoking_a_friend_reports_instead_of_failing(
     already committed a revocation — calling ``apply_node`` on a freshly selected node
     would not reproduce it.
     """
-    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+    node_ids, user_id = await fleet_with_user(client, session, reality_params, ws_params)
 
-    response = await client.post(f"/api/friends/{friend_id}/revoke")
+    response = await client.post(f"/api/users/{user_id}/revoke")
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -164,10 +178,12 @@ async def test_a_successful_revocation_push_records_what_was_applied(
 
     from control.app.models import NodeTransport
 
-    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+    node_ids, user_id = await fleet_with_user(client, session, reality_params, ws_params)
 
-    await client.post(f"/api/friends/{friend_id}/revoke")
+    await client.post(f"/api/users/{user_id}/revoke")
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     rows = (
         await session.execute(
             select(NodeTransport).where(NodeTransport.node_id.in_(node_ids))
@@ -190,10 +206,17 @@ async def test_a_pushed_node_is_left_active(
     """
     from control.app.services import nodes
 
-    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+    node_ids, user_id = await fleet_with_user(client, session, reality_params, ws_params)
 
-    await client.post(f"/api/friends/{friend_id}/revoke")
+    await client.post(f"/api/users/{user_id}/revoke")
 
+    # The note under ``fleet_with_user`` says why this line is not optional. Without it
+    # this test cannot fail WHILE THE STALE COPY IS ALIVE: the copy in the map already
+    # says ``active``, so a revocation that degraded every node it pushed to would still
+    # be read back as untouched. Once the collector has taken that copy the read reaches
+    # the row and the same test does see the damage — which is the same lottery as the
+    # flake one file over, landing the other way. Expiring settles it in both directions.
+    session.expire_all()
     for node_id in node_ids:
         node = await nodes.get_node(session, node_id)
         assert node.state == NodeState.ACTIVE
@@ -254,13 +277,13 @@ async def test_an_unexpected_error_mid_push_is_reported_and_the_fan_out_continue
     """One node's crash must not cost the operator the outcome of the others.
 
     This is criterion 6's reporting obligation: a fan-out that aborts on the first node
-    says nothing about the rest, and the revoked friend stays connected to every one of
+    says nothing about the rest, and the revoked user stays connected to every one of
     them with nobody aware of it.
     """
     caplog.set_level(logging.ERROR)
-    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+    node_ids, user_id = await fleet_with_user(client, session, reality_params, ws_params)
 
-    response = await client.post(f"/api/friends/{friend_id}/revoke")
+    response = await client.post(f"/api/users/{user_id}/revoke")
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -283,6 +306,8 @@ async def test_an_unexpected_error_mid_push_is_reported_and_the_fan_out_continue
     # and must not stay in anyone's subscription. ``==`` not ``is`` — String column.
     from control.app.services import nodes
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.DEGRADED
     assert "MissingGreenlet" in (failed_node.state_detail or "")
@@ -294,13 +319,13 @@ async def test_an_unexpected_error_after_the_push_leaves_the_node_alone(
     """A node that WAS configured is reported as not updated, but not degraded.
 
     The distinction is the whole reason the widened catch lives in two places: degrading
-    a node that is serving perfectly well would take it out of every friend's
+    a node that is serving perfectly well would take it out of every user's
     subscription over a bug in our own bookkeeping.
     """
     caplog.set_level(logging.ERROR)
-    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+    node_ids, user_id = await fleet_with_user(client, session, reality_params, ws_params)
 
-    response = await client.post(f"/api/friends/{friend_id}/revoke")
+    response = await client.post(f"/api/users/{user_id}/revoke")
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -315,6 +340,8 @@ async def test_an_unexpected_error_after_the_push_leaves_the_node_alone(
 
     from control.app.services import nodes
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.ACTIVE
     assert failed_node.state_detail is None
@@ -366,9 +393,9 @@ async def test_an_unexpected_error_never_carries_the_node_address_outward(
     assert NODE_ADDRESS in str(a_refused_connection())
 
     caplog.set_level(logging.ERROR)
-    node_ids, friend_id = await fleet_with_friend(client, session, reality_params, ws_params)
+    node_ids, user_id = await fleet_with_user(client, session, reality_params, ws_params)
 
-    response = await client.post(f"/api/friends/{friend_id}/revoke")
+    response = await client.post(f"/api/users/{user_id}/revoke")
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -385,6 +412,8 @@ async def test_an_unexpected_error_never_carries_the_node_address_outward(
 
     from control.app.services import nodes
 
+    # The note under ``fleet_with_user`` says why this line is not optional.
+    session.expire_all()
     failed_node = await nodes.get_node(session, failed_id)
     assert failed_node.state == NodeState.DEGRADED
     assert NODE_ADDRESS not in (failed_node.state_detail or ""), (

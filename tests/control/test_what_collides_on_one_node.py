@@ -6,7 +6,7 @@ WHAT: the uniqueness rule after it moved off ``(node, transport_name)`` and onto
 WHY:  the old rule was enforced in terms of the wrong concept, at the worst moment, with
       no way to undo the state that triggered it. It made the runbook's own advice
       impossible: AmneziaWG is mandated for the entry→leaf hop and recommended for
-      friends on the same box, so the first one enabled excluded the other forever.
+      users on the same box, so the first one enabled excluded the other forever.
 HOW:  through the real services and a real database. The half that cannot be proven here
       is whether two daemons on one host actually come up — that is the owner's field
       check, and nothing in this file claims it. What IS proven is that the control plane
@@ -16,7 +16,7 @@ HOW:  through the real services and a real database. The half that cannot be pro
       THE RANGE RULE IS M17.1c AND LIVES HERE because it is the same question asked of
       the same function: what may two transports on one node share. It is the one of the
       three with a person on the other end of it — two tunnels whose ranges meet can hand
-      two friends the same address, and the host's single routing table then sends one
+      two users the same address, and the host's single routing table then sends one
       of them the other's traffic. No rendered file shows it, because each file is
       correct on its own.
 """
@@ -34,10 +34,10 @@ HOP_TRANSPORT = "amneziawg"
 
 # Two ports, because one node cannot have one. Neither is a value this codebase would
 # ship — they are typed here the way an operator types them into the form.
-FRIEND_PORT = 51820
+USER_PORT = 51820
 HOP_PORT = 51821
 
-# How many users a friend-facing row of this transport may hand an address to — M17.
+# How many users a user-facing row of this transport may hand an address to — M17.
 # Far above anything this file creates, and comfortably inside the /24s below: nothing
 # here is about the pool, and a size that only just fitted would turn a port test red the
 # day somebody adds a user to it. A HOP end takes none of this: a hop is a pair of peers,
@@ -49,7 +49,7 @@ POOL_SIZE = 100
 def wg_params() -> dict[str, object]:
     """The operator-supplied half of one wg-quick-family end. Material is minted."""
     return {
-        "port": FRIEND_PORT,
+        "port": USER_PORT,
         "tunnel_address": "10.70.0.1/24",
         "peer_tunnel_address": "10.70.0.2/24",
         "mtu": 1280,
@@ -73,7 +73,7 @@ async def a_node(client, name: str, address: str) -> str:
 
 
 async def offered(client, node_id: str, params: dict) -> dict:
-    """The runbook's Shape A step 2: this transport, offered to friends, on this box."""
+    """The runbook's Shape A step 2: this transport, offered to users, on this box."""
     response = await client.post(
         f"/api/nodes/{node_id}/transports",
         json={
@@ -87,12 +87,12 @@ async def offered(client, node_id: str, params: dict) -> dict:
 
 
 async def the_hop_an_entry_box_would_dial(client, wg_params):
-    """A box offering the transport to friends, and the hop it then asks to dial.
+    """A box offering the transport to users, and the hop it then asks to dial.
 
     The runbook's own sequence, and the whole of what this file was written around: the
     product refused it with a 409 about UNIQUENESS until M15 moved that rule onto the
     port. It is refused again since M25 and for an unrelated reason — an entry node's
-    friends leave through its hop, and a kernel tunnel cannot carry somebody else's
+    users leave through its hop, and a kernel tunnel cannot carry somebody else's
     packets there — so the response is RETURNED rather than asserted, and the one test
     below that is about the entry side reads it.
 
@@ -127,22 +127,22 @@ async def the_hop_an_entry_box_would_dial(client, wg_params):
 
 
 async def a_leaf_carrying_both(client, wg_params) -> tuple[str, dict, dict]:
-    """A node offering the transport to friends AND holding the LEAF end of a hop.
+    """A node offering the transport to users AND holding the LEAF end of a hop.
 
     THE arrangement this file is about: two rows of one transport on one node, two ports,
     two config names and two ranges. It is the side of the tunnel that WAITS, and since
-    M25 that is the only side of it there is — an ENTRY node's friends must leave through
+    M25 that is the only side of it there is — an ENTRY node's users must leave through
     the hop, which a kernel tunnel cannot express for them, so the panel now refuses to
     build that pair at either door rather than accepting it and refusing the apply. A
-    leaf has no hop of its own, so its friends exit from it as they always have, which is
+    leaf has no hop of its own, so its users exit from it as they always have, which is
     route B and is what nine field walks were carried on.
 
-    Returns the node holding both rows, its friend-facing row and the hop's body — in
+    Returns the node holding both rows, its user-facing row and the hop's body — in
     which the end ON THAT NODE is ``hop["leaf"]``.
     """
     entry_id = await a_node(client, "dialer-1", "192.0.2.80")
     leaf_id = await a_node(client, "landing-1", "192.0.2.81")
-    friend_row = await offered(client, leaf_id, wg_params)
+    user_row = await offered(client, leaf_id, wg_params)
 
     hop_side = {
         **wg_params,
@@ -165,12 +165,12 @@ async def a_leaf_carrying_both(client, wg_params) -> tuple[str, dict, dict]:
         },
     )
     assert established.status_code == 201, established.text
-    return leaf_id, friend_row, established.json()
+    return leaf_id, user_row, established.json()
 
 
 # --- what is now allowed ------------------------------------------------------
 
-async def test_one_node_carries_a_friend_facing_and_a_hop_end_of_one_transport(
+async def test_one_node_carries_a_user_facing_and_a_hop_end_of_one_transport(
     client, wg_params
 ) -> None:
     """The sequence that answered 409 in the field, and the rows it now writes.
@@ -180,24 +180,24 @@ async def test_one_node_carries_a_friend_facing_and_a_hop_end_of_one_transport(
     uniqueness (see the entry-side test below). Nothing about M15's own answer changed:
     one node, two rows, one transport, two ids.
     """
-    node_id, friend_row, hop = await a_leaf_carrying_both(client, wg_params)
+    node_id, user_row, hop = await a_leaf_carrying_both(client, wg_params)
 
     assert hop["leaf"]["node_id"] == node_id
-    assert hop["leaf"]["transport_name"] == friend_row["transport_name"]
-    assert hop["leaf"]["id"] != friend_row["id"]
+    assert hop["leaf"]["transport_name"] == user_row["transport_name"]
+    assert hop["leaf"]["id"] != user_row["id"]
 
 
 async def test_the_two_rows_are_placed_under_two_names(client, wg_params) -> None:
     """The names are what stops them being one file and one network interface.
 
-    The friend-facing row keeps the transport's own name, which is what every node
+    The user-facing row keeps the transport's own name, which is what every node
     already in the field has on disk — a scheme that renamed it would take the interface
     down under a running daemon on the next apply.
     """
-    _, friend_row, hop = await a_leaf_carrying_both(client, wg_params)
+    _, user_row, hop = await a_leaf_carrying_both(client, wg_params)
 
-    assert friend_row["config_name"] == HOP_TRANSPORT
-    assert hop["leaf"]["config_name"] != friend_row["config_name"]
+    assert user_row["config_name"] == HOP_TRANSPORT
+    assert hop["leaf"]["config_name"] != user_row["config_name"]
     # The entry is a fresh node, so it keeps the plain name: the rule is per node.
     assert hop["entry"]["config_name"] == HOP_TRANSPORT
 
@@ -238,35 +238,35 @@ async def test_the_two_rows_render_to_two_files_the_node_can_actually_run(
         assert node_stack.config_name_is_usable(HOP_TRANSPORT, stem), stem
 
     # And the two files are genuinely different configurations rather than one rendered
-    # twice: the hop end dials a peer, the friend-facing end waits for devices.
+    # twice: the hop end dials a peer, the user-facing end waits for devices.
     assert len(set(configs.values())) == 2
 
 
-async def test_an_entry_box_is_not_given_a_kernel_tunnel_for_its_friends_at_all(
+async def test_an_entry_box_is_not_given_a_kernel_tunnel_for_its_users_at_all(
     client, wg_params
 ) -> None:
     """The OTHER refusal on this shape, which M15 does not remove — and which M25 moved.
 
     It used to be at the APPLY. The two rows were written, the ``409`` about uniqueness
     was gone, and the entry node then could not be rendered: a kernel tunnel hands its
-    packets to the node's own routing stack, so an entry node's friends cannot be made to
+    packets to the node's own routing stack, so an entry node's users cannot be made to
     leave through a hop on a different interface, and ``edge`` refuses that out loud
-    rather than writing a file that would send a friend in Russia out of the Russian node
+    rather than writing a file that would send a user in Russia out of the Russian node
     (``edge/egress.py``, M14.3 and decision 3).
 
     That refusal is correct and is untouched. What M25's walk measured is what it cost to
-    arrive so late: the row was accepted, every active friend was granted a credential on
+    arrive so late: the row was accepted, every active user was granted a credential on
     it, and one of them was handed a complete configuration file for a node that could
     never be applied. So the same rule is now asked at both doors, and this file's own
-    sequence — offer the transport to friends on the entry box, then hop from it — is
+    sequence — offer the transport to users on the entry box, then hop from it — is
     answered where the operator is standing. The 409 is back and it is a different 409:
-    not "already configured", which was M15's defect, but "this node's friends would have
+    not "already configured", which was M15's defect, but "this node's users would have
     no way out", with both moves out of it named.
 
     What the doors do NOT do is un-write a node that is already in that state. The render
-    refusal is therefore still the thing standing between such a node and a friend's
+    refusal is therefore still the thing standing between such a node and a user's
     traffic in the wrong country, and it is asserted in
-    ``tests/control/test_both_doors_refuse_a_friend_with_no_way_out.py`` — on a row put
+    ``tests/control/test_both_doors_refuse_a_user_with_no_way_out.py`` — on a row put
     there by hand, because no surface of this product will produce one now.
     """
     refused = await the_hop_an_entry_box_would_dial(client, wg_params)
@@ -304,7 +304,7 @@ async def test_two_transports_on_one_node_may_not_share_a_port(
     assert collided.status_code == 409, collided.text
     assert collided.json()["error"]["code"] == "conflict"
     message = collided.json()["error"]["message"]
-    assert str(FRIEND_PORT) in message, message
+    assert str(USER_PORT) in message, message
     assert "port-1" in message, message
 
 
@@ -314,8 +314,8 @@ async def test_a_hop_end_is_refused_over_the_port_the_node_already_listens_on(
     """The same rule at the other creation path, so the two cannot disagree.
 
     ON THE LEAF END SINCE M25, and the move is not a weakening: the node that already
-    offers the transport to friends has to be the one that WAITS, because a node that
-    DIALS a hop is refused this transport for its friends before any port is looked at
+    offers the transport to users has to be the one that WAITS, because a node that
+    DIALS a hop is refused this transport for its users before any port is looked at
     (see the entry-side test above). The rule under test is unchanged — a hop end may not
     take a port its own node already binds — and it is asked of the same call on the same
     path. What changed is which of two refusals a submission with both faults meets
@@ -338,7 +338,7 @@ async def test_a_hop_end_is_refused_over_the_port_the_node_already_listens_on(
             "leaf_node_id": leaf_id,
             "transport_name": HOP_TRANSPORT,
             "entry_params": hop_side,
-            # The port the leaf node already offers to friends.
+            # The port the leaf node already offers to users.
             "leaf_params": {
                 **hop_side,
                 "tunnel_address": "10.73.0.2/24",
@@ -349,7 +349,7 @@ async def test_a_hop_end_is_refused_over_the_port_the_node_already_listens_on(
 
     assert collided.status_code == 409, collided.text
     assert collided.json()["error"]["code"] == "conflict"
-    assert str(FRIEND_PORT) in collided.json()["error"]["message"]
+    assert str(USER_PORT) in collided.json()["error"]["message"]
 
 
 async def test_a_switched_off_transport_still_holds_its_port(
@@ -394,7 +394,7 @@ async def test_retyping_a_port_onto_one_the_node_already_uses_is_refused(
         await rotation.replace_params(
             session,
             node_transport_id=hop["leaf"]["id"],
-            params={transports_service.PORT_FIELD: FRIEND_PORT},
+            params={transports_service.PORT_FIELD: USER_PORT},
         )
 
 
@@ -402,7 +402,7 @@ async def test_retyping_a_port_onto_one_the_node_already_uses_is_refused(
 #
 # The third thing that collides, and the only one whose failure has a victim: the port
 # rule stops a container that will not start, the name rule stops two files at one path,
-# and this one stops one friend's return traffic arriving at another friend's device.
+# and this one stops one user's return traffic arriving at another user's device.
 # Everything here goes through the same ``placement`` call as the two above.
 
 async def test_two_tunnels_on_one_node_may_not_share_a_range(
@@ -479,7 +479,7 @@ async def test_a_hop_end_may_not_be_laid_over_a_tunnel_the_node_already_carries(
 ) -> None:
     """The same rule at the other creation path, so the two cannot disagree.
 
-    The runbook puts a friend-facing tunnel and a hop end on ONE entry box, which is the
+    The runbook puts a user-facing tunnel and a hop end on ONE entry box, which is the
     shape M15 unlocked — and it is exactly the shape this rule matters in: both data
     planes are on that host, writing into one routing table.
     """
@@ -519,7 +519,7 @@ async def test_retyping_a_tunnel_onto_one_the_node_already_carries_is_refused(
 ) -> None:
     """The third path that writes a range, held to the same rule — M17.1c.
 
-    A hop end moved onto the friend-facing tunnel's own range. It is the path that had
+    A hop end moved onto the user-facing tunnel's own range. It is the path that had
     nothing at all: enabling and establishing both went through ``placement.claim``, and
     replacing a parameter went through neither, so a range that could not be typed into
     the form could still be typed into this one.
@@ -558,7 +558,7 @@ async def test_a_node_whose_two_ranges_already_meet_can_still_be_rotated(
     The overlap is written by hand because no surface can produce one any more, which is
     the point: this is the upgrade path, not a state the product still creates.
     """
-    _, friend_row, hop = await a_leaf_carrying_both(client, wg_params)
+    _, user_row, hop = await a_leaf_carrying_both(client, wg_params)
     end = await session.get(NodeTransport, hop["leaf"]["id"])
     end.params = {
         **end.params,
@@ -568,19 +568,19 @@ async def test_a_node_whose_two_ranges_already_meet_can_still_be_rotated(
     await session.commit()
 
     replaced = await rotation.replace_params(
-        session, node_transport_id=friend_row["id"], params={"port": 51999}
+        session, node_transport_id=user_row["id"], params={"port": 51999}
     )
 
     assert replaced.rotated == ["port"]
     session.expire_all()
-    assert (await session.get(NodeTransport, friend_row["id"])).params["port"] == 51999
+    assert (await session.get(NodeTransport, user_row["id"])).params["port"] == 51999
 
     # And the rule itself is untouched: a range that MOVES is still measured against
     # every other tunnel on the node, overlap already present or not.
     with pytest.raises(Conflict):
         await rotation.replace_params(
             session,
-            node_transport_id=friend_row["id"],
+            node_transport_id=user_row["id"],
             params={"tunnel_address": "10.70.0.1/23"},
         )
 
@@ -873,7 +873,7 @@ async def test_the_enable_dialog_still_offers_a_transport_the_node_already_runs(
     """The new freedom has to work in both directions, from the only surface there is.
 
     The dialog used to subtract every transport the node already had a row for, hop ends
-    included — so friends-then-hop worked and hop-then-friends did not, and the second is
+    included — so users-then-hop worked and hop-then-users did not, and the second is
     the shape a leaf legitimately takes. Whether a second instance is legal is
     ``placement``'s single answer; the form no longer pre-empts it.
     """
@@ -898,12 +898,12 @@ async def test_the_enable_dialog_still_offers_a_transport_the_node_already_runs(
 async def a_user_on(client, node_id: str, nickname: str) -> str:
     """One person holding material on this node, which is what removal must destroy.
 
-    The node is put into service first: a friend is granted every SERVING node at the
+    The node is put into service first: a user is granted every SERVING node at the
     moment they are created, so the order is what puts a credential on the row.
     """
     activated = await client.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
     assert activated.status_code == 200, activated.text
-    created = await client.post("/api/friends", json={"nickname": nickname})
+    created = await client.post("/api/users", json={"nickname": nickname})
     assert created.status_code == 201, created.text
     return created.json()["id"]
 
@@ -938,7 +938,7 @@ async def test_removing_a_transport_frees_the_port_and_the_name_it_held(
 
     assert reused.status_code == 201, reused.text
     # The PORT is free: this is the same number the removed row listened on.
-    assert reused.json()["params"][transports_service.PORT_FIELD] == FRIEND_PORT
+    assert reused.json()["params"][transports_service.PORT_FIELD] == USER_PORT
     # …and so is the NAME: a second instance would have been placed under a suffix.
     assert reused.json()["config_name"] == HOP_TRANSPORT
 
@@ -970,9 +970,9 @@ async def test_removing_a_transport_takes_every_credential_minted_under_it(
     assert list(left.scalars().unique()) == [], "a user's material outlived its transport"
     assert await session.get(NodeTransport, row["id"]) is None
     # And the person is untouched: removing a protocol is not revoking anybody.
-    friends = (await client.get("/api/friends")).json()
-    assert [friend["nickname"] for friend in friends] == ["removed-from-under-them"]
-    assert friends[0]["revoked_at"] is None
+    users = (await client.get("/api/users")).json()
+    assert [user["nickname"] for user in users] == ["removed-from-under-them"]
+    assert users[0]["revoked_at"] is None
 
 
 async def test_a_hop_end_is_not_removed_this_way_and_the_refusal_names_what_is(
@@ -981,10 +981,10 @@ async def test_a_hop_end_is_not_removed_this_way_and_the_refusal_names_what_is(
     """A hop is a pair, so the refusal points at the operation that takes the pair.
 
     The mirror of ``dissolve_hop`` refusing anything that is not already a hop end — the
-    refusal that made a friend-facing row unclearable in the first place. Neither path
+    refusal that made a user-facing row unclearable in the first place. Neither path
     silently does half the other's job, and each names the other.
     """
-    _, friend_row, hop = await a_leaf_carrying_both(client, wg_params)
+    _, user_row, hop = await a_leaf_carrying_both(client, wg_params)
 
     refused = await client.delete(f"/api/transports/{hop['leaf']['id']}")
 
@@ -997,8 +997,8 @@ async def test_a_hop_end_is_not_removed_this_way_and_the_refusal_names_what_is(
 
     # …and the operation the refusal names does work, on the same row.
     assert (await client.delete(f"/api/hops/{hop['leaf']['id']}")).status_code == 200
-    # The friend-facing row on that node is untouched by either operation.
-    assert await session.get(NodeTransport, friend_row["id"]) is not None
+    # The user-facing row on that node is untouched by either operation.
+    assert await session.get(NodeTransport, user_row["id"]) is not None
 
 
 async def test_removing_from_the_console_says_what_the_node_is_still_running(
@@ -1047,7 +1047,7 @@ async def test_removing_from_the_console_says_what_the_node_is_still_running(
     assert "the node keeps serving it" in removed.text
     assert "apply it to stop that" not in removed.text
     # Three collections move when a row leaves, and the tables refresh themselves.
-    assert removed.headers["HX-Trigger"] == "nodes-changed, keys-changed, friends-changed"
+    assert removed.headers["HX-Trigger"] == "nodes-changed, keys-changed, users-changed"
     assert await console.offers_on(session, node_id) == []
 
 

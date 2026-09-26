@@ -2,7 +2,7 @@
 
 WHAT: the three writes a node record admits after it exists — ``set_node_state``,
       ``set_resolver``, ``set_ssh_key`` — and the one that turns a transport on and off
-      for friends (``set_transport_enabled``), each asked to change a row that has moved
+      for users (``set_transport_enabled``), each asked to change a row that has moved
       since the calling session last read it.
 WHY:  all four decide whether to write by comparing the new value against the object
       their caller's session is holding, and skip the write when the two agree:
@@ -19,7 +19,7 @@ WHY:  all four decide whether to write by comparing the new value against the ob
       decide whether the transition is ALLOWED, so a node something else retired still
       looks draft — and ``retired -> active``, the one transition the state machine
       exists to refuse, goes through as ``draft -> active``, putting a destroyed host's
-      address back into every friend's subscription.
+      address back into every user's subscription.
 HOW:  two sessions against one real Postgres, which is what this actually is: the test's
       own session holds the node, and the SECOND change arrives through the API or the
       panel, in the request's own session, the way it does in the field. What is
@@ -133,7 +133,7 @@ async def test_a_resolver_reaches_a_row_another_session_moved(client, session) -
 
     An operator who set a resolver, had it changed elsewhere, and set it back to what
     they meant was told the record held their value while it held the other one — and a
-    resolver is what decides whose network a friend's lookups leave through.
+    resolver is what decides whose network a user's lookups leave through.
     """
     node_id = await a_node(client, name="leaf-2")
     held = await nodes.set_resolver(session, node_id=node_id, resolver=A_RESOLVER)
@@ -183,8 +183,8 @@ async def test_a_withdrawal_reaches_a_row_another_session_moved(
 ) -> None:
     """The same shape one table over, and the half of criterion 3 it would cost.
 
-    Enabling a transport from the panel reaches every friend's subscription; turning it
-    off has to take it back out of every friend's subscription, with nobody touching
+    Enabling a transport from the panel reaches every user's subscription; turning it
+    off has to take it back out of every user's subscription, with nobody touching
     their device. Decided against a copy that was withdrawn once already, the second
     withdrawal finds nothing to do and answers the operator with a toast while the row
     stays offered.
@@ -222,7 +222,7 @@ async def test_a_transition_the_machine_refuses_is_refused_against_the_row(
 
     ``retired`` is terminal on purpose: a retired node's host has usually been destroyed,
     and re-activating the record would put an address that may now belong to a stranger
-    back into every friend's subscription (``NodeState.allowed_from``). Decided against a
+    back into every user's subscription (``NodeState.allowed_from``). Decided against a
     copy loaded before the retirement, the machine is asked ``draft -> active`` instead —
     which it permits — and the write goes through.
     """

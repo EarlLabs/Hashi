@@ -57,7 +57,7 @@ def test_the_node_script_row_does_not_promise_a_serving_host(deployment: str) ->
     """The measured sentence, and the one this milestone exists to retire.
 
     A bare host reaches *serving traffic* after one command and THREE panel actions —
-    register the node, offer it a transport, apply — and a friend's packets move after
+    register the node, offer it a transport, apply — and a user's packets move after
     five. The script is honest about this; the page was not.
     """
     row = re.search(r"^\| node bootstrap \|[^\n]*$", deployment, re.M)
@@ -143,7 +143,7 @@ def test_the_charter_counts_what_the_walk_counted(deployment: str) -> None:
     """The narrowing is a measurement, not a hedge — so the numbers are on the page.
 
     Each row of that table is a count the walk took on bare hosts, and the one that
-    matters most is the fifth: a friend's packets move after FIVE panel actions, because
+    matters most is the fifth: a user's packets move after FIVE panel actions, because
     adding a user is a change no node has been told about until the next apply.
     """
     said = flat(deployment)
@@ -151,7 +151,7 @@ def test_the_charter_counts_what_the_walk_counted(deployment: str) -> None:
         "the charter no longer counts what it takes to get a node serving"
     )
     assert "apply again" in said, (
-        "the charter's count omits the second apply, which is the step a friend's traffic "
+        "the charter's count omits the second apply, which is the step a user's traffic "
         "does not move without"
     )
     assert "is not brought up by one script" in said, (

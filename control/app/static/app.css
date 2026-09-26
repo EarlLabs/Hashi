@@ -339,7 +339,7 @@
 .htmx-request > .loaded { display: none; }
 
 /* One button waiting on its own request. This is what a row action indicates now
-   that friends_table.html and overview_body.html disinherit hx-indicator: the
+   that users_table.html and overview_body.html disinherit hx-indicator: the
    feedback is on the control that was pressed, instead of the whole list vanishing
    into a skeleton to fetch a dialog that changes nothing about the list. */
 .btn.htmx-request { opacity: 0.55; cursor: progress; }

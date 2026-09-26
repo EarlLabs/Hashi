@@ -1,12 +1,12 @@
 """What the control plane pushes to an entry node that has a hop — M3.
 
-WHAT: that a friend-facing transport on a node with a hop is rendered to leave through
+WHAT: that a user-facing transport on a node with a hop is rendered to leave through
       that hop, and that a node without one is rendered to leave by its own route.
 WHY:  this is the charter's core claim and the failure it hides is invisible. Before M3
       the entry's config had one hardcoded outbound and the node dialled the internet
-      itself: the friend connects, pages load, the panel shows two active nodes and a
+      itself: the user connects, pages load, the panel shows two active nodes and a
       live hop, and the exit is in Russia. Nothing logs it, and nothing may. Since M16
-      the same holds for where a friend's destination NAMES are looked up, which
+      the same holds for where a user's destination NAMES are looked up, which
       ``sendThrough`` alone never reached.
 
       The edge zone proves a renderer given the policy obeys it. This file proves the
@@ -17,7 +17,7 @@ WHY:  this is the charter's core claim and the failure it hides is invisible. Be
 HOW:  real Postgres, real encryption, real rendering, through the same API an operator
       uses. No node is contacted: the claim is about the text that WOULD be pushed.
 
-      Whether a friend's traffic then emerges at the leaf's address is a field
+      Whether a user's traffic then emerges at the leaf's address is a field
       observation on two real hosts with a real client. Nothing here stands in for it —
       and decision 3 says so explicitly, because the success and the failure differ only
       in where packets come out.
@@ -33,7 +33,7 @@ from control.app.services import apply, nodes, relay
 from edge.egress import NOT_THE_INTERNET, Egress
 
 HOP_TRANSPORT = "amneziawg"
-FRIEND_TRANSPORT = "vless-reality"
+USER_TRANSPORT = "vless-reality"
 
 ENTRY_TUNNEL = "10.44.0.1/24"
 ENTRY_EXIT_ADDRESS = "10.44.0.1"
@@ -64,10 +64,10 @@ def hop_params() -> dict[str, object]:
     }
 
 
-async def entry_node_serving_friends(
+async def entry_node_serving_users(
     client, session, reality_params, *, resolver: str | None = RESOLVER
 ) -> str:
-    """A Russian entry node with a friend-facing transport and no hop yet.
+    """A Russian entry node with a user-facing transport and no hop yet.
 
     Given a resolver unless a test says otherwise — M16: a node that dials a hop does not
     render without one, and every test here but the one about that refusal is about a
@@ -85,7 +85,7 @@ async def entry_node_serving_friends(
     node_id = created.json()["id"]
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
@@ -121,27 +121,27 @@ async def hop_to_a_leaf(client, hop_params, entry_id: str) -> str:
     return leaf_id
 
 
-async def friend_config(session, node_id: str) -> dict:
-    """The friend-facing config that would be pushed to one node, parsed."""
+async def user_config(session, node_id: str) -> dict:
+    """The user-facing config that would be pushed to one node, parsed."""
     node = await nodes.get_node(session, node_id)
-    return json.loads((await apply.render_for_node(session, node))[FRIEND_TRANSPORT])
+    return json.loads((await apply.render_for_node(session, node))[USER_TRANSPORT])
 
 
 # --- the claim ----------------------------------------------------------------
 
-async def test_a_friend_on_an_entry_node_leaves_through_the_hop(
+async def test_a_user_on_an_entry_node_leaves_through_the_hop(
     client, session, reality_params, hop_params
 ) -> None:
     """Every outbound in the pushed config is bound to the hop's near address.
 
     Asserted over ALL outbounds rather than "the hop outbound is there": a config that
     grew a direct outbound beside it would satisfy the weaker claim and is precisely the
-    invisible failure — the friend exits in Russia and every screen stays green.
+    invisible failure — the user exits in Russia and every screen stays green.
     """
-    entry_id = await entry_node_serving_friends(client, session, reality_params)
+    entry_id = await entry_node_serving_users(client, session, reality_params)
     await hop_to_a_leaf(client, hop_params, entry_id)
 
-    config = await friend_config(session, entry_id)
+    config = await user_config(session, entry_id)
 
     assert config["outbounds"]
     for outbound in config["outbounds"]:
@@ -161,18 +161,18 @@ async def test_a_node_with_no_hop_still_exits_directly(
     round changed here. It used to read ``"routing" not in config``, and that was a true
     statement of the bytes standing in for a claim about the exit — which the bytes stopped
     making the moment such a node had anything to refuse. A proxy on a leaf now carries a
-    routing section, and a friend on it may reach the internet and NOT the entry at the far
+    routing section, and a user on it may reach the internet and NOT the entry at the far
     end of that node's hop, its provider's LAN or its metadata service. So: the rule that
-    carries a friend is the LAST one, it names an outbound that binds no source address,
+    carries a user is the LAST one, it names an outbound that binds no source address,
     and the only rule read before it is the refusal. Nothing below it means nothing else
     can decide; no ``sendThrough`` means the node's own route; and both together are what
     "exits directly" is.
     """
-    entry_id = await entry_node_serving_friends(
+    entry_id = await entry_node_serving_users(
         client, session, reality_params, resolver=None
     )
 
-    config = await friend_config(session, entry_id)
+    config = await user_config(session, entry_id)
 
     outbounds = {outbound["tag"]: outbound for outbound in config["outbounds"]}
     assert outbounds[BY_THE_NODES_OWN_ROUTE]["protocol"] == "freedom"
@@ -194,8 +194,8 @@ async def test_a_hop_end_that_is_switched_off_is_still_the_way_out(
 
     ``exit_through_hop`` deliberately reads the row's EXISTENCE and not ``enabled``. A hop
     end that is off is a tunnel that is not running — which is "the hop is down" — and the
-    friend's config must still point into it and give them no exit. Had the query filtered
-    on ``enabled``, this node would get its direct outbound back and every friend on it
+    user's config must still point into it and give them no exit. Had the query filtered
+    on ``enabled``, this node would get its direct outbound back and every user on it
     would exit in Russia with nothing saying so.
 
     The flag is set on the row rather than through the API on purpose: the API refuses to
@@ -203,14 +203,14 @@ async def test_a_hop_end_that_is_switched_off_is_still_the_way_out(
     reachable by editing the database. It is guarded anyway, because the refusal is a
     different decision from this one and either could be revisited alone.
     """
-    entry_id = await entry_node_serving_friends(client, session, reality_params)
+    entry_id = await entry_node_serving_users(client, session, reality_params)
     await hop_to_a_leaf(client, hop_params, entry_id)
 
     end = (await relay.hop_ends(session, entry_id))[0]
     end.enabled = False
     await session.flush()
 
-    config = await friend_config(session, entry_id)
+    config = await user_config(session, entry_id)
 
     for outbound in config["outbounds"]:
         assert outbound.get("sendThrough") == ENTRY_EXIT_ADDRESS, outbound
@@ -219,24 +219,24 @@ async def test_a_hop_end_that_is_switched_off_is_still_the_way_out(
 async def test_the_entry_learns_an_address_and_never_what_carries_the_hop(
     client, session, reality_params, hop_params
 ) -> None:
-    """M3.2. The friend-facing config must not name the transport the hop runs on.
+    """M3.2. The user-facing config must not name the transport the hop runs on.
 
     The rule this milestone was most likely to break — and the whole reason the policy
     travels as an address. A protocol name here would mean a new hop transport is surgery
     on another transport's template.
     """
-    entry_id = await entry_node_serving_friends(client, session, reality_params)
+    entry_id = await entry_node_serving_users(client, session, reality_params)
     await hop_to_a_leaf(client, hop_params, entry_id)
 
     node = await nodes.get_node(session, entry_id)
     rendered = await apply.render_for_node(session, node)
 
-    assert HOP_TRANSPORT not in rendered[FRIEND_TRANSPORT]
+    assert HOP_TRANSPORT not in rendered[USER_TRANSPORT]
 
 
 # --- M16: the lookup takes the same way out -------------------------------------
 
-async def test_a_friends_lookups_go_through_the_hop_to_the_nodes_own_resolver(
+async def test_a_users_lookups_go_through_the_hop_to_the_nodes_own_resolver(
     client, session, reality_params, hop_params
 ) -> None:
     """The resolver on the node's record reaches the pushed config, and the lookup is
@@ -246,10 +246,10 @@ async def test_a_friends_lookups_go_through_the_hop_to_the_nodes_own_resolver(
     there from the database — M14's bug had exactly this shape: a correct renderer whose
     argument never arrived.
     """
-    entry_id = await entry_node_serving_friends(client, session, reality_params)
+    entry_id = await entry_node_serving_users(client, session, reality_params)
     await hop_to_a_leaf(client, hop_params, entry_id)
 
-    config = await friend_config(session, entry_id)
+    config = await user_config(session, entry_id)
 
     assert config["dns"]["servers"] == [RESOLVER]
     outbounds = {outbound["tag"]: outbound for outbound in config["outbounds"]}
@@ -270,10 +270,10 @@ async def test_an_entry_with_a_hop_and_no_resolver_is_refused_rather_than_resolv
     """Decision 3, applied to the lookup, through the path an apply takes.
 
     The alternative is the M16 bug itself: a config the daemon accepts, an exit abroad,
-    and every name a friend visits resolved on the near side of the hop. Refused as a
+    and every name a user visits resolved on the near side of the hop. Refused as a
     node operation, with the sentence the operator reads.
     """
-    entry_id = await entry_node_serving_friends(
+    entry_id = await entry_node_serving_users(
         client, session, reality_params, resolver=None
     )
     await hop_to_a_leaf(client, hop_params, entry_id)
@@ -309,7 +309,7 @@ async def test_a_resolver_that_could_never_carry_a_lookup_is_refused_at_registra
 ) -> None:
     """Refused while the operator is still at the form: a value ``edge`` would refuse
     surfaces otherwise at the first apply after a hop — on another screen, maybe weeks
-    later, after friends have been given the node."""
+    later, after users have been given the node."""
     refused = await client.post(
         "/api/nodes",
         json={
@@ -327,19 +327,19 @@ async def test_a_resolver_that_could_never_carry_a_lookup_is_refused_at_registra
 
 # --- the policy the rendering comes from --------------------------------------
 
-def test_a_friend_facing_row_on_a_node_with_a_hop_exits_through_it() -> None:
+def test_a_user_facing_row_on_a_node_with_a_hop_exits_through_it() -> None:
     """The table's third answer, stated as the property it exists for.
 
     Keyed on the purpose the row already carries AND on whether the node has a way out of
-    its own, because the same friend-facing row means "exit here" on a leaf and "exit
+    its own, because the same user-facing row means "exit here" on a leaf and "exit
     through the hop" on an entry — and getting that wrong in the second direction is
     silent.
     """
     from control.app.models import NodeTransport, TransportPurpose
 
-    friends = NodeTransport(purpose=TransportPurpose.FRIENDS)
-    assert nodes.egress_for(friends, ENTRY_EXIT_ADDRESS) is Egress.HOP
-    assert nodes.egress_for(friends, None) is Egress.LOCAL
+    users = NodeTransport(purpose=TransportPurpose.USERS)
+    assert nodes.egress_for(users, ENTRY_EXIT_ADDRESS) is Egress.HOP
+    assert nodes.egress_for(users, None) is Egress.LOCAL
     assert nodes.egress_for(NodeTransport(purpose="something-later"), ENTRY_EXIT_ADDRESS) is (
         Egress.NONE
     )

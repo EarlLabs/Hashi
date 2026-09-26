@@ -33,7 +33,7 @@ from control.app.services import apply, nodes, revocation
 from control.app.services.apply import NotUpdated
 
 HOP_TRANSPORT = "amneziawg"
-FRIEND_TRANSPORT = "vless-reality"
+USER_TRANSPORT = "vless-reality"
 
 # RFC 5737 documentation addresses, one per node.
 ENTRY, LEAF, REFUSING, QUIET = "192.0.2.20", "192.0.2.10", "192.0.2.30", "192.0.2.40"
@@ -74,10 +74,10 @@ async def a_node(client, name: str, address: str) -> str:
     return created.json()["id"]
 
 
-async def serving_friends(client, session, node_id: str, reality_params) -> None:
+async def serving_users(client, session, node_id: str, reality_params) -> None:
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
@@ -86,12 +86,12 @@ async def serving_friends(client, session, node_id: str, reality_params) -> None
 async def a_revocation_that_cannot_finish(
     client, session, reality_params, hop_params, monkeypatch
 ) -> dict[str, str]:
-    """Three serving nodes one friend holds a credential on, each failing its own way.
+    """Three serving nodes one user holds a credential on, each failing its own way.
 
     ``entry-ru`` dials a hop and has no resolver — the state migration 0005 leaves every
     existing entry in. ``refused-1``'s configuration is refused by a checker whose output
     quotes that node's own private key, which is the shape the M9 carry-over measured.
-    ``quiet-1`` has no SSH key. The friend is created last: that is the order that mints a
+    ``quiet-1`` has no SSH key. The user is created last: that is the order that mints a
     credential on every serving node.
 
     Note what ``quiet-1`` actually exercises since M23: ``apply.target_for`` refuses a
@@ -101,7 +101,7 @@ async def a_revocation_that_cannot_finish(
     behaviour belongs to the routing table — which is what M21.2 removed from this zone.
     """
     entry = await a_node(client, "entry-ru", ENTRY)
-    await serving_friends(client, session, entry, reality_params)
+    await serving_users(client, session, entry, reality_params)
     leaf = await a_node(client, "leaf-nl", LEAF)
     established = await client.post(
         "/api/hops",
@@ -124,9 +124,9 @@ async def a_revocation_that_cannot_finish(
     assert established.status_code == 201, established.text
 
     refusing = await a_node(client, "refused-1", REFUSING)
-    await serving_friends(client, session, refusing, reality_params)
+    await serving_users(client, session, refusing, reality_params)
     quiet = await a_node(client, "quiet-1", QUIET)
-    await serving_friends(client, session, quiet, reality_params)
+    await serving_users(client, session, quiet, reality_params)
 
     row = (
         await session.execute(
@@ -146,13 +146,13 @@ async def a_revocation_that_cannot_finish(
 
     monkeypatch.setattr(apply.checker, "validate", the_checker)
 
-    friend = await client.post("/api/friends", json={"nickname": "kolya"})
-    assert friend.status_code < 300, friend.text
+    user = await client.post("/api/users", json={"nickname": "kolya"})
+    assert user.status_code < 300, user.text
     return {
         "entry": entry,
         "refusing": refusing,
         "quiet": quiet,
-        "friend": friend.json()["id"],
+        "user": user.json()["id"],
         "secret": secret,
     }
 
@@ -168,7 +168,7 @@ async def test_each_node_is_named_with_what_is_actually_wrong_with_it(
         client, session, reality_params, hop_params, monkeypatch
     )
 
-    outcome = await revocation.revoke_friend(session, friend_id=fleet["friend"])
+    outcome = await revocation.revoke_user(session, user_id=fleet["user"])
 
     assert outcome.why_failed == {
         fleet["entry"]: NotUpdated.NO_RESOLVER,
@@ -190,7 +190,7 @@ async def test_a_node_left_with_nothing_enabled_is_reported_as_refused_not_unrea
 
     Withdrawing a transport does not take back a minted credential and does not touch the
     host: the daemon goes on serving the config it was last given, and everybody in it is
-    still authorised. Revoke the last friend on a node whose only row was withdrawn and
+    still authorised. Revoke the last user on a node whose only row was withdrawn and
     the re-push has nothing to render.
 
     That case used to push an empty compose file, be told ``services must be a mapping``,
@@ -202,18 +202,18 @@ async def test_a_node_left_with_nothing_enabled_is_reported_as_refused_not_unrea
     node_id = await a_node(client, "withdrawn-1", LEAF)
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
-    friend = await client.post("/api/friends", json={"nickname": "kolya"})
-    assert friend.status_code < 300, friend.text
+    user = await client.post("/api/users", json={"nickname": "kolya"})
+    assert user.status_code < 300, user.text
     withdrawn = await client.post(
         f"/api/transports/{enabled.json()['id']}/state", json={"enabled": False}
     )
     assert withdrawn.status_code == 200, withdrawn.text
 
-    outcome = await revocation.revoke_friend(session, friend_id=friend.json()["id"])
+    outcome = await revocation.revoke_user(session, user_id=user.json()["id"])
 
     assert outcome.why_failed == {node_id: NotUpdated.REFUSED}, outcome.why_failed
     summary = outcome.summary()
@@ -234,7 +234,7 @@ async def test_the_sentence_cannot_carry_what_a_nodes_refusal_carries(
         client, session, reality_params, hop_params, monkeypatch
     )
 
-    outcome = await revocation.revoke_friend(session, friend_id=fleet["friend"])
+    outcome = await revocation.revoke_user(session, user_id=fleet["user"])
 
     if fleet["secret"] not in outcome.nodes_failed[fleet["refusing"]]:
         pytest.fail(
@@ -256,7 +256,7 @@ async def test_the_banner_names_each_node_and_carries_none_of_its_key(
     )
 
     response = await client.post(
-        f"/panel/friends/{fleet['friend']}/revoke", headers={"HX-Request": "true"}
+        f"/panel/users/{fleet['user']}/revoke", headers={"HX-Request": "true"}
     )
 
     assert response.status_code == 200
@@ -281,7 +281,7 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
     """
     planted = "PLANTED-private-key-0123456789abcdef"
     outcome = revocation.RevocationOutcome(
-        friend_id="f",
+        user_id="f",
         nodes_updated=["n0"],
         nodes_failed={
             "n1": planted,
@@ -332,7 +332,7 @@ def test_the_banner_is_made_of_node_names_and_fixed_sentences_and_nothing_else()
         "pushes reaches it. If that host is genuinely back, register it again as a new "
         "node and apply that one — otherwise it is the host being gone that ends this."
     )
-    assert revocation.RevocationOutcome(friend_id="f", nodes_updated=["a", "b"]).summary() == (
+    assert revocation.RevocationOutcome(user_id="f", nodes_updated=["a", "b"]).summary() == (
         "access withdrawn everywhere; 2 node(s) updated"
     )
 

@@ -8,7 +8,7 @@ WHY:  the walk stopped ``hashi-node-amneziawg-1`` on its leaf and pressed probe.
       probe was RIGHT — *"failed  leaf-acc answered but is not serving — not running:
       amneziawg."* — and one reload later the row read ``active`` beside ``in sync``,
       ``state_detail`` was empty, and the Overview read *"nodes active 2 … transports
-      serving 2"* while that friend's ``ping 1.1.1.1`` was 100% loss. The node stayed in
+      serving 2"* while that user's ``ping 1.1.1.1`` was 100% loss. The node stayed in
       every user's link. A measurement that is taken, is correct and is then discarded is
       worse than one never taken: the operator saw the truth once and the product
       overwrote it with a reassurance.
@@ -387,5 +387,5 @@ async def test_no_finding_records_anything_about_a_person(
     finding = node.last_probe_finding or ""
 
     assert NODE_ADDRESS not in finding, "a stored finding names an address"
-    for word in ("user", "friend", "peer", "handshake", "bytes", "connected"):
+    for word in ("user", "peer", "handshake", "bytes", "connected"):
         assert word not in finding.lower(), f"a stored finding says {word!r}"

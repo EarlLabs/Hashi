@@ -1,0 +1,22 @@
+# hashi — the backup overlay: one variable, and the reason it is not in the base file.
+#
+# WHAT: hands scripts/backup.sh the age PUBLIC key a dump is encrypted to, and nothing
+#       else. It adds no service, publishes nothing and starts no application.
+# WHY:  the script must never read the env file itself (CLAUDE.md, hard rules) — it asks
+#       the stack, exactly as it asks the db container for POSTGRES_USER. Compose is the
+#       one thing allowed to read that file, so the recipient arrives by being
+#       interpolated HERE and never passes through the script at all.
+#
+#       It is not in docker-compose.yml because every interpolation there carries a `:?`
+#       guard (tests/infra/test_compose.py's test_required_env_vars_fail_loudly), and a
+#       guard on this variable would refuse to start THE WHOLE STACK on a host whose
+#       keypair does not exist yet — .env.example ships the value blank on purpose. In
+#       this file the same guard refuses exactly one thing, the backup, at the moment it
+#       is asked for, which is the only moment the value means anything.
+# HOW:  loaded by scripts/backup.sh alone, with `run --rm --no-deps --entrypoint sh`, so
+#       the control application is never started from it. `make up` never loads this file
+#       and a deployed stack never carries the variable.
+services:
+  control:
+    environment:
+      HASHI_BACKUP_AGE_RECIPIENT: "${HASHI_BACKUP_AGE_RECIPIENT:?no backup recipient. Generate a keypair with age-keygen somewhere that is not this host, put the PUBLIC half in HASHI_BACKUP_AGE_RECIPIENT in your env file, and keep the private half with you}"

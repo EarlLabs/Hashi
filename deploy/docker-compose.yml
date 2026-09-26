@@ -49,6 +49,24 @@ services:
       # owner's machine and never enters this file.
       HASHI_OPERATOR_USERNAME: ${HASHI_OPERATOR_USERNAME:?set HASHI_OPERATOR_USERNAME in .env}
       HASHI_OPERATOR_PASSWORD_HASH: ${HASHI_OPERATOR_PASSWORD_HASH:?set HASHI_OPERATOR_PASSWORD_HASH in .env}
+    volumes:
+      # The backup schedule's record, READ-ONLY — M28.5. It is written on the host by
+      # scripts/backup-run.sh and holds dates, exit codes and the schedule's own settings:
+      # no user, no node, no address, ever (CLAUDE.md — never log who connected to what).
+      #
+      # It is mounted rather than fetched because the question "when did a backup last
+      # succeed, and has one failed since" cannot be asked of the bucket: the credential
+      # this host holds may only write, so the object store cannot be read back and this
+      # file is the only account of the backup history that exists here.
+      #
+      # Read-only, and that direction is the point: the schedule writes, the panel reads,
+      # and the control plane can neither invent a successful backup nor erase a failed
+      # one. A relative path, like every other path in this file, so the control plane
+      # stays relocatable — and, as with the Caddyfile above, a bind mount resolves on the
+      # DAEMON's filesystem, so on a remote engine this arrives empty, which reads as "no
+      # backup has been recorded" rather than as a wrong answer. `make env` creates the
+      # directory before any `up`, so the daemon never creates it as root.
+      - ../backups/state:/var/lib/hashi/backup:ro
     depends_on:
       db:
         condition: service_healthy

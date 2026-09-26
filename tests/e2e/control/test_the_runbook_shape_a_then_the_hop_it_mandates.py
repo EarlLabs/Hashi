@@ -1,13 +1,13 @@
 """Following the runbook's own Shape A advice, then adding the hop it mandates.
 
-WHAT: one box registered as its own node, the transport the runbook names for friends
+WHAT: one box registered as its own node, the transport the runbook names for users
       enabled on it, and then the entry→leaf hop the runbook requires — over the SAME
       transport, which is what the runbook says to use for it. The box becomes the end of
       that hop which WAITS, because since M25 it is the only end it can be.
 WHY:  this is the sequence that was refused in the field with
       ``409 'amneziawg' is already configured on node 'entry-ru'`` (M15). The old rule
       was one ``NodeTransport`` row per ``(node, transport_name)`` whatever the row was
-      FOR, so the friend-facing transport and the hop end were the same pair and
+      FOR, so the user-facing transport and the hop end were the same pair and
       whichever came first excluded the other — with no delete for a node transport, and
       nothing anywhere saying so. Every existing scenario reached for a THIRD node to
       sidestep it, which is how a product-level contradiction stayed invisible to a
@@ -24,7 +24,7 @@ HOW:  the runbook's own order, over HTTP, as an operator following it would: reg
       offer, register the other box, hop. Then the two refusals that DO survive — one
       port per node, and no users on a kernel tunnel behind a hop — and the one guarantee
       that must survive two rows of one transport on one node: the hop end still reaches
-      no friend.
+      no user.
 
 Boundary: real control + postgres. No node exists, so nothing here proves a tunnel comes
 up; what is proven is that the control plane accepts the configuration the runbook asks
@@ -41,18 +41,18 @@ import pytest
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 
 # The transport the runbook names TWICE — "enable a transport: amneziawg (or wireguard)
-# on UDP 51820" for Shape A's friends, and "transport = amneziawg" for the hop in Shape
+# on UDP 51820" for Shape A's users, and "transport = amneziawg" for the hop in Shape
 # B. Naming it here is the point of the scenario rather than a shortcut: the collision
 # exists because one protocol is the right answer to both questions.
 RUNBOOK_TRANSPORT = "amneziawg"
 
-# The runbook's own number for the friend-facing side, and a second one for the hop.
+# The runbook's own number for the user-facing side, and a second one for the hop.
 # Two ports because two daemons on one host cannot share one — which is the rule this
 # milestone moved the uniqueness onto.
-FRIEND_PORT = 51820
+USER_PORT = 51820
 HOP_PORT = 51821
 
-# How many users a friend-facing row of this transport may hand an address to — M17. The
+# How many users a user-facing row of this transport may hand an address to — M17. The
 # stand is WARM: every scenario in this directory adds users to one control plane and
 # none of them are removed, so a pool is measured against a fleet that only grows. Sized
 # in the low thousands against a /20 tunnel for that reason — the number is an upper
@@ -64,7 +64,7 @@ POOL_SIZE = 2000
 def _entries(archive: bytes) -> dict[str, bytes]:
     """Every file in a config archive, by name.
 
-    Read with the stdlib rather than by shelling out: this asserts what a friend's
+    Read with the stdlib rather than by shelling out: this asserts what a user's
     client will find in the response body, and nothing about our own tooling.
     """
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
@@ -110,9 +110,9 @@ async def a_node(operator, name: str, address: str, label: str) -> str:
 
 
 async def shape_a_box(operator, unique: str) -> tuple[str, str]:
-    """The runbook's Shape A, as far as it goes: one box, one friend-facing transport.
+    """The runbook's Shape A, as far as it goes: one box, one user-facing transport.
 
-    Returns the node's id and its friend-facing row's id. Steps 1 and 2 of *Register the
+    Returns the node's id and its user-facing row's id. Steps 1 and 2 of *Register the
     box as its own node* — the apply in step 3 needs a real host and is the owner's field
     check, never this suite's.
     """
@@ -122,7 +122,7 @@ async def shape_a_box(operator, unique: str) -> tuple[str, str]:
         json={
             "transport_name": RUNBOOK_TRANSPORT,
             "pool_size": POOL_SIZE,
-            "params": side("10.60.0.1/20", "10.60.0.2/20", FRIEND_PORT),
+            "params": side("10.60.0.1/20", "10.60.0.2/20", USER_PORT),
         },
     )
     assert offered.status_code == 201, offered.text
@@ -132,7 +132,7 @@ async def shape_a_box(operator, unique: str) -> tuple[str, str]:
 async def test_the_box_the_runbook_describes_can_also_carry_the_hop_it_requires(
     operator, unique: str
 ) -> None:
-    """The whole milestone in one sequence: offer it to friends, then hop over it.
+    """The whole milestone in one sequence: offer it to users, then hop over it.
 
     The assertion that was red before M15 is the status code — this answered 409 with
     *"'amneziawg' is already configured on node ..."*, and there was no way back from it
@@ -143,7 +143,7 @@ async def test_the_box_the_runbook_describes_can_also_carry_the_hop_it_requires(
     of the hop a new Russian entry dials. Making it the DIALLING end is the other half of
     this file — refused, and asserted two tests down.
     """
-    box_id, friend_row = await shape_a_box(operator, unique)
+    box_id, user_row = await shape_a_box(operator, unique)
     entry_id = await a_node(operator, f"ru-{unique}", "192.0.2.41", f"Entryland-{unique}")
 
     established = await operator.post(
@@ -165,8 +165,8 @@ async def test_the_box_the_runbook_describes_can_also_carry_the_hop_it_requires(
     # And it is a real pair rather than half a hop: the entry end exists and points back.
     assert hop["entry"] is not None, hop
     assert hop["entry"]["node_id"] == entry_id
-    # The friend-facing row this box already had is untouched and is still its own row.
-    assert hop["leaf"]["id"] != friend_row
+    # The user-facing row this box already had is untouched and is still its own row.
+    assert hop["leaf"]["id"] != user_row
 
 
 async def test_the_same_box_is_refused_the_hop_it_would_dial(
@@ -207,7 +207,7 @@ async def test_the_same_box_is_refused_the_hop_it_would_dial(
 
 
 async def test_the_two_rows_on_one_node_take_two_names(operator, unique: str) -> None:
-    """The friend-facing row keeps the transport's own name; the hop end takes another.
+    """The user-facing row keeps the transport's own name; the hop end takes another.
 
     Asserted separately from the status code because it is the half a green 201 does not
     prove. The first instance keeping the plain name is deliberate and load-bearing: every
@@ -232,7 +232,7 @@ async def test_the_two_rows_on_one_node_take_two_names(operator, unique: str) ->
     entry_end = established.json()["entry"]
     leaf_end = established.json()["leaf"]
     assert leaf_end["config_name"] != RUNBOOK_TRANSPORT, (
-        "the hop end took the name the friend-facing row already holds on this node"
+        "the hop end took the name the user-facing row already holds on this node"
     )
     # The entry is a fresh node and runs one of this transport, so it keeps the plain
     # name — the difference is per node, never fleet-wide.
@@ -255,26 +255,26 @@ async def test_two_transports_on_one_node_may_not_share_a_port(
         json={
             "transport_name": RUNBOOK_TRANSPORT,
             "pool_size": POOL_SIZE,
-            "params": side("10.63.0.1/20", "10.63.0.2/20", FRIEND_PORT),
+            "params": side("10.63.0.1/20", "10.63.0.2/20", USER_PORT),
         },
     )
 
     assert collided.status_code == 409, collided.text
     body = collided.json()["error"]
     assert body["code"] == "conflict"
-    assert str(FRIEND_PORT) in body["message"], body["message"]
+    assert str(USER_PORT) in body["message"], body["message"]
     assert RUNBOOK_TRANSPORT in body["message"], body["message"]
 
 
-async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
+async def test_a_hop_end_on_the_same_node_still_reaches_no_user(
     operator, client, unique: str
 ) -> None:
     """The guarantee two rows of one transport on one node must not weaken.
 
-    Before M15 the purpose column was one of TWO things separating a friend's offer from
+    Before M15 the purpose column was one of TWO things separating a user's offer from
     a hop end, the other being that they could never be the same transport on the same
     node. That second one is gone by design, so the filter in
-    ``nodes.serving_transports`` is now the only thing standing between a friend and the
+    ``nodes.serving_transports`` is now the only thing standing between a user and the
     entry↔leaf tunnel — which is why this is asserted here and not left to the scenario
     that proves it for two different nodes.
     """
@@ -298,11 +298,11 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
             await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
         ).status_code == 200
 
-    friend_id = (
-        await operator.post("/api/friends", json={"nickname": f"boxfriend-{unique}"})
+    user_id = (
+        await operator.post("/api/users", json={"nickname": f"boxuser-{unique}"})
     ).json()["id"]
     token = (
-        await operator.get(f"/api/friends/{friend_id}/subscription")
+        await operator.get(f"/api/users/{user_id}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     archive = await client.get(f"/sub/{token}", params={"format": "client-config-file"})
@@ -311,16 +311,16 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
         content.decode() for content in _entries(archive.content).values()
     )
 
-    # The friend-facing row on this box DID arrive, so the two refusals below are not
+    # The user-facing row on this box DID arrive, so the two refusals below are not
     # passing because the subscription is empty. Its endpoint is this scenario's own
     # address and port, which no other scenario in the run uses.
-    assert f"192.0.2.30:{FRIEND_PORT}" in received, received[:2000]
+    assert f"192.0.2.30:{USER_PORT}" in received, received[:2000]
 
     # The hop end on the SAME node did not. Its port and its tunnel network are the two
-    # markers a friend's device must not hold — the port because it would dial the
+    # markers a user's device must not hold — the port because it would dial the
     # entry↔leaf tunnel directly, the network because it is the topology itself.
-    assert f":{HOP_PORT}" not in received, "a hop end reached a friend's configuration"
-    assert "10.64.0." not in received, "the hop's tunnel network reached a friend"
+    assert f":{HOP_PORT}" not in received, "a hop end reached a user's configuration"
+    assert "10.64.0." not in received, "the hop's tunnel network reached a user"
 
 
 # --- the way back out (M15.2) -------------------------------------------------
@@ -333,13 +333,13 @@ async def test_a_hop_end_on_the_same_node_still_reaches_no_friend(
 
 # This scenario's own node, and a port band nothing else in this suite uses. Its own
 # rather than ``shape_a_box``'s because the assertion below is an ABSENCE: every other
-# scenario in this file registers a box at the same address, and a friend is granted
+# scenario in this file registers a box at the same address, and a user is granted
 # every SERVING node, so a shared endpoint would make "it is gone" depend on what else
 # ran.
 #
 # THE STAND IS NOT RESET BETWEEN RUNS, and that is the harder half. A second
 # ``make test-e2e`` against one stack leaves this scenario's own earlier box active at
-# whatever endpoint it used, and a friend created by the second run is granted it too —
+# whatever endpoint it used, and a user created by the second run is granted it too —
 # so the endpoint is derived per run, and the assertion is a DELTA rather than a plain
 # absence. Either alone would pass on a cold stand and go red on a warm one, which is the
 # failure that reaches nobody until the day somebody re-runs the suite.
@@ -398,7 +398,7 @@ async def remove_from_the_panel(operator, node_id: str, transport: str) -> str:
     return removed.text
 
 
-async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
+async def test_a_user_facing_transport_is_removed_and_its_port_comes_back(
     operator, client, unique: str
 ) -> None:
     """The milestone's second done-when, end to end, from the only surface there is.
@@ -426,11 +426,11 @@ async def test_a_friend_facing_transport_is_removed_and_its_port_comes_back(
         await operator.post(f"/api/nodes/{node_id}/state", json={"state": "active"})
     ).status_code == 200
 
-    friend_id = (
-        await operator.post("/api/friends", json={"nickname": f"removed-{unique}"})
+    user_id = (
+        await operator.post("/api/users", json={"nickname": f"removed-{unique}"})
     ).json()["id"]
     token = (
-        await operator.get(f"/api/friends/{friend_id}/subscription")
+        await operator.get(f"/api/users/{user_id}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     archive = await client.get(f"/sub/{token}", params={"format": "client-config-file"})

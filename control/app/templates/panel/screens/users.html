@@ -1,10 +1,11 @@
 {#
   Users — the list of people who can dial the mesh.
 
-  The label is "users" and the code says `friend` everywhere behind it. That is
-  docs/decisions.md decision 9, and the rule it carries is that the rename stops at
-  the rendered page: not a route, not a schema field, not a service name, not a test.
-  So this file says "user" and the URL it lives at is /panel/friends.
+  The label is "users" and the code says `user` everywhere behind it — the route, the
+  schema field, the service name and the tests. It did not always: this screen said
+  "users" for eleven milestones while the code said something else, and M29
+  (docs/decisions.md, 2026-09-22) finished it in the direction the screens had already
+  chosen. So this file says "user" and the URL it lives at is /panel/users.
 
   The design's `last seen` column is not here. It is one of the four cells decision 6
   removed: a per-user record of activity is exactly what the charter says must not
@@ -13,7 +14,7 @@
 #}
 {% include "panel/console_header.html" %}
 <div class="panel">
-  {% include "panel/friends_table.html" %}
+  {% include "panel/users_table.html" %}
   <p class="text-muted section-note">
     A user gets one subscription URL covering every serving node. Nothing else is
     stored about them.

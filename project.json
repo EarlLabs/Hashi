@@ -1,6 +1,6 @@
 {
   "project": "hashi",
-  "purpose": "A self-hosted, multi-protocol VPN for its owner and ~30-50 friends: a Russian entry node fronting foreign exit nodes, where both nodes and protocols are data.",
+  "purpose": "A self-hosted, multi-protocol VPN for its owner and ~30-50 users: a Russian entry node fronting foreign exit nodes, where both nodes and protocols are data.",
   "owner_language": "Russian",
   "main_branch": "main",
   "integration_branch": "develop",

@@ -27,7 +27,7 @@ secrets/
 .DS_Store
 
 # Local database dumps (scripts/backup.sh). Encrypted, but still every node
-# credential and every friend token in one file — never in git.
+# credential and every user token in one file — never in git.
 backups/
 
 # aikit acceptance evidence: screenshots and tree dumps, per-run output. They

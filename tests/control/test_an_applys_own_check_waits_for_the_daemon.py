@@ -13,14 +13,14 @@ WHY:  the second acceptance walk pressed probe on a leaf whose data plane could 
       start and got the truth — *"r2leaf answered but is not serving — not running:
       amneziawg."* Then it pressed apply. Twenty seconds later, and still at sixty-five,
       the row read ``active / in sync``, the finding was gone, the Overview was silent
-      and the friend's ping was 100% loss, with the container sitting in ``Restarting
+      and the user's ping was 100% loss, with the container sitting in ``Restarting
       (1)`` on the host. Pressing apply a SECOND time on the same host produced the
       correct refusal — so the check existed and was sampling the container inside the
       first seconds of its first start, which is exactly the apply an operator makes
       after a change.
 
       It fired the other way too: one apply on a leaf whose container came up a moment
-      later left the row ``degraded`` while that friend's ping was 0% loss. Both
+      later left the row ``degraded`` while that user's ping was 0% loss. Both
       directions are the same defect, and both are here, because a fix for one of them
       is half a fix. An operator told their working node is broken is an operator who
       learns to ignore the warning.
@@ -357,7 +357,7 @@ async def test_a_container_that_takes_a_moment_is_not_called_degraded(
     """The other direction of the same defect, and the one that teaches an operator to
     ignore the warning.
 
-    The walk watched an apply leave a leaf reading ``degraded`` while that friend's ping
+    The walk watched an apply leave a leaf reading ``degraded`` while that user's ping
     was 0% loss, because the container came up a moment after the check looked. This host
     is being restarted by the engine when the apply first looks and is up and staying up
     well inside the ceiling.

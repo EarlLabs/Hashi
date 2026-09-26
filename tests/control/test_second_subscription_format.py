@@ -1,12 +1,12 @@
 """The second shape of a subscription — backlog item 27.
 
 WHAT: the branchy parts of ``services/subscriptions``' file half — which credentials
-      each shape includes, how the archive is built, and what happens when a friend has
+      each shape includes, how the archive is built, and what happens when a user has
       nothing in a shape — plus the refusal that survived the change.
 WHY:  the acceptance scenarios (``tests/e2e/control/test_the_same_token_serves_two_shapes.py``)
-      drive the endpoint as a friend's client does and cannot see any of this: the
+      drive the endpoint as a user's client does and cannot see any of this: the
       ZIP's entry metadata, a filename collision between two nodes, or a transport that
-      declares no friend-facing format at all — because none ships.
+      declares no user-facing format at all — because none ships.
 HOW:  real Postgres, real encryption, real rendering. No node is contacted.
 """
 
@@ -21,8 +21,8 @@ import pytest
 from sqlalchemy import select
 
 from control.app.errors import NotDeliverable
-from control.app.models import Credential, Friend, NodeState
-from control.app.services import apply, friends, nodes, subscriptions
+from control.app.models import Credential, NodeState, User
+from control.app.services import apply, nodes, subscriptions, users
 from edge.addressing import host_of
 from edge.registry import ClientConfig, SubscriptionFormat, discover
 
@@ -63,7 +63,7 @@ def file_transport() -> str:
 
 
 # How many users a transport that gives each of them an address may hand out here — M17.
-# Far above anything this file creates: every test below is about which SHAPE a friend
+# Far above anything this file creates: every test below is about which SHAPE a user
 # receives, not about the pool's edges, and a size that only just fits would turn an
 # unrelated test red the day somebody adds a user to it. The /24s below hold it easily.
 POOL_SIZE = 200
@@ -108,12 +108,12 @@ def names_in(archive: bytes) -> list[str]:
 async def test_each_shape_includes_only_the_transports_that_declare_it(
     client, session, file_transport: str, reality_params
 ) -> None:
-    """One friend, one node of each kind, and neither shape carries the other's.
+    """One user, one node of each kind, and neither shape carries the other's.
 
     The failure this catches is not cosmetic. Before item 27, ``entries_for`` met only
-    URI transports, because a file transport could not be enabled for friends at all.
-    Now one friend can hold both, and a v1 render that did not filter would call
-    ``render_client`` on a transport that raises — turning that friend's ORDINARY
+    URI transports, because a file transport could not be enabled for users at all.
+    Now one user can hold both, and a v1 render that did not filter would call
+    ``render_client`` on a transport that raises — turning that user's ORDINARY
     subscription link into a 500 because of a node they were merely also given.
     """
     await serving_node(
@@ -127,8 +127,8 @@ async def test_each_shape_includes_only_the_transports_that_declare_it(
                 "tunnel_address": "10.20.0.1/24", "peer_tunnel_address": "10.20.0.2/24"},
     )
 
-    friend = (await client.post("/api/friends", json={"nickname": "kolya"})).json()
-    handle = await friends.get_friend(session, friend["id"])
+    user = (await client.post("/api/users", json={"nickname": "kolya"})).json()
+    handle = await users.get_user(session, user["id"])
 
     entries = await subscriptions.entries_for(session, handle)
     assert len(entries) == 1, [entry.entry for entry in entries]
@@ -142,29 +142,29 @@ async def test_each_shape_includes_only_the_transports_that_declare_it(
     assert len(document.splitlines()) == 1
 
 
-async def test_a_friend_with_nothing_in_this_shape_gets_an_archive_that_says_so(
+async def test_a_user_with_nothing_in_this_shape_gets_an_archive_that_says_so(
     client, session, reality_params
 ) -> None:
     """Empty, not an error — the same rule as the empty v1 document.
 
-    A friend whose nodes are momentarily degraded has not been revoked. An error here
+    A user whose nodes are momentarily degraded has not been revoked. An error here
     would make a node outage look like a withdrawal of access, which is the one thing
     their client reports to them directly.
 
     AND IT SAYS SO IN WORDS — M23, round 1's item 4, re-confirmed on the real hosts in
     round 3. The answer was a 22-byte ZIP: an empty central directory and nothing else,
-    which a friend's unarchiver opens as an empty folder without comment. The walk watched
+    which a user's unarchiver opens as an empty folder without comment. The walk watched
     one person's archive go 3897 B to 22 B after a failed revocation degraded both nodes,
     with nothing anywhere telling them their link was still good. So an empty archive
-    holds exactly one file, named for the answer, because a listing is often all a friend
+    holds exactly one file, named for the answer, because a listing is often all a user
     sees before deciding the download failed.
     """
     await serving_node(
         client, session, name="uri-only", address="192.0.2.22",
         transport_name=URI_TRANSPORTS[0], params=reality_params,
     )
-    friend = (await client.post("/api/friends", json={"nickname": "masha"})).json()
-    handle = await friends.get_friend(session, friend["id"])
+    user = (await client.post("/api/users", json={"nickname": "masha"})).json()
+    handle = await users.get_user(session, user["id"])
 
     configs = await subscriptions.config_files_for(session, handle)
     assert configs == []
@@ -179,7 +179,7 @@ async def test_a_friend_with_nothing_in_this_shape_gets_an_archive_that_says_so(
     for said in ("uri-only", "masha", "192.0.2.22", "node", "revoke"):
         assert said not in note.lower(), note
     # And what it must: the link is fine and nothing on the device needs changing, which
-    # is the whole reason a friend can tell this from a download that went wrong.
+    # is the whole reason a user can tell this from a download that went wrong.
     assert "your link is not dead" in note
     # Byte-stable like every other archive: no clock inside the response.
     assert subscriptions.archive_of([]) == subscriptions.archive_of([])
@@ -191,8 +191,8 @@ async def test_an_archive_that_holds_configs_carries_no_note(
     """The note is what an EMPTY archive is, and nothing else — and the route serves it.
 
     Both halves in one place because they are one decision. A note that also rode along
-    with a working archive would be a file every friend unpacks beside their configs and
-    has to wonder about; and the fetch that matters is the one a friend's client actually
+    with a working archive would be a file every user unpacks beside their configs and
+    has to wonder about; and the fetch that matters is the one a user's client actually
     makes, which is the route rather than the builder.
     """
     await serving_node(
@@ -201,9 +201,9 @@ async def test_an_archive_that_holds_configs_carries_no_note(
         params={**AWG_PARAMS, "port": 51823,
                 "tunnel_address": "10.26.0.1/24", "peer_tunnel_address": "10.26.0.2/24"},
     )
-    friend = (await client.post("/api/friends", json={"nickname": "grisha"})).json()
+    user = (await client.post("/api/users", json={"nickname": "grisha"})).json()
     token = (
-        await client.get(f"/api/friends/{friend['id']}/subscription")
+        await client.get(f"/api/users/{user['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     served = await anonymous.get(f"/sub/{token}", params={"format": "client-config-file"})
@@ -222,7 +222,7 @@ async def test_an_archive_that_holds_configs_carries_no_note(
     assert empty.status_code == 200, empty.text
     assert empty.headers["content-type"] == "application/zip"
     assert names_in(empty.content) == [subscriptions.EMPTY_ARCHIVE_NOTE_NAME], (
-        "a link that resolves to nothing still answers with an archive a friend cannot "
+        "a link that resolves to nothing still answers with an archive a user cannot "
         "tell from a download that went wrong"
     )
 
@@ -234,7 +234,7 @@ async def test_the_archive_is_byte_stable_across_builds(
 
     ``ZipInfo`` defaults to the current time, which would make two refreshes of an
     unchanged fleet differ — noise that hides a real change, and a timestamp inside a
-    file a friend keeps.
+    file a user keeps.
     """
     await serving_node(
         client, session, name="stable", address="192.0.2.23",
@@ -242,8 +242,8 @@ async def test_the_archive_is_byte_stable_across_builds(
         params={**AWG_PARAMS, "port": 51821,
                 "tunnel_address": "10.23.0.1/24", "peer_tunnel_address": "10.23.0.2/24"},
     )
-    friend = (await client.post("/api/friends", json={"nickname": "pyotr"})).json()
-    handle = await friends.get_friend(session, friend["id"])
+    user = (await client.post("/api/users", json={"nickname": "pyotr"})).json()
+    handle = await users.get_user(session, user["id"])
 
     configs = await subscriptions.config_files_for(session, handle)
     assert configs
@@ -254,7 +254,7 @@ def test_two_nodes_that_suggest_one_filename_both_survive() -> None:
     """A collision is resolved, never overwritten.
 
     Two names the same in a ZIP is an archive a client unpacks into one file, and the
-    friend is silently missing an exit — with a valid-looking download to show for it.
+    user is silently missing an exit — with a valid-looking download to show for it.
     Resolved with the node id rather than a counter, so the same fleet names the same
     file the same way on every refresh.
     """
@@ -298,9 +298,9 @@ async def test_the_endpoint_serves_both_shapes_behind_one_token(
         params={**AWG_PARAMS, "port": 51822,
                 "tunnel_address": "10.24.0.1/24", "peer_tunnel_address": "10.24.0.2/24"},
     )
-    friend = (await client.post("/api/friends", json={"nickname": "sveta"})).json()
+    user = (await client.post("/api/users", json={"nickname": "sveta"})).json()
     token = (
-        await client.get(f"/api/friends/{friend['id']}/subscription")
+        await client.get(f"/api/users/{user['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
 
     plain = await anonymous.get(f"/sub/{token}")
@@ -310,20 +310,20 @@ async def test_the_endpoint_serves_both_shapes_behind_one_token(
     archived = await anonymous.get(f"/sub/{token}", params={"format": "client-config-file"})
     assert archived.status_code == 200
     assert archived.headers["content-type"] == "application/zip"
-    assert names_in(archived.content), "the friend's only transport produced no file"
+    assert names_in(archived.content), "the user's only transport produced no file"
     for response in (plain, archived):
         assert response.headers["cache-control"] == "no-store, max-age=0"
 
 
-async def test_a_transport_with_no_friend_facing_format_is_still_refused(
+async def test_a_transport_with_no_user_facing_format_is_still_refused(
     client, session, monkeypatch, reality_params
 ) -> None:
     """The refusal item 27 narrowed but did not remove.
 
     No installed transport declares an empty format set, so the only way to assert the
     refusal is to present one. Worth asserting rather than assuming: the condition moved
-    from "not a URI" to "nothing a friend can consume", and if that move had gone one
-    step too far, enabling such a transport would deliver a friend a subscription that
+    from "not a URI" to "nothing a user can consume", and if that move had gone one
+    step too far, enabling such a transport would deliver a user a subscription that
     is quietly one node short.
     """
     created = await client.post(
@@ -346,16 +346,16 @@ async def test_a_transport_with_no_friend_facing_format_is_still_refused(
     assert "consume" in str(refused.value)
 
 
-# --- what making a file transport friend-facing exposed in the APPLY path -----
+# --- what making a file transport user-facing exposed in the APPLY path -----
 #
 # Both of the following were found by running item 27's acceptance scenarios, not by
 # reading. Both are recorded here rather than only fixed, because each is a class of
 # failure rather than one instance.
 
-async def test_a_friends_private_material_never_reaches_a_server_config(
+async def test_a_users_private_material_never_reaches_a_server_config(
     client, session, file_transport: str
 ) -> None:
-    """The server needs a friend's PUBLIC half. It must never get the private one.
+    """The server needs a user's PUBLIC half. It must never get the private one.
 
     ``render_for_node`` now hands each credential's whole client-scoped mapping to the
     renderer, because a WireGuard-family server authorises peers by their public keys
@@ -370,7 +370,7 @@ async def test_a_friends_private_material_never_reaches_a_server_config(
         params={**AWG_PARAMS, "port": 51823,
                 "tunnel_address": "10.26.0.1/24", "peer_tunnel_address": "10.26.0.2/24"},
     )
-    await client.post("/api/friends", json={"nickname": "ira"})
+    await client.post("/api/users", json={"nickname": "ira"})
 
     stored = (await session.execute(select(Credential))).scalars().unique().all()
     assert stored, "no credential was minted, so this assertion would be vacuous"
@@ -389,7 +389,7 @@ async def test_a_friends_private_material_never_reaches_a_server_config(
     configs = await apply.render_for_node(session, node)
     whole = "\n".join(configs.values())
     for secret in private_values:
-        assert secret not in whole, "a friend's private key reached a node's config file"
+        assert secret not in whole, "a user's private key reached a node's config file"
 
 
 @pytest.mark.parametrize("people", [2, 3])
@@ -398,7 +398,7 @@ async def test_every_user_on_one_wireguard_row_renders_at_an_address_of_their_ow
 ) -> None:
     """THE PINNED REFUSAL, INVERTED — M17, and the whole reason the milestone exists.
 
-    This test used to assert the opposite: two friends on one config-file transport
+    This test used to assert the opposite: two users on one config-file transport
     could not be rendered at all, and the value of the test was that the refusal reached
     the operator as a NODE failure carrying the transport's own sentence rather than as
     a 500. That refusal is still right and is still pinned — by
@@ -416,18 +416,18 @@ async def test_every_user_on_one_wireguard_row_renders_at_an_address_of_their_ow
     hijack ``AmbiguousPeerRoute`` exists to refuse.
 
     RED WITHOUT THE ALLOCATOR: remove the ``settle`` call from
-    ``friends.grant_everywhere`` and this fails at ``render_for_node`` with the old
+    ``users.grant_everywhere`` and this fails at ``render_for_node`` with the old
     refusal, for every value of ``people``.
     """
     node_id = await serving_node(
-        client, session, name="two-friends", address="192.0.2.27",
+        client, session, name="two-users", address="192.0.2.27",
         transport_name=file_transport,
         params={**AWG_PARAMS, "port": 51824,
                 "tunnel_address": "10.27.0.1/24", "peer_tunnel_address": "10.27.0.2/24"},
     )
     for nickname in ("first", "second", "third")[:people]:
         assert (
-            await client.post("/api/friends", json={"nickname": nickname})
+            await client.post("/api/users", json={"nickname": nickname})
         ).status_code == 201
 
     node = await nodes.get_node(session, node_id)
@@ -473,7 +473,7 @@ async def test_each_users_own_file_names_the_address_the_node_authorises_for_the
     people = ["olya", "petya"]
     for nickname in people:
         assert (
-            await client.post("/api/friends", json={"nickname": nickname})
+            await client.post("/api/users", json={"nickname": nickname})
         ).status_code == 201
 
     node = await nodes.get_node(session, node_id)
@@ -485,7 +485,7 @@ async def test_each_users_own_file_names_the_address_the_node_authorises_for_the
     theirs = set()
     for nickname in people:
         handle = (
-            await session.execute(select(Friend).where(Friend.nickname == nickname))
+            await session.execute(select(User).where(User.nickname == nickname))
         ).scalars().one()
         configs = await subscriptions.config_files_for(session, handle)
         assert len(configs) == 1, configs
@@ -506,7 +506,7 @@ async def test_an_unreadable_secret_is_a_sentence_the_operator_can_act_on(
 ) -> None:
     """The moment this exists for: a restore onto a new host with the key mistyped.
 
-    Everything about such a restore looks perfect — every friend and node is listed — and
+    Everything about such a restore looks perfect — every user and node is listed — and
     the only thing wrong is one line in an env file. As an opaque 500 the available
     reading was "the restore lost my data", and the operator would go looking for another
     dump instead of fixing the key.

@@ -41,10 +41,15 @@ PANEL_SCRIPT = REPO / "scripts" / "panel-bootstrap.sh"
 CADDYFILE = REPO / "deploy" / "caddy" / "Caddyfile"
 NODES_TABLE = REPO / "control" / "app" / "templates" / "panel" / "nodes_table.html"
 MIGRATIONS = REPO / "control" / "migrations" / "versions"
+ENV_EXAMPLE = REPO / ".env.example"
 
 # M16's section, by its exact title: the shapes that build a hop and the migration that
 # empties the field both point at it by these words.
 RESOLVER_SECTION = "A node that dials a hop needs a resolver"
+
+# M28.4's section, by its exact title, for the same reason: ``.env.example`` sends the
+# operator here for the one decision it cannot carry in a comment.
+RETENTION_SECTION = "The retention this host's own key cannot reach"
 
 # Ports that mean something to somebody, so a literal one is a value that gets copied.
 # The same list the script's own test uses, for the same reason.
@@ -442,7 +447,7 @@ def test_the_panel_section_does_not_render_forwarding_rules_into_the_admin_tunne
 # Everything above guards two sections; these guard the three shapes and the section
 # that answers them. The drift this file exists to catch is exactly the drift that cost
 # M15: the runbook mandated one transport for the hop and recommended the same one for
-# the friends of the box that dials it, and nothing anywhere compared the two claims
+# the users of the box that dials it, and nothing anywhere compared the two claims
 # against the product. Prose is where that recommendation lives, so prose is where the
 # check has to be.
 #
@@ -522,7 +527,7 @@ def _egress_expression(transport_name: str) -> str:
     Read off the transport's own render module — which of ``edge.egress``'s two
     expressions it imports — rather than off its name, its family or its config format.
     That import IS the distinction the runbook's first column describes: a package that
-    calls ``wg_quick_egress`` hands a friend's packets to the node's routing table and is
+    calls ``wg_quick_egress`` hands a user's packets to the node's routing table and is
     refused on a node whose way out is a hop, and one that calls ``exit_origin``
     terminates the connection and opens its own from the hop's near address.
     """
@@ -556,7 +561,7 @@ def capability_table(runbook: str) -> dict[str, tuple[str, str, str]]:
         r"^\| transport \|[^\n]*\n\|[-| ]+\|\n((?:\|[^\n]*\n)+)", runbook, re.M
     )
     assert table, (
-        "the runbook no longer states which transport may serve friends on a node that "
+        "the runbook no longer states which transport may serve users on a node that "
         "dials a hop — which is the question following it used to get wrong"
     )
     rows: dict[str, tuple[str, str, str]] = {}
@@ -581,12 +586,12 @@ def test_the_capability_table_covers_every_transport_this_image_ships(
     )
 
 
-def test_the_table_agrees_with_the_code_about_friends_on_a_node_that_dials_a_hop(
+def test_the_table_agrees_with_the_code_about_users_on_a_node_that_dials_a_hop(
     capability_table: dict[str, tuple[str, str, str]],
 ) -> None:
     """M15.3's whole subject, checked against ``edge`` rather than against memory.
 
-    A friend-facing transport on a node whose way out is a hop must terminate the
+    A user-facing transport on a node whose way out is a hop must terminate the
     connection and originate its own; one whose packets the kernel routes is accepted by
     the panel and refused by ``edge/egress.py`` at apply. The table says which is which,
     and this is what stops it saying it wrongly.
@@ -594,7 +599,7 @@ def test_the_table_agrees_with_the_code_about_friends_on_a_node_that_dials_a_hop
     for name, (with_hop, _, _) in capability_table.items():
         expected = "no" if _egress_expression(name) == "kernel" else "yes"
         assert _answer(with_hop) == expected, (
-            f"the runbook says {name} is {_answer(with_hop)!r} for the friends of a node "
+            f"the runbook says {name} is {_answer(with_hop)!r} for the users of a node "
             f"with a hop, and its renderer says {expected!r}"
         )
 
@@ -617,12 +622,12 @@ def test_the_table_agrees_with_the_panel_about_which_transport_can_carry_a_hop(
         )
 
 
-def test_the_table_offers_friends_only_a_transport_the_panel_proposes(
+def test_the_table_offers_users_only_a_transport_the_panel_proposes(
     capability_table: dict[str, tuple[str, str, str]],
 ) -> None:
     """The column for a node with no hop, against the form an operator actually meets.
 
-    IT USED TO ASK THE DECLARED DELIVERY FORMATS — whether a friend's client could
+    IT USED TO ASK THE DECLARED DELIVERY FORMATS — whether a user's client could
     consume this transport at all, which is what ``nodes.enable_transport`` refuses on.
     That was the whole answer until M20, when a transport measured to carry nothing on the
     hosts this runbook prepares was retired from the enable dialog. Its formats are
@@ -638,7 +643,7 @@ def test_the_table_offers_friends_only_a_transport_the_panel_proposes(
     for name, (_, without_hop, _) in capability_table.items():
         expected = "yes" if name in offered else "no"
         assert _answer(without_hop) == expected, (
-            f"the runbook says {name} is {_answer(without_hop)!r} for the friends of a "
+            f"the runbook says {name} is {_answer(without_hop)!r} for the users of a "
             f"node with no hop, and the panel's enable dialog says {expected!r}"
         )
 
@@ -678,7 +683,7 @@ def test_the_table_says_why_a_transport_it_no_longer_recommends_is_not_offered(
     for name in marked:
         _, without_hop, _ = capability_table[name]
         assert "retired" in without_hop.lower(), (
-            f"the runbook tells an operator not to give {name} to friends on a node with "
+            f"the runbook tells an operator not to give {name} to users on a node with "
             "no hop and does not say it has been retired, so the only way to find out is "
             "to go looking for it on a form that no longer has it"
         )
@@ -738,7 +743,7 @@ def test_no_shape_tells_an_operator_to_enable_a_retired_transport(
 
     Over every backticked name in the shape, rather than over one instruction's phrasing:
     the runbook writes "Enable a transport: `x`" in one shape and "Enable a
-    **friend-facing** transport on E — `x`" in another, and a check tied to either
+    **user-facing** transport on E — `x`" in another, and a check tied to either
     sentence would be a check that a paraphrase turns green.
     """
     retired = set(retired_transports())
@@ -757,13 +762,13 @@ def test_no_shape_tells_an_operator_to_enable_a_retired_transport(
     )
 
 
-def test_no_shape_that_builds_a_hop_offers_its_friends_a_kernel_tunnel(
+def test_no_shape_that_builds_a_hop_offers_its_users_a_kernel_tunnel(
     shapes: dict[str, str], capability_table: dict[str, tuple[str, str, str]]
 ) -> None:
     """The contradiction M15 was found in the field, guarded where it was written.
 
     A shape that builds a hop is a shape whose entry node dials one, so the transport it
-    tells an operator to enable for that node's friends must be one the table above marks
+    tells an operator to enable for that node's users must be one the table above marks
     yes. Checked per shape rather than per file, because the same transport is the right
     answer in Shape A — one box, no hop — and the wrong one on the box that dials a hop,
     and a check that could not tell the two apart would have to forbid the correct advice
@@ -776,20 +781,20 @@ def test_no_shape_that_builds_a_hop_offers_its_friends_a_kernel_tunnel(
     for letter, body in shapes.items():
         if not re.search(HOP_FIELD, body):
             continue
-        steps = [step for step in _numbered_steps(body) if "friend-facing" in step]
+        steps = [step for step in _numbered_steps(body) if "user-facing" in step]
         assert steps, (
-            f"Shape {letter} builds a hop and never says to enable a friend-facing "
+            f"Shape {letter} builds a hop and never says to enable a user-facing "
             "transport, so it produces an entry node nobody can dial"
         )
         for step in steps:
             for name in _transport_names(step):
                 assert _answer(capability_table[name][0]) == "yes", (
                     f"Shape {letter} names {name} where it tells an operator what to give "
-                    f"the friends of a node that dials a hop: {step.strip()!r}"
+                    f"the users of a node that dials a hop: {step.strip()!r}"
                 )
         assert "The one combination that will not render" in _flat(body), (
             f"Shape {letter} builds a hop and does not point at the section that says "
-            "which friend-facing transport such a node can actually render"
+            "which user-facing transport such a node can actually render"
         )
 
 
@@ -801,7 +806,7 @@ def test_the_orphan_exception_covers_every_extension_a_config_is_written_with(
     A rendered config takes the TRANSPORT's extension (``node_stack.EXTENSION``), so the
     WireGuard family leaves a ``.conf`` behind and the VLESS pair leaves a ``.json``. That
     is not a detail: the section carrying this exception is the one that moves an entry
-    node's friends onto VLESS, so the very next orphan it creates is the one a ``.conf``
+    node's users onto VLESS, so the very next orphan it creates is the one a ``.conf``
     -only exception would not name — and the standing rule above it would then read as
     "never touch it", leaving a node key and every user's id on a host that can be seized.
 
@@ -935,7 +940,7 @@ def test_the_migration_that_empties_the_field_points_at_this_section() -> None:
 # "Nothing else collides". Since M17.1c ``placement.claim`` refuses a third: two
 # WireGuard-family rows on one node whose tunnel networks overlap, hop ends and withdrawn
 # rows included. It fires on exactly the pair this runbook mandates — Shape A's
-# friend-facing `amneziawg` and the hop the same box dials — so the operator met a
+# user-facing `amneziawg` and the hop the same box dials — so the operator met a
 # refusal the page said could not exist. Read out of ``placement`` rather than described,
 # for this file's usual reason: the answer compared against the prose has to be the one
 # the panel really gives.
@@ -1072,7 +1077,7 @@ def test_the_account_change_section_does_not_instruct_a_step_with_no_surface(
 # The move an operator makes is Shape A and then a Russian box — and Shape B, read as a
 # migration, points the existing box at the entry position, which the hop form refuses.
 # Of the two ways out that refusal names, removal is the one an operator reaches for, and
-# removal is what destroys every friend's material on that box. So the page has to name
+# removal is what destroys every user's material on that box. So the page has to name
 # the other move: the box you have becomes the LEAF, and the new box becomes the entry.
 #
 # Everything below asks the code the same question the section answers, for this file's
@@ -1089,13 +1094,13 @@ def growth_section(runbook: str) -> str:
     assert section, (
         "the runbook describes three shapes and no move between them — so an operator who "
         "ran Shape A and then rented a Russian box has only Shape B to read, and following "
-        "it destroys every credential their friends are connecting on"
+        "it destroys every credential their users are connecting on"
     )
     return section.group(0)
 
 
 def _nodes_whose_offers_the_hop_form_asks_about() -> set[str]:
-    """Which of ``establish_hop``'s two nodes is checked for friend-facing rows.
+    """Which of ``establish_hop``'s two nodes is checked for user-facing rows.
 
     By ``ast`` over the function's own source, the same reading ``_claim_refusals`` takes
     of ``placement.claim``: the question is which node that refusal is about, which is a
@@ -1107,26 +1112,26 @@ def _nodes_whose_offers_the_hop_form_asks_about() -> set[str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "friend_facing_on"
+        and node.func.attr == "user_facing_on"
         for argument in node.args[1:]
     }
 
 
-def test_the_growth_path_sends_the_box_that_already_serves_friends_to_the_leaf_end(
+def test_the_growth_path_sends_the_box_that_already_serves_users_to_the_leaf_end(
     growth_section: str,
 ) -> None:
     """The whole point of the section, and the one claim it cannot be wrong about.
 
-    An operator's first box serves friends on a kernel tunnel. It can keep doing that as
+    An operator's first box serves users on a kernel tunnel. It can keep doing that as
     the LEAF end of a hop and cannot as the entry end, and the asymmetry is not a
-    convention — ``establish_hop`` asks only the entry node what it offers its friends,
-    because the leaf's friends exit by the leaf's own route however many hops land on it.
+    convention — ``establish_hop`` asks only the entry node what it offers its users,
+    because the leaf's users exit by the leaf's own route however many hops land on it.
     If that refusal ever grew to ask the leaf as well, this advice would start costing an
     operator the credentials it exists to save, and it would do so silently.
     """
     assert _nodes_whose_offers_the_hop_form_asks_about() == {"entry_node.id"}, (
         "relay.establish_hop no longer refuses on the ENTRY node's offers alone. The "
-        "runbook's growth path tells an operator their existing friend-facing transport "
+        "runbook's growth path tells an operator their existing user-facing transport "
         "survives on the leaf end — check that is still true before touching this test"
     )
     flat = _flat(growth_section)
@@ -1148,7 +1153,7 @@ def test_the_growth_path_quotes_what_removing_a_transport_destroys(
     them costs what. Quoted from ``console.removal_summary`` and checked against it — the
     clause up to its first full stop, which is everything the dialog says about what
     removal took and carries no node and no transport of its own. An operator who reads
-    "remove that transport" and does it has destroyed every friend's material on that
+    "remove that transport" and does it has destroyed every user's material on that
     box, and this is the sentence that has to be in front of them first.
     """
     summary = _flat(
@@ -1167,10 +1172,10 @@ def test_the_growth_path_builds_a_hop_the_panel_would_actually_accept(
 ) -> None:
     """The new entry node, against the three forms the operator types it into.
 
-    Same three questions ``test_no_shape_that_builds_a_hop_offers_its_friends_a_kernel_
+    Same three questions ``test_no_shape_that_builds_a_hop_offers_its_users_a_kernel_
     tunnel`` and its neighbours ask of a shape, asked here because this section is a
     fourth set of instructions and inherits none of them: the hop form offers only
-    ``hop_transports()``, a node that dials a hop can render only a friend-facing
+    ``hop_transports()``, a node that dials a hop can render only a user-facing
     transport the table marks yes, and such a node does not render at all without a
     resolver. A migration that ends in a refusal is worse than no migration — the
     operator has already rented the box.
@@ -1184,16 +1189,16 @@ def test_the_growth_path_builds_a_hop_the_panel_would_actually_accept(
         "which the panel's hop form does not offer"
     )
 
-    steps = [step for step in _numbered_steps(growth_section) if "friend-facing" in step]
+    steps = [step for step in _numbered_steps(growth_section) if "user-facing" in step]
     assert steps, (
-        "the growth path never says to enable a friend-facing transport on the new entry, "
+        "the growth path never says to enable a user-facing transport on the new entry, "
         "so it produces an entry node nobody can dial"
     )
     for step in steps:
         for name in _transport_names(step):
             assert _answer(capability_table[name][0]) == "yes", (
                 f"the growth path names {name} where it tells an operator what to give the "
-                f"friends of the node that dials the hop: {step.strip()!r}"
+                f"users of the node that dials the hop: {step.strip()!r}"
             )
 
     assert RESOLVER_SECTION in flat, (
@@ -1201,7 +1206,7 @@ def test_the_growth_path_builds_a_hop_the_panel_would_actually_accept(
         "resolver, so the first apply refuses"
     )
     assert "The one combination that will not render" in flat, (
-        "the growth path does not point at the section that says which friend-facing "
+        "the growth path does not point at the section that says which user-facing "
         "transport the node it creates can render"
     )
 
@@ -1211,10 +1216,11 @@ def test_no_paragraph_states_the_kernel_tunnel_rule_without_naming_which_end(
 ) -> None:
     """The rule is true of ONE end, and *Rules that are not optional* said it absolutely.
 
-    ``A friend-facing kernel tunnel and a hop still cannot share a node`` sat two bullets
-    below a paragraph of this same page explaining that on a leaf they are exactly right,
-    and it sat where an operator goes to look a rule up. The product's answer is the
-    narrower one — ``establish_hop`` asks only the entry node what it offers its friends
+    The bullet used to state it absolutely — a kernel tunnel for a node's own users and a
+    hop still cannot share a node — and it sat two bullets below a paragraph of this same
+    page explaining that on a leaf they are exactly right, where an operator goes to look a
+    rule up. The product's answer is the
+    narrower one — ``establish_hop`` asks only the entry node what it offers its users
     — so an operator who believes the absolute version takes a transport away from a leaf
     that could have kept it, and takes every credential on it with them.
 
@@ -1234,7 +1240,7 @@ def test_no_paragraph_states_the_kernel_tunnel_rule_without_naming_which_end(
         if "kernel tunnel" not in paragraph:
             continue
         assert re.search(r"\b(?:dials?|dialling|dialled|entry)\b", paragraph, re.I), (
-            "a paragraph says what a friend-facing kernel tunnel may not share a node "
+            "a paragraph says what a user-facing kernel tunnel may not share a node "
             "with and never says which end of the hop that is true of — on a leaf it is "
             f"supported and is what the growth path depends on: {paragraph}"
         )
@@ -1246,34 +1252,58 @@ def test_no_paragraph_states_the_kernel_tunnel_rule_without_naming_which_end(
 def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str]) -> None:
     """The step the walk had to work out for itself, in the pages it worked from.
 
-    It added a friend and fetched their configuration file: complete, correct, importable
+    It added a user and fetched their configuration file: complete, correct, importable
     — the node's real public key, an address out of that row's pool — while the node held
     no peer for them and their client would have handshaked into nothing. A second apply,
     three minutes later, is what made it true.
 
-    Both shapes that add users read *"Apply … Add friends"*, in that order, which is the
+    Both shapes that add users read *"Apply … Add users"*, in that order, which is the
     right order for a node and the wrong one for a person. So a shape whose steps add a
     user has to apply AFTER it, and this asserts the order rather than the presence of the
     word: an apply above the add-user step is the version the walk followed.
+
+    THE ORDER CHECK SKIPS A SHAPE WHOSE ADD STEP IT CANNOT RECOGNISE, so it is bracketed
+    by two assertions that can fail on their own — "a verification that cannot fail" is
+    this repository's signature defect and the skip is one waiting to happen. One end
+    catches the specific way it would happen (a step reverting to the retired word, which
+    M29 took out of this page and which this regex no longer matches); the other catches
+    the general one (no shape matched at all, so nothing below ran), and is the same
+    ``assert steps`` the two ``user-facing`` filters above carry for the same reason.
     """
+    covered = set()
     for letter, body in shapes.items():
         steps = _numbered_steps(body)
+        retired = [
+            step for step in steps if re.search(r"add (?:a )?friends?\b", step, re.I)
+        ]
+        assert not retired, (
+            f"Shape {letter} tells an operator to add a friend. The word is `user` "
+            "(docs/decisions.md, 2026-09-22) — and the order check below does not "
+            f"recognise this step, so it skips the shape silently: "
+            f"{[step.strip() for step in retired]!r}"
+        )
         adding = [
             index
             for index, step in enumerate(steps)
-            if re.search(r"add (?:a )?(?:friend|user)", step, re.I)
+            if re.search(r"add (?:a )?user", step, re.I)
         ]
         if not adding:
             continue
+        covered.add(letter)
         applying = [
             index
             for index, step in enumerate(steps)
             if re.search(r"\bapply\b", step, re.I)
         ]
         assert any(index > adding[0] for index in applying), (
-            f"Shape {letter} adds a user and never applies afterwards, so the friend it "
+            f"Shape {letter} adds a user and never applies afterwards, so the user it "
             "hands a link to is on no node until the operator works that out themselves"
         )
+    assert covered, (
+        "no shape adds a user at all, so the order this test exists to check was not "
+        "checked anywhere — either the runbook stopped telling an operator to add one, "
+        "or it words it in a way this no longer matches"
+    )
 
 
 def test_the_leaf_section_says_the_exit_codes_do_not_survive_make(
@@ -1349,4 +1379,148 @@ def test_the_prerequisites_name_what_the_control_plane_box_needs(runbook: str) -
         )
     assert re.search(r"control.plane box", said, re.I), (
         "the section answers for a node only, and the control-plane box is not a node"
+    )
+
+
+@pytest.fixture(scope="module")
+def retention_section(runbook: str) -> str:
+    """M28.4's section: the half of the protection that is not on this host at all."""
+    section = re.search(
+        rf"^### {re.escape(RETENTION_SECTION)}\n((?:.*\n)*?)(?=^#{{2,3}} )", runbook, re.M
+    )
+    assert section, (
+        "the runbook no longer says what retention the backup bucket must have — which "
+        "leaves a write-only key against a bucket that keeps one overwritable copy"
+    )
+    return section.group(1)
+
+
+def _table_rows(section: str) -> list[list[str]]:
+    """The decision table's data rows, as cells. Header and separator dropped."""
+    rows = [
+        [cell.strip() for cell in line.strip().strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|") and set(line) - set("|- ")
+    ]
+    assert rows, "the section carries no table"
+    return rows[1:]
+
+
+def test_the_retention_section_settles_the_three_rather_than_offering_them(
+    retention_section: str,
+) -> None:
+    """The plan offered versioning, object lock and a lifecycle rule as a choice.
+
+    They are not one: the first is the defence, the second an upgrade to it, the third the
+    thing being defended against. A page that lists all three with no verdict reads as
+    "pick whichever your store has", and the store that has only the third is then set up
+    with a rule that deletes the history on a timer and nothing that keeps it.
+    """
+    rows = _table_rows(retention_section)
+    verdicts = {row[0].lower(): row[1] for row in rows}
+    for mechanism in ("versioning", "object lock", "lifecycle"):
+        matched = [name for name in verdicts if mechanism in name]
+        assert len(matched) == 1, f"the table has no single row for {mechanism}: {matched}"
+
+    versioning = next(v for name, v in verdicts.items() if "versioning" in name)
+    assert "required" in versioning.lower(), (
+        f"versioning is not stated as required — it reads {versioning!r}, and every other "
+        "row on this page assumes it is on"
+    )
+    lifecycle = next(v for name, v in verdicts.items() if "lifecycle" in name)
+    assert "not a retention mechanism" in lifecycle.lower(), (
+        f"the lifecycle row reads {lifecycle!r}, which lets a rule that deletes on a "
+        "schedule be mistaken for one that keeps things"
+    )
+
+
+def test_the_retention_section_denies_that_the_object_name_is_the_defence(
+    retention_section: str,
+) -> None:
+    """The plausible wrong answer, and it is already half true, which is what makes it bad.
+
+    ``hashi-<timestamp>.sql.gz.age`` does stop two runs colliding. It stops nothing else:
+    the uploading credential picks the name, so it can write yesterday's name, and a bucket
+    with no versioning keeps whatever was written last.
+    """
+    said = _flat(retention_section)
+    assert "hashi-<timestamp>" in said, (
+        "the section does not say what the object is called, so a reader cannot tell "
+        "whether the naming is doing the work"
+    )
+    assert "by mistake" in said and "on purpose" in said, (
+        "the section does not separate what the naming defends against from what "
+        "versioning defends against"
+    )
+
+
+def test_the_retention_section_gives_a_check_this_host_cannot_run_for_them(
+    retention_section: str,
+) -> None:
+    """A retention that has only been described is worth nothing, and cannot be tested here.
+
+    The credential on this host writes and does nothing else, so the check has to be run by
+    the owner from somewhere else — and the page has to say that this repository will never
+    run it, or ``make verify`` passing reads as the bucket being configured.
+    """
+    said = _flat(retention_section)
+    for call in (
+        "GetBucketVersioning",
+        "GetObjectLockConfiguration",
+        "GetBucketLifecycleConfiguration",
+        "ListObjectVersions",
+    ):
+        assert call in said, (
+            f"the section does not name {call}, so the operator is left to find the check "
+            "in a console whose wording differs from every other store's"
+        )
+    assert "No test in this tree asserts any of the above" in said, (
+        "the section does not say that nothing here proves the retention is on, which is "
+        "the sentence that keeps a green `make verify` from being read as one"
+    )
+
+
+def test_the_retention_section_names_no_provider(retention_section: str) -> None:
+    """CLAUDE.md's rule, in the one section most likely to break it.
+
+    Retention is configured in somebody's console, and a console path is the shape a
+    provider name arrives in: it reads as helpful and is indistinguishable, later, from a
+    requirement. The protocol calls above are the general form and every store answers
+    them.
+    """
+    providers = re.compile(
+        r"aws|amz|amazon|google|azure|cloudflare|backblaze|wasabi|yandex|selectel|minio",
+        re.IGNORECASE,
+    )
+    found = providers.findall(retention_section)
+    assert found == [], f"the retention section names {sorted(set(found))}"
+    assert not re.search(r"[a-z]+://", retention_section), (
+        "the retention section carries a URL — the store is a field, not an address"
+    )
+    assert not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", retention_section), (
+        "an IP address is hardcoded in the retention section"
+    )
+
+
+def test_the_env_file_sends_the_operator_to_the_section_that_decides_retention(
+    runbook: str,
+) -> None:
+    """The comment beside the write-only key cannot carry the whole decision, so it points.
+
+    An anchor by exact title, the same way M16's resolver section is pointed at: rename the
+    heading and this fails, rather than leaving a comment that directs an operator to a
+    section that is no longer there.
+    """
+    # The comment wraps, and a wrapped title is still a pointer: the `#` that opens each
+    # continuation line is dropped before the phrase is looked for.
+    env = ENV_EXAMPLE.read_text()
+    said = _flat(re.sub(r"\n#", " ", env))
+    assert RETENTION_SECTION in said, (
+        "`.env.example` does not point at the section that decides the bucket-side "
+        "retention, so the credential comment is the only account of it an operator sees"
+    )
+    assert f"### {RETENTION_SECTION}" in runbook, "the section it points at is gone"
+    assert "VERSIONING" in said, (
+        "the comment beside the write-only key does not name the mechanism that makes "
+        "write-only stick, so the key reads as sufficient on its own"
     )

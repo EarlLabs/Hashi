@@ -5,7 +5,7 @@ WHAT: the one answer to "may this transport be placed on this node, and under wh
       parameters of one.
 WHY:  the rule used to be one row per ``(node, transport_name)``, which is not what
       collides. It made the runbook's own advice impossible to follow: AmneziaWG is
-      MANDATED for the entry→leaf hop and RECOMMENDED for friends on the same box, so
+      MANDATED for the entry→leaf hop and RECOMMENDED for users on the same box, so
       whichever was enabled first excluded the other — permanently, because at the time
       there was no delete for a node transport (``nodes.remove_transport`` is that exit
       and arrived with M15.2). What actually collides on a host is the listening port,
@@ -126,7 +126,7 @@ NO_NAME_LEFT = (
 # the Keys & configs screen, and none of them is an address any person holds. The middle
 # sentence is the whole reason this refusal exists, and it is stated rather than implied,
 # because the failure it stands in front of looks like nothing at all — two valid files,
-# two interfaces that come up, and one friend's traffic arriving at another's device.
+# two interfaces that come up, and one user's traffic arriving at another's device.
 TUNNEL_TAKEN = (
     "node {node!r} already carries {holder!r} on a tunnel at {held}, and {wanted} is in "
     "the same range. Two tunnels on one node cannot share one: their data planes write "
@@ -275,7 +275,7 @@ async def tunnel_network_is_free(
 
     EVERY ROW ON THE NODE, hop ends and withdrawn rows included, which is ``_rows_on``'s
     own rule and is load-bearing twice here. A hop end is a tunnel on that host exactly as
-    a friend-facing row is — the runbook puts both on the entry node — and its interface
+    a user-facing row is — the runbook puts both on the entry node — and its interface
     is up whether or not anybody is offered it. A withdrawn row keeps its range for the
     same reason it keeps its port: switching it back on must not be the moment the
     collision appears.
@@ -326,7 +326,7 @@ async def claim(
     # AFTER the port and before the name, so a request that gets both wrong is answered
     # about the port first — the older refusal, the one every existing caller asserts on.
     # This is where establishing a hop meets the rule as well: ``relay.establish_hop``
-    # claims each end on its own node, so a hop laid over a node's friend-facing tunnel is
+    # claims each end on its own node, so a hop laid over a node's user-facing tunnel is
     # refused with the form still in front of the operator.
     await tunnel_network_is_free(
         session, node=node, transport_name=transport_name, params=params

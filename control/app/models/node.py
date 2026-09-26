@@ -36,14 +36,14 @@ class NodeState(enum.StrEnum):
 
     ``DEGRADED`` is the load-bearing one. Core invariants §4: a partially applied
     node operation marks the node degraded, never active — because silence about a
-    half-configured node is worse than an outage, since friends get routed onto it
+    half-configured node is worse than an outage, since users get routed onto it
     and report a broken client instead of a broken node.
     """
 
     # Created in the panel, no configuration pushed yet. Never in a subscription.
     DRAFT = "draft"
 
-    # Configured, verified, and serving. The only state that reaches a friend.
+    # Configured, verified, and serving. The only state that reaches a user.
     ACTIVE = "active"
 
     # Something failed halfway. Excluded from subscriptions until an operator
@@ -63,7 +63,7 @@ class NodeState(enum.StrEnum):
 
         * ``retired -> active`` is refused. A retired node's host has usually been
           destroyed; re-activating the RECORD would put an address that may now belong
-          to a stranger back into every friend's subscription. Create a new node
+          to a stranger back into every user's subscription. Create a new node
           instead — which is the ten-minute operation the charter is built around.
 
         ``draft -> degraded`` was refused here too, on the reading that degraded means
@@ -86,7 +86,7 @@ class NodeState(enum.StrEnum):
 
         Everything else is permitted, including ``degraded -> active`` (a successful
         apply after a fix) and ``active -> draft`` (taking a node out of rotation
-        without retiring it, so it stops reaching friends but keeps its configuration).
+        without retiring it, so it stops reaching users but keeps its configuration).
         """
         match current:
             case cls.DRAFT:
@@ -102,10 +102,10 @@ class NodeState(enum.StrEnum):
 
     @classmethod
     def serving(cls) -> tuple[NodeState, ...]:
-        """The states a friend may be routed onto. Defined once, here.
+        """The states a user may be routed onto. Defined once, here.
 
         Every query that builds a subscription filters on this, so "which nodes do
-        friends see" has exactly one answer in the codebase rather than one per
+        users see" has exactly one answer in the codebase rather than one per
         call site.
         """
         return (cls.ACTIVE,)
@@ -116,11 +116,11 @@ class TransportPurpose(enum.StrEnum):
 
     The charter's topology is a Russian ENTRY node fronting foreign LEAF nodes, and
     the hop between them is an ordinary transport whose consumer happens to be another
-    node rather than a friend's device. That difference has to be recorded, because
+    node rather than a user's device. That difference has to be recorded, because
     everything downstream reads it:
 
     * a hop must never appear in a subscription, and must never be granted to a
-      friend — a friend handed the entry↔leaf tunnel would bypass the entry entirely;
+      user — a user handed the entry↔leaf tunnel would bypass the entry entirely;
     * exactly one end of a hop dials the other. The entry dials, always: it sits
       behind a Russian carrier NAT and cannot be dialled. Recording which end is which
       is what lets ``edge.relay`` render the asymmetry.
@@ -130,8 +130,8 @@ class TransportPurpose(enum.StrEnum):
     to a literal.
     """
 
-    # The default, and what every existing row is: a transport friends connect to.
-    FRIENDS = "friends"
+    # The default, and what every existing row is: a transport users connect to.
+    USERS = "users"
 
     # This end of a node-to-node hop, on the node that DIALS.
     RELAY_ENTRY = "relay-entry"
@@ -180,7 +180,7 @@ class Node(Base, TimestampMixin):
     resolver: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Indexed: every subscription render filters nodes by state, and that is the one
-    # query that must stay fast when a node has just been blocked and every friend is
+    # query that must stay fast when a node has just been blocked and every user is
     # refreshing at once.
     #
     # ``EnumText`` rather than ``String(16)``, and the difference is not cosmetic: over
@@ -197,11 +197,11 @@ class Node(Base, TimestampMixin):
 
     # --- what the last probe of this host found — M26, the first acceptance walk ----
     #
-    # The walk stopped the friend-facing daemon on a leaf and pressed probe. The probe
+    # The walk stopped the user-facing daemon on a leaf and pressed probe. The probe
     # was RIGHT — *"failed  leaf-acc answered but is not serving — not running:
     # amneziawg."* — and one reload later the row read ``active`` beside ``in sync``
     # again, with nothing anywhere on the console saying otherwise, while that node was
-    # still in every user's link and a friend's ping was 100% loss. A measurement that is
+    # still in every user's link and a user's ping was 100% loss. A measurement that is
     # taken, is correct and is then discarded is worse than one never taken: the operator
     # saw the truth once and the product overwrote it with a reassurance.
     #
@@ -272,7 +272,7 @@ class NodeTransport(Base, TimestampMixin):
         # It used to be ``(node_id, transport_name)``, on the reasoning that two
         # instances of one transport would mean two ports and two sets of keys under
         # one name. That is true and it is not a reason to forbid them: the runbook
-        # MANDATES AmneziaWG for the entry→leaf hop and RECOMMENDS it for friends on
+        # MANDATES AmneziaWG for the entry→leaf hop and RECOMMENDS it for users on
         # the same box, so the old rule made a node that followed both pieces of advice
         # impossible — and, with no delete for a node transport at the time, impossible
         # forever. Removing one is ``nodes.remove_transport`` since M15.2, which is also
@@ -367,21 +367,21 @@ class NodeTransport(Base, TimestampMixin):
 
     # Who consumes this transport — see ``TransportPurpose``. Defaulted rather than
     # nullable so that "not a hop" is a value rather than an absence: every query that
-    # builds a subscription filters on it, and a NULL there would be a friend routed
+    # builds a subscription filters on it, and a NULL there would be a user routed
     # onto an entry↔leaf tunnel.
     purpose: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=TransportPurpose.FRIENDS, index=True
+        String(16), nullable=False, default=TransportPurpose.USERS, index=True
     )
 
     # The other end of the hop, when this row is one end of one. Self-referential and
-    # nullable: a friend-facing transport has no peer. SET NULL rather than CASCADE on
+    # nullable: a user-facing transport has no peer. SET NULL rather than CASCADE on
     # delete, so removing one end leaves the other visible and obviously half a hop
     # instead of silently disappearing with it.
     peer_node_transport_id: Mapped[str | None] = mapped_column(
         ForeignKey("node_transports.id", ondelete="SET NULL"), nullable=True
     )
 
-    # An operator can enable a transport without exposing it to friends yet.
+    # An operator can enable a transport without exposing it to users yet.
     # Disabled means "configured on the node but not in anyone's subscription".
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

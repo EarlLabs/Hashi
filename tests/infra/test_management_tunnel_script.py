@@ -69,17 +69,23 @@ def env_file(directory: pathlib.Path, **overrides: str | None) -> pathlib.Path:
     return path
 
 
-def run(env_path: pathlib.Path, out: pathlib.Path) -> subprocess.CompletedProcess:
+def run(
+    env_path: pathlib.Path, out: pathlib.Path, *, raw: bool = False
+) -> subprocess.CompletedProcess:
     """Run it exactly as the bootstrap does, with no TTY and no input.
 
     ``stdin`` is closed rather than inherited, which is the mechanism behind the
     "not one interactive question" property: a prompt anywhere would get EOF and
     fail here instead of hanging on a flaky SSH session in production.
+
+    ``raw`` hands back bytes. ``text=True`` decodes with universal newlines, which
+    turns a stray ``\r`` in a printed device config into a line break and hides the
+    exact byte M28.13 is about — a test that cannot see the defect cannot pin it.
     """
     return subprocess.run(
         [str(SCRIPT), "--env-file", str(env_path), "--out", str(out)],
         capture_output=True,
-        text=True,
+        text=not raw,
         timeout=120,
         cwd=REPO,
         stdin=subprocess.DEVNULL,
@@ -257,8 +263,8 @@ def test_the_host_config_has_no_forwarding_and_no_nat(generated) -> None:
 def test_a_device_is_routed_to_the_panel_host_and_not_to_the_internet(generated) -> None:
     """The client's ``AllowedIPs`` is the host's tunnel address, never a default route.
 
-    The same field, the opposite answer from a friend's exit config, because the
-    consumer is different: a friend wants everything to leave through the node, and
+    The same field, the opposite answer from a user's exit config, because the
+    consumer is different: a user wants everything to leave through the node, and
     the owner wants exactly one host reachable. A default route here would send the
     owner's whole internet into a host with no forwarding — which fails silently.
     """
@@ -433,3 +439,112 @@ def test_the_files_it_writes_are_readable_only_by_their_owner(generated) -> None
     _, conf = generated
     assert stat.S_IMODE(conf.stat().st_mode) == 0o600, "the host config is not 0600"
     assert stat.S_IMODE(conf.parent.stat().st_mode) == 0o700, "the directory is not 0700"
+
+
+# --- the env file as somebody else's editor saved it ---------------------------
+#
+# Everything above writes a clean env file: LF line endings, bare values, one
+# assignment per key. That is the file this script's author tested with and the file
+# every scenario here produced for eleven milestones, and a parser is never wrong on
+# that file — it is wrong on the file an operator saves from a Windows editor while
+# rebuilding a host from their laptop, or after pasting a quoted value, or after
+# leaving the first line in place and adding a corrected one under it. M28.12 round 1
+# named the class (step-notes item 9) and left this script's copy of the weak parser
+# for M28.13 to close.
+
+
+def edited_env(directory: pathlib.Path, transform, **overrides: str | None):
+    """The complete env file above, re-saved the way some other editor saves it.
+
+    Bytes rather than text on the way out, because the transform under test is a line
+    ending: ``write_text`` would translate it back on some platforms and the scenario
+    would prove nothing.
+    """
+    path = env_file(directory, **overrides)
+    path.write_bytes(transform(path.read_text()).encode())
+    return path
+
+
+def test_a_crlf_env_file_puts_no_carriage_return_in_the_tunnel(tmp_path) -> None:
+    """The operator filled everything in correctly and the tunnel still does not come up.
+
+    This is not the credential leak M28.12 closed — every value here is genuinely
+    configured. It is config corruption: ``\\r`` is not whitespace to bash's default
+    ``IFS`` and it is not a comment to AmneziaWG, so it lands inside ``Address``,
+    ``ListenPort``, ``MTU`` and ``Endpoint``, in this host's own file AND in every
+    device config the operator pastes onto a phone. The symptom is a handshake that
+    never completes from a file that looks right in every editor that hides the byte.
+    """
+    out = tmp_path / "management"
+    result = run(edited_env(tmp_path, lambda text: text.replace("\n", "\r\n")), out, raw=True)
+    assert result.returncode == 0, result.stderr.decode()
+
+    conf = (out / "awg-mgmt.conf").read_bytes()
+    assert b"\r" not in conf, "a carriage return reached this host's own tunnel config"
+    for line in (b"Address = 10.77.0.1/24", b"ListenPort = 51821", b"MTU = 1420"):
+        assert line + b"\n" in conf, f"{line!r} is not what the env file said"
+
+    # The half that leaves this machine. Anchored on the endpoint because that is the
+    # value the defect was reproduced on, and on each peer's own address because the
+    # comma split runs under an IFS that does not include `\r` either.
+    assert b"\r" not in result.stdout, "a carriage return reached a printed device config"
+    assert result.stdout.count(b"Endpoint = panel.invalid:51821\n") == 2, (
+        "the endpoint an operator pastes onto a device is not the one they configured"
+    )
+    for address in (b"10.77.0.2/32", b"10.77.0.3/32"):
+        assert b"AllowedIPs = " + address + b"\n" in conf
+        assert b"Address = " + address + b"\n" in result.stdout
+
+
+def test_the_last_assignment_of_a_key_is_the_one_used(tmp_path) -> None:
+    """An env file means the last one, and so does compose reading the same file.
+
+    Correcting a value by adding a line under it is ordinary, and the two readers of
+    this file disagreeing about which line won is a tunnel built from a value nothing
+    else on the host is using.
+    """
+    out = tmp_path / "management"
+    result = run(
+        edited_env(tmp_path, lambda text: text + "HASHI_MGMT_MTU=1280\n"), out
+    )
+    assert result.returncode == 0, result.stderr
+    assert "MTU = 1280" in (out / "awg-mgmt.conf").read_text()
+    assert "MTU = 1420" not in result.stdout, (
+        "a device was handed the corrected line's predecessor"
+    )
+
+
+def test_a_quoted_value_arrives_without_its_quotes(tmp_path) -> None:
+    """Quoting is how compose is told a value has a space in it, so it is legal here."""
+    out = tmp_path / "management"
+    result = run(
+        edited_env(
+            tmp_path,
+            lambda text: text.replace(
+                "HASHI_MGMT_ENDPOINT=panel.invalid", 'HASHI_MGMT_ENDPOINT="panel.invalid"'
+            ),
+        ),
+        out,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Endpoint = panel.invalid:51821" in result.stdout
+    assert '"' not in result.stdout
+
+
+def test_a_trailing_comment_is_not_part_of_the_value(tmp_path) -> None:
+    """`.env.example` itself annotates keys this way, so an operator's file will too."""
+    out = tmp_path / "management"
+    result = run(
+        edited_env(
+            tmp_path,
+            lambda text: text.replace(
+                "HASHI_MGMT_MTU=1420", "HASHI_MGMT_MTU=1420  # 1420 is the AmneziaWG default"
+            ),
+        ),
+        out,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "MTU = 1420\n" in (out / "awg-mgmt.conf").read_text()
+    assert "default" not in (out / "awg-mgmt.conf").read_text(), (
+        "the comment became part of the MTU"
+    )

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """hashi — seed the identities the security audit attacks as.
 
-WHAT: creates the audit's three friends on the disposable stand — two live and
+WHAT: creates the audit's three users on the disposable stand — two live and
       one revoked — and writes their subscription tokens to a roles file that
       ``role.sh`` reads.
 
-WHY:  the audit's highest-value boundary is "friend A's token must not reach
-      friend B's configuration", and a single identity cannot test it. The
+WHY:  the audit's highest-value boundary is "user A's token must not reach
+      user B's configuration", and a single identity cannot test it. The
       acceptance stand deliberately seeds NOTHING (its whole value is that every
       awkward first-time step is still ahead of the agent), so the audit's
       identities are seeded here, on top of it, rather than by changing what
       acceptance walks.
 
-WHY a revoked friend too. ``docs/security/threat-model.md`` §3.4: a revoked
+WHY a revoked user too. ``docs/security/threat-model.md`` §3.4: a revoked
       token's answer must be indistinguishable from a token that was never
       issued. That is a comparison between two requests, so both sides have to
       exist before the hunt starts — a hunter that revokes someone mid-run has
@@ -58,7 +58,7 @@ BASE = f"http://{API_HOST}:{API_PORT}"
 
 # The stand's fixed operator credentials, printed by scripts/acceptance/stand.sh.
 # Obviously fake and committed on the same grounds as deploy/e2e.env: they guard a
-# stack with no real nodes and no real friends, whose volume is destroyed on the
+# stack with no real nodes and no real users, whose volume is destroyed on the
 # way out. Nothing here may ever be copied into .env.
 OPERATOR_USER = os.environ.get("HASHI_OPERATOR_USERNAME", "owner")
 OPERATOR_PASSWORD = os.environ.get("HASHI_OPERATOR_PASSWORD", "e2e-operator-password")
@@ -72,10 +72,10 @@ ROLES_FILE = pathlib.Path(
 # The nicknames are recognisable on purpose. Someone reading the stand's database
 # while debugging should be able to tell an audit fixture from a real record at a
 # glance — on the stand there are no real records, and the habit is still right.
-FRIENDS = [
-    ("friend_a", "audit-friend-a"),
-    ("friend_b", "audit-friend-b"),
-    ("friend_revoked", "audit-friend-revoked"),
+USERS = [
+    ("user_a", "audit-user-a"),
+    ("user_b", "audit-user-b"),
+    ("user_revoked", "audit-user-revoked"),
 ]
 
 
@@ -154,25 +154,25 @@ def login(client: urllib.request.OpenerDirector, jar: http.cookiejar.CookieJar) 
         )
     if not any(cookie.name == SESSION_COOKIE for cookie in jar):
         fail(f"login answered {status} and set no {SESSION_COOKIE} cookie — no session")
-    guarded, raw = call(client, "GET", "/api/friends")
+    guarded, raw = call(client, "GET", "/api/users")
     if guarded != 200:
         fail(
-            f"the session does not open /api/friends: {guarded} {raw[:200]!r}. The "
+            f"the session does not open /api/users: {guarded} {raw[:200]!r}. The "
             f"cookie exists and the app will not accept it."
         )
 
 
-def create_friend(client: urllib.request.OpenerDirector, nickname: str) -> str:
-    status, raw = call(client, "POST", "/api/friends", json_body={"nickname": nickname})
+def create_user(client: urllib.request.OpenerDirector, nickname: str) -> str:
+    status, raw = call(client, "POST", "/api/users", json_body={"nickname": nickname})
     if status != 201:
         fail(f"creating {nickname} returned {status}: {raw[:400]!r}")
     return str(json.loads(raw)["id"])
 
 
-def token_of(client: urllib.request.OpenerDirector, friend_id: str) -> str:
-    status, raw = call(client, "GET", f"/api/friends/{friend_id}/subscription")
+def token_of(client: urllib.request.OpenerDirector, user_id: str) -> str:
+    status, raw = call(client, "GET", f"/api/users/{user_id}/subscription")
     if status != 200:
-        fail(f"no subscription for {friend_id}: {status} {raw[:400]!r}")
+        fail(f"no subscription for {user_id}: {status} {raw[:400]!r}")
     # The response carries a full URL built from the stand's configured public base,
     # which is not necessarily the address the agent reaches it on. The TOKEN is what
     # is wanted, so take the last path segment and let the agent compose the URL from
@@ -180,14 +180,14 @@ def token_of(client: urllib.request.OpenerDirector, friend_id: str) -> str:
     url = str(json.loads(raw)["url"])
     token = urllib.parse.urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
     if len(token) < 16:
-        fail(f"{friend_id}'s subscription URL does not end in a token: {url!r}")
+        fail(f"{user_id}'s subscription URL does not end in a token: {url!r}")
     return token
 
 
-def revoke(client: urllib.request.OpenerDirector, friend_id: str) -> None:
-    status, raw = call(client, "POST", f"/api/friends/{friend_id}/revoke")
+def revoke(client: urllib.request.OpenerDirector, user_id: str) -> None:
+    status, raw = call(client, "POST", f"/api/users/{user_id}/revoke")
     if status != 200:
-        fail(f"revoking {friend_id} returned {status}: {raw[:400]!r}")
+        fail(f"revoking {user_id} returned {status}: {raw[:400]!r}")
 
 
 def main() -> int:
@@ -204,12 +204,16 @@ def main() -> int:
         },
     }
 
-    for key, nickname in FRIENDS:
-        friend_id = create_friend(client, nickname)
-        token = token_of(client, friend_id)
+    for key, nickname in USERS:
+        user_id = create_user(client, nickname)
+        token = token_of(client, user_id)
         roles[key] = {
             "kind": "path-token",
-            "friend_id": friend_id,
+            # The roles file is a two-file contract: scripts/security/role.sh reads
+            # this key by name, so it moves only when that script moves with it — and a
+            # roles file left over from an older stand still carries the old key, which
+            # is why every `stand.sh up` re-seeds rather than reusing one.
+            "user_id": user_id,
             "nickname": nickname,
             "token": token,
             "path": f"/sub/{token}",
@@ -217,8 +221,8 @@ def main() -> int:
 
     # Revoked LAST and after its token was read: the token has to be known in order
     # to ask what a revoked one answers, which is the whole point of §3.4.
-    revoke(client, roles["friend_revoked"]["friend_id"])
-    roles["friend_revoked"]["revoked"] = "true"
+    revoke(client, roles["user_revoked"]["user_id"])
+    roles["user_revoked"]["revoked"] = "true"
 
     ROLES_FILE.parent.mkdir(parents=True, exist_ok=True)
     # 0600 on a file holding three bearer credentials, and the mode is set before the
@@ -230,8 +234,8 @@ def main() -> int:
     # Counts and names only. A token never goes to stdout from here — `role.sh` is
     # the one thing that prints one, to the one agent that asked for it.
     print(
-        f"[seed] {len(FRIENDS)} friends seeded "
-        f"({', '.join(nickname for _, nickname in FRIENDS)}), one of them revoked"
+        f"[seed] {len(USERS)} users seeded "
+        f"({', '.join(nickname for _, nickname in USERS)}), one of them revoked"
     )
     print(f"[seed] credentials in {ROLES_FILE} (0600, gitignored) — read them with role.sh")
     return 0

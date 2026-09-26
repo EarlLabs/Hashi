@@ -31,8 +31,8 @@ def new_id() -> str:
     """A fresh primary key.
 
     UUIDs rather than serial integers, stored as text. Two reasons, one of them
-    security: a sequential node or friend id in a URL or an error message tells a
-    reader how many friends exist and in what order they were added, and the
+    security: a sequential node or user id in a URL or an error message tells a
+    reader how many users exist and in what order they were added, and the
     charter's whole posture is that the system reveals as little as possible about
     who uses it. The other is that an id can be minted before the row is inserted,
     which is what lets a node record and its key material be built in one
@@ -47,7 +47,7 @@ class TimestampMixin:
     Note what this is NOT: a record of activity. These are timestamps on
     configuration — when the operator added a node — never on a connection. Core
     invariants §3 forbids "timestamps of individual connections", and no model in
-    this codebase has a "last seen" column for a friend, deliberately.
+    this codebase has a "last seen" column for a user, deliberately.
     """
 
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -131,7 +131,7 @@ class EnumText(TypeDecorator):
 
     Stored as the member's ``value``, never its ``name``: the values are what is already
     in the database, and a member whose stored text stopped matching the subscription
-    filter would take a node out of every friend's configuration.
+    filter would take a node out of every user's configuration.
 
     ``cache_ok = True`` is safe: both constructor arguments are hashable, which is what
     SQLAlchemy's statement cache key needs from a type.

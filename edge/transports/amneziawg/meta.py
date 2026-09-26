@@ -65,7 +65,7 @@ META = TransportMeta(
         ),
         # Peer-scoped material. "CLIENT" in the contract's vocabulary means "one per
         # consumer of this transport"; for this transport the consumer is another NODE
-        # rather than a friend, and the contract does not need to know the difference.
+        # rather than a user, and the contract does not need to know the difference.
         KeySpec(
             name="peer_private_key",
             kind=KeyKind.X25519_KEYPAIR_BASE64,
@@ -73,20 +73,20 @@ META = TransportMeta(
             public_name="peer_public_key",
         ),
         # WireGuard's pre-shared key is a property of a PAIR, and until M23 this transport
-        # declared only the node-scoped one above — so every friend on a node was handed
+        # declared only the node-scoped one above — so every user on a node was handed
         # the identical value. Read off the real leaf: two PresharedKey lines in the node's
-        # config, one distinct value. One friend's leaked file therefore exposed the
-        # symmetric layer protecting every other friend's handshake on that node, and
-        # revoking that friend rotated nothing.
+        # config, one distinct value. One user's leaked file therefore exposed the
+        # symmetric layer protecting every other user's handshake on that node, and
+        # revoking that user rotated nothing.
         #
         # The same shape M17 gave the tunnel address one field over: CLIENT scope means
-        # "one per consumer", so `control` mints it per (friend, node, transport) with no
+        # "one per consumer", so `control` mints it per (user, node, transport) with no
         # knowledge of what it is for, and dropping that row is what makes a revocation
         # total. ``shared_between_peers`` is left False and means nothing here — it is a
         # NODE-scope question about a hop, and a hop's two ends agree through the
         # node-scoped key above, which is why that one stays. It has a second job as well:
         # ``render_server`` falls back to it for a credential minted before this
-        # declaration existed, so a node whose friends hold older files keeps authorising
+        # declaration existed, so a node whose users hold older files keeps authorising
         # them until they are re-issued.
         KeySpec(
             name="peer_preshared_key",
@@ -104,7 +104,7 @@ META = TransportMeta(
     # kept item 25 blocked: a transport could say "I am not a URI" and had no way to
     # say what it IS. It says it here. ``subscription_expressible`` is still False
     # (derived — see TransportMeta), so `control` still refuses to offer this to
-    # friends until delivery of the second format lands as item 27. The serialiser
+    # users until delivery of the second format lands as item 27. The serialiser
     # existing is not the same as the endpoint handing it over, and this declaration
     # does not pretend otherwise.
     subscription_formats=frozenset({SubscriptionFormat.CLIENT_CONFIG_FILE}),
@@ -129,14 +129,14 @@ META = TransportMeta(
     # — AllowedIPs is both lists at once — so two consumers on one address is a silent
     # hijack of the first one's return path, which ``render_server`` refuses outright.
     # On a hop the consumer is a single far node and the pool is one address long; when
-    # the transport is offered to friends instead, it is as long as the operator sizes
+    # the transport is offered to users instead, it is as long as the operator sizes
     # it. The renderer cannot tell the two apart and does not need to.
     peer_address=PeerAddress(name="peer_tunnel_address", within="tunnel_address"),
     # A kernel tunnel: wg-quick hands what this interface decrypts to the host's routing
     # table, which is why ``render_server`` expresses its egress through
     # ``egress.wg_quick_egress`` and not through ``exit_origin``. Stated out loud rather
     # than left to the default, because it is the declaration that decides one real
-    # answer for an operator — friends on a node that dials a hop may not be on this
+    # answer for an operator — users on a node that dials a hop may not be on this
     # transport (M25), and a reader who meets that refusal deserves to find the fact in
     # the package it is about.
     #

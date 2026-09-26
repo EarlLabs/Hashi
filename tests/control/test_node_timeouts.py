@@ -37,7 +37,7 @@ from control.app.services import apply, health, nodes
 
 from .conftest import GENERATED_SSH_KEY, assert_plain_reason
 
-# What a FRIEND would dial: a reserved documentation address (RFC 5737), as everywhere
+# What a USER would dial: a reserved documentation address (RFC 5737), as everywhere
 # else in this zone. Nothing in this file dials it — the control plane reaches a node at
 # its ``ssh_host``, which is the separate column below — so its routability is no longer
 # load-bearing anywhere here. It is still checked for below: a node has two addresses

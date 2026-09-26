@@ -1,7 +1,7 @@
 {#
   The hops table, on its own so a mutation can refresh it without a page load.
 
-  Swaps itself, exactly like panel/nodes_table.html and panel/friends_table.html: one
+  Swaps itself, exactly like panel/nodes_table.html and panel/users_table.html: one
   file is both the first paint and every refresh, so there is no second rendering that
   could disagree with this one about what a row says. It listens for `hops-changed`,
   which both hop mutations in panel/routes.py fire.

@@ -12,7 +12,7 @@ HOW:  renders through the same function the apply path uses, so "drifted" means 
 
       AND WHAT IT FOUND IS KEPT — M26's first acceptance walk. Until then a probe's
       answer lived exactly as long as the banner carrying it: the walk stopped a leaf's
-      friend-facing daemon, read the correct finding, reloaded once and saw ``active``
+      user-facing daemon, read the correct finding, reloaded once and saw ``active``
       beside ``in sync`` again on a node whose users were carrying nothing. So every
       probe that reaches a host writes what it found onto that host's own row
       (``nodes.record_probe``), in the words the operator read.

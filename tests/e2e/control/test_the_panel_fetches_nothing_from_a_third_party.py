@@ -41,7 +41,7 @@ OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 PANEL_PAGES = (
     "/panel/login",
     "/panel/",
-    "/panel/friends",
+    "/panel/users",
     "/panel/nodes",
     "/panel/hops",
     # M9.3's, added in the change that added the screen. It has no fragment of its own:
@@ -69,13 +69,13 @@ PANEL_PAGES = (
 # how this scenario would have passed while the panel's most sensitive dialog fetched
 # a font from a stranger.
 #
-# The two that need a friend are parameterised and built by ``surfaces`` below. The
+# The two that need a user are parameterised and built by ``surfaces`` below. The
 # POST routes are deliberately absent: they render these same templates through
 # panel/mutation_result.html, and a scenario that mutated the stand to re-read a
 # template it has already read would buy nothing and cost determinism.
 PANEL_FRAGMENTS = (
-    "/panel/friends/new",
-    "/panel/friends/table",
+    "/panel/users/new",
+    "/panel/users/table",
     "/panel/overview/body",
     # M9.1's two, added in the change that added the screen — which is the rule this
     # list exists to enforce.
@@ -118,9 +118,9 @@ async def operator(client):
 
 @pytest.fixture
 async def surfaces(operator, unique: str) -> list[str]:
-    """Every panel URL that renders markup, including the two that need a friend.
+    """Every panel URL that renders markup, including the two that need a user.
 
-    A real friend and a real node are created because the most interesting fragments do
+    A real user and a real node are created because the most interesting fragments do
     not exist without them: the subscription-link dialog, which is the one surface in
     the console that displays a live bearer credential, and the two node dialogs the
     Nodes screen's rows open — the transports list and the state form. (It used to say
@@ -128,12 +128,12 @@ async def surfaces(operator, unique: str) -> list[str]:
     dialogs.) The stand is disposable and this run's rows are suffixed, so they cannot
     collide with another scenario's.
 
-    NOTE what this fixture does NOT do: it never reads the friend's subscription URL.
+    NOTE what this fixture does NOT do: it never reads the user's subscription URL.
     The id is enough to address the dialog, and the token stays where it belongs.
     """
-    friend = await operator.post("/api/friends", json={"nickname": f"styles-{unique}"})
-    assert friend.status_code == 201, friend.text
-    friend_id = friend.json()["id"]
+    user = await operator.post("/api/users", json={"nickname": f"styles-{unique}"})
+    assert user.status_code == 201, user.text
+    user_id = user.json()["id"]
 
     node = await operator.post(
         "/api/nodes",
@@ -150,8 +150,8 @@ async def surfaces(operator, unique: str) -> list[str]:
         *PANEL_FRAGMENTS,
         # The link dialog — the one fragment in the console that displays a live
         # bearer credential, and therefore the one whose markup matters most.
-        f"/panel/friends/{friend_id}/subscription",
-        f"/panel/friends/{friend_id}/revoke",
+        f"/panel/users/{user_id}/subscription",
+        f"/panel/users/{user_id}/revoke",
         # The pre-redesign node page was walked here too, because it carried an inline
         # script of its own. M9.6 deleted it and ``pages/base.html`` with it, so this
         # list is now the whole panel with nothing bolted on.
@@ -338,7 +338,7 @@ def offenders(references: list[str]) -> list[str]:
     Origins and not whole URLs, deliberately, and this is a rule for anything added
     to this file. The surfaces below include the subscription-link dialog, which
     carries a live bearer credential — so a failure message that echoed a matched URL
-    could put a friend's token into a CI log, which would be a worse defect than the
+    could put a user's token into a CI log, which would be a worse defect than the
     one this scenario closes. An origin names the third party, which is the entire
     actionable content of the finding; the path adds nothing an operator needs.
     """

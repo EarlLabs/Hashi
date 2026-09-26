@@ -1,16 +1,16 @@
-"""Pure rendering for AmneziaWG — the node's end, and now a friend's device.
+"""Pure rendering for AmneziaWG — the node's end, and now a user's device.
 
 ``render_server`` behaves exactly like every other transport's. The other two are the
 interesting pair, and they are two rather than one on purpose:
 
 * ``render_client`` REFUSES. There is no URI form of this protocol, and the contract
   requires that refusal to be explicit rather than a quietly malformed entry.
-* ``render_client_config`` produces the friend-facing form that DOES exist: a complete
+* ``render_client_config`` produces the user-facing form that DOES exist: a complete
   wg-quick file. This is the serialisation backlog item 25 was blocked on, and item 26
   is where the contract grew the vocabulary to express it (``SubscriptionFormat``).
 
 Together they are the honest answer to the charter's open question: not "this protocol
-cannot reach a friend", but "it reaches them as a file, and here it is".
+cannot reach a user", but "it reaches them as a file, and here it is".
 """
 
 import ipaddress
@@ -67,9 +67,9 @@ def render_server(
 
     ``egress`` says which way out packets decrypted onto this interface take — see
     ``edge/egress.py``. It defaults to ``NONE`` because the failure it guards is silent in
-    exactly one direction: a hop end that masquerades locally is a friend in Russia
-    exiting in Russia with every screen showing green, while a friend-facing tunnel with
-    no exit is a friend who tells you at once that nothing loads.
+    exactly one direction: a hop end that masquerades locally is a user in Russia
+    exiting in Russia with every screen showing green, while a user-facing tunnel with
+    no exit is a user who tells you at once that nothing loads.
 
     ``exit_via`` names the address that way out runs through, and this transport can
     honour it only when it is this interface's own — a kernel tunnel hands its packets to
@@ -81,7 +81,7 @@ def render_server(
         egress,
         str(params["tunnel_address"]),
         exit_via,
-        # What a FRIEND's own file tells their device to ask, so this node's rules can let
+        # What a USER's own file tells their device to ask, so this node's rules can let
         # exactly that through and nothing else that is not on the internet — M23. The
         # same two sources ``render_client_config`` reads, passed to one function
         # (``egress.client_resolvers``) so the file and the firewall cannot disagree.
@@ -102,7 +102,7 @@ def render_server(
         )
         # The peer's own address, unless this tunnel IS the node's way out — in which case
         # the far end is where everything goes and everything comes back from, and a
-        # narrower route would have the interface drop a friend's traffic with nothing
+        # narrower route would have the interface drop a user's traffic with nothing
         # logging it. The policy decides, not this renderer: see ``edge/egress.py``.
         route = plan.peer_route or peer_allowed_ips(address)
 
@@ -127,17 +127,17 @@ def render_server(
                 "public_key": secrets["peer_public_key"],
                 # THIS PEER's pre-shared key, which is what a pre-shared key is: an
                 # attribute of a pair. Rendering the node's own for every peer — which is
-                # what this file did until M23 — put one symmetric key in every friend's
+                # what this file did until M23 — put one symmetric key in every user's
                 # config on the node, so one leaked file exposed the layer protecting
-                # everyone else's handshake and revoking that friend rotated nothing.
+                # everyone else's handshake and revoking that user rotated nothing.
                 #
-                # The fallback has two consumers and neither is a friend issued today.
+                # The fallback has two consumers and neither is a user issued today.
                 # One is the ENTRY-TO-LEAF HOP: its peer is a node, its pre-shared key is
                 # node-scoped and declared ``shared_between_peers``, and ``relay.py``
                 # synthesises the peer from parameters alone — so the hop renders the
                 # bytes it always rendered and this line is why. The other is a
                 # credential minted before the per-pair declaration existed: that
-                # friend's device already holds a file naming the node's key, and
+                # user's device already holds a file naming the node's key, and
                 # refusing here would cut them off at the next apply rather than at the
                 # next issue. ``render_client_config`` refuses for them instead, which
                 # stops the shared key being handed out again.
@@ -187,7 +187,7 @@ def _interface_name(display_name: str) -> str:
     serialisation, not cosmetics. Linux caps an interface name at 15 characters, and
     the operator's node name is free text, so it is slugged and truncated here.
 
-    Derived from the node rather than from the friend, deliberately: a friend holding
+    Derived from the node rather than from the user, deliberately: a user holding
     three files needs to tell the exits apart, and the file lands on their own device
     where the node's name is the useful label. Nothing about which person this is goes
     into the name.
@@ -205,21 +205,21 @@ def render_client_config(
     params: Mapping[str, object],
     credential: Credential,
 ) -> ClientConfig:
-    """One friend's complete AmneziaWG configuration file.
+    """One user's complete AmneziaWG configuration file.
 
     The serialisation this transport declares (``SubscriptionFormat.CLIENT_CONFIG_FILE``)
     and the thing backlog item 25 was blocked on. It is a file rather than a line
     because that is what this protocol family's configuration IS — see the package
     docstring and ``client.j2``.
 
-    Pure, like every renderer here: the friend's own keypair arrives in ``credential``,
+    Pure, like every renderer here: the user's own keypair arrives in ``credential``,
     the node's public half in ``params``, and nothing is generated inside.
     """
     secrets = credential.secrets
     private_key = secrets.get("peer_private_key")
     if not private_key:
         # Named rather than rendered blank. A file with an empty PrivateKey is
-        # syntactically fine and produces a tunnel that never comes up, which a friend
+        # syntactically fine and produces a tunnel that never comes up, which a user
         # reports as "your VPN does not work" with nothing to go on.
         raise MissingPeerMaterial(
             f"this credential carries no 'peer_private_key', so no {META.name} config "
@@ -231,17 +231,17 @@ def render_client_config(
     if not preshared_key:
         # Named rather than filled in from the node's own key. That fallback is what
         # ``render_server`` still does for this credential — deliberately, so the file
-        # this friend already holds keeps working — but handing the shared key out AGAIN
+        # this user already holds keeps working — but handing the shared key out AGAIN
         # is the defect itself, and a download is the moment to stop doing it. M23.
         raise MissingPeerMaterial(
             f"this credential carries no 'peer_preshared_key', so no {META.name} config "
             "can be built for it. The transport declares that material at CLIENT scope "
             "because a pre-shared key belongs to a PAIR; a credential minted before that "
             "declaration carries the node's own key, which is shared with every other "
-            "friend on it. Rotate this credential's material rather than reissuing that."
+            "user on it. Rotate this credential's material rather than reissuing that."
         )
 
-    # The friend's own address when they have one, falling back to the single address in
+    # The user's own address when they have one, falling back to the single address in
     # params for the point-to-point case — the same rule, and the same reason, as
     # render_server's peer loop.
     tunnel_address = str(secrets.get("peer_tunnel_address") or params["peer_tunnel_address"])
@@ -263,7 +263,7 @@ def render_client_config(
         ),
         # Which addresses this device sends into the tunnel, decided in the same
         # place as the resolver above and for the same reason — it is the node's own
-        # egress policy, read from the friend's end. See ``CLIENT_ROUTES``: the IPv6
+        # egress policy, read from the user's end. See ``CLIENT_ROUTES``: the IPv6
         # half names a family this node cannot carry, on purpose.
         routes=CLIENT_ROUTES,
         endpoint=_endpoint(node.address, params["port"]),
@@ -289,14 +289,14 @@ def render_client(
     """Always raises. AmneziaWG is a config file, not a link.
 
     This is the honest answer to the charter's open question rather than a workaround
-    for it. Producing something URI-shaped here would put a line in a friend's
+    for it. Producing something URI-shaped here would put a line in a user's
     subscription that their client cannot parse — and the symptom would be "the whole
     subscription is broken", not "one entry is unsupported".
     """
     raise NotExpressibleAsUri(
         f"{META.name} has no client-entry URI form, so it cannot appear in a v1 "
         "subscription. It is used on the entry-to-leaf hop, where the config is "
-        "consumed by a node rather than by a friend's device. A friend-facing variant "
+        "consumed by a node rather than by a user's device. A user-facing variant "
         "needs a second subscription format — backlog item 25."
     )
 

@@ -84,7 +84,7 @@ async def park(client, node_id: str, *, state: str, why: str) -> None:
 
 
 async def add_user(client, nickname: str) -> str:
-    created = await client.post("/api/friends", json={"nickname": nickname})
+    created = await client.post("/api/users", json={"nickname": nickname})
     assert created.status_code == 201, created.text
     return created.json()["id"]
 
@@ -105,7 +105,7 @@ async def applied_at(session, node_transport_id: str):
     """When a config last actually landed on this row — NULL until one did.
 
     The stamp rather than the digest, because the digest answers a different question:
-    this project's configs do not change when the only friend on a node is withdrawn
+    this project's configs do not change when the only user on a node is withdrawn
     from a transport that carries its clients elsewhere, so an unchanged digest is not
     evidence that nothing was pushed. The stamp moves on every push that landed.
     """
@@ -151,7 +151,7 @@ async def test_a_revocation_does_not_take_a_node_out_of_service_back_into_it(
     session.expire_all()
     assert await credentials_on(session, node_id) == 1
 
-    await revocation.revoke_friend(session, friend_id=olga)
+    await revocation.revoke_user(session, user_id=olga)
 
     session.expire_all()
     node = await nodes.get_node(session, node_id)
@@ -182,7 +182,7 @@ async def test_the_operator_is_told_the_node_was_not_updated_and_why(
     olga = await add_user(client, "olga")
     await park(client, node_id, state="draft", why="parked, rebuilding the host")
 
-    outcome = await revocation.revoke_friend(session, friend_id=olga)
+    outcome = await revocation.revoke_user(session, user_id=olga)
 
     assert not outcome.confirmed, "a node that was not pushed was reported as updated"
     assert outcome.why_failed[node_id] is apply.NotUpdated.OUT_OF_SERVICE, (
@@ -207,10 +207,10 @@ async def test_nothing_about_the_node_is_recorded_as_having_happened(
     await park(client, node_id, state="draft", why="parked, rebuilding the host")
     before = await actions(session)
 
-    await revocation.revoke_friend(session, friend_id=olga)
+    await revocation.revoke_user(session, user_id=olga)
 
     session.expire_all()
-    assert await actions(session) == [*before, AuditAction.FRIEND_REVOKED]
+    assert await actions(session) == [*before, AuditAction.USER_REVOKED]
 
 
 async def test_a_rotation_does_not_take_a_node_out_of_service_back_into_it(
@@ -252,7 +252,7 @@ async def test_a_node_that_is_serving_is_still_pushed_by_a_fan_out(
     olga = await add_user(client, "olga")
     landed = await applied_at(session, row_id)
 
-    outcome = await revocation.revoke_friend(session, friend_id=olga)
+    outcome = await revocation.revoke_user(session, user_id=olga)
 
     assert outcome.confirmed, outcome.summary()
     assert outcome.nodes_updated == [node_id]
@@ -275,7 +275,7 @@ async def test_the_operators_own_apply_still_takes_a_parked_node_back(
     node_id, row_id = await a_node_that_serves(client, reality_params, name="coming-back")
     olga = await add_user(client, "olga")
     await park(client, node_id, state="draft", why="parked, rebuilding the host")
-    await revocation.revoke_friend(session, friend_id=olga)
+    await revocation.revoke_user(session, user_id=olga)
     await add_user(client, "pavel")
 
     applied = await client.post(f"/api/nodes/{node_id}/apply")

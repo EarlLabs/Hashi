@@ -84,18 +84,21 @@ fail() { printf 'management-tunnel: %s\n' "$1" >&2; exit 1; }
 [ -f "${ENV_FILE}" ] || fail "no env file at ${ENV_FILE}. Copy .env.example to .env and
   fill in the HASHI_MGMT_* keys, or pass --env-file."
 
-value_of() {
-  # First assignment wins, surrounding quotes stripped. `awk NR==1` rather than
-  # `head -1`: under pipefail a closed pipe reads as a failed command (M11's notes).
-  sed -n "s/^[[:space:]]*$1=[[:space:]]*//p" "${ENV_FILE}" \
-    | awk 'NR==1' | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/'
-}
+# Values come out of the file through the one parser this repository has, and this script
+# is the reason it is a library (M28.13). Its own version took the FIRST assignment and
+# left `\r` on the value, so an env file saved by a Windows editor — an ordinary thing to
+# do while rebuilding a host from a laptop — wrote `Address`, `ListenPort`, `MTU` and
+# `Endpoint = <host>^M:<port>^M` into the file below AND into every device config printed
+# for an operator to paste onto a phone. Nothing refuses a carriage return there: the
+# tunnel simply never comes up, from a file that looks correct.
+# shellcheck source=lib/env-value.sh
+. "${REPO_ROOT}/scripts/lib/env-value.sh"
 
-MGMT_ADDRESS="$(value_of HASHI_MGMT_ADDRESS)"
-MGMT_PORT="$(value_of HASHI_MGMT_PORT)"
-MGMT_ENDPOINT="$(value_of HASHI_MGMT_ENDPOINT)"
-MGMT_MTU="$(value_of HASHI_MGMT_MTU)"
-MGMT_PEERS="$(value_of HASHI_MGMT_PEERS)"
+MGMT_ADDRESS="$(env_value_of "${ENV_FILE}" HASHI_MGMT_ADDRESS)"
+MGMT_PORT="$(env_value_of "${ENV_FILE}" HASHI_MGMT_PORT)"
+MGMT_ENDPOINT="$(env_value_of "${ENV_FILE}" HASHI_MGMT_ENDPOINT)"
+MGMT_MTU="$(env_value_of "${ENV_FILE}" HASHI_MGMT_MTU)"
+MGMT_PEERS="$(env_value_of "${ENV_FILE}" HASHI_MGMT_PEERS)"
 
 MISSING=()
 [ -n "${MGMT_ADDRESS}" ] || MISSING+=(HASHI_MGMT_ADDRESS)

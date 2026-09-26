@@ -16,14 +16,14 @@
 <div class="dialog-backdrop">
   <div class="dialog blueprint" role="dialog" aria-modal="true"
        aria-labelledby="subscription-title">
-    <div class="dialog-title" id="subscription-title">{{ friend.nickname }}'s link</div>
+    <div class="dialog-title" id="subscription-title">{{ user.nickname }}'s link</div>
     {% if url %}
     <div class="dialog-body">
       One URL, every serving node. Sharing it again does not mint a new key.
     </div>
     <div class="mono dialog-code" id="subscription-url">{{ url }}</div>
     <div class="dialog-body text-muted">
-      Anyone holding this URL has {{ friend.nickname }}'s access — it is the
+      Anyone holding this URL has {{ user.nickname }}'s access — it is the
       credential, not a link to one. It keeps working when nodes or protocols change,
       which is why they never re-add anything.
     </div>
@@ -47,7 +47,7 @@
     </div>
     {% else %}
     <div class="dialog-body">
-      {{ friend.nickname }} has no live subscription, so there is nothing to hand
+      {{ user.nickname }} has no live subscription, so there is nothing to hand
       over. That is what a revoked user looks like.
     </div>
     <div class="dialog-actions">

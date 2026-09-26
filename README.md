@@ -1,6 +1,6 @@
 # hashi
 
-A self-hosted, multi-protocol VPN for its owner and a small circle of friends,
+A self-hosted, multi-protocol VPN for its owner and a small circle of users,
 built to keep working from Russia: a Russian entry node fronting foreign exit
 nodes, where **both nodes and protocols are data** — either can be added, swapped
 or destroyed in minutes without anyone touching their device.

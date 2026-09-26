@@ -21,7 +21,7 @@ from control.app.models import NodeState
 from control.app.services import apply, nodes
 
 HOP_TRANSPORT = "amneziawg"
-FRIEND_TRANSPORT = "vless-reality"
+USER_TRANSPORT = "vless-reality"
 
 # RFC 5737 documentation address, standing in for the resolver an operator names.
 RESOLVER = "192.0.2.53"
@@ -52,11 +52,11 @@ async def a_node(client, name: str = "entry-ru", address: str = "192.0.2.20") ->
 
 
 async def an_entry_the_upgrade_stranded(client, session, reality_params, hop_params) -> str:
-    """An active entry serving friends over a hop, with no resolver — what 0005 leaves."""
+    """An active entry serving users over a hop, with no resolver — what 0005 leaves."""
     entry = await a_node(client)
     enabled = await client.post(
         f"/api/nodes/{entry}/transports",
-        json={"transport_name": FRIEND_TRANSPORT, "params": reality_params},
+        json={"transport_name": USER_TRANSPORT, "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=entry, state=NodeState.ACTIVE)
@@ -97,7 +97,7 @@ async def test_an_entry_the_upgrade_stranded_renders_once_its_resolver_is_set(
     assert response.json()["resolver"] == RESOLVER
     node = await nodes.get_node(session, entry)
     await session.refresh(node)
-    config = json.loads((await apply.render_for_node(session, node))[FRIEND_TRANSPORT])
+    config = json.loads((await apply.render_for_node(session, node))[USER_TRANSPORT])
     assert config["dns"]["servers"] == [RESOLVER]
 
 

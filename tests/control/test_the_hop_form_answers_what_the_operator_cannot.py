@@ -5,7 +5,7 @@ WHAT: that the establish-hop dialog opens with a value already in every box the 
       SAME value, that two hops get DIFFERENT ones, that a hop can be established from
       what the form arrived with, and that nothing else on the form is filled in.
 WHY:  the walk prepared two bare hosts with one command each, registered both, enabled a
-      friend-facing transport on the entry — and then ran out of action budget inside
+      user-facing transport on the entry — and then ran out of action budget inside
       this dialog's advanced tuning, which wanted eleven parameters per end with no
       defaults. The milestone's fourth "done when" was not reached because of an empty
       box. Four of those boxes per end are obfuscation magic headers that must be typed

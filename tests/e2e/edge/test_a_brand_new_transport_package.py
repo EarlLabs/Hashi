@@ -2,7 +2,7 @@
 
 WHAT: creates a transport package that does not exist in this repository, in a throwaway
       copy of the tree, and proves the fleet picks it up whole — discovered, validated,
-      rendered, serialised for a friend, and offered by the panel's own form builder —
+      rendered, serialised for a user, and offered by the panel's own form builder —
       with no edit anywhere else.
 WHY:  criterion 4 is the hypothesis the entire design rests on: "a new protocol is one
       new package under edge/transports/ and not surgery". Until now it was tested only
@@ -87,7 +87,7 @@ def _package_files() -> dict[str, str]:
                 subscription_formats=frozenset({SubscriptionFormat.V1_URI_LIST}),
                 # M25: this renderer terminates the consumer's connection and opens its
                 # own (it calls ``egress.exit_origin`` below), so it says so — which is
-                # what lets a node that dials a hop offer it to friends. One more line in
+                # what lets a node that dials a hop offer it to users. One more line in
                 # the same file, which is the whole of what the eighth widening costs an
                 # author; a package that leaves it out is held to the restrictive answer
                 # rather than being accepted and refused at an apply.
@@ -293,7 +293,7 @@ def test_a_package_nobody_has_seen_is_discovered_rendered_and_offered(tmp_path) 
         probed["discovered"]
     ), probed["discovered"]
 
-    # It rendered a complete config, and the friend's own entry carries this transport's
+    # It rendered a complete config, and the user's own entry carries this transport's
     # scheme — which nothing outside its package knows about.
     assert json.loads(probed["server_config"])["inbounds"][0]["port"] == 8500
     assert probed["entry"].startswith("acme://")
@@ -558,7 +558,7 @@ def test_a_package_that_breaks_the_contract_is_refused_at_discovery(
     The moment is the whole finding. ``discover()`` runs on every panel screen and every
     subscription render, so a malformed package caught there is one error message an
     operator sees immediately. The same package caught later is an exception inside one
-    friend's refresh — or a node the operator was told was configured, which cannot mint a
+    user's refresh — or a node the operator was told was configured, which cannot mint a
     credential for anybody.
 
     Each variant also has to say what is wrong. A refusal an author cannot act on sends
@@ -584,7 +584,7 @@ def test_a_package_that_breaks_the_contract_is_refused_at_discovery(
 
     assert reported != "NO ERROR", (
         f"discovery accepted a package that {description} — the failure moves to render "
-        "time, inside one friend's subscription refresh"
+        "time, inside one user's subscription refresh"
     )
     assert reported.startswith("ContractViolation"), (
         f"a package that {description} failed, but not as a contract violation: {reported}"

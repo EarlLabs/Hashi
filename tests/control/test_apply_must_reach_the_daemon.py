@@ -8,7 +8,7 @@ WHY:  docs/tracker/M1/field-measurement.md. On a real node, a config was written
       was ``active``, and the health probe said ``reachable: true, healthy: true,
       drifted: []``. Every one of those was a true answer to a question that does not
       establish what an operator reads it as establishing. The consequence is charter
-      criterion 6 failing silently: a revoked friend keeps connecting, because the file
+      criterion 6 failing silently: a revoked user keeps connecting, because the file
       lost their credential and the running daemon never re-read the file.
 HOW:  the node is faked at the SHELL, not at ``node_stack``. ``_FakeHost`` answers
       commands and holds files, so the real ``node_stack`` builds the real compose
@@ -211,18 +211,18 @@ def test_the_label_the_node_carries_is_the_one_the_library_reads() -> None:
     assert node_stack.CONFIG_DIGEST_LABEL == DIGEST_LABEL
 
 
-async def test_adding_a_friend_and_applying_recreates_the_container(
+async def test_adding_a_user_and_applying_recreates_the_container(
     client, session, reality_params, monkeypatch
 ) -> None:
     """M1's first "done when", as far as a test can carry it.
 
-    The node is applied, then a friend is added — which changes the rendered config and
+    The node is applied, then a user is added — which changes the rendered config and
     nothing else — and the node is applied again. The container must be a NEW one: on a
     real host that is a start timestamp later than the config's mtime, and the field
     measurement is the same two numbers 8m25s apart in the wrong order.
 
     Before M1 the second apply rendered a byte-identical compose file, Compose saw an
-    unchanged definition, and the friend could not connect.
+    unchanged definition, and the user could not connect.
     """
     host = host_for(monkeypatch, _FakeHost())
     node_id = await a_node_with_a_transport(client, session, reality_params)
@@ -230,11 +230,11 @@ async def test_adding_a_friend_and_applying_recreates_the_container(
     assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
     assert host.creations[TRANSPORT] == 1
 
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
 
     assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
     assert host.creations[TRANSPORT] == 2, (
-        "the second apply left the original container running, so the friend who was "
+        "the second apply left the original container running, so the user who was "
         "just added is in the file on the node and not in the daemon serving it"
     )
 
@@ -283,7 +283,7 @@ async def test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly(
 
     assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
 
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
     response = await client.post(f"/api/nodes/{node_id}/apply")
 
     assert response.status_code == 502, (
@@ -294,6 +294,12 @@ async def test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly(
     assert "still running an older configuration" in message
     assert TRANSPORT in message
 
+    # ``a_node_with_a_transport`` set this node ACTIVE through THIS session, so the row
+    # is in its identity map; the apply wrote DEGRADED through the request's own session.
+    # With ``expire_on_commit=False`` a plain ``get`` short-circuits on the stale copy and
+    # this reads ``active`` — the zone's usual idiom before re-reading what a request
+    # wrote (``test_a_retired_node_is_never_applied_back_into_service``).
+    session.expire_all()
     node = await nodes.get_node(session, node_id)
     assert node.state == NodeState.DEGRADED
     assert "still running an older configuration" in node.state_detail
@@ -318,13 +324,31 @@ async def test_a_stale_apply_records_no_applied_digest(
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
     await client.post(f"/api/nodes/{node_id}/apply")
+    # BOTH reads expire first, and this one used not to — M28.16. ``a_node_with_a_transport``
+    # calls ``set_node_state`` through THIS session, and ``Node.transports`` is
+    # ``lazy="selectin"``, so that call pulled this very row into this session's identity
+    # map with ``applied_digest`` still ``None``. The apply wrote the digest through the
+    # request's own session; a ``select`` here returns the identity map's copy whenever it
+    # is still alive, so ``first`` read ``None`` while the second read — which already
+    # expired — read the digest the first apply really recorded, and the assertion at the
+    # end FAILED. When the collector had already taken the copy, both reads agreed and it
+    # passed. That is the flake, and the direction matters: the stale copy is what turns
+    # this test red, not what makes it green.
+    #
+    # The map holds WEAK references and ``Node``↔``NodeTransport`` back-populate each
+    # other into a reference cycle, so "still alive" means "the cyclic collector has not
+    # run yet" — which is why this test failed under `make test-control` and passed under
+    # `make verify` on the same commit. Reproduced deterministically by disabling the
+    # collector for the run: red 5 times out of 5 at the baseline with it off, green 5 out
+    # of 5 with it on.
+    session.expire_all()
     first = (
         await session.execute(
             select(NodeTransport).where(NodeTransport.node_id == node_id)
         )
     ).scalars().unique().one().applied_digest
 
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
     await client.post(f"/api/nodes/{node_id}/apply")
 
     session.expire_all()
@@ -354,7 +378,7 @@ async def test_health_calls_a_stale_node_stale_rather_than_healthy(
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
     await client.post(f"/api/nodes/{node_id}/apply")
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
     await client.post(f"/api/nodes/{node_id}/apply")
 
     health = (await client.get(f"/api/nodes/{node_id}/health")).json()
@@ -381,7 +405,7 @@ async def test_a_node_serving_what_we_pushed_is_healthy(
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
     await client.post(f"/api/nodes/{node_id}/apply")
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
     await client.post(f"/api/nodes/{node_id}/apply")
 
     health = (await client.get(f"/api/nodes/{node_id}/health")).json()
@@ -391,30 +415,30 @@ async def test_a_node_serving_what_we_pushed_is_healthy(
     assert health["drifted"] == []
 
 
-async def test_a_revoked_friend_leaves_the_running_daemon_too(
+async def test_a_revoked_user_leaves_the_running_daemon_too(
     client, session, reality_params, monkeypatch
 ) -> None:
     """Criterion 6, at the node rather than in the file — M1's third "done when".
 
     The code half of it: revoking must recreate the container, so the process
     authorising connections is one that never saw the withdrawn credential. Whether
-    that friend's client actually stops connecting is a field observation on real
+    that user's client actually stops connecting is a field observation on real
     hardware, and this asserts only what makes it possible.
     """
     host = host_for(monkeypatch, _FakeHost())
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
     await client.post(f"/api/nodes/{node_id}/apply")
-    with_friend = host.containers[TRANSPORT]["generation"]
+    with_user = host.containers[TRANSPORT]["generation"]
 
-    response = await client.post(f"/api/friends/{friend_id}/revoke")
+    response = await client.post(f"/api/users/{user_id}/revoke")
 
     assert response.status_code == 200, response.text
     assert response.json()["complete"] is True
-    assert host.containers[TRANSPORT]["generation"] != with_friend, (
+    assert host.containers[TRANSPORT]["generation"] != with_user, (
         "the revocation rewrote the file and left the same process running, so the "
-        "revoked friend is still being authorised by the daemon"
+        "revoked user is still being authorised by the daemon"
     )
 
 
@@ -445,13 +469,13 @@ async def test_a_revocation_over_a_stale_daemon_says_the_push_landed(
     host_for(monkeypatch, _FakeHost(recreates=False))
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
-    # The friend first, so the container the host starts is one that authorises them —
+    # The user first, so the container the host starts is one that authorises them —
     # from that point the host is frozen on it and the withdrawal cannot reach the
     # process, which is the state this test is about.
-    friend_id = (await client.post("/api/friends", json={"nickname": "kolya"})).json()["id"]
+    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
     assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
 
-    outcome = await revocation.revoke_friend(session, friend_id=friend_id)
+    outcome = await revocation.revoke_user(session, user_id=user_id)
 
     assert outcome.why_failed == {node_id: NotUpdated.NOT_SERVING}, outcome.why_failed
     summary = outcome.summary()
@@ -497,7 +521,7 @@ async def test_a_push_that_landed_says_what_is_still_on_the_host(
         json={"state": "draft", "detail": "parked, rebuilding the host"},
     )
     assert parked.status_code == 200, parked.text
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
 
     response = await client.post(f"/api/nodes/{node_id}/apply")
 
@@ -534,7 +558,7 @@ async def test_a_re_apply_that_minted_nothing_says_nothing_about_orphans(
     assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
     # Added while the node is serving, so they already hold their credential and the
     # apply below has nobody to grant.
-    await client.post("/api/friends", json={"nickname": "kolya"})
+    await client.post("/api/users", json={"nickname": "kolya"})
 
     response = await client.post(f"/api/nodes/{node_id}/apply")
 

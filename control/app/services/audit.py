@@ -58,7 +58,7 @@ def record(
     so they are written here and asserted by the zone's tests:
 
     * **A label is a value read off an inventory row, copied whole** — ``Node.name``,
-      ``Friend.nickname``, a transport name, a ``NodeState`` — and never composed from
+      ``User.nickname``, a transport name, a ``NodeState`` — and never composed from
       one. ``f"{node.name}: {node.state_detail}"`` satisfies every other rule on this
       table and is exactly the hole this closes: ``state_detail`` is 500 characters of
       free text that can carry a remote host's words, and it sits one attribute away
@@ -159,7 +159,7 @@ async def sweep_forever(database: Database, *, retention_days: int) -> None:
         except Exception:
             # The traceback, because this runs with nobody watching and a sweep that
             # stops working leaves a record growing past the window it promised. It
-            # names no friend and no node: the statement is one comparison against a
+            # names no user and no node: the statement is one comparison against a
             # timestamp.
             logger.exception(
                 "the audit retention sweep failed; the next attempt is in %d seconds",

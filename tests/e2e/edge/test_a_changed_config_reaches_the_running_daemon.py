@@ -6,7 +6,7 @@ WHAT: places a config, brings the data plane up, changes the config, applies aga
       already new and the daemon is still old.
 WHY:  M1. On a real node, measured, a config was written **8m25s after** the container
       meant to serve it started; the apply returned 200, the node reported ``active``,
-      and the probe said ``healthy: true, drifted: []``. A revoked friend would have
+      and the probe said ``healthy: true, drifted: []``. A revoked user would have
       stayed connected. The cause is that ``docker compose up -d`` is DECLARATIVE and
       the CONTENTS of a bind-mounted file are not part of a service definition, so the
       fix was to put the config's digest into the definition as a label.
@@ -23,14 +23,14 @@ HOW:  one sequence, run once, with every state recorded as it happens: apply, ob
 
       The changed config is the same config plus one byte. The mechanism under test is a
       digest of BYTES, and one byte is the smallest difference an edit can make — a
-      friend added or revoked changes far more, and would prove strictly less. Choosing
+      user added or revoked changes far more, and would prove strictly less. Choosing
       it this way also keeps the scenario free of any knowledge of a config's syntax, so
       a transport added later is applied here by arriving.
 
 Boundary: needs a docker engine, ``/dev/net/tun`` and the pinned images, and it changes
 what the offline suite could not: that a REAL engine recreates a real container on a
 label change. It still proves nothing about SSH, about the control plane's apply
-endpoint, or about a friend's client — the first is ``tests/control``, the last is a
+endpoint, or about a user's client — the first is ``tests/control``, the last is a
 field observation with a real client on a real node.
 """
 
@@ -203,7 +203,7 @@ def test_a_changed_config_replaces_the_running_container(transport_name: str, ap
     assert after["container"] != before["container"], (
         f"the container serving {transport_name!r} survived a config change, so the "
         "daemon is still running what it loaded at start. On a node this is a revoked "
-        "friend who is still connected — and the apply returns 200."
+        "user who is still connected — and the apply returns 200."
     )
     assert after["label"] == node_stack.digest_of(second_configs[transport_name])
     assert after["started"] > before["started"]
@@ -232,7 +232,7 @@ def test_applying_the_same_config_again_replaces_nothing(transport_name: str, ap
     """Idempotence, which is why ``up -d`` is the single verb for every case.
 
     A label that changed on every render would recreate every container on every apply —
-    restarting every friend's tunnel to no purpose, and hiding a real change in the
+    restarting every user's tunnel to no purpose, and hiding a real change in the
     noise.
     """
     assert applied["third"][transport_name]["container"] == (

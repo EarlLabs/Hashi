@@ -1,4 +1,4 @@
-"""A friend's decrypted packet has to leave the node — M14.
+"""A user's decrypted packet has to leave the node — M14.
 
 WHAT: the forwarding and NAT a kernel tunnel needs, rendered into the config that
       creates the interface, and removed when the interface goes away.
@@ -110,7 +110,7 @@ def rule_spec(command: str) -> str:
 # would do.
 SOME_OTHER_INTERFACE = "not-the-tunnel"
 
-# A destination that stands for "the internet" — the one thing a friend's tunnel is for,
+# A destination that stands for "the internet" — the one thing a user's tunnel is for,
 # and since M23's fifth round the only thing it carries. It CANNOT be an RFC 5737
 # documentation address like every other fixture in this zone: those ranges are exactly
 # what the new rules drop, so a packet addressed to one would prove the opposite of what
@@ -122,11 +122,11 @@ SOMEWHERE_ON_THE_INTERNET = "192.88.99.10"
 
 # The address the walk actually reached: the Russian entry node's end of the hop, on the
 # real leaf that carries the owner's traffic. RFC 1918, so nothing on the open internet
-# can reach it — which is the whole of the finding. A friend's tunnel handed it out.
+# can reach it — which is the whole of the finding. A user's tunnel handed it out.
 THE_ENTRY_ON_THE_HOP = "10.90.0.1"
 
-# A resolver a node's record may legitimately name and a friend's tunnel would otherwise
-# drop. The same value as ``tests/edge/test_a_friends_lookup_leaves_through_the_hop.py``
+# A resolver a node's record may legitimately name and a user's tunnel would otherwise
+# drop. The same value as ``tests/edge/test_a_users_lookup_leaves_through_the_hop.py``
 # uses, written out again rather than imported: pytest runs with
 # ``--import-mode=importlib`` and this zone's conftest says test modules here do not
 # import each other.
@@ -163,7 +163,7 @@ def matches(
 ) -> bool:
     """Whether one rule matches one packet, read the way netfilter reads it.
 
-    Grew a destination and a port in M23's fifth round, and had to: the friend-facing
+    Grew a destination and a port in M23's fifth round, and had to: the user-facing
     rules now decide by where a packet is GOING, so a matcher that looked only at
     interfaces would report the first rule in the chain as the verdict for every packet —
     and every assertion in this file would have been about the wrong rule while staying
@@ -215,7 +215,7 @@ def verdict(
     answer rather than being reported as a drop.
 
     A packet with no destination named is one bound for the internet, which is what a
-    friend's tunnel exists to carry and what most of the questions below are about.
+    user's tunnel exists to carry and what most of the questions below are about.
     """
     for rule in chain:
         if matches(
@@ -240,11 +240,11 @@ def rendered(name: str, node, request, egress: Egress) -> str:
     return transport.profile.render_server(node, validated, clients, egress=egress)
 
 
-def a_friends_address(name: str, request) -> str:
-    """One address on this tunnel that a friend's device holds.
+def a_users_address(name: str, request) -> str:
+    """One address on this tunnel that a user's device holds.
 
     The first address the pool hands out, out of the transport's own parameters, so the
-    question "can one friend reach another" is asked with the address a friend actually
+    question "can one user reach another" is asked with the address a user actually
     has rather than with one this file invented.
     """
     transport = profile(name)
@@ -274,19 +274,19 @@ def test_a_local_exit_renders_the_rules_the_kernel_needs(name: str, node, reques
     assert any("MASQUERADE" in spec for spec in specs), specs
 
 
-# --- M23: and it must leave, rather than arrive at the friend in the next flat -------
+# --- M23: and it must leave, rather than arrive at the user in the next flat -------
 
 @pytest.mark.parametrize("name", WG_FAMILY)
-def test_one_friend_cannot_reach_another_inside_the_tunnel(
+def test_one_user_cannot_reach_another_inside_the_tunnel(
     name: str, node, request
 ) -> None:
     """The walk's ``ping`` and its ``nc``, asked of the chain instead of of a host.
 
-    Measured on the real leaf with two real clients: one friend pinged the other's tunnel
+    Measured on the real leaf with two real clients: one user pinged the other's tunnel
     address with 0% loss and carried a TCP payload to a listener on it. The cause was not
-    the crypto — a friend cannot forge another's address, which the same walk confirmed —
+    the crypto — a user cannot forge another's address, which the same walk confirmed —
     it was this chain. ``-i %i -j ACCEPT`` matches a packet that arrives on the tunnel and
-    leaves by the tunnel, and with a pool every friend on the node is in one routed
+    leaves by the tunnel, and with a pool every user on the node is in one routed
     network, so thirty people who need not know each other could reach each other's
     laptops and phones.
 
@@ -299,11 +299,11 @@ def test_one_friend_cannot_reach_another_inside_the_tunnel(
         chain,
         arriving_on=INTERFACE_TOKEN,
         leaving_by=INTERFACE_TOKEN,
-        # The other friend's own address, out of this transport's own parameters, rather
+        # The other user's own address, out of this transport's own parameters, rather
         # than a packet bound for the internet that happens to be leaving by the tunnel.
         # It is what the walk sent, and since the rules decide by destination it is the
         # only version of this question that still asks anything.
-        destined_for=a_friends_address(name, request),
+        destined_for=a_users_address(name, request),
     ) == "DROP"
 
 
@@ -311,7 +311,7 @@ def test_one_friend_cannot_reach_another_inside_the_tunnel(
 def test_the_way_out_and_the_way_back_stay_open(name: str, node, request) -> None:
     """The other half, and the one a wider drop would take with it.
 
-    ``-i %i -j DROP`` would close friend-to-friend and the exit in the same stroke, which
+    ``-i %i -j DROP`` would close user-to-user and the exit in the same stroke, which
     is M14 again with a different author. The drop has to be exactly the pair that both
     enters and leaves by this interface; everything else is what the tunnel is for, in
     both directions.
@@ -348,7 +348,7 @@ def test_nothing_between_two_other_interfaces_is_touched(
 def test_the_destination_that_stands_for_the_internet_is_on_it() -> None:
     """The fixture every question below leans on, held to what it claims.
 
-    If this address were one of the ranges a friend's tunnel drops, every "still reaches
+    If this address were one of the ranges a user's tunnel drops, every "still reaches
     the internet" assertion in this file would be asking whether a DROP is an ACCEPT —
     and would have been changed to agree with whatever the rules did.
     """
@@ -358,18 +358,18 @@ def test_the_destination_that_stands_for_the_internet_is_on_it() -> None:
 
 
 @pytest.mark.parametrize("name", WG_FAMILY)
-def test_a_friend_cannot_reach_the_node_this_one_is_attached_to(
+def test_a_user_cannot_reach_the_node_this_one_is_attached_to(
     name: str, node, request
 ) -> None:
     """The walk's ``nc 10.90.0.1 22``, asked of the chain instead of of a host.
 
-    Measured on the owner's real leaf with a real client: a friend opened TCP to the
+    Measured on the owner's real leaf with a real client: a user opened TCP to the
     Russian ENTRY node's address on the hop and was answered by its SSH daemon, with the
     packet masqueraded on the way in so the entry saw it arrive from its own trusted peer.
     Ports 80 and 443 answered too and 4444 did not, so it was the host and not a probe
     artefact, and the round trip named it: 104 ms against the leaf's own 52.
 
-    The cause was ``-i %i -j ACCEPT``, which permits a friend's packet to leave by ANY
+    The cause was ``-i %i -j ACCEPT``, which permits a user's packet to leave by ANY
     interface — and one of this host's interfaces is the hop, the owner's live route out
     of Russia. Asked here as a VERDICT on a packet leaving by SOME OTHER interface,
     because "which interface" is exactly what this project's rules may not name.
@@ -386,7 +386,7 @@ def test_a_friend_cannot_reach_the_node_this_one_is_attached_to(
 
 @pytest.mark.parametrize("destination", NOT_THE_INTERNET_IPV4)
 @pytest.mark.parametrize("name", WG_FAMILY)
-def test_nothing_off_the_internet_is_reachable_from_a_friends_tunnel(
+def test_nothing_off_the_internet_is_reachable_from_a_users_tunnel(
     name: str, destination: str, node, request
 ) -> None:
     """The whole class, not just the address the walk happened to dial.
@@ -461,18 +461,18 @@ def decoded_from_nat64(network: ipaddress.IPv6Network) -> ipaddress.IPv4Network:
     )
 
 
-def test_every_range_a_friend_cannot_reach_is_the_registrys_or_a_spelling_of_one() -> None:
+def test_every_range_a_user_cannot_reach_is_the_registrys_or_a_spelling_of_one() -> None:
     """What the list tracks, in both directions and both families — and it is not one rule.
 
     ``CLAUDE.md`` forbids a hardcoded address because it names something a node could
     have to rotate away from. These name nothing of any node, and they are not ours to
     choose: what is on the public internet is a registry, and the standard library
     carries it. Holding the constant against ``ipaddress`` is what keeps that true — a
-    range that drifts fails here rather than in a friend's tunnel.
+    range that drifts fails here rather than in a user's tunnel.
 
     TWO KINDS OF ENTRY SINCE M23's THIRTEENTH ROUND, which is the round that had to say
     what the list actually tracks. It is NOT IANA's registry as such: two entries of that
-    registry are marked globally reachable, and a friend dialling either reaches the
+    registry are marked globally reachable, and a user dialling either reaches the
     public internet. So the ordinary entry is held to ``not is_global`` exactly as before,
     and the second kind — a range inside the well-known NAT64 prefix — is held to
     something else entirely, because it IS globally reachable and is refused anyway: its
@@ -487,7 +487,7 @@ def test_every_range_a_friend_cannot_reach_is_the_registrys_or_a_spelling_of_one
 
     BOTH FAMILIES SINCE M23's TWELFTH ROUND, which is the round that found the list was
     only ever half of what it claimed to be: ``[::1]`` and ``[fc00::2]`` answered a
-    friend through the product's own rendered proxy config while ``127.0.0.1`` and
+    user through the product's own rendered proxy config while ``127.0.0.1`` and
     ``172.17.0.5`` were refused. Asked per family rather than over one flat list, because
     ``subnet_of`` across families is a ``TypeError`` — so a flat loop would have passed
     by short-circuiting on the v4 entries that come first, which is exactly what it did
@@ -501,7 +501,7 @@ def test_every_range_a_friend_cannot_reach_is_the_registrys_or_a_spelling_of_one
     ours = [ipaddress.ip_network(network) for network in NOT_THE_INTERNET]
     refusing_v4 = [network for network in ours if network.version == 4]
 
-    # Nothing we drop is on the internet — so no friend loses a destination they could
+    # Nothing we drop is on the internet — so no user loses a destination they could
     # legitimately have reached. Unless it is one address wearing another's hat, which is
     # the one licence this list has and is spent entirely inside the NAT64 prefix.
     for network in ours:
@@ -510,7 +510,7 @@ def test_every_range_a_friend_cannot_reach_is_the_registrys_or_a_spelling_of_one
             assert any(carried.subnet_of(covering) for covering in refusing_v4), (
                 f"{network} is globally reachable and is dropped, and what it carries "
                 f"({carried}) is not something this list refuses — so it is not a second "
-                "spelling of anything and a friend loses a destination for nothing"
+                "spelling of anything and a user loses a destination for nothing"
             )
             continue
         assert not network.is_global, f"{network} is on the internet and is dropped"
@@ -529,7 +529,7 @@ def test_every_range_a_friend_cannot_reach_is_the_registrys_or_a_spelling_of_one
     # Two /32s inside ``192.0.0.0/24`` — the PCP and NAT64 discovery anycast addresses —
     # ARE globally reachable, and are dropped with the block around them. Deliberate, and
     # asserted rather than left to be discovered: they are IETF protocol machinery no
-    # friend's device asks a VPN for, and two exceptions in every node's firewall would
+    # user's device asks a VPN for, and two exceptions in every node's firewall would
     # cost more to read than they buy. The v6 half has six of the same shape, all inside
     # ``2001::/23``, and they are carried on the same terms.
     for constants in (ipaddress.IPv4Address._constants, ipaddress.IPv6Address._constants):
@@ -564,7 +564,7 @@ def test_every_range_the_v4_half_refuses_is_refused_in_its_nat64_spelling_too() 
     }
 
     assert spelled == {ipaddress.ip_network(network) for network in NOT_THE_INTERNET_IPV4}, (
-        "the two spellings of this list have drifted: a destination a friend cannot reach "
+        "the two spellings of this list have drifted: a destination a user cannot reach "
         "in one family is reachable in the other, which is the whole of the finding"
     )
 
@@ -580,10 +580,10 @@ def test_the_two_globally_reachable_registry_entries_are_a_decision() -> None:
       there arrives at a relay router on the public internet and nothing in the address
       says where it goes next — so it IS the internet, and it is the address this
       project's own stands use for that word (``tests/edge`` above, and
-      ``tests/e2e/edge/test_a_friend_exits_at_the_leaf_and_not_at_the_entry.py``, which
+      ``tests/e2e/edge/test_a_user_exits_at_the_leaf_and_not_at_the_entry.py``, which
       round eleven had to fix because it was passing through the very bypass it was
       closing). Adding it would refuse the one destination those scenarios exist to prove
-      a friend still reaches.
+      a user still reaches.
     * ``64:ff9b::/96``, the well-known NAT64 prefix. Globally reachable too, and an
       address in it with a GLOBAL IPv4 address inside is how a v6-only client reaches the
       v4 internet — so the prefix itself stays reachable, and only its embeddings of what
@@ -685,16 +685,16 @@ def test_no_rule_a_kernel_tunnel_renders_names_an_address_iptables_cannot_take(
 
 
 @pytest.mark.parametrize("name", WG_FAMILY)
-def test_a_friend_may_still_ask_the_resolver_their_own_file_names(
+def test_a_user_may_still_ask_the_resolver_their_own_file_names(
     name: str, node, request
 ) -> None:
     """The exception, and the reason the drops above do not take DNS with them.
 
     A node's record is allowed to name a PRIVATE resolver — ``resolver_problem`` refuses
     loopback and a name and deliberately allows this, because a resolver the node can
-    reach is one its friends can reach through it — and ``client_resolvers`` writes that
-    value into every friend's own config file. Dropped, it would take every name away
-    from every friend on that node while addresses kept working: the shape this project
+    reach is one its users can reach through it — and ``client_resolvers`` writes that
+    value into every user's own config file. Dropped, it would take every name away
+    from every user on that node while addresses kept working: the shape this project
     fears, produced by the fix for it.
 
     Both protocols, because a lookup falls back to TCP for an answer that does not fit.
@@ -722,7 +722,7 @@ def test_the_exception_is_a_lookup_and_not_the_host_that_answers_it(
 ) -> None:
     """Scoped to the port DNS is spoken on, which is the whole width of the exception.
 
-    An operator is free to point their friends' resolver at any address, and one of the
+    An operator is free to point their users' resolver at any address, and one of the
     addresses they could point it at is the entry node. Address-only, this exception would
     hand back in full the reach the rules above exist to take away — the finding, through
     the door left open for its own fix.
@@ -748,7 +748,7 @@ def test_a_resolver_on_the_internet_needs_no_rule_of_its_own(
     So a node whose resolver is an ordinary public one renders no exception at all, its
     rule set says exactly what its exceptions are, and the bytes of its config do not
     move when the record is filled in — which is the claim
-    ``test_a_friends_lookup_leaves_through_the_hop.py`` still holds for every transport.
+    ``test_a_users_lookup_leaves_through_the_hop.py`` still holds for every transport.
     """
     on_the_internet = dataclasses.replace(node, resolver=A_RESOLVER_ON_THE_INTERNET)
     chain = forward_chain(rendered(name, on_the_internet, request, Egress.LOCAL))
@@ -873,7 +873,7 @@ def test_the_default_is_the_no_exit_policy(name: str, node, request) -> None:
 HOP_CAPABLE_FAMILY = [name for name in WG_FAMILY if profile(name).meta.hop_capable]
 
 # The two ends of one hop, as ``render_hop`` writes them. A tunnel network of its own, so
-# nothing here is confused with the friend-facing fixtures above.
+# nothing here is confused with the user-facing fixtures above.
 HOP_NETWORK = ("10.44.0.1/24", "10.44.0.2/24")
 
 
@@ -916,8 +916,8 @@ def test_only_the_leaf_end_of_a_hop_exits_locally(name: str, node, request) -> N
 
     The two ends are not symmetric, and M3 is where that stopped being academic. The LEAF
     masquerades what arrives over the hop out of its own route — that IS the exit, the
-    foreign address a friend is supposed to appear from. The ENTRY must never do it:
-    masquerading there is a friend in Russia exiting in Russia while every screen shows
+    foreign address a user is supposed to appear from. The ENTRY must never do it:
+    masquerading there is a user in Russia exiting in Russia while every screen shows
     green. ``render_hop`` fixes both rather than trusting whatever the caller believed.
 
     M14 left this as "neither end, ever", with a note that the property had to survive M3.
@@ -927,7 +927,7 @@ def test_only_the_leaf_end_of_a_hop_exits_locally(name: str, node, request) -> N
     """
     entry_config, leaf_config = hop_configs(name, node, request)
 
-    assert "MASQUERADE" not in entry_config, "the entry masquerades a friend into Russia"
+    assert "MASQUERADE" not in entry_config, "the entry masquerades a user into Russia"
     # The leaf's is the exit itself, and it is the same rule M14 measured on real
     # hardware: FORWARD both ways, and one masquerade for the tunnel's own subnet — which
     # is the range the entry's own tunnel address sits in.
@@ -942,7 +942,7 @@ def test_the_leaf_end_of_a_hop_renders_the_rules_it_was_already_running(
     """The owner's live hop, pinned — M23's fifth round changed nothing at this end.
 
     That end is the leaf side of the tunnel carrying the owner's real traffic out of
-    Russia, and the next apply rewrites its file. So the narrowing a friend's tunnel
+    Russia, and the next apply rewrites its file. So the narrowing a user's tunnel
     received is asserted to have stopped here, rule for rule and in order: the two
     ACCEPTs, the drop that keeps the tunnel out of itself, and one masquerade.
     """
@@ -964,12 +964,12 @@ def test_the_leaf_end_of_a_hop_renders_the_rules_it_was_already_running(
 def test_what_arrives_over_a_hop_still_reaches_a_private_resolver(
     name: str, node, request
 ) -> None:
-    """Why the leaf end is a policy of its own rather than a friend's tunnel — M16.
+    """Why the leaf end is a policy of its own rather than a user's tunnel — M16.
 
     What arrives over a hop is an ENTRY NODE's forwarded traffic, and part of it is that
     node's own lookups: M16 routes them through the hop precisely so they leave at the
     far end, and ``resolver_problem`` allows the record to name a resolver inside the far
-    end's own network. A friend's drops applied here would take the hop's own DNS away —
+    end's own network. A user's drops applied here would take the hop's own DNS away —
     the failure M16 exists to prevent, reintroduced at the other end of the same tunnel.
     """
     chain = forward_chain(rendered(name, node, request, Egress.RELAY))
@@ -989,8 +989,8 @@ def test_a_hop_end_is_told_which_end_it_is_rather_than_being_asked(
     """``render_hop`` decides, exactly as it decides the exit itself.
 
     The two policies are one argument apart and the wrong one is silent in both
-    directions: a friend's tunnel given the relay's rules reaches the entry node, and a
-    hop end given a friend's rules stops carrying the entry's lookups. Asserted through
+    directions: a user's tunnel given the relay's rules reaches the entry node, and a
+    hop end given a user's rules stops carrying the entry's lookups. Asserted through
     the function an operator's apply actually goes through, so a caller could not pick.
     """
     _, leaf_config = hop_configs(name, node, request)

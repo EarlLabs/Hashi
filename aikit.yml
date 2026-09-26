@@ -188,10 +188,10 @@ acceptance:
       note: "sign in with the username and password the stand prints when it comes up"
     - name: "Delivery endpoint"
       url: "http://127.0.0.1:54200/sub/{token}"
-      note: "a friend's subscription; the token comes from the panel. Tokens shorter than 16 characters are refused on format before any lookup happens, so a short string is not a test of whether the token exists"
+      note: "a user's subscription; the token comes from the panel. Tokens shorter than 16 characters are refused on format before any lookup happens, so a short string is not a test of whether the token exists"
   seed: >-
     an empty control plane — the operator account exists and nothing else does:
-    no nodes, no transports, no friends, no relay hops. Every awkward first-time
+    no nodes, no transports, no users, no relay hops. Every awkward first-time
     step is still ahead of you, which is where the findings are.
   # Empty on purpose. A run builds images and writes to .e2e/artifacts/, and every
   # such path is already gitignored, so nothing TRACKED moves. Each entry here is a
@@ -265,7 +265,7 @@ security:
   #     a wrong password alike. (Corrected 2026-09-22: this said a 200 meant failure.
   #     It does not — 200 is what a client that FOLLOWS the redirect sees on success,
   #     which is how scripts/security/seed.py rejected its own first login.)
-  #   - a friend's credential is a PATH SEGMENT. There is nothing to pin with
+  #   - a user's credential is a PATH SEGMENT. There is nothing to pin with
   #     `probe auth` at all — the token goes in the URL, which is exactly the
   #     property under audit.
   #
@@ -277,18 +277,18 @@ security:
     - name: anon
     - name: operator
       auth: "login:scripts/security/role.sh operator"
-    - name: friend_a
-      auth: "login:scripts/security/role.sh friend_a"
-    - name: friend_b
-      auth: "login:scripts/security/role.sh friend_b"
+    - name: user_a
+      auth: "login:scripts/security/role.sh user_a"
+    - name: user_b
+      auth: "login:scripts/security/role.sh user_b"
     # A fourth identity the owner did not name, seeded because the boundary it
     # tests is a charter promise: "revocation is total" means a revoked token's
     # answer must be indistinguishable from a token that was never issued. That is
     # a comparison between two requests, so both sides have to exist before the
     # hunt starts — a hunter that revokes someone mid-run has spent budget and
     # still cannot replay the pair. Threat model §3.4.
-    - name: friend_revoked
-      auth: "login:scripts/security/role.sh friend_revoked"
+    - name: user_revoked
+      auth: "login:scripts/security/role.sh user_revoked"
   # The SAME read-only role acceptance reads through, reused rather than rebuilt:
   # `acceptance_ro` holds SELECT and nothing else, granted by the stand. It is what
   # tells *exploitable* from *looks exploitable* — the endpoint returned another

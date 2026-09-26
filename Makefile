@@ -11,13 +11,22 @@ VENV        := .venv
 PY          := $(VENV)/bin/python
 COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
-# The deployed shape: the base stack plus the only overlay that opens a port on a
+# The deployed shape: the base stack plus the only overlays that open a port on a
 # real host. Never the dev overlay — that publishes the database.
-COMPOSE_PANEL := $(COMPOSE) -f deploy/docker-compose.public.yml
+#
+# Two of them, and the split is M28.10's: everything a deployed host publishes whether
+# or not it has a management tunnel is in public.yml, and the console on the TUNNEL's
+# own address — the one mapping that needs an address this host actually holds — is in
+# tunnel.yml. A host restored from a bucket has no tunnel yet, so `up-panel` there fails
+# on a bind docker cannot make, and `up-panel-over-ssh` below is the same publication
+# without that one line.
+COMPOSE_PANEL_SSH := $(COMPOSE) -f deploy/docker-compose.public.yml
+COMPOSE_PANEL := $(COMPOSE_PANEL_SSH) -f deploy/docker-compose.tunnel.yml
 
 .PHONY: setup env verify e2e-verify test test-control test-edge test-infra test-e2e lint \
-        up up-dev up-panel down logs ps e2e-up e2e-down e2e-reset e2e-psql \
-        e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap
+        up up-dev up-panel up-panel-over-ssh restart-control down logs ps \
+        e2e-up e2e-down e2e-reset e2e-psql \
+        e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap hash-password
 
 ## --- setup ------------------------------------------------------------------
 
@@ -27,8 +36,14 @@ setup:
 	$(PY) -m pip install --quiet -e ".[dev]"
 	@echo "ready — run: make test"
 
+# The state directory is created HERE, before anything brings the stack up, and that
+# ordering is the whole reason it is in this target: the control service mounts it
+# read-only (deploy/docker-compose.yml), and a bind mount whose source does not exist is
+# created by the docker daemon — as root. The backup schedule, which runs as the operator,
+# could then never write the record it exists to write.
 env:
 	@test -f .env || { cp .env.example .env; echo ".env created from .env.example — fill it in"; }
+	@mkdir -p backups/state
 
 # Every verify target needs the venv. Fail with an instruction, not a traceback.
 define need_venv
@@ -95,7 +110,7 @@ test-edge:
 
 test-infra:
 	$(need_venv)
-	$(PY) -m ruff check tests/infra deploy/warden .e2e
+	$(PY) -m ruff check tests/infra deploy/backup deploy/warden .e2e
 	$(PY) -m pytest tests/infra -q
 
 # Acceptance scenarios, run against the disposable e2e stack (`make e2e-up`) —
@@ -160,6 +175,37 @@ up-dev: env
 up-panel: env
 	$(NO_ATTESTATIONS) $(COMPOSE_PANEL) up -d --build
 
+# The same publication on a host that has no management tunnel yet — which is every
+# host `make restore-from-bucket` has just rebuilt, because the tunnel's keys were on
+# the machine that was lost and a fresh one has no address to bind to. `make up-panel`
+# there fails on `cannot assign requested address`, and the walk that found it answered
+# with `ip addr add`, by hand, at the point where the operator cannot log in yet.
+#
+# What it publishes: the delivery endpoint on 80/443, and the console on THIS HOST'S
+# LOOPBACK only. Nothing off the box can reach the console; you reach it the way the
+# runbook's "The way back in when the tunnel is unavailable" already describes, and
+# which the field run used all night:
+#
+#   ssh -L <HASHI_PRIVATE_PORT>:127.0.0.1:<HASHI_PRIVATE_PORT> you@this-host
+#
+# It is not a weaker `up-panel`: the mapping it leaves out is an ADDITIONAL address to
+# reach the same console on, and nothing here publishes the console on an address the
+# internet can reach. Move to `make up-panel` once the tunnel is up.
+up-panel-over-ssh: env
+	$(NO_ATTESTATIONS) $(COMPOSE_PANEL_SSH) up -d --build
+
+# What to run after a restore, and deliberately not `make down && make up`.
+#
+# The restore used to end by telling the operator exactly that, and on a deployed host
+# it is the one sequence the Makefile itself warns against: `make up` converges the
+# stack back to the base file's shape and takes the published ports away, so the
+# instruction that was supposed to finish a rebuild ends with a panel nobody can reach
+# (M28.10, finding 3). `restart` restarts the containers that are there and changes
+# nothing about what the stack publishes, so it is correct whichever of `up-dev`,
+# `up-panel` and `up-panel-over-ssh` this host was brought up with.
+restart-control:
+	$(COMPOSE) restart control
+
 down:
 	$(COMPOSE) down
 
@@ -182,6 +228,22 @@ ps:
 panel-bootstrap:
 	@scripts/panel-bootstrap.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
 
+# The one value in .env that cannot be typed, on a host where nothing can produce it.
+#
+# HASHI_OPERATOR_PASSWORD_HASH comes from `python -m control.cli hash-password`, which
+# needs this project's dependencies and Python 3.14 — and a rented Ubuntu box has 3.10,
+# no venv and no way to make one (`make setup` looks for python3.14 and does not find
+# it). So the restore runbook asked for four values and one of them could only be made
+# on a SECOND working machine, which is the difference between "read the command" and
+# "have another computer" (M28.10, finding 1).
+#
+# It runs in the control image, which is the same answer this project already gives for
+# pg_dump and for age: the tool lives where the stack lives, and the host needs nothing
+# but a container runtime. Nothing here reads an env file — it cannot, because the file
+# is what this command exists to help fill in.
+hash-password:
+	@scripts/hash-password.sh
+
 ## --- preparing a host to be a node (see scripts/node-bootstrap.sh) ----------
 
 # The other half of the pair above: panel-bootstrap installs a control plane, this
@@ -200,19 +262,95 @@ node-bootstrap:
 ## --- backup / restore (see scripts/backup.sh) -------------------------------
 
 # The control database is the single source of truth, so it is the one thing whose
-# loss cannot be repaired by rebuilding a node. The dump is useless without
-# HASHI_SECRET_KEY — back that up separately, and see the script's own warning.
-.PHONY: backup restore checkers
+# loss cannot be repaired by rebuilding a node. The WHOLE dump is encrypted with age, to
+# HASHI_BACKUP_AGE_RECIPIENT, before it reaches the disk — this host holds only the public
+# half, so it can write a backup and cannot read one back. Underneath that layer the
+# columns holding node and user secrets are encrypted again and are useless without
+# HASHI_SECRET_KEY; back that up separately and keep it somewhere the age identity is not.
+# A restore costs both, and neither of them lives on this machine. See the script's own
+# warning, and docs/deploy/runbook.md, "Backups".
+#
+# With HASHI_BACKUP_ENABLED=1 the same artifact is then sent to the object store in the
+# HASHI_BACKUP_S3_* block, with a credential that may only write — so this host can add to
+# the backup history and can neither read nor destroy it. `make backup` exits 3, not 0,
+# when the dump succeeded and the upload did not: the file is here, and a backup that
+# never left the machine is not an offsite backup.
+#
+# WHEN it happens is `make backup-schedule` — one cron entry that calls
+# scripts/backup-run.sh every 15 minutes. The entry carries no hour on purpose: the hour
+# is HASHI_BACKUP_AT in HASHI_BACKUP_TZ, decided by that script, so a box that was down at
+# 04:00 takes the day's backup when it comes back instead of skipping the day in silence.
+# `make backup-status` is what the record of all that says.
+.PHONY: backup backup-upload backup-schedule backup-unschedule backup-status restore \
+        restore-from-bucket checkers
 
+# Goes through the recorder rather than straight to the script, so that a backup taken by
+# hand counts as the day's backup: without it the panel would report a host as un-backed-up
+# an hour after its operator backed it up, and the schedule would take a second one at
+# 04:00 for a day that already had one. What it prints is scripts/backup.sh's own output,
+# unchanged, and it exits with the same 0/1/3.
 backup:
-	@scripts/backup.sh dump
+	@scripts/backup-run.sh now
+
+# The schedule itself. Idempotent: it replaces its own block in this account's crontab and
+# leaves every other line alone. No root, no new package, no daemon of ours — see the
+# script's header for why a container with the docker socket was rejected instead.
+backup-schedule:
+	@scripts/backup-schedule.sh install
+
+backup-unschedule:
+	@scripts/backup-schedule.sh remove
+
+# "When did a backup last succeed, and has one failed since?" — answered from the record
+# on this host, because the credential here may only write and cannot look in the bucket.
+backup-status:
+	@scripts/backup-run.sh status
+
+# What exit 3 leaves you holding. Sends an artifact that is already on disk, and never
+# dumps — so it costs the database nothing and can be retried as often as the store needs.
+backup-upload:
+	@test -n "$(FROM)" || { echo "usage: make backup-upload FROM=backups/hashi-....sql.gz.age"; exit 2; }
+	@scripts/backup.sh upload "$(FROM)"
 
 # Deliberately requires the path on the command line rather than picking the newest
 # dump: restoring is destructive and "the latest one" is not a decision a Makefile
 # should make for the operator.
+#
+# The age identity is handed over at the moment of the restore and never stored here:
+#   HASHI_RESTORE_AGE_IDENTITY=/path/to/identity make restore FROM=backups/hashi-....sql.gz.age
+# An artifact written before the encryption existed — plain SQL, gzipped — still restores
+# and needs no identity. The script tells the two apart by reading the file, not its name.
 restore:
-	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz"; exit 2; }
+	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz.age"; exit 2; }
 	@scripts/backup.sh restore "$(FROM)"
+
+# The one for the day the machine is gone, and the only verb here that is a whole rebuild
+# rather than a step of one. On a host that has never run this project it installs the
+# control plane, reads the bucket with a credential you are carrying, takes the newest
+# artifact that actually opens and restores it:
+#
+#   HASHI_RESTORE_AGE_IDENTITY=/path/to/identity \
+#   HASHI_RESTORE_S3_ACCESS_KEY_ID=... HASHI_RESTORE_S3_SECRET_ACCESS_KEY=... \
+#   make restore-from-bucket
+#
+# Three inputs, all carried by the operator and none of them on the host that was lost:
+# HASHI_SECRET_KEY, which goes in this machine's own .env because the control plane cannot
+# start without it; the age identity; and a READ credential for the bucket. The last two
+# are taken from this command's environment and are never written into an env file here —
+# that is what the HASHI_RESTORE_* names are for, and the command refuses rather than
+# reading them from anywhere else.
+#
+# OBJECT= names a specific artifact instead of the newest that opens. Unlike `restore`,
+# which deliberately makes the operator name a file, this one does choose — because the
+# operator cannot see into the bucket and the alternative is a restore that cannot be
+# started at all. What it chose is printed beside everything it did not choose.
+#
+# What it does NOT do — DNS, the delivery endpoint's certificate, telling any user
+# anything — it says on its last screen, and docs/deploy/runbook.md says it beside the
+# command. A restored control plane on a new address that the old name still does not
+# point at serves nobody.
+restore-from-bucket:
+	@scripts/backup.sh restore-from-bucket $(if $(OBJECT),"$(OBJECT)",)
 
 # Fetch the upstream data-plane checkers, so the validation tests stop skipping.
 checkers:

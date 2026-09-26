@@ -1,10 +1,10 @@
-"""A friend on an entry node must exit at the leaf — M3, the charter's core claim.
+"""A user on an entry node must exit at the leaf — M3, the charter's core claim.
 
-WHAT: what an entry node's friend-facing transport renders once that node has a hop, and
+WHAT: what an entry node's user-facing transport renders once that node has a hop, and
       — the half that matters more — what it must no longer render.
 WHY:  before M3 the answer was one hardcoded outbound: the node dialled the internet
       itself, from Russia, whatever the topology said. **The failure is invisible.** The
-      friend connects, pages load, the panel shows two active nodes and a live hop, and
+      user connects, pages load, the panel shows two active nodes and a live hop, and
       the protection the whole topology exists to provide is simply absent. Nothing logs
       it, and nothing should — logging who connected to what is the one record the
       charter forbids.
@@ -18,7 +18,7 @@ HOW:  pure, and parametrised over the transports that TERMINATE a connection rat
       what decides whether "where do I dial from" is even expressible is the data plane,
       not the protocol. A transport added later is covered by arriving.
 
-What this does NOT prove is the whole of M3's first "done when": that a friend's traffic
+What this does NOT prove is the whole of M3's first "done when": that a user's traffic
 actually emerges at the leaf's address. That is a field observation on two real hosts with
 a real client, and no assertion in this file stands in for it.
 """
@@ -77,7 +77,7 @@ def test_an_entry_with_a_hop_opens_every_connection_from_the_hop(
 
     Asserted over ALL of them rather than "the hop outbound exists": a config carrying the
     hop outbound and a direct one beside it satisfies the second and is precisely the
-    invisible failure — Xray would use whichever the routing sent it to, and a friend
+    invisible failure — Xray would use whichever the routing sent it to, and a user
     would exit in Russia with every screen green.
     """
     config = rendered(name, node, request, egress=Egress.HOP, exit_via=HOP_ADDRESS)
@@ -94,7 +94,7 @@ def test_an_entry_with_a_hop_opens_every_connection_from_the_hop(
 
 
 @pytest.mark.parametrize("name", PROXIES)
-def test_the_friend_facing_inbound_is_routed_into_the_hop(name: str, node, request) -> None:
+def test_the_user_facing_inbound_is_routed_into_the_hop(name: str, node, request) -> None:
     """A routing rule ties the inbound to the hop outbound by tag.
 
     Belt to the braces above: the single outbound already makes a local exit
@@ -109,7 +109,7 @@ def test_the_friend_facing_inbound_is_routed_into_the_hop(name: str, node, reque
     parsed = json.loads(config)
     tags = {outbound["tag"] for outbound in parsed["outbounds"]}
     rules = parsed["routing"]["rules"]
-    assert rules, "friend traffic is routed by whatever happens to be first"
+    assert rules, "user traffic is routed by whatever happens to be first"
     for rule in rules:
         assert rule["outboundTag"] in tags
     inbound_tags = {inbound["tag"] for inbound in parsed["inbounds"]}

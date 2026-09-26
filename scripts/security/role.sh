@@ -7,10 +7,10 @@
 # WHY:  `aikit.yml`'s `security.roles[].auth` is either a fixed header or a
 #       command the agent runs to obtain a session. Neither of this project's two
 #       credentials is a header: the operator's is a SIGNED COOKIE that only the
-#       probe's own jar can hold, and a friend's is a PATH SEGMENT with no header
+#       probe's own jar can hold, and a user's is a PATH SEGMENT with no header
 #       to pin at all. So the command is this one — it hands over the material and
 #       says which probe verb turns it into a session.
-# WHY it is re-read and never remembered: a friend's token is 32 random bytes
+# WHY it is re-read and never remembered: a user's token is 32 random bytes
 #       minted by the control plane, so every `stand.sh up` produces different
 #       ones. The refuter runs this AFTER its own fresh stand and gets that
 #       stand's token, which is what lets it re-send a proof the hunter wrote
@@ -32,7 +32,7 @@ BASE="http://${E2E_API_HOST}:${E2E_API_PORT}"
 
 die() { printf '[role] %s\n' "$*" >&2; exit 1; }
 
-[ $# -eq 1 ] || die "usage: scripts/security/role.sh <anon|operator|friend_a|friend_b|friend_revoked>"
+[ $# -eq 1 ] || die "usage: scripts/security/role.sh <anon|operator|user_a|user_b|user_revoked>"
 NAME="$1"
 
 [ -f "$ROLES_FILE" ] || die "no ${ROLES_FILE} — run \`scripts/security/stand.sh up\` first; it seeds the roles"
@@ -70,7 +70,7 @@ elif kind == "path-token":
     revoked = role.get("revoked") == "true"
     what = "REVOKED — for the revoked-vs-unknown comparison" if revoked else "live"
     print(f"{name} ({role['nickname']}, {what}):")
-    print(f"  friend id  {role['friend_id']}")
+    print(f"  user id    {role['user_id']}")
     print(f"  token      {role['token']}")
     print(f"  url        {base}{role['path']}")
     print("  the credential is the PATH, not a header — there is nothing to pin with")

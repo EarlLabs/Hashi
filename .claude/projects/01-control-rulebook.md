@@ -44,6 +44,14 @@ a shortcut.
 
 ## Idioms — how code is written here
 
+- **A comment says what this code does and why; never what another channel
+  does.** The panel and `scripts/backup-run.sh` read one record and have
+  disagreed about it repeatedly. Do not write "`make backup-status` prints the
+  same to the minute" — it prints an ISO stamp and this screen prints a coarse
+  age, and nothing here goes red when either changes. Name the other channel and
+  stop. **A rendered string names the state it holds for**: `clock ahead` covers
+  a run dated ahead *and* a due date ahead, and what is true of one is false of
+  the other.
 - **Async all the way down.** No synchronous database or HTTP call inside a
   request path, ever. One `AsyncSession` per request, injected with `Depends`.
 - **Configuration comes only from `settings.py`.** No `os.environ` anywhere else.

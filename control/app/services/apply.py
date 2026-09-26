@@ -3,7 +3,7 @@
 WHAT: ``apply_node`` (render every enabled transport, validate, push, restart,
       verify) and ``apply_many`` (do that for a set of node-transports).
 WHY:  this is the half of criterion 6 that the database cannot do. Deleting a
-      friend's credential rows changes what we WOULD render; until the new config
+      user's credential rows changes what we WOULD render; until the new config
       reaches every node, the running daemon still authorises them. It is also the
       half of criterion 2 that makes a replacement node real rather than recorded.
 HOW:  the order is the contract, and every step exists because skipping it produces
@@ -22,7 +22,7 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 
       Any failure from step 3 onward marks the node DEGRADED, never active — core
       invariants §4. A node that is half-configured and reported as fine gets
-      friends routed onto it, and the bug report is about their client.
+      users routed onto it, and the bug report is about their client.
 """
 
 import datetime
@@ -80,8 +80,8 @@ logger = logging.getLogger(__name__)
 # EXCEPT THE THREE REFUSALS BELOW, since M18's acceptance: they are answered to an API
 # consumer as well as to the console, and naming a screen is the one thing an API message
 # must not do. Their directions are written in the clauses under this and become the
-# console's own words at ``panel/wording.for_the_page`` — the same seam decision 9 sends
-# ``friend`` across, for the same reason. This constant stays because the sentences that
+# console's own words at ``panel/wording.for_the_page`` — the one seam where a sentence
+# written for any caller becomes page copy. This constant stays because the sentences that
 # are ONLY ever read on the console still use it (``services/console.py``, the incomplete
 # revocation and rotation reports).
 WHERE_TO_RETRY = "the Nodes screen"
@@ -150,7 +150,7 @@ NO_SSH_KEY = (
 # and the operator needed a sentence about transports, not about YAML.
 #
 # Refusal rather than a silent no-op, and the deciding case is not the console: the
-# revocation fan-out re-pushes every node a withdrawn friend held a credential on, and a
+# revocation fan-out re-pushes every node a withdrawn user held a credential on, and a
 # withdrawn row KEEPS its minted credentials, so a node whose last row was withdrawn
 # arrives here with nothing to render while its container is still running the config
 # that authorises that person. A no-op would report such a node as updated. It is
@@ -265,7 +265,7 @@ MAKE_THE_POOL_BIGGER = (
 )
 POOL_SHORT_TO_APPLY = (
     "applying this node is what puts it into service, and a node that serves gives every "
-    "active friend an address on each transport it offers — {pools}. Nothing was pushed "
+    "active user an address on each transport it offers — {pools}. Nothing was pushed "
     f"and nothing on the node was changed. {MAKE_THE_POOL_BIGGER}"
 )
 
@@ -276,7 +276,7 @@ POOL_SHORT_TO_APPLY = (
 # ``nodes.set_node_state``, so the machine that has refused ``retired -> active`` since
 # backlog item 17 was never asked on this door: apply on a retired node answered 200 and
 # left it active. Round 5 made that worse rather than created it — the fan-out above now
-# mints material for every active friend on the way in, so the button re-activated a
+# mints material for every active user on the way in, so the button re-activated a
 # host the operator had recorded as gone AND granted the whole fleet on it, and its
 # address was back in every subscription at the next fetch.
 #
@@ -302,8 +302,8 @@ CANNOT_SERVE_AGAIN = (
     "this node is {state}, and applying a node is what puts it into service — which is "
     "the one move a {state} node is refused. That state is where an operator records "
     "that a host is gone, so bringing the record back would put an address that may now "
-    "answer for somebody else into every friend's subscription and hand every active "
-    "friend key material on it. Nothing was pushed, nobody was granted anything and "
+    "answer for somebody else into every user's subscription and hand every active "
+    "user key material on it. Nothing was pushed, nobody was granted anything and "
     f"nothing about this node was changed. {REGISTER_IT_AGAIN}"
 )
 
@@ -319,7 +319,7 @@ CANNOT_SERVE_AGAIN = (
 #
 # SO THE PROBE YIELDS AND THE APPLY DOES NOT, which is the way round that costs least.
 # Apply's refusal closes a hole nothing else closes: it is what stops a written-off host
-# reappearing in every friend's subscription with key material minted for the whole fleet.
+# reappearing in every user's subscription with key material minted for the whole fleet.
 # The probe's answer, by contrast, is not lost — it is behind the step the operator has to
 # take anyway. If that host is genuinely theirs again they register it as a new node, and
 # they can probe THAT node freely; if it is not theirs, the probe was a connection to a
@@ -327,7 +327,7 @@ CANNOT_SERVE_AGAIN = (
 #
 # What it costs, named rather than discovered: the probe is this console's only oracle for
 # "is that host still running the file it was last given", and a retired node is exactly
-# where that question is most uncomfortable — a withdrawn friend may still be authorised
+# where that question is most uncomfortable — a withdrawn user may still be authorised
 # there. This says so instead of answering it, because the answer would not change what
 # the operator can do about it: nothing this control plane pushes reaches a node it will
 # not put into service.
@@ -430,7 +430,7 @@ NOT_IN_SERVICE_TO_PUSH = (
 # happened, it was undone, and the file that landed is older than the database again.
 ORPHANED_ON_THE_HOST = (
     "This apply was also what put the node into service, so it granted every active "
-    "friend an address on it before rendering — and that grant was undone when this "
+    "user an address on it before rendering — and that grant was undone when this "
     "failed, because an apply that fails must grant nobody. The file that DID land still "
     "carries them. Nobody is routed onto a degraded node and the next successful apply "
     "rewrites that file whole, but until one does, a daemon that comes up on that host "
@@ -472,11 +472,11 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     """Every enabled transport's config for one node, keyed by the name it is placed under.
 
     Pure with respect to the node: it reads the database, then renders. Each
-    transport gets exactly the friends who hold a live credential on it, which is
+    transport gets exactly the users who hold a live credential on it, which is
     what makes the rendered file the authoritative answer to "who can use this node".
 
     THE KEY IS ``config_name``, not the transport's name, and since M15 those can
-    differ: a node may run a friend-facing AmneziaWG and the entry end of a hop over the
+    differ: a node may run a user-facing AmneziaWG and the entry end of a hop over the
     same transport, and they are two files, two compose services and two interfaces. For
     every row written before M15 — and for every first instance since — the two strings
     are equal, which is why every caller indexing this by a transport's name still finds
@@ -488,7 +488,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
 
     # This node's own way out, if it has one — M3. Read once per node rather than per
     # transport, because it is a property of the NODE: an entry node has a hop and its
-    # friends leave through it; a leaf has none and its friends leave from it. What comes
+    # users leave through it; a leaf has none and its users leave from it. What comes
     # back is an address and nothing else, so nothing below learns what carries the hop.
     hop_exit = await relay.exit_through_hop(session, node)
 
@@ -506,7 +506,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
 
     for node_transport in listed.scalars().unique():
         # A hop end is rendered as a PAIR with its far end, not as a server with a list
-        # of friends — see services/relay.py. Dispatched on the stored purpose, which
+        # of users — see services/relay.py. Dispatched on the stored purpose, which
         # is topology, never on the transport's name.
         if node_transport.purpose in TransportPurpose.relays():
             peer = await relay.peer_of(session, node_transport)
@@ -522,18 +522,18 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
         # resolved once per row rather than per credential — M17.
         spec = addresses.spec_for(node_transport.transport_name)
         credentials = [
-            # The friend's own client-scoped material travels with the subject, and it
+            # The user's own client-scoped material travels with the subject, and it
             # has to. A VLESS server config needs only the subject, so this looked
-            # unnecessary until a WireGuard-family transport became friend-facing (item
+            # unnecessary until a WireGuard-family transport became user-facing (item
             # 27): its server config authorises each peer by the peer's PUBLIC key,
             # which lives here. Without it, applying such a node raised KeyError deep
             # in a renderer — and the first place that showed up was a revocation
-            # returning 500, because revocation re-pushes every node the friend was on.
+            # returning 500, because revocation re-pushes every node the user was on.
             #
             # Handed over whole rather than filtered: which parts of its own client
             # material belong in a server config is the transport's business, and
             # picking them here would mean `control` recognising field names. That a
-            # friend's PRIVATE half never reaches a server config is asserted instead —
+            # user's PRIVATE half never reaches a server config is asserted instead —
             # see tests/control/test_second_subscription_format.py.
             #
             # Built through ``addresses.edge_credential``, which is also what the user's
@@ -542,10 +542,10 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             # here is how they would come to disagree.
             addresses.edge_credential(row, spec)
             for row in result.scalars().unique()
-            # A revoked friend's rows are deleted rather than flagged, so this is a
+            # A revoked user's rows are deleted rather than flagged, so this is a
             # belt-and-braces filter rather than the mechanism — see
-            # services/friends.py:revoke for why deletion is the real guarantee.
-            if row.friend.is_active
+            # services/users.py:revoke for why deletion is the real guarantee.
+            if row.user.is_active
         ]
         # Sorted so the rendered config is byte-stable regardless of row order,
         # which is what makes the applied digest a drift signal rather than noise.
@@ -575,7 +575,7 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
             # sentence, on the node's page, with the node left degraded.
             #
             # Before this, such a refusal escaped as a 500. The path it escaped through
-            # was the worst available: revocation re-pushes every node the friend was
+            # was the worst available: revocation re-pushes every node the user was
             # on, so an unrelated node's rendering problem made "remove this person's
             # access" answer "internal error" — and the operator has no way to tell
             # whether the removal happened.
@@ -916,7 +916,7 @@ async def _record_failure(
 async def _take_into_service(
     session: AsyncSession, node: Node, rows: Sequence[NodeTransport]
 ) -> list[Credential]:
-    """Hand every active friend a credential on the rows this apply is about to serve.
+    """Hand every active user a credential on the rows this apply is about to serve.
 
     THE ORDER AGAINST THE RENDER IS THE WHOLE OF THIS FUNCTION — M23, round 3. Round 2
     added this fan-out at the END of ``apply_node``, after the push, and the real-host
@@ -938,29 +938,29 @@ async def _take_into_service(
     failure path would then read the row and find ``active -> degraded`` perfectly legal,
     resurrecting the one node the state machine exists to refuse. The state still moves in
     one place, on the success path, past every failure arm. What made that possible is
-    ``friends.grant_on``, which grants over the rows it is given rather than over the ones
+    ``users.grant_on``, which grants over the rows it is given rather than over the ones
     a query calls serving.
 
     THE ROWS ARE THIS NODE'S OWN, not the fleet's. An apply is about one node, and an
     apply of node A that quietly mints material on node B is a side effect nobody pressed.
-    FRIEND-FACING ONLY, filtered here because ``grant_on`` deliberately re-filters nothing:
-    a hop end's consumer is the far NODE, and a friend granted one would be routed straight
+    USER-FACING ONLY, filtered here because ``grant_on`` deliberately re-filters nothing:
+    a hop end's consumer is the far NODE, and a user granted one would be routed straight
     past the entry node the topology exists to hide behind.
 
     Does NOT commit: the caller owns the transaction that carries the applied digests, the
     audit entries and this.
     """
-    friend_facing = [row for row in rows if row.purpose == TransportPurpose.FRIENDS]
+    user_facing = [row for row in rows if row.purpose == TransportPurpose.USERS]
 
     # Refused before anything is minted, before anything is rendered and before the node is
     # dialled, which is what makes ``POOL_SHORT_TO_APPLY``'s own sentence true about the
     # host as well as about the record. ``shortfalls_among`` and not the fan-out's own
     # ``PoolFull``, for the reason ``nodes.set_transport_enabled`` gives at the same
-    # measurement: the fan-out skips a friend who already holds a credential here, so a row
+    # measurement: the fan-out skips a user who already holds a credential here, so a row
     # everybody is already on refuses nothing and the node would go into service carrying a
     # pool with no room for the next person. ``PoolFull`` stays underneath as the backstop
     # for a pool that is big enough on paper and full in fact.
-    short = await addresses.shortfalls_among(session, friend_facing)
+    short = await addresses.shortfalls_among(session, user_facing)
     if short:
         raise addresses.PoolFull(
             POOL_SHORT_TO_APPLY.format(
@@ -968,14 +968,14 @@ async def _take_into_service(
             )
         )
 
-    # Deferred import for the cycle its siblings name: ``friends`` imports the services
+    # Deferred import for the cycle its siblings name: ``users`` imports the services
     # this one does.
-    from control.app.services import friends  # noqa: PLC0415
+    from control.app.services import users  # noqa: PLC0415
 
     granted: list[Credential] = []
-    for friend in await friends.list_friends(session):
-        if friend.is_active:
-            granted.extend(await friends.grant_on(session, friend, friend_facing))
+    for user in await users.list_users(session):
+        if user.is_active:
+            granted.extend(await users.grant_on(session, user, user_facing))
     return granted
 
 
@@ -1028,7 +1028,7 @@ async def apply_node(
     # ends by writing ``active`` directly (see the end of this function), so without this
     # line ``POST /nodes/{id}/apply`` was the one door where ``retired -> active`` went
     # through: the node came back into ``serving_transports``, the fan-out below handed
-    # every active friend material on it, and its address was in every subscription at
+    # every active user material on it, and its address was in every subscription at
     # the next fetch.
     #
     # ``!=`` first, for the same no-op ``set_node_state`` allows and for the same reason:
@@ -1173,7 +1173,7 @@ async def apply_node(
             # with, so the comparison below is against what the process was started from
             # rather than against what is on disk beside it. Without it this function
             # wrote an ``applied_digest`` recording a state the node was not in — and a
-            # revoked friend stayed connected.
+            # revoked user stayed connected.
             #
             # AND IT IS WATCHED RATHER THAN SAMPLED — M26's second acceptance walk, and
             # it is the same fault one layer in. This line used to look ONCE, straight
@@ -1181,7 +1181,7 @@ async def apply_node(
             # start: running, not yet restarting, and in a crash loop by the time the
             # operator read the row. The walk saw that twice, and saw the same check fire
             # the other way on a leaf whose container came up a moment later — degraded,
-            # while that friend's ping was 0% loss. ``services/serving`` is the whole of
+            # while that user's ping was 0% loss. ``services/serving`` is the whole of
             # the fix: two readings an interval apart, comparable because each says which
             # LIFE of the container it looked at, bounded by a ceiling, and nothing
             # confirmed that was not observed staying up. See that module for why a
@@ -1245,7 +1245,7 @@ async def apply_node(
         # invariants §4 is unconditional there — a partially applied node is marked
         # degraded, never left active — and it does not care whether the interruption
         # was a node that went quiet or a bug in this file. Without this arm an
-        # unexpected error left the node ACTIVE and therefore still in every friend's
+        # unexpected error left the node ACTIVE and therefore still in every user's
         # subscription, pointing them at a daemon that may be mid-swap.
         #
         # Logged with its traceback BEFORE it is converted, for the same reason
@@ -1500,7 +1500,7 @@ def why_not_updated(exc: BaseException) -> NotUpdated:
         return NotUpdated.NO_RESOLVER
     # ``NothingToApply`` joins ``ConfigRefused`` here rather than falling through to
     # UNREACHED, and the case is real rather than defensive: a withdrawn row keeps its
-    # minted credentials, so revoking the last friend on a node whose only transport was
+    # minted credentials, so revoking the last user on a node whose only transport was
     # withdrawn re-pushes a node with nothing to render. "Could not be reached — apply it
     # again once it can be" would send the operator to retry a button that will refuse
     # for the same reason for ever. Nothing was pushed and retrying changes nothing,
@@ -1540,7 +1540,7 @@ async def apply_many(
 
     Used by revocation, where several nodes must be re-pushed at once. Every node is
     attempted even if an earlier one failed — stopping at the first failure would
-    leave a revoked friend live on nodes that were perfectly reachable, which is the
+    leave a revoked user live on nodes that were perfectly reachable, which is the
     exact failure criterion 6 forbids. Failures are collected and reported, each as its
     message and its kind (``NodeNotUpdated``).
 

@@ -20,10 +20,10 @@ import pytest
 
 WRITE_PATHS = [
     ("/api/nodes", {"name": "x", "address": "192.0.2.1", "location_label": "x"}),
-    ("/api/friends", {"nickname": "x"}),
+    ("/api/users", {"nickname": "x"}),
     ("/api/hops", {}),
 ]
-READ_PATHS = ["/api/nodes", "/api/friends", "/api/transports", "/api/hops"]
+READ_PATHS = ["/api/nodes", "/api/users", "/api/transports", "/api/hops"]
 
 
 @pytest.mark.parametrize("path", READ_PATHS)

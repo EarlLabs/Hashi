@@ -4,7 +4,7 @@ WHAT: re-minting a node-transport's key material (item 23), and replacing a Real
       decoy or any other operator-supplied parameter (item 24).
 WHY:  the charter's job for the owner is "rotate anything that gets blocked, all from
       one admin panel". Rotation is the operation that makes a node survivable without
-      being replaced — and it is the one operation that changes what friends' devices
+      being replaced — and it is the one operation that changes what users' devices
       are currently using, which is why it is not just an UPDATE.
 HOW:  every rotation follows the same three steps, and the order is the point:
 
@@ -15,11 +15,11 @@ HOW:  every rotation follows the same three steps, and the order is the point:
 
       Step 3 is not optional and not deferred. Between the write and the push, the
       database says one thing and the node is still running the old material — which
-      for a key rotation means friends' current configs still work, and for a decoy
+      for a key rotation means users' current configs still work, and for a decoy
       rotation means the blocked decoy is still in use. Either way the operator must be
       told whether the push landed.
 
-Note what rotation deliberately does NOT do: change a friend's subscription URL. Their
+Note what rotation deliberately does NOT do: change a user's subscription URL. Their
 token is untouched, so they re-fetch the same link and receive the new material. That
 is the whole reason rotation is possible without "a user touching their device".
 """
@@ -68,7 +68,7 @@ MATERIAL_NOT_REPEATED = (
     "rejected."
 )
 
-# What an operator is told when the tunnel they typed would leave friends who are already
+# What an operator is told when the tunnel they typed would leave users who are already
 # on this transport holding an address it cannot carry — M17.1c. COUNTS and never an
 # address: which person holds which address is the one record this project does not keep,
 # and this sentence reaches an operator through the API's envelope and the console's
@@ -97,7 +97,7 @@ POOL_WOULD_STRAND = (
 # parameter already means there, so a size on such a row is a number that would describe
 # nothing. It stands beside ``nodes.POOL_SIZE_NOT_TAKEN`` rather than reusing it: that one
 # is about a TRANSPORT that identifies its users by material, and saying it here would be
-# untrue of a transport that does hand friends addresses on its other row.
+# untrue of a transport that does hand users addresses on its other row.
 POOL_SIZE_NOT_ON_A_HOP = (
     "this row is one end of a hop, and no user holds anything on it — the far end is "
     "another of your own nodes, at the single address this row already names. There is "
@@ -147,7 +147,7 @@ class RotationOutcome:
         if self.complete:
             return (
                 f"rotated {', '.join(self.rotated)} and pushed to "
-                f"{', '.join(self.nodes_updated)}; friends pick it up at their next "
+                f"{', '.join(self.nodes_updated)}; users pick it up at their next "
                 "refresh, with no action on their part"
             )
         return (
@@ -183,13 +183,13 @@ async def rotate_keys(
 ) -> RotationOutcome:
     """Re-mint a node-transport's key material — item 23.
 
-    ``include_clients`` also re-mints every friend's per-client material on this
+    ``include_clients`` also re-mints every user's per-client material on this
     transport. On by default, and the reasoning matters: rotation is what you do after
     a node may have been compromised, and a node that was compromised may have leaked
     the client credentials it was authenticating. Rotating only the server key would
-    leave every friend's identity on that node unchanged.
+    leave every user's identity on that node unchanged.
 
-    Friends' subscription URLs are not touched, so nobody re-imports anything.
+    Users' subscription URLs are not touched, so nobody re-imports anything.
 
     ONE END OF A HOP IS NOT ROTATED ALONE. A hop is two rows that render as a pair: the
     far end's configuration is built from this end's public half, and a transport may
@@ -308,7 +308,7 @@ async def rotate_keys(
                 if subject:
                     credential.subject = subject
                 credential.secrets = json.dumps({**fresh.secrets, **fresh.params})
-            outcome.rotated.append("per-friend credentials")
+            outcome.rotated.append("per-user credentials")
 
     # Which node and which transport, and nothing about WHAT was rotated: ``outcome``
     # names the fields for the operator who is standing there, and a list of field
@@ -316,7 +316,7 @@ async def rotate_keys(
     # end of a hop gets no entry of its own — one operator action is one entry, and the
     # peer's copy is part of this one change rather than a second one.
     # The node is fetched by id rather than reached through the relationship, for the
-    # reason ``friends.grant_everywhere`` gives: eager configuration does not help on a
+    # reason ``users.grant_everywhere`` gives: eager configuration does not help on a
     # row this session has not loaded, and the lazy read raises.
     audit.record(
         session,
@@ -351,7 +351,7 @@ async def replace_params(
 
     Existing key material is PRESERVED. Replacing a decoy must not silently re-key the
     node: those are two different operations with two different consequences for
-    friends, and conflating them means an operator changing a hostname cannot predict
+    users, and conflating them means an operator changing a hostname cannot predict
     what happens.
 
     On one end of a hop the pair is re-rendered before the change is written, exactly as
@@ -555,7 +555,7 @@ async def replace_params(
         # ``sized_pool(against_the_fleet=False)`` above mean anything at all. That
         # carve-out exists so a row whose pool is already smaller than the fleet can still
         # have a blocked value rotated away from it — and on a SERVING row the two
-        # conditions are one condition: every active friend holds a credential there, so a
+        # conditions are one condition: every active user holds a credential there, so a
         # short pool means credentials without addresses, and ``settle`` raised
         # ``PoolFull`` a few lines later and rolled the whole rotation back. The escape
         # hatch was dead in exactly the state it was written for: the field's own row
@@ -591,18 +591,18 @@ async def replace_params(
         # The race the constraint exists for, on this path too: ``settle`` read which
         # addresses were free and somebody else took one before this flush. The loser is
         # refused rather than given a shared address — and it is refused in the SAME words
-        # ``friends.grant_everywhere`` uses, because it is the same event and an operator
+        # ``users.grant_everywhere`` uses, because it is the same event and an operator
         # meeting it twice must not have to learn two sentences. Without this it would
         # leave as an ``IntegrityError``: a 500, which the console does not swap, so the
         # operator sees a spinner stop and nothing else.
         #
         # Imported here rather than at the top for the reason this module's neighbours
-        # give: ``friends`` reaches back into these services, and a module-level import
+        # give: ``users`` reaches back into these services, and a module-level import
         # both ways is a cycle waiting for its first new call.
-        from control.app.services import friends  # noqa: PLC0415
+        from control.app.services import users  # noqa: PLC0415
 
         await session.rollback()
-        raise Conflict(friends.ADDRESS_TAKEN_MEANWHILE) from exc
+        raise Conflict(users.ADDRESS_TAKEN_MEANWHILE) from exc
     logger.info("replaced parameters on node-transport %s", node_transport.id)
 
     outcome = RotationOutcome(node_transport_id=node_transport.id, rotated=changed)
@@ -640,8 +640,8 @@ async def _resize(
     are unchanged by this milestone — no address, no pool, the same dialog boxes — and a
     hop end is a row of a transport that DOES declare each consumer needs an address, so
     deciding from the transport's declaration alone put a pool on the runbook's own entry
-    box. Nothing downstream reads it (``nodes.serving_transports`` filters on ``FRIENDS``,
-    so no friend is ever granted there and ``settle`` finds nobody to place), which is
+    box. Nothing downstream reads it (``nodes.serving_transports`` filters on ``USERS``,
+    so no user is ever granted there and ``settle`` finds nobody to place), which is
     exactly why it had to be refused here: a number stored on a relay row is a fact about
     that row that is not true, and the fleet refusal it can produce — "every one of them
     is granted a credential here the moment this node serves" — is false of a hop. The two

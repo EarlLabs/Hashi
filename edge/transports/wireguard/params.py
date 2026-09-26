@@ -19,7 +19,7 @@ BASE64_32 = re.compile(r"^[A-Za-z0-9+/]{42}[A-Za-z0-9+/=]{2}$")
 
 
 class Params(BaseModel):
-    """One node's WireGuard interface, plus what a friend's device needs to reach it."""
+    """One node's WireGuard interface, plus what a user's device needs to reach it."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -37,7 +37,7 @@ class Params(BaseModel):
     peer_tunnel_address: str = Field(
         description=(
             "the address given to a peer: on a hop the single far end's, and when this "
-            "transport is offered to friends the FIRST of the pool, which counts up from "
+            "transport is offered to users the FIRST of the pool, which counts up from "
             "it one per person. An address with its prefix, in the same range as this "
             "node's own tunnel address and never that address itself — e.g. 10.x.y.2/24 "
             "where this node is 10.x.y.1/24."
@@ -54,7 +54,7 @@ class Params(BaseModel):
     # debugs as MTU on the first day.
     mtu: int = Field(ge=1200, le=1500)
 
-    # Resolvers written into a friend's config. Empty by default and never defaulted to
+    # Resolvers written into a user's config. Empty by default and never defaulted to
     # an address: a hardcoded resolver is an address this fleet could never rotate away
     # from. Empty falls back to the NODE's own resolver (``egress.client_resolvers``), and
     # only with neither does the client template say — truthfully, since M23 — that the
@@ -62,9 +62,9 @@ class Params(BaseModel):
     client_dns: tuple[str, ...] = Field(
         default=(),
         description=(
-            "the resolver a FRIEND's device is told to use inside the tunnel. Not used "
+            "the resolver a USER's device is told to use inside the tunnel. Not used "
             "at a hop end. An address, not a name. Left empty this node's own resolver "
-            "is written instead; with neither, a friend's device keeps asking a "
+            "is written instead; with neither, a user's device keeps asking a "
             "resolver it can no longer reach and no name resolves."
         ),
     )
@@ -116,7 +116,7 @@ class Params(BaseModel):
     def _each_resolver_is_one_a_device_could_reach(
         cls, value: tuple[str, ...]
     ) -> tuple[str, ...]:
-        """Each entry must be an address a friend's device can actually ask — M23.
+        """Each entry must be an address a user's device can actually ask — M23.
 
         ``egress.client_resolver_problem`` decides, exactly as it does for this family's
         other member: a name and an IPv6 address are both refused, and neither rule is a

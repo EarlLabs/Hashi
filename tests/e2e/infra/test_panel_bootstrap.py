@@ -207,7 +207,7 @@ def docker_available() -> None:
 def test_it_refuses_to_run_without_a_secret_key_and_never_generates_one(tmp_path) -> None:
     """The one rule here that protects a person rather than an uptime figure.
 
-    ``HASHI_SECRET_KEY`` decrypts every friend's credentials and every node's private
+    ``HASHI_SECRET_KEY`` decrypts every user's credentials and every node's private
     key. If the panel is on the Russian entry node — which the topology allows — a key
     generated on that host would sit on the machine most likely to be seized, beside the
     data it opens, with nobody having decided that. So absence must stop the run.

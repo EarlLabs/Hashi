@@ -1,20 +1,20 @@
 """Entry→leaf hops between two nodes — backlog item 16.
 
 WHAT: establishing, re-pointing and tearing down the tunnel that carries traffic from
-      the entry node the friends dial to the leaf node their traffic leaves from.
+      the entry node the users dial to the leaf node their traffic leaves from.
 WHY:  this is the charter's topology, and it is what makes criterion 2 ("replace any
-      node in ten minutes") true of a LEAF: friends only ever hold the entry's address,
+      node in ten minutes") true of a LEAF: users only ever hold the entry's address,
       so a blocked leaf is replaced by re-pointing one hop and pushing two nodes — with
       nobody touching their device.
 HOW:  a hop is two ordinary ``NodeTransport`` rows that point at each other, marked
-      with the end of the hop they are. Reusing the friend-facing row shape rather than
+      with the end of the hop they are. Reusing the user-facing row shape rather than
       inventing a parallel table is deliberate: key minting, encryption at rest,
       rotation, apply and drift detection then work on a hop for free, and none of them
       needed a line of "if this is a relay".
 
       What this module refuses to do is as important as what it does. A hop row is
-      never granted to a friend and never appears in a subscription (see
-      ``nodes.serving_transports``), because a friend holding the entry↔leaf tunnel
+      never granted to a user and never appears in a subscription (see
+      ``nodes.serving_transports``), because a user holding the entry↔leaf tunnel
       would be routed straight past the entry node the topology exists to hide behind.
 """
 
@@ -71,7 +71,7 @@ async def peer_of(session: AsyncSession, end: NodeTransport) -> NodeTransport:
 
 
 async def exit_through_hop(session: AsyncSession, node: Node) -> str | None:
-    """The address on this node that its friends' traffic must leave through — M3.
+    """The address on this node that its users' traffic must leave through — M3.
 
     ``None`` for a node with no hop of its own: a leaf, or a single-box deployment. That
     is every node that has always exited directly and must keep doing so, which is why
@@ -79,9 +79,9 @@ async def exit_through_hop(session: AsyncSession, node: Node) -> str | None:
 
     Read from the row's EXISTENCE and not from ``enabled``, and the difference is decision
     3. A hop end an operator has switched off is a tunnel that is not running — so the
-    friend-facing config still points at an address that is not there, and the friend gets
+    user-facing config still points at an address that is not there, and the user gets
     no exit. Filtering on ``enabled`` would instead hand that node back its direct
-    outbound: a friend in Russia exiting in Russia the moment somebody unticks a box.
+    outbound: a user in Russia exiting in Russia the moment somebody unticks a box.
     """
     result = await session.execute(
         select(NodeTransport)
@@ -125,7 +125,7 @@ async def dials_a_hop(session: AsyncSession, node_id: str) -> bool:
     switched the hop back on — at the apply, which is where this refusal exists to stop
     the operator ending up.
 
-    The LEAF end of a hop is not a way out and is not counted: that node's friends leave
+    The LEAF end of a hop is not a way out and is not counted: that node's users leave
     by its own route, which is route B and is untouched by any of this.
     """
     result = await session.execute(
@@ -395,16 +395,16 @@ async def establish_hop(
     leaf_node = await nodes.get_node(session, leaf_node_id)
 
     # THE SECOND DOOR — M25, and the same rule as ``nodes._enable``'s approached from the
-    # other side. Giving a node a hop is giving its friends ``Egress.HOP``, so every
+    # other side. Giving a node a hop is giving its users ``Egress.HOP``, so every
     # transport it already offers them has to be one that can honour it; a kernel tunnel
     # cannot, and the node's next apply would refuse to render the row it has been serving
     # from. Refused here rather than there, before either end is minted or written, so the
     # operator's fleet is exactly as it was and no material exists to be thrown away.
     #
-    # Only the ENTRY node is asked. The leaf's friends exit by the leaf's own route
+    # Only the ENTRY node is asked. The leaf's users exit by the leaf's own route
     # exactly as they always have — that is route B, and nine field walks are built on it.
     #
-    # Every friend-facing row on it, switched on or not, for ``dials_a_hop``'s reason: a
+    # Every user-facing row on it, switched on or not, for ``dials_a_hop``'s reason: a
     # row that is off can be switched back on from this panel, and that surface has no
     # node to refuse about. Sorted by the transport's name so a node offering two
     # unrenderable rows names the same one every time rather than whichever the database
@@ -420,9 +420,9 @@ async def establish_hop(
     # answering them with "already offers" is this panel disagreeing with itself about
     # the row they are looking at; the withdrawn sentence says what is true of it and why
     # a row nobody is being served on still stands in the way (M25's second walk).
-    for offer in await nodes.friend_facing_on(session, entry_node.id):
+    for offer in await nodes.user_facing_on(session, entry_node.id):
         offered = installed.get(offer.transport_name)
-        if offered is not None and not offered.serves_friends_through_a_hop:
+        if offered is not None and not offered.serves_users_through_a_hop:
             refusal = (
                 transports.NO_HOP_OVER_WHAT_IT_OFFERS
                 if offer.enabled
@@ -433,7 +433,7 @@ async def establish_hop(
             )
 
     # What used to stand here was a refusal when either node already had a row for this
-    # transport, whatever that row was FOR — so a node offering AmneziaWG to friends
+    # transport, whatever that row was FOR — so a node offering AmneziaWG to users
     # could never become a hop end over it, which is the defect M15 is about. The rule
     # moved onto what actually collides (``services.placement``) and is asked per end
     # below, once each end's parameters have been validated.

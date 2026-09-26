@@ -65,7 +65,7 @@ def config_path(
 
     Usually the transport's own name, which is what ``config_path_for`` passes and
     what every node in the field already has on disk. It is a name in its own right
-    because M15 lets one node run two instances of one transport — a friend-facing
+    because M15 lets one node run two instances of one transport — a user-facing
     AmneziaWG and the entry end of a hop — and those are two files, two compose
     services and, for this family, two network interfaces.
     """
@@ -475,7 +475,7 @@ def services_for(
     ``transports`` says which transport each of those came from, and defaults to the
     name itself — the single-instance case, which is every node in the field and every
     caller that existed before M15. A node running two instances of one transport
-    (a friend-facing AmneziaWG and a hop end) passes the mapping, because the name on
+    (a user-facing AmneziaWG and a hop end) passes the mapping, because the name on
     the file and the transport that rendered it are then two different strings.
     """
     services = []

@@ -38,12 +38,12 @@ HOW:  fields of the transport's own model, minus every name the transport declar
       handshake and carrying nothing. M20's ACCEPTANCE made it a refusal as well as a
       subtraction: ``nodes.enable_transport`` reads the same declaration and will not
       create a row on any route, because the thing being minted is a complete credential
-      for a tunnel that carries nothing and the friend holding it has no way to notice.
+      for a tunnel that carries nothing and the user holding it has no way to notice.
       What retirement still does not touch is a row that EXISTS — it keeps rendering,
       keeps serving the people granted on it, and can still be withdrawn or removed.
 
       M25 adds the two sentences a door refuses with when a transport and a node's
-      topology cannot stand together — friends on a kernel tunnel, on a node whose way
+      topology cannot stand together — users on a kernel tunnel, on a node whose way
       out is a hop. They live here for ``NO_LONGER_OFFERED``'s reason and carry
       ``edge``'s own explanation of why, so that what a door refuses and what a render
       refuses are one rule rather than two that have to be kept in step.
@@ -233,7 +233,7 @@ def hop_transports() -> list[str]:
     same one today, arrived at by asking the question instead of two things near it.
 
     Note the overlap this allows, and which is correct: a transport can be on this list
-    AND offerable to friends.
+    AND offerable to users.
 
     A THIRD CONDITION SINCE M20, and it is the same shape as the other two: a transport
     the registry declares retired is not proposed here either. No transport this image
@@ -265,20 +265,20 @@ def hop_transports() -> list[str]:
 # the Transports screen, and the thing they most need to know is that neither their node
 # nor their users have changed. Enabling is refused; serving is not.
 #
-# NO WORD OF IT IS TRANSLATED at the console's boundary (``panel/wording.py``) — it names
-# no ``friend`` and gives no directions — so an API caller and an operator read the same
-# sentence character for character, which is the point of there being one.
+# NO WORD OF IT IS TRANSLATED at the console's boundary (``panel/wording.py``) — it gives
+# no directions — so an API caller and an operator read the same sentence character for
+# character, which is the point of there being one.
 NO_LONGER_OFFERED = (
     "nothing was enabled — {name} is no longer offered here: {reason} A node already "
     "running it keeps serving it, and nobody's configuration has changed."
 )
 
 
-# The two doors that would otherwise build a node whose friends have no way out — M25,
-# found by the walk that proved route A carries. A node dialling a hop gives its friends
+# The two doors that would otherwise build a node whose users have no way out — M25,
+# found by the walk that proved route A carries. A node dialling a hop gives its users
 # ``Egress.HOP``, and only a transport that re-originates can honour that for somebody
-# else's packets (``TransportMeta.serves_friends_through_a_hop``); the panel accepted the
-# other kind at both doors, granted every friend a credential on it, handed one of them a
+# else's packets (``TransportMeta.serves_users_through_a_hop``); the panel accepted the
+# other kind at both doors, granted every user a credential on it, handed one of them a
 # complete configuration file, and left the refusal to the apply.
 #
 # TWO SENTENCES FOR ONE RULE, because they are the same mistake made from two ends and
@@ -289,8 +289,8 @@ NO_LONGER_OFFERED = (
 # hop away" is advice only where there is one.
 #
 # AND THREE, because the hop door counts a row that is SWITCHED OFF and one sentence
-# could not describe both — M25's second walk. ``nodes.friend_facing_on`` returns every
-# friend-facing row on the entry, offered or withdrawn, and deliberately so: nothing
+# could not describe both — M25's second walk. ``nodes.user_facing_on`` returns every
+# user-facing row on the entry, offered or withdrawn, and deliberately so: nothing
 # refuses ``set_transport_enabled``, so a withdrawn row is one press from being back in
 # every user's link and a hop built beside it would be the combination nothing renders.
 # What the operator read was "already offers" — on a row the withdraw screen had just
@@ -310,8 +310,7 @@ NO_LONGER_OFFERED = (
 # Each opens by saying that nothing happened, for ``NO_LONGER_OFFERED``'s reason: the
 # operator's first question on meeting a refusal is what state their fleet is in now.
 # Neither names a port, an address or a country, and neither is translated at the
-# console's boundary beyond ``friends`` becoming ``users`` — an API caller and an operator
-# read the same fact.
+# console's boundary at all — an API caller and an operator read the same fact.
 #
 # THE TRANSPORT AND THE NODE ARE QUOTED, which is ``services.placement``'s idiom on the
 # same two doors and is load-bearing on one of them: a node's name is the operator's own
@@ -320,19 +319,19 @@ NO_LONGER_OFFERED = (
 # ``friends-ru`` is printed as they named it instead of being rewritten to ``users-ru``.
 NO_EXIT_THROUGH_THE_HOP = (
     "nothing was enabled — this node's traffic leaves through a hop, and {name!r} cannot "
-    "carry a friend's out through one: " + NOT_THROUGH_A_HOP + " Offer this node's "
-    "friends a transport that terminates their connection and re-originates it, or "
+    "carry a user's out through one: " + NOT_THROUGH_A_HOP + " Offer this node's "
+    "users a transport that terminates their connection and re-originates it, or "
     "dissolve the hop."
 )
 NO_HOP_OVER_WHAT_IT_OFFERS = (
-    "no hop was established — node {node!r} already offers {name!r} to its friends, and "
+    "no hop was established — node {node!r} already offers {name!r} to its users, and "
     "it cannot carry their traffic out through a hop: " + NOT_THROUGH_A_HOP + " Give that "
-    "node's friends a transport that terminates their connection and re-originates it "
+    "node's users a transport that terminates their connection and re-originates it "
     "first — or remove that transport from it — and then build the hop."
 )
 NO_HOP_OVER_WHAT_IT_HOLDS = (
     "no hop was established — node {node!r} holds a withdrawn {name!r} row for its "
-    "friends, and it cannot carry their traffic out through a hop: "
+    "users, and it cannot carry their traffic out through a hop: "
     + NOT_THROUGH_A_HOP
     + " Withdrawn is not gone: the row keeps its port, its config name and its tunnel "
     "range, and offering it again is one press and is refused by nothing — which would "
@@ -460,7 +459,7 @@ def minted_hop_values(transport_name: str) -> dict[str, str]:
 
     M26's SECOND ACCEPTANCE WALK, and the finding is not that the boxes are tedious. The
     walk prepared two bare hosts with one command each, registered both, enabled a
-    friend-facing transport on the entry — and then ran out of action budget inside this
+    user-facing transport on the entry — and then ran out of action budget inside this
     form, which wanted eleven parameters per end. The fourth "done when" of the milestone
     was not reached because of an empty box, so the emptiness is the finding.
 
@@ -682,7 +681,7 @@ def replaceable_params(
     tidy-up. It was ``operator_params``, which filters on ``is_required`` — so a field
     the transport DEFAULTS had no box on this form and none on the enable form either,
     and the only way to answer one was the JSON API. The field that made that concrete is
-    the one a friend's resolver is written from: the walk on the real leaf found no
+    the one a user's resolver is written from: the walk on the real leaf found no
     setting in this panel that gives a person working DNS, and the reason was this
     filter rather than the renderer. See ``operator_tuning`` for the whole judgement.
 
@@ -786,7 +785,7 @@ def operator_tuning(transport_name: str) -> tuple[TuningField, ...]:
     stood here called that "not narrower than what the route accepts … deliberate",
     because ``POST /panel/nodes/{id}/transports`` has always read every field of
     ``supplied_params``. The real-host walk measured what the asymmetry cost: the one
-    defaulted field any shipped transport has is the one a friend's ``DNS`` line is
+    defaulted field any shipped transport has is the one a user's ``DNS`` line is
     written from, so **there was no setting in this panel that gave a person working
     DNS** — the route would have honoured it and no form would draw the box.
 

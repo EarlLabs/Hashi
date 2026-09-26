@@ -1,13 +1,13 @@
-"""A friend may ask a node for the internet, and for nothing that node sits in.
+"""A user may ask a node for the internet, and for nothing that node sits in.
 
-WHAT: the routing rules a proxy renders about WHERE a friend's connection may be opened
+WHAT: the routing rules a proxy renders about WHERE a user's connection may be opened
       to — on a leaf as much as on an entry since M23's tenth round — and the two things
       they deliberately leave reachable.
-WHY:  M23's fifth walk measured the same hole on the other kind of data plane — a friend
+WHY:  M23's fifth walk measured the same hole on the other kind of data plane — a user
       on the owner's real leaf opened TCP to ``10.90.0.1``, the Russian entry node's
       address on the hop, and was answered by its SSH daemon. The ninth round closed that
       direction in the wg family's own firewall rules and reported the MIRROR rather than
-      claiming it fixed: a friend served by an ENTRY is served by a proxy, so no FORWARD
+      claiming it fixed: a user served by an ENTRY is served by a proxy, so no FORWARD
       rule of ours is anywhere on their path. Xray dials whatever it is asked for, bound
       to the hop's near address; the leaf's peer entry authorises that source; the leaf's
       own address is then INPUT, and its sshd answers. Same exposure, different mechanism —
@@ -15,20 +15,20 @@ WHY:  M23's fifth walk measured the same hole on the other kind of data plane �
 
       So the assertions here are about a VERDICT rather than about the presence of a rule.
       Xray takes the first rule that matches and the rule below the refusal matches
-      everything from a friend's inbound, so a refusal written in the wrong place is a
+      everything from a user's inbound, so a refusal written in the wrong place is a
       refusal that decides nothing — and a test asserting it was in the file would pass.
 HOW:  pure renders, parsed as JSON, over the transports that TERMINATE a connection —
       derived as the M3 and M16 files derive them, so a proxy added later is covered by
       arriving. Every address is reserved and nothing here dials anything.
 
       M23's TENTH round is the same two questions asked where the ninth stopped. First,
-      on the OTHER kind of node: a friend on a leaf gets ``Egress.LOCAL``, whose config
+      on the OTHER kind of node: a user on a leaf gets ``Egress.LOCAL``, whose config
       carried no routing at all, and a leaf's neighbourhood is the wider one — the entry
       across the hop, the provider's LAN, the metadata service, its own loopback. Second,
       the residual the ninth round wrote into its own template: the rule matches an
-      ADDRESS, and at Xray's default a friend who asks for a NAME never has one compared,
+      ADDRESS, and at Xray's default a user who asks for a NAME never has one compared,
       so any wildcard DNS service turned every refused address back into a reachable one.
-      Both are verdicts here too, and ``where_a_friend_lands`` now models the step that
+      Both are verdicts here too, and ``where_a_user_lands`` now models the step that
       decides the second: WHETHER the rules ever see an address at all.
 
 What this does NOT prove is that a packet stops at a real node. That is a field
@@ -66,10 +66,10 @@ HOP_ADDRESS = "10.44.0.1"
 # it — which is the whole of the finding.
 THE_LEAF_ON_THE_HOP = "10.90.0.2"
 
-# And the other end of that same tunnel: the RUSSIAN ENTRY, which is what a friend served
+# And the other end of that same tunnel: the RUSSIAN ENTRY, which is what a user served
 # by the LEAF's own proxy reaches across it. The exact address the fifth walk opened TCP
 # to on the owner's real leaf and was answered by an SSH daemon — the one node in this
-# fleet that is inside Russia, reachable from thirty to fifty friends' devices and from
+# fleet that is inside Russia, reachable from thirty to fifty users' devices and from
 # nothing else on the internet.
 THE_ENTRY_ON_THE_HOP = "10.90.0.1"
 
@@ -82,7 +82,7 @@ THE_ENTRY_ON_THE_HOP = "10.90.0.1"
 # where the name IS the address and anybody can mint one for any address they please.
 A_NAME = "the-entry-on-the-hop.example"
 
-# A destination that stands for "the internet", and the one thing a friend's tunnel is
+# A destination that stands for "the internet", and the one thing a user's tunnel is
 # for. It cannot be an RFC 5737 documentation address like most fixtures in this zone:
 # those ranges are exactly what is refused below, so a connection to one would prove the
 # opposite of what it was asked. The deprecated 6to4 relay anycast block — reserved, so
@@ -105,7 +105,7 @@ SOMEWHERE_ON_THE_INTERNET = "192.88.99.10"
 # is why the two are worth telling apart here and not only in the constant they come from.
 #
 # Measured against the pinned Xray run as a live proxy with the product's own rendered
-# config: a friend asking for this address was carried, in the same run in which ``[::1]``
+# config: a user asking for this address was carried, in the same run in which ``[::1]``
 # and ``[fc00::2]`` were refused. A refusal that also took IPv6 to the internet away would
 # not be a fix.
 NAT64_PREFIX = "64:ff9b::"
@@ -130,7 +130,7 @@ SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY = through_nat64(SOMEWHERE_ON_THE_I
 
 # The two addresses the twelfth walk actually reached through the product's own config,
 # named rather than left inside the parametrised class above — the same way the fifth
-# walk's own address is named. A friend on the owner's real leaf could open TCP to the
+# walk's own address is named. A user on the owner's real leaf could open TCP to the
 # node's own loopback and to the private network it sits in, spelled in IPv6, while every
 # IPv4 spelling of both was refused.
 THE_NODES_OWN_LOOPBACK = "::1"
@@ -150,7 +150,7 @@ def an_address_in(destination: str) -> str:
 # The one range of IANA's registry ``NOT_THE_INTERNET`` does not carry, and an address in
 # it. The pinned Xray refuses ``::ffff:0:0/96`` as a CIDR outright — ``invalid network
 # mask for router: 96`` — because it folds an IPv4-mapped address back to four bytes
-# before measuring the prefix. This is the same fact from the friend's side, measured on
+# before measuring the prefix. This is the same fact from the user's side, measured on
 # the live proxy: the mapped spelling of a refused address is refused by the v4 half, and
 # the mapped spelling of a reachable one is carried, so the range is covered one spelling
 # over rather than left out. Computed for the same reason as the pair above.
@@ -175,9 +175,9 @@ THE_LOOPBACK_THROUGH_NAT64 = through_nat64(an_address_in("127.0.0.0/8"))
 # connection reached nothing" rather than as a protocol string repeated nine times.
 REACHES_NOTHING = "blackhole"
 
-# The tag the friend-facing inbound carries, and the tag the node's own resolver's queries
+# The tag the user-facing inbound carries, and the tag the node's own resolver's queries
 # carry. Both are the template's, and the whole carve-out is the difference between them.
-A_FRIEND = "in"
+A_USER = "in"
 THE_NODES_OWN_LOOKUP = "lookup"
 
 
@@ -203,7 +203,7 @@ def hop_config(name: str, node, request) -> dict:
 def leaf_config(name: str, node, request) -> dict:
     """The config a node with NO hop is sent, parsed.
 
-    Every leaf, and every single-box deployment. Its friends get ``Egress.LOCAL``: no
+    Every leaf, and every single-box deployment. Its users get ``Egress.LOCAL``: no
     ``sendThrough``, no resolver of the node's own, and until M23's tenth round no routing
     section at all — so the source of an outgoing connection was the node's own route and
     its DESTINATION was anything the node could reach. Which on a leaf includes the entry
@@ -214,28 +214,28 @@ def leaf_config(name: str, node, request) -> dict:
     return json.loads(rendered(name, node, request, egress=Egress.LOCAL))
 
 
-# The two seats a friend can be sat in, and the reason the claims below are parametrised
+# The two seats a user can be sat in, and the reason the claims below are parametrised
 # over both instead of written once and mirrored by hand. The ninth round wrote them for
 # the entry alone, and the leaf — the wider exposure of the two — went unasserted for a
 # round because nothing named it. A seat added later is covered by arriving.
 SEATS = {"an entry node with a hop": hop_config, "a leaf with no hop": leaf_config}
 
 
-def where_a_friend_lands(
+def where_a_user_lands(
     config: dict, *, arriving_on: str, destined_for: str, resolves_to: str | None = None
 ) -> dict:
     """The outbound Xray hands one connection to, evaluated the way Xray evaluates it.
 
     Built rather than looked for, because ORDER is the finding here just as it was in the
     kernel tunnels' chain: rules are read top to bottom and the FIRST one whose every
-    condition matches decides. A refusal written after the rule that carries a friend is
+    condition matches decides. A refusal written after the rule that carries a user is
     a refusal that never runs, and asserting it is in the file would not notice.
 
     Two conditions, which are the only two the rendered rules carry: the inbound's tag,
     and whether the destination falls in one of the rule's networks. An ABSENT condition
     is unconstrained and not unsatisfiable — a rule with no ``inboundTag`` decides every
     connection, not none — and getting that backwards is what makes an instrument blind to
-    the mutation that matters: a refusal that stopped naming the friend's inbound would go
+    the mutation that matters: a refusal that stopped naming the user's inbound would go
     on refusing them while quietly refusing the node's own lookups too, and an evaluator
     that skipped the rule would report both as fine.
 
@@ -343,21 +343,21 @@ def test_the_destinations_this_file_uses_are_what_it_says_they_are() -> None:
     )
 
 
-# --- M23, round 9's mirror: what a friend may ask this node to dial ------------------
+# --- M23, round 9's mirror: what a user may ask this node to dial ------------------
 
 @pytest.mark.parametrize("name", PROXIES)
-def test_a_friend_cannot_ask_this_node_to_dial_the_leaf_on_the_hop(
+def test_a_user_cannot_ask_this_node_to_dial_the_leaf_on_the_hop(
     name: str, node, request
 ) -> None:
     """The walk's ``nc 10.90.0.1 22``, asked from the entry's side instead of the leaf's.
 
     Nothing of this node's forwards that packet, so the verdict comes from the proxy's own
-    routing rather than from any chain: the friend's connection reaches an outbound that
+    routing rather than from any chain: the user's connection reaches an outbound that
     opens nothing, instead of one bound to the hop.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         hop_config(name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=THE_LEAF_ON_THE_HOP,
     )
 
@@ -367,7 +367,7 @@ def test_a_friend_cannot_ask_this_node_to_dial_the_leaf_on_the_hop(
 @pytest.mark.parametrize("destination", NOT_THE_INTERNET)
 @pytest.mark.parametrize("seat", SEATS)
 @pytest.mark.parametrize("name", PROXIES)
-def test_nothing_off_the_internet_can_be_dialled_for_a_friend(
+def test_nothing_off_the_internet_can_be_dialled_for_a_user(
     name: str, seat: str, destination: str, node, request
 ) -> None:
     """The whole class, not only the address the walk happened to reach.
@@ -377,9 +377,9 @@ def test_nothing_off_the_internet_can_be_dialled_for_a_friend(
     for a verdict rather than checked for a rule, and asked of BOTH seats — a leaf is a
     node too, and the one the fifth walk was actually standing on.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         SEATS[seat](name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=an_address_in(destination),
     )
 
@@ -387,17 +387,17 @@ def test_nothing_off_the_internet_can_be_dialled_for_a_friend(
 
 
 @pytest.mark.parametrize("name", PROXIES)
-def test_a_friend_still_reaches_the_internet_through_the_hop(
+def test_a_user_still_reaches_the_internet_through_the_hop(
     name: str, node, request
 ) -> None:
     """The control, and the reason the refusals above are not simply an outage.
 
-    A friend's traffic is here to reach the internet. If this failed, every assertion
+    A user's traffic is here to reach the internet. If this failed, every assertion
     above would be satisfied by a config that carries nothing at all.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         hop_config(name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=SOMEWHERE_ON_THE_INTERNET,
     )
 
@@ -407,26 +407,26 @@ def test_a_friend_still_reaches_the_internet_through_the_hop(
 
 @pytest.mark.parametrize("seat", SEATS)
 @pytest.mark.parametrize("name", PROXIES)
-def test_the_refusal_is_read_before_the_rule_that_carries_a_friend(
+def test_the_refusal_is_read_before_the_rule_that_carries_a_user(
     name: str, seat: str, node, request
 ) -> None:
     """Order, which is the whole of the finding and not a detail of the file.
 
     Xray takes the first rule whose conditions all match, and the rule that sends a
-    friend's inbound into the hop carries no destination at all — so it matches every
+    user's inbound into the hop carries no destination at all — so it matches every
     connection from that inbound, including the ones the refusal exists for. Written
     after it, the refusal would be unreachable, and a test that looked for the rule
     rather than for the verdict would pass.
     """
     rules = SEATS[seat](name, node, request)["routing"]["rules"]
-    friends = [
-        index for index, rule in enumerate(rules) if A_FRIEND in rule.get("inboundTag", ())
+    users = [
+        index for index, rule in enumerate(rules) if A_USER in rule.get("inboundTag", ())
     ]
-    assert friends, "no rule names the friend-facing inbound at all"
+    assert users, "no rule names the user-facing inbound at all"
 
-    first = rules[friends[0]]
+    first = rules[users[0]]
     assert first.get("ip"), (
-        "the first rule that decides a friend's connection carries no destination, so it "
+        "the first rule that decides a user's connection carries no destination, so it "
         f"matches all of them and nothing below it is ever read: {first}"
     )
 
@@ -439,7 +439,7 @@ def test_what_is_refused_is_dropped_and_never_answered(
     """DROP and not REJECT, said in the other tool's vocabulary.
 
     Xray's blackhole can be told to write an HTTP 403 back instead of closing, and that
-    would be an answer — which is a signal, and a signal is how one friend's device
+    would be an answer — which is a signal, and a signal is how one user's device
     enumerates what a node is attached to or a scan maps the fleet. The kernel rules made
     the same choice in the same words; this is that choice where a proxy makes it, written
     out rather than left to the upstream default.
@@ -458,21 +458,21 @@ def test_what_is_refused_is_dropped_and_never_answered(
 # --- M23, round 10: the same question from the other seat -----------------------------
 
 @pytest.mark.parametrize("name", PROXIES)
-def test_a_friend_on_a_leaf_cannot_dial_the_entry_across_the_hop(
+def test_a_user_on_a_leaf_cannot_dial_the_entry_across_the_hop(
     name: str, node, request
 ) -> None:
     """The fifth walk's own measurement, on the node it was made from.
 
-    ``nc 10.90.0.1 22`` from a friend's tunnel on the owner's real leaf, answered by the
-    Russian entry's SSH daemon. The ninth round closed it for a friend on a wg-family
-    tunnel and for a friend on an entry's proxy, and left this one: a leaf's OWN proxy,
+    ``nc 10.90.0.1 22`` from a user's tunnel on the owner's real leaf, answered by the
+    Russian entry's SSH daemon. The ninth round closed it for a user on a wg-family
+    tunnel and for a user on an entry's proxy, and left this one: a leaf's OWN proxy,
     which renders no ``sendThrough`` and had no routing section at all, so it dialled
     whatever it was handed from whatever route the node had — and one of a leaf's routes
     is the hop.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         leaf_config(name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=THE_ENTRY_ON_THE_HOP,
     )
 
@@ -480,19 +480,19 @@ def test_a_friend_on_a_leaf_cannot_dial_the_entry_across_the_hop(
 
 
 @pytest.mark.parametrize("name", PROXIES)
-def test_a_friend_on_a_leaf_still_reaches_the_internet_by_the_nodes_own_route(
+def test_a_user_on_a_leaf_still_reaches_the_internet_by_the_nodes_own_route(
     name: str, node, request
 ) -> None:
     """The control for the leaf, and the claim M3 makes about every node without a hop.
 
     A leaf IS the exit. If this failed, the refusals above would be satisfied by a config
-    that takes a friend's internet away instead of taking the node's neighbourhood away —
+    that takes a user's internet away instead of taking the node's neighbourhood away —
     and the two are told apart only here. ``sendThrough`` must be absent rather than
     anything in particular: the way out of a node with no hop is its own route.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         leaf_config(name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=SOMEWHERE_ON_THE_INTERNET,
     )
 
@@ -510,15 +510,15 @@ def test_a_name_that_resolves_off_the_internet_is_refused_too(
 ) -> None:
     """The residual the ninth round wrote into its own template, closed.
 
-    Measured against the pinned Xray before it was written: a friend asking for the
-    ADDRESS ``127.0.0.1`` was refused, and the same friend asking for the NAME
+    Measured against the pinned Xray before it was written: a user asking for the
+    ADDRESS ``127.0.0.1`` was refused, and the same user asking for the NAME
     ``localhost`` was answered. A rule that compares addresses decides nothing about a
     destination that is still a name when it is read, and a wildcard DNS service turns
     any address into a name for nothing — so every range above had a way round it.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         SEATS[seat](name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=A_NAME,
         resolves_to=an_address_in(destination),
     )
@@ -531,13 +531,13 @@ def test_a_name_that_resolves_off_the_internet_is_refused_too(
 def test_a_name_on_the_internet_is_still_carried(
     name: str, seat: str, node, request
 ) -> None:
-    """The control for the rule above: resolving destinations must not cost a friend the
-    web. Almost everything a friend asks for is a name, so a strategy that refused them
+    """The control for the rule above: resolving destinations must not cost a user the
+    web. Almost everything a user asks for is a name, so a strategy that refused them
     all would be an outage rather than a policy — and every assertion about a refusal
     would pass."""
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         SEATS[seat](name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=A_NAME,
         resolves_to=SOMEWHERE_ON_THE_INTERNET,
     )
@@ -564,9 +564,9 @@ def test_neither_lesser_strategy_would_have_closed_it(
     for lesser in ("AsIs", "IpIfNonMatch"):
         config = SEATS[seat](name, node, request)
         config["routing"]["domainStrategy"] = lesser
-        landed = where_a_friend_lands(
+        landed = where_a_user_lands(
             config,
-            arriving_on=A_FRIEND,
+            arriving_on=A_USER,
             destined_for=A_NAME,
             resolves_to=THE_ENTRY_ON_THE_HOP,
         )
@@ -603,7 +603,7 @@ def test_even_the_outbound_that_dials_nothing_is_bound_to_the_hop(
 )
 @pytest.mark.parametrize("seat", SEATS)
 @pytest.mark.parametrize("name", PROXIES)
-def test_a_friend_cannot_dial_what_the_node_sits_in_spelled_as_ipv6(
+def test_a_user_cannot_dial_what_the_node_sits_in_spelled_as_ipv6(
     name: str, seat: str, destination: str, node, request
 ) -> None:
     """The twelfth walk's own measurement, and the reason the list grew a second half.
@@ -616,10 +616,10 @@ def test_a_friend_cannot_dial_what_the_node_sits_in_spelled_as_ipv6(
 
     These two are named rather than left to the parametrised class above for the same
     reason the fifth walk's address is: the class says the policy holds, and this says
-    the thing that actually answered a friend does not.
+    the thing that actually answered a user does not.
     """
-    landed = where_a_friend_lands(
-        SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination
+    landed = where_a_user_lands(
+        SEATS[seat](name, node, request), arriving_on=A_USER, destined_for=destination
     )
 
     assert landed["protocol"] == REACHES_NOTHING, landed
@@ -627,20 +627,20 @@ def test_a_friend_cannot_dial_what_the_node_sits_in_spelled_as_ipv6(
 
 @pytest.mark.parametrize("seat", SEATS)
 @pytest.mark.parametrize("name", PROXIES)
-def test_a_friend_still_reaches_the_internet_over_ipv6(
+def test_a_user_still_reaches_the_internet_over_ipv6(
     name: str, seat: str, node, request
 ) -> None:
     """The control for the whole of the twelfth round, and the half that is easy to lose.
 
     A refusal that also refused IPv6 to the internet would satisfy every assertion above
-    while taking away every destination a friend reaches over the family most of the web
+    while taking away every destination a user reaches over the family most of the web
     is now dual-stacked on — silently, because their device would simply fall back to v4
     where there is one and stall where there is not. Measured on the live proxy in the
     same run as the refusals: carried, on both seats' rules.
     """
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         SEATS[seat](name, node, request),
-        arriving_on=A_FRIEND,
+        arriving_on=A_USER,
         destined_for=SOMEWHERE_ON_THE_INTERNET_IN_THE_OTHER_FAMILY,
     )
 
@@ -666,14 +666,14 @@ def test_an_ipv4_destination_spelled_as_ipv6_gets_the_ipv4_answer(
     for router: 96`` — having folded the mapped address back to four bytes before it
     measured the prefix. A reader is entitled to ask whether that leaves every refused
     address reachable under ``::ffff:``, and this is the answer: the same folding decides
-    a friend's destination, so the v4 half already covers it.
+    a user's destination, so the v4 half already covers it.
 
     Both directions, because the cost of the folding is the other half of it: a global
     IPv4 address written as a mapped one must still be carried, or a client that prefers
     the v6 form of a dual-stack answer would lose the web.
     """
-    landed = where_a_friend_lands(
-        SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination
+    landed = where_a_user_lands(
+        SEATS[seat](name, node, request), arriving_on=A_USER, destined_for=destination
     )
 
     assert (landed["protocol"] != REACHES_NOTHING) is carried, landed
@@ -714,8 +714,8 @@ def test_the_nat64_spelling_of_an_address_gets_that_addresss_answer(
     ``[64:ff9b::7f00:1]`` refused, ``[64:ff9b::c058:6301]`` reached, and every verdict the
     twelfth round measured unchanged.
     """
-    landed = where_a_friend_lands(
-        SEATS[seat](name, node, request), arriving_on=A_FRIEND, destined_for=destination
+    landed = where_a_user_lands(
+        SEATS[seat](name, node, request), arriving_on=A_USER, destined_for=destination
     )
 
     assert (landed["protocol"] != REACHES_NOTHING) is carried, landed
@@ -732,12 +732,12 @@ def test_the_nodes_own_lookup_is_not_refused_even_to_a_private_resolver(
     ``resolver_problem`` deliberately allows a node record to name a PRIVATE resolver: the
     query is source-routed into the hop whatever its destination, so a resolver inside the
     far end's own network is reached through the hop like anything else. That address is
-    in the ranges refused above, and the refusal names the FRIEND's inbound — so what
+    in the ranges refused above, and the refusal names the USER's inbound — so what
     tells the two apart is whose connection it is, not where it is going.
 
     Scoped that way rather than by an address and a port, which is what the kernel tunnels
-    had to use: there the resolver is named in a friend's own config file and the packet
-    is the friend's own, so only a destination could carve it out. Here the node's lookup
+    had to use: there the resolver is named in a user's own config file and the packet
+    is the user's own, so only a destination could carve it out. Here the node's lookup
     is a different inbound, so the carve-out can be about the asker — and an exception
     that names no address can never become a hole for one.
     """
@@ -750,7 +750,7 @@ def test_the_nodes_own_lookup_is_not_refused_even_to_a_private_resolver(
         "would pass without the carve-out it is about"
     )
 
-    landed = where_a_friend_lands(
+    landed = where_a_user_lands(
         config,
         arriving_on=config["dns"]["tag"],
         destined_for=config["dns"]["servers"][0],
@@ -796,7 +796,7 @@ def test_the_refusal_records_nothing_about_what_it_refused(
 
     A rule that drops is exactly where somebody reaches for a log line to find out what
     it dropped, and a destination is the one record this project must never create. Both
-    seats, and ``dnsLog`` on both: since the tenth round a leaf resolves a friend's names
+    seats, and ``dnsLog`` on both: since the tenth round a leaf resolves a user's names
     too — through its own host's resolver, where they have always gone — so the key that
     would write them down is one every config this project renders must answer for.
     """

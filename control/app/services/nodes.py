@@ -54,7 +54,7 @@ DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_PORT = 22
 
 # The width of ``Node.state_detail``, stated at the layer that refuses a value the column
-# could not hold — the same pairing ``friends.NICKNAME_MAX_LENGTH`` is half of, and the
+# could not hold — the same pairing ``users.NICKNAME_MAX_LENGTH`` is half of, and the
 # model is the other half of this one.
 #
 # M23, round 12. The console's own box was given ``maxlength="500"`` in round 8, which
@@ -66,7 +66,7 @@ DEFAULT_SSH_PORT = 22
 # 422 — so what was missing was a declaration on the path a FORM takes.
 #
 # Refused rather than trimmed, which is this console's own rule twice over
-# (``panel/add_friend_dialog.html``, ``panel/routes.VALUE_TOO_LONG``): a note silently
+# (``panel/add_user_dialog.html``, ``panel/routes.VALUE_TOO_LONG``): a note silently
 # clipped to 500 characters is a record written under something other than what the
 # operator typed, and this is the note that outlives the host it describes.
 #
@@ -178,7 +178,7 @@ async def get_node_transport(session: AsyncSession, node_transport_id: str) -> N
 
 
 async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
-    """Every node-transport a friend may legitimately be routed onto.
+    """Every node-transport a user may legitimately be routed onto.
 
     One query, one definition. This is what a subscription is built from, and the
     filter is the whole safety property: a node that is draft, degraded or retired
@@ -189,10 +189,10 @@ async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
         select(NodeTransport)
         .join(Node)
         .where(NodeTransport.enabled.is_(True))
-        # Friend-facing rows only. An entry↔leaf hop (item 16) is a transport enabled
-        # on a node and would otherwise qualify — and a friend handed the hop would be
+        # User-facing rows only. An entry↔leaf hop (item 16) is a transport enabled
+        # on a node and would otherwise qualify — and a user handed the hop would be
         # routed straight past the entry node the whole topology exists to hide behind.
-        .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
+        .where(NodeTransport.purpose == TransportPurpose.USERS)
         .where(Node.state.in_(NodeState.serving()))
         # The row's own id last, so the order is TOTAL — M17. Two instances of one
         # transport on one node (which M15 permits) tied on every other key, and the
@@ -209,14 +209,14 @@ async def serving_transports(session: AsyncSession) -> list[NodeTransport]:
     return list(result.scalars().unique())
 
 
-async def friend_facing_on(session: AsyncSession, node_id: str) -> list[NodeTransport]:
-    """Every transport ONE node offers its friends, switched on or not — M25.
+async def user_facing_on(session: AsyncSession, node_id: str) -> list[NodeTransport]:
+    """Every transport ONE node offers its users, switched on or not — M25.
 
     ``serving_transports``' neighbour and deliberately not a narrowing of it: that one
-    answers "what may a friend be routed onto" for the whole fleet and filters on the
-    node's state and on ``enabled``, because a friend in a draft node's configuration is
+    answers "what may a user be routed onto" for the whole fleet and filters on the
+    node's state and on ``enabled``, because a user in a draft node's configuration is
     the failure it exists to prevent. This one answers "what has this node been set up to
-    offer people", which is a question about the NODE rather than about any friend — so
+    offer people", which is a question about the NODE rather than about any user — so
     neither filter belongs, and both would make it lie to its one caller.
 
     ``enabled`` in particular: a row that is switched off is still a row this panel can
@@ -232,7 +232,7 @@ async def friend_facing_on(session: AsyncSession, node_id: str) -> list[NodeTran
     result = await session.execute(
         select(NodeTransport)
         .where(NodeTransport.node_id == node_id)
-        .where(NodeTransport.purpose == TransportPurpose.FRIENDS)
+        .where(NodeTransport.purpose == TransportPurpose.USERS)
         .order_by(NodeTransport.transport_name, NodeTransport.id)
     )
     return list(result.scalars().unique())
@@ -260,9 +260,9 @@ def node_view(node: Node) -> NodeView:
 # own"), and `control` still compares no transport name to a literal.
 #
 # The answers are not symmetric in how they fail, and that is why this is written down
-# rather than assumed. A friend-facing tunnel with no exit produces a friend who says at
-# once that nothing loads. A friend-facing tunnel on an ENTRY that exits locally produces
-# a friend in Russia whose traffic leaves in Russia, with two active nodes and a live hop
+# rather than assumed. A user-facing tunnel with no exit produces a user who says at
+# once that nothing loads. A user-facing tunnel on an ENTRY that exits locally produces
+# a user in Russia whose traffic leaves in Russia, with two active nodes and a live hop
 # on every screen and nothing to notice.
 #
 # WHICH OF THE RELAY ENTRIES BELOW IS LIVE TODAY: none, and they are here on purpose.
@@ -277,16 +277,16 @@ def node_view(node: Node) -> NodeView:
 # say NONE rather than mirroring what ``render_hop`` does. A guard's job is to be safe,
 # and this one cannot supply the address the entry's real policy needs.
 #
-# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(FRIENDS, True)`` says a
-# friend's traffic leaves through the hop, and only a transport that re-originates can
+# AND ONE OF ITS ROWS IS NOW GUARDED AT THE DOOR — M25. ``(USERS, True)`` says a
+# user's traffic leaves through the hop, and only a transport that re-originates can
 # express that; ``_enable`` and ``relay.establish_hop`` refuse to create the pairing with
 # one that cannot, so the row is still reached by every node that legitimately holds it
 # and no longer by one whose renderer would refuse. The table is unchanged: what may not
 # exist is the combination, not the policy.
 _EGRESS: dict[tuple[str, bool], Egress] = {
     # (purpose, this node has a hop it dials)
-    (TransportPurpose.FRIENDS, False): Egress.LOCAL,
-    (TransportPurpose.FRIENDS, True): Egress.HOP,
+    (TransportPurpose.USERS, False): Egress.LOCAL,
+    (TransportPurpose.USERS, True): Egress.HOP,
     (TransportPurpose.RELAY_ENTRY, False): Egress.NONE,
     (TransportPurpose.RELAY_ENTRY, True): Egress.NONE,
     (TransportPurpose.RELAY_LEAF, False): Egress.NONE,
@@ -347,7 +347,7 @@ async def _node_to_write(session: AsyncSession, node_id: str, *decided_by: str) 
     whether the transition is ALLOWED, so a node another session retired still looks
     draft here — and ``retired -> active``, the one transition the machine exists to
     refuse, goes through as ``draft -> active``. That puts a destroyed host's address
-    back into every friend's subscription, which is the harm ``NodeState.allowed_from``
+    back into every user's subscription, which is the harm ``NodeState.allowed_from``
     is written against.
 
     ``_refuse_state`` in the panel re-reads for the neighbouring reason — a service that
@@ -394,7 +394,7 @@ async def create_node(
 
     Draft rather than active is deliberate: a node exists as a record before it is
     configured, and a record that defaulted to active would put an unconfigured host
-    into every friend's subscription the moment it was typed in.
+    into every user's subscription the moment it was typed in.
 
     A key that will not load is refused HERE and not stored. It is ordinary bad input —
     a paste that lost its last line, a key with a passphrase — and the alternative is
@@ -542,7 +542,7 @@ async def set_ssh_key(
         # test over that is a test that eventually matches something else. Any other
         # reason is left exactly as it is, because nothing here has answered it.
         #
-        # Imported inside the function for the cycle the two ``friends`` imports below
+        # Imported inside the function for the cycle the two ``users`` imports below
         # name from the other side: ``apply`` imports this module.
         from control.app.services import apply  # noqa: PLC0415
 
@@ -593,7 +593,7 @@ async def enable_and_grant(
     params: dict,
     pool_size: int | None = None,
 ) -> NodeTransport:
-    """Enable a transport and hand it to every active friend — in ONE transaction.
+    """Enable a transport and hand it to every active user — in ONE transaction.
 
     Criterion 3 stated as an operation: a protocol enabled from the panel is in every
     subscriber's config at their next refresh with no further action from anybody.
@@ -617,12 +617,12 @@ async def enable_and_grant(
         pool_size=pool_size,
     )
 
-    # Deferred for the cycle ``set_node_state`` names: ``friends`` imports this module.
-    from control.app.services import friends  # noqa: PLC0415
+    # Deferred for the cycle ``set_node_state`` names: ``users`` imports this module.
+    from control.app.services import users  # noqa: PLC0415
 
-    for friend in await friends.list_friends(session):
-        if friend.is_active:
-            await friends.grant_everywhere(session, friend)
+    for user in await users.list_users(session):
+        if user.is_active:
+            await users.grant_everywhere(session, user)
 
     await session.commit()
     logger.info("transport enabled on node %s", node_transport.node_id)
@@ -652,7 +652,7 @@ async def _enable(
     installed = discover()
     if transport_name not in installed:
         # Names the installed set, which is safe: it is a property of our own image,
-        # not of any node or friend.
+        # not of any node or user.
         raise NotFound(
             f"no transport named {transport_name!r} is installed "
             f"(have: {', '.join(sorted(installed))})"
@@ -668,7 +668,7 @@ async def _enable(
     # It sits here and not on a route because every route has to give the same answer.
     # The panel had stopped OFFERING a retired transport and the operator API went on
     # enabling one — 201, ``enabled: true``, and a complete credential for it in the next
-    # friend's archive. That is not a wrong status code, it is a friend with a tunnel
+    # user's archive. That is not a wrong status code, it is a user with a tunnel
     # whose handshake completes and which carries nothing, on every host this project
     # prepares, with nothing on their device saying so. Refusing to CREATE is not
     # refusing to SERVE: the row the owner's own leaf already holds renders exactly as it
@@ -686,19 +686,19 @@ async def _enable(
         )
 
     # Refused out loud rather than silently omitted later. The charter's amendment A
-    # and backlog item 7 S2a: a transport a friend cannot receive AT ALL would produce
-    # a friend whose config is quietly one node short, and they would have no way to
+    # and backlog item 7 S2a: a transport a user cannot receive AT ALL would produce
+    # a user whose config is quietly one node short, and they would have no way to
     # notice.
     #
     # The condition moved with item 27, and the move is the point. It used to be "not
     # expressible in the v1 URI list", because that was the only shape delivery could
     # produce — so a transport whose configuration is a file was refused for a reason
     # that was about US, not about it. Now that the delivery endpoint hands out files
-    # too, the honest question is whether the transport declares ANY friend-facing
-    # format. One that declares none still cannot reach a friend, and is still refused.
+    # too, the honest question is whether the transport declares ANY user-facing
+    # format. One that declares none still cannot reach a user, and is still refused.
     if not meta.subscription_formats:
         raise NotDeliverable(
-            f"transport {transport_name!r} declares no format a friend's client can "
+            f"transport {transport_name!r} declares no format a user's client can "
             "consume, so enabling it would deliver an incomplete subscription. "
             "Refusing rather than shipping a silent gap."
         )
@@ -706,13 +706,13 @@ async def _enable(
     node = await get_node(session, node_id)
 
     # THE COMBINATION THAT CANNOT BE RENDERED — M25, found by the walk that proved route
-    # A carries. This node's friends leave through its hop and nowhere else
+    # A carries. This node's users leave through its hop and nowhere else
     # (``_EGRESS`` above), and only a transport that terminates their connection and
     # re-originates it can express that; a kernel tunnel hands what it decrypts to this
-    # node's routing table, where a friend's packets match no source route of the hop's
+    # node's routing table, where a user's packets match no source route of the hop's
     # and leave by the node's own way out. ``edge`` refuses to render it, correctly and
     # fail-closed — and until this refusal existed the panel said yes three times before
-    # that: the row was written, every active friend was granted a credential on it, and
+    # that: the row was written, every active user was granted a credential on it, and
     # the delivery endpoint handed one of them a complete, importable configuration file
     # for a node that can never be applied.
     #
@@ -729,7 +729,7 @@ async def _enable(
     # It says nothing about a node with NO hop, which is every leaf and every single box:
     # there the same transport renders a local exit and is exactly right, which is what
     # nine of M23's walks were carried on.
-    if not meta.serves_friends_through_a_hop:
+    if not meta.serves_users_through_a_hop:
         # Deferred for the cycle ``enable_and_grant`` names below: ``relay`` imports this
         # module for ``node_view`` and ``render_params``.
         from control.app.services import relay  # noqa: PLC0415
@@ -780,7 +780,7 @@ async def _enable(
         #
         # Imported inside the function to break a cycle: ``relay`` imports this module
         # for ``node_view`` and ``render_params``. Same deferred-import reasoning as the
-        # two ``friends`` imports below.
+        # two ``users`` imports below.
         from control.app.services import relay  # noqa: PLC0415
 
         fields = relay.refused_fields(exc, withholding=minted.secrets.values())
@@ -852,15 +852,15 @@ async def _enable(
 # names what to do rather than only what was refused, and none of them names an address:
 # the value in question is a count.
 POOL_SIZE_REQUIRED = (
-    "this transport gives every friend an address of its own, so it needs to be told how "
+    "this transport gives every user an address of its own, so it needs to be told how "
     "many addresses it may hand out. Size the pool for the fleet this node will serve."
 )
 POOL_SIZE_NOT_TAKEN = (
-    "this transport identifies each friend by their own material rather than by an "
+    "this transport identifies each user by their own material rather than by an "
     "address, so there is no pool to size on it."
 )
 POOL_SIZE_BELOW_THE_FLEET = (
-    "a pool of {size} cannot hold the {people} friends this control plane already has, "
+    "a pool of {size} cannot hold the {people} users this control plane already has, "
     "and every one of them is granted a credential here the moment this node serves. "
     "Nothing has been changed — size the pool for the fleet."
 )
@@ -946,7 +946,7 @@ async def sized_pool(
 
     # THE FLEET COUNT IS ``addresses``', not this module's own query — M17.
     # The same number is the floor in the enable dialog's placeholder and the threshold
-    # the add-a-friend refusal uses; written out here as well, a later change to who
+    # the add-a-user refusal uses; written out here as well, a later change to who
     # counts as being in the fleet would land in one copy and the box would offer a size
     # this refuses.
     if not against_the_fleet:
@@ -976,7 +976,7 @@ async def sized_pool(
 # the phrase under the withheld button and the refusal a stale page gets name the same
 # pool the same way: a pool IS SIZED FOR n, a person HOLDS an address.
 POOL_SHORT_TO_OFFER = (
-    "{pool}. Offering it gives every active friend an address on it the moment this node "
+    "{pool}. Offering it gives every active user an address on it the moment this node "
     "serves, so as it stands nobody can be. Nothing has been changed — make the pool "
     "bigger on that transport first, or take somebody off the fleet."
 )
@@ -985,18 +985,18 @@ POOL_SHORT_TO_OFFER = (
 async def set_transport_enabled(
     session: AsyncSession, *, node_transport_id: str, enabled: bool
 ) -> NodeTransport:
-    """Turn one node's transport on or off for friends — charter criterion 3.
+    """Turn one node's transport on or off for users — charter criterion 3.
 
     The criterion is "a transport is enabled from the panel and arrives in every
-    friend's subscription at the next refresh". Its other half is what makes it a
+    user's subscription at the next refresh". Its other half is what makes it a
     control and not just an addition: turning the transport back off has to remove it
-    from every friend's subscription again, with nobody touching their device. Until
+    from every user's subscription again, with nobody touching their device. Until
     this function existed, ``NodeTransport.enabled`` was written ``True`` at creation
     and never changed by any route, so only the positive half was expressible.
 
-    Enabling grants material to every active friend, exactly as enabling a transport
+    Enabling grants material to every active user, exactly as enabling a transport
     for the first time does — otherwise a transport switched off and on again would
-    come back only for friends created in between.
+    come back only for users created in between.
 
     Idempotent: setting the value it already has does nothing and does not re-grant.
     A retried click is not an event.
@@ -1007,7 +1007,7 @@ async def set_transport_enabled(
     a control plane that only hides an action has not refused it.
 
     **What this does NOT do, and must not be reported as doing:** disabling changes
-    what `control` DELIVERS, not what a node is running. A friend who already holds a
+    what `control` DELIVERS, not what a node is running. A user who already holds a
     fetched config keeps connecting until the node is re-applied without them. Use
     it to withdraw a protocol from the fleet's offer; use revocation (item 9) to
     withdraw a person's access; use ``remove_transport`` to take the row away
@@ -1017,22 +1017,22 @@ async def set_transport_enabled(
     # THE FLAG IS RE-READ, for the reason ``_node_to_write`` gives about the three node
     # writes above: the value this compares against is whatever the calling session last
     # loaded, and on a stale copy a withdraw that finds the transport "already off"
-    # returns success while the row stays on — leaving it in every friend's subscription,
+    # returns success while the row stays on — leaving it in every user's subscription,
     # which is the half of criterion 3 this function exists to make expressible. One
     # column, so nothing else this session has pending is touched. ``purpose`` is not
     # re-read: it is written once, when the row is created, and no service moves it.
     await session.refresh(node_transport, ["enabled"])
 
-    # A hop end is not an offer to friends, and switching one off is not a delivery
+    # A hop end is not an offer to users, and switching one off is not a delivery
     # change — it is half a tunnel that stops completing a handshake while both ends
     # still look configured. Refused by pointing at the operation that removes both.
-    if node_transport.purpose != TransportPurpose.FRIENDS:
+    if node_transport.purpose != TransportPurpose.USERS:
         # The id is substituted rather than left as a placeholder, for the reason
         # ``REMOVE_IS_FOR_AN_OFFER`` gives: an envelope naming ``{node_transport_id}``
         # literally is one the script reading it has to decode.
         raise Conflict(
             "this transport is one end of an entry-to-leaf hop, not something "
-            "friends are offered. Switching one end off would leave a tunnel that "
+            "users are offered. Switching one end off would leave a tunnel that "
             "no longer completes while both ends still look configured — remove the "
             f"hop instead (DELETE /api/hops/{node_transport_id})."
         )
@@ -1048,7 +1048,7 @@ async def set_transport_enabled(
         # ``shortfalls_among`` and not the fan-out's own ``PoolFull``, because the two ask
         # different questions and only this one holds on every node. ``grant_everywhere``
         # grants on SERVING rows, so on a draft or degraded node the loop below allocates
-        # nothing and therefore refuses nothing; and it skips a friend who already holds a
+        # nothing and therefore refuses nothing; and it skips a user who already holds a
         # credential here, which is the serving node's own version of the same gap. Either
         # way the row ends up offered at a size that cannot hold the fleet, which is the
         # state M17's done-when says may not be committed. ``PoolFull`` stays underneath
@@ -1062,7 +1062,7 @@ async def set_transport_enabled(
     # eager, but a row this session created moments ago has never been LOADED, so
     # touching it is lazy I/O — which on an async session is an immediate
     # MissingGreenlet crash rather than a slow query. Same rule as in
-    # ``friends.grant_everywhere``.
+    # ``users.grant_everywhere``.
     node = await get_node(session, node_transport.node_id)
     # Below the idempotence check above, so a retried click writes nothing: only a
     # change that actually happened is an entry. Two actions rather than one action and
@@ -1078,7 +1078,7 @@ async def set_transport_enabled(
     if enabled:
         # INSIDE THE TRANSACTION SINCE M17, and the order of these two statements is the
         # whole of it. This used to commit the flag and then grant in a second
-        # transaction: with an address per friend to allocate, a pool with no room then
+        # transaction: with an address per user to allocate, a pool with no room then
         # refused AFTER the transport was already back in everybody's subscription, and
         # the operator was told the offer failed while the row said it had succeeded.
         # Now a refusal from the fan-out rolls this back with it and nothing committed.
@@ -1086,12 +1086,12 @@ async def set_transport_enabled(
         # Flushed above (the flag is what makes the row serving), so the grant sees it.
         #
         # Same deferred import, same cycle, same reasoning as ``set_node_state``.
-        from control.app.services import friends  # noqa: PLC0415
+        from control.app.services import users  # noqa: PLC0415
 
         await session.flush()
-        for friend in await friends.list_friends(session):
-            if friend.is_active:
-                await friends.grant_everywhere(session, friend)
+        for user in await users.list_users(session):
+            if user.is_active:
+                await users.grant_everywhere(session, user)
 
     await session.commit()
     logger.info("node-transport %s enabled -> %s", node_transport.id, enabled)
@@ -1111,7 +1111,7 @@ async def set_transport_enabled(
 # any of it: it answers in its own words from ``console.REMOVE_HOP_END``, because "no
 # URL typed by hand" is what the panel promises.
 REMOVE_IS_FOR_AN_OFFER = (
-    "this transport is one end of an entry-to-leaf hop, not something friends are "
+    "this transport is one end of an entry-to-leaf hop, not something users are "
     "offered. Removing one end would leave the other holding a tunnel to an exit that "
     "is no longer configured — remove the hop instead, which takes both ends "
     "(DELETE /api/hops/{node_transport_id})."
@@ -1119,7 +1119,7 @@ REMOVE_IS_FOR_AN_OFFER = (
 
 
 async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> str:
-    """Delete one friend-facing transport, and everything minted under it — M15.2.
+    """Delete one user-facing transport, and everything minted under it — M15.2.
 
     Returns the id of the node that now needs re-applying.
 
@@ -1153,7 +1153,7 @@ async def remove_transport(session: AsyncSession, *, node_transport_id: str) -> 
     """
     node_transport = await get_node_transport(session, node_transport_id)
 
-    if node_transport.purpose != TransportPurpose.FRIENDS:
+    if node_transport.purpose != TransportPurpose.USERS:
         raise Conflict(
             REMOVE_IS_FOR_AN_OFFER.format(node_transport_id=node_transport_id)
         )
@@ -1274,18 +1274,18 @@ async def set_node_state(
 
     if became_serving:
         # THE moment charter criterion 2 depends on. A node becoming serving must hand
-        # a credential to every existing friend, or their subscription resolves to a
+        # a credential to every existing user, or their subscription resolves to a
         # fleet that no longer includes the node they were supposed to be moved onto —
         # and the promise is that a replacement node requires no action from any user.
         #
         # It has to happen here rather than only when a transport is enabled: a
         # transport is normally enabled while the node is still a draft (it has not
         # been configured yet), so at that point there is nothing serving to grant.
-        # Getting this wrong is silent — every friend simply gets an empty
+        # Getting this wrong is silent — every user simply gets an empty
         # subscription — which is why the ordering has its own test.
         #
         # IN THIS TRANSACTION SINCE M17. The state change used to commit first and grant
-        # afterwards, which with an address per friend to allocate meant a node could go
+        # afterwards, which with an address per user to allocate meant a node could go
         # active — recorded, on every screen, in every subscription — and only then be
         # unable to give somebody an address. The operator was told the operation failed
         # by a control plane that had already done half of it. Now a pool with no room
@@ -1295,15 +1295,15 @@ async def set_node_state(
         # without the flush the node is still draft as far as the database is concerned
         # and the fan-out below would grant nobody anything.
         #
-        # Imported inside the function to break a cycle: ``friends`` imports this
+        # Imported inside the function to break a cycle: ``users`` imports this
         # module for ``serving_transports``. A deferred import is the honest fix here;
         # the alternative is a third module that exists only to hold one call.
-        from control.app.services import friends  # noqa: PLC0415
+        from control.app.services import users  # noqa: PLC0415
 
         await session.flush()
-        for friend in await friends.list_friends(session):
-            if friend.is_active:
-                await friends.grant_everywhere(session, friend)
+        for user in await users.list_users(session):
+            if user.is_active:
+                await users.grant_everywhere(session, user)
 
     await session.commit()
     # Which of the two happened, rather than one line for both. A no-op is a legitimate

@@ -1,0 +1,33 @@
+# hashi — the console on the management tunnel's own address.
+#
+# WHAT: one port mapping, split out of deploy/docker-compose.public.yml.
+# WHY:  that mapping is the only thing in the deployed shape that needs an address
+#       THIS HOST ACTUALLY HAS. A machine restored from a bucket has no management
+#       tunnel yet — the tunnel's keys were on the box that was lost — so the address
+#       does not exist, docker refuses the bind, and `make up-panel` fails on a host
+#       whose whole problem is that its operator cannot log in yet (M28.10, finding 4).
+#       The bare-host walk answered that by inventing an address with `ip addr add`,
+#       which is a step in nobody's head at 3am.
+#
+#       So the publication is two files now: what a deployed host publishes REGARDLESS
+#       (the delivery endpoint, and the console on loopback for the `ssh -L` route) is
+#       in public.yml, and this one adds the tunnel address on top. `make up-panel` is
+#       both, unchanged; `make up-panel-over-ssh` is the first alone, for a host that
+#       has no tunnel yet. Neither publishes the console on anything the internet can
+#       reach — that property is what these files exist for and splitting them does not
+#       weaken it, because a mapping with no bind address is in neither.
+# HOW:  `make up-panel`. Never loaded by anything else, and never by `make up`.
+
+services:
+  caddy:
+    ports:
+      # The console, on the management tunnel's own address on this host. This mapping
+      # is the whole of "the panel is off the public internet": Caddy inside the
+      # container listens on every interface it has, and this line is what decides that
+      # the only interface the port appears on is the tunnel's.
+      #
+      # Required with no default, and NEVER loopback here — public.yml's fallback
+      # mapping already claims loopback for that port, and docker refuses the second
+      # bind with "port is already allocated". scripts/panel-bootstrap.sh checks for
+      # that and says so, because the raw error names neither cause nor cure.
+      - "${HASHI_PRIVATE_BIND_ADDR:?set HASHI_PRIVATE_BIND_ADDR in .env — the management tunnel address on this host, or use make up-panel-over-ssh if there is no tunnel yet}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}:${HASHI_PRIVATE_PORT:?set HASHI_PRIVATE_PORT in .env}"

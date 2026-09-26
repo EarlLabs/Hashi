@@ -6,7 +6,7 @@
         AmneziaWG hop needs a different daemon entirely.
   WHY:  a container per transport rather than one Xray with many inbounds: a config
         error in a newly enabled protocol then cannot take down the protocol every
-        existing friend is already using. Enabling a transport is supposed to be
+        existing user is already using. Enabling a transport is supposed to be
         safe (criterion 3), and blast radius is how that is made true.
   HOW:  rendered by edge/bootstrap/node_stack.py:render_compose. The image tag is
         passed in — never a literal here, because core invariants §5 pins the data
@@ -62,7 +62,7 @@ services:
       # The digest of the config THIS service loads, and the reason an apply reaches
       # the running daemon at all. `up -d` compares the service DEFINITION against the
       # running container, and a bind-mounted file's contents are not part of that — so
-      # without this line a new config never restarted anything, and a revoked friend
+      # without this line a new config never restarted anything, and a revoked user
       # stayed connected. The value also reads back through `docker inspect`, which
       # reports the labels a container was CREATED with. Full reasoning at
       # edge/bootstrap/node_stack.py:CONFIG_DIGEST_LABEL. It is a SHA-256 of the

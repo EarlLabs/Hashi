@@ -132,7 +132,7 @@ def test_a_retired_transport_is_still_discovered_and_still_renders(
     )
     assert config.strip(), f"{name} is retired and now renders nothing"
     assert transport.meta.subscription_formats, (
-        f"{name} lost its friend-facing format when it was retired, so the friend who "
+        f"{name} lost its user-facing format when it was retired, so the user who "
         "already holds one could not be handed a replacement"
     )
 

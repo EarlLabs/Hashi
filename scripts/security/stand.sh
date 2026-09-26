@@ -5,8 +5,8 @@
 # WHAT: `up` brings up the SAME stand acceptance walks and then seeds the audit's
 #       identities; `down` destroys it with its volumes.
 # WHY:  the audit needs more than one identity live at once — authorization bugs
-#       are invisible with a single login, and "friend A's token must not reach
-#       friend B's configuration" is this product's highest-value boundary. The
+#       are invisible with a single login, and "user A's token must not reach
+#       user B's configuration" is this product's highest-value boundary. The
 #       acceptance stand deliberately seeds nothing, because an agent walking a
 #       milestone should meet every awkward first-time step. Both are right, so
 #       this script is a LAYER over that one rather than a second stack: a second
@@ -55,7 +55,7 @@ up() {
 [sec-stand] ready for the audit.
 
   Target        http://${E2E_API_HOST}:${E2E_API_PORT}
-  Roles         anon, operator, friend_a, friend_b, friend_revoked
+  Roles         anon, operator, user_a, user_b, user_revoked
   Credentials   scripts/security/role.sh <role>   (never printed here)
   Truth         scripts/acceptance/query.py       (read-only role, reused)
 
@@ -66,7 +66,7 @@ INNER
 
 down() {
   # Pure delegation, deliberately: `acceptance/stand.sh down` runs `e2e-down` with
-  # -v, which takes the volume and therefore every friend and token this script
+  # -v, which takes the volume and therefore every user and token this script
   # seeded. A second teardown here would be a second place to forget a profile.
   say "tearing the stand down with its volumes"
   scripts/acceptance/stand.sh down

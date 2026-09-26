@@ -1,9 +1,9 @@
-"""The delivery endpoint — the only route a friend ever touches.
+"""The delivery endpoint — the only route a user ever touches.
 
-WHAT: ``GET /sub/{token}`` returns that friend's subscription — the base64 document by
+WHAT: ``GET /sub/{token}`` returns that user's subscription — the base64 document by
       default, or their configuration files as one archive with
       ``?format=client-config-file`` (item 27).
-WHY:  backlog item 8, charter criterion 5. This is the single artefact a friend
+WHY:  backlog item 8, charter criterion 5. This is the single artefact a user
       holds, and the reason a node or protocol can be swapped without them acting:
       their client re-fetches this URL and gets the new fleet.
 HOW:  unauthenticated by design — the token IS the credential — which makes this the
@@ -53,7 +53,7 @@ DELIVERY_HEADERS = {
 }
 
 # What the archive is called when a browser saves it. Fixed, and deliberately carrying
-# nothing about the friend or the token: this string ends up in a downloads folder and
+# nothing about the user or the token: this string ends up in a downloads folder and
 # in a browser's own history.
 ARCHIVE_FILENAME = "hashi-configs.zip"
 
@@ -64,8 +64,8 @@ async def deliver_subscription(
     # so the route does not accept something that could never be a real token.
     token: str = Path(min_length=16, max_length=512),
     # WHICH shape, asked for explicitly. Never inferred from the User-Agent or from
-    # what the friend happens to have: a response that changes with who is asking is
-    # one nobody can reproduce, and the friend reporting a problem would be describing
+    # what the user happens to have: a response that changes with who is asking is
+    # one nobody can reproduce, and the user reporting a problem would be describing
     # a different document than the operator sees.
     #
     # Typed as the `edge` vocabulary, so this route gains one arm per FORMAT and none
@@ -77,28 +77,28 @@ async def deliver_subscription(
     ),
     session: AsyncSession = Depends(session_dependency),
 ) -> Response:
-    """Return this friend's subscription in the requested shape, or 404.
+    """Return this user's subscription in the requested shape, or 404.
 
     Two shapes, one token, one route (item 27). Without ``?format=`` the response is
-    byte for byte what it has always been — the link a friend already holds must not
+    byte for byte what it has always been — the link a user already holds must not
     change meaning because a second shape was added.
     """
     subscription = await subscriptions.find_by_token(session, token)
 
     if subscription is None:
-        # Deliberately identical for unknown, revoked, and revoked-friend — and
+        # Deliberately identical for unknown, revoked, and revoked-user — and
         # identical across shapes, so which formats a token supports cannot be probed
         # either. Note there is no logging here at all: a "subscription not found" log
         # line with the path attached would be the leak this whole module is written
         # to avoid.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    friend = subscription.friend
+    user = subscription.user
 
     if subscription_format is SubscriptionFormat.CLIENT_CONFIG_FILE:
-        configs = await subscriptions.config_files_for(session, friend)
+        configs = await subscriptions.config_files_for(session, user)
         # An empty archive rather than a 404, for the same reason ``render`` returns an
-        # empty document: a friend whose nodes are momentarily degraded has not been
+        # empty document: a user whose nodes are momentarily degraded has not been
         # revoked, and their client must not report it as though they had been.
         return Response(
             content=subscriptions.archive_of(configs),
@@ -112,7 +112,7 @@ async def deliver_subscription(
         )
 
     return Response(
-        content=await subscriptions.render(session, friend),
+        content=await subscriptions.render(session, user),
         # text/plain is what stock clients expect for a base64 subscription; a JSON
         # content type makes some of them refuse the response outright.
         media_type="text/plain; charset=utf-8",

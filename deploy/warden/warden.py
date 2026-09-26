@@ -317,7 +317,7 @@ async def main() -> None:
     hub = HubClient(HUB_ADDR, token_path=f"{STATE}/hub_token")
     manifest = make_manifest(
         NAME,
-        purpose="A self-hosted, multi-protocol VPN for its owner and ~30-50 friends: a Russian entry node fronting foreign exit nodes, where both nodes and protocols are data.",
+        purpose="A self-hosted, multi-protocol VPN for its owner and ~30-50 users: a Russian entry node fronting foreign exit nodes, where both nodes and protocols are data.",
         # This text is what the caller reads when CHOOSING a kind, so the map
         # from kind to behaviour lives here and not only in the code.
         description=(

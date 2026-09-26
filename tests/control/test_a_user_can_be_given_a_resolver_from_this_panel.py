@@ -5,13 +5,13 @@ WHAT: that every field a transport lets an operator supply has a box on the enab
       empty, and that answering the one a resolver is written from reaches the file a
       user's client downloads.
 WHY:  measured on the owner's Amsterdam leaf with two real AmneziaWG clients. Both
-      friends completed a handshake, exited at the leaf and moved five megabytes, and
+      users completed a handshake, exited at the leaf and moved five megabytes, and
       neither resolved a single name — because their config carried no ``DNS`` line
       while ``AllowedIPs`` routed every address into the tunnel, their own resolver
       included. The walk's verdict on the panel was the sentence this file exists
-      against: *"There is no setting in the panel that gives a friend working DNS."*
+      against: *"There is no setting in the panel that gives a user working DNS."*
 
-      The renderer's half landed first: a friend's config now takes its ``DNS`` from the
+      The renderer's half landed first: a user's config now takes its ``DNS`` from the
       transport's ``client_dns``, falling back to the node record's own resolver. That
       changed nothing an operator could reach, because ``client_dns`` DECLARES A DEFAULT
       and both forms filtered their boxes on ``is_required``. The route had always
@@ -36,7 +36,7 @@ import html
 import pytest
 
 from control.app.models import NodeState
-from control.app.services import friends, nodes, rotation, subscriptions
+from control.app.services import nodes, rotation, subscriptions, users
 from control.app.services import transports as transports_service
 from edge.registry import SubscriptionFormat, discover
 
@@ -47,7 +47,7 @@ NODE_ADDRESS = "192.0.2.90"
 A_RESOLVER = "192.0.2.53"
 ANOTHER_RESOLVER = "198.51.100.53"
 
-# An address a friend's device could never hear back from: their config routes every IPv6
+# An address a user's device could never hear back from: their config routes every IPv6
 # address into the tunnel and the node drops all of it. RFC 3849's documentation prefix,
 # standing in for the public resolver an operator pastes in when their own machine happens
 # to print the v6 form first — which is how the walk produced it.
@@ -109,14 +109,14 @@ def form_for(transport_name: str, **overrides: object) -> dict[str, str]:
 
 
 async def a_user(client, *, nickname: str) -> str:
-    created = await client.post("/api/friends", json={"nickname": nickname})
+    created = await client.post("/api/users", json={"nickname": nickname})
     assert created.status_code < 300, created.text
     return created.json()["id"]
 
 
-async def the_file_for(session, friend_id: str) -> str:
+async def the_file_for(session, user_id: str) -> str:
     """The configuration file that user's client would download, as one string."""
-    handle = await friends.get_friend(session, friend_id)
+    handle = await users.get_user(session, user_id)
     configs = await subscriptions.config_files_for(session, handle)
     assert len(configs) == 1, [config.filename for config in configs]
     return configs[0].content
@@ -126,10 +126,10 @@ async def a_users_file(client, session, *, nickname: str) -> str:
     return await the_file_for(session, await a_user(client, nickname=nickname))
 
 
-async def the_file_a_user_would_download(app, friend_id: str) -> str:
+async def the_file_a_user_would_download(app, user_id: str) -> str:
     """The same file, produced by a session that has been holding nothing.
 
-    Which is what a friend's download actually is: a request of its own, with a session
+    Which is what a user's download actually is: a request of its own, with a session
     of its own, reading every row for the first time. THE TEST'S OWN ``session`` FIXTURE
     IS NOT THAT — it stays open across POSTs made in other sessions, and a session keeps
     what it loaded (``expire_on_commit=False``), so a node-transport it read before the
@@ -142,7 +142,7 @@ async def the_file_a_user_would_download(app, friend_id: str) -> str:
     """
     content = ""
     async for handle in app.state.database.session():
-        content = await the_file_for(handle, friend_id)
+        content = await the_file_for(handle, user_id)
     return content
 
 
@@ -301,8 +301,8 @@ async def test_the_replace_form_can_give_a_resolver_to_a_row_that_has_none(
     assert enabled.status_code == 201, enabled.text
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = await a_user(client, nickname="masha")
-    before = await the_file_a_user_would_download(app, friend_id)
+    user_id = await a_user(client, nickname="masha")
+    before = await the_file_a_user_would_download(app, user_id)
     assert "DNS = " not in before, before
 
     replaced = await client.post(
@@ -323,7 +323,7 @@ async def test_the_replace_form_can_give_a_resolver_to_a_row_that_has_none(
     # never taken out of ``degraded``.
     await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    after = await the_file_a_user_would_download(app, friend_id)
+    after = await the_file_a_user_would_download(app, user_id)
     assert f"DNS = {ANOTHER_RESOLVER}" in after, after
 
 
@@ -469,12 +469,12 @@ async def test_one_row_that_cannot_be_rendered_does_not_take_away_the_others(
         rows.append(enabled.json()["id"])
         await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    friend_id = await a_user(client, nickname="kolya")
+    user_id = await a_user(client, nickname="kolya")
     row = await rotation.get_node_transport(session, rows[1])
     row.params = {**row.params, RESOLVER_FIELD: [A_RESOLVER_THE_TUNNEL_CANNOT_CARRY]}
     await session.commit()
 
-    handle = await friends.get_friend(session, friend_id)
+    handle = await users.get_user(session, user_id)
     configs = await subscriptions.config_files_for(session, handle)
 
     assert len(configs) == 1, [config.filename for config in configs]
@@ -482,7 +482,7 @@ async def test_one_row_that_cannot_be_rendered_does_not_take_away_the_others(
 
     # And on the route a user's client actually fetches, which is where the 500 was.
     token = (
-        await client.get(f"/panel/friends/{friend_id}/subscription")
+        await client.get(f"/panel/users/{user_id}/subscription")
     ).text
     assert "/sub/" in token, token
     path = token.split("/sub/")[1].split("<")[0].split('"')[0].strip()

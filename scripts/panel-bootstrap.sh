@@ -74,27 +74,63 @@ fail() { printf 'panel-bootstrap: %s\n' "$1" >&2; exit 1; }
   "no env file at ${ENV_FILE}. Copy .env.example to .env and fill it in, or pass
   --env-file. Nothing is generated for you: see the refusal below."
 
+# An env file compose cannot PARSE is answered here, first, and without its contents.
+#
+# This is M28.7's gate, and it is here because this script had the same leak one script
+# over: when compose cannot parse an env file it quotes the offending line's whole value
+# back, and section 2 below prints `compose up -d --build`'s output as it comes. So one
+# unclosed quote on the HASHI_SECRET_KEY line put the master key on the terminal of a
+# failed install — which is the output somebody pastes into a chat window when asking why
+# their install did not work. Reproduced live, not reasoned about (M28.8).
+#
+# Position is the whole of it: before every compose call this script can reach, so there is
+# nothing to remember when one is added. The checks below read the file themselves, for
+# PRESENCE of keys and for line numbers, and never print a value — but they cannot tell a
+# file compose will refuse from one it will accept, which is why this comes first.
+ENV_GATE_NOTHING_HAPPENED="Nothing was installed, started or changed."
+# shellcheck source=lib/env-file-gate.sh
+. "${REPO_ROOT}/scripts/lib/env-file-gate.sh"
+env_file_must_be_readable
+
 # grep for `KEY=value` with a non-empty value. Deliberately not `source`: sourcing an
 # env file runs it, so a stray backtick in a password becomes a command on this host.
 has_value() {
   grep -Eq "^[[:space:]]*$1=[[:space:]]*[^[:space:]]" "${ENV_FILE}"
 }
 
+# ONE VALUE out of an env file, by name — and the reason it exists is a defect this script
+# had twice (M28.12, round 1). Both places that ask "is this still the value .env.example
+# ships" used to compare whole LINES for equality, and two ordinary files defeat that: one
+# edited on Windows, where every line ends `\r` and nothing matches, and one whose values
+# are quoted. In the tunnel check below, walking past it generated a tunnel out of the
+# template and printed two fabricated device private keys; in the password-hash check
+# above it, walking past it means the unfilled placeholder reaches the control plane and
+# an operator meets a three-minute health-check timeout about a container instead of a
+# one-second sentence naming the variable. A comparison a line ending can defeat is not a
+# comparison. Used on BOTH sides of every such comparison, so the template may be written
+# either way too; it reads named values and never prints one, the rule for this file since
+# M6.5.
+#
+# THE IMPLEMENTATION IS THE LIBRARY'S, not this file's, since M28.13 found the same weak
+# parser a third time in `scripts/management-tunnel.sh`. The library says why.
+# shellcheck source=lib/env-value.sh
+. "${REPO_ROOT}/scripts/lib/env-value.sh"
+
 # THE refusal. Everything else in this script is about uptime; this is about a person.
 #
-# HASHI_SECRET_KEY decrypts every friend's credentials and every node's private key. If
+# HASHI_SECRET_KEY decrypts every user's credentials and every node's private key. If
 # the panel is installed on the Russian entry node — which the topology allows and the
 # charter anticipates — then a key generated on that host lives on the machine most
 # likely to be seized, next to the data it opens. So it must arrive from outside, and
 # the only safe behaviour when it is absent is to stop.
 #
 # Generating one here would be worse than useless: the stack would come up, the owner
-# would see a working panel, and the key protecting their friends' access would exist
+# would see a working panel, and the key protecting their users' access would exist
 # only on the host they are least able to trust — with nobody having decided that.
 if ! has_value HASHI_SECRET_KEY; then
   fail "HASHI_SECRET_KEY is not set in ${ENV_FILE}.
 
-  This script does NOT generate it, on purpose. That key decrypts every friend's
+  This script does NOT generate it, on purpose. That key decrypts every user's
   credentials and every node's private key. If this host is the Russian entry node, a
   key generated here would sit on the machine most likely to be seized, beside the data
   it opens — and nobody would have decided that.
@@ -123,9 +159,68 @@ for key in HASHI_PUBLIC_HOST HASHI_PRIVATE_HOST HASHI_PRIVATE_PORT \
   has_value "$key" || MISSING+=("$key")
 done
 if [ ${#MISSING[@]} -gt 0 ]; then
+  # One of them cannot be typed, and on a bare host nothing here could produce it —
+  # which is why the way to make it is named HERE rather than left to a document. The
+  # bare-host walk met this refusal, followed it to .env.example, followed that to
+  # `python -m control.cli hash-password`, and found a machine with Python 3.10, no venv
+  # and no way to make one (M28.10, finding 1). `make hash-password` runs the same
+  # command inside the control image and needs nothing but the runtime this host
+  # already has.
+  HASH_ROUTE=""
+  case " ${MISSING[*]} " in
+    *" HASHI_OPERATOR_PASSWORD_HASH "*)
+      HASH_ROUTE="
+
+  HASHI_OPERATOR_PASSWORD_HASH is the one you cannot type. Make it on this machine,
+  with nothing installed but the container runtime that is already here:
+
+      make hash-password
+
+  It prompts for a password, prints the whole line to paste into ${ENV_FILE}, and
+  writes nothing anywhere. On a machine that already has this project set up,
+  \`python -m control.cli hash-password\` is the same command without the build." ;;
+  esac
   fail "these keys are missing or empty in ${ENV_FILE}: ${MISSING[*]}.
   See .env.example for what each one is. Nothing is defaulted: a default here would be
-  the same value on every host that ever runs this script."
+  the same value on every host that ever runs this script.${HASH_ROUTE}"
+fi
+
+# A required key still holding .env.example's own placeholder is a key nobody filled in,
+# and this is the one where noticing costs nothing and not noticing costs three minutes.
+# The control plane refuses to boot on a hash that is not one, so an unfilled hash
+# arrives as the health-check timeout at the end of this script — a failure whose message
+# is about a container that did not answer, with nothing in it about a password. It is
+# also the key the operator was most likely to leave, because until `make hash-password`
+# existed there was no way to produce it on a host like this one (M28.10, finding 1).
+#
+# Read OUT OF .env.example rather than written here, so the two cannot drift, and
+# compared as a VALUE on both sides rather than as a whole line — see `env_value_of`
+# above for what a line comparison lets through, which is this refusal not firing on an
+# env file that was edited on Windows or that quotes its values. Only this key: the
+# VALIDITY of a value is control/app/settings.py's to judge, and this is not that — it is
+# "nothing was put here at all", which no amount of validation downstream says plainly.
+TEMPLATE="${REPO_ROOT}/.env.example"
+hash_is_the_placeholder() {
+  local want
+  [ -r "${TEMPLATE}" ] || return 1
+  want="$(env_value_of "${TEMPLATE}" HASHI_OPERATOR_PASSWORD_HASH)"
+  [ -n "${want}" ] || return 1
+  [ "$(env_value_of "${ENV_FILE}" HASHI_OPERATOR_PASSWORD_HASH)" = "${want}" ]
+}
+if hash_is_the_placeholder; then
+  fail "HASHI_OPERATOR_PASSWORD_HASH in ${ENV_FILE} is still the placeholder .env.example
+  ships, so nobody has set an operator password and the panel would refuse to start.
+
+  Make it on this machine, with nothing installed but the container runtime that is
+  already here:
+
+      make hash-password
+
+  It prompts for a password, prints the whole line to paste into ${ENV_FILE}, and writes
+  nothing anywhere. On a machine that already has this project set up,
+  \`python -m control.cli hash-password\` is the same command without the build.
+
+  Nothing was installed, started or changed."
 fi
 
 # A `$` that is not doubled. This check earns its place with a bug that cost a whole
@@ -176,8 +271,13 @@ fi
 # down (deploy/docker-compose.public.yml). Loopback for both makes docker refuse the
 # second bind with "port is already allocated", an error that names neither the cause
 # nor the cure. Checked here rather than left to be discovered during a deploy.
-PRIVATE_BIND="$(sed -n 's/^[[:space:]]*HASHI_PRIVATE_BIND_ADDR=[[:space:]]*//p' \
-  "${ENV_FILE}" | awk 'NR==1' | tr -d '"')"
+# Through `env_value_of` like every other value this file reads, rather than a parser of
+# its own. It was the third reader in one script and the weakest — first assignment
+# instead of last, double quotes only, no `\r`, no trailing comment — and while none of
+# that changes this check's ANSWER today (it is a prefix match, not an equality, so a
+# value wearing a `\r` still reads as loopback), two parsers in one file is how the defect
+# round 1 found gets reintroduced by somebody reasonably copying the nearest one.
+PRIVATE_BIND="$(env_value_of "${ENV_FILE}" HASHI_PRIVATE_BIND_ADDR)"
 case "${PRIVATE_BIND}" in
   127.*|localhost|::1)
     fail "HASHI_PRIVATE_BIND_ADDR is ${PRIVATE_BIND}, which is loopback.
@@ -188,8 +288,19 @@ case "${PRIVATE_BIND}" in
   mapping beside it, so docker would refuse the second bind with 'port is already
   allocated' and you would be reading that instead of this.
 
-  If there is no management tunnel on this host yet, leave the variable unset and reach
-  the panel over SSH — docs/deploy/runbook.md, 'Reaching the panel'." ;;
+  If there is no management tunnel on this host yet — which is true of every host a
+  restore has just rebuilt, because the tunnel's keys were on the machine that was lost
+  — leave this variable unset and publish with
+
+      make up-panel-over-ssh
+
+  That is the same publication without the one mapping that needs a tunnel address, so
+  the console lands on this host's loopback only and you reach it with
+
+      ssh -L <HASHI_PRIVATE_PORT>:127.0.0.1:<HASHI_PRIVATE_PORT> <you>@<this host>
+
+  Move to \`make up-panel\` once the tunnel is up. The long version of both routes is
+  docs/deploy/runbook.md, 'Reaching the panel'." ;;
 esac
 
 say "env file ${ENV_FILE} has every required key and no unescaped \$"
@@ -199,7 +310,7 @@ say "env file ${ENV_FILE} has every required key and no unescaped \$"
 # The charter forbids connection logs at any level, and `ufw enable` — which the runbook
 # tells an operator to run — turns logging on by default. On the fleet's own leaf that had
 # collected source addresses within minutes (docs/decisions.md, decision 5). This host is
-# the one friends dial for their subscriptions, so its firewall log is a list of who asked
+# the one users dial for their subscriptions, so its firewall log is a list of who asked
 # for a config and when.
 #
 # Checked, never changed. `scripts/node-bootstrap.sh` owns turning it off, because that
@@ -234,7 +345,7 @@ else
 
   The firewall writes a source address for every packet it refuses. That is a connection
   log, and the charter forbids one at any level — it is the one record that can hurt a
-  real person, and this host is the one friends dial for their subscriptions.
+  real person, and this host is the one users dial for their subscriptions.
 
   Turn it off and run this again; a second run is safe:
 
@@ -271,6 +382,63 @@ fi
 # images are built on the host that runs them and never pushed anywhere that could check
 # a signature. Set on this one command rather than exported, so it describes the build and
 # nothing else.
+# Before the first `up`, and this ordering is the only reason it is here: the control
+# service mounts this directory read-only (the backup schedule's record, M28.5), and a
+# bind mount whose source does not exist is created by the docker daemon, as root. The
+# schedule runs as the operator and would then never be able to write the record.
+mkdir -p "${REPO_ROOT}/backups/state"
+
+# WHAT A SECOND RUN COSTS A DEPLOYED HOST, said HERE rather than in a document (M28.12).
+#
+# "A second run is safe" is true of the data and false of the publication. Every refusal
+# above ends with it, and the restore command repeats it — and on a host that is already
+# serving, `up -d --build` with the BASE file converges the stack to the base file's
+# shape, which publishes nothing. So 80, 443 and the console go away, and the operator who
+# re-ran the command they were told was safe loses the panel and the delivery endpoint at
+# once. The only warning was in the runbook under a heading they had no reason to open,
+# which is the same failure as every other thing this script now says out loud.
+#
+# Detected rather than assumed, so a fresh host is not warned about something that cannot
+# happen to it: the running stack is asked what it publishes. `ps --format json` is read
+# with a shell pattern and no JSON parser — a published mapping carries a non-zero
+# PublishedPort and an unpublished one carries 0 — and the whole answer is captured first,
+# because a pipe closed early reads as a failed command under `pipefail`.
+#
+# THREE ANSWERS AND NOT TWO. `--format json` is not in every compose v2 (this project's
+# rulebook names no minimum), and a command that fails and is read as "publishing
+# nothing" is this warning going silent in exactly the case it exists for. A project with
+# no containers answers EMPTY and exits 0 — checked — so an empty answer is a real "no"
+# and only a non-zero exit is "could not tell". The third answer is said out loud rather
+# than assumed either way: "I could not ask" is useful, and silence is the failure.
+PUBLISHED_BEFORE="no"
+if LISTED="$("${COMPOSE[@]}" ps --format json 2>/dev/null)"; then
+  case "${LISTED}" in
+    *'"PublishedPort":'[1-9]*) PUBLISHED_BEFORE="yes" ;;
+  esac
+else
+  PUBLISHED_BEFORE="unknown"
+fi
+if [ "${PUBLISHED_BEFORE}" = "unknown" ]; then
+  say "COULD NOT ASK THIS HOST WHAT IT PUBLISHES — \`compose ps --format json\` did not
+  answer here, which is what an older compose v2 does. So this cannot tell you whether
+  the step below takes a published port away, and it might: it converges the stack to
+  deploy/docker-compose.yml, which publishes nothing. If this host was serving on 80/443
+  or answering on the console port, publish it again when this finishes with
+  \`make up-panel\` or \`make up-panel-over-ssh\`. Nothing about the data is affected."
+fi
+if [ "${PUBLISHED_BEFORE}" = "yes" ]; then
+  say "THIS HOST PUBLISHES PORTS TODAY, AND THIS RUN TAKES THEM AWAY. The step below
+  converges the stack to deploy/docker-compose.yml, which publishes nothing — so the
+  delivery endpoint on 80/443 and the console both stop answering until they are
+  published again. The data is untouched; this is about reachability only. Publish them
+  again when this finishes:
+
+      make up-panel            with a management tunnel on this host
+      make up-panel-over-ssh   without one
+
+  This is said again at the end, so it does not have to be remembered from here."
+fi
+
 say "building and starting the stack (this is the slow part on a fresh host)"
 # A failure here does NOT end the run, and that is deliberate rather than lax.
 # `compose up -d` fails when a service it was told to wait for never becomes healthy —
@@ -310,7 +478,7 @@ status, body = get('/healthz')
 if status != 200 or 'ok' not in body:
     sys.exit(1)
 
-# The delivery endpoint, which is the only route a friend ever touches. A 404 for a
+# The delivery endpoint, which is the only route a user ever touches. A 404 for a
 # token that cannot exist is the correct answer and proves the route is wired — a live
 # process with an unrouted /sub is a panel that looks up and delivers nothing.
 # Deliberately not a real token: this probe must never carry a credential.
@@ -356,7 +524,58 @@ say "the control plane answers on /healthz and routes /sub/{token}"
 # SSH fallback is a real and documented mode, and refusing to install a control plane
 # because its owner has not chosen a tunnel range yet would be this script deciding
 # something that is not its to decide. It says which mode it left the host in.
-if has_value HASHI_MGMT_ADDRESS; then
+#
+# AND IT IS SKIPPED WHEN THE BLOCK IS STILL THE TEMPLATE'S OWN (M28.12). `.env.example`
+# ships a complete HASHI_MGMT_* block — an address range, a port, an endpoint and two
+# example devices — so a host that copied the template and filled in the four values the
+# refusals above ask for arrives here with a block nobody chose. The generator then did
+# exactly what it is for: it wrote a tunnel config and printed a full device config,
+# private key included, for each of the template's example peers, at an operator who
+# asked for none of it and on a machine none of it points at. A private key on a terminal
+# is the class of thing M28.7 and M28.8 exist to prevent, and these were fabricated
+# credentials for an endpoint that is not this host.
+#
+# The comparison is against `.env.example`'s own lines, read out of the file exactly as
+# the password hash's is above, so the two cannot drift. Skipped and not refused: a host
+# with no tunnel is a supported mode, it is the mode every restored machine is in, and
+# refusing here would stop a rebuild over a thing that is not needed to run a panel.
+#
+# THREE KEYS RATHER THAN ONE, and it is not thoroughness: the address and the peer
+# addresses are values somebody could genuinely choose, so skipping on the address alone
+# would refuse a real deployment. Any of the three still being the template's is an
+# unfinished block, and the message names which — so the operator is told what to change
+# rather than being told no.
+#
+# VALUES, NOT LINES, through `env_value_of` at the top of this file — that is the whole
+# of round 1's finding, and the password-hash check up there is the other half of it.
+MGMT_TEMPLATE_KEYS=""
+mgmt_is_the_template() {
+  local key want have
+  MGMT_TEMPLATE_KEYS=""
+  [ -r "${TEMPLATE}" ] || return 1
+  for key in HASHI_MGMT_ADDRESS HASHI_MGMT_ENDPOINT HASHI_MGMT_PEERS; do
+    want="$(env_value_of "${TEMPLATE}" "${key}")"
+    [ -n "${want}" ] || continue
+    have="$(env_value_of "${ENV_FILE}" "${key}")"
+    if [ "${have}" = "${want}" ]; then
+      MGMT_TEMPLATE_KEYS="${MGMT_TEMPLATE_KEYS}${MGMT_TEMPLATE_KEYS:+ }${key}"
+    fi
+  done
+  [ -n "${MGMT_TEMPLATE_KEYS}" ]
+}
+
+if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
+  say "still .env.example's own value(s) in ${ENV_FILE}: ${MGMT_TEMPLATE_KEYS}. NO
+  management tunnel was generated. Generating one from the template would have written a
+  tunnel here and printed a private key for each of the example devices in that file —
+  credentials nobody asked for, pointing at the example endpoint rather than at this
+  host.
+
+  Fill the HASHI_MGMT_* block in with this deployment's own address range, port, endpoint
+  and devices, then run this again; a second run is safe and generates the tunnel then.
+  Until then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
+  'Reaching the panel'. Nothing here published it either way."
+elif has_value HASHI_MGMT_ADDRESS; then
   say "generating the management tunnel the panel is reached over"
   "${REPO_ROOT}/scripts/management-tunnel.sh" --env-file "${ENV_FILE}"
 else
@@ -378,8 +597,30 @@ fi
 # So the run ends by naming exactly what it proved and exactly what is still missing.
 say "done. Proven: the control plane runs, answers /healthz and routes /sub/{token} —
   all of it asked from inside the compose network."
+# Said as something this run DID, not as a standing condition, when it is: an operator who
+# re-ran a command they were told was safe has had a working panel taken away by it, and
+# "nothing here is reachable from outside this host" reads as a description of a fresh
+# machine rather than as what just happened to a deployed one.
+if [ "${PUBLISHED_BEFORE}" = "yes" ]; then
+  say "AND WHAT THIS RUN TOOK AWAY: this host was publishing ports when it started, and
+  is not now — the stack has been converged to deploy/docker-compose.yml, which publishes
+  none. The delivery endpoint and the console answer nothing until you publish them
+  again, with \`make up-panel\` or \`make up-panel-over-ssh\` below."
+elif [ "${PUBLISHED_BEFORE}" = "unknown" ]; then
+  say "AND WHAT THIS RUN MAY HAVE TAKEN AWAY: this compose could not be asked what the
+  host was publishing before it ran, so if anything was, it is not now — the stack has
+  been converged to deploy/docker-compose.yml, which publishes none. Publish it again
+  with \`make up-panel\` or \`make up-panel-over-ssh\` below."
+fi
 say "NOT proven, and not yet true: nothing here is reachable from outside this host. This
   stack publishes no ports and this script adds none, so there is no panel address to
-  visit until Caddy's ports are published — \`make up-panel\`, which is this same stack
-  plus deploy/docker-compose.public.yml. What that costs to re-run this script afterwards
-  is in docs/deploy/runbook.md under 'The port-publication gap'."
+  visit until Caddy's ports are published:
+
+      make up-panel            this stack plus the delivery endpoint and the console on
+                               this host's management-tunnel address
+      make up-panel-over-ssh   the same without that last mapping, for a host with no
+                               tunnel yet — the console then answers on loopback only
+                               and you reach it with \`ssh -L\`
+
+  What either costs to re-run this script afterwards is in docs/deploy/runbook.md under
+  'The port-publication gap'."

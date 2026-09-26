@@ -3,7 +3,7 @@
 WHAT: what happens to a credential that does not carry everything its transport now
       declares a consumer's material is — in the archive a user downloads, and on the
       screen the operator rotates from.
-WHY:  the WireGuard family gained a per-pair pre-shared key, because every friend on a
+WHY:  the WireGuard family gained a per-pair pre-shared key, because every user on a
       node had been handed the node's own one: a single leaked config exposed the
       symmetric layer protecting everybody else's handshake, and revoking that person
       rotated nothing. New credentials carry it. **Every credential minted before that
@@ -30,7 +30,7 @@ import pytest
 from sqlalchemy import select
 
 from control.app.models import Credential, NodeState
-from control.app.services import console, friends, keymaterial, nodes, rotation, subscriptions
+from control.app.services import console, keymaterial, nodes, rotation, subscriptions, users
 from edge.registry import KeyScope, SubscriptionFormat, discover
 
 NODE_ADDRESS = "192.0.2.95"
@@ -152,10 +152,10 @@ async def test_one_stale_credential_does_not_take_away_a_users_other_nodes(
         client, session, name="new-leaf", address=SECOND_ADDRESS,
         transport_name=file_transport, tunnel="10.96.0",
     )
-    created = await client.post("/api/friends", json={"nickname": "kolya"})
+    created = await client.post("/api/users", json={"nickname": "kolya"})
     assert created.status_code < 300, created.text
     token = (
-        await client.get(f"/api/friends/{created.json()['id']}/subscription")
+        await client.get(f"/api/users/{created.json()['id']}/subscription")
     ).json()["url"].rsplit("/", 1)[-1]
     await take_the_value_back_out(session, stale_row, a_client_scoped_value)
 
@@ -179,8 +179,8 @@ async def test_the_stale_credential_itself_is_the_one_that_is_left_out(
         client, session, name="old-leaf", address=NODE_ADDRESS,
         transport_name=file_transport, tunnel="10.95.0",
     )
-    created = await client.post("/api/friends", json={"nickname": "masha"})
-    handle = await friends.get_friend(session, created.json()["id"])
+    created = await client.post("/api/users", json={"nickname": "masha"})
+    handle = await users.get_user(session, created.json()["id"])
     assert await subscriptions.config_files_for(session, handle)
 
     await take_the_value_back_out(session, stale_row, a_client_scoped_value)
@@ -217,7 +217,7 @@ async def test_the_keys_screen_counts_them_and_names_the_button_that_fixes_it(
     )
     for nickname in ("kolya", "masha"):
         assert (
-            await client.post("/api/friends", json={"nickname": nickname})
+            await client.post("/api/users", json={"nickname": nickname})
         ).status_code < 300
     await take_the_value_back_out(session, stale_row, a_client_scoped_value)
 
@@ -246,7 +246,7 @@ async def test_a_row_whose_users_all_carry_it_says_nothing(
         client, session, name="fresh-leaf", address=NODE_ADDRESS,
         transport_name=file_transport, tunnel="10.95.0",
     )
-    assert (await client.post("/api/friends", json={"nickname": "kolya"})).status_code < 300
+    assert (await client.post("/api/users", json={"nickname": "kolya"})).status_code < 300
 
     rows = await console.key_rows(session)
 
@@ -270,8 +270,8 @@ async def test_rotating_the_row_is_what_the_sentence_says_it_is(
         client, session, name="old-leaf", address=NODE_ADDRESS,
         transport_name=file_transport, tunnel="10.95.0",
     )
-    created = await client.post("/api/friends", json={"nickname": "kolya"})
-    handle = await friends.get_friend(session, created.json()["id"])
+    created = await client.post("/api/users", json={"nickname": "kolya"})
+    handle = await users.get_user(session, created.json()["id"])
     await take_the_value_back_out(session, stale_row, a_client_scoped_value)
     assert (await console.key_rows(session))[0].stale_material is not None
 

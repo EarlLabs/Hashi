@@ -14,7 +14,7 @@ HOW:  the shape IS the guarantee, so it is deliberately too narrow to hold anyth
       without anyone deciding to add one, so there is nowhere for such a value to go.
       ``action`` is an enum through ``EnumText``, so a value nobody declared fails at
       the write; the two label columns are 64 characters wide, which is exactly the
-      width of the inventory values they may hold (``Node.name``, ``Friend.nickname``,
+      width of the inventory values they may hold (``Node.name``, ``User.nickname``,
       a transport name, a ``NodeState``) and nowhere near ``Node.state_detail``'s 500.
 
       Rows are append-only: written once by the service that made the change, read by
@@ -49,15 +49,20 @@ class AuditAction(enum.StrEnum):
     The values are machine keys and are what lands in the database. The sentence an
     operator reads is composed at render time — see the panel's wording module — so
     these never have to be readable prose and must never be edited casually: a value
-    whose text changed would orphan every row already written with the old one.
+    whose text changed would orphan every row already written with the old one. Two of
+    them did change, once, in M29: ``friend-added`` and ``friend-revoked`` became
+    ``user-added`` and ``user-revoked`` because an operator reads them on the audit
+    screen and the product now has one word for the person. That cost a data migration
+    (``0009``) rewriting every existing row, reversible both ways — which is the price
+    the paragraph above is warning about, paid deliberately and not casually.
 
     Only changes that COMMITTED are in this list. There is no login, no probe, no
     failure and no refusal: a probe changes nothing, and a refusal's text can come
     from a remote host while this table has nowhere safe to put it.
     """
 
-    FRIEND_ADDED = "friend-added"
-    FRIEND_REVOKED = "friend-revoked"
+    USER_ADDED = "user-added"
+    USER_REVOKED = "user-revoked"
     NODE_ADDED = "node-added"
     NODE_STATE_CHANGED = "node-state-changed"
     NODE_APPLIED = "node-applied"
@@ -100,7 +105,7 @@ class AuditEntry(Base):
     __tablename__ = "audit_entries"
 
     # A UUID like every other table here, for the reason ``new_id`` gives: a sequential
-    # id says how many friends exist and in what order they arrived. It is in the
+    # id says how many users exist and in what order they arrived. It is in the
     # whitelist because a row needs a primary key, not because anything reads it.
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
 
@@ -117,7 +122,7 @@ class AuditEntry(Base):
     action: Mapped[AuditAction] = mapped_column(EnumText(AuditAction, 32), nullable=False)
 
     # What the change was about — a name the operator already chose or the registry
-    # already holds, copied whole and never composed: a node name, a friend's nickname,
+    # already holds, copied whole and never composed: a node name, a user's nickname,
     # a transport name, a node state. One label for a change about one thing ("kolya
     # added"), two for a change about a pair ("vless-reality enabled on leaf-ams-1").
     #
