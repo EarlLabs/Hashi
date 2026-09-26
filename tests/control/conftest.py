@@ -426,10 +426,6 @@ class AcceptingNode:
         # to be able to read the document, and the name is derived rather than stored,
         # so a digest of it would be a second derivation nothing pins.
         self.delivered: list[node_delivery.Artifact] = []
-        # And whether this apply took delivery off the host instead of placing any —
-        # M27.4. A separate fact from an empty ``delivered``: that is a host which serves
-        # delivery and carries nobody, this is a host which does not serve delivery.
-        self.delivery_removed = False
 
     # Untyped return: the class is its own annotation and py314 still needs a string
     # for that, which this repo's ruff rules reject (UP037).
@@ -491,12 +487,12 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
         connection.delivered = list(artifacts)
 
     async def remove_delivery(connection) -> bool:
-        # What the real one leaves behind: no directory at all. A host that was holding
-        # material is what this double stands for — ``True`` — because the host it
-        # stands for is one every step of an apply worked on, and a test about a host
-        # that held none builds its own double and says so in its own file.
+        # The host is left holding nothing, which is what the real one leaves behind —
+        # and it answers ``True``, the host that WAS holding some. That is the answer
+        # this fixture's node has always stood for: one every step of an apply works on.
+        # A test about a host that held none builds its own double and says so in its
+        # own file.
         connection.delivered = []
-        connection.delivery_removed = True
         return True
 
     async def compose_projects(connection) -> frozenset[str]:
