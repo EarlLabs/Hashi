@@ -1787,3 +1787,45 @@ defect** and the `flowing()` form is red.
 panel's behaviour, so a pin on such a sentence could never go red — it would convert an
 unverifiable claim into a green tick. The absence half, swept over states, is the assertion
 that carries information.
+
+
+## From M28.24 — a check that can be satisfied by the absence of what it checks
+
+**Converged clean in two rounds** (control 993/2, edge 911/3, infra 486, **e2e 224/0**), and
+the step is worth reading as one artifact because the same defect appeared three times at
+three depths inside it.
+
+1. The gate test's expected side was `has_a_run = standing is not Standing.NEVER`. **False:**
+   `Standing.NEVER` means no backup ever *succeeded*, not that no run exists — `backup_standing`
+   has a `case Standing.NEVER if reading.failed_since` branch that prints a real age. The
+   biconditional passed only because the one NEVER body in the sweep happened to be the
+   run-less shape. **Derive "has a run" from the record, never from the standing.**
+2. The guard added to fix that checked the mixed way's **content** and never ran when the way
+   was not generated: strip the FAILING body's `last_success` and the test went green — green
+   over a live defect.
+3. The existence check added to fix *that* recorded `swept.update(ways)` **before** the loop,
+   so it stood for what the helper *offered*. Insert a `continue` and it was green again.
+
+**The rule that falls out, and it is the milestone's own subject stated generally: a check
+that can be satisfied by the absence of the thing it checks will be, eventually.** The audit
+that swept a file after the code moved out of it, the schedule line printed whether or not a
+schedule existed, and all three of these are one defect. **Pin existence beside content**, and
+collect what was *exercised* at the end of the loop body, never what was offered before it.
+
+**`swept` holds `(standing, way)` pairs**, not names, because it is a union over every body:
+a bare name proves *some* body offered the mixed way, not that the FAILING one did. Measured —
+with a second both-runs body present and FAILING stripped, the name form is green and the pair
+form is red.
+
+**Reuse `_every_way_a_run_can_be_ahead(body)`** for any clause gated on a run being ahead:
+`"every run"` / `"no run"` / `"the failure only"`, the last offered only where the body carries
+both runs, built on `_with_the_runs_ahead(body, keys)`. **Do not add a second NEVER body to
+`_every_standing_with_a_record()`** — it is keyed on the standing and two other tests assert
+off that key; build the extra body as a list in the test that needs it.
+
+**Mutation 4's brittleness is deliberate and is an alarm, not a defect.** A real newline inside
+`BACKUP_CLOCK_RUNS_UNDISTURBED` turns the assertion red, because the detail is flowed and the
+constant is not. Since the assertion is a biconditional, such a newline would also make the
+*absence* half unfalsifiable — and the presence half going red in the same edit is what stops
+that hole landing silently. Flowing both sides removes the alarm and the hole together, which
+is a trade for `docs/decisions.md`, not a drive-by.
