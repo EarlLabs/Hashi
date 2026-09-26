@@ -202,6 +202,18 @@ def answered(running: DeliveryHost, path: str, *extra: str) -> str:
     return result.stdout
 
 
+def header_names(answer: str) -> tuple[str, ...]:
+    """The header names of one response, lowercased and sorted, minus the ones every
+    answer from any server carries — ``Date`` differs by the second and
+    ``Content-Length`` by the body, and neither says anything about this host."""
+    names = sorted(
+        line.split(":", 1)[0].strip().lower()
+        for line in answer.splitlines()
+        if ":" in line and not line.startswith("HTTP/")
+    )
+    return tuple(one for one in names if one not in ("date", "content-length"))
+
+
 # --- what it serves -------------------------------------------------------------------
 
 
@@ -221,13 +233,43 @@ def test_the_archive_shape_is_answered_under_a_name_that_identifies_nobody(
     assert f'filename="{ARCHIVE_FILENAME}"' in answer, answer[:400]
 
 
-def test_every_response_carries_the_headers_it_was_given(host: DeliveryHost) -> None:
-    """Including the 404's — a body that is a bearer credential must not be cacheable,
-    and a rule applied only to the success path is one a proxy can route around."""
-    for path in (f"/sub/{NAME}", f"/sub/{UNKNOWN}"):
+def test_a_response_that_carries_a_document_carries_the_headers_it_was_given(
+    host: DeliveryHost,
+) -> None:
+    """Both shapes: the body is a bearer credential and must not be cacheable."""
+    for path in (f"/sub/{NAME}", f"/sub/{NAME}?format=client-config-file"):
         answer = answered(host, path)
         for name, value in HEADERS.items():
             assert f"{name}: {value}" in answer, f"{path}:\n{answer[:400]}"
+
+
+def test_every_refusal_is_the_same_bare_answer(host: DeliveryHost) -> None:
+    """Measured header for header, because this is a fingerprint question.
+
+    A fixed set of headers on an empty 404 is a signature every delivery host would
+    answer with, on the most scannable machine in the fleet. It also has to be true that
+    a name nothing is stored under is answered EXACTLY as a path that was never a
+    subscription — otherwise a scanner learns which names exist, which is the one thing
+    the control plane's own 404 is written to hide.
+    """
+    refusals = {
+        path: header_names(answered(host, path))
+        for path in (
+            f"/sub/{UNKNOWN}",
+            f"/sub/{NAME}?format=there-is-no-such-shape",
+            "/",
+            "/panel/login",
+        )
+    }
+    assert len(set(refusals.values())) == 1, (
+        f"a delivery host answers its refusals differently from each other: {refusals}"
+    )
+    for path, names in refusals.items():
+        for header in HEADERS:
+            assert header.lower() not in names, (
+                f"{path} is refused with {header!r} on it, which is a header no 404 of "
+                f"the control plane's carries: {names}"
+            )
 
 
 @pytest.mark.parametrize(
