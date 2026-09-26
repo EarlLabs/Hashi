@@ -1253,8 +1253,19 @@ async def apply_node(
             # material no user can currently fetch. The alternative — carrying on and
             # logging — is the silent half-applied host this file exists to refuse.
             #
-            # AN EMPTY ``artifacts`` IS NOT SKIPPED: it is how a node that no longer
-            # carries anybody stops holding delivery material at all.
+            # AFTER THE READINGS AND NOT AFTER THE VERDICT, which is not the same
+            # thing: ``confirm_serving`` measures, and whether those measurements are a
+            # failure is decided below this block. So a node whose data plane did not
+            # come back is handed fresh material and then marked degraded. Deliberate —
+            # what is placed is a function of the database and not of whether the
+            # daemon came back, and withholding it would leave the STALER directory on
+            # a host that is about to be repaired.
+            #
+            # AN EMPTY ``artifacts`` IS NOT SKIPPED: it is how a node that still has a
+            # transport enabled but no longer carries anybody stops holding delivery
+            # material. It does NOT reach a node with nothing enabled at all — that
+            # apply is refused above, before the connection — see the M27.2 rows in
+            # ``docs/decisions.md`` for what is left on such a host and who owns it.
             await node_delivery.place_delivery(connection, artifacts=artifacts)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:

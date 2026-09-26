@@ -98,9 +98,13 @@ async def artifacts_for_node(
     any transport's name: the far end of a hop is not a user's to hold, and no
     credential points at one.
 
-    Returns an empty list for a node that carries nobody, which is what makes a host
-    that stops carrying users stop holding delivery material — ``place_delivery``
-    replaces the directory with an empty one rather than skipping the push.
+    Returns an empty list for a node whose enabled rows carry nobody, and the empty
+    list is not a no-op downstream: ``place_delivery`` replaces the directory with an
+    empty one. That is what empties a host that still has a transport enabled and has
+    stopped carrying users. It says nothing about a host with NOTHING enabled — that
+    apply is refused before this is called (``apply_node``), so such a host keeps its
+    last directory; the M27.2 rows in ``docs/decisions.md`` record which states that
+    leaves open and who owns them.
 
     A TOKEN THIS CONTROL PLANE CANNOT DECRYPT RAISES OUT OF HERE and is not skipped.
     The column is decrypted as the row is loaded, so the ``select`` below raises

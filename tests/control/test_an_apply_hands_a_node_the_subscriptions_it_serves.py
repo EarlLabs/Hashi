@@ -355,3 +355,36 @@ def test_a_derived_name_is_one_this_node_package_will_place() -> None:
     assert ARTIFACT_NAME.match(name), name
     assert delivery.artifact_name("a" * 43) == name, "the same token named two files"
     assert delivery.artifact_name("b" * 43) != name
+
+
+async def test_a_node_with_nothing_enabled_is_refused_above_the_push(
+    client, session, uri_transport: str, handed: Handed
+) -> None:
+    """The state the stop case is NOT closed in, pinned rather than left in prose.
+
+    Withdraw a node's only transport and press apply: ``apply_node`` answers "nothing to
+    apply" before it opens a connection, so the host keeps the delivery directory it was
+    last given — its ex-users' rendered subscriptions, and the client halves in them.
+
+    This asserts what the product DOES, so that the day something reaches that host the
+    assertion fails and the M27.2 rows in ``docs/decisions.md`` are read again. It is
+    not an approval of the behaviour: those rows hand the state to M27.4 with the reason.
+    """
+    await add_user(client, "boris")
+    node_id = await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
+    assert handed.pushes == 1 and handed.artifacts, "the first apply pushed nothing"
+
+    rows = await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    only = next(iter(rows.scalars().unique()))
+    withdrawn = await client.post(
+        f"/api/transports/{only.id}/state", json={"enabled": False}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    assert handed.pushes == 1, (
+        "the refused apply reached the delivery push — if that is now intended, the "
+        "three states in the M27.2 rows of docs/decisions.md are out of date"
+    )
