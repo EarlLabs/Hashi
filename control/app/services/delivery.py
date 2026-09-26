@@ -193,10 +193,10 @@ async def artifacts_for_node(
     Returns an empty list for a node whose enabled rows carry nobody, and the empty
     list is not a no-op downstream: ``place_delivery`` replaces the directory with an
     empty one. That is what empties a host that still has a transport enabled and has
-    stopped carrying users. It says nothing about a host with NOTHING enabled — that
-    apply is refused before this is called (``apply_node``), so such a host keeps its
-    last directory; the M27.2 rows in ``docs/decisions.md`` record which states that
-    leaves open and who owns them.
+    stopped carrying users — a delivery host with nobody on it, which is a different
+    state from a host that does not serve delivery and is not asked for here. Which of
+    the two a host is, and what a host with NOTHING enabled gets, is ``apply``'s: it
+    reads ``is_delivery_host`` above and never calls this for the second one.
 
     A TOKEN THIS CONTROL PLANE CANNOT DECRYPT RAISES OUT OF HERE and is not skipped.
     The column is decrypted as the row is loaded, so the ``select`` below raises
