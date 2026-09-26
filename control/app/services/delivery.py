@@ -83,10 +83,11 @@ _ARTIFACT_NAME_LABEL = b"hashi/delivery-artifact-name/v2"
 # The compose project this control plane's own stack is deployed as — ``name:`` in
 # ``deploy/docker-compose.yml``, which sets it explicitly so that it is a property of
 # this product rather than of whatever directory somebody cloned into.
-# ``tests/control/test_a_host_that_already_serves_delivery_gets_no_second_listener.py``
-# holds the two together, in the way ``test_a_delivery_host_answers_like_the_control
-# _plane`` holds the two routes together: a value copied across a zone boundary that
-# nothing compares is a value that drifts.
+# A test in ``tests/control`` reads that file and holds the two together — the way this
+# zone already holds its own route and the delivery site's together. A value copied
+# across a zone boundary that nothing compares is a value that drifts, and this one
+# would drift silently in the direction that looks safe: every co-located box would
+# start being told it is a stranger.
 CONTROL_STACK_PROJECT = "hashi"
 
 
@@ -156,9 +157,10 @@ async def is_delivery_host(
     that holds this control plane's own compose project is that control plane's box.
 
     A HOST THAT CANNOT ANSWER IS NOT AN EMPTY ANSWER. ``compose_projects`` raises rather
-    than returning nothing, and this does not catch it: an apply that cannot ask the
-    engine on a node is an apply that cannot do anything else there either, and the
-    caller already marks such a node degraded.
+    than returning nothing, and that is not caught here: a reading this control plane
+    could not take is the caller's to answer for, and an empty set invented here would
+    mean "nothing of ours is on this box" — the one answer that puts a second listener
+    on the machine that already has one.
 
     The false answer costs nothing on a box that already has everything — the control
     plane's own host holds the database and the master key, so a host judged co-located
