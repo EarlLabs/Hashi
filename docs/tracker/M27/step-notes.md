@@ -145,3 +145,68 @@ certificate are M27.6's, and what may be recorded there is M27.3's subject.
 `test_every_image_pin_resolves` builds from `DATA_PLANES`, so a pin added now would be
 unchecked. **Cost, recorded: until M27.3, every applied node holds material no user can
 fetch.**
+
+
+## From M27.3 — a delivery host serves the name, and records nothing
+
+**Stopped at its round cap with two Highs open** (carried to M27.4). The central claim —
+whatever serves `/sub/{token}` on a delivery host records no token, on every surface including
+the container runtime — is measured, reproduced independently, and holds under adversarial
+probing.
+
+**The route: the artifact's name IS the path, salted with the node's id.**
+`artifact_name(node_id, token) = sha256(b"hashi/delivery-artifact-name/v2" + node_id + b"\x00" + token)`,
+still unkeyed, both arguments positional so **no path produces an unsalted name**. This closed
+M27.2's open constraint; `test_one_subscription_is_a_different_name_on_every_host` pins it.
+
+**Why this route rather than hashing the path segment**, and it is the step's own title: under
+that route **the token is in every request line, in the clear, on the most seizable host in
+the fleet** — a host compromised while *running* harvests live credentials, each of which
+opens the control plane's un-narrowed route. Here there is no token to record, in flight or at
+rest, so *records no token* is **structural rather than a discipline**. It is also the only
+route plain Caddy can serve: a file server hashes nothing, so the alternative needs a program
+on a node — new code, a new pin, and `/sub/{token}`'s rules taught a second time.
+
+**The id, not the address** — an operator-editable address would dead-link every URL a user
+holds the moment it is corrected.
+
+### What measurement found that reading would not
+
+**Caddy writes three lines before it applies the logging configuration it is given** —
+`using config from file`, `adapted config to JSON`, `redirected default logger`. That is why
+`logging: driver: none` is on the service: config-level silencing is a **discipline**, the
+driver is a **structure**. Thirty probes, including traversal, `%00`, duplicate and
+case-varied query keys: still exactly those three lines, no path, no name.
+
+**Caddy resolves placeholders inside quoted tokens.** Without `_UNWRITABLE_IN_A_VALUE`, a
+header value naming `{http.request.uri}` echoes the artifact name — which under this route *is*
+the fetch credential — into **every response**. Verified twice by bypassing the guard and
+watching real Caddy return `X-Thing: /sub/3fccc…`. **Never relax that guard.**
+
+**Headers on an empty body are a signature.** Response headers sit behind a `file` matcher
+inside each shape's `handle` block, so they attach only where an artifact really is; the
+catch-all is a bare `respond 404`. Every refusal is byte-identical —
+`404 / Server: Caddy / Content-Length: 0` — across unknown names, bad shapes, `/`,
+`/panel/login`, traversal and the adversarial set. A fixed header set on every delivery host's
+404 would be the enumerability `CLAUDE.md` bans a shared Reality decoy for.
+
+**Two pre-existing Caddy behaviours, not defects of ours:** `//sub/<name>` normalises to a
+200, and `?FORMAT=` reads as *no format* because the `query` matcher key is case-sensitive.
+
+**A digest in a log is NOT acceptable** — under this route the name is that host's fetch
+credential, so a log of names is a log of credentials, and a log of names plus a seizure is a
+record of who fetched what.
+
+**asyncssh logs the remote path at DEBUG** (`Sending open for <path>`, one line per SFTP
+operation) — unreachable today and one `setLevel` away. Pinned to WARNING in
+`configure_logging`. The M27.2 row's claim about `SFTPError` carrying the path was **measured
+false** (OpenSSH sends generic reasons; `apply.py` uses `type(exc).__name__`), and a correcting
+row was appended rather than editing the accepted one.
+
+**Declared, not wired.** Nothing passes `compose_service` and no apply places the site file —
+that needs M27.4's predicate and M27.6's name. `render_compose(delivery=None)` is
+byte-identical, so a non-delivery host recreates nothing. The site file is
+`/opt/hashi/delivery-site.Caddyfile`, deliberately **not** `delivery.*`, which is the push's
+staging family and gets `rm -rf`'d. `restart` runs `up -d --remove-orphans`, so dropping the
+service removes the container — M27.4's removal path, for free, though the *directory* still
+needs `place_delivery(artifacts=[])`.

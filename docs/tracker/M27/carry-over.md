@@ -79,3 +79,44 @@ Assert the error code or the sentence.
 `control/app/services/apply` is *"the only one"* that calls `place_delivery`. True today,
 unverifiable from that package, and rots silently — the class the convention exists to prevent.
 Drop *"the only one"*, keep the name.
+
+
+## From M27.3 — OPEN, carried into M27.4
+
+**1. A correction applied in one place out of five.** Four places still assert the control
+plane answers an unknown token with a **bare** 404: `edge/bootstrap/delivery_site.py:216-218`,
+`edge/bootstrap/delivery-site.Caddyfile.j2:54-57`,
+`tests/edge/test_what_a_delivery_host_serves_and_what_it_writes_down.py:199-200`, and
+`tests/e2e/infra/test_a_delivery_host_serves_a_subscription_and_logs_nothing.py:270-271`.
+**Measured false:** `GET /sub/<unknown>` on the control plane returns 404 with
+`cache-control`, `content-security-policy`, `referrer-policy`, `x-content-type-options` and
+`x-frame-options` — and two of those are exactly the ones the e2e assertion message says no
+control-plane 404 carries.
+
+**The same round discovered this and corrected `docs/decisions.md` to say the opposite**, then
+left the claim standing everywhere else, so **the durable record and the source now contradict
+each other about one measurement.** The true statement is already written in the row: a
+delivery host's refusal matches the control plane's **public site** (bare Caddy 404) and
+deliberately does **not** match the control plane's own `/sub/` 404, because matching that
+would mean answering with the header set that identifies a hashi control plane.
+
+**2. A test that cannot fail, in the test added to fix an untested guarantee.** Deleting the
+`sqlalchemy.engine` pin from `configure_logging` leaves all four tests in
+`tests/control/test_the_loggers_this_process_silences_stay_silenced.py` **green**, because
+SQLAlchemy sets `logging.getLogger("sqlalchemy")` to WARNING at import, so the child's
+effective level is 30 whatever the root and the pin do. `asyncssh` and `uvicorn.access` go
+genuinely red. The file's header claims the guarantee for all three. Fix: drive the **parent**
+to DEBUG before calling `configure_logging`, add those parents to the save/restore set, and
+re-run the deletion mutation for all three.
+
+**3. `file` and `file_server` disagree on a directory** named `<name><extension>`: `file`
+treats it as absent, `file_server` serves its index — measured, 200 with a body and **none of
+the headers**, i.e. a document without `no-store`. Unreachable in practice (the push writes
+only regular files, replaces the directory wholesale, and mounts `:ro`, so it needs root on the
+node already). One sentence, or give `file_server` a matcher too.
+
+**4. The header guard test misses the block a real link hits.**
+`test_the_headers_are_set_only_where_the_artifact_is_really_there` loops `ARTIFACT_EXTENSION`
+and so covers the two shape matchers but not `@no_shape_named` — the block a URL a user
+already holds actually reaches. Deleting the `file` guard from that one block leaves it and
+its neighbour green; only the e2e scenario catches it.
