@@ -243,6 +243,37 @@ NOTHING_LEFT_TO_APPLY_UNPUSHED = (
     f"{OFFER_ONE_AGAIN} {NOTHING_STOPS_A_SERVING_HOST}"
 )
 
+# The clause each of the three refusals above ends its first sentence with, named here
+# because M27.4 made it conditional — and the sentence that replaces it when it is not
+# true any more.
+#
+# A refused apply now REMOVES this host's delivery material before it refuses (see
+# ``apply_node``), so on a host that was holding some, "nothing on the node was changed"
+# is false. It is a replacement rather than an addition on purpose: an operator cannot be
+# told in one paragraph both that nothing changed and that something was taken away, and
+# the clause it replaces is the one making the false half of that claim.
+#
+# The substitution is the same mechanism ``panel/wording`` already uses on these
+# sentences — a named clause swapped for another named clause — rather than a second set
+# of three constants, which would have to be kept in step with these by hand.
+NOTHING_CHANGED_ON_THE_NODE = "nothing was pushed and nothing on the node was changed"
+DELIVERY_TAKEN_BACK = (
+    "nothing was pushed, and the one thing that did change on the node is that the "
+    "pre-rendered subscriptions an earlier apply left there have been removed — a host "
+    "this control plane no longer hands anybody's material to does not keep it"
+)
+
+# And when the host could not be reached to do that. Appended rather than substituted,
+# because here "nothing on the node was changed" is exactly true: nothing was, including
+# the removal. What the operator would otherwise not learn is that the material is still
+# sitting there — which on a host nobody is pushing to any more is other people's
+# configurations with no end date.
+DELIVERY_MAY_STILL_BE_THERE = (
+    " This control plane could not reach the node to take back the pre-rendered "
+    "subscriptions an earlier apply may have left on it, so whatever is there is still "
+    "there."
+)
+
 # What an apply is refused with when the node it would put into service has a pool that
 # cannot hold the fleet — M23, round 3. The walk pressed apply on a degraded node with a
 # two-address pool and three users: the push went out, the host's config changed, the
@@ -814,8 +845,16 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
     )
 
 
-async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
-    """Which of the three refusals this node gets.
+async def _nothing_to_apply(
+    session: AsyncSession, node: Node, *, delivery_material: bool | None = False
+) -> str:
+    """Which of the three refusals this node gets, and what it says about the host.
+
+    ``delivery_material`` is what the removal below the refusal found: ``True`` when this
+    host was holding delivery material and no longer is, ``False`` when it was holding
+    none, and ``None`` when the host could not be reached to ask. Only the first of those
+    makes the refusal's "nothing on the node was changed" false, and only the third
+    leaves something behind worth telling an operator about.
 
     One query, on the refusal path only, and it reads both axes off one column.
     ``enabled_transports`` already filtered to the offered rows and came back empty, so
@@ -841,10 +880,63 @@ async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
     )
     stamps = applied_at.scalars().all()
     if not stamps:
-        return NOTHING_TO_APPLY_YET
-    if any(stamp is not None for stamp in stamps):
-        return NOTHING_LEFT_TO_APPLY
-    return NOTHING_LEFT_TO_APPLY_UNPUSHED
+        refusal = NOTHING_TO_APPLY_YET
+    elif any(stamp is not None for stamp in stamps):
+        refusal = NOTHING_LEFT_TO_APPLY
+    else:
+        refusal = NOTHING_LEFT_TO_APPLY_UNPUSHED
+    if delivery_material is None:
+        return refusal + DELIVERY_MAY_STILL_BE_THERE
+    if delivery_material:
+        return refusal.replace(NOTHING_CHANGED_ON_THE_NODE, DELIVERY_TAKEN_BACK)
+    return refusal
+
+
+async def _take_delivery_back(node: Node, node_settings: Settings) -> bool | None:
+    """Take this host's delivery material off it when its apply is refused — M27.4.
+
+    ``True`` when the host was holding some and no longer is, ``False`` when it was
+    holding none, ``None`` when the host could not be reached to ask.
+
+    WHY A REFUSED APPLY REACHES A HOST AT ALL. ``apply_node`` refuses a node with nothing
+    enabled above everything it writes, so the ordinary way a host stops carrying users —
+    withdraw its last transport, press apply — never reached the push, and the host kept
+    its ex-users' rendered subscriptions, including a WireGuard-family client file's
+    ``PrivateKey``, which the node's own server config never held. A host nothing will
+    ever push to again keeping other people's configurations is not "absent" by any
+    reading, and there is no other path in this product that would ever come back for it.
+
+    M27.2 WEIGHED REACHING IT AND REFUSED, on three grounds, and this is a REMOVAL rather
+    than the push it refused:
+
+    * a push needs ``node_stack.prepare``, which has not run here. This creates nothing —
+      ``rm -rf`` on a path that is not there succeeds — so it cannot make ``NODE_ROOT``
+      under an account that should not own it, and it cannot reintroduce the raw
+      ``Permission denied`` that ``HOST_NOT_PREPARED`` was written to replace;
+    * the three refusals say "nothing on the node was changed". That clause is now
+      conditional and is replaced on the one host where it is false — see
+      ``DELIVERY_TAKEN_BACK``;
+    * and a failure had nowhere to go. It has one now: ``None`` reaches the operator as
+      ``DELIVERY_MAY_STILL_BE_THERE``. It is NOT a reason to degrade the node or to
+      answer the apply with a failure — M18.1 settled that a node with nothing enabled is
+      not a failed node, and a host we could not reach is in exactly the state the
+      refusal already describes.
+
+    Nothing about the node's record is written here, including a host key learned on a
+    first connection: this path exists to take something off a host, and a refused apply
+    that quietly edited the row would be a change nobody asked for.
+    """
+    try:
+        target = target_for(node, node_settings)
+    except NodeOperationFailed:
+        # No address, no key, or a key this control plane cannot read. Nothing was
+        # dialled, so nothing can be said about what is on the host.
+        return None
+    try:
+        async with NodeConnection(target) as connection:
+            return await node_delivery.remove_delivery(connection)
+    except NodeUnreachable:
+        return None
 
 
 async def _record_failure(
@@ -1079,7 +1171,19 @@ async def apply_node(
     # the old answer came from: zero services renders an empty ``services:`` mapping,
     # which the daemon rejects, and the operator was handed that rejection.
     if not enabled:
-        raise NothingToApply(await _nothing_to_apply(session, node))
+        # AND THE HOST IS STILL REACHED, for the one thing a refusal must not leave
+        # behind — M27.4. Everything else about this refusal is unchanged: no state is
+        # written, nothing is rendered, nothing is pushed, and the node goes on serving
+        # whatever it was last given. See ``_take_delivery_back`` for why a removal is
+        # allowed on a path a push was refused on, and ``_nothing_to_apply`` for what the
+        # operator is told in each of its three outcomes.
+        raise NothingToApply(
+            await _nothing_to_apply(
+                session,
+                node,
+                delivery_material=await _take_delivery_back(node, node_settings),
+            )
+        )
 
     # Whether this apply is what PUTS the node into service, read before the line that
     # does it — M23. The answer is not "did the state change": a re-apply of an active
@@ -1124,8 +1228,15 @@ async def apply_node(
     # host is about to be given rather than what the fleet was serving a moment ago.
     #
     # It carries no other node's material — see ``services/delivery``, which holds that
-    # narrowing at its own seam. Nothing on the node reads this directory yet: what
-    # serves it is M27.3's, and which hosts should is M27.4's.
+    # narrowing at its own seam.
+    #
+    # Rendered before it is known whether this host is a delivery host at all, and that
+    # is deliberate rather than an oversight: the second half of that question is a
+    # reading of the HOST (``delivery.is_delivery_host``) and cannot be asked above the
+    # connection, while this is a database question and this is where those are asked.
+    # What it costs on a host that turns out not to be one is a render that is thrown
+    # away; what the alternative costs is a database read inside the connection block,
+    # where a slow query holds a half-restarted node open.
     artifacts = await delivery.artifacts_for_node(session, node, enabled)
 
     for config_name, config in configs.items():
@@ -1263,10 +1374,19 @@ async def apply_node(
             #
             # AN EMPTY ``artifacts`` IS NOT SKIPPED: it is how a node that still has a
             # transport enabled but no longer carries anybody stops holding delivery
-            # material. It does NOT reach a node with nothing enabled at all — that
-            # apply is refused above, before the connection — see the M27.2 rows in
-            # ``docs/decisions.md`` for what is left on such a host and who owns it.
-            await node_delivery.place_delivery(connection, artifacts=artifacts)
+            # material.
+            #
+            # AND WHICH OF THE TWO CALLS BELOW IS MADE IS DERIVED — M27.4. A host that
+            # is not a delivery host does not hold an emptied directory, it holds no
+            # directory: the feature is ABSENT there rather than switched off, which is
+            # what the co-located arrangements require and what the same call gives a
+            # host that has STOPPED being one. ``is_delivery_host`` is the whole of the
+            # decision and it takes no setting from anybody — see it for how both halves
+            # are read off what is already true.
+            if await delivery.is_delivery_host(connection, enabled=enabled):
+                await node_delivery.place_delivery(connection, artifacts=artifacts)
+            else:
+                await node_delivery.remove_delivery(connection)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
         await _record_failure(session, node, str(exc), granted)

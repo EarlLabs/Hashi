@@ -426,6 +426,10 @@ class AcceptingNode:
         # to be able to read the document, and the name is derived rather than stored,
         # so a digest of it would be a second derivation nothing pins.
         self.delivered: list[node_delivery.Artifact] = []
+        # And whether this apply took delivery off the host instead of placing any —
+        # M27.4. A separate fact from an empty ``delivered``: that is a host which serves
+        # delivery and carries nobody, this is a host which does not serve delivery.
+        self.delivery_removed = False
 
     # Untyped return: the class is its own annotation and py314 still needs a string
     # for that, which this repo's ruff rules reject (UP037).
@@ -438,11 +442,11 @@ class AcceptingNode:
 
 @pytest.fixture
 def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the six calls that touch a host, and nothing else.
+    """Replace the eight calls that touch a host, and nothing else.
 
-    Five in ``node_stack`` and, since M27.2, one in ``edge.bootstrap.delivery`` — a
+    Six in ``node_stack`` and, since M27.2, two in ``edge.bootstrap.delivery`` — a
     node is handed its users' pre-rendered subscriptions on every apply, so a fixture
-    that left that one real would reach a stub connection with no ``run`` on it and
+    that left those real would reach a stub connection with no ``run`` on it and
     every apply in this suite would die inside it.
     """
     from control.app.services import apply
@@ -486,6 +490,23 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
         # second apply did not push.
         connection.delivered = list(artifacts)
 
+    async def remove_delivery(connection) -> bool:
+        # What the real one leaves behind: no directory at all. A host that was holding
+        # material is what this double stands for — ``True`` — because the host it
+        # stands for is one every step of an apply worked on, and a test about a host
+        # that held none builds its own double and says so in its own file.
+        connection.delivered = []
+        connection.delivery_removed = True
+        return True
+
+    async def compose_projects(connection) -> frozenset[str]:
+        # A NODE, and not the box this control plane is deployed on — M27.4. The
+        # co-located arrangement is a different host and a different answer, and a
+        # test about it says so in its own file: this fixture has always stood for the
+        # ordinary node, and the ordinary node runs the node stack and nothing of ours
+        # besides.
+        return frozenset({"hashi-node"})
+
     async def restart(connection) -> None:
         return None
 
@@ -527,6 +548,8 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)
     pinned(monkeypatch, node_delivery, "place_delivery", place_delivery)
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
+    pinned(monkeypatch, node_stack, "compose_projects", compose_projects)
     pinned(monkeypatch, node_stack, "restart", restart)
     pinned(monkeypatch, node_stack, "running_containers", running_containers)
 

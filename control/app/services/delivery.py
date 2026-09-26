@@ -43,10 +43,12 @@ path for host J, and it is not ``/sub/{token}`` either, so the two URLs a user m
 cannot be moved by changing a DNS record alone. That cost is M27.7's to carry, and is
 recorded in ``docs/decisions.md`` under 2026-09-26.
 
-WHAT THIS MODULE DOES NOT DO: it does not decide which hosts serve delivery (M27.4), it
-does not stand up a listener — that is ``edge.bootstrap.delivery_site``, which nothing
-wires in yet — and it does not put a delivery URL in front of a user (M27.7). What it
-produces is placed on the node by ``services/apply``.
+WHICH HOSTS SERVE DELIVERY IS ``is_delivery_host`` BELOW, and it is derived rather than
+asked for (M27.4). What this module still does not do: it does not stand up a listener —
+that is ``edge.bootstrap.delivery_site``, which nothing wires in yet, because a site
+block needs an address and a port and both are M27.6's — and it does not put a delivery
+URL in front of a user (M27.7). What it produces is placed on the node by
+``services/apply``.
 """
 
 import hashlib
@@ -62,7 +64,7 @@ from control.app.models import (
     TransportPurpose,
 )
 from control.app.services import subscriptions
-from edge.bootstrap import delivery
+from edge.bootstrap import NodeConnection, delivery, node_stack
 from edge.registry import SubscriptionFormat
 
 # Domain separation, in the shape ``crypto.py``'s derivation labels use and for the
@@ -77,6 +79,15 @@ from edge.registry import SubscriptionFormat
 # is not a migration to worry about — the push REPLACES the directory, so the previous
 # names are gone in the same call (``edge.bootstrap.delivery.place_delivery``).
 _ARTIFACT_NAME_LABEL = b"hashi/delivery-artifact-name/v2"
+
+# The compose project this control plane's own stack is deployed as — ``name:`` in
+# ``deploy/docker-compose.yml``, which sets it explicitly so that it is a property of
+# this product rather than of whatever directory somebody cloned into.
+# ``tests/control/test_a_host_that_already_serves_delivery_gets_no_second_listener.py``
+# holds the two together, in the way ``test_a_delivery_host_answers_like_the_control
+# _plane`` holds the two routes together: a value copied across a zone boundary that
+# nothing compares is a value that drifts.
+CONTROL_STACK_PROJECT = "hashi"
 
 
 def artifact_name(node_id: str, token: str) -> str:
@@ -109,6 +120,54 @@ def artifact_name(node_id: str, token: str) -> str:
     return hashlib.sha256(
         _ARTIFACT_NAME_LABEL + node_id.encode() + b"\x00" + token.encode()
     ).hexdigest()
+
+
+async def is_delivery_host(
+    connection: NodeConnection, *, enabled: list[NodeTransport]
+) -> bool:
+    """Should this host serve its own users their subscriptions — M27.4.
+
+    DERIVED, NEVER ASKED FOR, and that is the whole of this function. The three roles
+    this product has — control plane, entry, leaf — are placed on one, two or three
+    machines in any combination, and which country each sits in is not the product's
+    business; a setting for "this one is a delivery host" would be a way to get the
+    arrangement wrong, and an operator who has never read M27 would have to know to
+    leave it off. So both halves below are read off things that are already true.
+
+    FIRST HALF: does anyone fetch from this host at all. A node with no user-facing row
+    carries nobody — the far end of a hop is not a user's to hold — so there is nothing
+    for a listener here to answer and nobody who would ask. That covers the leaf in
+    every arrangement, and it is asked off the row's own PURPOSE rather than off any
+    transport's name.
+
+    SECOND HALF: is this host already the one a user refreshes against. Where the
+    control plane sits on this box, ``/sub/{token}`` is served from it already, and a
+    second answer for the same document would be a second name, a second certificate
+    and a second listener on one machine — the feature INERT rather than absent, which
+    is what M27.4 forbids.
+
+    It is measured on the host rather than compared between records, and that is not
+    fastidiousness. ``docs/deploy/runbook.md`` has the operator register a co-located
+    box with its public IP, while ``HASHI_PUBLIC_HOST`` must be a NAME with a real DNS
+    record (``.env.example`` says so, because a public CA will not issue for an
+    address) — so the two truthful values for one machine are two different strings,
+    and a comparison of them would answer "not co-located" for the arrangement this
+    milestone is most careful about. What cannot be spelled two ways is the host: a box
+    that holds this control plane's own compose project is that control plane's box.
+
+    A HOST THAT CANNOT ANSWER IS NOT AN EMPTY ANSWER. ``compose_projects`` raises rather
+    than returning nothing, and this does not catch it: an apply that cannot ask the
+    engine on a node is an apply that cannot do anything else there either, and the
+    caller already marks such a node degraded.
+
+    The false answer costs nothing on a box that already has everything — the control
+    plane's own host holds the database and the master key, so a host judged co-located
+    that is not simply keeps no second copy — and the true one is what keeps a second
+    listener off a machine that already answers.
+    """
+    if not any(row.purpose == TransportPurpose.USERS for row in enabled):
+        return False
+    return CONTROL_STACK_PROJECT not in await node_stack.compose_projects(connection)
 
 
 async def artifacts_for_node(

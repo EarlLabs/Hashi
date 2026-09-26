@@ -23,7 +23,16 @@ WHY:  the root is WARNING, so each of these three is quiet today by inheritance 
         values this database only ever holds encrypted.
 HOW:  the levels are read back through ``getEffectiveLevel`` rather than from the source,
       so a pin that is present but overridden by something later in the function fails
-      here too.
+      here too — and every ANCESTOR of the logger under test is driven to DEBUG first,
+      which is what makes each of these able to fail.
+
+      CORRECTED 2026-09-26, and the correction is the reason the ancestors are there.
+      The first version drove only the ROOT to DEBUG, and deleting the
+      ``sqlalchemy.engine`` pin left all four tests green: SQLAlchemy sets
+      ``logging.getLogger("sqlalchemy")`` to WARNING when it is imported, so the child's
+      effective level was 30 whatever the root and the pin did. A test for a pin that
+      passes with the pin deleted is a test of the library's own default — which the
+      library is free to change, in the release after this one.
 
 Boundary: this says nothing about what any of the three would actually print. It says
 that this process has asked them not to, which is the half a test can hold.
@@ -39,6 +48,17 @@ from control.app.main import configure_logging
 # M27.3's; the other two were pinned long before and were equally untested.
 PINNED = ("asyncssh", "sqlalchemy.engine")
 
+# Every logger these three inherit from, root included — the set this file has to drive
+# loud before it can claim the pin is what keeps them quiet, and the set it has to put
+# back afterwards because logging is process-global. Derived from the names rather than
+# listed, so a fourth pinned logger brings its ancestors with it.
+def _ancestors(name: str) -> tuple[str, ...]:
+    parts = name.split(".")
+    return ("", *(".".join(parts[:count]) for count in range(1, len(parts))))
+
+
+ANCESTORS = sorted({one for name in (*PINNED, "uvicorn.access") for one in _ancestors(name)})
+
 
 @pytest.fixture(autouse=True)
 def restore_levels():
@@ -50,7 +70,7 @@ def restore_levels():
     """
     before = {
         name: (logging.getLogger(name).level, logging.getLogger(name).disabled)
-        for name in (*PINNED, "uvicorn.access", "control", "edge", "")
+        for name in (*PINNED, "uvicorn.access", "control", "edge", *ANCESTORS)
     }
     yield
     for name, (level, disabled) in before.items():
@@ -62,8 +82,14 @@ def restore_levels():
 def test_a_library_that_writes_paths_and_parameters_is_never_louder_than_warning(
     name: str,
 ) -> None:
-    """Pinned on the logger itself, so raising the ROOT to DEBUG does not reach it."""
-    logging.getLogger().setLevel(logging.DEBUG)
+    """Pinned on the logger itself, so nothing it inherits from can reach it.
+
+    Every ancestor is driven to DEBUG, not just the root: a library that sets its own
+    top-level logger to WARNING at import — SQLAlchemy does — would otherwise be the
+    thing keeping this quiet, and deleting the pin would change nothing here.
+    """
+    for ancestor in _ancestors(name):
+        logging.getLogger(ancestor).setLevel(logging.DEBUG)
     configure_logging()
     assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING, (
         f"{name!r} would write at DEBUG or INFO in this process — see this file's header "
@@ -75,6 +101,8 @@ def test_the_access_log_is_off_whatever_started_this_process() -> None:
     """uvicorn is also started with ``--no-access-log`` and both are needed: the flag
     covers the server's own invocation, this covers a test harness, gunicorn, or a
     developer's ``uvicorn`` without it."""
+    for ancestor in _ancestors("uvicorn.access"):
+        logging.getLogger(ancestor).setLevel(logging.DEBUG)
     logging.getLogger("uvicorn.access").disabled = False
     configure_logging()
     assert logging.getLogger("uvicorn.access").disabled

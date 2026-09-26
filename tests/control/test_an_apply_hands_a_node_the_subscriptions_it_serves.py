@@ -22,10 +22,11 @@ import pytest
 from sqlalchemy import select
 
 from control.app.models import NodeTransport, Subscription
-from control.app.services import delivery, nodes
+from control.app.services import apply, delivery, nodes
 from control.app.services import transports as transports_service
 from edge.bootstrap import delivery as node_delivery
 from edge.bootstrap.delivery import ARTIFACT_NAME
+from edge.bootstrap.ssh import NodeUnreachable
 from edge.registry import SubscriptionFormat, discover
 
 from .conftest import GENERATED_SSH_KEY, pinned
@@ -80,6 +81,10 @@ class Handed:
     def __init__(self) -> None:
         self.artifacts: list[node_delivery.Artifact] = []
         self.pushes = 0
+        # And the other call an apply can make — M27.4. A host that is not a delivery
+        # host is not pushed an empty set, it is stripped: the two are different states
+        # on the host and have to be different facts here.
+        self.removals = 0
 
 
 @pytest.fixture
@@ -91,13 +96,19 @@ def handed(accepting_nodes, monkeypatch) -> Handed:
     """
     watched = Handed()
     accepting = node_delivery.place_delivery
+    stripping = node_delivery.remove_delivery
 
     async def place_delivery(connection, *, artifacts) -> None:
         watched.artifacts = list(artifacts)
         watched.pushes += 1
         await accepting(connection, artifacts=artifacts)
 
+    async def remove_delivery(connection) -> bool:
+        watched.removals += 1
+        return await stripping(connection)
+
     pinned(monkeypatch, node_delivery, "place_delivery", place_delivery)
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
     return watched
 
 
@@ -370,18 +381,19 @@ def test_one_subscription_is_a_different_name_on_every_host() -> None:
     assert delivery.artifact_name("node-1", token) != delivery.artifact_name("node-2", token)
 
 
-async def test_a_node_with_nothing_enabled_is_refused_above_the_push(
+async def test_a_node_with_nothing_enabled_is_refused_and_stripped(
     client, session, uri_transport: str, handed: Handed
 ) -> None:
-    """The state the stop case is NOT closed in, pinned rather than left in prose.
+    """The stop case, CLOSED — M27.4, and this test used to pin it open.
 
-    Withdraw a node's only transport and press apply: ``apply_node`` answers "nothing to
-    apply" before it opens a connection, so the host keeps the delivery directory it was
-    last given — its ex-users' rendered subscriptions, and the client halves in them.
+    Withdraw a node's only transport and press apply: ``apply_node`` still answers
+    "nothing to apply" and still pushes nothing, and it now reaches the host for one
+    thing before it does — the delivery material an earlier apply left there, which is
+    its ex-users' rendered subscriptions and the client halves in them, on a host this
+    control plane will never push to again.
 
-    This asserts what the product DOES, so that the day something reaches that host the
-    assertion fails and the M27.2 rows in ``docs/decisions.md`` are read again. It is
-    not an approval of the behaviour: those rows hand the state to M27.4 with the reason.
+    What is unchanged is everything else about the refusal: 409, no state written, and a
+    node still running whatever it was last given.
     """
     await add_user(client, "boris")
     node_id = await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
@@ -397,7 +409,109 @@ async def test_a_node_with_nothing_enabled_is_refused_above_the_push(
     refused = await client.post(f"/api/nodes/{node_id}/apply")
 
     assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
     assert handed.pushes == 1, (
-        "the refused apply reached the delivery push — if that is now intended, the "
-        "three states in the M27.2 rows of docs/decisions.md are out of date"
+        f"the refused apply pushed material to a host it refuses to configure: {said}"
     )
+    assert handed.removals == 1, (
+        "the refused apply left the host holding its ex-users' subscriptions, which is "
+        f"the state M27.4 closes: {said}"
+    )
+    # WHICH 409, not merely a 409: a future change refusing this apply for another
+    # reason would keep a status assertion green while the path under test stopped
+    # being reachable.
+    assert apply.DELIVERY_TAKEN_BACK in said, said
+    assert apply.NOTHING_CHANGED_ON_THE_NODE not in said, (
+        "the refusal tells the operator nothing on the node was changed, in the one "
+        f"case where something was: {said}"
+    )
+
+
+async def test_a_refused_apply_on_a_host_holding_nothing_says_what_it_always_said(
+    client, session, uri_transport: str, handed: Handed, monkeypatch
+) -> None:
+    """The common case, and the one M18.1's sentence was written for.
+
+    Almost every host this refusal is read on never held delivery material — every host
+    in this product did not, until M27.2 — so the removal finds nothing and the operator
+    reads exactly the sentence they read before. A clause that appeared on every refusal
+    would be a change to the one screen M18's acceptance walked.
+    """
+
+    async def remove_delivery(connection) -> bool:
+        handed.removals += 1
+        return False
+
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
+    await add_user(client, "boris")
+    node_id = await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
+    rows = await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    only = next(iter(rows.scalars().unique()))
+    assert (
+        await client.post(f"/api/transports/{only.id}/state", json={"enabled": False})
+    ).status_code == 200
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
+    assert handed.removals == 1, "the host was not even asked whether it held any"
+    assert apply.NOTHING_CHANGED_ON_THE_NODE in said, said
+    assert apply.DELIVERY_TAKEN_BACK not in said, (
+        f"the operator is told material was removed from a host that held none: {said}"
+    )
+
+
+async def test_a_refused_apply_that_could_not_reach_the_host_says_so(
+    client, session, uri_transport: str, handed: Handed, monkeypatch
+) -> None:
+    """And the third outcome, which is the one that leaves something behind.
+
+    The refusal itself is unchanged — a node with nothing enabled is not a failed node,
+    whatever the host did — but "nothing on the node was changed" is now the whole of
+    what this control plane can say about a box it could not dial, and the material it
+    went there to take back is still sitting on it.
+    """
+
+    async def remove_delivery(connection) -> bool:
+        handed.removals += 1
+        raise NodeUnreachable("the node did not answer")
+
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
+    await add_user(client, "boris")
+    node_id = await a_served_node(client, uri_transport, name="entry", address=FIRST_ADDRESS)
+    rows = await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    only = next(iter(rows.scalars().unique()))
+    assert (
+        await client.post(f"/api/transports/{only.id}/state", json={"enabled": False})
+    ).status_code == 200
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
+    assert apply.DELIVERY_MAY_STILL_BE_THERE.strip() in said, said
+    assert apply.NOTHING_CHANGED_ON_THE_NODE in said, (
+        f"nothing was changed on this host, and the refusal no longer says so: {said}"
+    )
+    node = await client.get(f"/api/nodes/{node_id}")
+    assert node.json()["state"] == "active", (
+        "a host that could not be reached to strip delivery material marked the node "
+        "degraded — a node with nothing enabled is not a failed node (M18.1)"
+    )
+
+
+def test_every_refusal_carries_the_clause_the_removal_corrects() -> None:
+    """The substitution is by text, so this is what keeps it from quietly doing nothing.
+
+    ``_nothing_to_apply`` swaps one named clause for another. A refusal reworded so that
+    it no longer contains the first one would go on being returned unchanged — telling an
+    operator nothing on the node was changed, on the host this control plane has just
+    stripped — and every assertion about the other two outcomes would stay green.
+    """
+    for refusal in (
+        apply.NOTHING_TO_APPLY_YET,
+        apply.NOTHING_LEFT_TO_APPLY,
+        apply.NOTHING_LEFT_TO_APPLY_UNPUSHED,
+    ):
+        assert apply.NOTHING_CHANGED_ON_THE_NODE in refusal, refusal
