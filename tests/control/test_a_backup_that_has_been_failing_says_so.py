@@ -995,20 +995,44 @@ async def test_a_record_with_both_dates_ahead_says_both_things(written) -> None:
     assert console.BACKUP_CLOCK_RUNS_UNDISTURBED not in flowing(said.detail)
 
 
-def _with_the_runs_ahead(body: dict) -> dict:
-    """The same record with every run it HAS stamped after the moment it will be read.
+def _with_the_runs_ahead(
+    body: dict, keys: tuple[str, ...] = ("last_success", "last_failure", "last_attempt")
+) -> dict:
+    """The same record with the runs named in ``keys`` stamped after the moment it is read.
 
     Only the two ``_ahead`` reads — ``last_success`` and ``last_failure`` — decide the run
     half, but ``last_attempt`` moves with them so the record stays one a writer could have
     left: a success at this hour and an attempt six weeks earlier is not a shape
     ``scripts/backup-run.sh`` can write, and a fixture nobody could produce proves nothing.
+
+    ``keys`` exists for the MIXED state — the failure ahead and the success where it was,
+    which is still a record a writer could leave, since the latest run is the one whose
+    stamp the moved clock caught.
     """
     ahead = dict(body)
-    for key in ("last_success", "last_failure", "last_attempt"):
+    for key in keys:
         was = body.get(key)
         if was is not None:
             ahead[key] = run(-30, exit_code=was["exit_code"], outcome=was["outcome"])
     return ahead
+
+
+def _every_way_a_run_can_be_ahead(body: dict) -> dict[str, dict]:
+    """The same body with every run ahead, with only the failure ahead, and with none.
+
+    THE MIXED ONE NEEDS NO PURPOSE-BUILT RECORD, which is the fact the gate was wrong about:
+    the reason recorded for leaving that state unpinned was that no body here carries both
+    runs, and the FAILING body is ``record(last_failure=run(1, …))``, so ``record()``'s
+    default ``last_success`` survives the override and it carries both. It is offered only
+    where there are two runs to tell apart; anywhere else it would be a second name for
+    "every run", and a case that is another case renamed pins nothing.
+    """
+    ways = {"every run": _with_the_runs_ahead(body), "no run": dict(body)}
+    if body["last_success"] and body["last_failure"]:
+        ways["the failure only"] = _with_the_runs_ahead(
+            body, ("last_failure", "last_attempt")
+        )
+    return ways
 
 
 async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) -> None:
@@ -1020,7 +1044,16 @@ async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) ->
     and has just said no age on this screen can be believed — at least one of them is
     ``BACKUP_AGE_UNKNOWABLE`` in that state, though not necessarily all, since a record with
     one run ahead and one not still prints a real age for the other; and there has to BE a
-    run, which under NEVER there is not.
+    run, which is a question about the BODY and not about the standing.
+
+    THE THIRD ONE IS NOT THE STANDING, and reading it off the standing is what M28.24 found
+    here. ``Standing.NEVER`` means no backup ever SUCCEEDED, not that no run exists:
+    ``backup_standing`` has a ``case Standing.NEVER if reading.failed_since`` branch, and
+    measured, a record with ``last_success: null``, a failure six hours old and a due date
+    ahead answers standing ``never``, draws *"The last run was 6 hours ago"*, and DOES say
+    this clause. The old expected side — ``standing is not NEVER`` — agreed with the code
+    only because the one NEVER body swept was the run-less shape, so the sweep carries a
+    second NEVER body and the expected side is read out of the record.
 
     A BICONDITIONAL AND NOT A PRESENCE CHECK. A presence check cannot fail in the direction
     this milestone keeps failing in — a true sentence appearing in a state nobody had in
@@ -1031,20 +1064,43 @@ async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) ->
     Pinned by constant, because a literal here would be a second copy of the sentence, and
     two copies agree with each other even when both are wrong.
     """
-    for standing, body in _every_standing_with_a_record().items():
-        has_a_run = standing is not backups.Standing.NEVER
+    # A list and not the helper's dict, because the helper is keyed on the standing and the
+    # second NEVER body would displace the first. Both are wanted: the run-less one and the
+    # one whose only run failed are the two halves of what NEVER means.
+    sweep = [
+        *_every_standing_with_a_record().items(),
+        (
+            backups.Standing.NEVER,
+            record(
+                last_success=None,
+                last_failure=run(6, exit_code=1, outcome="no-artifact"),
+                last_attempt=run(6, exit_code=1, outcome="no-artifact"),
+            ),
+        ),
+    ]
+    for standing, body in sweep:
+        has_a_run = bool(body["last_success"] or body["last_failure"])
         for due_ahead in (True, False):
-            for runs_ahead in (True, False):
-                content = _with_the_runs_ahead(body) if runs_ahead else dict(body)
+            for way, ahead in _every_way_a_run_can_be_ahead(body).items():
+                content = dict(ahead)
+                runs_ahead = way != "no run"
                 if due_ahead:
                     content["due_date"] = A_DAY_NOBODY_HAS_REACHED
 
                 reading = await backups.read(written(content), now=NOW)
-                case = (standing, due_ahead, runs_ahead)
+                case = (standing, has_a_run, due_ahead, way)
                 assert reading.due_ahead is due_ahead, case
                 assert (reading.success_ahead or reading.failure_ahead) is (
                     runs_ahead and has_a_run
                 ), case
+                # ...and the mixed state is really mixed. Without this it could degenerate
+                # into "every run" under another name — the fixture stops carrying two runs,
+                # every assertion below stays green, and the state goes back to unpinned.
+                if way == "the failure only":
+                    assert (reading.success_ahead, reading.failure_ahead) == (
+                        False,
+                        True,
+                    ), case
 
                 said = console.backup_standing(reading)
                 assert (
