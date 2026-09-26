@@ -23,16 +23,18 @@ identifier and, since the path IS how an artifact is fetched, a record of one is
 record of a credential for this host — which is why "no access log" here is the same
 absolute rule it is on the control plane and not a tidier default.
 
-NOT DECIDED HERE and deliberately absent: which hosts serve delivery (M27.4), the name
-and certificate the site is reached under (M27.6), and where a certificate persists —
-no volume is declared for Caddy's own storage, so a host that obtains one today loses
-it when the container is recreated.
+NOT DECIDED HERE and deliberately absent: which hosts serve delivery — that is
+``control/app/services/delivery.is_delivery_host``, a question about the fleet and about
+the box, neither of which this zone can see — the name and certificate the site is
+reached under (M27.6), and where a certificate persists: no volume is declared for
+Caddy's own storage, so a host that obtains one today loses it when the container is
+recreated.
 
 A NODE RUNS THIS ONLY WHEN SOMETHING ASKS FOR IT. Two calls, neither of which this
 package makes: ``compose_service`` has to reach ``node_stack.render_compose``, and
 ``place_delivery_site`` has to be called on the connection. A host nobody makes them for
-keeps the state ``delivery.place_delivery`` leaves it in — holding material, serving
-none of it.
+runs no listener, and what it holds is whatever the last call to ``delivery`` left there
+— which is either material nothing serves or, after ``remove_delivery``, nothing at all.
 """
 
 import re
