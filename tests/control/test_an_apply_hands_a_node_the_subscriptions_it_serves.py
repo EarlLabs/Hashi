@@ -12,6 +12,11 @@ WHY:  M27. The refresh endpoint lives wherever the control plane lives, so a use
 HOW:  the shared ``accepting_nodes`` harness with one more double over it, so this file
       can read what was handed to the host. Nothing here proves a file reached a disk,
       and nothing here proves anything serves it — nothing does yet.
+
+      ONE TEST DELIBERATELY DOES NOT TAKE THAT HARNESS: the refusal path now opens a
+      real ``NodeConnection``, and what is asserted there is that a record the SSH layer
+      cannot build a session from still comes back as the refusal rather than as an
+      internal error. A double would be standing in for exactly the code under test.
 """
 
 import base64
@@ -19,9 +24,9 @@ import io
 import zipfile
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from control.app.models import NodeTransport, Subscription
+from control.app.models import Node, NodeTransport, Subscription
 from control.app.services import apply, delivery, nodes
 from control.app.services import transports as transports_service
 from edge.bootstrap import delivery as node_delivery
@@ -541,3 +546,85 @@ async def test_a_node_nothing_was_ever_pushed_to_is_not_told_material_may_be_the
     said = refused.json()["error"]["message"]
     assert handed.removals == 1, "the host was not reached at all, so nothing was taken back"
     assert said == apply.NOTHING_TO_APPLY_YET, said
+
+
+async def test_a_withdrawn_row_nothing_was_ever_pushed_from_is_still_reached(
+    client, session, uri_transport: str, handed: Handed, monkeypatch
+) -> None:
+    """The third refusal: withdrawn rows, none of which ever reached the host.
+
+    Both properties at once, because they pull in opposite directions. The host IS still
+    reached — a row's ``applied_at`` is this control plane's record of its own pushes and
+    says nothing about what else is on the box — and the refusal is left exactly as it
+    was, because this is one of the two sentences that already tell the operator they
+    cannot be told what was pushed here.
+    """
+
+    async def remove_delivery(connection) -> bool:
+        handed.removals += 1
+        raise NodeUnreachable("the node did not answer")
+
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
+    node_id = await a_reachable_node(client, name="never-applied", address=FIRST_ADDRESS)
+    assert (await enable(client, node_id, uri_transport)).status_code == 201
+    rows = await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    only = next(iter(rows.scalars().unique()))
+    assert (
+        await client.post(f"/api/transports/{only.id}/state", json={"enabled": False})
+    ).status_code == 200
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
+    assert handed.removals == 1, (
+        "a host no row of ours was ever applied to was not reached, so material an "
+        f"earlier record placed there is never taken back: {said}"
+    )
+    assert said == apply.NOTHING_LEFT_TO_APPLY_UNPUSHED, said
+
+
+async def test_a_record_with_no_host_on_it_is_not_dialled_at_all(
+    client, handed: Handed
+) -> None:
+    """The arm above the connection: there is no host on this record to reach.
+
+    ``target_for`` refuses a record with no address, no key, or a key this control plane
+    cannot read, and it refuses it before anything is dialled — so the removal cannot be
+    attempted and nothing about the host may be claimed either way.
+    """
+    created = await client.post(
+        "/api/nodes",
+        json={"name": "no-way-in", "address": FIRST_ADDRESS, "location_label": "Testland"},
+    )
+    assert created.status_code == 201, created.text
+
+    refused = await client.post(f"/api/nodes/{created.json()['id']}/apply")
+
+    assert refused.status_code == 409, refused.text
+    assert handed.removals == 0, "a record with nothing to dial was dialled"
+    assert refused.json()["error"]["message"] == apply.NOTHING_TO_APPLY_YET
+
+
+async def test_a_host_key_that_will_not_import_is_still_a_refusal_and_not_a_500(
+    client, session
+) -> None:
+    """The real ``NodeConnection``, and the one thing this path must never do.
+
+    ``target_for`` checks the PRIVATE key (``nodes.ssh_key_is_usable``) and nothing checks
+    the stored HOST key, which ``NodeConnection`` imports before the block that turns a
+    failure into ``NodeUnreachable``. On an apply that gets as far as the connection that
+    lands in ``apply_node``'s own catch-all; here it would escape the function entirely,
+    because this call sits above both of its try blocks — and an apply refused for having
+    nothing to apply would be answered as an internal error.
+    """
+    node_id = await a_reachable_node(client, name="bad-host-key", address=FIRST_ADDRESS)
+    await session.execute(
+        update(Node).where(Node.id == node_id).values(ssh_host_key="not-a-public-key")
+    )
+    await session.commit()
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["message"] == apply.NOTHING_TO_APPLY_YET

@@ -156,6 +156,15 @@ async def is_delivery_host(
     milestone is most careful about. What cannot be spelled two ways is the host: a box
     that holds this control plane's own compose project is that control plane's box.
 
+    WHAT THIS ASSUMES, named because it is the expensive failure direction: that this
+    control plane is deployed by compose, under the name above, on the engine the node's
+    own SSH account talks to. A control plane run some other way — outside compose, or
+    under a daemon that account does not reach, a rootless one or a non-default context —
+    is invisible here, and its own box then reads as a stranger and is offered delivery.
+    That is a supported-install assumption rather than a check, and there is nothing on
+    the host to check it against: the alternative is a setting, which is the one thing
+    this function exists not to have.
+
     A HOST THAT CANNOT ANSWER IS NOT AN EMPTY ANSWER. ``compose_projects`` raises rather
     than returning nothing, and that is not caught here: a reading this control plane
     could not take is the caller's to answer for, and an empty set invented here would

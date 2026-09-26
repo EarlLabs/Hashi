@@ -257,10 +257,26 @@ NOTHING_LEFT_TO_APPLY_UNPUSHED = (
 # sentences — a named clause swapped for another named clause — rather than a second set
 # of three constants, which would have to be kept in step with these by hand.
 NOTHING_CHANGED_ON_THE_NODE = "nothing was pushed and nothing on the node was changed"
+
+# IT NAMES THE DIRECTORY AND NOT WHAT WAS IN IT, and that is the whole of the second
+# version of this sentence. ``remove_delivery`` answers about the LIVE DIRECTORY —
+# whether one was there — and a directory this product itself leaves EMPTY is a state it
+# creates on purpose: a host that serves delivery and carries nobody right now is pushed
+# an empty one (``place_delivery`` with no artifacts). The first version said "the
+# pre-rendered subscriptions have been removed", which is false on exactly that host,
+# and telling an operator somebody's configurations were taken off a box that held none
+# is the failure this milestone keeps producing — a sentence true of the state it was
+# written for and false in the neighbouring one the same code reaches.
+#
+# Counting what was in it was weighed and refused: it is a second reading of the host
+# for a distinction that changes nothing the operator would do, since either way this
+# host no longer has a place delivery can be served from. "With whatever it was holding"
+# is true of both states and claims neither.
 DELIVERY_TAKEN_BACK = (
     "nothing was pushed, and the one thing that did change on the node is that the "
-    "pre-rendered subscriptions an earlier apply left there have been removed — a host "
-    "this control plane no longer hands anybody's material to does not keep it"
+    "delivery directory an earlier apply left there is gone, with whatever it was "
+    "holding — a host this control plane no longer hands anybody's material to does not "
+    "keep the place it was served from"
 )
 
 # And when the host could not be reached to do that. Appended rather than substituted,
@@ -278,9 +294,8 @@ DELIVERY_TAKEN_BACK = (
 # minute ago. The removal is still ATTEMPTED on all three: what is conditional is the
 # claim, not the reach.
 DELIVERY_MAY_STILL_BE_THERE = (
-    " This control plane could not reach the node to take back the pre-rendered "
-    "subscriptions an earlier apply may have left on it, so whatever is there is still "
-    "there."
+    " This control plane could not reach the node to take back the delivery directory "
+    "an earlier apply may have left on it, so whatever is there is still there."
 )
 
 # What an apply is refused with when the node it would put into service has a pool that
@@ -855,13 +870,15 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
 
 
 async def _nothing_to_apply(
-    session: AsyncSession, node: Node, *, delivery_material: bool | None = False
+    session: AsyncSession, node: Node, *, delivery_material: bool | None
 ) -> str:
     """Which of the three refusals this node gets, and what it says about the host.
 
     ``delivery_material`` is what the removal below the refusal found: ``True`` when this
-    host was holding delivery material and no longer is, ``False`` when it was holding
-    none, and ``None`` when the host could not be reached to ask. The first makes the
+    host had a delivery directory and no longer does, ``False`` when it had none, and
+    ``None`` when the host could not be reached to ask. Required rather than defaulted:
+    "the host held none" is a measurement, and a second caller that inherited it as a
+    default would be making that claim without having looked. The first makes the
     refusal's "nothing on the node was changed" false and replaces that clause; the third
     is said only where this node's own rows show it was ever applied, which is the same
     axis the three refusals are already chosen on — see ``DELIVERY_MAY_STILL_BE_THERE``.
@@ -950,6 +967,28 @@ async def _take_delivery_back(node: Node, node_settings: Settings) -> bool | Non
         async with NodeConnection(target) as connection:
             return await node_delivery.remove_delivery(connection)
     except NodeUnreachable:
+        # The expected one, and not worth a traceback: a host that did not answer is a
+        # state this function has an answer for.
+        return None
+    except _NOT_PER_NODE:
+        # Not this node's fault and not this node's sentence — the same pass-through
+        # ``apply_node`` gives it, so "this control plane cannot read its own secrets"
+        # reaches the operator instead of being reported as a host that went quiet.
+        raise
+    except Exception:
+        # EVERYTHING ELSE IS ALSO "we did not get there", and the arm is wide because
+        # this call sits ABOVE both of ``apply_node``'s try blocks: an exception
+        # escaping here escapes the function, and a refusal that is not a failure would
+        # be answered as an internal error. The reachable one today is a stored SSH HOST
+        # key that will not import — ``target_for`` guards the private key
+        # (``nodes.ssh_key_is_usable``) and nothing guards that one, and
+        # ``NodeConnection`` imports it before the block that turns a failure into
+        # ``NodeUnreachable``.
+        #
+        # Logged with its traceback, because that is the difference between a wide arm
+        # and a swallowed one: nothing about this node's material can be claimed now, the
+        # operator is told the refusal, and the bug is still readable here.
+        logger.exception("could not take delivery material back from node %s", node.id)
         return None
 
 
