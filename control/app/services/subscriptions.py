@@ -32,7 +32,7 @@ from urllib.parse import quote
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.models import Credential, Subscription, User
+from control.app.models import Credential, NodeTransport, Subscription, User
 from control.app.services import addresses, keymaterial, nodes
 from edge.egress import EgressNotRenderable
 from edge.node import Credential as EdgeCredential
@@ -148,14 +148,41 @@ def compose_label(entry: ClientEntry) -> str:
     return entry.display_label or entry.country_label
 
 
-async def entries_for(session: AsyncSession, user: User) -> list[ClientEntry]:
+async def _rows_rendered_over(
+    session: AsyncSession, over: Sequence[NodeTransport] | None
+) -> set[str]:
+    """Which node-transport ids the three renderers below build a user's material from.
+
+    Defaults to every row the fleet is currently serving, which is the answer the
+    delivery route wants and the only answer this module had until M27.2: a node that
+    is draft, degraded or retired must never appear in anybody's configuration.
+
+    ``over`` REPLACES that filter rather than narrowing it, and a caller passing rows is
+    asserting they are ones a user may be routed onto — it is not checked here, because
+    the rows are objects the caller already holds and re-deriving the state filter from
+    them would be a second copy of ``nodes.serving_transports``. The one caller is
+    ``services/delivery.py``, which passes the rows an apply is pushing to one node: the
+    material placed on a host has to be what that host was just configured to serve,
+    and a node going into service is not in ``serving_transports`` until the apply that
+    is placing the material commits.
+    """
+    if over is not None:
+        return {node_transport.id for node_transport in over}
+    return {node_transport.id for node_transport in await nodes.serving_transports(session)}
+
+
+async def entries_for(
+    session: AsyncSession, user: User, *, over: Sequence[NodeTransport] | None = None
+) -> list[ClientEntry]:
     """Every client entry this user should currently receive.
 
     Built from their credentials, so a revoked user yields nothing (their rows are
-    gone) and a user on a draft or degraded node yields nothing for it (the
-    node-transport is not serving).
+    gone) and — where ``over`` is left at its default, which is every caller a user's
+    own fetch reaches — a user on a draft or degraded node yields nothing for it,
+    because the node-transport is not serving. A caller that passes ``over`` gets the
+    entries for those rows and no state filter at all; see ``_rows_rendered_over``.
     """
-    serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
+    serving = await _rows_rendered_over(session, over)
 
     result = await session.execute(
         select(Credential).where(Credential.user_id == user.id)
@@ -192,7 +219,9 @@ async def entries_for(session: AsyncSession, user: User) -> list[ClientEntry]:
     return rendered
 
 
-async def config_files_for(session: AsyncSession, user: User) -> list[ClientConfig]:
+async def config_files_for(
+    session: AsyncSession, user: User, *, over: Sequence[NodeTransport] | None = None
+) -> list[ClientConfig]:
     """Every configuration FILE this user should currently receive — item 27.
 
     The second representation, and `control`'s whole half of it: ask each transport
@@ -205,6 +234,9 @@ async def config_files_for(session: AsyncSession, user: User) -> list[ClientConf
     error: they have nothing in this shape, and the endpoint says so with an empty
     archive for the same reason ``render`` returns an empty document.
 
+    ``over`` is ``entries_for``'s, and means the same thing here: the rows to render
+    this user's files from, defaulting to every row the fleet is serving.
+
     FOUR THINGS ARE SKIPPED RATHER THAN REFUSED, and the last two are M23's: a row that
     is not serving, a transport with no file shape, a credential that does not carry what
     its transport declares a consumer's material is, and — round 2 — a row whose
@@ -213,7 +245,7 @@ async def config_files_for(session: AsyncSession, user: User) -> list[ClientConf
     only route a user touches, and a refusal anywhere in it is a 500 that takes away
     every node they have, not just the one it was about.
     """
-    serving = {node_transport.id for node_transport in await nodes.serving_transports(session)}
+    serving = await _rows_rendered_over(session, over)
 
     result = await session.execute(
         select(Credential).where(Credential.user_id == user.id)
@@ -366,7 +398,9 @@ def archive_of(configs: Sequence[ClientConfig]) -> bytes:
     return buffer.getvalue()
 
 
-async def render(session: AsyncSession, user: User) -> str:
+async def render(
+    session: AsyncSession, user: User, *, over: Sequence[NodeTransport] | None = None
+) -> str:
     """The subscription document, exactly as a client receives it.
 
     Base64 of newline-joined URIs — charter amendment A. Standard base64 with
@@ -376,8 +410,11 @@ async def render(session: AsyncSession, user: User) -> str:
     whose every node is temporarily degraded gets a subscription that resolves to
     nothing, and their client keeps its last-known config. A 500 here would make a
     node outage look like a revocation.
+
+    ``over`` is ``entries_for``'s and is passed straight through, so a document
+    rendered over one node's rows is a SHORTER list and not a different shape.
     """
-    entries = await entries_for(session, user)
+    entries = await entries_for(session, user, over=over)
     # The label is percent-encoded: it contains a space and a separator, and an
     # unencoded fragment is not a valid URI. Clients are forgiving about it, but a
     # user's client is the one thing we cannot debug remotely.

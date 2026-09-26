@@ -39,6 +39,7 @@ from control.app.models import Base
 from control.app.services import transports as transports_service
 from control.app.settings import Settings
 from edge.bootstrap import NodeConnection, node_stack
+from edge.bootstrap import delivery as node_delivery
 from edge.health import listening
 from edge.registry import Layer4, discover
 
@@ -420,6 +421,11 @@ class AcceptingNode:
 
     def __init__(self) -> None:
         self.placed: dict[str, str] = {}
+        # Every delivery artifact this apply handed the host — M27.2. Kept whole rather
+        # than digested, unlike ``placed`` above: a test about what a host is given has
+        # to be able to read the document, and the name is derived rather than stored,
+        # so a digest of it would be a second derivation nothing pins.
+        self.delivered: list[node_delivery.Artifact] = []
 
     # Untyped return: the class is its own annotation and py314 still needs a string
     # for that, which this repo's ruff rules reject (UP037).
@@ -432,7 +438,13 @@ class AcceptingNode:
 
 @pytest.fixture
 def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the five node_stack calls that touch a host, and nothing else."""
+    """Replace the six calls that touch a host, and nothing else.
+
+    Five in ``node_stack`` and, since M27.2, one in ``edge.bootstrap.delivery`` — a
+    node is handed its users' pre-rendered subscriptions on every apply, so a fixture
+    that left that one real would reach a stub connection with no ``run`` on it and
+    every apply in this suite would die inside it.
+    """
     from control.app.services import apply
 
     def connection_for(target):
@@ -467,6 +479,12 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
 
     async def place_compose(connection, *, compose: str) -> None:
         return None
+
+    async def place_delivery(connection, *, artifacts) -> None:
+        # REPLACES rather than extends, because the real one replaces the host's whole
+        # delivery directory: a double that appended would let a test see material a
+        # second apply did not push.
+        connection.delivered = list(artifacts)
 
     async def restart(connection) -> None:
         return None
@@ -508,6 +526,7 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)
+    pinned(monkeypatch, node_delivery, "place_delivery", place_delivery)
     pinned(monkeypatch, node_stack, "restart", restart)
     pinned(monkeypatch, node_stack, "running_containers", running_containers)
 

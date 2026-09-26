@@ -53,10 +53,14 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, nodes, placement, relay, serving
+from control.app.services import addresses, audit, delivery, nodes, placement, relay, serving
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
+
+# Aliased because both halves of M27.2 are called ``delivery`` and both are read in this
+# file: ``services.delivery`` renders what a host is given, and this one places it.
+from edge.bootstrap import delivery as node_delivery
 from edge.egress import ResolverMissing
 from edge.health import Listener
 from edge.registry import discover, profile
@@ -1114,6 +1118,16 @@ async def apply_node(
     # See ``services/serving`` for the whole of that argument.
     listeners = await placed_listeners(session, node)
 
+    # AND WHAT A USER WOULD FETCH FROM THIS HOST — M27.2. Rendered here, above the
+    # connection, for ``listeners``' reason: it is a database question, asked over the
+    # rows this apply is pushing so that the material describes the configuration the
+    # host is about to be given rather than what the fleet was serving a moment ago.
+    #
+    # It carries no other node's material — see ``services/delivery``, which holds that
+    # narrowing at its own seam. Nothing on the node reads this directory yet: what
+    # serves it is M27.3's, and which hosts should is M27.4's.
+    artifacts = await delivery.artifacts_for_node(session, node, enabled)
+
     for config_name, config in configs.items():
         # The FORMAT comes from the transport's own declaration, so the right checker
         # runs without this module knowing which protocol it is looking at.
@@ -1226,6 +1240,22 @@ async def apply_node(
             # used far below, where the last probe's finding is either contradicted or
             # left standing.
             unchecked_ports = list(settled.unchecked)
+
+            # THE DELIVERY MATERIAL, LAST — M27.2, and the position is the decision.
+            # Placing it before the restart would put a file nothing reads between a
+            # revocation and the daemon that is still authorising the person it
+            # removed; nothing this pushes is worth delaying that by one step.
+            #
+            # Inside the connection block, so a failure here degrades the node like
+            # every other write to a host does (core invariants §4) rather than being
+            # swallowed. That is knowingly strict while nothing serves the directory:
+            # a host whose data plane came back correctly can be marked degraded over
+            # material no user can currently fetch. The alternative — carrying on and
+            # logging — is the silent half-applied host this file exists to refuse.
+            #
+            # AN EMPTY ``artifacts`` IS NOT SKIPPED: it is how a node that no longer
+            # carries anybody stops holding delivery material at all.
+            await node_delivery.place_delivery(connection, artifacts=artifacts)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
         await _record_failure(session, node, str(exc), granted)
