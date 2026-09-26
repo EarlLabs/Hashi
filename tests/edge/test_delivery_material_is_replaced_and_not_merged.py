@@ -10,18 +10,28 @@ WHY:  an artifact is somebody's rendered subscription. Merging would mean a host
       this product that ever takes it away. ``docs/decisions.md`` (2026-09-13) records
       that an apply never removes what an earlier one wrote; this directory is the one
       place that is not true, and these tests are what holds it.
-HOW:  against a stub connection rather than a host, exactly as ``test_node_preparation``
-      does: ``place_delivery`` touches a node only through ``run`` and ``write_file``,
-      so a recorder that answers both proves the sequence in microseconds.
+HOW:  two halves. The ORDER is proven against a stub connection, exactly as
+      ``test_node_preparation`` does — ``place_delivery`` touches a node only through
+      ``run`` and ``write_file``, so a recorder that answers both proves the sequence in
+      microseconds. What those two commands DO is proven by running the exact strings
+      under this host's own ``/bin/sh`` against a temporary directory, the way
+      ``test_the_wireguard_family_can_start`` runs the supervisor: they contain
+      ``rm -rf`` and they run on a node, and a shell construct busybox accepts and this
+      host does not — or the reverse — is a push that fails on the host.
 
-      Stated plainly: nothing here proves a file reaches a disk. What it proves is that
-      this package cannot write an artifact outside its own directory, and cannot leave
-      one behind that the control plane stopped rendering.
+      Stated plainly: nothing here reaches a node over SSH. What it proves is that this
+      package cannot write an artifact outside its own directory, and cannot leave one
+      behind that the control plane stopped rendering.
 """
+
+import pathlib
+import subprocess
 
 import pytest
 
 from edge.bootstrap.delivery import (
+    _STAGE,
+    _SWAP,
     ARTIFACT_EXTENSION,
     DELIVERY_DIR,
     INCOMING_DIR,
@@ -30,7 +40,7 @@ from edge.bootstrap.delivery import (
     artifact_path,
     place_delivery,
 )
-from edge.bootstrap.node_stack import CONFIG_DIR
+from edge.bootstrap.node_stack import CONFIG_DIR, NODE_ROOT
 from edge.bootstrap.ssh import CommandResult
 from edge.registry import SubscriptionFormat
 
@@ -195,3 +205,67 @@ def test_delivery_material_is_not_written_where_every_daemon_can_read_it() -> No
         f"{DELIVERY_DIR} is inside {CONFIG_DIR}, which node-compose.yml.j2 bind-mounts "
         "into every data-plane container"
     )
+
+
+# --- and the same two commands, run by a real shell ----------------------------------
+#
+# The stub above proves the ORDER; it cannot prove that a shell accepts these strings or
+# that they do what they say. They contain `rm -rf` and they run on a node, so they are
+# exercised here the way ``_WG_QUICK_SUPERVISOR`` is — the exact strings, under this
+# host's own /bin/sh, with the node root rebased into a temporary directory so nothing
+# outside it can be reached.
+
+
+def _run(command: str, root: pathlib.Path) -> subprocess.CompletedProcess:
+    rebased = command.replace(NODE_ROOT, str(root))
+    assert NODE_ROOT not in rebased, "the rebase missed a path and this would touch a real one"
+    return subprocess.run(["/bin/sh", "-c", rebased], capture_output=True, text=True, check=True)
+
+
+@pytest.mark.parametrize("command", [_STAGE, _SWAP], ids=["stage", "swap"])
+def test_both_commands_are_posix_shell(command: str) -> None:
+    """``sh -n`` on this host, for the reason M21.3 gives: a node's shell is busybox and
+    this one is not, and a construct only one of them accepts is a push that fails on
+    the host rather than here."""
+    checked = subprocess.run(
+        ["/bin/sh", "-n", "-c", command], capture_output=True, text=True
+    )
+    assert checked.returncode == 0, checked.stderr
+
+
+def test_the_sequence_replaces_the_directory_on_a_real_shell(tmp_path) -> None:
+    """Stage, write, swap — three times over, on a filesystem.
+
+    First push onto a host that has nothing, second push replacing it, third push with
+    nothing to place. The third is the one the stop case rests on.
+    """
+    live = tmp_path / "delivery"
+
+    _run(_STAGE, tmp_path)
+    (tmp_path / "delivery.incoming" / "first").write_text("x")
+    _run(_SWAP, tmp_path)
+    assert sorted(path.name for path in live.iterdir()) == ["first"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["delivery"], (
+        "the staging or the previous directory is still beside the live one"
+    )
+
+    _run(_STAGE, tmp_path)
+    (tmp_path / "delivery.incoming" / "second").write_text("x")
+    _run(_SWAP, tmp_path)
+    assert sorted(path.name for path in live.iterdir()) == ["second"], (
+        "the previous push's material survived a push that does not render it"
+    )
+
+    _run(_STAGE, tmp_path)
+    _run(_SWAP, tmp_path)
+    assert list(live.iterdir()) == [], (
+        "a host that stopped carrying anybody still holds the material it was last given"
+    )
+
+
+def test_the_staging_directory_is_private(tmp_path) -> None:
+    """0700 on the directory, as ``prepare`` sets on the config one: the files in it are
+    0600, and a directory anyone can list is a directory anyone can count users in."""
+    _run(_STAGE, tmp_path)
+
+    assert (tmp_path / "delivery.incoming").stat().st_mode & 0o777 == 0o700
