@@ -1024,8 +1024,13 @@ def _every_way_a_run_can_be_ahead(body: dict) -> dict[str, dict]:
     the reason recorded for leaving that state unpinned was that no body here carries both
     runs, and the FAILING body is ``record(last_failure=run(1, …))``, so ``record()``'s
     default ``last_success`` survives the override and it carries both. It is offered only
-    where there are two runs to tell apart; anywhere else it would be a second name for
-    "every run", and a case that is another case renamed pins nothing.
+    where there are two runs to tell apart, and that guard is LOAD-BEARING rather than
+    tidiness: ``runs_ahead`` in the sweep is read off the way's NAME, so over a body with no
+    failure this way would move ``last_attempt`` alone, leave both ``_ahead`` reads False,
+    and be "no run" wearing the wrong name — measured, the sweep goes red on
+    ``(False, False) == (False, True)`` with the guard removed. Whether it was offered at
+    all is asserted by the sweep, because a guard that silently has nothing to guard is this
+    milestone's own failure mode.
     """
     ways = {"every run": _with_the_runs_ahead(body), "no run": dict(body)}
     if body["last_success"] and body["last_failure"]:
@@ -1078,10 +1083,13 @@ async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) ->
             ),
         ),
     ]
+    swept = set()
     for standing, body in sweep:
         has_a_run = bool(body["last_success"] or body["last_failure"])
         for due_ahead in (True, False):
-            for way, ahead in _every_way_a_run_can_be_ahead(body).items():
+            ways = _every_way_a_run_can_be_ahead(body)
+            swept.update(ways)
+            for way, ahead in ways.items():
                 content = dict(ahead)
                 runs_ahead = way != "no run"
                 if due_ahead:
@@ -1093,9 +1101,12 @@ async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) ->
                 assert (reading.success_ahead or reading.failure_ahead) is (
                     runs_ahead and has_a_run
                 ), case
-                # ...and the mixed state is really mixed. Without this it could degenerate
-                # into "every run" under another name — the fixture stops carrying two runs,
-                # every assertion below stays green, and the state goes back to unpinned.
+                # ...and the untouched body still stands where the sweep files it. Only
+                # here: moving a run ahead legitimately changes what the standing is.
+                if way == "no run":
+                    assert reading.standing is standing, case
+                # ...and the mixed way, where it IS produced, really is mixed rather than
+                # "every run" reaching the same two ``_ahead`` reads by another route.
                 if way == "the failure only":
                     assert (reading.success_ahead, reading.failure_ahead) == (
                         False,
@@ -1106,6 +1117,15 @@ async def test_the_run_times_clause_is_said_exactly_where_it_is_true(written) ->
                 assert (
                     console.BACKUP_CLOCK_RUNS_UNDISTURBED in flowing(said.detail)
                 ) is (due_ahead and not runs_ahead and has_a_run), case
+
+    # AND THE MIXED WAY WAS ACTUALLY PRODUCED. Everything above it is conditional on the way
+    # existing, so a body that stops carrying two runs — the FAILING one losing the
+    # ``last_success`` it keeps by default is all it takes — removes the case, its guard and
+    # its coverage together, in silence: the sweep stays green over the one defect only that
+    # case catches. A check that verifies what it looks at and says nothing when there is
+    # nothing to look at is what this milestone keeps finding, so the existence is pinned
+    # too, and not only the content.
+    assert "the failure only" in swept, swept
 
 
 async def test_a_due_date_a_timezone_could_explain_is_left_alone(written) -> None:
