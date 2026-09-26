@@ -3968,6 +3968,17 @@ the arrangement of them is data too.
 | 2 | C + L \| E | the case that needs the work |
 | 3 | C \| E \| L | the case that needs the work |
 
+**This step also owns the removal path for a host whose apply is refused** — added
+2026-09-26, from M27.2's review. `apply_node` raises `NothingToApply` above the delivery push,
+so the ordinary way a host stops carrying users (disable its last transport, press Apply)
+never reaches it and the host keeps its ex-users' rendered subscriptions — including a
+WireGuard client `PrivateKey` its own server config never held. **That is not what "absent,
+not inert" means** and the decisions rows are at pains to say so: this step is the home for it
+because it is the step that introduces the predicate *"is this host a delivery host"*, and the
+removal path for a host that is **not** one is the same path a host that **stopped** being one
+needs. Both must reach a host whose apply is refused. `tests/control/test_an_apply_hands_a_node_the_subscriptions_it_serves.py`
+pins the uncovered state and goes red the day anything reaches that host.
+
 **Where the roles are co-located the feature must be ABSENT, not merely inert.**
 No second domain, no second certificate, no second listener, no extra key in
 `.env` — and **no flag the operator has to know to leave off**, because a flag like
@@ -4048,7 +4059,10 @@ show the feature is absent when co-located, and cannot show a border.
       a `PrivateKey` the node's own server config does not. **M27.4's "absent, not inert" does
       not cover this**: that requirement is about a host which never served delivery, not one
       which stops. Either the material goes, or what survives is named in
-      `docs/decisions.md` and in the runbook where an operator will look.
+      `docs/decisions.md` **(done — M27.2's rows name three states, and a test pins the one
+      that is not closed)** and in the runbook where an operator will look — **M27.8 owns the
+      runbook half**, and nothing in the runbook yet says a node carries pushed material at
+      all. The removal path itself is **M27.4's**, per M27.2's rows.
 
 acceptance: yes
 Walk it on the two arrangements that differ, not only on the one that motivated it.
