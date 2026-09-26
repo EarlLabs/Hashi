@@ -174,10 +174,11 @@ async def artifacts_for_node(
                     content=document.encode(),
                 )
             )
-            # BOTH SHAPES, always, including the empty archive's note: what a user
-            # fetches from this host must be what they would have been answered on the
-            # same route by the control plane, and an absent file is a different answer
-            # from an archive saying there is nothing in it right now.
+            # BOTH SHAPES, always, including the empty archive's note. It is about the
+            # SHAPE and not the contents, which the row set above has already narrowed:
+            # a user who asks this host for the archive and finds no file has been
+            # answered something different from an archive saying there is nothing in it
+            # right now, and the second is what this product decided that state says.
             artifacts.append(
                 delivery.Artifact(
                     name=name,
