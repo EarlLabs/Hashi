@@ -213,11 +213,14 @@ def render_delivery_site(
     THEY DO NOT GO ON A 404, and that is not a saving. A fixed set of headers on an empty
     body is a signature every delivery host would answer with, on the most scannable host
     in the fleet — the argument `CLAUDE.md` makes about a shared decoy destination, one
-    layer up. The control plane answers an unknown token with a bare 404
-    (``control/app/api/delivery.py``) and its public site answers everything else with
-    one (``deploy/caddy/Caddyfile``), so a refusal here is the same bare answer as both.
-    That also means an unknown NAME and a path that is not a subscription are answered
-    identically, which is the property the control plane's own route is at pains to have.
+    layer up. What a refusal here matches is the bare 404 the control plane's PUBLIC SITE
+    gives anything that is not a subscription (``deploy/caddy/Caddyfile``), and it
+    deliberately does not match that host's own ``/sub/`` refusal: measured on 2026-09-26,
+    an unknown token there comes back with five headers the application's middleware adds,
+    so answering like it would mean answering with the header set that identifies a hashi
+    control plane. Either way an unknown NAME and a path that is not a subscription are
+    answered identically here, which is the property that keeps a scanner from learning
+    which names exist.
 
     ONE BLOCK PER SUBSCRIPTION FORMAT, off ``ARTIFACT_EXTENSION`` — the same table the
     push writes the files with, so the request that arrives and the file that is on

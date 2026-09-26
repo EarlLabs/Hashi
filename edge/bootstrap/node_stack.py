@@ -674,6 +674,36 @@ async def restart(connection: NodeConnection) -> None:
     await connection.run(f"cd {NODE_ROOT} && docker compose up -d --remove-orphans")
 
 
+async def compose_projects(connection: NodeConnection) -> frozenset[str]:
+    """Every compose project this host holds, by name, running or stopped.
+
+    A reading of the host and nothing else: this package has no opinion about which
+    names mean anything, and the caller that does is the one that knows what else it
+    deploys. It exists because "what else is on this box" cannot be answered from a node
+    record — an address the operator typed is a spelling, and two spellings of one
+    machine are not one string.
+
+    ``--all`` so a project whose containers are stopped is still an answer. A stack that
+    is down is still installed on this host: it owns its ports and its name the moment
+    somebody brings it back, and a caller deciding whether to put a second one beside it
+    has to count it.
+
+    ``--quiet`` so the answer is one name per line, rather than the table Compose prints
+    for a person or the JSON whose shape has changed between versions — the same reason
+    ``running_containers`` reads ``docker inspect --format`` instead of ``compose ps
+    --format json``.
+
+    Not ``check=False``: a host that cannot answer this has no working ``docker
+    compose``, which is the whole of how this package runs a data plane, and a silent
+    empty answer would read as "nothing else is here" — the answer that puts a second
+    stack on a box that already has one.
+    """
+    result = await connection.run("docker compose ls --all --quiet")
+    return frozenset(
+        line.strip() for line in result.stdout.splitlines() if line.strip()
+    )
+
+
 @dataclass(frozen=True)
 class RunningContainers:
     """One reading of what a node's compose project has up, in two halves.

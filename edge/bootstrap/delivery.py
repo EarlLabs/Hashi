@@ -1,8 +1,8 @@
 """Pre-rendered delivery material on a node: where it lives, and how it is replaced.
 
 WHAT: the directory a node's pushed subscription artifacts are placed in, the name
-      and path one artifact is written under, and the SSH sequence that REPLACES the
-      whole of that directory in one step.
+      and path one artifact is written under, the SSH sequence that REPLACES the whole
+      of that directory in one step, and the one that takes it off a host entirely.
 WHY:  M27. The control plane pre-renders what a user's client fetches and pushes it
       to a node over the channel that already exists, so a refresh does not have to
       reach the control plane's own host. Rendering needs the database and stays
@@ -148,13 +148,17 @@ async def place_delivery(
     material at all: the staged directory is empty, the swap makes it the live one,
     and what was there is removed.
 
-    That is the only removal path in this package, and it removes material from one
-    host: the one this call was made for. Which hosts get called for is the caller's
-    and is not described here — ``control/app/services/apply`` is the only one, and
-    where it does and does not reach is recorded in ``docs/decisions.md`` under
-    M27.2 rather than paraphrased in this package, which cannot see it change. What
-    holds here is the narrow thing: a host nothing calls this for keeps whatever it
-    was last given, as it does for every other file this package places.
+    It is not the same thing as ``remove_delivery`` below, and the difference is what
+    the host looks like afterwards: this leaves an empty directory — a host that serves
+    delivery and has nobody on it right now — and that one leaves no directory at all.
+
+    Either way it is one host: the one this call was made for. Which hosts get called
+    for is the caller's and is not described here — ``control/app/services/apply`` is
+    the only one, and where it does and does not reach is recorded in
+    ``docs/decisions.md`` under M27.2 rather than paraphrased in this package, which
+    cannot see it change. What holds here is the narrow thing: a host nothing calls
+    this for keeps whatever it was last given, as it does for every other file this
+    package places.
 
     0600 on every file, for the reason ``node_stack.place_config`` sets it: what is
     written here is a user's own configuration, and the account this runs as is not
@@ -171,3 +175,40 @@ async def place_delivery(
             mode=0o600,
         )
     await connection.run(_SWAP)
+
+
+# The removal, and it is deliberately not ``place_delivery`` with nothing to place. That
+# call leaves an EMPTY directory, which is the right answer for a host that serves
+# delivery and currently carries nobody; this one leaves no directory at all, which is
+# the answer for a host that does not serve delivery. The difference is what a person
+# reading the host sees: a feature that is off and a feature that is not there.
+#
+# The staging siblings go with it. They are this module's own paths and an interrupted
+# ``place_delivery`` can leave either of them holding artifacts, so a removal that took
+# only the live directory would leave material behind under a name nothing else clears.
+#
+# ``rm -rf`` on a path that is not there succeeds and creates nothing — which is why
+# this can run on a host ``prepare`` has never touched. It makes no directory, so it
+# cannot make ``NODE_ROOT`` under an account that may write where the node's own root
+# is not (the privilege boundary in ``node_stack.prepare``), and a host that was never
+# prepared answers it as the no-op it is.
+_REMOVE = f"rm -rf {DELIVERY_DIR} {INCOMING_DIR} {REPLACED_DIR}"
+
+
+async def remove_delivery(connection: NodeConnection) -> bool:
+    """Take this host's delivery material off it, and say whether there was any.
+
+    Answers TRUE when the live directory was there when this looked, so the caller can
+    tell an operator that something on the host changed. It is read in a separate
+    command rather than inferred from the removal, because ``rm -rf`` reports the same
+    success either way and a caller that guessed would be claiming a change on every
+    host it ever touched.
+
+    The answer is about the LIVE directory only. A leftover staging directory is a
+    half-finished push rather than material this host was serving, and telling an
+    operator their host held delivery material because a previous call died mid-write
+    would be a sentence about our own interrupted run.
+    """
+    held = await connection.run(f"test -d {DELIVERY_DIR}", check=False)
+    await connection.run(_REMOVE)
+    return held.ok

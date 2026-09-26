@@ -30,15 +30,18 @@ import subprocess
 import pytest
 
 from edge.bootstrap.delivery import (
+    _REMOVE,
     _STAGE,
     _SWAP,
     ARTIFACT_EXTENSION,
     DELIVERY_DIR,
     INCOMING_DIR,
+    REPLACED_DIR,
     Artifact,
     UndeliverableArtifact,
     artifact_path,
     place_delivery,
+    remove_delivery,
 )
 from edge.bootstrap.node_stack import CONFIG_DIR, NODE_ROOT
 from edge.bootstrap.ssh import CommandResult
@@ -61,14 +64,24 @@ class _Recorder:
     directory nothing will replace.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, refusing: str | None = None) -> None:
         self.commands: list[str] = []
         self.written: list[tuple[str, bytes | str, int]] = []
         self.steps: list[str] = []
+        # Matched as a substring of the command, so a test names the step it wants
+        # answered no — ``test -d`` — rather than an index into a list that shifts
+        # whenever a step is added.
+        self._refusing = refusing
 
     async def run(self, command: str, *, check: bool = True) -> CommandResult:
         self.commands.append(command)
         self.steps.append(command)
+        if self._refusing and self._refusing in command:
+            assert not check, (
+                f"{command!r} was run with `check`, so a host answering it no raises "
+                "NodeUnreachable instead of being an answer"
+            )
+            return CommandResult(exit_status=1, stdout="", stderr="")
         return OK
 
     async def write_file(self, path: str, content, *, mode: int = 0o600) -> None:
@@ -114,11 +127,15 @@ async def test_the_swap_is_the_last_thing_that_happens() -> None:
 
 
 async def test_an_empty_push_is_how_a_host_stops_holding_delivery_material() -> None:
-    """Nothing to place still replaces the directory — the one removal path there is.
+    """Nothing to place still replaces the directory, and leaves an EMPTY one.
 
     A host that stops carrying anyone's material gets an empty directory, not its last
     one. Without this, "this node no longer serves anybody" would leave every artifact
     it was last given on disk for as long as the host exists.
+
+    The other end of the same question is ``remove_delivery`` below, which leaves no
+    directory at all: this is a host that serves delivery and carries nobody, that is a
+    host that does not serve delivery.
     """
     node = _Recorder()
 
@@ -222,8 +239,10 @@ def _run(command: str, root: pathlib.Path) -> subprocess.CompletedProcess:
     return subprocess.run(["/bin/sh", "-c", rebased], capture_output=True, text=True, check=True)
 
 
-@pytest.mark.parametrize("command", [_STAGE, _SWAP], ids=["stage", "swap"])
-def test_both_commands_are_posix_shell(command: str) -> None:
+@pytest.mark.parametrize(
+    "command", [_STAGE, _SWAP, _REMOVE], ids=["stage", "swap", "remove"]
+)
+def test_every_command_is_posix_shell(command: str) -> None:
     """``sh -n`` on this host, for the reason M21.3 gives: a node's shell is busybox and
     this one is not, and a construct only one of them accepts is a push that fails on
     the host rather than here."""
@@ -269,3 +288,82 @@ def test_the_staging_directory_is_private(tmp_path) -> None:
     _run(_STAGE, tmp_path)
 
     assert (tmp_path / "delivery.incoming").stat().st_mode & 0o777 == 0o700
+
+
+# --- and the host that should hold none of it at all — M27.4 --------------------------
+
+
+async def test_a_removal_takes_the_live_directory_and_both_staging_paths() -> None:
+    """All three, because an interrupted push can leave material in either sibling.
+
+    A removal that took only the live directory would leave artifacts on the host under
+    a name nothing else clears — ``place_delivery`` only clears them on its NEXT run,
+    and a host this is called for is one there will be no next run for.
+    """
+    node = _Recorder()
+
+    await remove_delivery(node)
+
+    removal = node.commands[-1]
+    for path in (DELIVERY_DIR, INCOMING_DIR, REPLACED_DIR):
+        assert path in removal, removal
+
+
+async def test_a_removal_creates_nothing() -> None:
+    """It runs on a host ``prepare`` has never touched, so it must not make a directory.
+
+    That is the whole reason this is a removal rather than a push of nothing:
+    ``place_delivery`` runs ``mkdir``, which on a host whose root was never prepared
+    either creates ``NODE_ROOT`` under an account that has no business owning it, or
+    fails with the raw permission error ``node_stack.prepare`` exists to replace.
+    """
+    node = _Recorder()
+
+    await remove_delivery(node)
+
+    assert not any("mkdir" in command for command in node.commands), node.commands
+    assert node.written == [], node.written
+
+
+async def test_a_host_that_was_holding_material_says_so() -> None:
+    """The answer the caller tells an operator with: something on this host changed."""
+    assert await remove_delivery(_Recorder()) is True
+
+
+async def test_a_host_that_was_holding_none_is_not_reported_as_changed() -> None:
+    """And the other way, which is the common one: most hosts never held any.
+
+    Read in its own command rather than inferred from ``rm -rf``, which reports the same
+    success either way — a caller that guessed would claim a change on every host it
+    ever touched.
+    """
+    assert await remove_delivery(_Recorder(refusing=f"test -d {DELIVERY_DIR}")) is False
+
+
+def test_a_removal_leaves_no_delivery_path_on_a_real_shell(tmp_path) -> None:
+    """Push, then remove: the live directory and both siblings are gone.
+
+    On a filesystem rather than against the recorder, for the reason the swap is: this
+    string contains ``rm -rf`` and runs on a node, and a construct busybox reads
+    differently is a removal that fails there rather than here.
+    """
+    _run(_STAGE, tmp_path)
+    (tmp_path / "delivery.incoming" / "an-artifact").write_text("x")
+    _run(_SWAP, tmp_path)
+    (tmp_path / "delivery.replaced").mkdir()
+    _run(_STAGE, tmp_path)
+
+    _run(_REMOVE, tmp_path)
+
+    assert list(tmp_path.iterdir()) == [], (
+        "a host that does not serve delivery still has something of this milestone's "
+        f"on it: {[path.name for path in tmp_path.iterdir()]}"
+    )
+
+
+def test_a_removal_on_a_host_that_has_nothing_is_not_a_failure(tmp_path) -> None:
+    """The ordinary case, and the one that must not raise: every host that never served
+    delivery gets this command, and a missing path is the state it is written for."""
+    _run(_REMOVE, tmp_path)
+
+    assert list(tmp_path.iterdir()) == []

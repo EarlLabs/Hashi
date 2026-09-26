@@ -196,8 +196,11 @@ def test_no_header_of_ours_is_set_on_a_refusal() -> None:
 
     Each shape's headers are guarded by a ``file`` matcher, so they reach a response that
     carries a document and nothing else; the catch-all answers a bare ``respond 404``.
-    That is what the control plane does at both ends — a bare 404 for an unknown token,
-    a bare 404 from the public site for everything that is not a subscription.
+    What that matches is the control plane's PUBLIC site, which answers everything that
+    is not a subscription with a bare 404 — and not the control plane's own ``/sub/``
+    route, whose refusal was measured on 2026-09-26 carrying five headers its middleware
+    adds. Matching that one would mean every delivery host answered a scan with the
+    header set that identifies a hashi control plane.
     """
     site = a_site()
     refusal = site.rsplit("handle {", 1)[1]
@@ -216,10 +219,22 @@ def test_the_headers_are_set_only_where_the_artifact_is_really_there() -> None:
     Without it the headers would land on `file_server`'s own 404 — so a name that exists
     and a name that does not would be answered differently, which is the one thing a
     delivery host must not disclose.
+
+    EVERY BLOCK, including the one for a request that names no shape at all. That is the
+    block a URL a user already holds actually reaches, and it is a second block for a
+    format the loop below has already covered under another matcher name — so a version
+    of this test built from ``ARTIFACT_EXTENSION`` alone stayed green with the guard
+    deleted from exactly the block that answers real traffic.
     """
     site = a_site()
-    for shape, extension in ARTIFACT_EXTENSION.items():
-        matcher = delivery_site._matcher_for(shape)
+    guarded = {
+        delivery_site._matcher_for(shape): extension
+        for shape, extension in ARTIFACT_EXTENSION.items()
+    }
+    guarded[delivery_site._NO_SHAPE_NAMED] = ARTIFACT_EXTENSION[
+        delivery_site.DEFAULT_SHAPE
+    ]
+    for matcher, extension in guarded.items():
         assert f"@present_{matcher} file /{{re.{matcher}.1}}{extension}" in site, site
         assert f"header @present_{matcher} {{" in site, site
 
