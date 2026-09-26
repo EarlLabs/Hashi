@@ -3687,7 +3687,23 @@ Gate: `make test-control` with a real Postgres — report the skip count, the re
 ~992/2 — then `make verify`, with the e2e half at **224 passed / 0 skipped**.
 
 
-### M28.23 — `infra`: what M28.21 left open at its round cap, and the counts that keep being wrong · 2026-09-25
+### M28.23 — WITHDRAWN 2026-09-26, folded into the accepted prose debt · was: `infra`, what M28.21 left open at its round cap
+
+**Not built, and the reason is the same judgement that closed M28.22's prose work.** Every
+item below is a sentence in a comment, a tracker note or a runbook paragraph. None changes
+what the product does. Two consecutive cleanup steps hit their round cap by removing several
+such sentences and writing two or three new ones, and at fifteen instances the trade has
+stopped paying: the risk being bought down is a reader misled by a comment, and the price is
+measured at two or three fresh instances per step.
+
+It is recorded in `docs/tracker/M28/carry-over.md` as debt, with the standing recommendation
+for whoever takes it: **delete rather than refine.** These sentences explain gates that are
+already pinned by biconditionals failing in both directions; the explanations are pinned by
+nothing and cannot be.
+
+The items, kept here so the debt is legible:
+
+#### The original text — M28.23 — `infra`: what M28.21 left open at its round cap, and the counts that keep being wrong · 2026-09-25
 
 **M28.21 stopped at its round cap with three Highs open.** Its code is clean and gated — the
 seven sentences it was written for are fixed and every behavioural claim was re-derived by
@@ -3747,6 +3763,43 @@ has `flat()`; the three open assertions there are for whichever step next touche
 
 Gate: `make test-infra`, then `make verify`, with **e2e 224 passed / 0 skipped** reported
 explicitly.
+
+
+### M28.24 — `control`: a gate test whose expected side is a false equivalence · 2026-09-26
+
+**The one finding from M28.22's cap that is not prose.** Two items, both about whether a test
+means what it says.
+
+1. **`has_a_run = standing is not backups.Standing.NEVER` is false.** `Standing.NEVER` means no
+   backup ever **succeeded**, not that no run exists — `backup_standing` has a
+   `case Standing.NEVER if reading.failed_since` branch printing *"The last run was 6 hours
+   ago…"*. Measured: `last_success: null`, `last_failure` 6 h old, a due date far ahead →
+   standing `never`, a real age on screen, and `BACKUP_CLOCK_RUNS_UNDISTURBED` **is** said.
+
+   So `test_the_run_times_clause_is_said_exactly_where_it_is_true` passes only because
+   `_every_standing_with_a_record()`'s NEVER body happens to be the run-less shape, and its
+   docstring's claim to sweep *"every state it could be said in"* is untrue. **Derive
+   `has_a_run` from the body** (`body["last_success"] or body["last_failure"]`), not from the
+   standing, and add the NEVER-with-a-failure body to the sweep.
+
+2. **The mixed run-ahead state is unpinned on a ground that is factually wrong.** The reason
+   recorded was that `_every_standing_with_a_record()` cannot reach it because no body carries
+   both runs. It does: the FAILING body is `record(last_failure=run(1, …))`, which keeps
+   `record()`'s default `last_success=run(6)`. Reaching the state needs one more value in the
+   existing `runs_ahead` loop, guarded on the body having a failure — not a purpose-built
+   record.
+
+   **Pin it.** This milestone's record is prose and pins drifting from behaviour, and the
+   gate's own justification was wrong about *precisely this state* one round ago. A state that
+   is measured but unpinned is where the next edit reintroduces the defect.
+
+**Do not rewrite the surrounding comments.** The over-general sentences beside this gate are
+recorded as accepted debt in `docs/tracker/M28/carry-over.md` and are deliberately out of
+scope — this step is about the test, not the prose. If a comment you touch becomes false
+because of an edit you make, fix that one and say so; do not widen.
+
+Gate: `make test-control` with a real Postgres — report the skip count, the real number is
+~993/2 — then `make verify`, with **e2e 224 passed / 0 skipped** reported explicitly.
 
 
 **Done when**
