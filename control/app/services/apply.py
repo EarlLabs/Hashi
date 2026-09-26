@@ -268,6 +268,15 @@ DELIVERY_TAKEN_BACK = (
 # the removal. What the operator would otherwise not learn is that the material is still
 # sitting there — which on a host nobody is pushing to any more is other people's
 # configurations with no end date.
+#
+# ON ONE OF THE THREE REFUSALS ONLY, and it is the one that already claims to know what
+# this host is running: a surviving row carries an ``applied_at``, so this control plane
+# has pushed here and may have left material. The other two say in their own words that
+# they cannot tell what was ever pushed to this host — a removed row takes the record of
+# its own apply with it — and a hedge added to them would be a second sentence saying
+# "something might be there" on the refusal an operator reads on a node they created a
+# minute ago. The removal is still ATTEMPTED on all three: what is conditional is the
+# claim, not the reach.
 DELIVERY_MAY_STILL_BE_THERE = (
     " This control plane could not reach the node to take back the pre-rendered "
     "subscriptions an earlier apply may have left on it, so whatever is there is still "
@@ -852,9 +861,10 @@ async def _nothing_to_apply(
 
     ``delivery_material`` is what the removal below the refusal found: ``True`` when this
     host was holding delivery material and no longer is, ``False`` when it was holding
-    none, and ``None`` when the host could not be reached to ask. Only the first of those
-    makes the refusal's "nothing on the node was changed" false, and only the third
-    leaves something behind worth telling an operator about.
+    none, and ``None`` when the host could not be reached to ask. The first makes the
+    refusal's "nothing on the node was changed" false and replaces that clause; the third
+    is said only where this node's own rows show it was ever applied, which is the same
+    axis the three refusals are already chosen on — see ``DELIVERY_MAY_STILL_BE_THERE``.
 
     One query, on the refusal path only, and it reads both axes off one column.
     ``enabled_transports`` already filtered to the offered rows and came back empty, so
@@ -886,7 +896,11 @@ async def _nothing_to_apply(
     else:
         refusal = NOTHING_LEFT_TO_APPLY_UNPUSHED
     if delivery_material is None:
-        return refusal + DELIVERY_MAY_STILL_BE_THERE
+        return (
+            refusal + DELIVERY_MAY_STILL_BE_THERE
+            if refusal == NOTHING_LEFT_TO_APPLY
+            else refusal
+        )
     if delivery_material:
         return refusal.replace(NOTHING_CHANGED_ON_THE_NODE, DELIVERY_TAKEN_BACK)
     return refusal

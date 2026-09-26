@@ -515,3 +515,29 @@ def test_every_refusal_carries_the_clause_the_removal_corrects() -> None:
         apply.NOTHING_LEFT_TO_APPLY_UNPUSHED,
     ):
         assert apply.NOTHING_CHANGED_ON_THE_NODE in refusal, refusal
+
+
+async def test_a_node_nothing_was_ever_pushed_to_is_not_told_material_may_be_there(
+    client, handed: Handed, monkeypatch
+) -> None:
+    """The refusal an operator reads on a node they created a minute ago is unchanged.
+
+    That sentence already says what can be known — a node with no transport row cannot
+    say whether anything was ever pushed to this host, because a removed row takes the
+    record of its own apply with it — and a hedge about delivery material added to it
+    would fire on every first-run apply, which is how a warning stops being read.
+    """
+
+    async def remove_delivery(connection) -> bool:
+        handed.removals += 1
+        raise NodeUnreachable("the node did not answer")
+
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
+    node_id = await a_reachable_node(client, name="fresh", address=FIRST_ADDRESS)
+
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert refused.status_code == 409, refused.text
+    said = refused.json()["error"]["message"]
+    assert handed.removals == 1, "the host was not reached at all, so nothing was taken back"
+    assert said == apply.NOTHING_TO_APPLY_YET, said
