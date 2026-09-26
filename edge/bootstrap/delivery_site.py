@@ -26,8 +26,13 @@ absolute rule it is on the control plane and not a tidier default.
 NOT DECIDED HERE and deliberately absent: which hosts serve delivery (M27.4), the name
 and certificate the site is reached under (M27.6), and where a certificate persists —
 no volume is declared for Caddy's own storage, so a host that obtains one today loses
-it when the container is recreated. Nothing calls ``place_delivery_site`` or passes
-``compose_service`` to ``node_stack.render_compose`` yet.
+it when the container is recreated.
+
+A NODE RUNS THIS ONLY WHEN SOMETHING ASKS FOR IT. Two calls, neither of which this
+package makes: ``compose_service`` has to reach ``node_stack.render_compose``, and
+``place_delivery_site`` has to be called on the connection. A host nobody makes them for
+keeps the state ``delivery.place_delivery`` leaves it in — holding material, serving
+none of it.
 """
 
 import re
@@ -175,7 +180,6 @@ def render_delivery_site(
     site_address: str,
     headers: Mapping[str, str],
     shape_headers: Mapping[SubscriptionFormat, Mapping[str, str]] | None = None,
-    directory: str = DELIVERY_DIR,
 ) -> str:
     """The site configuration a delivery host serves its placed directory through.
 
@@ -198,6 +202,10 @@ def render_delivery_site(
     push writes the files with, so the request that arrives and the file that is on
     disk cannot come to different conclusions about the suffix. A format added later
     adds a block by existing; a transport added later adds nothing at all.
+
+    The directory it serves is ``delivery.DELIVERY_DIR`` and is not a parameter: it is
+    the one the push writes into, and a listener pointed anywhere else would be serving
+    something nothing puts there.
     """
     if not _SITE_ADDRESS.match(site_address):
         raise UnservableSite(
@@ -208,12 +216,13 @@ def render_delivery_site(
     per_shape = shape_headers or {}
     return _TEMPLATES.get_template("delivery-site.Caddyfile.j2").render(
         site_address=site_address,
-        directory=directory,
+        directory=DELIVERY_DIR,
         headers=sorted(_checked_headers(headers).items()),
         # Sorted by the format's own value, so two fleets rendering the same shapes
-        # render the same file. The default shape is rendered last and separately: its
-        # block matches a request carrying no format at all, which every other block's
-        # request also does, and `handle` takes the first that matches.
+        # render the same file. The default shape is passed separately because it gets
+        # a SECOND block for a format that already has one above — a different matcher
+        # name (two Caddy matchers may not share one) and a different condition: that
+        # block answers a request carrying no ``format`` at all, and only that.
         shapes=[
             _shape(shape, per_shape.get(shape, {}))
             for shape in sorted(ARTIFACT_EXTENSION, key=lambda one: one.value)
