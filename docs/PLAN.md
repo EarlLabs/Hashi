@@ -2775,9 +2775,28 @@ confirm the panel still works.
 
 ---
 
-## → M28 — The control plane must be restorable on a machine it has never run on · asked for by the owner 2026-09-22 · PROPOSED
+## ✅ M28 — The control plane must be restorable on a machine it has never run on · asked for by the owner 2026-09-22 · done 2026-09-26 (acceptance: good — 3 rounds, 24 steps, the restore performed rather than described)
 
-**Not started.**
+**Done.** 22 steps landed, one withdrawn. Acceptance rounds 1 and 2 both blocked on the same
+defect in new surfaces — a reader of the backup record asserting what the record did not
+license — and round 3 passed with six `clumsy` findings and none blocking. The walk destroyed
+a working fleet and rebuilt it from one bucket object plus the two carried secrets: the
+existing user's **existing** token returned a byte-identical body on the restored control
+plane. `file` reads the artifact as *age encrypted file, X25519 recipient*, decryption without
+an identity refuses, and the node address, node name, country, username, transport and SQL
+keywords all grep to **zero** in it. The host issued 9 PUT and 0 DELETE.
+
+**What the walk could not prove, recorded rather than implied:** the bare host was a fresh
+clone on the same Docker engine, not a second machine; the object store was a minimal
+S3-protocol server, so bucket versioning, object lock and the provider-side write-only
+credential are documented decisions and not exercised; applying the restored node could not
+complete because no leaf host exists on a stand; the daily run was proven by installing the
+real cron entry and running the tick as cron runs it, not by waiting out 04:00; and **nothing
+here says anything about surviving a Russian mobile whitelist shutdown** — that is a field
+observation on a real network.
+
+**The real-host restore walk was NOT performed.** It needs read-only bucket credentials at
+`~/.hashi/restore.env`, which do not exist. Reported as not performed rather than described.
 
 ### What the owner asked for
 
