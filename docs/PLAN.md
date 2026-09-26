@@ -4040,6 +4040,15 @@ show the feature is absent when co-located, and cannot show a border.
       moves, is decided and written down rather than left implied.
 - [ ] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
       for both"* **and its three-shape structure**, because neither is true any more.
+- [ ] **A host that STOPS being a delivery host does not keep its material.** There is no
+      teardown in this product — recorded twice on 2026-09-13, and measured with a leaf's
+      `wireguard.conf` and its `PrivateKey` still on disk after the row was deleted — so
+      delivery inherits that gap rather than a cleanup. A node that stops carrying users
+      keeps its ex-users' rendered subscriptions, and a WireGuard-family client file carries
+      a `PrivateKey` the node's own server config does not. **M27.4's "absent, not inert" does
+      not cover this**: that requirement is about a host which never served delivery, not one
+      which stops. Either the material goes, or what survives is named in
+      `docs/decisions.md` and in the runbook where an operator will look.
 
 acceptance: yes
 Walk it on the two arrangements that differ, not only on the one that motivated it.
