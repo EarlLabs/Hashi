@@ -14,8 +14,9 @@ HOW:  rendering is pure, so this is all offline. That the file is VALID, that Ca
       says what it must and refuses what it must.
 
 Boundary: nothing here starts a container, opens a socket or reaches a node. A green
-run says the configuration is right, never that a delivery host is reachable — nothing
-in this repository wires this listener onto one yet.
+run says the configuration is right, never that a delivery host is reachable: no name
+is rendered here, and a node runs this only once something passes the compose service
+to ``render_compose`` and places the file.
 """
 
 import pytest
@@ -74,7 +75,7 @@ def test_the_delivery_container_keeps_no_log_at_all() -> None:
     """The half the site configuration cannot cover: what the ENGINE retains.
 
     A process that prints anything — a panic, a configuration it will not load — is
-    captured by the container runtime and kept in the node's journal whatever the
+    captured by the container runtime and kept for that container whatever the
     application believes about its own logging. ``driver: none`` is the only setting
     under which there is nothing to keep.
     """
@@ -188,6 +189,17 @@ def test_a_header_that_could_end_the_block_it_sits_in_is_refused(headers: dict) 
         a_site(headers=headers)
 
 
+def test_a_header_that_would_answer_with_the_request_itself_is_refused() -> None:
+    """Braces, and this one is not about quoting at all.
+
+    Caddy resolves a placeholder inside a quoted token too, so a value naming one would
+    put whatever it names into a header of every response — and the request URI is the
+    artifact's name.
+    """
+    with pytest.raises(delivery_site.UnservableSite):
+        a_site(headers={"X-Thing": "{http.request.uri}"})
+
+
 def test_a_header_carrying_a_quoted_filename_is_accepted() -> None:
     """The red half of the rule above: the one value this is written for has quotes in
     it, and refusing it would make the archive save under a per-subscription name."""
@@ -254,3 +266,21 @@ def test_the_site_configuration_is_placed_outside_the_directory_that_is_replaced
     """``place_delivery`` replaces the whole delivery directory on every apply, so a
     configuration file inside it would be deleted by the next push."""
     assert not delivery_site.DELIVERY_SITE_PATH.startswith(f"{DELIVERY_DIR}/")
+
+
+async def test_placing_the_site_writes_one_file_where_the_container_reads_it() -> None:
+    """The only thing this module does to a node, against a connection that records.
+
+    The path and the mode are the assertion: a site written anywhere else is a listener
+    that starts on the configuration baked into its image, and one written world-readable
+    is a habit this package does not have.
+    """
+    written: list[tuple[str, object, int]] = []
+
+    class _Recorder:
+        async def write_file(self, path, content, *, mode):
+            written.append((path, content, mode))
+
+    site = a_site()
+    await delivery_site.place_delivery_site(_Recorder(), site=site)
+    assert written == [(delivery_site.DELIVERY_SITE_PATH, site, 0o600)]

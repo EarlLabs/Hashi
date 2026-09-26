@@ -115,8 +115,8 @@ services:
       # loggers, and this is what makes that true of anything it prints anyway — a
       # panic, a configuration it will not load, a directive that logs by default in
       # some later version. Measured on engine 29.4.0: with json-file, the three lines
-      # Caddy writes before it applies its own logging configuration are kept in the
-      # node's journal, and with this they are not.
+      # Caddy writes before it applies its own logging configuration are kept by the
+      # engine for that container, and with this they are not kept at all.
       #
       # The cost is real and is the smaller one: this container's startup diagnostics
       # are gone, and an operator debugging a listener that will not start runs the

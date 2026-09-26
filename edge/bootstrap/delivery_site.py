@@ -112,10 +112,16 @@ _PATH_PATTERN = f"^{SUBSCRIPTION_PATH}({_NAME})$"
 # double quote is allowed in one: the one value this is written for is a
 # ``Content-Disposition`` carrying a quoted filename, and Caddy's backtick-quoted token
 # takes it without an escape. Checked against caddy 2.8.4, not assumed.
+#
+# BRACES ARE REFUSED IN A VALUE for a reason that has nothing to do with quoting:
+# Caddy resolves ``{...}`` as a placeholder inside quoted tokens too, so a value
+# carrying one would be answered with whatever it names — ``{http.request.uri}`` would
+# put the request path, and therefore the artifact's name, into a response header of
+# every answer this host gives. Nothing needs a placeholder here.
 _SITE_ADDRESS = re.compile(r"^[A-Za-z0-9:/._*\[\]-]{1,255}$")
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _HEADER_VALUE = re.compile(r"^[\x20-\x7e]{1,256}$")
-_UNWRITABLE_IN_A_VALUE = "`\\"
+_UNWRITABLE_IN_A_VALUE = "`\\{}"
 
 
 class UnservableSite(Exception):
@@ -169,8 +175,9 @@ def _checked_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
         ):
             raise UnservableSite(
                 f"the value given for {name!r} is not one this site can carry — a value "
-                "is 1 to 256 printable ASCII characters with no backtick, no backslash "
-                "and no line break, so that it cannot end the token it is written into"
+                "is 1 to 256 printable ASCII characters with no backtick, no backslash, "
+                "no brace and no line break, so that it can neither end the token it is "
+                "written into nor name a placeholder to be resolved into it"
             )
     return headers
 
@@ -256,7 +263,7 @@ def compose_service(*, site: str) -> dict:
     THE CONTAINER RUNTIME KEEPS NOTHING, and that is the half the site configuration
     cannot cover. Caddy discards its own loggers, but a process that prints anything at
     all — a panic, a configuration it will not load, a future directive that logs by
-    default — is captured by the engine and kept in the node's journal, where nobody is
+    default — is captured by the engine and kept for that container, where nobody is
     watching for a subscription identifier to appear. ``driver: none`` is the only
     setting under which there is nothing to retain. It costs the operator this
     container's startup diagnostics, which is a real cost and the smaller one: those
