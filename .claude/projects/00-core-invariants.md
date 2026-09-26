@@ -106,6 +106,14 @@ HOW:  every developer and reviewer pre-reads this file. Keep it short — a
 - **Never add a public signup route, a payment flow, or anything that advertises
   the service.** All three are charter non-goals, and the third carries a legal
   penalty for the owner.
+- **Never write a comment that asserts what another module, another channel or a
+  neighbouring branch does.** Describe the code it sits on, record why the
+  decision was taken and what was rejected, and *name* the other thing rather
+  than paraphrasing its behaviour. Nothing in this file changes when that
+  behaviour changes, so the sentence rots silently and the suite stays green.
+  M28 paid for this fifteen times: the shell claiming what the panel reads, the
+  panel claiming what `make backup-status` prints, a gate comment claiming what
+  the neighbouring state does — each true when written, each false within a step.
 - **Never leave TODO / FIXME / stubbed logic in work handed to review.**
 - **Never weaken a test to make it pass**; fix the product, or explain why the
   test was wrong.

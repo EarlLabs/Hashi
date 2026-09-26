@@ -41,6 +41,12 @@ scoped to the first transport only — see *Completing the contract* below.
 
 ## Idioms — how code is written here
 
+- **A comment says what this code does and why; never what another module
+  does.** `edge` is pure and is imported by `control`, so a comment here that
+  describes what `control` does with a rendered config cannot see the thing it
+  describes and will not be corrected when it changes. Record the decision and
+  the rejected alternative — that is what a reader cannot recover from the
+  source — and name anything outside this package rather than paraphrasing it.
 - **Rendering is pure.** `render_server` and `render_client` take data and return
   data: no database, no network, no filesystem, no clock, no randomness. Key
   material is *passed in*, never generated inside a renderer.

@@ -39,6 +39,13 @@ or `edge`.
 
 ## Idioms — how code is written here
 
+- **A comment says what this script does and why; never what the panel does.**
+  This zone and `control/**` read the same records and speak to the same
+  operator, and every instance of prose drifting from behaviour in M28 crossed
+  that line. Name `control/app/services/…` and let the reader look. **Operator
+  output names the state it holds for** — a warning printed over several record
+  shapes must be true of each, and `make backup-status` is read by someone who
+  cannot check it against the code.
 - **The base compose file publishes no ports.** Not the database, not the API,
   not Caddy's admin endpoint. `expose` is fine; `ports:` in the base file is a
   finding. Only `docker-compose.dev.yml` publishes, and its bind address

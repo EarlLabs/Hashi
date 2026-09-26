@@ -67,6 +67,18 @@ so a developer who needs one asks instead of editing.
 - Adding a dependency is an architect decision, not an implementation detail.
 - Every module gets a WHAT/WHY/HOW header comment; the owner is learning from
   this codebase, so explain non-obvious decisions where they are made.
+- **A comment describes the code it sits on and records why — never what
+  something else does.** Say what this code does, and record the decision behind
+  it and the alternative that was rejected: that is the half a reader cannot
+  recover from the source. Do **not** describe what another module, another
+  channel or a neighbouring branch does — name it and let the reader look.
+  Nothing in this file changes when *that* behaviour changes, so such a sentence
+  is wrong from the first edit onwards and no test can catch it. M28 found
+  fifteen of them; every late one reached across a boundary.
+  The same applies to anything a person reads — a screen, `--help`, the runbook:
+  **a sentence about behaviour names the state it holds for.** "Every age in this
+  record is worthless" was true of a record whose *runs* were dated ahead, and
+  false, on the same screen, of one whose *due date* alone was.
 
 ## Published ports and credentials
 
