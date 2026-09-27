@@ -245,6 +245,40 @@ def test_the_delivery_certificate_is_readable_where_its_path_points() -> None:
     assert "deploy/delivery/" in guidance
 
 
+def test_the_operator_is_told_the_pair_must_be_readable_by_the_container() -> None:
+    """The other half of "readable", and the one following the instructions loses — M27.7.
+
+    The control plane runs as a system account in its own image (uid 999, measured on a
+    built image on 2026-09-27) and the files belong to whoever placed them. At the 0600 a
+    private key normally carries the read fails, the pair is refused, and no host serves
+    refreshes — so an operator who does exactly as told, with a correctly permissioned
+    key, gets the same outcome as one who configured nothing.
+
+    AND IT IS CHECKED BESIDE THE RENEWAL INSTRUCTION, not only beside the placement one.
+    Renewal is "replace the two files", which is where `cp -p` and a certbot deploy hook
+    put the issuer's own mode back — a step an operator takes every few months, long
+    after reading the paragraph above it.
+    """
+    guidance = (DEPLOY.parent / ".env.example").read_text()
+    assert "uid 999" in guidance, (
+        "`.env.example` no longer says which account inside the container has to be able "
+        "to read the delivery pair"
+    )
+    renewal = next(
+        (
+            paragraph
+            for paragraph in guidance.split("#\n")
+            if "Renewal is replacing the two files" in paragraph
+        ),
+        "",
+    )
+    assert renewal, "the renewal instruction for the delivery pair is gone"
+    assert "mode" in renewal, (
+        "the renewal instruction no longer says to check the mode — this is the step "
+        "that reintroduces a 0600 key the container cannot open"
+    )
+
+
 def split_mapping(mapping: str) -> list[str]:
     """Split ``bind:host:container`` on colons that are not inside a ``${…}``.
 
