@@ -1581,3 +1581,25 @@ def test_the_runbook_quotes_the_words_that_go_with_a_delivery_link(runbook: str)
         f"console.DELIVERY_URL_GOES_ALONGSIDE, which now reads "
         f"{console.DELIVERY_URL_GOES_ALONGSIDE!r}"
     )
+
+
+def test_the_panel_points_at_a_section_this_page_actually_has(runbook: str) -> None:
+    """The Nodes screen sends the operator here by name, so the name is pinned — M27.7.
+
+    Same rule as M16's resolver section and M28.4's retention one: a pointer is checked
+    against the heading it points at, rather than left to be found broken by whoever
+    followed it. The panel names the section's opening phrase, not its whole title, which
+    is what ``startswith`` allows and a rename does not.
+    """
+    pointed = re.search(
+        "“([^”]+)”", console.DELIVERY_HANDED_OVER_BY_YOU.format(alongside="")
+    )
+    assert pointed, (
+        "the Nodes screen no longer points anywhere for how a link on a delivery host "
+        "is handed over"
+    )
+    assert f"## {MOVING_DELIVERY_SECTION}" in runbook
+    assert MOVING_DELIVERY_SECTION.startswith(pointed.group(1)), (
+        f"the panel sends the operator to {pointed.group(1)!r} and this page's section "
+        f"is called {MOVING_DELIVERY_SECTION!r}"
+    )
