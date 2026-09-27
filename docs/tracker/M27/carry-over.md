@@ -146,16 +146,51 @@ that scenario builds, or making the assertion name which service was recreated s
 explains itself.
 
 
-## From M27.9 — one more hour-dependent gate item, found by the sweep and not fixed
+## From M27.9
 
-**`tests/e2e/infra/test_restore_proves_the_backup.py:620-624` inverts for about 75 seconds a
-day.** The scenario appoints `HASHI_BACKUP_AT` at `now + 75s` and then asserts that a tick
-before that minute is silent. When the 75 seconds cross midnight the appointed time becomes
-`00:0x`, the script compares the local `23:59` against it, finds it **not** before, and
-decides the window has passed — so step 2's "still before the appointed minute, must be
-silent" tick takes a backup and the assertion inverts. It is the inverse of M27.9's own
-defect (configuration derived from the clock rather than a fixture derived from the
-configuration) and it is in the e2e tier, which is why M27.9 fixed the static half and left
-this. **Do not mistake a red here for a regression in the step that happens to be running.**
-A fix has to pick an appointed minute that cannot straddle a date boundary, or assert against
-the day the script says it owes rather than against the wall clock.
+**1. `tests/e2e/infra/test_restore_proves_the_backup.py:620-624` is fragile — and the
+mechanism first recorded here was WRONG.** Corrected 2026-09-27 after measurement.
+
+**False as first recorded:** that `now + 75s` crossing midnight makes `appointed` become
+`00:0x`, so the script compares local `23:59`, finds it not before, reads the window as passed
+and takes a backup. **Measured:** at local `23:59` with `HASHI_BACKUP_AT=00:05`, `due_date()`
+returns the **same** day for both steps, step 1 writes exactly that date
+(`run_backup`: `STATE_DUE="${DUE}"`), so step 2 finds `STATE_DUE == DUE` → `action=wait` →
+silent. Live: step 1 `action=run due=2026-09-26`, step 2 `action=wait`. No inversion.
+
+**The real fragility is a DURATION race, at every hour.** `now + 75s` truncated to the minute
+leaves **15 to 75 seconds**. If step 1's dump overruns that, step 2 runs at or after the minute
+and takes a backup; if the minute passed before step 1, step 3's 180 s wait ends with no new
+artifact. The exposure is not "75 seconds a day" — it is every run whose dump is slower than
+the remaining slack. **Fix later:** budget the appointed minute against how long a dump takes,
+or drive step 2 off the script's own `due` answer. Pre-existing; not M27.9's.
+
+**How this entry came to be wrong is the lesson.** The mechanism was reasoned in a review,
+relayed by the orchestrator as *confirmed*, and written here as measured. It was neither until
+the next round measured it. **A mechanism in this file is either measured or labelled
+unmeasured.**
+
+**2. One mirrored behaviour is held by no test and cannot be.** Deleting `[:64]` from
+`the_hour_the_script_resolves` leaves the 48-case pin entirely green — provably inert, since
+the accepted shape is 4 or 5 characters, so anything long enough to cut is malformed either way
+and falls back to `04:00`. The comment saying *"change this only with a run of that"* is false
+for that line.
+
+**3. Two coverage claims in the pin's comments are true only at some wall clocks** — this
+step's own class, in its remedy. *"Whatever the wall clock is, it holds zones on both sides of
+every hour"*: over all 1440 minutes, both sides exist for `00:01` in **4**, for `23:59` in
+**4**, for the `04:00` family in 960. The grid holds **four** distinct clocks, not six
+(`Etc/GMT+11` and `Etc/GMT-13` are both UTC+13 mod 24; `Nowhere/Useful` resolves to UTC). And
+*"a raw-string oracle is a day out for all four"* is false for `1 2:00` — wrong only at local
+hour 10 or 11, and it contributed **0** of the 11 measured reds. True instead: the grid spreads
+local hours so a raw-string comparison is caught at every wall clock, 11 of 48.
+
+**4. A sanitiser-repaired zone parts the oracle from the script.** `Etc/GMT-5!` → script
+resolves `Etc/GMT-5`, `TZ='Etc/GMT-5!' date` prints UTC: five hours, a wrong day for most of
+them. No fixture uses one, and the docstring invites the next author to pass whatever the env
+file names.
+
+**5. The both-sides clock read exists only in the pin.**
+`test_what_the_command_line_may_say_about_a_backup.py:568` compares a date a tick wrote against
+one read afterwards — the strict equality across a clock read that the pin's docstring calls
+*"red for one second a day, the shape this whole step is about"*.
