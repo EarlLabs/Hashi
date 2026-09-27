@@ -50,7 +50,7 @@ from collections.abc import Mapping
 from edge.bootstrap.delivery import ARTIFACT_EXTENSION, ARTIFACT_NAME, DELIVERY_DIR
 from edge.bootstrap.node_stack import NODE_ROOT, digest_of
 from edge.bootstrap.ssh import NodeConnection
-from edge.registry import SubscriptionFormat
+from edge.registry import Layer4, SubscriptionFormat
 from edge.templating import environment_for
 
 _TEMPLATES = environment_for(__file__)
@@ -76,6 +76,21 @@ DELIVERY_IMAGE = "docker.io/library/caddy:2.8.4-alpine"
 # delivery host may take — ``render_compose`` refuses the collision rather than
 # rendering two services with one name.
 DELIVERY_SERVICE = "delivery"
+
+# THE SOCKET A RENDERED SITE BINDS. Declared because something outside this zone has to
+# keep a transport off it, and read from here rather than written down twice: this is
+# the daemon's behaviour, measured on the pin above by reading a running container's own
+# /proc/net, and not a number anybody chose. Nothing renders it — the site address is a
+# bare name and the daemon's defaults do the rest, which is why no port appears in the
+# rendered file at all.
+#
+# It is a CONSEQUENCE and cannot be rotated away from, which is the one thing that makes
+# it unlike the addresses and ports ``CLAUDE.md`` keeps out of code. A subscription URL
+# is fetched by whatever ordinary HTTPS client a user's device has, at the moment a
+# whitelist shutdown has taken everything else away; a delivery endpoint on another port
+# is one that is not reachable then, which is the only moment it exists for.
+DELIVERY_PORT = 443
+DELIVERY_LAYER4 = Layer4.TCP
 
 # Where the rendered site configuration is placed. Beside the delivery directory
 # rather than inside it: ``place_delivery`` REPLACES that directory wholesale on every

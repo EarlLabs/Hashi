@@ -24,7 +24,7 @@ import pytest
 from edge.bootstrap import delivery_site, node_stack
 from edge.bootstrap.delivery import ARTIFACT_EXTENSION, ARTIFACT_NAME, DELIVERY_DIR
 from edge.bootstrap.node_stack import CONFIG_DIR
-from edge.registry import SubscriptionFormat
+from edge.registry import Layer4, SubscriptionFormat
 
 # A site address of the shape a delivery host is given. A name, because that is what a
 # public CA can issue for and what M27.6 settled a delivery host is reached under;
@@ -504,3 +504,26 @@ async def test_the_removal_takes_the_private_key_off_the_host() -> None:
     ):
         assert path in ran[0]
     assert "mkdir" not in ran[0]
+
+
+def test_the_declared_socket_is_the_one_a_rendered_site_actually_binds() -> None:
+    """``DELIVERY_PORT`` exists so that something outside this zone can keep a transport
+    off it, and a declaration nothing checks is a number that drifts from the daemon.
+
+    It cannot be read out of the rendered file — the whole point is that no port is
+    written there — so what is held here is the pair of directives that make the binding
+    what the constant says, and the constant against the scheme it is the default for.
+    A run of the real image behind the claim is in ``tests/e2e/infra/``.
+    """
+    assert delivery_site.DELIVERY_LAYER4 is Layer4.TCP
+    assert delivery_site.DELIVERY_PORT == 443
+    site = a_site()
+    assert "auto_https disable_redirects" in site and "protocols h1 h2" in site
+    directives = [
+        line
+        for line in site.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert not [
+        line for line in directives if str(delivery_site.DELIVERY_PORT) in line
+    ], site
