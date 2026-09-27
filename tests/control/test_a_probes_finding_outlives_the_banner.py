@@ -158,8 +158,8 @@ async def an_applied_node(client, reality_params, *, name: str = "leaf-acc") -> 
 
 
 async def test_a_node_nobody_probed_carries_no_finding(
-    client, session, reality_params, host
-, settings) -> None:
+    client, session, reality_params, host, settings
+) -> None:
     """The accept direction, and the reason it is first.
 
     Without it every assertion below could pass on a panel that warns about every node

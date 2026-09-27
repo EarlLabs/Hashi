@@ -91,6 +91,7 @@ from control.app.errors import Conflict
 from control.app.models import Node, NodeTransport, TransportPurpose
 from control.app.services import addresses, delivery
 from control.app.services.transports import PORT_FIELD
+from control.app.settings import Settings
 from edge.addressing import networks_overlap
 from edge.bootstrap import delivery_site, node_stack
 from edge.registry import Layer4, discover, profile
@@ -274,6 +275,7 @@ async def delivery_socket_is_free(
     node: Node,
     transport_name: str,
     port: str | None,
+    settings: Settings,
     purpose: TransportPurpose = TransportPurpose.USERS,
     excluding: str | None = None,
 ) -> None:
@@ -290,12 +292,36 @@ async def delivery_socket_is_free(
     in this file may name a port, and a copy of that one would be the drift this module's
     header refuses for ``config_format`` and for ``listens_on``.
 
-    WHETHER THIS NODE IS ONE is the DATABASE half of the delivery question
-    (``delivery.may_serve_delivery``) and never the reading of the host: this runs on a
-    form submission, and a check that dialled the node would make enabling a transport
-    depend on the host being up. The over-answer is the co-located box, where the control
-    plane's own Caddy holds the same port for the panel — so the refusal is true there
-    too, for a different holder, and the runbook has said so since Shape A.
+    WHETHER THIS NODE IS ONE IS ``delivery.listener_for``, the same call the apply makes
+    and the same one the Nodes screen composes its sentence from — so the refusal and the
+    screen cannot come to different views of one host. A fleet holding no certificate
+    serves no refreshes from anywhere, and reserving the socket there would tax every
+    operator who never asked for the feature with a sentence that is not true of their
+    fleet: the screen would say "not served from any host" while the form said the host
+    answers refreshes on that port.
+
+    It is the DATABASE and CONFIGURATION halves of the question and never the reading of
+    the host: this runs on a form submission, and a check that dialled the node would make
+    enabling a transport depend on the host being up. The over-answer is the co-located
+    box, where the control plane's own Caddy holds the same port for the panel — so the
+    refusal is true there too, for a different holder, and the runbook has said so since
+    Shape A.
+
+    THE ORDERING HAZARD IS CLOSED ELSEWHERE, deliberately. An operator can put a
+    transport on this socket while no certificate is configured and add one afterwards,
+    and this check cannot see the future. What catches it is the apply: the delivery
+    service is watched like every other container on the node, so a listener that cannot
+    bind leaves the node degraded with the port named — rather than being pre-empted here
+    by a refusal nobody could act on yet.
+
+    IT READS ``_rows_on`` AND THEREFORE IGNORES ``enabled``, unlike the same row question
+    asked during an apply (``delivery.may_serve_delivery``, which is handed the rows that
+    apply is pushing). That is this module's own rule rather than a divergence from that
+    one: a disabled row still holds its port and its name, because freeing them would
+    move the collision to the moment somebody switches it back on. A node whose only
+    user-facing row is switched off is not serving refreshes today and will be the
+    instant it is switched on, so the socket is held for it here — while the apply, which
+    is describing a host as it is about to be, reads what is actually enabled.
 
     BOTH DIRECTIONS, because a node becomes a delivery host by gaining a user-facing row
     and not only by being one already. Enabling something on the port is refused when the
@@ -304,9 +330,17 @@ async def delivery_socket_is_free(
     passes and the collision would appear on the node, at apply, as a container that
     will not bind.
     """
-    if delivery.delivery_site_address(node) is None:
-        # A host a certificate cannot be issued for never serves delivery, so its ports
-        # are its transports' — see ``delivery.delivery_site_address``.
+    try:
+        if delivery.listener_for(node, settings) is None:
+            # Nothing would answer refreshes here — no name a certificate can be issued
+            # for, or no usable certificate anywhere in the fleet — so this node's ports
+            # are entirely its transports'.
+            return
+    except delivery.DeliveryCertificateUnusable:
+        # A configured pair this control plane cannot load. It is a fleet-wide fault with
+        # a sentence of its own on the Nodes screen, and it is not this form's to answer:
+        # refusing a port over it would be a second report of one problem, on a screen
+        # that cannot fix it. No host serves delivery in that state either.
         return
     rows = await _rows_on(session, node.id, excluding=excluding)
     claiming_users = purpose == TransportPurpose.USERS
@@ -421,6 +455,7 @@ async def claim(
     node: Node,
     transport_name: str,
     params: Mapping[str, object],
+    settings: Settings,
     purpose: TransportPurpose = TransportPurpose.USERS,
 ) -> str:
     """Refuse what this row would collide with, and answer with the name it takes.
@@ -447,6 +482,7 @@ async def claim(
         node=node,
         transport_name=transport_name,
         port=port_of(params),
+        settings=settings,
         purpose=purpose,
     )
     # AFTER the port and before the name, so a request that gets both wrong is answered

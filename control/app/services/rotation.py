@@ -50,6 +50,7 @@ from control.app.services import (
     placement,
     relay,
 )
+from control.app.settings import bound_settings
 from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
@@ -479,6 +480,7 @@ async def replace_params(
         node=node,
         transport_name=node_transport.transport_name,
         port=placement.port_of(validated),
+        settings=bound_settings(),
         purpose=node_transport.purpose,
         excluding=node_transport.id,
     )

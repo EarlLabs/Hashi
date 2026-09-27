@@ -279,8 +279,8 @@ async def test_a_container_that_never_stays_up_is_never_reported_as_serving(
 
 
 async def test_what_the_walk_saw_the_row_say_is_not_what_it_says_now(
-    client, session, reality_params, monkeypatch
-, settings) -> None:
+    client, session, reality_params, monkeypatch, settings
+) -> None:
     """The whole finding, end to end, on the two screens the walk read.
 
     The walk probed a host whose data plane could not start, got the correct finding,

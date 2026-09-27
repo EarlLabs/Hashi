@@ -138,7 +138,7 @@ async def test_the_same_transport_on_any_other_port_is_accepted(client) -> None:
 @pytest.mark.skipif(
     not UDP_ONLY_TRANSPORTS, reason="this image ships no UDP-only transport"
 )
-async def test_a_udp_transport_may_hold_the_same_number(session) -> None:
+async def test_a_udp_transport_may_hold_the_same_number(session, settings) -> None:
     """A PORT NUMBER IS NOT A PORT, and this is the measurement that makes it true here.
 
     The rendered site binds TCP alone — ``protocols h1 h2`` takes HTTP/3's UDP listener
@@ -159,6 +159,7 @@ async def test_a_udp_transport_may_hold_the_same_number(session) -> None:
         node=a_record(NODE_NAME),
         transport_name=UDP_ONLY_TRANSPORTS[0],
         port=str(delivery_site.DELIVERY_PORT),
+        settings=settings,
     )
 
 
@@ -465,7 +466,7 @@ def _watch_the_host(monkeypatch) -> _Placed:
 
 @pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
 async def test_the_nodes_screen_says_how_long_this_host_can_go_on_answering(
-    client,
+    client, accepting_nodes
 ) -> None:
     """The owner's requirement of 2026-09-27: the remaining validity is VISIBLE before
     the border shuts, not discovered after.
@@ -479,10 +480,17 @@ async def test_the_nodes_screen_says_how_long_this_host_can_go_on_answering(
     assert (
         await enable(client, node_id, TCP_TRANSPORTS[0], delivery_site.DELIVERY_PORT + 1)
     ).status_code == 201
-    body = (await client.get("/panel/nodes")).text
-    assert NODE_NAME in body
-    assert "delivery" in body
-    assert "shutdown longer than that" in body
+    unapplied = (await client.get("/panel/nodes")).text
+    assert NODE_NAME in unapplied
+    # BEFORE ANY APPLY there is no listener on the host, and the screen says which of the
+    # two states this is rather than describing a machine that answers nothing.
+    assert "nothing on this host serves refreshes yet" in unapplied
+    assert "shutdown longer than that" not in unapplied
+
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    applied = (await client.get("/panel/nodes")).text
+    assert "the last apply put a listener on this host" in applied
+    assert "shutdown longer than that" in applied
 
 
 @pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
@@ -507,7 +515,7 @@ async def test_a_node_nobody_fetches_from_is_told_nothing_about_delivery(client)
 
 @pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
 async def test_a_user_facing_row_is_refused_where_something_already_holds_the_socket(
-    session,
+    session, settings
 ) -> None:
     """The other direction: a node becomes a delivery host by GAINING a user-facing row.
 
@@ -540,12 +548,15 @@ async def test_a_user_facing_row_is_refused_where_something_already_holds_the_so
             node=node,
             transport_name=TCP_TRANSPORTS[0],
             port=str(delivery_site.DELIVERY_PORT + 1),
+            settings=settings,
             purpose=TransportPurpose.USERS,
         )
 
 
 @pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
-async def test_a_hop_is_not_answered_about_a_transport_it_did_not_touch(session) -> None:
+async def test_a_hop_is_not_answered_about_a_transport_it_did_not_touch(
+    session, settings
+) -> None:
     """The narrowing, and the reason for it.
 
     A node whose rows already collide can only have been written before this check
@@ -579,5 +590,58 @@ async def test_a_hop_is_not_answered_about_a_transport_it_did_not_touch(session)
         node=node,
         transport_name=TCP_TRANSPORTS[0],
         port=str(delivery_site.DELIVERY_PORT + 3),
+        settings=settings,
         purpose=TransportPurpose.RELAY_ENTRY,
     )
+
+
+@pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
+async def test_no_certificate_means_the_socket_is_the_transports(
+    client, settings: Settings
+) -> None:
+    """The shipped default, and the refusal must not fire in it.
+
+    With no certificate configured no host serves refreshes from anywhere — the Nodes
+    screen says exactly that — so reserving the socket would tax every operator who
+    never asked for the feature, and would answer them with a sentence the screen
+    contradicts on the same host in the same second.
+    """
+    object.__setattr__(settings, "delivery_certificate_path", "")
+    object.__setattr__(settings, "delivery_key_path", "")
+    node_id = await a_node(client)
+    accepted = await enable(client, node_id, TCP_TRANSPORTS[0], delivery_site.DELIVERY_PORT)
+    assert accepted.status_code == 201, accepted.text
+    body = (await client.get("/panel/nodes")).text
+    assert "this control plane holds no delivery certificate" in body
+
+
+@pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
+async def test_a_listener_that_will_not_come_up_degrades_the_node_and_names_the_port(
+    client, accepting_nodes, monkeypatch
+) -> None:
+    """The one container a node runs for a PERSON was the only one nothing confirmed.
+
+    It declares ``logging: driver: none``, so a listener that will not bind leaves no
+    diagnostics anywhere — and before this the apply reported success over a host
+    answering no refresh at all, while the Nodes screen said users could refresh from it.
+
+    This is also what closes the hazard ``placement`` leaves open on purpose: a transport
+    put on the socket before a certificate existed is met here, with the port named.
+    """
+    from edge.health import listening  # noqa: PLC0415
+
+    from .conftest import pinned  # noqa: PLC0415
+
+    async def bound_ports(connection):
+        # Every port held EXCEPT the delivery listener's: a node whose data plane came
+        # back and whose listener bound nothing, which is the state under test.
+        return {Layer4.TCP: frozenset({delivery_site.DELIVERY_PORT + 1}), Layer4.UDP: frozenset()}
+
+    pinned(monkeypatch, listening, "bound_ports", bound_ports)
+    node_id = await a_node(client)
+    assert (
+        await enable(client, node_id, TCP_TRANSPORTS[0], delivery_site.DELIVERY_PORT + 1)
+    ).status_code == 201
+    refused = await client.post(f"/api/nodes/{node_id}/apply")
+    assert refused.status_code != 200, refused.text
+    assert delivery_site.DELIVERY_SERVICE in refused.json()["error"]["message"]

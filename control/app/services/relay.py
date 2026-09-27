@@ -34,6 +34,7 @@ from control.app.errors import (
 )
 from control.app.models import AuditAction, Node, NodeTransport, TransportPurpose
 from control.app.services import audit, keymaterial, nodes, placement, transports
+from control.app.settings import bound_settings
 from edge import relay as edge_relay
 from edge.registry import KeyScope, discover, profile
 
@@ -500,6 +501,7 @@ async def establish_hop(
             node=node,
             transport_name=transport_name,
             params=validated,
+            settings=bound_settings(),
             # A hop end is not a user-facing row, and the delivery rule cares which:
             # a node that carries only hop ends answers nobody and serves no
             # subscription refreshes, so its ports are entirely its transports'.

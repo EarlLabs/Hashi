@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from control.app import settings as settings_module
 from control.app.crypto import SecretUnreadable
 from control.app.errors import (
     ConfigNotServing,
@@ -1440,9 +1441,30 @@ async def apply_node(
             # whatever it did, so a data plane that does nothing successfully is up for
             # ever. The walk built exactly that image and the apply reported success over
             # a host with no tunnel device and 100% loss across its hop.
+            # AND THE DELIVERY LISTENER IS WATCHED LIKE EVERY OTHER CONTAINER — M27.6,
+            # and it is what keeps the Nodes screen's sentence about this host honest.
+            # Without it the one container this node runs for a PERSON rather than for a
+            # client of a transport was the only one nothing confirmed: it declares
+            # ``logging: driver: none``, so a listener that will not bind leaves no
+            # diagnostics, and the apply reported success over a host answering no
+            # refresh at all. It costs nothing to ask — the service carries the same
+            # config-digest label the data planes do, and ``running_containers`` keys its
+            # answer by compose service name, so it arrives in the same reading.
+            #
+            # It is also what closes the ordering hazard ``placement`` deliberately
+            # leaves open: a transport put on this socket before a certificate existed is
+            # met here, with the port named, rather than by a refusal nobody could have
+            # acted on at the time.
+            watched = dict(configs)
+            if serves_delivery:
+                watched[delivery_site.DELIVERY_SERVICE] = listener.site
+                listeners[delivery_site.DELIVERY_SERVICE] = Listener(
+                    port=delivery_site.DELIVERY_PORT,
+                    protocols=frozenset({delivery_site.DELIVERY_LAYER4}),
+                )
             settled = await serving.confirm_serving(
                 connection,
-                expected=configs,
+                expected=watched,
                 listeners=listeners,
                 interval=node_settings.node_settle_interval,
                 timeout=node_settings.node_settle_timeout,
@@ -1462,9 +1484,15 @@ async def apply_node(
             # the clearing of the probe finding below, which is the claim it actually
             # undermines.
             not_listening = list(settled.not_listening)
+            # Over ``watched`` and not ``configs``: the site file is the delivery
+            # service's configuration exactly as a rendered config is a transport's, and
+            # the digest the service was created with is the digest of that text — so a
+            # host handed a renewed certificate under a container Compose did not
+            # recreate is named here, by the same comparison, rather than serving the
+            # expired one while the apply reports success.
             stale = sorted(
                 name
-                for name, config in configs.items()
+                for name, config in watched.items()
                 if name in loaded and loaded[name] != node_stack.digest_of(config)
             )
             # What this apply may say it re-measured for itself. Read inside the
@@ -1904,16 +1932,18 @@ async def apply_many(
 # parameter on every function because these are called from routes, from the panel
 # and from revocation, and threading settings through all three adds a parameter
 # nobody reads.
-_settings_instance: Settings | None = None
 
 
 def bind_settings(settings: Settings) -> None:
-    global _settings_instance
-    _settings_instance = settings
+    """Bind the process's settings. Kept here because ``main`` calls it by this name.
+
+    The binding itself moved to ``control.app.settings`` in M27.6: ``placement`` needs it
+    too, and this module imports ``placement``, so a second reader reaching back here
+    would be a cycle. One object, one place, two names for the call.
+    """
+    settings_module.bind_settings(settings)
 
 
 def settings() -> Settings:
     """The bound settings, or a loud failure. Public: services/health.py uses it."""
-    if _settings_instance is None:
-        raise RuntimeError("bind_settings() must run before any node operation")
-    return _settings_instance
+    return settings_module.bound_settings()

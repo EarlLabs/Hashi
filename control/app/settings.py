@@ -207,3 +207,30 @@ class Settings(BaseSettings):
         """The origin a user's client dials. Built here, so nothing hardcodes it."""
         scheme = "https" if self.public_https else "http"
         return f"{scheme}://{self.public_host}"
+
+
+# The one ``Settings`` this process is running on, bound once at boot.
+#
+# IT LIVES HERE rather than beside any one service, which is where it used to be
+# (``services/apply``), because more than one service now needs it and the import that
+# would take: ``apply`` imports ``nodes``, ``placement`` and ``relay``, so any of those
+# reaching back for it is a cycle. This module imports nothing from ``services`` and can
+# never grow a cycle with one.
+#
+# WHAT READS IT IS A BOUNDARY AND NEVER A RULE. A service function that is the entry
+# point of an operation reads the binding; the rule it then applies takes the value as an
+# argument (``placement.delivery_socket_is_free``). A rule that read a process-wide global
+# would be a rule no test could state a premise for.
+_bound: Settings | None = None
+
+
+def bind_settings(settings: Settings) -> None:
+    global _bound
+    _bound = settings
+
+
+def bound_settings() -> Settings:
+    """The bound settings, or a loud failure rather than a default nobody chose."""
+    if _bound is None:
+        raise RuntimeError("bind_settings() must run before any node operation")
+    return _bound

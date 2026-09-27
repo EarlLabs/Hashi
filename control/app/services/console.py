@@ -1571,11 +1571,23 @@ DELIVERY_DAYS_WORTH_COUNTING = 30
 # promises is finite and this is where the number is: a shutdown longer than this ends
 # refreshes from this host and there is nothing the product can do about it.
 DELIVERY_SERVED = (
-    "delivery — users can refresh from https://{name}/sub/… on this host, unless it is "
-    "the box this control plane runs on, which already answers. The certificate an apply "
-    "puts there is good until {until} UTC{countdown}: a shutdown longer than that ends "
-    "refreshes from here, because nothing can renew it while this control plane cannot "
-    "reach the host."
+    "delivery — the last apply put a listener on this host, so users can refresh from "
+    "https://{name}/sub/… unless this is the box this control plane runs on, which "
+    "already answers. The certificate it was given is good until {until} UTC{countdown}: "
+    "a shutdown longer than that ends refreshes from here, because nothing can renew it "
+    "while this control plane cannot reach the host."
+)
+
+# And the same host before any apply has reached it, which is a different sentence and
+# not a hedge on that one. Nothing is on the host yet — no listener, no certificate, no
+# container — so a line saying users can refresh from it would be describing a machine
+# that answers nothing. It names the press that changes it, which is the only action
+# there is.
+DELIVERY_ON_THE_NEXT_APPLY = (
+    "delivery — nothing on this host serves refreshes yet. The next apply puts a "
+    "listener there under https://{name}/sub/… with a certificate good until {until} "
+    "UTC{countdown}, unless this is the box this control plane runs on, which already "
+    "answers."
 )
 
 # And the three ways a host that carries users serves none, each naming the one thing
@@ -1621,23 +1633,41 @@ def delivery_note(node: Node, settings: Settings) -> str | None:
         row.enabled and row.purpose == TransportPurpose.USERS for row in node.transports
     ):
         return None
-    address = delivery.delivery_site_address(node)
-    if address is None:
-        return DELIVERY_NO_NAME.format(address=node.address)
     try:
-        certificate = delivery.configured_certificate(settings)
+        listener = delivery.listener_for(node, settings)
     except delivery.DeliveryCertificateUnusable as exc:
         return DELIVERY_UNUSABLE.format(problem=exc)
+    if listener is not None:
+        until = listener.certificate.not_after.strftime("%Y-%m-%d %H:%M")
+        days = listener.certificate.remaining.days
+        countdown = f" — {days} days" if days <= DELIVERY_DAYS_WORTH_COUNTING else ""
+        # WHAT IS ON THE HOST AND WHAT WOULD BE ARE TWO SENTENCES, because nothing here
+        # reaches a node: the listener, its certificate and its container are put there
+        # by an apply, so on a node no apply has reached there is nothing to refresh
+        # against and a line saying otherwise would be this screen asserting a mechanism
+        # it has not got. Read off ``applied_at``, which is the same fact the drift cell
+        # beside it reads and the only record this control plane keeps of having pushed.
+        said = (
+            DELIVERY_SERVED
+            if any(row.applied_at for row in node.transports)
+            else DELIVERY_ON_THE_NEXT_APPLY
+        )
+        return said.format(
+            name=delivery.delivery_site_address(node), until=until, countdown=countdown
+        )
+    # ONE VERDICT, THREE REASONS. Whether this host serves refreshes is
+    # ``delivery.listener_for`` above — the same call the apply makes and the same one
+    # ``placement`` refuses a port on, so the three cannot disagree. What is composed
+    # below is only WHY it does not, which is the operator's to act on and nobody
+    # else's.
+    if delivery.delivery_site_address(node) is None:
+        return DELIVERY_NO_NAME.format(address=node.address)
+    certificate = delivery.configured_certificate(settings)
     if certificate is None:
         return DELIVERY_NO_CERTIFICATE
-    until = certificate.not_after.strftime("%Y-%m-%d %H:%M")
-    if certificate.remaining <= datetime.timedelta(0):
-        return DELIVERY_EXPIRED.format(until=until)
-    days = certificate.remaining.days
-    countdown = (
-        f" — {days} days" if days <= DELIVERY_DAYS_WORTH_COUNTING else ""
+    return DELIVERY_EXPIRED.format(
+        until=certificate.not_after.strftime("%Y-%m-%d %H:%M")
     )
-    return DELIVERY_SERVED.format(name=address, until=until, countdown=countdown)
 
 
 def probe_note(node: Node) -> str | None:

@@ -517,7 +517,7 @@ class AcceptingNode:
 
 @pytest.fixture
 def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the eight calls that touch a host, and nothing else.
+    """Replace the eleven calls that touch a host, and nothing else.
 
     Six in ``node_stack``, two in ``edge.bootstrap.delivery`` since M27.2, and three in
     ``edge.bootstrap.delivery_site`` since M27.6 — a node is handed its users'
@@ -569,6 +569,13 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
 
     async def place_delivery_site(connection, *, site: str) -> None:
         connection.site = site
+        # AND THE CONTAINER COMES BACK UP ON IT, which is what makes this double stand
+        # for "a node where every step of an apply works" now that the apply watches the
+        # delivery listener like every other container (M27.6). ``running_containers``
+        # below answers out of ``placed``, so a site placed and not recorded here is a
+        # node whose listener never came up — and every apply in this suite would be
+        # reported as degraded, correctly.
+        connection.placed[node_delivery_site.DELIVERY_SERVICE] = node_stack.digest_of(site)
 
     async def place_delivery_certificate(connection, *, certificate: str, key: str) -> None:
         connection.certificate = (certificate, key)
@@ -578,6 +585,9 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
         # distinguishable from one nothing ever stood up — see ``AcceptingNode``.
         connection.site = False
         connection.certificate = False
+        # And the container goes with the files: on a real host it is dropped from the
+        # compose file and ``restart`` runs with ``--remove-orphans``.
+        connection.placed.pop(node_delivery_site.DELIVERY_SERVICE, None)
 
     async def remove_delivery(connection) -> bool:
         # The host is left holding nothing, which is what the real one leaves behind —

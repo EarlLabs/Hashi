@@ -230,8 +230,8 @@ async def test_the_refusal_is_in_the_probes_own_words(
 
 
 async def test_the_apply_does_not_delete_a_finding_it_did_not_contradict(
-    client, session, reality_params, monkeypatch
-, settings) -> None:
+    client, session, reality_params, monkeypatch, settings
+) -> None:
     """The deletion the walk watched happen twice, and the rule that stops it.
 
     The probe found the truth about this host and the panel stored it. An apply that
