@@ -345,3 +345,41 @@ quiet* — when it would have been red only during the hour between the old valu
 zone the module names, which moves the local hour the script compares against `at`. For tests
 pinned at `at=00:01`, move the configured hour instead. **That method shifts hours, not
 minutes**, so sub-minute cases are not covered by it.
+
+## From M27.5 — silence on both axes, for two different reasons
+
+**STALE: nothing in the artifact about its age.** The artifact and the host's own server configs
+are two renders of one row set inside one apply — one `enabled_transports` read handed to
+`artifacts_for_node`, the same filter re-issued by `render_for_node`, same transaction, placement
+paired inside the connection, `applied_at`/`applied_digest` written only after the block succeeds.
+So the material goes out of date exactly when the daemon does, and in that state the control
+plane's `/sub/{token}` is the **less** accurate answer for that host's entries. **Delivery does not
+inherit M25's sentence** — that names nodes, states and two buttons a user has not got.
+
+**One measured exception, and only one:** two node-record fields can change after registration
+(`set_resolver`, `set_ssh_key`); only `resolver` reaches rendered material. A resolver **on the
+internet** renders no `PostUp` exception into the node's own config, so the drift cell reads
+`in sync` while the archive still names the old one. Pinned.
+
+**PARTIAL: also nothing, for the opposite reason.** A truthful per-user sentence needs the render
+to learn whether that person holds material elsewhere, and writing that onto the seizable box says
+*"this person has other nodes"* once per person — worse than the addresses narrowing removed. An
+unconditional sentence carries no per-user fact and belongs with the URL. **M27.7 owns it as a
+requirement.**
+
+**Rejected in writing:** a render marker (dates the operator's last touch, orders that host's users
+by first push, and `archive_of` already refuses "now" via `ARCHIVE_TIMESTAMP`); a client-visible
+entry (the v1 URI list has **no slot for prose** — a non-URI line is a parse risk, a decoy entry is
+a tap-and-fail, in clients this project cannot debug remotely); serving nothing (a delivery host
+exists for the moment the control plane is unreachable).
+
+**The pin that holds both decisions:** in a one-user-facing-host fleet the narrowed artifact is
+**byte for byte** what `/sub/{token}` answers, in both shapes. A single added comment line turns
+4 of 9 red — it genuinely holds "nothing was added".
+
+**Compare artifacts as raw bytes here**, unlike the neighbouring delivery test which decodes. A
+decode on either side hides a difference a user's client would meet.
+
+**`_a_resolver_the_drops_leave_alone()` derives its address** by walking octets against
+`edge.egress.NOT_THE_INTERNET_IPV4`, because every RFC 5737 literal is treated as off-the-internet
+and the state is unreachable with one. **Copy the helper, never the value it returns today.**
