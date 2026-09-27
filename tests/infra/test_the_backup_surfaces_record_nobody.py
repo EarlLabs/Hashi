@@ -445,12 +445,18 @@ def test_a_tick_with_nothing_owed_says_nothing_at_all(tmp_path) -> None:
     state = tmp_path / "state"
     path = env_file(tmp_path, HASHI_BACKUP_AT="04:00", HASHI_BACKUP_TZ="Etc/UTC")
     # The day the script itself thinks is owed, asked of the script rather than computed
-    # here: a test that works out the date for itself is a second implementation of the
-    # thing under test, and it goes wrong across midnight.
+    # here: nothing below asserts anything about this date, it is only the state in which
+    # the tick has nothing to do, so a second implementation of the date would be a second
+    # thing that can go wrong under an assertion about SILENCE. Where the date IS the
+    # assertion, `test_backup_schedule.day_owed_in` works it out instead and says why —
+    # this test is the case its docstring names on the other side of that line.
+    #
+    # Named `owed` and not `today`: for the four hours before `HASHI_BACKUP_AT` the day
+    # owed is yesterday's, and a name saying otherwise is the mis-reading M27.9 came from.
     state.mkdir()
-    today = verdict(run("due", path, state))["due"]
-    seed(state, due_date=today,
-         last_attempt={"at": f"{today}T04:00:00Z", "due_date": today,
+    owed = verdict(run("due", path, state))["due"]
+    seed(state, due_date=owed,
+         last_attempt={"at": f"{owed}T04:00:00Z", "due_date": owed,
                        "exit_code": 0, "outcome": "on-this-host-only"})
 
     quiet = run("tick", path, state)

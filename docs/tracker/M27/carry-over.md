@@ -144,3 +144,18 @@ Not in any M27 diff. The property depends on a fully-cached rebuild producing th
 which a session that also pulls or builds images elsewhere can break. Worth pinning the base images
 that scenario builds, or making the assertion name which service was recreated so the next red run
 explains itself.
+
+
+## From M27.9 — one more hour-dependent gate item, found by the sweep and not fixed
+
+**`tests/e2e/infra/test_restore_proves_the_backup.py:620-624` inverts for about 75 seconds a
+day.** The scenario appoints `HASHI_BACKUP_AT` at `now + 75s` and then asserts that a tick
+before that minute is silent. When the 75 seconds cross midnight the appointed time becomes
+`00:0x`, the script compares the local `23:59` against it, finds it **not** before, and
+decides the window has passed — so step 2's "still before the appointed minute, must be
+silent" tick takes a backup and the assertion inverts. It is the inverse of M27.9's own
+defect (configuration derived from the clock rather than a fixture derived from the
+configuration) and it is in the e2e tier, which is why M27.9 fixed the static half and left
+this. **Do not mistake a red here for a regression in the step that happens to be running.**
+A fix has to pick an appointed minute that cannot straddle a date boundary, or assert against
+the day the script says it owes rather than against the wall clock.
