@@ -3845,6 +3845,42 @@ command to get there.
 
 ---
 
+## → M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27
+
+**Deferred out of M27.6 on purpose, and the reason is `CLAUDE.md`'s own rule.** The owner chose
+a wildcard issued by the control plane over DNS-01 and pushed on apply, because a per-host
+certificate publishes every Russian entry's name in Certificate Transparency — public,
+permanent, near-real-time. Everything downstream of issuance is built: the control plane reads
+the pair from `HASHI_DELIVERY_CERTIFICATE_PATH` / `HASHI_DELIVERY_KEY_PATH`, distributes it on
+apply, stands a listener down when it expires and takes the key off the host.
+
+**What is not built is the issuance**, because DNS-01 needs either an ACME client library or a
+Caddy rebuilt with a provider module, and **adding a dependency is an architect decision, not
+an implementation detail.** The implementer raised it instead of adding it, which is what the
+rule is for.
+
+**So the shipped mode is: the operator obtains the wildcard and puts it at those paths.** Zero
+new dependencies, works today. The cost is manual renewal roughly every ninety days — and
+because a pushed certificate is renewed by an apply, the operator must also apply afterwards
+or delivery stands down at expiry with the listener removed.
+
+**Done when**
+- [ ] The control plane obtains and renews the wildcard itself, without the operator touching a
+      file.
+- [ ] The DNS credential lives only on the control plane — **never on a node**, because it can
+      rewrite the fleet's records.
+- [ ] The dependency this needs is the owner's decision, recorded in `docs/decisions.md` before
+      it is added.
+- [ ] Nothing in the issuance path publishes an individual delivery hostname; that is what the
+      wildcard is for.
+
+acceptance: yes
+On a stand, with a test zone: let the control plane obtain a wildcard from scratch, push it,
+and serve a subscription over it. Then let it renew one that is near expiry and confirm a
+delivery host picks the new pair up on the next apply without an operator touching anything.
+
+---
+
 ## → M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · PROPOSED
 
 **Not started.**
