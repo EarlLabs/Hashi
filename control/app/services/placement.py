@@ -309,27 +309,50 @@ async def delivery_socket_is_free(
         # are its transports' — see ``delivery.delivery_site_address``.
         return
     rows = await _rows_on(session, node.id, excluding=excluding)
-    if purpose != TransportPurpose.USERS and not any(
+    claiming_users = purpose == TransportPurpose.USERS
+    if not claiming_users and not any(
         row.purpose == TransportPurpose.USERS for row in rows
     ):
         return
-    held = str(delivery_site.DELIVERY_PORT)
-    installed = discover()
-    contending = [
-        (transport_name, port),
-        *((row.transport_name, port_of(row.params)) for row in rows),
-    ]
-    for name, wanted in contending:
-        if wanted != held or name not in installed:
-            continue
-        if delivery_site.DELIVERY_LAYER4 in binds_of(name):
-            raise Conflict(
-                PORT_IS_DELIVERYS.format(
-                    node=node.name,
-                    protocol=str(delivery_site.DELIVERY_LAYER4).upper(),
-                    port=held,
-                )
+
+    def refuse() -> None:
+        raise Conflict(
+            PORT_IS_DELIVERYS.format(
+                node=node.name,
+                protocol=str(delivery_site.DELIVERY_LAYER4).upper(),
+                port=delivery_site.DELIVERY_PORT,
             )
+        )
+
+    if _holds_the_delivery_socket(transport_name, port):
+        refuse()
+    # AND THE OTHER DIRECTION, BUT ONLY WHEN THIS CLAIM IS WHAT CREATES THE COLLISION.
+    # A node becomes a delivery host by gaining a user-facing row, so a user-facing row
+    # arriving on a host where something already holds the socket is refused here rather
+    # than discovered on the node as a container that will not bind.
+    #
+    # It is NOT asked of every other claim on such a node, and the narrowing is the rule
+    # that a refusal is about what was submitted. A node whose rows already collide can
+    # only have been written before this check existed; answering an operator laying a
+    # HOP with a sentence about a user-facing transport they did not touch, on a form
+    # that cannot fix it, is the defect M23's thirteenth round found in the revocation
+    # banner — a true sentence that sends somebody nowhere.
+    if claiming_users:
+        for row in rows:
+            if _holds_the_delivery_socket(row.transport_name, port_of(row.params)):
+                refuse()
+
+
+def _holds_the_delivery_socket(transport_name: str, port: str | None) -> bool:
+    """Would this transport, on this port, bind the socket a delivery listener holds.
+
+    A row whose transport this image no longer ships is skipped for ``port_is_free``'s
+    reason: nothing can say what it binds, and inventing an answer would either refuse a
+    port that is free or allow one that is not.
+    """
+    if port != str(delivery_site.DELIVERY_PORT) or transport_name not in discover():
+        return False
+    return delivery_site.DELIVERY_LAYER4 in binds_of(transport_name)
 
 
 def tunnel_of(transport_name: str, params: Mapping[str, object]) -> str | None:

@@ -503,3 +503,81 @@ async def test_a_node_nobody_fetches_from_is_told_nothing_about_delivery(client)
     operator stops reading."""
     await a_node(client, name="leaf", address="leaf.example.test")
     assert "delivery —" not in (await client.get("/panel/nodes")).text
+
+
+@pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
+async def test_a_user_facing_row_is_refused_where_something_already_holds_the_socket(
+    session,
+) -> None:
+    """The other direction: a node becomes a delivery host by GAINING a user-facing row.
+
+    Without this, the two rows could be created in the order that passes and the
+    collision would appear on the node at apply, as a container that will not bind on a
+    host nobody has a shell on.
+
+    Asked of the service because the state it needs — a row already on the socket — is
+    one the API now refuses to create, which is the point of the check above it.
+    """
+    from control.app.models import NodeTransport, TransportPurpose  # noqa: PLC0415
+    from control.app.services import placement  # noqa: PLC0415
+
+    node = a_record(NODE_NAME)
+    session.add(node)
+    session.add(
+        NodeTransport(
+            node_id=node.id,
+            transport_name=TCP_TRANSPORTS[0],
+            config_name=TCP_TRANSPORTS[0],
+            purpose=TransportPurpose.RELAY_ENTRY,
+            params={"port": delivery_site.DELIVERY_PORT},
+        )
+    )
+    await session.flush()
+
+    with pytest.raises(Exception, match="refresh"):
+        await placement.delivery_socket_is_free(
+            session,
+            node=node,
+            transport_name=TCP_TRANSPORTS[0],
+            port=str(delivery_site.DELIVERY_PORT + 1),
+            purpose=TransportPurpose.USERS,
+        )
+
+
+@pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")
+async def test_a_hop_is_not_answered_about_a_transport_it_did_not_touch(session) -> None:
+    """The narrowing, and the reason for it.
+
+    A node whose rows already collide can only have been written before this check
+    existed. Answering an operator laying a HOP with a sentence about a user-facing
+    transport they did not submit, on a form that cannot fix it, is the defect M23's
+    thirteenth round found in the revocation banner: a true sentence that sends
+    somebody nowhere. The collision is still real and is met at the apply.
+    """
+    from control.app.models import NodeTransport, TransportPurpose  # noqa: PLC0415
+    from control.app.services import placement  # noqa: PLC0415
+
+    node = a_record(NODE_NAME)
+    session.add(node)
+    for purpose, port in (
+        (TransportPurpose.USERS, delivery_site.DELIVERY_PORT),
+        (TransportPurpose.RELAY_LEAF, delivery_site.DELIVERY_PORT + 2),
+    ):
+        session.add(
+            NodeTransport(
+                node_id=node.id,
+                transport_name=TCP_TRANSPORTS[0],
+                config_name=f"{TCP_TRANSPORTS[0]}-{purpose}",
+                purpose=purpose,
+                params={"port": port},
+            )
+        )
+    await session.flush()
+
+    await placement.delivery_socket_is_free(
+        session,
+        node=node,
+        transport_name=TCP_TRANSPORTS[0],
+        port=str(delivery_site.DELIVERY_PORT + 3),
+        purpose=TransportPurpose.RELAY_ENTRY,
+    )
