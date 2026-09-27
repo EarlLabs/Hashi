@@ -63,6 +63,15 @@
 	# That rule cannot see this listener, so a tunnel on UDP 443 and this host's HTTP/3
 	# would have contended for a socket no table in the product names, on the host that
 	# is hardest to get a shell on.
+	#
+	# AND HTTP/3 PUT A HEADER ON EVERY REFUSAL, which is the other thing measuring found
+	# and is this file's own rule broken from the inside. With it on, Caddy advertises
+	# itself with `alt-svc` on every response INCLUDING the empty 404 below — so each
+	# delivery host answered an unknown name with a fixed pair of headers rather than
+	# with the one the control plane's public site gives, which is the enumerable
+	# signature the comment above that 404 exists to prevent. It was invisible offline,
+	# because the header is added by the server and not by this file, and invisible to
+	# the scenario, because a site asked for over `http://` has no HTTP/3 to advertise.
 	auto_https disable_redirects
 
 	servers {
