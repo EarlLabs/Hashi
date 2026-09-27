@@ -210,3 +210,82 @@ byte-identical, so a non-delivery host recreates nothing. The site file is
 staging family and gets `rm -rf`'d. `restart` runs `up -d --remove-orphans`, so dropping the
 service removes the container — M27.4's removal path, for free, though the *directory* still
 needs `place_delivery(artifacts=[])`.
+
+
+## From M27.4 — the predicate, derived and never flagged
+
+**Converged clean.** control 1043/2, edge 967/3, e2e 239/0.
+
+**`control.app.services.delivery.is_delivery_host(connection, *, enabled)` — call it, never re-derive
+it, and never add a field or setting beside it.** Two halves, both read off things already true:
+
+1. **Does anyone fetch from this host** — `any(row.purpose == TransportPurpose.USERS for row in
+   enabled)`. A *purpose*, never a transport name. Settles every leaf in every arrangement
+   **without dialling the host**.
+2. **Is this host already the one that answers `/sub/`** — `CONTROL_STACK_PROJECT not in
+   compose_projects(connection)`, i.e. `docker compose ls --all --quiet` over the connection the
+   apply already holds.
+
+**Why half 2 is measured on the host and cannot be a record comparison.** The runbook registers a
+co-located box with its **public IP** for `address` and `ssh_host`, while `.env.example` and the
+runbook require `HASHI_PUBLIC_HOST` to be a **DNS name**, because a public CA cannot issue for an
+IP. Two truthful values for one machine, two different strings — so a record comparison answers
+*"not co-located"* for **exactly the arrangement this step is about**.
+
+**The failure directions are asymmetric, and that is what makes it affordable.** A host wrongly
+judged co-located keeps no second copy — the control box already holds the database and the master
+key. A host wrongly judged a stranger gets the second name, certificate and listener the step
+forbids. So `compose_projects` **raises rather than answering empty**: an empty set reads as
+"nothing of ours is here", which is the answer that puts a second listener on the box that already
+answers.
+
+**Named assumption, not checkable:** the control stack is deployed by compose, under that name, on
+the engine the node's SSH account reaches. One run outside compose, or under a daemon that account
+cannot see (rootless, a non-default context), is invisible — and its own box is then offered
+delivery. Named rather than checked, because the alternative is the setting the predicate exists
+not to have.
+
+**`CONTROL_STACK_PROJECT` is pinned against `deploy/docker-compose.yml`** by a control test that
+fires if that name changes. Node stacks are `hashi-node`, so a node never looks like the control
+host.
+
+### The removal path
+
+**`remove_delivery(connection)` creates nothing** — `test -d` then `rm -rf` of the live directory
+**and both staging siblings** — which is what makes it legal on a host `prepare` has never touched.
+It is **not** `place_delivery(artifacts=[])`: that leaves an *empty* directory, the right state for
+a delivery host carrying nobody; this leaves **no** directory, which is *absent, not inert*.
+
+**A refused apply now dials the host** before refusing, and M27.2's three objections are answered
+rather than overridden: the removal creates nothing, so the privilege boundary and
+`HOST_NOT_PREPARED` are untouched; the clause *"nothing was pushed and nothing on the node was
+changed"* is **replaced, never appended to**, on the one host where it is false, through the
+substitution `panel/wording` already uses — with a test pinning that all three refusals still
+contain the clause, or the swap would silently no-op; and a failure to reach never degrades.
+Still 409, no state write, no render, no push.
+
+**`DELIVERY_MAY_STILL_BE_THERE` is appended only to `NOTHING_LEFT_TO_APPLY`** — the refusal whose
+evidence is a surviving `applied_at`. A hedge on the others would fire on every first-run apply.
+
+**Three states the removal does not reach**, all recorded: `cannot_serve_again`, a node the fan-out
+skips as not serving, and a node whose record is deleted.
+
+**The wording names the directory, not its contents** — *"the delivery directory an earlier apply
+left there is gone, with whatever it was holding"* — because `remove_delivery` measures the live
+directory and nothing else, and that sentence is true of both the populated host and the empty one
+this product creates on purpose. Counting files was weighed and refused: a second reading of the
+host for a distinction that changes nothing an operator would do.
+
+### The seam M27.6 inherits, and it is wider than a name
+
+Nothing passes `compose_service`; nothing calls `place_delivery_site`. **The blocker is the port.**
+A Caddy site address with a bare name takes 80/443, and the runbook puts `vless-reality` on **443
+on the entry** — which is the delivery host in **both** arrangements that need the work. The
+runbook also records that the co-located shape cannot have Reality on 443 *because Caddy holds it*.
+So **M27.6 owns a port-sharing decision**, not only a name and a certificate. An operator-set port
+is the flag M27.4 bans; a literal is the hardcoding `CLAUDE.md` bans.
+
+**For acceptance:** the co-located arrangements are currently absent by **two** constructions — the
+predicate says no, **and** no listener exists anywhere. So the walk's second scenario cannot yet
+distinguish a feature absent by derivation from one absent because nothing was built. It becomes
+meaningful only after M27.6.

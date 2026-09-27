@@ -120,3 +120,27 @@ node already). One sentence, or give `file_server` a matcher too.
 and so covers the two shape matchers but not `@no_shape_named` — the block a URL a user
 already holds actually reaches. Deleting the `file` guard from that one block leaves it and
 its neighbour green; only the e2e scenario catches it.
+
+
+## From M27.4 — two gate-integrity findings, neither this milestone's
+
+**1. `make verify` is red for four hours a day, and has been since M28.** Confirmed at 00:54 UTC:
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py::{test_the_tick_that_takes_it_leaves_a_record_this_clock_can_read,
+test_a_run_timestamp_ahead_does_not_make_the_tick_dump, test_an_ordinary_record_says_none_of_that}`
+fail between **00:00 and 04:00 UTC**. The module builds `A_REAL_RUN_HALF_AN_HOUR_AGO` at import
+with `due_date = today_in("Etc/UTC")`, while `scripts/backup-run.sh` computes the due date from the
+configured `at=04:00` window — so inside that window the fixture's record is dated a day **ahead**
+of the schedule's own due date and the script correctly answers `clock=ahead`. **The product is
+right and the fixture is wrong.** Proven pre-existing: the same three fail at `530e61b` in a clean
+worktree at the same wall clock, and M27.4 touches no infra file the suite collects.
+
+This is the sharpest instance yet of the family this run keeps finding — **a gate whose colour
+depends on the hour**, green in every run anyone happened to make. Fixed as its own step because
+every remaining step of M27 gates on `make verify`.
+
+**2. `test_panel_bootstrap.py::test_running_it_again_changes_nothing` went red once** on a cached
+rebuild recreating one container of a shared module-scoped install, and green on three re-runs.
+Not in any M27 diff. The property depends on a fully-cached rebuild producing the same image id,
+which a session that also pulls or builds images elsewhere can break. Worth pinning the base images
+that scenario builds, or making the assertion name which service was recreated so the next red run
+explains itself.
