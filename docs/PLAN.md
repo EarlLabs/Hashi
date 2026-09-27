@@ -4013,6 +4013,16 @@ want to.
 
 So one of these is decided deliberately and recorded:
 
+**A requirement this step inherits, not a suggestion — from M27.5, 2026-09-27.** The wording
+that travels with a delivery URL must say **add it alongside the link you already have, do not
+replace it.** A delivery host serves a *slice* — only its own material — so a client that
+replaces its subscription URL with a delivery URL silently loses every node not on that host,
+and it looks exactly like a revocation. M27.5 weighed putting that warning *inside* the
+artifact and refused: a truthful per-user version writes *"this person has other nodes"* onto
+the most seizable box in the fleet, once per person, which yields a seizer more than the leaf
+addresses narrowing was built to hide. **So the protection cannot live in the document. This
+step is the only place it can live.**
+
 - a subscription carries **more than one** delivery URL from the day it is issued,
   and a client falls back — which doubles the number of places a bearer token can
   be recorded, and puts a Russian-side address into every foreign artifact and the
