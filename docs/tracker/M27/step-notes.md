@@ -383,3 +383,54 @@ decode on either side hides a difference a user's client would meet.
 **`_a_resolver_the_drops_leave_alone()` derives its address** by walking octets against
 `edge.egress.NOT_THE_INTERNET_IPV4`, because every RFC 5737 literal is treated as off-the-internet
 and the state is unreachable with one. **Copy the helper, never the value it returns today.**
+
+## From M27.6 — the socket, and the certificate that arrives by apply
+
+**Stopped at the round cap with two Highs open** (carried). The Critical — that the feature could
+not be switched on in any deployed shape — was fixed and **verified end to end**: a real image, a
+real container, a real pair in `deploy/delivery/`, `Settings` picking both paths up,
+`configured_certificate` parsing, and `listener_for` returning a site carrying `tls`.
+
+**No port is written anywhere.** A bare site address; Caddy's defaults decide. **Which** socket
+that is is `edge`'s measurement (`DELIVERY_PORT` / `DELIVERY_LAYER4`), read by `control`, never
+copied.
+
+**The site binds one socket only**, with `auto_https disable_redirects` and
+`servers { protocols h1 h2 }`. Without them it also takes TCP 80 and **UDP 443** — which would
+have contended silently with `amneziawg` on 443, because `placement` treats UDP and TCP on one
+number as two sockets and knows nothing about this listener.
+
+**HTTP/3 was also signing every refusal.** With it on, Caddy advertises `alt-svc` on **every**
+response including the empty 404, so each delivery host answered an unknown name with a fixed
+header pair instead of the bare 404 — the enumerable signature M27.3's own comment exists to
+prevent. Invisible in both directions: the header is emitted by the server, not written into any
+rendered byte, and the old scenario asked over `http://`, which has no HTTP/3 to advertise. Found
+by mutation, not by reading.
+
+**Nobody on the node renews.** The control plane holds one wildcard and pushes the pair on apply;
+the node's Caddy is handed `tls <cert> <key>`. So a node dials no certificate authority, answers
+no challenge, keeps no account key — and **needs no volume**.
+
+**Paths are inside the control container**; the files go in `deploy/delivery/` on the host,
+bind-mounted read-only at `/etc/hashi/delivery`. Renewal is replacing the two files **and running
+an apply** — the pair is read on every apply and never cached, so a host keeps the old one until
+an apply reaches it.
+
+**An expired or unloadable certificate stands the listener down and takes the private key off the
+host, and does not fail the apply** — an apply is how a blocked node's data plane is repaired, so
+a certificate must never be what stops an operator mid-outage.
+
+**The delivery service is in the apply's serving check now** — `watched` carries
+`DELIVERY_SERVICE` and a `Listener(port=DELIVERY_PORT)`, so an absent container, a crash loop, a
+listener that binds nothing and a renewed certificate under a non-recreated container all degrade
+the node.
+
+**The refusal is `placement`'s third occupant of an existing table**, threaded with `Settings` so
+it returns early when no listener can exist. A fleet with no usable certificate keeps 443
+everywhere, and that is the default.
+
+**The wildcard's cost, recorded after review:** every delivery host presents the **identical leaf
+certificate**, so anyone holding one delivery name — or scanning 443 — can pivot on key or serial
+and enumerate every other delivery host, with no seizure, no DNS control and no network position.
+The decision stands (per-host certificates are worse, via Certificate Transparency), but it does
+**not** close the cheap path for enumeration, only for impersonation.

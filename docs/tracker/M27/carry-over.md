@@ -194,3 +194,60 @@ file names.
 `test_what_the_command_line_may_say_about_a_backup.py:568` compares a date a tick wrote against
 one read afterwards — the strict equality across a clock read that the pin's docstring calls
 *"red for one second a day, the shape this whole step is about"*.
+
+## From M27.6 — OPEN, carried
+
+**1. `DELIVERY_SERVED` is still false in the state every existing fleet will be in.** It asserts
+*"the last apply put a listener on this host"* and gives the certificate's expiry, but is chosen
+on `any(row.applied_at for row in node.transports)` — which records only that some transport row
+was pushed, never that a delivery listener was placed. Reproduced: a node with one applied
+user-facing row, and a certificate configured **after** that apply, renders the full sentence
+with an expiry date while there is no listener, no certificate and no container on that host.
+**That is exactly the state every fleet is in the moment the Critical fix makes the feature
+reachable**, and the same holds for an address corrected from an IP to a name since the last
+apply. The renewal case points the defect at the number the decision row says the product exists
+to make visible: after the operator replaces the pair, `until` is the **new** certificate's
+expiry while the host still holds the old one, so the screen over-promises the shutdown horizon.
+A narrowing of round 1's High, not a reversal — "never applied" is correctly handled. Fix by
+recording what was actually placed (the site digest, the certificate's `not_after`) and composing
+the sentence from that. **Carried to M27.7.**
+
+**2. The runbook's 443 paragraph is false for the shipped default.** It says the socket collides
+*"on any host that carries a user-facing transport and is registered under a name"* and closes
+its exemption list without the third case: with both `HASHI_DELIVERY_*` blank — the default, and
+the state of every fleet before an operator acts — such a host **does** keep 443, and
+`test_no_certificate_means_the_socket_is_the_transports` asserts it.
+`test_a_new_collision_check_cannot_be_added_without_the_page_gaining_a_sentence` only checks a
+sentence exists, so it stayed green. **Carried to M27.8**, whose file it is.
+
+**3. `.dockerignore`'s `*.pem` reaches only the repository root.** Go's `filepath.Match` matches
+the whole relative path, so the guard the file states for itself — *"the first `COPY . .` anyone
+writes would bake real secrets into a layer"* — does not cover `deploy/delivery/`, where this step
+puts **the fleet's wildcard private key**, which answers for every delivery name until it expires.
+Proven: a build with `COPY deploy/delivery /d` has `privkey.pem` in the layer. No key is in the
+shipped image today, because `control.Dockerfile` copies only `pyproject.toml`, `control/` and
+`edge/`. Add `deploy/delivery/` or `**/*.pem`. **Carried to M27.7.**
+
+**4. Following the instructions literally fails on a correctly-permissioned key.** The container
+runs as uid 999; the operator's files are owned by their own uid. At the 0600 a private key
+normally carries, the container gets `DeliveryCertificateUnusable`. Reproduced, along with the
+0644 success. Nothing in `.env.example`, the compose comment or the runbook says the pair must be
+readable by a uid the operator never chose — and the renewal instruction (*"replacing the two
+files"*) is exactly where a `cp -p` or a certbot hook reintroduces it. The failure is at least
+loud and names the path. **Carried to M27.7.**
+
+**5. The backup table does not list `deploy/delivery/`.** *"What belongs in a backup, and what does
+not"* is an explicitly closed table; this step added key material on the control-plane host and
+the table does not mention it, nor does *"It does not give you back"*. After
+`restore-from-bucket` the restored `.env` points at an empty mounted directory and every host
+silently stops serving refreshes until the operator re-places the pair. The answer is almost
+certainly **No** — same reasoning as `caddy_data`, a seized host's key is presumed compromised and
+the wildcard is re-issuable — but it must be written. **Carried to M27.8.**
+
+**6. Two comments assert what a neighbouring module prints.** `placement.py:314` and its test say
+the apply meets the ordering hazard *"with the port named"*; the refusal is built as `nothing
+listening on the port for: delivery` and names the service, never the number.
+
+**7. `.env.example:17` says "by path on this machine"** eighteen lines before `:35` says **"THE
+PATHS ARE INSIDE THE CONTROL CONTAINER"**. The second corrects the first, and that ambiguity is
+the one that produced the Critical.
