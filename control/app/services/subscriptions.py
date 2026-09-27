@@ -70,6 +70,12 @@ TOKEN_BYTES = 32
 # not say whether this person has ever had anything. It says the link is fine, that
 # nothing on their device needs changing, and who to ask — which is everything they can
 # act on and nothing a stranger learns from.
+#
+# THAT RULE HAS A SECOND READER SINCE M27.2, which is why it is stricter than it reads:
+# this text is written into an archive that is placed on a node, so it is held by whoever
+# holds that box as well as by whoever holds the token. It says nothing about the fleet
+# today and may go on saying nothing — M27.5 weighed a sentence here about a subscription
+# being answered in part and refused it (``docs/decisions.md``, 2026-09-27).
 EMPTY_ARCHIVE_NOTE_NAME = "no-configurations-right-now.txt"
 EMPTY_ARCHIVE_NOTE = """\
 There is nothing in this archive at the moment.

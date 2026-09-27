@@ -197,6 +197,28 @@ async def artifacts_for_node(
     The narrowing is the row set, not a filter over a rendered document — a shorter
     list is a valid subscription in both shapes.
 
+    AND NOTHING IS ADDED TO SAY SO — M27.5, and it is the answer to both ways this
+    differs from what ``/sub/{token}`` would hand the same person. No marker naming when
+    it was rendered, no entry saying what is missing, no note beside the entries.
+
+    A SNAPSHOT of what, is the first half. This is rendered over the rows one apply is
+    placing, and the node's own server configs are rendered over the same rows in the
+    same call — so the material a host serves describes the configuration that host is
+    RUNNING, and it can only be behind the database in the state where the daemon is
+    behind it too. There is nothing true to tell a user there: the answer they get is the
+    one they can actually connect on. The panel's sentence for that state names nodes,
+    states and two buttons, and none of the three is a user's.
+
+    A SLICE is the second half, and it gets the same silence for a different reason. From
+    the second user-facing node onward this returns strictly less than the whole
+    subscription, which a user cannot tell apart from a revocation. Saying so in the
+    artifact would mean this function learning, per user, whether that user holds
+    material on some other host — and writing that onto a host that may be seized is
+    worse than the addresses the narrowing above removes, because it says "this person
+    has other nodes" once per person. An unconditional sentence learns nothing per user
+    and for that reason is not this function's to write: it is a property of the product
+    and belongs with the URL, not in the document. See ``docs/decisions.md``, 2026-09-27.
+
     RELAY ROWS ARE NOT IN IT, on the purpose the row already carries rather than on
     any transport's name: the far end of a hop is not a user's to hold, and no
     credential points at one.
