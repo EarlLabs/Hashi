@@ -1,0 +1,9 @@
+# The delivery certificate and its key live here and are NEVER committed — M27.6.
+#
+# The key is pushed to every delivery host and answers for every name the certificate
+# covers, so it belongs with `.env` on the list of things this repository must not carry.
+# The directory itself IS committed, empty but for this file, because the control plane
+# bind-mounts it read-only (deploy/docker-compose.yml) and a mount of a path the daemon
+# has to create arrives owned by root.
+*
+!.gitignore

@@ -43,7 +43,7 @@ setup:
 # could then never write the record it exists to write.
 env:
 	@test -f .env || { cp .env.example .env; echo ".env created from .env.example — fill it in"; }
-	@mkdir -p backups/state
+	@mkdir -p backups/state deploy/delivery
 
 # Every verify target needs the venv. Fail with an instruction, not a traceback.
 define need_venv
