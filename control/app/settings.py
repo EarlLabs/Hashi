@@ -59,6 +59,23 @@ class Settings(BaseSettings):
     # control plane directly rather than through Caddy.
     public_https: bool = True
 
+    # The certificate every delivery host is served under, and its private key, by path
+    # on THIS host — M27.6. One wildcard for the fleet: a certificate per delivery host
+    # would publish each Russian entry's name in a Certificate Transparency log as it
+    # was issued, which is a feed anyone can subscribe to.
+    #
+    # BOTH EMPTY IS A SUPPORTED MODE and is the default: no host then serves
+    # subscription refreshes of its own, every user refreshes against this control plane
+    # exactly as they did before, and the co-located arrangements — where that is the
+    # same box anyway — need neither of these set. They are NOT the switch M27.4 forbids:
+    # a certificate is material, like ``secret_key``, and setting one cannot produce the
+    # wrong arrangement. Which hosts serve delivery is derived and has no setting.
+    #
+    # A PATH rather than the material, so that renewal replaces a file and needs no
+    # migration, no screen and no restart — the pair is read per apply and never cached.
+    delivery_certificate_path: str = ""
+    delivery_key_path: str = ""
+
     # SQLAlchemy URL for the control database, e.g.
     # postgresql+asyncpg://hashi:...@db:5432/hashi
     #

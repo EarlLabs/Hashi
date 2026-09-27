@@ -154,6 +154,24 @@
             <td class="text-muted wraps" colspan="7">why: {{ node.state_detail }}</td>
           </tr>
           {% endif %}
+          {% if node.delivery %}
+          {#
+            WHETHER THIS HOST ANSWERS ITS OWN USERS' REFRESHES, AND UNTIL WHEN — M27.6.
+            Its own row for the reason the two above have one: the sentence is long, it
+            names a URL, and a status cell may never be allowed to break (app.css).
+
+            It is here rather than in a banner or a dialog because of WHEN it has to be
+            read. The certificate a delivery host serves under is pushed by an apply, so
+            it cannot be renewed across a shut border — which means the number that
+            matters is how long is left, and it is only useful if the operator has seen
+            it before the day it runs out. A line that appeared only once something was
+            wrong would first be read on that day. Composed in services/console.py
+            (`delivery_note`), never here.
+          #}
+          <tr class="row-detail">
+            <td class="text-muted wraps" colspan="7">{{ node.delivery }}</td>
+          </tr>
+          {% endif %}
           {% if node.probe %}
           {#
             WHAT THE LAST PROBE FOUND, AND IT OUTLIVES THE BANNER — M26's first

@@ -44,18 +44,32 @@ cannot be moved by changing a DNS record alone. That cost is M27.7's to carry, a
 recorded in ``docs/decisions.md`` under 2026-09-26.
 
 WHICH HOSTS SERVE DELIVERY IS ``is_delivery_host`` BELOW, and it is derived rather than
-asked for (M27.4). What this module still does not do: it does not stand up a listener —
-that is ``edge.bootstrap.delivery_site``, which nothing wires in yet, because a site
-block needs an address and a port and both are M27.6's — and it does not put a delivery
-URL in front of a user (M27.7). What it produces is placed on the node by
-``services/apply``.
+asked for (M27.4). WHAT EACH ONE IS CALLED is ``delivery_site_address``, derived from the
+same record for the same reason (M27.6), and what it is served under is
+``configured_certificate`` — one wildcard for the fleet, held by this control plane and
+pushed to a host on apply, so that no node ever dials a certificate authority and no
+per-host name is published to a Certificate Transparency log.
+
+What this module still does not do: it does not ISSUE that certificate. The decision of
+2026-09-27 is that this control plane obtains it over ACME's DNS-01 challenge, which
+needs a dependency this stack has not got and which is an architect's to add — so the
+seam is ``configured_certificate``, which reads the pair from where an issuer would
+write it. And it does not put a delivery URL in front of a user (M27.7).
 """
 
+import datetime
 import hashlib
+import ipaddress
+import pathlib
+from collections.abc import Sequence
+from dataclasses import dataclass
 
+from cryptography import x509
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from control.app.api import delivery as api_delivery
+from control.app.errors import DomainError
 from control.app.models import (
     Credential,
     Node,
@@ -64,7 +78,8 @@ from control.app.models import (
     TransportPurpose,
 )
 from control.app.services import subscriptions
-from edge.bootstrap import NodeConnection, delivery, node_stack
+from control.app.settings import Settings
+from edge.bootstrap import NodeConnection, delivery, delivery_site, node_stack
 from edge.registry import SubscriptionFormat
 
 # Domain separation, in the shape ``crypto.py``'s derivation labels use and for the
@@ -123,8 +138,70 @@ def artifact_name(node_id: str, token: str) -> str:
     ).hexdigest()
 
 
+def delivery_site_address(node: Node) -> str | None:
+    """The name this host would serve delivery under, or ``None`` if it has none — M27.6.
+
+    THE NODE'S OWN ADDRESS, and nothing new. It is already "the hostname or IP a client
+    dials" (``models.node``), already per node, already the operator's to change, and
+    already the string a user's device reaches this host at — so a second field for
+    "the delivery name" would be a second answer to a question this record answers, and
+    two answers for one host is how a URL comes to point somewhere the transport does
+    not.
+
+    A HOST REGISTERED BY ADDRESS GETS NO LISTENER, and that is derived rather than
+    refused with a setting. A public certificate authority will not issue for an IP —
+    ``.env.example`` already records what happens when one is used anyway: the daemon
+    falls back to its own authority and every stock client refuses the handshake, so
+    the subscription fails for every user while nothing on the host looks wrong. There
+    is nothing to ask an operator here: either the record names something a certificate
+    can be issued for or it does not.
+
+    A dot is required for the same reason and it is the same question asked of a name:
+    a single label is not a name a public authority issues for either. What is NOT
+    checked is that the name resolves to this host — that is a fact about the internet,
+    it is the operator's to arrange, and this product touches no DNS record anywhere
+    (``docs/deploy/runbook.md``, the restore path, says the same thing about the same
+    name).
+
+    Note what this shares with ``artifact_name``, which deliberately uses the node's ID
+    and not this: the name an artifact is stored under must survive an address being
+    corrected, and the name a user's client dials cannot — it IS the address. Changing
+    it dead-links every URL a user holds for this host either way, and that is M27.7's.
+    """
+    address = node.address.strip().strip("[]")
+    if not address or "." not in address:
+        return None
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    return None
+
+
+def may_serve_delivery(node: Node, enabled: Sequence[NodeTransport]) -> bool:
+    """The half of "is this a delivery host" that the database can answer on its own.
+
+    Split out of ``is_delivery_host`` below rather than copied, because two callers now
+    need it and one of them has no connection to a host and must not open one. The
+    Transports screen asks whether this node will hold the delivery socket at the moment
+    an operator picks a port for something else (``services/placement``), which is a
+    form submission — a question that dialled the node would make enabling a transport
+    depend on the host being up.
+
+    So what is here is the two questions a record answers, and the reading of the BOX
+    stays below with the caller that already holds a connection. The asymmetry that
+    makes the split safe is the one M27.4 named: over-answering "yes" here costs a
+    refused port on a host that turns out to be the control plane's own — where 443 is
+    already taken by the control plane's own Caddy, so the refusal is true anyway and
+    the runbook has said so since Shape A.
+    """
+    if not any(row.purpose == TransportPurpose.USERS for row in enabled):
+        return False
+    return delivery_site_address(node) is not None
+
+
 async def is_delivery_host(
-    connection: NodeConnection, *, enabled: list[NodeTransport]
+    connection: NodeConnection, *, node: Node, enabled: list[NodeTransport]
 ) -> bool:
     """Should this host serve its own users their subscriptions — M27.4.
 
@@ -135,11 +212,14 @@ async def is_delivery_host(
     arrangement wrong, and an operator who has never read M27 would have to know to
     leave it off. So both halves below are read off things that are already true.
 
-    FIRST HALF: does anyone fetch from this host at all. A node with no user-facing row
-    carries nobody — the far end of a hop is not a user's to hold — so there is nothing
-    for a listener here to answer and nobody who would ask. That covers the leaf in
-    every arrangement, and it is asked off the row's own PURPOSE rather than off any
-    transport's name.
+    FIRST HALF, and since M27.6 it is ``may_serve_delivery`` above: does anyone fetch
+    from this host, and can this host be reached under a name. A node with no
+    user-facing row carries nobody — the far end of a hop is not a user's to hold — so
+    there is nothing for a listener here to answer and nobody who would ask; that covers
+    the leaf in every arrangement, and it is asked off the row's own PURPOSE rather than
+    off any transport's name. The name is the second, and it is the same kind of
+    question: a host a certificate cannot be issued for cannot serve an endpoint every
+    stock client has to accept.
 
     SECOND HALF: is this host already the one a user refreshes against. Where the
     control plane sits on this box, ``/sub/{token}`` is served from it already, and a
@@ -176,7 +256,7 @@ async def is_delivery_host(
     that is not simply keeps no second copy — and the true one is what keeps a second
     listener off a machine that already answers.
     """
-    if not any(row.purpose == TransportPurpose.USERS for row in enabled):
+    if not may_serve_delivery(node, enabled):
         return False
     return CONTROL_STACK_PROJECT not in await node_stack.compose_projects(connection)
 
@@ -316,3 +396,167 @@ async def artifacts_for_node(
                 )
             )
     return artifacts
+
+
+@dataclass(frozen=True)
+class DeliveryCertificate:
+    """The certificate every delivery host is served under, as this control plane holds it.
+
+    ONE CERTIFICATE FOR THE FLEET, and the reason is a channel nobody controls. A
+    publicly issued certificate is published in Certificate Transparency, permanently
+    and within minutes — so a certificate per delivery host would put every Russian
+    entry's name into a feed anyone can subscribe to, as each one is created. That is
+    ``CLAUDE.md``'s argument against a shared decoy destination arriving through a
+    different door: the fleet becomes enumerable by a property of the infrastructure
+    rather than by anything an operator did. A wildcard publishes the zone and not the
+    hosts in it.
+
+    WHAT IT COSTS, recorded in ``docs/decisions.md`` under 2026-09-27 and repeated here
+    because this is the object the key travels in: the private half is pushed to every
+    delivery host, which are the most seizable machines in the fleet, and whoever holds
+    it can answer for ANY name the certificate covers — so the zone it is issued for
+    must be one that carries nothing else, and never the one the panel is on.
+    """
+
+    certificate: str
+    key: str
+    not_after: datetime.datetime
+
+    @property
+    def remaining(self) -> datetime.timedelta:
+        """How much longer this certificate answers a handshake.
+
+        Negative once it has expired, deliberately: the caller that decides what to do
+        about that reads the same number as the one that tells the operator, so the
+        screen and the apply cannot come to different views of one certificate.
+        """
+        return self.not_after - datetime.datetime.now(datetime.UTC)
+
+
+class DeliveryCertificateUnusable(DomainError):
+    """The configured delivery certificate cannot be served, and no apply will fix it.
+
+    Its own error rather than a swallowed ``None`` because the two states are different
+    in kind and want different sentences: nothing configured is a fleet that has not
+    been given a delivery endpoint yet, and a configured pair that will not load is a
+    fleet that thinks it has one.
+    """
+
+
+def configured_certificate(settings: Settings) -> DeliveryCertificate | None:
+    """The delivery certificate this control plane holds, or ``None`` if it holds none.
+
+    WHERE IT COMES FROM IS THE SEAM THIS STEP DID NOT CLOSE, and the gap is named rather
+    than papered over. The decision of 2026-09-27 is that the control plane ISSUES this
+    wildcard over ACME's DNS-01 challenge and pushes it; issuing needs an ACME client or
+    a Caddy built with a DNS provider module, and adding either is an architect's call
+    (``CLAUDE.md``) — so what is built is everything downstream of the issued pair, and
+    this function reads it from where the issuer will one day write it. Until then the
+    operator obtains the wildcard and puts it here, which is the same shape
+    ``vless-ws-tls`` already has for the certificate it needs on a node.
+
+    Reading a file per apply rather than holding it in the database, for two reasons
+    that point the same way: renewal then replaces a file and needs no migration and no
+    screen, and a certificate that is already on this host's disk beside
+    ``HASHI_SECRET_KEY`` gains nothing by being copied into a table that is backed up.
+
+    NOT CACHED. A renewal that this control plane went on ignoring until it was
+    restarted is the expiry it exists to prevent, and one small read per apply is not a
+    cost worth trading for it.
+    """
+    if not settings.delivery_certificate_path and not settings.delivery_key_path:
+        return None
+    if not settings.delivery_certificate_path or not settings.delivery_key_path:
+        raise DeliveryCertificateUnusable(
+            "a delivery certificate needs both a certificate and its key, and only one "
+            "of the two is configured — set both, or neither and no host serves "
+            "subscription refreshes of its own"
+        )
+    try:
+        certificate = pathlib.Path(settings.delivery_certificate_path).read_text()
+        key = pathlib.Path(settings.delivery_key_path).read_text()
+    except OSError as exc:
+        # The path and never the reason from the operating system: what an operator has
+        # to fix is which file this control plane was pointed at, and ``strerror`` on a
+        # key file is the one place this sentence could start quoting bytes.
+        raise DeliveryCertificateUnusable(
+            "the configured delivery certificate could not be read — check that both "
+            "files exist and that this control plane can read them: "
+            f"{exc.filename or settings.delivery_certificate_path}"
+        ) from exc
+    try:
+        parsed = x509.load_pem_x509_certificate(certificate.encode())
+    except ValueError as exc:
+        raise DeliveryCertificateUnusable(
+            "the configured delivery certificate is not a PEM certificate. A chain "
+            "starts with the leaf; a key file in its place is the usual mistake"
+        ) from exc
+    # ``not_valid_after_utc`` and not ``not_valid_after``: the second is naive and
+    # comparing it against an aware "now" raises, while comparing two naive values would
+    # read a certificate's UTC expiry against this host's local clock and be wrong by
+    # the offset — silently, and in whichever direction the operator is from Greenwich.
+    return DeliveryCertificate(
+        certificate=certificate, key=key, not_after=parsed.not_valid_after_utc
+    )
+
+
+@dataclass(frozen=True)
+class DeliveryListener:
+    """Everything a host needs to answer its own users' refreshes, rendered together.
+
+    One object because the three cannot be built apart without being able to disagree:
+    the compose service carries the digest of the site, and the site carries the digest
+    of the certificate, so a service built from one rendering and a file placed from
+    another is a container that was not recreated for the change it was recreated for.
+    """
+
+    site: str
+    service: dict
+    certificate: DeliveryCertificate
+
+
+def listener_for(node: Node, settings: Settings) -> DeliveryListener | None:
+    """What this host would run to serve its own users, or ``None`` if it runs nothing.
+
+    ``None`` for the two states an apply does the same thing about — a host with no name
+    a certificate can be issued for, and a fleet this control plane holds no usable
+    certificate for. They are different to an OPERATOR, which is why
+    ``console.delivery_note`` tells them apart, and identical to an apply: no listener is
+    stood up and whatever an earlier one left is taken off the host.
+
+    AN EXPIRED CERTIFICATE IS ``None`` TOO, and that is the decision rather than an
+    oversight. A listener serving an expired certificate is refused by every stock client
+    — the user sees a failure they cannot click through, on the one endpoint that exists
+    for the moment other things have failed — so it serves nobody either way. Taking it
+    down is the same outcome said honestly, and it takes the private key off the host
+    with it. While the border is open the user's client falls back to this control plane
+    on the URL it already had; while the border is shut, nothing here runs at all,
+    because no apply reaches the host.
+
+    It does NOT ask whether this box is the one this control plane runs on. That is the
+    reading of the host in ``is_delivery_host``, it needs a connection, and this is
+    called where the database questions are asked.
+    """
+    address = delivery_site_address(node)
+    if address is None:
+        return None
+    certificate = configured_certificate(settings)
+    if certificate is None or certificate.remaining <= datetime.timedelta(0):
+        return None
+    site = delivery_site.render_delivery_site(
+        site_address=address,
+        certificate=certificate.certificate,
+        headers=api_delivery.DELIVERY_HEADERS,
+        shape_headers={
+            SubscriptionFormat.CLIENT_CONFIG_FILE: {
+                "Content-Disposition": (
+                    f'attachment; filename="{api_delivery.ARCHIVE_FILENAME}"'
+                )
+            }
+        },
+    )
+    return DeliveryListener(
+        site=site,
+        service=delivery_site.compose_service(site=site),
+        certificate=certificate,
+    )

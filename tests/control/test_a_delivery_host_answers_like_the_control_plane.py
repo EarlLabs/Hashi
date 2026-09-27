@@ -34,6 +34,10 @@ from edge.registry import SubscriptionFormat
 # same rendering the control plane would ask for.
 SITE = delivery_site.render_delivery_site(
     site_address="sub.example.test",
+    # Stands in for the wildcard this control plane pushes. Never parsed by the renderer
+    # — it writes the digest into the site and the daemon reads the placed FILE — so a
+    # fake is the honest fixture here.
+    certificate="-----BEGIN CERTIFICATE-----\nnot-one\n-----END CERTIFICATE-----\n",
     headers=DELIVERY_HEADERS,
     shape_headers={
         SubscriptionFormat.CLIENT_CONFIG_FILE: {

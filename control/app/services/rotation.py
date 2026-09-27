@@ -470,6 +470,18 @@ async def replace_params(
         port=placement.port_of(validated),
         excluding=node_transport.id,
     )
+    # And against the delivery listener's own socket — M27.6, the third path this family
+    # of rules is asked on. Retyping a port onto the one a delivery host answers
+    # refreshes on is the same collision as enabling a transport there, and this is the
+    # only place this path is asked it.
+    await placement.delivery_socket_is_free(
+        session,
+        node=node,
+        transport_name=node_transport.transport_name,
+        port=placement.port_of(validated),
+        purpose=node_transport.purpose,
+        excluding=node_transport.id,
+    )
     # And the tunnel's own range against every other tunnel on that node — M17.1c, the
     # third path this rule is asked on (the other two are enabling a transport and
     # establishing a hop, both through ``placement.claim``). Excluding this row for the

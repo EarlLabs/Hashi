@@ -41,11 +41,13 @@ from edge.registry import SubscriptionFormat, discover
 
 from .conftest import GENERATED_SSH_KEY, pinned
 
-# RFC 5737 documentation addresses, as everywhere in this zone. Never dialled — the
-# connection is replaced — but the narrowing is asserted by looking for one of them in
-# the other host's material, so they have to differ.
-FIRST_ADDRESS = "192.0.2.101"
-SECOND_ADDRESS = "192.0.2.102"
+# Reserved documentation NAMES, and the name half is the subject since M27.6: a host
+# registered by address can hold no certificate, so it serves no delivery and is handed
+# no material. Never dialled and never resolved — the connection is replaced — and they
+# have to differ because the narrowing is asserted by looking for one of them in the
+# other host's material.
+FIRST_ADDRESS = "first.example.test"
+SECOND_ADDRESS = "second.example.test"
 
 # One transport of each SHAPE, resolved from the registry rather than named: this file
 # compares both shapes of a subscription against both shapes of an artifact, and a shape

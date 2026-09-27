@@ -59,6 +59,7 @@ from control.app.services import (
     apply,
     audit,
     backups,
+    delivery,
     keymaterial,
     nodes,
     relay,
@@ -361,6 +362,12 @@ class NodeRow:
     # question and stays the other question — that one is about what WE have pushed and
     # needs no network; this one is what the HOST last said, and only a press gets it.
     probe: str | None = None
+    # WHETHER THIS HOST ANSWERS ITS OWN USERS' REFRESHES, and until when — M27.6, and
+    # ``None`` on every node the question is not about, which is every node carrying no
+    # user-facing row. It is the one place the operator is told how long the delivery
+    # endpoint on this host goes on working, and the whole reason it is on a screen is
+    # that the answer has to be known BEFORE a border shuts and not discovered after.
+    delivery: str | None = None
     # What this node runs. A configuration fact and nothing else: it moves when the
     # OPERATOR enables or withdraws a protocol and never when a user connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
@@ -1544,6 +1551,95 @@ async def drift_of(session: AsyncSession, node: Node) -> str:
 PROBE_FINDING = "probe, {when} UTC — {finding}"
 
 
+# How long is left before the operator is told in DAYS rather than only a date. Not a
+# threshold for a warning — there is no warning, and a line that only appeared when
+# somebody had already decided it was urgent is a line an operator has never read before
+# the day it matters. It is the granularity: past this, the date is what is actionable
+# and a day count is noise.
+DELIVERY_DAYS_WORTH_COUNTING = 30
+
+# What the Nodes screen says about a host that answers its own users' refreshes.
+#
+# IT HEDGES ON CO-LOCATION and has to: the second half of "is this a delivery host" is a
+# reading of the BOX taken over SSH during an apply (``delivery.is_delivery_host``), and
+# this screen paints without touching a network. Saying it flatly would be a sentence
+# that is false on exactly the arrangement M27 is most careful about, on a screen that
+# cannot tell.
+#
+# AND IT STATES THE BOUND RATHER THAN A REASSURANCE. A certificate is pushed by an apply
+# and this control plane cannot reach a host across a shut border, so what the product
+# promises is finite and this is where the number is: a shutdown longer than this ends
+# refreshes from this host and there is nothing the product can do about it.
+DELIVERY_SERVED = (
+    "delivery — users can refresh from https://{name}/sub/… on this host, unless it is "
+    "the box this control plane runs on, which already answers. The certificate an apply "
+    "puts there is good until {until} UTC{countdown}: a shutdown longer than that ends "
+    "refreshes from here, because nothing can renew it while this control plane cannot "
+    "reach the host."
+)
+
+# And the three ways a host that carries users serves none, each naming the one thing
+# that would change it. Separate sentences rather than one hedged one, because the
+# repairs are three different actions and two of them are not on this screen.
+DELIVERY_NO_NAME = (
+    "delivery — not served from this host: it is registered as {address}, and a public "
+    "certificate authority will not issue for an address. Users refresh from this "
+    "control plane instead. Register this host under a name that resolves to it to "
+    "serve refreshes from the host itself."
+)
+DELIVERY_NO_CERTIFICATE = (
+    "delivery — not served from any host: this control plane holds no delivery "
+    "certificate. Users refresh from this control plane instead, which is behind "
+    "whichever border it is on."
+)
+DELIVERY_EXPIRED = (
+    "delivery — not served from any host: the delivery certificate expired {until} UTC, "
+    "and every client refuses an expired one. The next apply takes the listener and its "
+    "private key off this host. Users refresh from this control plane instead."
+)
+DELIVERY_UNUSABLE = "delivery — not served from any host: {problem}"
+
+
+def delivery_note(node: Node, settings: Settings) -> str | None:
+    """What this screen says about this host answering its own users' refreshes — M27.6.
+
+    ``None`` for a node the question is not about, which is any node carrying no
+    user-facing row: a leaf answers nobody, so a line saying it serves no refreshes
+    would be a sentence about a thing that was never in question. Every other node gets
+    one, including the three that serve none — because "nothing here" is exactly the
+    state an operator can sit in for months without noticing.
+
+    IT DOES NOT DIAL THE HOST, and the sentence it composes is hedged for it: the
+    co-located half of the question is read over SSH during an apply and this screen
+    paints without a network, which is a property ``node_rows`` has and must keep.
+
+    The certificate is read here rather than passed in for the same reason it is read
+    per apply: a renewal that this screen went on ignoring until the process restarted
+    is the expiry it exists to prevent.
+    """
+    if not any(
+        row.enabled and row.purpose == TransportPurpose.USERS for row in node.transports
+    ):
+        return None
+    address = delivery.delivery_site_address(node)
+    if address is None:
+        return DELIVERY_NO_NAME.format(address=node.address)
+    try:
+        certificate = delivery.configured_certificate(settings)
+    except delivery.DeliveryCertificateUnusable as exc:
+        return DELIVERY_UNUSABLE.format(problem=exc)
+    if certificate is None:
+        return DELIVERY_NO_CERTIFICATE
+    until = certificate.not_after.strftime("%Y-%m-%d %H:%M")
+    if certificate.remaining <= datetime.timedelta(0):
+        return DELIVERY_EXPIRED.format(until=until)
+    days = certificate.remaining.days
+    countdown = (
+        f" — {days} days" if days <= DELIVERY_DAYS_WORTH_COUNTING else ""
+    )
+    return DELIVERY_SERVED.format(name=address, until=until, countdown=countdown)
+
+
 def probe_note(node: Node) -> str | None:
     """What the last probe of this node found, or ``None`` when there is nothing to say.
 
@@ -1564,7 +1660,7 @@ def probe_note(node: Node) -> str | None:
     )
 
 
-async def node_rows(session: AsyncSession) -> list[NodeRow]:
+async def node_rows(session: AsyncSession, settings: Settings) -> list[NodeRow]:
     """Every node, with its drift cell computed.
 
     One render per node per screen load, which is the cost of the drift cell being
@@ -1583,6 +1679,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
             state_detail=node.state_detail,
             drift=await drift_of(session, node),
             probe=probe_note(node),
+            delivery=delivery_note(node, settings),
             transports=tuple(
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
@@ -2745,7 +2842,9 @@ def tear_down_summary(affected: list[str]) -> str:
     )
 
 
-async def overview(session: AsyncSession, *, backup: backups.Reading) -> Overview:
+async def overview(
+    session: AsyncSession, *, settings: Settings, backup: backups.Reading
+) -> Overview:
     """The Overview screen's whole content, in one call.
 
     ``backup`` is read by the CALLER and handed in, which is the only thing on this screen
@@ -2778,7 +2877,11 @@ async def overview(session: AsyncSession, *, backup: backups.Reading) -> Overvie
     "hops established" beside it do, and the zero it shows is then the same zero the card
     to its left is showing for the same reason.
     """
-    rows = await node_rows(session)
+    # The rows for their STATES, and the delivery line each one composes is thrown away
+    # here: this card counts machines and the sentence belongs to the screen that shows
+    # one row per machine. ``settings`` is threaded rather than defaulted so that a new
+    # caller has to decide, instead of quietly getting rows with the line missing.
+    rows = await node_rows(session, settings)
     people = await user_rows(session)
     hops = await relay.list_hops(session)
 

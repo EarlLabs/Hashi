@@ -39,8 +39,12 @@ from .conftest import GENERATED_SSH_KEY, pinned
 # RFC 5737 documentation addresses, as everywhere in this zone. Never dialled — the
 # connection is replaced — but a node record has to name something, and these two have
 # to differ because the narrowing is asserted by looking for one of them.
-FIRST_ADDRESS = "192.0.2.81"
-SECOND_ADDRESS = "192.0.2.82"
+#
+# NAMES rather than the RFC 5737 addresses these were, and since M27.6 that is the
+# subject rather than a fixture detail: a host registered by address serves no delivery,
+# so it is handed no material either. Reserved for documentation, and never resolved.
+FIRST_ADDRESS = "first.example.test"
+SECOND_ADDRESS = "second.example.test"
 
 # Every transport this image both OFFERS and serialises into the v1 URI list. The
 # declaration, never a name: a transport added later is exercised here by arriving, and

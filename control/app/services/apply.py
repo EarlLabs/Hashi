@@ -56,7 +56,7 @@ from control.app.models import (
 from control.app.services import addresses, audit, delivery, nodes, placement, relay, serving
 from control.app.settings import Settings
 from edge import checker
-from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
+from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, delivery_site, node_stack
 
 # Aliased because both halves of M27.2 are called ``delivery`` and both are read in this
 # file: ``services.delivery`` renders what a host is given, and this one places it.
@@ -965,7 +965,18 @@ async def _take_delivery_back(node: Node, node_settings: Settings) -> bool | Non
         return None
     try:
         async with NodeConnection(target) as connection:
-            return await node_delivery.remove_delivery(connection)
+            held = await node_delivery.remove_delivery(connection)
+            # AND THE LISTENER'S OWN FILES — M27.6. A host with nothing enabled carries
+            # nobody, so it is not a delivery host by the first half of that question,
+            # and the site configuration, the certificate and its private key go the same
+            # way its material does. It creates nothing either, so nothing above changes.
+            #
+            # The container is not stopped here and cannot be: this path places no
+            # compose file and runs no restart. It is stopped by the next apply that
+            # succeeds, or by the operator; what is taken away now is the key, which is
+            # the part that keeps working on a host nobody drives.
+            await delivery_site.remove_delivery_site(connection)
+            return held
     except NodeUnreachable:
         # The expected one, and not worth a traceback: a host that did not answer is a
         # state this function has an answer for.
@@ -1305,10 +1316,44 @@ async def apply_node(
     # container whose config changed. Sorted so the rendered compose file is byte-stable
     # regardless of the order the transports were read in — an unstable one would
     # recreate every container on every apply.
-    compose = node_stack.render_compose(
-        transports=node_stack.services_for(
-            {name: configs[name] for name in sorted(configs)}, transports=placed
-        )
+    services = node_stack.services_for(
+        {name: configs[name] for name in sorted(configs)}, transports=placed
+    )
+    compose = node_stack.render_compose(transports=services)
+
+    # AND THE SAME FILE WITH THE DELIVERY LISTENER IN IT — M27.6. Both are rendered here,
+    # above the connection, and the one that is placed is chosen inside it, because the
+    # two halves of "is this a delivery host" are asked in two different places: what
+    # this node is FOR is a database question and belongs up here with the others, and
+    # whether this BOX is already the one answering ``/sub/`` is a reading of the host.
+    # Rendering the variant that is thrown away costs nothing — both are pure — and the
+    # alternative is a compose render inside the connection block, where a node sits
+    # half-restarted while this process works.
+    #
+    # ``None`` when this host can never serve delivery or this control plane holds no
+    # certificate, and then nothing below stands a listener up. The two are different
+    # states and the operator is told which on the Nodes screen
+    # (``services/console.delivery_note``); here they are one thing, because what an
+    # apply does about either is identical.
+    try:
+        listener = delivery.listener_for(node, node_settings)
+    except delivery.DeliveryCertificateUnusable as exc:
+        # NOT A FAILED APPLY, and the asymmetry is the decision. An apply is how a node's
+        # data plane is repaired, so a configured certificate this control plane cannot
+        # load must not be what stops an operator restarting a blocked node's transports
+        # in the middle of an outage. The host gets no listener and loses whatever an
+        # earlier apply left, which is what happens for every other reason a host does
+        # not serve delivery; what an operator has to act on is said where they will
+        # meet it, on the Nodes screen (``console.delivery_note``).
+        #
+        # The sentence names a path on THIS host and nothing about a node or a user, so
+        # it is the one thing in this file's log that is about our own configuration.
+        logger.warning("no delivery listener on any node: %s", exc)
+        listener = None
+    compose_with_delivery = (
+        node_stack.render_compose(transports=services, delivery=listener.service)
+        if listener
+        else None
     )
 
     # Built before the connection, and its refusal RECORDED. A record that cannot
@@ -1338,7 +1383,30 @@ async def apply_node(
                     config=config,
                     path=node_stack.config_path_of(config_name, placed[config_name]),
                 )
-            await node_stack.place_compose(connection, compose=compose)
+            # WHETHER THIS HOST ANSWERS ITS OWN USERS' REFRESHES, and it is read here
+            # rather than after the restart because the answer decides which compose
+            # file is placed. ``is_delivery_host`` is the whole of the decision and it
+            # takes no setting from anybody — see it for how both halves are read off
+            # what is already true.
+            serves_delivery = listener is not None and await delivery.is_delivery_host(
+                connection, node=node, enabled=enabled
+            )
+            if serves_delivery:
+                # BEFORE THE COMPOSE FILE AND THEREFORE BEFORE THE RESTART. The listener
+                # reads all three at start and a bind mount of a path nothing placed does
+                # not fail — the engine creates a DIRECTORY there — so a container
+                # recreated ahead of these files would come up against two directories
+                # and one missing certificate, and would stay down.
+                await delivery_site.place_delivery_certificate(
+                    connection,
+                    certificate=listener.certificate.certificate,
+                    key=listener.certificate.key,
+                )
+                await delivery_site.place_delivery_site(connection, site=listener.site)
+            await node_stack.place_compose(
+                connection,
+                compose=compose_with_delivery if serves_delivery else compose,
+            )
             await node_stack.restart(connection)
 
             # Verify rather than assume, and verify the right thing. `docker compose
@@ -1436,10 +1504,18 @@ async def apply_node(
             # host that has STOPPED being one. ``is_delivery_host`` is the whole of the
             # decision and it takes no setting from anybody — see it for how both halves
             # are read off what is already true.
-            if await delivery.is_delivery_host(connection, enabled=enabled):
+            if serves_delivery:
                 await node_delivery.place_delivery(connection, artifacts=artifacts)
             else:
                 await node_delivery.remove_delivery(connection)
+                # AND THE LISTENER'S OWN FILES, which are not the material and are not
+                # ``remove_delivery``'s — M27.6. The container is already gone: it is a
+                # service in the compose file placed above, and ``restart`` runs with
+                # ``--remove-orphans``. What is left is the site configuration, the
+                # certificate and its PRIVATE KEY, and the key is why this call exists —
+                # a host that has stopped being a delivery host and keeps it can still
+                # answer for the delivery name, from a box the fleet no longer drives.
+                await delivery_site.remove_delivery_site(connection)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
         await _record_failure(session, node, str(exc), granted)

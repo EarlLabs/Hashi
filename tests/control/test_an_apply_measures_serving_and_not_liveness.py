@@ -231,7 +231,7 @@ async def test_the_refusal_is_in_the_probes_own_words(
 
 async def test_the_apply_does_not_delete_a_finding_it_did_not_contradict(
     client, session, reality_params, monkeypatch
-) -> None:
+, settings) -> None:
     """The deletion the walk watched happen twice, and the rule that stops it.
 
     The probe found the truth about this host and the panel stored it. An apply that
@@ -255,7 +255,7 @@ async def test_the_apply_does_not_delete_a_finding_it_did_not_contradict(
     assert node.last_probe_finding == found, (
         "an apply deleted a true probe finding while measuring the same fault again"
     )
-    rows = await console.node_rows(session)
+    rows = await console.node_rows(session, settings)
     row = next(row for row in rows if row.id == node_id)
     assert row.probe, "the Nodes screen has dropped a finding nothing contradicted"
     assert console.fleet_doubt(rows), (

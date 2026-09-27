@@ -24,7 +24,7 @@ import pathlib
 
 import pytest
 
-from control.app.models import NodeTransport, TransportPurpose
+from control.app.models import Node, NodeTransport, TransportPurpose
 from control.app.services import delivery
 from control.app.services import transports as transports_service
 from edge.bootstrap import delivery as node_delivery
@@ -34,8 +34,11 @@ from edge.registry import discover, profile
 
 from .conftest import GENERATED_SSH_KEY, pinned
 
-# RFC 5737, as everywhere in this zone. Never dialled — the connection is replaced.
-NODE_ADDRESS = "192.0.2.91"
+# A reserved name rather than a reserved address, and since M27.6 that is load-bearing
+# rather than cosmetic: a host registered by ADDRESS serves no delivery at all, because a
+# public certificate authority will not issue for one. Never dialled — the connection is
+# replaced — and never resolved.
+NODE_ADDRESS = "entry.example.test"
 
 # Any transport this image offers a user. The declaration, never a name.
 USER_TRANSPORTS = sorted(transports_service.offerable_transports())
@@ -89,6 +92,15 @@ class _Host:
         )
 
 
+def a_node(address: str = NODE_ADDRESS) -> Node:
+    """A record carrying the one field the predicate reads off it — M27.6.
+
+    Its ADDRESS, because that is the name a delivery host is reached under and a host
+    with no such name cannot hold a certificate for one.
+    """
+    return Node(id="a-node", name="a-node", address=address, location_label="nowhere")
+
+
 def a_row(purpose: TransportPurpose) -> NodeTransport:
     """One enabled row, of the purpose under test and of no transport in particular."""
     return NodeTransport(
@@ -102,8 +114,23 @@ def a_row(purpose: TransportPurpose) -> NodeTransport:
 async def test_a_host_that_carries_users_and_nothing_of_ours_serves_delivery() -> None:
     """The arrangement this milestone was asked for: the entry is its own machine."""
     assert await delivery.is_delivery_host(
-        _Host("hashi-node"), enabled=[a_row(TransportPurpose.USERS)]
+        _Host("hashi-node"), node=a_node(), enabled=[a_row(TransportPurpose.USERS)]
     )
+
+
+async def test_a_host_registered_by_address_serves_no_delivery_and_is_not_asked() -> None:
+    """M27.6, and it is the same kind of answer as the row half: read off the record.
+
+    A public certificate authority will not issue for an address, so a listener there
+    would be served under a certificate every stock client refuses — the subscription
+    fails for every user while nothing on the host looks wrong. There is nothing to ask
+    an operator, and nothing to ask the host either.
+    """
+    host = _Host("hashi-node")
+    assert not await delivery.is_delivery_host(
+        host, node=a_node("192.0.2.91"), enabled=[a_row(TransportPurpose.USERS)]
+    )
+    assert host.commands == []
 
 
 async def test_the_box_this_control_plane_is_deployed_on_serves_no_delivery() -> None:
@@ -116,6 +143,7 @@ async def test_the_box_this_control_plane_is_deployed_on_serves_no_delivery() ->
     """
     assert not await delivery.is_delivery_host(
         _Host(delivery.CONTROL_STACK_PROJECT, "hashi-node"),
+        node=a_node(),
         enabled=[a_row(TransportPurpose.USERS)],
     )
 
@@ -131,7 +159,7 @@ async def test_a_host_nobody_fetches_from_is_not_asked_about_at_all(purpose) -> 
     """
     host = _Host("hashi-node")
 
-    assert not await delivery.is_delivery_host(host, enabled=[a_row(purpose)])
+    assert not await delivery.is_delivery_host(host, node=a_node(), enabled=[a_row(purpose)])
     assert host.commands == [], host.commands
 
 
@@ -145,7 +173,9 @@ async def test_a_host_that_cannot_be_asked_is_not_assumed_to_be_a_stranger() -> 
             raise NodeUnreachable(f"command failed: {command!r}")
 
     with pytest.raises(NodeUnreachable):
-        await delivery.is_delivery_host(_Mute(), enabled=[a_row(TransportPurpose.USERS)])
+        await delivery.is_delivery_host(
+            _Mute(), node=a_node(), enabled=[a_row(TransportPurpose.USERS)]
+        )
 
 
 def test_the_project_name_is_the_one_this_product_deploys_under() -> None:
