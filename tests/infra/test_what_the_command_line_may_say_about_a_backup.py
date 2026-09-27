@@ -37,7 +37,7 @@ import subprocess
 
 import pytest
 
-from tests.infra.test_backup_schedule import PLANTED, env_file, seed, today_in
+from tests.infra.test_backup_schedule import PLANTED, day_owed_in, env_file, seed
 
 # The ceiling, read out of the script rather than typed out here — and the module it comes
 # from is the one that pins it against the panel's own constant (M28.17). Both fixtures
@@ -154,9 +154,29 @@ def a_record(tmp_path: pathlib.Path, **fields) -> pathlib.Path:
     return state
 
 
+# The schedule every invocation in this file runs under. `an_env` writes the zone and
+# writes no hour, so the hour is the one `scripts/backup-run.sh::resolve_schedule` falls
+# back to with none configured — a copy of it, kept here because the pair is what
+# `the_day_owed` has to be asked with, and the day it stops matching, the tests that seed a
+# current due date go red rather than quiet.
+THE_ZONE = "Etc/UTC"
+THE_HOUR_NO_ENV_HERE_CONFIGURES = "04:00"
+
+
 def an_env(tmp_path: pathlib.Path, **values) -> pathlib.Path:
-    values.setdefault("HASHI_BACKUP_TZ", "Etc/UTC")
+    values.setdefault("HASHI_BACKUP_TZ", THE_ZONE)
     return env_file(tmp_path, **values)
+
+
+def the_day_owed() -> str:
+    """The date whose backup that schedule owes at this instant — see ``day_owed_in``.
+
+    Asked per call and never once at import. A module-level constant is resolved when the
+    session collects, so every test that ran after the owed day rolled over would seed a
+    date the schedule has left behind, and a suite that straddles the hour would fail in
+    its second half only.
+    """
+    return day_owed_in(THE_ZONE, THE_HOUR_NO_ENV_HERE_CONFIGURES)
 
 
 A_GOOD_RUN = {
@@ -380,22 +400,43 @@ A_CLOCK_THAT_JUMPED = {
     "last_attempt": {**A_GOOD_RUN, "at": AHEAD},
     "last_success": {**A_GOOD_RUN, "at": AHEAD},
 }
+
+
 # A REAL RUN, RECENTLY, and it is what makes the shape below the reviewer's rather than a
 # convenient one: the times in that record are exact, and a warning printed over them has to
-# be true of exact times. Round 1 of this step's review found the sentence that was not.
-A_REAL_RUN_HALF_AN_HOUR_AGO = {
-    "at": (
-        datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "due_date": today_in("Etc/UTC"),
-    "exit_code": 0,
-    "outcome": "on-this-host-only",
-}
-A_DUE_DATE_AHEAD_ON_ITS_OWN = {
-    "due_date": "2099-03-01",
-    "last_attempt": A_REAL_RUN_HALF_AN_HOUR_AGO,
-    "last_success": A_REAL_RUN_HALF_AN_HOUR_AGO,
-}
+# be true of exact times. Round 1 of M28.19's review found the sentence that was not.
+def a_real_run_half_an_hour_ago() -> dict:
+    """Built per call, and dated by ``the_day_owed`` rather than by the calendar.
+
+    Both halves of that are what M27.9 fixed. The date this run accounts for is the
+    schedule's, so a fixture that wrote the calendar's date instead seeded a record the
+    script reads as dated ahead for every hour before the schedule's own — and the hour
+    this suite happens to run at decided which answer it got. Built per call because a
+    constant is resolved once at collection, which puts the same staleness a whole session
+    deep behind one import.
+    """
+    return {
+        "at": (
+            datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "due_date": the_day_owed(),
+        "exit_code": 0,
+        "outcome": "on-this-host-only",
+    }
+
+
+def a_due_date_ahead_on_its_own(real_run: dict | None = None) -> dict:
+    """The second shape, with real runs under it — pass one in to assert on its time.
+
+    Not named ``run``: that is this module's own helper for invoking the script, and a
+    parameter of that name here is one edit away from reading like a call to it.
+    """
+    real_run = real_run if real_run is not None else a_real_run_half_an_hour_ago()
+    return {
+        "due_date": "2099-03-01",
+        "last_attempt": real_run,
+        "last_success": real_run,
+    }
 
 
 def test_due_reads_the_record_and_says_the_ages_in_it_are_worthless(tmp_path) -> None:
@@ -447,15 +488,17 @@ def test_status_says_it_too_beside_the_ages_it_makes_worthless(tmp_path) -> None
     assert "DATED AHEAD OF THIS HOST'S CLOCK" in answered.stdout, answered.stdout
 
 
+# The shapes are passed as builders rather than as records: one of the two is dated by the
+# schedule, and a parameter list is built at collection.
 @pytest.mark.parametrize(
-    "record",
+    "shape",
     [
-        pytest.param(A_CLOCK_THAT_JUMPED, id="a-clock-that-jumped-forward"),
-        pytest.param(A_DUE_DATE_AHEAD_ON_ITS_OWN, id="a-due-date-ahead-on-its-own"),
+        pytest.param(lambda: A_CLOCK_THAT_JUMPED, id="a-clock-that-jumped-forward"),
+        pytest.param(a_due_date_ahead_on_its_own, id="a-due-date-ahead-on-its-own"),
     ],
 )
 def test_a_tick_takes_the_backup_rather_than_waiting_for_a_date_ahead_of_it(
-    tmp_path, record
+    tmp_path, shape
 ) -> None:
     """The channel that takes backups stops being the one that says nothing.
 
@@ -464,7 +507,7 @@ def test_a_tick_takes_the_backup_rather_than_waiting_for_a_date_ahead_of_it(
     that decides to RUN reaches ``ensure_state_dir``, refuses there and has dumped nothing.
     The exit code is the decision.
     """
-    state = a_record(tmp_path, **record)
+    state = a_record(tmp_path, **shape())
     state.chmod(0o500)
     try:
         answered = run("tick", an_env(tmp_path), state)
@@ -501,12 +544,12 @@ def test_the_tick_that_takes_it_leaves_a_record_this_clock_can_read(tmp_path) ->
     host = {"PATH": f"{binaries}:{os.environ.get('PATH', '')}"}
 
     env = an_env(tmp_path)
-    state = a_record(tmp_path, **A_DUE_DATE_AHEAD_ON_ITS_OWN)
+    state = a_record(tmp_path, **a_due_date_ahead_on_its_own())
     ticked = run("tick", env, state, host)
     assert ticked.returncode == 1, "the stub engine was supposed to fail the dump"
 
     record = json.loads((state / "last-run.json").read_text())
-    assert record["due_date"] == today_in("Etc/UTC"), (
+    assert record["due_date"] == the_day_owed(), (
         "the run did not rewrite the date that stopped the schedule, so the state repairs "
         f"nothing and every later tick dumps again: {record['due_date']}"
     )
@@ -534,7 +577,7 @@ def test_a_run_timestamp_ahead_does_not_make_the_tick_dump(tmp_path) -> None:
     deciding an action are different questions about one file.
     """
     state = a_record(
-        tmp_path, due_date=today_in("Etc/UTC"),
+        tmp_path, due_date=the_day_owed(),
         last_failure={"at": AHEAD, "due_date": "2099-03-01", "exit_code": 1,
                       "outcome": "no-artifact"},
     )
@@ -571,12 +614,13 @@ def test_a_due_date_ahead_does_not_make_the_times_beside_it_unbelievable(tmp_pat
 
     So the warning is composed from ``note_clock``'s two flags rather than hedged.
     """
-    state = a_record(tmp_path, **A_DUE_DATE_AHEAD_ON_ITS_OWN)
+    real_run = a_real_run_half_an_hour_ago()
+    state = a_record(tmp_path, **a_due_date_ahead_on_its_own(real_run))
     said = run("status", an_env(tmp_path), state, a_host(tmp_path, crontab=True))
 
     assert said.returncode == 0, said.stderr
     printed = flowing(said.stdout)
-    assert A_REAL_RUN_HALF_AN_HOUR_AGO["at"] in printed, (
+    assert real_run["at"] in printed, (
         f"the record's own run time is not printed, so this test is not the shape:\n"
         f"{said.stdout}"
     )
@@ -611,7 +655,7 @@ def test_a_run_dated_ahead_still_says_no_age_can_be_believed(tmp_path) -> None:
 
 def test_an_ordinary_record_says_none_of_that(tmp_path) -> None:
     """The negative, because a warning printed on every host is a warning nobody reads."""
-    answered = run("due", an_env(tmp_path), a_record(tmp_path, due_date=today_in("Etc/UTC")))
+    answered = run("due", an_env(tmp_path), a_record(tmp_path, due_date=the_day_owed()))
 
     assert answered.returncode == 0, answered.stderr
     assert "clock=ok" in answered.stdout
@@ -651,7 +695,7 @@ def test_a_record_someone_pretty_printed_is_still_the_record(tmp_path, layout) -
     through the parser this time.
     """
     state = a_record(
-        tmp_path, due_date=today_in("Etc/UTC"),
+        tmp_path, due_date=the_day_owed(),
         last_attempt=A_GOOD_RUN, last_success=A_GOOD_RUN,
     )
     canonical = run("status", an_env(tmp_path), state, a_host(tmp_path, crontab=True))
@@ -1093,7 +1137,7 @@ def test_a_tick_takes_a_backup_rather_than_believing_a_record_it_cannot_read(
     there, loudly, having dumped nothing. The two decisions are told apart by the exit code
     without a database anywhere near it.
     """
-    state = a_record(tmp_path, due_date=today_in("Etc/UTC"), **UNREADABLE[fault])
+    state = a_record(tmp_path, due_date=the_day_owed(), **UNREADABLE[fault])
     state.chmod(0o500)
     try:
         answered = run("tick", an_env(tmp_path), state)
