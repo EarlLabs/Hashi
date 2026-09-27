@@ -1274,10 +1274,32 @@ undefined table or column.
   swallows the narrower one beside it, and that is the pair written by accident. This
   is the rule that meets you when you follow Shape A and then the hop it mandates on
   the same box — users and hop are two `amneziawg` rows on that node, and they need
-  two ranges as much as they need two ports. Nothing else collides. A **disabled** row
-  still holds all three, because freeing them would move the collision to the moment
-  somebody switches it back on; removing the row is the only thing that gives them
-  back.
+  two ranges as much as they need two ports. A **disabled** row still holds all three,
+  because freeing them would move the collision to the moment somebody switches it back
+  on; removing the row is the only thing that gives them back.
+
+  **And one thing on a node that is not a row at all collides too — TCP 443, on any host
+  that carries a user-facing transport and is registered under a name.** That host
+  answers its own users' subscription refreshes, which is what makes a refresh work
+  while this control plane is behind a closed border, and the endpoint has to be on the
+  port an ordinary HTTPS client reaches. So the panel refuses a transport there, under
+  the box you typed it in:
+
+  > node `E` answers its own users' subscription refreshes on TCP port 443, so no
+  > transport on it can hold that port. *…Give this transport another port — and weigh
+  > what that costs here, because a TLS transport answering on an unusual port is itself
+  > a signal.*
+
+  **Read that cost before you plan a shape around it.** It is `vless-reality` this
+  usually refuses, and Reality's whole camouflage is being on 443 — so an entry node that
+  serves its own users' refreshes cannot also be a website on the ordinary port. That is a
+  real loss and it was taken knowingly, on 2026-09-27: the alternative put the refresh
+  endpoint behind the same name the tunnel hides under, so that blocking one name killed
+  both at the same instant — in exactly the arrangement the endpoint exists for. A host
+  with no user-facing transport, or one registered by IP address, keeps 443 for its
+  transports, because neither answers a refresh.
+
+  Nothing else collides.
 - **A user-facing kernel tunnel and the hop a node DIALS still cannot share that
   node**, which is a different rule and the one that bites — *The one combination that
   will not render*, above. **Which end of the hop it is decides the answer**, so this

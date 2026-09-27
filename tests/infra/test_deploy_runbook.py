@@ -967,12 +967,21 @@ def _claim_refusals() -> set[str]:
 def test_a_new_collision_check_cannot_be_added_without_the_page_gaining_a_sentence() -> None:
     """The list the runbook commits to is closed, so the code's list has to be pinned.
 
-    ``claim`` refuses on a port, on a tunnel range and — by having no name left — on the
-    config name, which is the one it answers with rather than the one it checks. Three,
-    and the page says "Nothing else collides". A fourth check added here is a fourth
-    thing an operator has to be told about, and this is what says so.
+    ``claim`` refuses on a port, on a tunnel range, on the socket a delivery host's own
+    listener holds (M27.6), and — by having no name left — on the config name, which is
+    the one it answers with rather than the one it checks. Four, and the page says
+    "Nothing else collides". A fifth check added here is a fifth thing an operator has
+    to be told about, and this is what says so.
+
+    ``delivery_socket_is_free`` is the one that proved the guard works: it was added to
+    ``claim`` and this test went red in the same run, which is how the runbook gained
+    the paragraph about 443 rather than going quietly false.
     """
-    assert _claim_refusals() == {"port_is_free", "tunnel_network_is_free"}, (
+    assert _claim_refusals() == {
+        "port_is_free",
+        "tunnel_network_is_free",
+        "delivery_socket_is_free",
+    }, (
         "placement.claim's collision checks have changed. The runbook's *Rules that are "
         "not optional* lists them for the operator and closes the list — update the "
         "bullet, then this test"
