@@ -102,11 +102,18 @@ services:
       # this a host handed a changed site would go on serving the previous one.
       {{ digest_label }}: "{{ delivery.config_digest }}"
     volumes:
-      # Read-only, both of them, and neither is the config directory. The listener has
-      # no reason to write anywhere, and the directory it serves is REPLACED wholesale
-      # by the next apply — a process that could write into it would be writing into
-      # something with an owner.
-      - {{ delivery.site_path }}:{{ delivery.site_path }}:ro
+      # Read-only, every one of them, and none is the config directory. The listener
+      # has no reason to write anywhere, and the directory it serves is REPLACED
+      # wholesale by the next apply — a process that could write into it would be
+      # writing into something with an owner.
+      #
+      # WHICH FILES ARE HERE IS DECIDED BY WHAT THE SITE WAS RENDERED WITH, not by this
+      # template: a site served over TLS names a certificate and a key and one served
+      # without names neither, and a bind mount of a path nothing placed does not fail
+      # — the engine creates a directory there. See delivery_site.py:compose_service.
+{% for path in delivery.mounted %}
+      - {{ path }}:{{ path }}:ro
+{% endfor %}
       - {{ delivery.directory }}:{{ delivery.directory }}:ro
     logging:
       # NOTHING IS RETAINED, and this is not the bounded json-file the data planes
@@ -114,9 +121,18 @@ services:
       # artifact, which is how that artifact is fetched; Caddy discards its own
       # loggers, and this is what makes that true of anything it prints anyway — a
       # panic, a configuration it will not load, a directive that logs by default in
-      # some later version. Measured on engine 29.4.0: with json-file, the three lines
-      # Caddy writes before it applies its own logging configuration are kept by the
-      # engine for that container, and with this they are not kept at all.
+      # some later version. Measured on engine 29.4.0: with json-file, the lines Caddy
+      # writes before it applies its own logging configuration are kept by the engine
+      # for that container, and with this they are not kept at all.
+      #
+      # HOW MANY SUCH LINES THERE ARE IS NOT A PROPERTY OF THE IMAGE, which is the whole
+      # argument for this setting rather than a tidier one. M27.3 counted three and
+      # M27.6 measured four on a second machine — the fourth is quic-go reporting the
+      # receive buffer the KERNEL would give it, so it appears or does not depending on
+      # a sysctl on the node. None of them carries a path or an artifact's name, so the
+      # rule this container exists under is not in question; what is in question is
+      # whether anybody can say in advance what a process prints, and that is a
+      # discipline, while this line is a structure.
       #
       # The cost is real and is the smaller one: this container's startup diagnostics
       # are gone, and an operator debugging a listener that will not start runs the

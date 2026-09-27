@@ -23,18 +23,25 @@ identifier and, since the path IS how an artifact is fetched, a record of one is
 record of a credential for this host — which is why "no access log" here is the same
 absolute rule it is on the control plane and not a tidier default.
 
-NOT DECIDED HERE and deliberately absent: which hosts serve delivery — that is
-``control/app/services/delivery.is_delivery_host``, a question about the fleet and about
-the box, neither of which this zone can see — the name and certificate the site is
-reached under (M27.6), and where a certificate persists: no volume is declared for
-Caddy's own storage, so a host that obtains one today loses it when the container is
-recreated.
+THE CERTIFICATE IS HANDED TO THIS LISTENER, NOT OBTAINED BY IT. ``tls`` names two files
+the control plane placed, so nothing here dials a certificate authority, answers a
+challenge or keeps an account key — and therefore this container declares no volume and
+loses nothing when it is recreated, which is the alternative design's first cost. What
+this one costs instead is that the certificate is only as fresh as the last apply that
+reached the host, and that a private key issued for a name now lives on a node. Both are
+recorded in ``docs/decisions.md`` under 2026-09-27, where the decision is, rather than
+argued here where this package could not see it change.
 
-A NODE RUNS THIS ONLY WHEN SOMETHING ASKS FOR IT. Two calls, neither of which this
+NOT DECIDED HERE and deliberately absent: which hosts serve delivery and what each one
+is called — that is ``control/app/services/delivery``, a question about the fleet and
+about the box, neither of which this zone can see.
+
+A NODE RUNS THIS ONLY WHEN SOMETHING ASKS FOR IT. Three calls, none of which this
 package makes: ``compose_service`` has to reach ``node_stack.render_compose``, and
-``place_delivery_site`` has to be called on the connection. A host nobody makes them for
-runs no listener, and what it holds is whatever the last call to ``delivery`` left there
-— which is either material nothing serves or, after ``remove_delivery``, nothing at all.
+``place_delivery_site`` and ``place_delivery_certificate`` have to be called on the
+connection. A host nobody makes them for runs no listener, and what it holds is whatever
+the last call to ``delivery`` left there — which is either material nothing serves or,
+after ``remove_delivery``, nothing at all.
 """
 
 import re
@@ -76,6 +83,20 @@ DELIVERY_SERVICE = "delivery"
 # does not begin ``delivery.`` either — ``delivery.incoming`` and ``delivery.replaced``
 # are that push's own staging paths.
 DELIVERY_SITE_PATH = f"{NODE_ROOT}/delivery-site.Caddyfile"
+
+# The certificate this host serves the site under, and its private key — both placed
+# by ``place_delivery_certificate`` below, both beside the site file for the reasons
+# that constant gives.
+#
+# A NODE ASKS NO CERTIFICATE AUTHORITY FOR ANYTHING. These two arrive over the same
+# channel every other file on a node arrives over, which keeps the one direction this
+# product has: the control plane reaches the node and a node reaches nothing. What it
+# costs is stated where it is paid — the material is only as fresh as the last apply
+# that reached the host — and what it buys here is that this container needs no
+# persistent storage: Caddy is handed a certificate rather than managing one, so there
+# is no account key and no issued-certificate store to lose when it is recreated.
+DELIVERY_CERTIFICATE_PATH = f"{NODE_ROOT}/delivery-cert.pem"
+DELIVERY_CERTIFICATE_KEY_PATH = f"{NODE_ROOT}/delivery-key.pem"
 
 # What the container runs. The image's own entrypoint would read ``/etc/caddy/Caddyfile``,
 # which is the one baked into it; ``--adapter caddyfile`` is required because Caddy only
@@ -189,11 +210,27 @@ def _checked_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+# The one site address shape that is served without TLS, and the whole of how this
+# module decides whether to write a ``tls`` directive. Caddy's own vocabulary already
+# answers the question — an ``http://`` site has no TLS and refuses a ``tls`` directive
+# — so the answer is read off the address the caller passes rather than asked for as a
+# second argument that could disagree with it.
+_WITHOUT_TLS = "http://"
+
+# The line the template writes when there is a certificate, spelled here so that
+# ``compose_service`` can tell a site that needs the certificate mounted from one that
+# does not. It is the template's line and not a paraphrase of it: a test renders both
+# shapes and asserts this is in one and not the other, so the two cannot drift into a
+# listener whose certificate is not mounted.
+_TLS_DIRECTIVE = f"\ttls {DELIVERY_CERTIFICATE_PATH} {DELIVERY_CERTIFICATE_KEY_PATH}\n"
+
+
 def render_delivery_site(
     *,
     site_address: str,
     headers: Mapping[str, str],
     shape_headers: Mapping[SubscriptionFormat, Mapping[str, str]] | None = None,
+    certificate: str | None = None,
 ) -> str:
     """The site configuration a delivery host serves its placed directory through.
 
@@ -202,9 +239,32 @@ def render_delivery_site(
     something actually changed.
 
     ``site_address`` is a Caddy site address — a name, optionally a scheme and a port —
-    and this function neither invents one nor defaults one. Whether a delivery host has
-    a name at all is M27.6's question and which hosts are delivery hosts is M27.4's; a
-    literal here would be an address the fleet could not rotate away from.
+    and this function neither invents one nor defaults one. Which hosts are delivery
+    hosts and what each one is called are both questions about the fleet
+    (``control/app/services/delivery``); a literal here would be an address the fleet
+    could not rotate away from.
+
+    NO PORT IS WRITTEN, ANYWHERE, and that is the answer rather than the absence of
+    one. A bare name is a complete Caddy site address and the daemon's own defaults
+    decide what it binds — which is how ``deploy/caddy/Caddyfile`` already serves the
+    control plane's own ``/sub/*``. Measured against caddy 2.8.4 with the two global
+    directives this file's template carries: TCP 443 and nothing else.
+
+    ``certificate`` is the PEM the control plane pushed, and it is the text rather than
+    the path so that the rendered site changes when the certificate does — see the
+    template, where the digest of it is written as a comment and the reason is the same
+    one every other config digest in this zone exists for. The PATHS are constants and
+    not parameters, exactly as ``directory`` is: they are where
+    ``place_delivery_certificate`` writes, and a site pointed anywhere else would be a
+    site reading a file nothing puts there.
+
+    WHETHER THERE IS TLS AT ALL IS READ OFF THE ADDRESS and is not a second argument.
+    An ``http://`` address is Caddy's own way of saying "no TLS here" and it refuses a
+    ``tls`` directive under one; anything else is served under the placed certificate.
+    Two arguments could disagree, and the disagreement would be a listener that will
+    not start or — worse — one that starts and serves a name it holds no certificate
+    for. So a certificate with an ``http://`` address is refused here, and so is an
+    address without one.
 
     ``headers`` go on every response that carries a document, and ``shape_headers`` adds
     to them for one shape — the archive's ``Content-Disposition``, in the one caller this
@@ -239,10 +299,27 @@ def render_delivery_site(
             "address is 1 to 255 characters of a host, scheme and port and nothing "
             "else, so that it cannot be read as more than one directive"
         )
+    serves_tls = not site_address.startswith(_WITHOUT_TLS)
+    if serves_tls and certificate is None:
+        raise UnservableSite(
+            f"{site_address!r} is served over TLS and no certificate was given for it "
+            "— a site with a name is answered on the HTTPS port, and a listener with "
+            "nothing to answer a handshake with is one every client refuses. Give the "
+            f"certificate this host was pushed, or ask for {_WITHOUT_TLS}"
+        )
+    if not serves_tls and certificate is not None:
+        raise UnservableSite(
+            f"{site_address!r} is an {_WITHOUT_TLS} address and a certificate was "
+            "given for it — the daemon refuses a certificate on a site it is told to "
+            "serve without TLS, so one of the two is not what was meant"
+        )
     per_shape = shape_headers or {}
     return _TEMPLATES.get_template("delivery-site.Caddyfile.j2").render(
         site_address=site_address,
         directory=DELIVERY_DIR,
+        certificate_digest=digest_of(certificate) if certificate else "",
+        certificate_path=DELIVERY_CERTIFICATE_PATH,
+        certificate_key_path=DELIVERY_CERTIFICATE_KEY_PATH,
         # Sorted by the format's own value, so two fleets rendering the same shapes
         # render the same file. The default shape is passed separately because it gets
         # a SECOND block for a format that already has one above — a different matcher
@@ -289,14 +366,26 @@ def compose_service(*, site: str) -> dict:
     container's startup diagnostics, which is a real cost and the smaller one: those
     are recoverable by running the image by hand on the node, and a request line in a
     journal is not recoverable at all.
+
+    WHETHER THE CERTIFICATE IS MOUNTED IS READ OUT OF THE SITE, not asked for. A bind
+    mount of a path nothing placed does not fail — the engine creates a DIRECTORY there
+    and mounts that over the file, which is the trap ``deploy/docker/caddy.Dockerfile``
+    was written to escape — so mounting the certificate unconditionally would turn a
+    site that wants no certificate into two directories on the node and a listener that
+    will not start. The alternative, a second argument saying what the site was
+    rendered with, is two values that can disagree about one file; reading the rendered
+    text is the same text ``digest_of`` above already consumes, and it cannot.
     """
+    mounted = [DELIVERY_SITE_PATH]
+    if _TLS_DIRECTIVE in site:
+        mounted += [DELIVERY_CERTIFICATE_PATH, DELIVERY_CERTIFICATE_KEY_PATH]
     return {
         "name": DELIVERY_SERVICE,
         "image": DELIVERY_IMAGE,
         "command": list(DELIVERY_COMMAND),
         "config_digest": digest_of(site),
-        "site_path": DELIVERY_SITE_PATH,
         "directory": DELIVERY_DIR,
+        "mounted": mounted,
     }
 
 
@@ -309,3 +398,68 @@ async def place_delivery_site(connection: NodeConnection, *, site: str) -> None:
     would have to justify.
     """
     await connection.write_file(DELIVERY_SITE_PATH, site, mode=0o600)
+
+
+async def place_delivery_certificate(
+    connection: NodeConnection, *, certificate: str, key: str
+) -> None:
+    """Put the certificate this host serves under, and its private key, on the node.
+
+    The KEY IS THE ONE FILE THIS PACKAGE PLACES THAT IS NOT THIS HOST'S OWN SECRET, and
+    that is worth saying here rather than only in the decision record. Every other
+    private key a node holds belongs to that node: a seizure yields the transport
+    material of the host that was seized and nothing about any other. This one is
+    issued for a name, and whoever holds it can answer for that name from anywhere
+    until it expires. What the fleet accepts by pushing it, and what bounds the damage,
+    is ``docs/decisions.md`` under 2026-09-27 — named here and not paraphrased, because
+    this package cannot see that decision change.
+
+    Both files together and in this order, certificate first: a listener recreated
+    between the two writes would find a certificate that does not match its key and
+    refuse every handshake, which is the same outage either way, while the reverse
+    order can leave a key on a host that never gets its certificate.
+
+    0600 on both, which is the mode every file this package places carries. The
+    container runs as root and reads them through a read-only bind mount; the account
+    the control plane drives the node as is the only other reader.
+    """
+    await connection.write_file(DELIVERY_CERTIFICATE_PATH, certificate, mode=0o600)
+    await connection.write_file(DELIVERY_CERTIFICATE_KEY_PATH, key, mode=0o600)
+
+
+# Taking the listener's own files off a host, which is not ``delivery.remove_delivery``
+# and is deliberately a second call rather than an extension of that one. That function
+# answers about the pushed MATERIAL — the directory, and whether the host was holding
+# one — and this is about the three files that make a host answer for a name at all.
+# They are this module's paths, so they are removed by this module; the caller makes
+# both calls, in the one place that knows a host has stopped serving delivery.
+#
+# THE PRIVATE KEY IS WHY THIS EXISTS. A host that stops being a delivery host and keeps
+# its artifacts is holding documents its own users already had; one that keeps this key
+# is holding the ability to answer for the delivery name, on a box the fleet has
+# stopped driving and may have stopped watching.
+#
+# ``rm -f`` and never a ``mkdir``: like the removal beside it, this must be legal on a
+# host ``node_stack.prepare`` has never touched, and a path that is not there is not a
+# failure.
+_REMOVE_SITE = (
+    f"rm -f {DELIVERY_SITE_PATH} {DELIVERY_CERTIFICATE_PATH} "
+    f"{DELIVERY_CERTIFICATE_KEY_PATH}"
+)
+
+
+async def remove_delivery_site(connection: NodeConnection) -> None:
+    """Take the site configuration, the certificate and its key off the node.
+
+    It does not stop a container, and does not need to: the listener is one service in
+    the node's rendered compose file, so a host that is no longer a delivery host is
+    handed a compose file without it and ``node_stack.restart`` — which runs with
+    ``--remove-orphans`` — takes the container away. What is left after that is the
+    files, and this is them.
+
+    Says nothing about what it found, unlike ``delivery.remove_delivery``. That one's
+    answer becomes a sentence an operator reads, because a directory of other people's
+    rendered subscriptions disappearing is a change worth naming; these three are this
+    product's own scaffolding and their removal is not news.
+    """
+    await connection.run(_REMOVE_SITE)

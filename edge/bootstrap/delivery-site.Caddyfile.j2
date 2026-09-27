@@ -11,7 +11,9 @@
   HOW:  rendered by edge/bootstrap/delivery_site.py:render_delivery_site. The site
         ADDRESS is passed in and nothing about it is decided here: which hosts serve
         delivery and under which name is not this zone's to know, and a literal here
-        would be an address the fleet cannot rotate away from.
+        would be an address the fleet cannot rotate away from. So is whether there is
+        a certificate to serve it under — see the block inside the site, which is
+        where this file's one statement about TLS is made.
 
   There is no application behind this. The request path carries the artifact's NAME,
   the name is the file's stem, and the only thing between the two is one rewrite — so
@@ -43,6 +45,29 @@
 	# in the fleet, it is of no use to anything here — this container is reconfigured
 	# by being recreated, never reloaded in place — and Caddy binds it by default.
 	admin off
+
+	# ONE SOCKET, and both directives below are here for that and nothing else. A
+	# delivery host always carries a user-facing transport — that is the first half of
+	# the question which chooses it — so every port this listener holds is a port that
+	# transport cannot have, and each one is a fight the operator has to be told about.
+	#
+	# MEASURED on caddy 2.8.4 against this very file, reading the container's own
+	# /proc/net: rendered without these two it binds TCP 80, TCP 443 and UDP 443; with
+	# them it binds TCP 443 and nothing else. TCP 80 is the automatic HTTP→HTTPS
+	# redirect, which this site has no use for — a subscription URL is https and is not
+	# typed by a person — and UDP 443 is HTTP/3.
+	#
+	# THE UDP ONE IS THE HALF NOTHING WOULD HAVE CAUGHT. A port number is not a port,
+	# and the rule that keeps two transports off one socket says so deliberately: a TCP
+	# proxy and an obfuscated UDP tunnel on one number are two sockets and no conflict.
+	# That rule cannot see this listener, so a tunnel on UDP 443 and this host's HTTP/3
+	# would have contended for a socket no table in the product names, on the host that
+	# is hardest to get a shell on.
+	auto_https disable_redirects
+
+	servers {
+		protocols h1 h2
+	}
 }
 
 {{ site_address }} {
@@ -52,6 +77,23 @@
 		output discard
 	}
 
+{% if certificate_digest %}
+	# THE CERTIFICATE IS A FILE ON THE NODE, PUT THERE BY THE CONTROL PLANE, and this
+	# host asks no certificate authority for anything. Nothing here dials an ACME
+	# server, answers a challenge or stores an account key — which is why this
+	# container declares no volume of its own and loses nothing when it is recreated.
+	#
+	# The line below is the certificate's SHA-256, and it is a comment that does work:
+	# the digest of THIS FILE is what the compose service carries as a label, `up -d`
+	# compares the service definition, and Caddy reads a `tls` file once at start. So
+	# without this line a renewed certificate under an unchanged site file would leave
+	# the container running and serving the expired one, with the apply reporting
+	# success — which is exactly the fault the config digest exists for, one file over.
+	# It discloses nothing: a certificate is handed to every client that connects.
+	# certificate {{ certificate_digest }}
+	tls {{ certificate_path }} {{ certificate_key_path }}
+
+{% endif %}
 	root * {{ directory }}
 
 	# THE RESPONSE HEADERS BELOW GO ONLY WHERE THERE IS A DOCUMENT TO CARRY THEM, which

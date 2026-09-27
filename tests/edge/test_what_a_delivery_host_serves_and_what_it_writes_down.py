@@ -26,10 +26,16 @@ from edge.bootstrap.delivery import ARTIFACT_EXTENSION, ARTIFACT_NAME, DELIVERY_
 from edge.bootstrap.node_stack import CONFIG_DIR
 from edge.registry import SubscriptionFormat
 
-# A site address of the shape a caller will pass once something decides one. A name,
-# because that is what M27.6 says a delivery host needs and what a public CA can issue
-# for; nothing in this zone chooses it.
+# A site address of the shape a delivery host is given. A name, because that is what a
+# public CA can issue for and what M27.6 settled a delivery host is reached under;
+# nothing in this zone chooses it.
 ADDRESS = "sub.example.test"
+
+# Stands in for the certificate the control plane pushes. It is never parsed here — the
+# renderer writes its digest into the site and the daemon reads the FILE, not this text
+# — so a fake is the honest fixture, and a real certificate in a repository is a habit
+# this zone does not have.
+CERTIFICATE = "-----BEGIN CERTIFICATE-----\nnot-a-certificate\n-----END CERTIFICATE-----\n"
 
 # The response headers the control plane's own route sets. Passed in rather than
 # imported: `edge` may not import `control`, and the two are held together by
@@ -43,6 +49,7 @@ def a_site(**overrides) -> str:
         "site_address": ADDRESS,
         "headers": HEADERS,
         "shape_headers": {SubscriptionFormat.CLIENT_CONFIG_FILE: ARCHIVE_HEADERS},
+        "certificate": CERTIFICATE,
     }
     settings.update(overrides)
     return delivery_site.render_delivery_site(**settings)
@@ -145,12 +152,22 @@ def test_it_serves_the_placed_directory_and_not_the_config_directory() -> None:
 
 
 def test_the_site_holds_no_address_but_the_one_it_was_given() -> None:
-    """No hostname, no port and no country in this zone's own text (CLAUDE.md)."""
+    """No hostname, no port and no country in this zone's own text (CLAUDE.md).
+
+    Asked of the DIRECTIVES and not of the whole file: a colon in a comment is prose and
+    a colon in a directive is a port or a scheme. The earlier form read the text up to
+    ``root *``, which put every explanatory line above it inside the assertion and made
+    the rule impossible to state in a sentence.
+    """
     site = a_site()
     assert ADDRESS in site
     assert site.count(ADDRESS) == 1, site
-    without = site.replace(ADDRESS, "")
-    assert ":" not in without.split("root *")[0].replace("http", ""), (
+    directives = [
+        line
+        for line in site.replace(ADDRESS, "").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert not [line for line in directives if ":" in line], (
         f"something in the rendered site names a port or a scheme of its own:\n{site}"
     )
 
@@ -334,3 +351,156 @@ async def test_placing_the_site_writes_one_file_where_the_container_reads_it() -
     site = a_site()
     await delivery_site.place_delivery_site(_Recorder(), site=site)
     assert written == [(delivery_site.DELIVERY_SITE_PATH, site, 0o600)]
+
+
+# --- one socket, and the certificate that fills it — M27.6 ---------------------------
+
+
+def test_the_site_takes_one_socket_and_writes_no_port_to_take_it() -> None:
+    """The measured answer to the port, pinned as text so it cannot be tidied away.
+
+    A delivery host always carries a user-facing transport, so every socket this
+    listener holds is one that transport cannot have. Measured on caddy 2.8.4 by reading
+    the container's own /proc/net: without these two directives the same file binds TCP
+    80, TCP 443 and UDP 443; with them, TCP 443 alone. The UDP one is the half no rule in
+    this product could have caught — a port number is not a port, so an obfuscated tunnel
+    on UDP 443 and this listener's HTTP/3 are two sockets to every check that exists.
+
+    AND NO PORT IS WRITTEN. The site address is a bare name and the daemon's own defaults
+    decide the socket, which is how the control plane's own `/sub/*` is already served.
+    """
+    site = a_site()
+    assert "auto_https disable_redirects" in site
+    assert "protocols h1 h2" in site
+    assert ":443" not in site, site
+    assert ":80" not in site, site
+
+
+def test_a_named_site_is_served_under_the_certificate_the_control_plane_placed() -> None:
+    """``tls`` names the two files the push writes, and nothing asks a CA for anything.
+
+    The paths are constants rather than parameters for the reason the served directory
+    is one: they are where ``place_delivery_certificate`` writes, and a site pointed
+    anywhere else is a listener reading a file nothing puts there.
+    """
+    site = a_site()
+    assert (
+        f"tls {delivery_site.DELIVERY_CERTIFICATE_PATH} "
+        f"{delivery_site.DELIVERY_CERTIFICATE_KEY_PATH}" in site
+    ), site
+
+
+def test_a_site_with_a_name_and_no_certificate_is_refused() -> None:
+    """A name is answered on the HTTPS port, and a listener with nothing to answer a
+    handshake with is one every client refuses — which reads to a user exactly like the
+    block the endpoint exists to survive."""
+    with pytest.raises(delivery_site.UnservableSite):
+        a_site(certificate=None)
+
+
+def test_a_certificate_on_a_site_asked_for_without_tls_is_refused() -> None:
+    """The two would be saying different things about one file, and the daemon refuses a
+    certificate on a site it is told to serve without TLS."""
+    with pytest.raises(delivery_site.UnservableSite):
+        a_site(site_address="http://:8080")
+
+
+def test_a_site_asked_for_without_tls_renders_none() -> None:
+    """The one caller that does this is a scenario, which cannot be given a name a public
+    CA would issue for. Whether there is TLS is read off the address rather than asked
+    for, so there is no second argument to disagree with it."""
+    site = a_site(site_address="http://:8080", certificate=None)
+    assert "tls " not in site, site
+    assert delivery_site.DELIVERY_CERTIFICATE_PATH not in site
+
+
+def test_a_renewed_certificate_is_a_changed_service_definition() -> None:
+    """The fault this pins is the one the config digest exists for, one file over.
+
+    Caddy reads a ``tls`` file once, at start. ``up -d`` compares the service definition
+    and a bind-mounted file's contents are not part of one — so a host pushed a renewed
+    certificate under an unchanged site would go on serving the expired one, from a
+    container nothing recreated, with the apply reporting success.
+    """
+    renewed = CERTIFICATE.replace("not-a-certificate", "a-different-certificate")
+    assert (
+        delivery_site.compose_service(site=a_site())["config_digest"]
+        != delivery_site.compose_service(site=a_site(certificate=renewed))["config_digest"]
+    )
+
+
+def test_the_certificate_is_mounted_exactly_where_the_site_names_one() -> None:
+    """A bind mount of a path nothing placed does not fail — the engine creates a
+    DIRECTORY there and mounts it over the file. So mounting unconditionally would turn
+    a site that wants no certificate into two directories and a listener that will not
+    start, and a site that wants one and does not get it is the same thing later."""
+    served = node_stack.render_compose(
+        transports=[], delivery=delivery_site.compose_service(site=a_site())
+    )
+    plain = node_stack.render_compose(
+        transports=[],
+        delivery=delivery_site.compose_service(
+            site=a_site(site_address="http://:8080", certificate=None)
+        ),
+    )
+    for path in (
+        delivery_site.DELIVERY_CERTIFICATE_PATH,
+        delivery_site.DELIVERY_CERTIFICATE_KEY_PATH,
+    ):
+        assert f"- {path}:{path}:ro" in served, served
+        assert path not in plain, plain
+
+
+def test_the_certificate_and_its_key_are_placed_outside_the_replaced_directory() -> None:
+    """``place_delivery`` replaces the whole delivery directory on every apply, and its
+    staging siblings are cleared by name. A key in either is a key the next push
+    deletes, on a host whose listener then answers no handshake at all."""
+    for path in (
+        delivery_site.DELIVERY_CERTIFICATE_PATH,
+        delivery_site.DELIVERY_CERTIFICATE_KEY_PATH,
+    ):
+        assert not path.startswith(f"{DELIVERY_DIR}/")
+        assert not path.startswith(f"{DELIVERY_DIR}.")
+
+
+async def test_placing_the_certificate_writes_both_files_unreadable_to_others() -> None:
+    """Certificate first, so a listener recreated between the two writes never meets a
+    key that belongs to a certificate it has not got."""
+    written: list[tuple[str, object, int]] = []
+
+    class _Recorder:
+        async def write_file(self, path, content, *, mode):
+            written.append((path, content, mode))
+
+    await delivery_site.place_delivery_certificate(
+        _Recorder(), certificate=CERTIFICATE, key="key"
+    )
+    assert written == [
+        (delivery_site.DELIVERY_CERTIFICATE_PATH, CERTIFICATE, 0o600),
+        (delivery_site.DELIVERY_CERTIFICATE_KEY_PATH, "key", 0o600),
+    ]
+
+
+async def test_the_removal_takes_the_private_key_off_the_host() -> None:
+    """A host that stops being a delivery host and keeps its artifacts is holding
+    documents its own users already had. One that keeps this key is holding the ability
+    to answer for the delivery name, on a box nothing drives any more.
+
+    And it creates nothing — like the material's own removal, it has to be legal on a
+    host ``prepare`` has never touched.
+    """
+    ran: list[str] = []
+
+    class _Recorder:
+        async def run(self, command, check=True):
+            ran.append(command)
+
+    await delivery_site.remove_delivery_site(_Recorder())
+    assert len(ran) == 1
+    for path in (
+        delivery_site.DELIVERY_SITE_PATH,
+        delivery_site.DELIVERY_CERTIFICATE_PATH,
+        delivery_site.DELIVERY_CERTIFICATE_KEY_PATH,
+    ):
+        assert path in ran[0]
+    assert "mkdir" not in ran[0]
