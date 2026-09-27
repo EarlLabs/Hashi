@@ -29,6 +29,7 @@ anywhere — no name is served here, and nothing in this repository makes a node
 listener yet.
 """
 
+import datetime
 import pathlib
 import socket
 import subprocess
@@ -358,3 +359,244 @@ def test_the_listener_writes_nothing_into_what_it_serves(host: DeliveryHost) -> 
         f"{NAME}.txt",
         f"{NAME}.zip",
     ]
+
+
+# --- the site as a real host is given it: a name, and a certificate — M27.6 -----------
+#
+# Everything above runs the site on `http://:<port>`, which is what a scenario could ask
+# for before this step: it has no name a public authority would issue for. What it could
+# not answer is the question M27.6 is about — that a listener handed a CERTIFICATE by the
+# control plane serves the same documents over TLS, takes ONE socket while doing it, and
+# still writes nothing down. This runs the shape a node is actually given.
+
+
+TLS_NAME = "sub.example.test"
+
+
+class ServedUnderAName(DeliveryHost):
+    """The same host, rendered the way an apply renders it: a bare name and a certificate.
+
+    A self-signed certificate, and curl is pointed at it as its own authority. Nothing in
+    this product validates a chain — the control plane reads the expiry and pushes the
+    bytes, the daemon serves them — so a scenario that went to a real authority would be
+    testing the internet.
+    """
+
+    def __init__(self, directory: pathlib.Path, port: int) -> None:
+        super().__init__(directory, port)
+        self.certificate_path = directory / "delivery-cert.pem"
+        self.key_path = directory / "delivery-key.pem"
+
+    def place(self) -> None:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+
+        (self.served / f"{NAME}.txt").write_bytes(DOCUMENT)
+        (self.served / f"{NAME}.zip").write_bytes(ARCHIVE)
+
+        key = ec.generate_private_key(ec.SECP256R1())
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, TLS_NAME)])
+        now = datetime.datetime.now(datetime.UTC)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(subject)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30))
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(TLS_NAME)]), critical=False
+            )
+            .sign(key, hashes.SHA256())
+        )
+        pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        self.certificate_path.write_text(pem)
+        self.key_path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+
+        site = delivery_site.render_delivery_site(
+            # A BARE NAME, which is the whole of the port answer: no port is written and
+            # the daemon's own defaults decide the socket.
+            site_address=TLS_NAME,
+            certificate=pem,
+            headers=HEADERS,
+            shape_headers={
+                SubscriptionFormat.CLIENT_CONFIG_FILE: {
+                    "Content-Disposition": f'attachment; filename="{ARCHIVE_FILENAME}"'
+                }
+            },
+        )
+        self.site_path.write_text(site)
+        (self.directory / "docker-compose.yml").write_text(
+            node_stack.render_compose(
+                transports=[], delivery=delivery_site.compose_service(site=site)
+            )
+        )
+        (self.directory / "docker-compose.override.yml").write_text(self._override())
+
+    def _override(self) -> str:
+        """The deviations, and the mounts are NOT among them.
+
+        The certificate and its key are mounted by the compose file this product renders
+        — that is the thing under test — so the override names only what a scenario
+        cannot have: a bridge network, a published port, and a log the engine keeps.
+        """
+        return yaml.safe_dump(
+            {
+                "services": {
+                    delivery_site.DELIVERY_SERVICE: {
+                        "network_mode": "bridge",
+                        "ports": [f"127.0.0.1:{self.port}:{delivery_site.DELIVERY_PORT}"],
+                        "logging": {"driver": "json-file"},
+                        "volumes": [
+                            f"{self.site_path}:{delivery_site.DELIVERY_SITE_PATH}:ro",
+                            f"{self.certificate_path}:"
+                            f"{delivery_site.DELIVERY_CERTIFICATE_PATH}:ro",
+                            f"{self.key_path}:{delivery_site.DELIVERY_CERTIFICATE_KEY_PATH}:ro",
+                            f"{self.served}:{DELIVERY_DIR}:ro",
+                        ],
+                    }
+                }
+            },
+            sort_keys=True,
+        )
+
+    def listening(self) -> tuple[set[int], set[int]]:
+        """Every TCP and UDP port this container holds, read from its own /proc/net.
+
+        Asked of the kernel rather than of the configuration, because the claim is about
+        what the daemon BINDS and the rendered file deliberately names no port at all.
+        """
+        held: list[set[int]] = []
+        for family in (("tcp", "tcp6"), ("udp", "udp6")):
+            ports: set[int] = set()
+            for table in family:
+                result = run(
+                    [
+                        *self.compose, "exec", "-T", delivery_site.DELIVERY_SERVICE,
+                        "cat", f"/proc/net/{table}",
+                    ],
+                    cwd=self.directory,
+                )
+                for line in result.stdout.splitlines()[1:]:
+                    columns = line.split()
+                    if len(columns) < 4 or ":" not in columns[1]:
+                        continue
+                    if table.startswith("tcp") and columns[3] != "0A":
+                        continue
+                    ports.add(int(columns[1].split(":")[1], 16))
+            held.append(ports)
+        return held[0], held[1]
+
+
+def fetch_over_tls(
+    running: ServedUnderAName, path: str, *extra: str
+) -> subprocess.CompletedProcess:
+    """One HTTPS request at the name the certificate is for, resolved to the published port.
+
+    ``--cacert`` and never ``--insecure``: half of what is under test is that the daemon
+    serves the certificate it was handed, and a client that accepted any certificate
+    would pass against a listener serving its own.
+    """
+    return run(
+        [
+            "curl", "--silent", "--show-error", "--include", "--max-time", "10",
+            "--cacert", str(running.certificate_path),
+            "--resolve", f"{TLS_NAME}:{running.port}:127.0.0.1",
+            *extra, f"https://{TLS_NAME}:{running.port}{path}",
+        ]
+    )
+
+
+@pytest.fixture(scope="module")
+def named_host(engine: str, tmp_path_factory) -> ServedUnderAName:
+    running = ServedUnderAName(tmp_path_factory.mktemp("named-delivery-host"), a_free_port())
+    running.place()
+    running.up()
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if fetch_over_tls(running, f"/sub/{NAME}").returncode == 0:
+            break
+        time.sleep(0.5)
+    yield running
+    running.down()
+
+
+def test_a_host_serves_its_users_documents_under_the_certificate_it_was_pushed(
+    named_host: ServedUnderAName,
+) -> None:
+    """The shape a node is actually given, answered by a real daemon.
+
+    ``--cacert`` is the assertion as much as the 200 is: the client verified against the
+    certificate this scenario placed, so the daemon is serving what it was handed rather
+    than one of its own.
+    """
+    answer = fetch_over_tls(named_host, f"/sub/{NAME}")
+    assert answer.returncode == 0, (
+        f"the TLS handshake or the fetch failed: {answer.stderr.strip()[:800]}"
+    )
+    assert "200" in answer.stdout.splitlines()[0], answer.stdout[:400]
+    assert DOCUMENT.decode() in answer.stdout, answer.stdout[:400]
+
+
+def test_the_listener_holds_one_socket_and_no_more(
+    named_host: ServedUnderAName,
+) -> None:
+    """The measured answer to the port, and the reason this scenario exists.
+
+    A delivery host always carries a user-facing transport, so every socket this holds is
+    one that transport cannot have. Rendered without ``auto_https disable_redirects`` and
+    ``protocols h1 h2`` the same file binds TCP 80, TCP 443 and UDP 443; the UDP one is
+    the half nothing in the product could have caught, because a port number is not a
+    port and the rule that keeps two transports apart treats TCP and UDP as two sockets.
+    """
+    tcp, udp = named_host.listening()
+    assert tcp == {delivery_site.DELIVERY_PORT}, (
+        f"the delivery listener holds TCP {sorted(tcp)} and the product tells the "
+        f"operator it holds {delivery_site.DELIVERY_PORT} alone"
+    )
+    assert udp == set(), (
+        f"the delivery listener holds UDP {sorted(udp)}, which nothing in this product "
+        "keeps a transport off — a port number is not a port"
+    )
+
+
+def test_the_named_host_records_no_path_either(named_host: ServedUnderAName) -> None:
+    """The step's own rule, asked again on the surface M27.6 added.
+
+    TLS is a new layer in front of the same file server and the engine keeps this
+    container's output in this scenario, so this is where a handshake or a certificate
+    error that named a request would show up.
+    """
+    fetch_over_tls(named_host, f"/sub/{NAME}")
+    fetch_over_tls(named_host, f"/sub/{UNKNOWN}")
+    time.sleep(1.0)
+
+    written = named_host.logs()
+    assert written.strip(), (
+        "nothing came back from the container log, so this scenario is not reading what "
+        "the engine kept and the assertions below prove nothing"
+    )
+    assert NAME not in written, written[:2000]
+    assert UNKNOWN not in written, written[:2000]
+    assert "/sub/" not in written, written[:2000]
+
+
+def test_a_refusal_over_tls_is_the_same_empty_404(named_host: ServedUnderAName) -> None:
+    """A name that is not there and a path that was never a subscription are one answer,
+    so a scanner learns neither what else runs here nor whether a name it guessed
+    exists. The headers are the assertion: a fixed set on an empty body would be a
+    signature every delivery host in the fleet answers with."""
+    for path in (f"/sub/{UNKNOWN}", "/", "/panel/login"):
+        answer = fetch_over_tls(named_host, path)
+        assert answer.returncode == 0, answer.stderr[:400]
+        assert "404" in answer.stdout.splitlines()[0], answer.stdout[:400]
+        assert header_names(answer.stdout) == ("server",), answer.stdout[:400]
