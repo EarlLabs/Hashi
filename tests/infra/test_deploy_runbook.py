@@ -1533,3 +1533,51 @@ def test_the_env_file_sends_the_operator_to_the_section_that_decides_retention(
         "the comment beside the write-only key does not name the mechanism that makes "
         "write-only stick, so the key reads as sufficient on its own"
     )
+
+
+# M27.7's section, by its exact title. The one place the product writes down how the
+# delivery endpoint moves and what has to be said when it does — the milestone's own
+# "decided and written down rather than left implied".
+MOVING_DELIVERY_SECTION = "Moving the delivery endpoint, and what users have to be told"
+
+
+def test_the_runbook_says_moving_delivery_is_an_out_of_band_event(runbook: str) -> None:
+    """The decision itself, on the page an operator follows — M27.7.
+
+    Not that a sentence exists: that the two halves which make it actionable are both
+    here. A channel that is not this product, and the fact that having one is a thing to
+    arrange before it is needed — because the failure this section is about is discovering
+    at the moment of a block that the only address you have for anybody is the dead one.
+    """
+    assert f"## {MOVING_DELIVERY_SECTION}" in runbook, (
+        "the runbook no longer says how the delivery endpoint moves; M27's done-when "
+        "asks for exactly this, written down rather than implied"
+    )
+    section = _flat(runbook.split(f"## {MOVING_DELIVERY_SECTION}")[1].split("\n## ")[0])
+    # Emphasis dropped: the phrases below are load-bearing as words, and which of them
+    # this page has chosen to bold is typography.
+    said = section.replace("*", "")
+    assert "out-of-band event" in said
+    assert "channel that is not this product" in said
+    assert "before a block" in said and "because of one" in said
+
+
+def test_the_runbook_quotes_the_words_that_go_with_a_delivery_link(runbook: str) -> None:
+    """And it quotes the product's own string, not a paraphrase of it — M27.5's
+    requirement on M27.7.
+
+    A delivery host serves a slice, so a client that REPLACES its subscription with a
+    delivery link loses every node on every other host and cannot tell that apart from a
+    revocation. The artifact cannot carry the warning — a truthful per-user version writes
+    "this person has other nodes" onto the most seizable box in the fleet — so the whole
+    of the protection is this sentence going with the link every time. Two copies of it
+    that have drifted are one copy and one near-miss, which is why this compares rather
+    than searching for a phrase.
+    """
+    quoted = _flat(re.sub(r"^[ \t]*> ?", "", runbook, flags=re.M))
+    assert _flat(console.DELIVERY_URL_GOES_ALONGSIDE) in quoted, (
+        "the runbook's copy of what must travel with a delivery URL is not what the "
+        "panel says any more — the product's own wording is "
+        f"console.DELIVERY_URL_GOES_ALONGSIDE, which now reads "
+        f"{console.DELIVERY_URL_GOES_ALONGSIDE!r}"
+    )
