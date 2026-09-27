@@ -237,6 +237,46 @@ class Node(Base, TimestampMixin):
     # this width where it is written rather than trusted to fit.
     last_probe_finding: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
+    # --- what the last apply actually put on this host to serve refreshes — M27.7 ---
+    #
+    # Two columns because the Nodes screen makes a claim no other record could support.
+    # It said *"the last apply put a listener on this host"* and gave the expiry of the
+    # certificate this control plane holds NOW, and it chose that sentence on whether any
+    # transport row had ever been pushed — which records that a CONFIG was placed and
+    # never that a listener was. Both halves were false in the state every fleet is in
+    # the day a certificate is first configured: a host applied before that has no
+    # listener, no certificate and no container, and the screen named a date anyway.
+    #
+    # So what is recorded here is what was PLACED, written in the same statement as the
+    # applied digests and only on a path that reached the host:
+    #
+    # * ``delivery_placed_digest`` is the digest of the site file the last apply placed
+    #   (``edge.bootstrap.node_stack.digest_of`` — the same value the compose service
+    #   carries as a label, and the same one the apply compares a running container
+    #   against). NULL means that apply placed no listener, which covers a host that
+    #   never had one and a host whose listener was taken back off;
+    # * ``delivery_placed_until`` is the expiry of the certificate that went with it,
+    #   and it is the number the screen exists to show: after a renewal the host goes on
+    #   holding the OLD pair until an apply reaches it, so the shutdown horizon is this
+    #   one and not the expiry of whatever pair the operator has just put on disk.
+    #
+    # The site text carries the certificate's own digest as a comment, so the two move
+    # together: a renewed certificate, or a corrected address, changes the digest here
+    # and the screen stops claiming the host holds what this control plane would place.
+    #
+    # NOT WRITTEN BY THE REFUSAL PATH, and that residual is named rather than closed.
+    # ``apply._take_delivery_back`` takes the listener off a host whose apply is refused
+    # and deliberately writes nothing about the node (no state, and the transaction there
+    # is never committed), so this pair outlives that removal. Nothing says a false
+    # sentence while it does — ``console.delivery_note`` answers ``None`` for a node with
+    # no enabled user-facing row, which is the only way that path is reached — but
+    # re-enabling such a row before the next apply reads as served for as long as it
+    # takes to press it.
+    delivery_placed_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_placed_until: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # --- how `control` reaches this node over SSH ----------------------------
     # Control dials the node; the node never dials us (core invariants §1).
     ssh_host: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -1658,6 +1658,27 @@ async def apply_node(
             configs[node_transport.config_name]
         )
 
+    # AND WHAT THIS APPLY PUT ON THE HOST TO SERVE REFRESHES — M27.7. The same write as
+    # the digests above, for the same reason and in the same transaction: a listener was
+    # placed or was taken back off a few lines up, and the only record of which is this
+    # one.
+    #
+    # It is not derivable from anything else on the row, which is the defect it closes.
+    # ``console.delivery_note`` chose "the last apply put a listener on this host" from
+    # ``applied_at``, and an applied transport row is not a placed listener: a host
+    # applied before a certificate was ever configured has every row stamped and nothing
+    # on it, which is the state every fleet is in the day the feature becomes reachable.
+    #
+    # Past the failure arms with the state write below, and for the same reason: an apply
+    # that did not get this far either placed nothing or is degraded over what it placed,
+    # and in both cases the previous record is the truer one — the host still holds
+    # whatever the last apply that DID get here left on it.
+    #
+    # ``serves_delivery`` and not ``listener is not None``: a co-located box is handed no
+    # listener however usable this control plane's certificate is, and recording one for
+    # it would put the feature back on the screen it is absent from.
+    delivery.record_placed_listener(node, listener if serves_delivery else None)
+
     # THE ONE PLACE THE STATE MOVES, past every failure arm above — which is the whole
     # of ``_take_into_service``'s second decision: the fan-out runs before the render and
     # still does not touch this column, so a push that failed leaves the node degraded by

@@ -560,3 +560,57 @@ def listener_for(node: Node, settings: Settings) -> DeliveryListener | None:
         service=delivery_site.compose_service(site=site),
         certificate=certificate,
     )
+
+
+@dataclass(frozen=True)
+class PlacedListener:
+    """What an apply actually put on a host, as this control plane recorded it — M27.7.
+
+    The counterpart of ``DeliveryListener`` above, and the two are deliberately different
+    types: that one is what this control plane WOULD place, computed from the record and
+    the certificate on disk; this one is what it DID place, read back off the node's own
+    row. Conflating them is the defect this pair exists to close — the Nodes screen chose
+    "a listener is on this host" from ``NodeTransport.applied_at``, which says a config
+    was pushed and says nothing about a listener.
+    """
+
+    digest: str
+    certificate_until: datetime.datetime
+
+
+def placed_listener(node: Node) -> PlacedListener | None:
+    """The listener the last apply left on this host, or ``None`` if it left none.
+
+    ``None`` also for the pair half-written, which nothing in this product produces —
+    ``record_placed_listener`` below writes both fields in one statement — and which a
+    row edited by hand could. Answering "no listener was placed" there understates what
+    is on the host by one apply; the alternative is a sentence composed from a date that
+    was never recorded.
+    """
+    if node.delivery_placed_digest is None or node.delivery_placed_until is None:
+        return None
+    return PlacedListener(
+        digest=node.delivery_placed_digest,
+        certificate_until=node.delivery_placed_until,
+    )
+
+
+def record_placed_listener(node: Node, listener: DeliveryListener | None) -> None:
+    """Record what this apply put on the host, or that it put nothing there.
+
+    ``None`` is the whole of the removal side and it is not an omission: an apply that
+    does not stand a listener up takes the site file, the certificate and its private key
+    back off (``apply_node``), so the row must stop claiming a listener at the same
+    moment the host stops holding one.
+
+    The digest is computed HERE and nowhere else, so the value written by an apply and
+    the value ``console.delivery_note`` compares against cannot be two different
+    readings of one site file — the same argument ``listener_for`` makes for building
+    the site, the service and the certificate as one object.
+    """
+    node.delivery_placed_digest = (
+        node_stack.digest_of(listener.site) if listener is not None else None
+    )
+    node.delivery_placed_until = (
+        listener.certificate.not_after if listener is not None else None
+    )
