@@ -4031,6 +4031,51 @@ section between them, and ends *Shape C* with *"today you choose one location fo
 both."* If this milestone lands and that structure survives unchanged, the point
 was missed.
 
+### M27.9 — `infra`: the gate is red for four hours a day · found building M27.4, 2026-09-27
+
+**Not M27's subject, and it is here because every remaining step of M27 gates on `make verify`.**
+
+Between **00:00 and 04:00 UTC**, three tests in
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py` fail —
+`test_the_tick_that_takes_it_leaves_a_record_this_clock_can_read`,
+`test_a_run_timestamp_ahead_does_not_make_the_tick_dump`, and
+`test_an_ordinary_record_says_none_of_that`. Confirmed at 00:54 UTC; the same three are green at
+other hours, and were green three times on the same diff earlier the same evening.
+
+**The product is right and the fixture is wrong.** The module builds
+`A_REAL_RUN_HALF_AN_HOUR_AGO` at import with `due_date = today_in("Etc/UTC")`, while
+`scripts/backup-run.sh` computes the schedule's due date from the configured `at=04:00` window. So
+inside that window the fixture's record is dated a day **ahead** of the schedule's own due date,
+and the script correctly answers `clock=ahead` — the behaviour M28.19 built and M28.22 measured
+across every offset. The test asserts the answer it gets during the other twenty hours.
+
+**Proven pre-existing**, so this is not M27's doing: the same three fail at `530e61b` in a clean
+worktree at the same wall clock, and M27.4 touches no infra file `make test-infra` collects.
+
+**Why it earns a step rather than a carry-over line.** A gate that is green in every run anyone
+happens to make is the exact defect this codebase has spent two milestones learning to name — M28
+found eight surfaces of *a check that can be satisfied by the absence of the thing it checks*, and
+this is the same shape wearing a clock. It has been in `develop` since M28 merged, so **every
+`make verify` this project has run in that window reported a failure nobody could act on**, and
+every one outside it reported a pass that did not cover this. Four more M27 steps gate on it.
+
+**Fix the fixture, not the product**, and fix the class rather than the three: build the record's
+dates from the **schedule's own due-date rule** — the same computation `backup-run.sh` uses — so
+the fixture is correct at every hour, rather than adding a window guard or freezing a clock.
+`docs/tracker/M28/step-notes.md` records the measured rule (`offset − ceil(at)`, floored at zero,
+and the boundary `due_date > (reader's UTC date + 1 day)`), and M28.22's sweep is the reference for
+what the schedule actually computes at each hour.
+
+**Then sweep `tests/infra/` for the shape**, not for these three: any fixture whose value is
+derived from `today`, `now` or an import-time clock while the code under test derives the same
+value from configuration. Report what the sweep finds even where you do not fix it.
+
+**Run the suite at a simulated hour inside the window and outside it, and report both** — a fix
+verified only at the hour you happen to be working is the defect again.
+
+Gate: `make test-infra`, then `make verify`, with **e2e 239 passed / 0 skipped**.
+
+
 **E2E:** `tests/e2e/control/` for what is pushed on apply and `tests/e2e/infra/`
 for what a delivery host serves and does not log. The arrangements themselves need
 two machines, so they are a real-host walk and are reported as one — the stand can
