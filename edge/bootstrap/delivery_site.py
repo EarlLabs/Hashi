@@ -315,14 +315,20 @@ def render_delivery_site(
             "else, so that it cannot be read as more than one directive"
         )
     serves_tls = not site_address.startswith(_WITHOUT_TLS)
-    if serves_tls and certificate is None:
+    # FALSY AND NOT ONLY ``None``, because the template writes the ``tls`` directive on
+    # the truth of this value: an empty string would pass a ``is None`` guard and render
+    # a NAMED site with no certificate, which Caddy answers by going to a certificate
+    # authority — the one thing this file's header says a node never does. Nothing in
+    # ``control`` can produce one today; the guard is the contract this package offers
+    # any caller, and a contract that holds only for today's caller is not one.
+    if serves_tls and not certificate:
         raise UnservableSite(
             f"{site_address!r} is served over TLS and no certificate was given for it "
             "— a site with a name is answered on the HTTPS port, and a listener with "
             "nothing to answer a handshake with is one every client refuses. Give the "
             f"certificate this host was pushed, or ask for {_WITHOUT_TLS}"
         )
-    if not serves_tls and certificate is not None:
+    if not serves_tls and certificate:
         raise UnservableSite(
             f"{site_address!r} is an {_WITHOUT_TLS} address and a certificate was "
             "given for it — the daemon refuses a certificate on a site it is told to "

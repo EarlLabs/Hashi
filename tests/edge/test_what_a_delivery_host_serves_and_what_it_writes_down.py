@@ -527,3 +527,16 @@ def test_the_declared_socket_is_the_one_a_rendered_site_actually_binds() -> None
     assert not [
         line for line in directives if str(delivery_site.DELIVERY_PORT) in line
     ], site
+
+
+def test_an_empty_certificate_is_refused_like_a_missing_one() -> None:
+    """The guard is on TRUTH and not on ``None``, because the template is.
+
+    An empty string would pass an ``is None`` guard and render a NAMED site with no
+    ``tls`` directive — which Caddy answers by going to a certificate authority, the one
+    thing this package's header says a node never does. Nothing in ``control`` produces
+    one today; this is the contract this package offers any caller, and a contract that
+    holds only for today's caller is not one.
+    """
+    with pytest.raises(delivery_site.UnservableSite):
+        a_site(certificate="")
