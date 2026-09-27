@@ -289,3 +289,59 @@ is the flag M27.4 bans; a literal is the hardcoding `CLAUDE.md` bans.
 predicate says no, **and** no listener exists anywhere. So the walk's second scenario cannot yet
 distinguish a feature absent by derivation from one absent because nothing was built. It becomes
 meaningful only after M27.6.
+
+## From M27.9 — the gate that was red four hours a day
+
+**`make verify` was unusable between 00:00 and 04:00 UTC from M28's merge until 2026-09-27.**
+The fixture built its record's `due_date` from the calendar day while `scripts/backup-run.sh`
+computes the schedule's owed day from the configured `at` window, so inside that window the
+record was a day ahead and the script correctly answered `clock=ahead`. **The product was
+right.** Green in every run anyone happened to make, which is why it survived a merge.
+
+**`day_owed_in(zone, at)` in `tests/infra/test_backup_schedule.py` is the oracle** — any infra
+fixture needing *the date the schedule is on* calls it with the zone and hour **the env file
+under test names**, never the calendar. `today_in` is deleted. Record fixtures are **functions**
+(`a_real_run_half_an_hour_ago(tmp_path)`, `a_due_date_ahead_on_its_own(tmp_path, …)`), never
+module constants — a `@parametrize` list is built at collection, so a constant there is the
+import-time half of this defect.
+
+**A test oracle is allowed to be a second implementation, and this one must be.** The
+M28.12/M28.13 lesson is about two implementations **in the product**, both reachable by users.
+An oracle's job is to be a second opinion: asking the script for the date would be satisfied by
+the script being consistently wrong, and one of these tests asserts on what a `tick` actually
+wrote. **But the line runs through the assertion, not the file:** implement the date when the
+assertion is *about* the date; **ask the script when the date is only scaffolding** under some
+other assertion — `test_the_backup_surfaces_record_nobody.py::test_a_tick_with_nothing_owed_says_nothing_at_all`
+is the canonical second case, and the two files now name each other.
+
+**An oracle without a pin is the drift it was written to prevent, and this one had already
+drifted at birth.** `test_the_day_this_suite_seeds_is_the_day_the_script_owes` compares
+`day_owed_in` against the real `due` output over 6 zones × 8 spellings. Against the helper as
+first written it was **red in 11 of 48**.
+
+**Three properties of that pin, all load-bearing:**
+- **the grid is chosen by timezone offset, not by hour** — a pin written against `Etc/UTC`
+  alone would itself be hour-dependent, which is this defect inside its own remedy;
+- **`Nowhere/Useful` is in the zone list precisely because it is not a zone** — the
+  pass-through-to-`date` assumption is checked rather than assumed;
+- **the oracle is read on both sides of the invocation** (`assert answered in {before, after}`)
+  because two clock reads a fifth of a second apart straddling the configured minute would make
+  the pin red for one second a day.
+
+**Mirror `resolve_schedule` completely or not at all.** `the_hour_the_script_resolves` mirrors
+the `sanitised` character class, the accepted shape, the `%02d` pad and the `04:00` fallback.
+Padding alone is not enough: the script **strips a space and accepts the result**, so
+`HASHI_BACKUP_AT=1 2:00` resolves to `12:00 configured`. Mutation-tested — dropping the
+sanitiser, the pad or the fallback each turns the pin red. (Dropping `[:64]` does not; see
+carry-over.)
+
+**Ask the script for configuration; compute the date yourself.**
+`the_hour_no_env_here_configures(tmp_path)` runs `due` with no `HASHI_BACKUP_AT` and reads
+`at=` off the first line, so the fallback cannot part from `resolve_schedule`. The constant it
+replaced carried a false safety claim — that a changed fallback would go *red rather than
+quiet* — when it would have been red only during the hour between the old value and the new.
+
+**To simulate an hour, nothing in the suite freezes a clock:** substitute `Etc/GMT±N` for the
+zone the module names, which moves the local hour the script compares against `at`. For tests
+pinned at `at=00:01`, move the configured hour instead. **That method shifts hours, not
+minutes**, so sub-minute cases are not covered by it.
