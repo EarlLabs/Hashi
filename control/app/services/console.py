@@ -1641,8 +1641,8 @@ DELIVERY_HOLDING_AN_EARLIER_ONE = (
     "delivery — this host is answering with what an earlier apply put there, which is "
     "not what this control plane would place now: the certificate has been replaced, or "
     "this host's name has changed, since. What it is holding is good until {held} "
-    "UTC{countdown}, and that is the bound — not the pair on this control plane's disk. "
-    "The next apply puts the current one there, good until {until} UTC."
+    "UTC{countdown}. That is the bound, and not the pair on this control plane's disk: "
+    "the next apply puts the current one there, good until {until} UTC."
 )
 DELIVERY_HOLDING_AN_EXPIRED_ONE = (
     "delivery — this host is answering with a certificate that expired {held} UTC, so "
