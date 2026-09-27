@@ -405,19 +405,30 @@ async def test_the_rows_the_material_is_rendered_over_are_the_rows_that_are_plac
     session.expire_all()
     node = await nodes.get_node(session, node_id)
     rows = await apply.enabled_transports(session, node)
-    assert {artifact.name for artifact in handed.artifacts} == {
-        artifact.name
-        for artifact in await delivery.artifacts_for_node(session, node, rows)
-    }, "re-rendering over this node's enabled rows does not reproduce what was pushed"
+    # Name, SHAPE and CONTENT. Names alone would be the weaker claim this docstring does
+    # not make: a change reaching one render and not the other is a change to the bytes,
+    # and every artifact for one subscription is named the same in both shapes.
+    assert _identified(handed.artifacts) == _identified(
+        await delivery.artifacts_for_node(session, node, rows)
+    ), "re-rendering over this node's enabled rows does not reproduce what was pushed"
 
 
-async def test_the_node_record_field_that_can_change_parts_them(
+def _identified(artifacts) -> set[tuple[str, SubscriptionFormat, bytes]]:
+    """Artifacts as the three things that make one distinguishable from another."""
+    return {
+        (artifact.name, artifact.shape, artifact.content) for artifact in artifacts
+    }
+
+
+async def test_the_one_record_field_that_reaches_rendered_material_parts_them(
     client, session, file_transport: str, handed: Handed
 ) -> None:
     """The one exception to the reading above, measured rather than assumed.
 
-    ``resolver`` is the only field on a node record that can change after registration,
-    and it is not on a row — it reaches a user's own configuration file through
+    Two fields on a node record can change after registration — ``nodes.set_resolver``
+    and ``nodes.set_ssh_key`` — and ``resolver`` is the only one that reaches rendered
+    material at all, because an SSH key is an input to no render. It is not on a row
+    either: it reaches a user's own configuration file through
     ``client_resolvers``, while it reaches the node's own config only as a firewall
     exception, and only for a resolver the user's tunnel rules would otherwise DROP.
     Point a node at a resolver on the internet and the host's configuration is
