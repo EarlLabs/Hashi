@@ -4346,7 +4346,7 @@ the feature was built as a switch instead of as a consequence.
 
 ---
 
-## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day · decided by the owner 2026-10-02 (one URL per config shape) · built 2026-10-02 · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
+## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day · decided by the owner 2026-10-02 (one URL per config shape; the config-file re-import accepted as a known limitation) · built 2026-10-02 · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
 
 **Built 2026-10-02** on branch `task/M24`, stacked on `task/M31`. Code, tests and a
 disposable stand only — no real host was touched. What closed, the gate and what the
@@ -4484,7 +4484,8 @@ environmental `[wireguard]` cases in `test_upstream_validation.py`); infra 553 p
 `amneziawg-go` pull, in `tests/e2e/edge/`; no M24 file is involved, and every control
 scenario, the new one included, passed in both runs). The 16 skips include the bucket-restore
 scenarios (minio image unavailable), as in M31. Review: `reviewer-strict`, round 1 — 0
-critical, 0 high; 1 medium (fixed, M24.3), 1 low (owner question recorded in the tracker).
+critical, 0 high; 1 medium (fixed, M24.3), 1 low (owner question recorded in the tracker — answered by the owner 2026-10-02, see
+*Not done here, deliberately*).
 Details: `docs/tracker/M24/step-notes.md`; what the real-host walk must see:
 `docs/tracker/M24/carry-over.md`.
 
@@ -4495,10 +4496,11 @@ Details: `docs/tracker/M24/step-notes.md`; what the real-host walk must see:
   decision for M24 covers the config-file shape on the control plane's own link only; the
   panel still composes no delivery URL (`test_this_panel_composes_no_delivery_url_anywhere`
   stays green). That stays M27's.
-- **A config-file user re-imports after a rotation.** Not new — it is what option (b)
-  (2026-08-09) always meant — but it qualifies the charter's *"users never re-add
-  anything"* for this family, and the dialog now says so to the operator instead of the
-  opposite. Raised to the owner rather than decided here.
+- **A config-file user re-imports after a rotation — decided by the owner 2026-10-02:
+  accepted as a known limitation.** Not new — it is what option (b) (2026-08-09) always
+  meant — and it qualifies the charter's *"users never re-add anything"* for this family;
+  the dialog says so to the operator, and the charter now says it holds for
+  subscription-link users only (`docs/decisions.md`, 2026-10-02).
 
 ---
 

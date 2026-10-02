@@ -34,6 +34,11 @@ What it must see with its own eyes:
   config-file link again and re-import. Inherent in option (b) (2026-08-09), not
   introduced by M24 — the dialog now says it instead of the opposite. Whether the charter
   wording should be narrowed, or the family needs something more, is the owner's call.
+- **Answered by the owner, 2026-10-02 (appended, the entry above left as it was):**
+  accepted as a known limitation. A config-file user re-downloads and re-imports their
+  `.conf` after a key rotation or a replaced node; "users never re-add anything" holds for
+  subscription-link users only. Recorded in `docs/decisions.md` (2026-10-02, "A CONFIG-FILE
+  USER RE-IMPORTS AFTER A CHANGE…") and stated in `docs/product/charter.md`. Closed.
 
 ## Known, not fixed here
 
