@@ -11,7 +11,8 @@ What it must see with its own eyes:
    blocks, *subscription link* then *config-file link*, each with its own copy button
    (*copy subscription link*, *copy config-file link*). Under the subscription link:
    "Carries nothing <nick> holds today, and opens as an empty document — not an error."
-   Under the config-file link: "Carries for <nick>: amneziawg."
+   Under the config-file link: "Carries for <nick>: amneziawg." once the node is active
+   (before that, "…amneziawg arrives in it once its node is serving").
 2. **The copy button copies the right one.** Paste each into a text field — the second
    ends in `?format=client-config-file`. (Stand tests read the DOM text, not the
    clipboard; `static/app.js` copies by element id, which is now `subscription-url-N`.)
@@ -26,11 +27,16 @@ What it must see with its own eyes:
 6. **The Nodes screen** row for an offered `amneziawg` reads "…gets it from the config-file
    link shown beside their subscription link under “show link” on the Users screen".
 
+## Open owner question
+
+- **"Users never re-add anything" does not hold for a config-file user.** An imported
+  `.conf` does not refresh: after a key rotation or a replaced node they download the
+  config-file link again and re-import. Inherent in option (b) (2026-08-09), not
+  introduced by M24 — the dialog now says it instead of the opposite. Whether the charter
+  wording should be narrowed, or the family needs something more, is the owner's call.
+
 ## Known, not fixed here
 
-- **A config-file user re-imports after a rotation or a replaced node.** The dialog now
-  says so; the charter's "users never re-add anything" does not hold for this family and
-  never did (option (b), 2026-08-09). An owner question, not an M24 defect.
 - **Per-host delivery URLs (M27.7)** are still composed by no screen — M27's, not M24's.
 - The 3 edge failures in `tests/edge/test_upstream_validation.py` (`[wireguard]`) are
   environmental (the system `wg-quick` calls `sudo`). Reported, not fixed.

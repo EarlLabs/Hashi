@@ -1,7 +1,7 @@
 agent: alfred
 role: overseer
 task: "M24 — the panel shows the URL that delivers a config-file transport (one URL per config shape)"
-state: in_progress
-progress: "built; gate running; review-loop next"
+state: done
+progress: "built; review-loop converged in round 1 (0 critical/high; 1 medium fixed as M24.3); awaits the orchestrator's real-host walk"
 blockers: null
 updated_at: 2026-10-02T00:00:00Z

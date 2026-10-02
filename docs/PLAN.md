@@ -4447,7 +4447,7 @@ Take a user on a node serving only `amneziawg`. Follow exactly what the panel
 hands the operator — nothing learned from the source — and get a working
 configuration onto a device.
 
-### What was built (M24.1–M24.2)
+### What was built (M24.1–M24.3)
 
 - **M24.1 (control)** — `console.links_for` composes every URL a user is handed: the
   subscription link always (byte for byte the old one), and the same token asking
@@ -4472,6 +4472,21 @@ configuration onto a device.
   - **"One subscription URL"** removed from the five sentences that said it.
 - **M24.2 (docs)** — runbook Shape A step 4 and *The two families are delivered
   differently* follow the dialog; this section; `docs/decisions.md`; `docs/tracker/M24/`.
+
+### What closed (2026-10-02)
+
+M24.1–M24.3 in code (M24.3 is review round 1's one medium finding: a link no longer says it
+*carries* a transport whose node is draft or degraded). Gate: control 1127 passed / 2
+skipped (throwaway Postgres); edge 968 passed / 14 skipped / 3 failed (the known
+environmental `[wireguard]` cases in `test_upstream_validation.py`); infra 553 passed;
+`make e2e-verify` **231 passed / 16 skipped** on M24.1+M24.2, and on the re-run after M24.3
+229 passed / 16 skipped / **2 failed — both Docker Hub pulls timing out** (`caddy` manifest,
+`amneziawg-go` pull, in `tests/e2e/edge/`; no M24 file is involved, and every control
+scenario, the new one included, passed in both runs). The 16 skips include the bucket-restore
+scenarios (minio image unavailable), as in M31. Review: `reviewer-strict`, round 1 — 0
+critical, 0 high; 1 medium (fixed, M24.3), 1 low (owner question recorded in the tracker).
+Details: `docs/tracker/M24/step-notes.md`; what the real-host walk must see:
+`docs/tracker/M24/carry-over.md`.
 
 ### Not done here, deliberately
 
