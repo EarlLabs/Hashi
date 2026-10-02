@@ -722,6 +722,22 @@ line names, not root. The control plane never escalates on a node (*Which accoun
 so that account needs only what the script gave it: `/opt/hashi`, the `docker` group and
 the key.
 
+### What each role lets in
+
+Per role, so a box carrying two roles opens both rows. Every port is your own
+configuration's — read it off `sshd -T`, the Caddyfile and the node record.
+
+| Role | Inbound | Outbound |
+|---|---|---|
+| **C** control plane | its SSH port; Caddy's HTTP and HTTPS ports (the delivery endpoint) | SSH to every node's SSH port |
+| **E** entry | its SSH port, from the control plane; each user-facing transport's port; TCP 443 once it is a delivery host | the hop's UDP port, to the leaf |
+| **L** leaf | its SSH port, from the control plane; the hop's UDP port, from the entry | — |
+
+The control plane reaches its **own** box over SSH too, out through the public address and
+back in, so on a box that carries C and a node role that box's firewall must let SSH in
+from its own address — which the control-plane block's `ufw allow` for sshd's port, or the
+node script's run, already arranges.
+
 ### Register each box as a node
 
 In the panel — reached over the management tunnel or the SSH forward, never over the public
@@ -780,6 +796,9 @@ Skip this on a one-box install. Otherwise, from the panel's hop form: entry = E,
 transport = `amneziawg`. The entry dials the leaf, always — an entry sits behind a Russian
 carrier NAT and cannot be dialled — so L listens and E reaches out, on the port you opened
 when you prepared L.
+
+Users only ever hold the entry's address. A blocked leaf is replaced by preparing a new one
+and re-pointing this one hop at it, with nobody touching their device.
 
 A hop is never granted to a user and never appears in a subscription: a user holding the
 entry↔leaf tunnel would route straight past the entry the topology exists to hide behind.
@@ -1454,18 +1473,20 @@ for the apply the panel refuses too: withdrawing a host's last transport and pre
 the site and the key back first. That refused apply places no compose file, so the
 listener's container stays up with nothing left to serve until the next apply on that
 host succeeds. So the order for a host you are dropping is **withdraw its user-facing rows,
-Apply, and only then delete the record.**
+Apply, and only then retire the node** (its state, on the Nodes screen) — a retired node is
+one the panel will not let serve again, which no apply reaches (below), so the apply has to
+come first. There is no way to delete a node record.
 
 Three states no apply reaches, and in each the material stays on the host until you remove
 it yourself:
 
-- **a node the panel will not let serve again** — the Nodes screen already says nothing
+- **a node the panel will not let serve again** (retired) — the Nodes screen already says nothing
   from here reaches that host, and the way back is a new record;
 - **a node that is not serving when a user is revoked** — the revocation applies only to
   nodes in service, so a degraded or draft host keeps that user's rendered subscription
   until it is repaired and applied;
-- **a node whose record is deleted** — nothing ever applies to it again, which is why the
-  order above deletes last.
+- **a node whose record is gone** — removed from the database by hand, or lost with a
+  database restored from a backup older than it: nothing here knows the host exists.
 
 By hand, on the host, as the account it was driven as:
 

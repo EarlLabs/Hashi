@@ -3973,7 +3973,8 @@ decision.** The owner runs the co-located arrangement, **C+E | L**: control plan
 on one box in Russia, several leaves abroad. There the host users refresh from is the
 control plane's own `HASHI_PUBLIC_HOST`, served by its own Caddy under the ordinary
 certificate Caddy obtains for that name, and by M27.4's predicate no node in that fleet is
-a delivery host — so no wildcard is pushed anywhere, issued by hand or by this milestone.
+a delivery host while no delivery certificate is configured (the shipped default, which
+that arrangement never needs to change) — so no wildcard is pushed anywhere, issued by hand or by this milestone.
 **It stays PROPOSED for the split arrangements** (C+L | E, C | E | L), where an entry answers
 its own users' refreshes under the wildcard. The owner approved adding a dependency for it
 in principle (`docs/decisions.md`, 2026-10-02) and has not chosen one, nor a DNS provider;

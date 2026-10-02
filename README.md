@@ -3,7 +3,9 @@
 A self-hosted, multi-protocol VPN for its owner and a small circle of users,
 built to keep working from Russia: a Russian entry node fronting foreign exit
 nodes, where **both nodes and protocols are data** — either can be added, swapped
-or destroyed in minutes without anyone touching their device.
+or destroyed in minutes without anyone touching their device — for users on a
+subscription link; a user on a WireGuard-family protocol re-imports a config file after
+a change (accepted by the owner, 2026-10-02).
 
 Not a product, not a business, not advertised. See
 [`docs/product/charter.md`](docs/product/charter.md) for what it is and — more
