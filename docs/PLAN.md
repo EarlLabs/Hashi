@@ -3875,6 +3875,140 @@ command to get there.
 
 ---
 
+## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer)
+
+**Asked for by the owner on 2026-10-02:** fix every defect the real-host field walk and the
+restore walk found that day. Branch `task/M31`, stacked on `task/M26-fix-round-5` (not yet
+merged to `develop`). Code, tests and a disposable stand only — **no real host is touched by
+this milestone**; the re-walk that accepts it is a separate act.
+
+Each step is one defect, in the owner's priority order: the command that was run, what was
+observed, and what is expected instead. Each closes with a test that was red before it,
+where the defect is testable at all.
+
+### M31.1 — (high, infra) An unpublished stack must not ask a public CA for anything
+
+`make restore-from-bucket` (and `make panel-bootstrap`) bring up the BASE stack, which
+publishes no port. On the restore walk `/data/caddy/acme` already held Let's Encrypt and
+ZeroSSL accounts, an `issue_cert_<host>.lock` and a ZeroSSL challenge token: Caddy started
+public issuance for `HASHI_PUBLIC_HOST` the moment it booted. The runbook promises it asks
+a CA only once the name resolves here and 80/443 are published. Every failed validation
+counts against the live domain's rate limits — during a disaster restore, of all times.
+
+**Done when**
+- [ ] The base stack's Caddy serves the public name from its own CA and asks no public CA;
+      only the publishing overlay (`deploy/docker-compose.public.yml`, used by
+      `make up-panel` and `make up-panel-over-ssh`) switches public issuance on.
+- [ ] A static test holds the Caddyfile and the overlays to that, and an e2e test asks the
+      real Caddy which issuer each of the two shapes configures.
+- [ ] The runbook (DNS, "does not do" item 2) and the restore's closing screen say what is
+      now true.
+
+### M31.2 — (high, infra/control) `HASHI_FINDING_REMEASURE_INTERVAL` never reached the control plane
+
+Set in `.env`, `env | grep` inside `control` showed nothing: the variable is not in
+`deploy/docker-compose.yml`'s `control.environment`, which is the whole list of what the
+control plane can read. `tests/infra/test_compose.py` has a rule for exactly this and did
+not fire.
+
+**Done when**
+- [ ] It is passed through, and documented in `.env.example` with what `0` means.
+- [ ] The rule that missed it is fixed so it would have caught it, and the reason it missed
+      is written down.
+- [ ] A control plane restored from a bucket does not start dialling nodes on its own before
+      the operator has published the panel — or, at minimum, the runbook says how to set
+      the interval to 0.
+
+### M31.3 — (high, control) An apply cannot repair a daemon whose config did not change
+
+Remove the hop peer live on the leaf (`awg set <if> peer <key> remove`), then apply: 502,
+"…pushed, but up and not serving … Probe it in a minute: a slow host often comes up just
+after this wait ends." The digest had not changed, so `docker compose up -d` left the
+container alone, and it went on not serving; only `docker compose restart <transport>` fixed
+it, and the message pointed somewhere else.
+
+**Done when**
+- [ ] An apply that finds a transport running the pushed configuration, refused by its own
+      reading, in a container this apply did not restart, restarts that service once and
+      measures again; the verdict is the second measurement's.
+- [ ] When that restart did not help, the message says so and does not send the operator to
+      wait for a slow host.
+- [ ] The choice is a row in `docs/decisions.md`.
+
+### M31.4 — (medium, control) The API cannot show a node's last probe finding
+
+`GET /api/nodes` read `active`, `state_detail: null`, while the apply had just said "the
+finding stays on its row" — it does, in `last_probe_finding`, which `NodeResponse` does not
+carry.
+
+**Done when**
+- [ ] `NodeResponse` carries the finding and when it was taken; a test reads it back after
+      an apply that kept a node in service.
+
+### M31.5 — (medium, control) `serving_unmeasured: []` for a transport nothing but its port can confirm
+
+`vless-reality` declares no serving question, so it is confirmed by its held port and an
+apply returns `serving_unmeasured: []` — while the schema says an empty list is the only
+case where 200 means "pushed and measured".
+
+**Done when**
+- [ ] The response says which configs were confirmed by their port alone, and the schema's
+      contract says what an empty `serving_unmeasured` does and does not mean.
+- [ ] The choice is a row in `docs/decisions.md`.
+
+### M31.6 — (medium, infra) A restore says nothing about what the artifact held
+
+Restoring an artifact with 0 rows printed "The control plane is back, with the users, nodes
+and tokens that artifact held." with no counts, so a backup older than the fleet looks the
+same as a good one.
+
+**Done when**
+- [ ] Every restore prints how many nodes and users the restored database holds, and says so
+      plainly when that is none.
+
+### M31.7 — (low, infra/docs) No `bash` on the host
+
+`make restore-from-bucket` on a host without bash → `env: can't execute 'bash'`, exit 127,
+before any prerequisite check.
+
+**Done when**
+- [ ] The Makefile checks for bash before any target that runs one of the bash scripts, with
+      a sentence naming it; the runbook's "What every box must already have" lists it.
+
+### M31.8 — (low, infra) Two accounts of what to do after a restore
+
+Mid-output: "Restart the control plane so it reconnects: make restart-control" and "the app
+will say so loudly on first use"; the closing screen and runbook: one command does the rest
+and a wrong key shows only in the panel. On the walk `/sub` served without a restart.
+
+**Done when**
+- [ ] One account, true in both paths, said once by the script and repeated by the runbook.
+
+### M31.9 — (low, infra) The restore names the wrong compose project
+
+"compose project: <default: the directory name>" — the real project is `hashi` (`name:` in
+the compose file).
+
+**Done when**
+- [ ] The confirmation names the project the running database actually belongs to.
+
+### M31.10 — (low, docs) Shape B: which account to register for an entry on the control-plane host
+
+When the entry shares the host with the control plane and root key login is not wanted, the
+runbook does not say which `ssh_user` to register. On the field walk `node-bootstrap --user
+<account>` with passwordless sudo worked, and the control container reached the host by its
+own public address.
+
+**Done when**
+- [ ] Shape B says it, with placeholders and no real address or account name.
+
+### Acceptance
+
+**Yes — a real-host re-walk**, run by the orchestrator after this milestone lands, not by
+the implementer. What it must confirm is in `docs/tracker/M31/carry-over.md`.
+
+---
+
 ## → M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27
 
 **Deferred out of M27.6 on purpose, and the reason is `CLAUDE.md`'s own rule.** The owner chose
