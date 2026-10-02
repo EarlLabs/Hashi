@@ -51,8 +51,11 @@ tool (exit 127) applies, unmeasured, refused by nothing.
   recovers) is still untested anywhere; the re-measure loop is now what is expected to
   clear its finding.
 
-## Still open, named
+## Decided by the owner the same day, and built
 
-- An apply that cannot reach an ACTIVE host at all (SSH connect timeout) still degrades
-  it, and so still empties a one-node link. That is an operation failure rather than a
-  health reading and is the owner's to decide.
+- An apply that cannot reach an ACTIVE host at all (no session opened, nothing written)
+  no longer degrades it: it stays in every link and the operator is warned. Test:
+  `test_a_serving_node_nobody_could_reach_stays_in_every_link` (red before: the link
+  decoded to `''`). Unchanged, with tests: a draft that cannot be reached stays out; a
+  host that drops after the session opened is still degraded (§4). A record with no
+  usable SSH address or key still degrades (`target_for`) — see the decisions row.
