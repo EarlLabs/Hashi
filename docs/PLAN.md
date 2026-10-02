@@ -3875,7 +3875,7 @@ command to get there.
 
 ---
 
-## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer)
+## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · built 2026-10-02, review clean in round 1 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer), PENDING
 
 **Asked for by the owner on 2026-10-02:** fix every defect the real-host field walk and the
 restore walk found that day. Branch `task/M31`, stacked on `task/M26-fix-round-5` (not yet
@@ -3896,12 +3896,12 @@ a CA only once the name resolves here and 80/443 are published. Every failed val
 counts against the live domain's rate limits — during a disaster restore, of all times.
 
 **Done when**
-- [ ] The base stack's Caddy serves the public name from its own CA and asks no public CA;
+- [x] The base stack's Caddy serves the public name from its own CA and asks no public CA;
       only the publishing overlay (`deploy/docker-compose.public.yml`, used by
       `make up-panel` and `make up-panel-over-ssh`) switches public issuance on.
-- [ ] A static test holds the Caddyfile and the overlays to that, and an e2e test asks the
+- [x] A static test holds the Caddyfile and the overlays to that, and an e2e test asks the
       real Caddy which issuer each of the two shapes configures.
-- [ ] The runbook (DNS, "does not do" item 2) and the restore's closing screen say what is
+- [x] The runbook (DNS, "does not do" item 2) and the restore's closing screen say what is
       now true.
 
 ### M31.2 — (high, infra/control) `HASHI_FINDING_REMEASURE_INTERVAL` never reached the control plane
@@ -3912,10 +3912,10 @@ control plane can read. `tests/infra/test_compose.py` has a rule for exactly thi
 not fire.
 
 **Done when**
-- [ ] It is passed through, and documented in `.env.example` with what `0` means.
-- [ ] The rule that missed it is fixed so it would have caught it, and the reason it missed
+- [x] It is passed through, and documented in `.env.example` with what `0` means.
+- [x] The rule that missed it is fixed so it would have caught it, and the reason it missed
       is written down.
-- [ ] A control plane restored from a bucket does not start dialling nodes on its own before
+- [x] A control plane restored from a bucket does not start dialling nodes on its own before
       the operator has published the panel — or, at minimum, the runbook says how to set
       the interval to 0.
 
@@ -3928,12 +3928,12 @@ container alone, and it went on not serving; only `docker compose restart <trans
 it, and the message pointed somewhere else.
 
 **Done when**
-- [ ] An apply that finds a transport running the pushed configuration, refused by its own
+- [x] An apply that finds a transport running the pushed configuration, refused by its own
       reading, in a container this apply did not restart, restarts that service once and
       measures again; the verdict is the second measurement's.
-- [ ] When that restart did not help, the message says so and does not send the operator to
+- [x] When that restart did not help, the message says so and does not send the operator to
       wait for a slow host.
-- [ ] The choice is a row in `docs/decisions.md`.
+- [x] The choice is a row in `docs/decisions.md`.
 
 ### M31.4 — (medium, control) The API cannot show a node's last probe finding
 
@@ -3942,7 +3942,7 @@ finding stays on its row" — it does, in `last_probe_finding`, which `NodeRespo
 carry.
 
 **Done when**
-- [ ] `NodeResponse` carries the finding and when it was taken; a test reads it back after
+- [x] `NodeResponse` carries the finding and when it was taken; a test reads it back after
       an apply that kept a node in service.
 
 ### M31.5 — (medium, control) `serving_unmeasured: []` for a transport nothing but its port can confirm
@@ -3952,9 +3952,9 @@ apply returns `serving_unmeasured: []` — while the schema says an empty list i
 case where 200 means "pushed and measured".
 
 **Done when**
-- [ ] The response says which configs were confirmed by their port alone, and the schema's
+- [x] The response says which configs were confirmed by their port alone, and the schema's
       contract says what an empty `serving_unmeasured` does and does not mean.
-- [ ] The choice is a row in `docs/decisions.md`.
+- [x] The choice is a row in `docs/decisions.md`.
 
 ### M31.6 — (medium, infra) A restore says nothing about what the artifact held
 
@@ -3963,7 +3963,7 @@ and tokens that artifact held." with no counts, so a backup older than the fleet
 same as a good one.
 
 **Done when**
-- [ ] Every restore prints how many nodes and users the restored database holds, and says so
+- [x] Every restore prints how many nodes and users the restored database holds, and says so
       plainly when that is none.
 
 ### M31.7 — (low, infra/docs) No `bash` on the host
@@ -3972,7 +3972,7 @@ same as a good one.
 before any prerequisite check.
 
 **Done when**
-- [ ] The Makefile checks for bash before any target that runs one of the bash scripts, with
+- [x] The Makefile checks for bash before any target that runs one of the bash scripts, with
       a sentence naming it; the runbook's "What every box must already have" lists it.
 
 ### M31.8 — (low, infra) Two accounts of what to do after a restore
@@ -3982,7 +3982,7 @@ will say so loudly on first use"; the closing screen and runbook: one command do
 and a wrong key shows only in the panel. On the walk `/sub` served without a restart.
 
 **Done when**
-- [ ] One account, true in both paths, said once by the script and repeated by the runbook.
+- [x] One account, true in both paths, said once by the script and repeated by the runbook.
 
 ### M31.9 — (low, infra) The restore names the wrong compose project
 
@@ -3990,7 +3990,7 @@ and a wrong key shows only in the panel. On the walk `/sub` served without a res
 the compose file).
 
 **Done when**
-- [ ] The confirmation names the project the running database actually belongs to.
+- [x] The confirmation names the project the running database actually belongs to.
 
 ### M31.10 — (low, docs) Shape B: which account to register for an entry on the control-plane host
 
@@ -4000,7 +4000,19 @@ runbook does not say which `ssh_user` to register. On the field walk `node-boots
 own public address.
 
 **Done when**
-- [ ] Shape B says it, with placeholders and no real address or account name.
+- [x] Shape B says it, with placeholders and no real address or account name.
+
+### What closed (2026-10-02)
+
+All ten in code, each with a test that was red before it except M31.10 (docs). Gate: control
+1118 passed / 2 skipped (throwaway Postgres); edge 968 passed / 14 skipped / 3 failed (the
+known environmental `wireguard` cases in `test_upstream_validation.py`); infra 553 passed;
+`make e2e-verify` 230 passed / 16 skipped. **Among the skips are the bucket-restore
+scenarios (S13–S17, the minio image is not available here)** — so the restore-from-bucket
+screen (counts, hold, restart) is proven statically and on the file-restore path only, and
+the re-walk is the first run of it end to end. Review: `reviewer-strict`, round 1, CLEAN, no
+medium or low findings. Details: `docs/tracker/M31/step-notes.md`; what the re-walk must see:
+`docs/tracker/M31/carry-over.md`.
 
 ### Acceptance
 

@@ -36,6 +36,13 @@ it must see with its own eyes, in priority order.
 
 ## Known, not fixed here
 
+- **The bucket-restore e2e scenarios were SKIPPED in this run** (S13–S17 in
+  `tests/e2e/infra/test_restore_proves_the_backup.py`: the pinned minio image could neither
+  be pulled nor found locally). Their M31 assertions — counts on the closing screen, "It
+  dials no node on its own", "Restarted the control plane" — are therefore unrun; the file
+  restore path (`make restore`, which shares `command_restore`) ran and passed with the
+  restart and the counts. Item 2 and 6 above are the first end-to-end run of the bucket path.
+
 - The 3 edge failures in `tests/edge/test_upstream_validation.py` are environmental (the
   system `wg-quick` calls `sudo`, which the sandbox blocks). Reported, not fixed.
 - The panel shows no port-only qualifier on a healthy apply (M31.5 is API-only, recorded
