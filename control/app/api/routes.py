@@ -188,6 +188,8 @@ async def apply_node(node_id: str, session: AsyncSession = Depends(session_depen
         node_id=node_id,
         transports_applied=sorted(applied.configs),
         serving_unmeasured=list(applied.unmeasured),
+        serving_port_only=list(applied.port_only),
+        restarted_to_serve=list(applied.restarted),
     )
 
 

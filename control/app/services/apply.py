@@ -28,7 +28,7 @@ HOW:  the order is the contract, and every step exists because skipping it produ
 import datetime
 import enum
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -1196,8 +1196,20 @@ class Applied:
 
     # Placed configs (and the delivery listener, when one was placed) that stayed up and
     # whose serving this apply could NOT establish — ``serving.Settled.unchecked``.
-    # Empty is the only state in which a caller may say the apply measured the node.
+    # Empty is the state in which a caller may say the apply measured every config —
+    # and, since M31.5, ``port_only`` says how strongly.
     unmeasured: tuple[str, ...] = ()
+
+    # Placed configs measured serving by their HELD PORT alone, because their transport
+    # declares no serving question of its own — ``serving.Settled.port_only``, M31.5.
+    # Measured, and weaker than the rest: anything holding the number satisfies it.
+    port_only: tuple[str, ...] = ()
+
+    # Placed configs this apply found running the configuration it pushed and refused by
+    # their own reading, in a container its ``up -d`` had left alone, and therefore
+    # restarted once — M31.3. Only a 200 returns this, so nothing refused a name here
+    # after the restart; one still refused is named in the 502 instead.
+    restarted: tuple[str, ...] = ()
 
 
 # What an apply that was refused by its own measurement says and records about a node it
@@ -1208,9 +1220,79 @@ class Applied:
 KEPT_IN_SERVICE = (
     "configuration was applied but the node is not confirmed serving it: {detail}. It "
     "stays in users' links — a health reading never takes a node out of them — and the "
-    "finding stays on its row until a later probe or apply measures it serving. Probe it "
-    "in a minute: a slow host often comes up just after this wait ends."
+    "finding stays on its row until a later probe or apply measures it serving. {advice}"
 )
+
+# What to do next, chosen by what this apply already tried — M31.3. The first was the only
+# advice there was, and the field walk read it about a daemon with its peer removed live:
+# the config had not changed, so ``up -d`` never touched the container, and no amount of
+# waiting or re-applying would have. Since M31.3 such a container is restarted by the apply
+# itself; when it STILL does not serve, waiting is the wrong advice, so this says what the
+# restart ruled out.
+WAIT_FOR_A_SLOW_HOST = (
+    "Probe it in a minute: a slow host often comes up just after this wait ends."
+)
+RESTART_DID_NOT_HELP = (
+    "This apply restarted {names} on the configuration {it} already had, and {it} still "
+    "{is_} not serving it, so waiting will not help: what {it} {was} given does not work "
+    "on that host. Check what the other end of {its} tunnel expects — its key, address "
+    "and port — and read the container's own output on the node."
+)
+
+
+def next_step(failing: Collection[str], restarted: Collection[str]) -> str:
+    """The advice that ends a not-serving verdict: wait, unless waiting was ruled out.
+
+    Waiting is ruled out for exactly the configs this apply restarted and that are still
+    failing — a container restarted on its own file and still refused has not been caught
+    starting slowly. Every other failing config was (re)started by this apply's ``up -d``
+    moments ago, and for those a slow start is still the likeliest story.
+    """
+    exhausted = sorted(set(failing) & set(restarted))
+    if not exhausted:
+        return WAIT_FOR_A_SLOW_HOST
+    one = len(exhausted) == 1
+    return RESTART_DID_NOT_HELP.format(
+        names=", ".join(exhausted),
+        it="it" if one else "they",
+        its="its" if one else "their",
+        is_="is" if one else "are",
+        was="was" if one else "were",
+    )
+
+
+def left_alone_and_refused(
+    before: node_stack.RunningContainers,
+    settled: serving.Settled,
+    watched: Mapping[str, str],
+) -> tuple[str, ...]:
+    """The configs a restart can repair and ``up -d`` could not — M31.3.
+
+    All three, and each one is what keeps this from restarting something it should not:
+
+    * REFUSED BY A READING — its transport's own question answered NO, or a definite
+      socket table without its port. Never "nobody could ask": a host missing a tool is
+      not repaired by restarting a daemon.
+    * RUNNING WHAT WAS PUSHED — its container was created with the digest of the
+      configuration this apply placed. A container on an older definition is ``stale``,
+      a different fault with a different repair.
+    * LEFT ALONE BY THIS APPLY — the same life of the same container before the ``up -d``
+      as after the settle. A container this apply just (re)created and that has not served
+      yet is a slow start, the case walk 4's false red was; restarting it would throw the
+      start away and begin again. Only a container ``up -d`` did not touch is one nothing
+      has tried to repair.
+    """
+    refused = set(settled.not_serving) | set(settled.not_listening)
+    return tuple(
+        sorted(
+            name
+            for name in refused
+            if name in watched
+            and settled.staying_up.get(name) == node_stack.digest_of(watched[name])
+            and before.started.get(name)
+            and before.started.get(name) == settled.started.get(name)
+        )
+    )
 KEPT_IN_SERVICE_FINDING = (
     "an apply could not confirm it is serving what it was given ({detail}); still in "
     "users' links"
@@ -1463,6 +1545,8 @@ async def apply_node(
     # 2026-10-02. False until the line inside ``async with`` runs, so a NodeUnreachable
     # raised while it is False is a host this apply never reached and never wrote to.
     reached = False
+    # What this apply restarted to repair (M31.3). Empty until the settle has spoken.
+    restarted: tuple[str, ...] = ()
     try:
         async with NodeConnection(target) as connection:
             reached = True
@@ -1503,6 +1587,12 @@ async def apply_node(
                 connection,
                 compose=compose_with_delivery if serves_delivery else compose,
             )
+            # WHICH LIFE OF EACH CONTAINER WAS RUNNING BEFORE ``up -d`` — M31.3. Read so
+            # that, once the settle below has refused something, this apply can tell a
+            # container its own ``up -d`` left alone (an unchanged definition) from one it
+            # just started. Only the first can be repaired by a restart and only the
+            # second can be a slow start; see ``left_alone_and_refused``.
+            before = await node_stack.running_containers(connection)
             await node_stack.restart(connection)
 
             # Verify rather than assume, and verify the right thing. `docker compose
@@ -1565,14 +1655,46 @@ async def apply_node(
             # Built from the render this apply is pushing, so the peers it compares
             # against are the peers this push authorises. The delivery listener declares
             # no question and is confirmed by its port as before.
+            checks = serving_checks(placed, configs)
             settled = await serving.confirm_serving(
                 connection,
                 expected=watched,
                 listeners=listeners,
-                checks=serving_checks(placed, configs),
+                checks=checks,
                 interval=node_settings.node_settle_interval,
                 timeout=node_settings.node_settle_timeout,
             )
+            # AND WHAT ``up -d`` CANNOT REPAIR, THIS APPLY RESTARTS — M31.3, the field
+            # walk of 2026-10-02. A wg-family daemon had its peer removed live on the
+            # host; its file, digest and definition were unchanged, so ``up -d`` left the
+            # container exactly as it was and every apply after that pushed the same file
+            # over a daemon still serving none of its peers — and said "probe it in a
+            # minute". ``docker compose restart`` of that one service repaired it. So a
+            # config this apply finds refused by its own reading, running what was
+            # pushed, in a container ``up -d`` did not touch, is restarted ONCE and the
+            # whole node measured again; the verdict below is that second measurement's.
+            #
+            # Once, and only those: a container this apply just started is given the
+            # settle window's patience rather than a restart (walk 4's slow host), and a
+            # second restart of one the first did not repair would be a loop with a
+            # longer wait in it. REJECTED: restarting every refused service — it throws
+            # away a slow host's start and begins it again, the false red walk 4 measured,
+            # made worse.
+            restarted = left_alone_and_refused(before, settled, watched)
+            if restarted:
+                logger.info(
+                    "restarting %d service(s) refused on an unchanged configuration",
+                    len(restarted),
+                )
+                await node_stack.restart_services(connection, restarted)
+                settled = await serving.confirm_serving(
+                    connection,
+                    expected=watched,
+                    listeners=listeners,
+                    checks=checks,
+                    interval=node_settings.node_settle_interval,
+                    timeout=node_settings.node_settle_timeout,
+                )
             loaded = settled.staying_up
             # A crash loop and a container that was never created are both "it did not
             # come up" to the operator, and they are one clause below because the repair
@@ -1607,6 +1729,7 @@ async def apply_node(
             # below: where the last probe's finding is either contradicted or left
             # standing, and in what the apply tells the operator it established.
             unmeasured = tuple(settled.unchecked)
+            port_only = tuple(settled.port_only)
 
             # THE DELIVERY MATERIAL, LAST — M27.2, and the position is the decision.
             # Placing it before the restart would put a file nothing reads between a
@@ -1786,7 +1909,12 @@ async def apply_node(
                 )
             else:
                 await session.commit()
-            raise ConfigNotServing(KEPT_IN_SERVICE.format(detail=detail))
+            raise ConfigNotServing(
+                KEPT_IN_SERVICE.format(
+                    detail=detail,
+                    advice=next_step([*not_running, *not_listening, *not_serving], restarted),
+                )
+            )
         await _record_failure(session, node, detail, granted)
         # ``ConfigNotServing`` since M23, and the type is the whole of the change — this
         # sentence was already true on the apply banner. What was not true was the
@@ -1805,6 +1933,11 @@ async def apply_node(
             f"configuration was applied but the node is not serving it — marked "
             f"degraded: {detail}"
         )
+        # Only the restart's half of the advice (M31.3): a node not yet in service is not
+        # told to probe in a minute — its way into users' links is an apply, not a probe.
+        exhausted = set(restarted) & {*not_running, *not_listening, *not_serving}
+        if exhausted:
+            not_serving = f"{not_serving}. {next_step(exhausted, restarted)}"
         raise ConfigNotServing(
             f"{not_serving} {ORPHANED_ON_THE_HOST}" if granted else not_serving
         )
@@ -1958,7 +2091,9 @@ async def apply_node(
 
     await session.commit()
     logger.info("node applied: %s (%d transports)", node.id, len(configs))
-    return Applied(configs=configs, unmeasured=unmeasured)
+    return Applied(
+        configs=configs, unmeasured=unmeasured, port_only=port_only, restarted=restarted
+    )
 
 
 class NotUpdated(enum.StrEnum):

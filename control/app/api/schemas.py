@@ -57,6 +57,16 @@ class NodeResponse(BaseModel):
     resolver: str | None
     state: str
     state_detail: str | None
+    # What the last measurement of this host found, and when — M31.4. ``state_detail`` is
+    # only ever the reason a node was taken OUT of service; since fix round 5 a node left
+    # IN service carries its verdict here instead, and the field walk read ``active``,
+    # ``state_detail: null`` beside an apply that had just said "the finding stays on its
+    # row" — a row this response did not show. ``null`` finding with a time is a probe
+    # that found nothing; both ``null`` is a host nobody has measured since it was last
+    # applied. The sentence names transports and containers, never a person (see
+    # ``nodes.record_probe``).
+    last_probe_finding: str | None = None
+    last_probe_at: datetime.datetime | None = None
     created_at: datetime.datetime
 
 
@@ -251,12 +261,28 @@ class RevocationResponse(BaseModel):
 class ApplyResponse(BaseModel):
     node_id: str
     transports_applied: list[str]
-    # What this apply pushed and could NOT measure serving — fix round 5. Empty is the
-    # only answer under which a 200 means "pushed and measured"; a name here is a config
-    # that stayed up, was refused by nothing and was confirmed by nothing either (an image
-    # without its transport's own check, a host without ``ss``). Its own field because the
-    # walk read a success that could not take the reading byte-identical to one that did.
+    # What this apply pushed and could NOT measure serving — fix round 5. A name here is a
+    # config that stayed up, was refused by nothing and was confirmed by nothing either (an
+    # image without its transport's own check, a host without ``ss``). Its own field
+    # because the walk read a success that could not take the reading byte-identical to one
+    # that did.
+    #
+    # EMPTY MEANS EVERY CONFIG WAS MEASURED, AND NOT HOW STRONGLY — M31.5. This comment
+    # used to call an empty list "pushed and measured", and the field walk read exactly
+    # that for ``vless-reality``, whose only measurement is that something holds its port.
+    # How each config was measured is the next field.
     serving_unmeasured: list[str] = Field(default_factory=list)
+    # Configs measured serving by their HELD PORT alone, because their transport declares
+    # no serving question of its own — M31.5. Measured, and weaker than the rest: ``nc``
+    # holding the number satisfies it as well as the daemon does (M26, walk 4). A config
+    # in neither list answered its transport's own serving question YES.
+    serving_port_only: list[str] = Field(default_factory=list)
+    # Configs this apply found running the configuration it pushed, refused by their own
+    # reading, in a container its ``docker compose up -d`` had left alone — and restarted
+    # once, after which nothing refused them — M31.3 (whether something CONFIRMED them is
+    # the two fields above, as for every config). Named because a restart drops every
+    # session on that transport, and an apply that did one should say so.
+    restarted_to_serve: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

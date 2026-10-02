@@ -1806,6 +1806,28 @@ def applied_unmeasured(name: str, applied: Sequence[str], unmeasured: Sequence[s
     )
 
 
+# What the apply button says when the push landed and was measured — and, since M31.3, that
+# it restarted something to get there. A restart drops every session on that transport, so
+# an apply that did one says so rather than reading exactly like one that touched nothing.
+APPLIED_AFTER_RESTART = (
+    " — restarted {restarted}: {it} {was} running what {it} {was} given and not serving "
+    "it, and came back serving"
+)
+
+
+def applied_toast(name: str, applied: Sequence[str], restarted: Sequence[str] = ()) -> str:
+    """The apply button's answer when everything it pushed was measured and not refused."""
+    toast = f"config applied to {name} — {', '.join(applied)}"
+    if restarted:
+        one = len(restarted) == 1
+        toast += APPLIED_AFTER_RESTART.format(
+            restarted=", ".join(restarted),
+            it="it" if one else "they",
+            was="was" if one else "were",
+        )
+    return toast
+
+
 def probe_note(node: Node) -> str | None:
     """What the last probe of this node found, or ``None`` when there is nothing to say.
 

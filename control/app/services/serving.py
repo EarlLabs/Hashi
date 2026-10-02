@@ -85,7 +85,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from edge.bootstrap import NodeConnection, node_stack
 from edge.health import listening
@@ -170,6 +170,20 @@ class Settled:
     # and a duration reads as a promise about how long the next one will take.
     waited: float
     readings: int
+
+    # Config names that are SERVING by the only reading their transport offers — the held
+    # port — because the transport declares no serving question of its own. Sorted, and a
+    # subset of ``serving``. M31.5: such a config is measured, but by "something holds
+    # this number", which ``nc`` satisfies as well as the daemon does (walk 4); a caller
+    # that says what an apply established has to be able to say this part was the weaker
+    # reading. Empty when every serving config answered its transport's own question.
+    port_only: tuple[str, ...] = ()
+
+    # Service name → the opaque token for the LIFE of the container the last reading saw
+    # (``RunningContainers.started``) — M31.3. Exposed so a caller holding a reading taken
+    # BEFORE it acted can tell a container its own action restarted from one it left
+    # alone; compared for equality and never read as a time, the rule that type states.
+    started: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def serving(self) -> dict[str, str]:
@@ -434,6 +448,16 @@ def _answer(
         and name not in not_serving
         and not _confirmed(current, listeners, name)
     }
+    # Confirmed, and confirmed by the port because no question of the transport's own was
+    # put: a config that declared one has an entry in ``answers`` (``_confirmed``).
+    port_only = {
+        name
+        for name in staying_up
+        if name not in not_listening
+        and name not in not_serving
+        and name not in unchecked
+        and name not in current.answers
+    }
     answer = Settled(
         staying_up=dict(staying_up),
         restarting=tuple(restarting),
@@ -443,6 +467,8 @@ def _answer(
         unchecked=tuple(sorted(unchecked)),
         waited=time.monotonic() - started_at,
         readings=readings,
+        port_only=tuple(sorted(port_only)),
+        started=dict(current.containers.started),
     )
     # No node name, no address, no transport parameters, and no PORT — the same rule
     # every log line in this zone keeps, and the socket reading makes the last of those

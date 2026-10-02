@@ -610,6 +610,15 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def restart(connection) -> None:
         return None
 
+    async def restart_services(connection, services) -> None:
+        # M31.3's repair — a restart of a service ``up -d`` left alone and that a reading
+        # refused. This double's containers keep ONE life for the whole test (see
+        # ``running_containers`` below), so every refused config here reads as left alone,
+        # and a test that refuses one exercises the repair too. Accepted and recorded, like
+        # every other step of an apply on this node: whether it then serves is what the
+        # test's own readings say.
+        connection.restarted = [*getattr(connection, "restarted", []), *sorted(services)]
+
     async def running_containers(connection) -> node_stack.RunningContainers:
         # A node whose restart DID take: every container comes back on the config it
         # was just handed, and stays. ``digest_of`` is the real one, so this is the
@@ -670,6 +679,7 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned(monkeypatch, node_delivery_site, "remove_delivery_site", remove_delivery_site)
     pinned(monkeypatch, node_stack, "compose_projects", compose_projects)
     pinned(monkeypatch, node_stack, "restart", restart)
+    pinned(monkeypatch, node_stack, "restart_services", restart_services)
     pinned(monkeypatch, node_stack, "running_containers", running_containers)
 
 

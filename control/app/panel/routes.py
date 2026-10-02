@@ -2370,7 +2370,7 @@ async def apply_node(
         )
     return _mutation(
         request,
-        toast=f"config applied to {node.name} — {', '.join(sorted(applied.configs))}",
+        toast=console.applied_toast(node.name, sorted(applied.configs), applied.restarted),
         keeping=node.name,
         events="nodes-changed",
     )

@@ -80,6 +80,16 @@ class ServingHost:
         # restart — a half-written host.
         self.unreachable = False
         self.drops_at_restart = False
+        # M31.3: which LIFE of each container is running, and the digest it was CREATED
+        # with — the two things ``docker compose up -d`` decides by. A service whose
+        # definition did not change keeps its life across an ``up -d``, exactly as the
+        # engine leaves an unchanged container alone; ``docker compose restart`` starts
+        # a new one. ``peers_return_on_restart`` is the field walk's leaf: a peer removed
+        # live, which only the daemon re-reading its own file puts back.
+        self.lives: dict[str, int] = {}
+        self.created_with: dict[str, str] = {}
+        self.peers_return_on_restart = False
+        self.restarted: list[str] = []
 
     async def __aenter__(self):
         self.dialled += 1
@@ -126,17 +136,30 @@ class ServingHost:
             raise NodeUnreachable("command timed out or failed to start")
 
         if "docker compose up -d" in command:
-            self.services = list(
-                yaml.safe_load(self.files[node_stack.COMPOSE_PATH])["services"]
-            )
+            definitions = yaml.safe_load(self.files[node_stack.COMPOSE_PATH])["services"]
+            self.services = list(definitions)
+            for service, definition in definitions.items():
+                digest = definition["labels"][node_stack.CONFIG_DIGEST_LABEL]
+                # Recreated only when the definition changed — the engine's rule, and the
+                # reason a peer removed live survived every apply on the field walk.
+                if self.created_with.get(service) != digest:
+                    self.created_with[service] = digest
+                    self.lives[service] = self.lives.get(service, 0) + 1
+            return CommandResult(exit_status=0, stdout="", stderr="")
+
+        if "docker compose restart " in command:
+            named = command.split("docker compose restart ", 1)[1].split()
+            for service in named:
+                service = service.strip("'")
+                self.restarted.append(service)
+                self.lives[service] = self.lives.get(service, 0) + 1
+            if self.peers_return_on_restart:
+                self.peers = PEERS_HELD
             return CommandResult(exit_status=0, stdout="", stderr="")
 
         if "docker inspect" in command:
-            definitions = yaml.safe_load(self.files[node_stack.COMPOSE_PATH])["services"]
             lines = [
-                f"{service}"
-                f"|{definitions[service]['labels'][node_stack.CONFIG_DIGEST_LABEL]}"
-                f"|true|false|one-life"
+                f"{service}|{self.created_with[service]}|true|false|life-{self.lives[service]}"
                 for service in self.services
             ]
             return CommandResult(exit_status=0, stdout="\n".join(lines) + "\n", stderr="")
