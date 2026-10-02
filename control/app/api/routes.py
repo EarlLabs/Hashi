@@ -184,7 +184,11 @@ async def apply_node(node_id: str, session: AsyncSession = Depends(session_depen
     retired node active — see ``apply.apply_node``, which now asks the machine first.
     """
     applied = await apply.apply_node(session, node_id=node_id)
-    return schemas.ApplyResponse(node_id=node_id, transports_applied=sorted(applied))
+    return schemas.ApplyResponse(
+        node_id=node_id,
+        transports_applied=sorted(applied.configs),
+        serving_unmeasured=list(applied.unmeasured),
+    )
 
 
 @router.get("/nodes/{node_id}/health", response_model=schemas.HealthResponse)

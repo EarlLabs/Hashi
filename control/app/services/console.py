@@ -1779,6 +1779,33 @@ def delivery_note(node: Node, settings: Settings) -> str | None:
     )
 
 
+# What the apply button says when the push landed and the containers stayed up, and the
+# apply could NOT take the reading that says whether they are serving — fix round 5, walk
+# 4's third finding. The walk removed ``ss`` from a host and read a success line
+# byte-identical to a healthy run's. The state was already right (such an apply clears no
+# finding); this is the sentence catching up with it. It names what was not measured and
+# says what that costs, because "applied" alone reads as "applied and checked".
+APPLIED_UNMEASURED = (
+    "config applied to {node} — {applied}. Not measured serving: {unmeasured}. "
+    "{they} came up and stayed up, and this apply could not ask whether {it} {is_} "
+    "carrying anything — the host would not answer the check — so nothing here says "
+    "{it} {is_}, and any finding already on this node's row is kept."
+)
+
+
+def applied_unmeasured(name: str, applied: Sequence[str], unmeasured: Sequence[str]) -> str:
+    """The apply button's answer when part of what it pushed could not be measured."""
+    one = len(unmeasured) == 1
+    return APPLIED_UNMEASURED.format(
+        node=name,
+        applied=", ".join(applied),
+        unmeasured=", ".join(unmeasured),
+        they="It" if one else "They",
+        it="it" if one else "they",
+        is_="is" if one else "are",
+    )
+
+
 def probe_note(node: Node) -> str | None:
     """What the last probe of this node found, or ``None`` when there is nothing to say.
 
@@ -3175,6 +3202,14 @@ def health_summary(name: str, health: schemas.HealthResponse) -> str:
             "Its container is up and nothing holds the port that transport was given, "
             "so there is nothing on the node for anyone to reach."
         )
+    for transport in health.not_serving:
+        # The transport's own NO, in its own words — M26's fourth walk. Its port may well
+        # be held; that is exactly the case this sentence exists for.
+        means = health.serving_means.get(transport)
+        parts.append(
+            f"{transport} is up and failed its own serving check"
+            + (f": {means}." if means else ".")
+        )
     if health.drifted:
         parts.append(
             "Its configuration differs from the one we would push; applying again "
@@ -3202,20 +3237,31 @@ def _serving_summary(name: str, health: schemas.HealthResponse) -> str:
         return f"{name} answered, and has no transport enabled to serve"
 
     parts = []
-    if health.listening:
-        each = "each container is" if len(health.listening) > 1 else "its container is"
+    # The strongest reading first, in the transport's own words — M26's fourth walk. A
+    # transport that passed its own check is not ALSO described by the port sentence: a
+    # second, weaker claim about the same name reads as doubt about the first.
+    for transport in health.serving:
+        means = health.serving_means.get(transport)
         parts.append(
-            f"{name} is listening for {', '.join(health.listening)} — {each} up and "
-            f"something holds its port."
+            f"{name} passed {transport}'s own serving check"
+            + (f" — {means}." if means else ".")
         )
-    if health.unchecked_ports:
+    by_port = [t for t in health.listening if t not in health.serving]
+    if by_port:
+        each = "each container is" if len(by_port) > 1 else "its container is"
+        subject = f"{name} is also listening for" if health.serving else f"{name} is listening for"
+        parts.append(
+            f"{subject} {', '.join(by_port)} — {each} up and something holds its port."
+        )
+    unchecked = [t for t in health.unchecked_ports if t not in health.serving]
+    if unchecked:
         # The weaker claim, in its own sentence and in its own verb. These containers are
         # up on the configuration we pushed and that is the whole of what is known about
         # them: nothing asked whether anything is bound, so nothing here says it is.
-        subject = "It is also running" if health.listening else f"{name} is running"
-        parts.append(
-            f"{subject} {', '.join(health.unchecked_ports)}, whose port was not checked."
+        subject = (
+            "It is also running" if health.listening or health.serving else f"{name} is running"
         )
+        parts.append(f"{subject} {', '.join(unchecked)}, whose port was not checked.")
     parts.append(WHAT_A_PROBE_CANNOT_SEE)
     return " ".join(parts)
 

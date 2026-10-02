@@ -133,6 +133,17 @@ class Settings(BaseSettings):
     node_settle_timeout: float = 20.0
     node_settle_interval: float = 2.0
 
+    # How often, in seconds, this control plane re-measures a node that is IN SERVICE and
+    # carries a finding — fix round 5, walk 4's fourth finding. The walk saw a node serving
+    # at 0% loss 35 seconds after an apply's wait ended, with the panel still reading the
+    # verdict, because nothing measured again until a human pressed probe. Sixty seconds
+    # because a slow host's late start is the case, and it is measured in tens of seconds;
+    # and because each pass dials only the nodes that carry a finding, so a healthy fleet
+    # costs nothing. ``0`` turns it off — a setting rather than a constant for the
+    # settle window's reason: it is what a real fleet (or this test suite) has to be able
+    # to change. See ``services/health.remeasure_findings`` for what it may and may not do.
+    finding_remeasure_interval: float = Field(default=60.0, ge=0)
+
     # How long the audit trail keeps an entry, in days. Thirty rather than ninety or
     # forever: what the trail answers — did I do this, what did I change before it
     # broke — decays in days, while the risk it carries grows with every day it is

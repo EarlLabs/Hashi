@@ -47,6 +47,7 @@ from edge.bootstrap import NodeConnection, node_stack
 from edge.bootstrap import delivery as node_delivery
 from edge.bootstrap import delivery_site as node_delivery_site
 from edge.health import listening
+from edge.health import serving as serving_question
 from edge.registry import Layer4, discover
 
 # Where the tests find a database. Defaults to the dev stack's published Postgres, so
@@ -642,7 +643,18 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
         # so in its own file.
         return _EVERY_PORT_HELD
 
+    async def ask(connection, *, checks, about) -> dict[str, bool | None]:
+        # AND THE TRANSPORT'S OWN SERVING QUESTION — M26's fourth walk, fix round 5,
+        # which taught the apply to put it to every placed config whose transport
+        # declares one. Answered YES for each of them, for ``bound_ports``' reason: this
+        # double is the node where every step of an apply works, and a wg-family
+        # interface holding the peers it was given is part of that. Without it the
+        # double has no ``run`` and every apply of such a transport dies in the settle
+        # loop. A test about a node that answers NO builds its own fake and says so.
+        return {name: True for name in sorted(set(about)) if name in checks}
+
     pinned(monkeypatch, listening, "bound_ports", bound_ports)
+    pinned(monkeypatch, serving_question, "ask", ask)
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)

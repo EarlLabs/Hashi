@@ -31,6 +31,17 @@ WHY:  two acceptance walks, one fault each, and the second one is why the socket
       module asks the second question too, and it asks the one the probe already asks:
       **an apply may only clear a finding it has actually contradicted, with a
       measurement of the same kind.**
+
+      * **Walk 4.** The port question was defeated twice in one walk: once by ``nc -u -l``
+        on the number, and once — contriving nothing — by the real data plane with its
+        peer removed, which is what an ordinary wrong peer key leaves behind. Device up,
+        right daemon, right port, ``peers=[]``, 100% loss, and this module confirmed it.
+        A question about a SOCKET is answered by anything holding the number, so this
+        module now also puts each transport's OWN serving question to the node
+        (``TransportMeta.serving_question``, run by ``edge.health.serving``), and for a
+        transport that declares one, THAT is what confirms it — the held port no longer
+        does. A transport that declares none is confirmed by the port exactly as before,
+        which is the most anything can say about it and is said as no more.
 HOW:  three things make the answer stable, and none of them is a longer sleep.
 
       * **Two readings, not one.** A container that is up in two readings taken an
@@ -78,6 +89,8 @@ from dataclasses import dataclass
 
 from edge.bootstrap import NodeConnection, node_stack
 from edge.health import listening
+from edge.health import serving as serving_question
+from edge.health.serving import ServingCheck
 from edge.registry import Layer4
 
 logger = logging.getLogger(__name__)
@@ -126,14 +139,30 @@ class Settled:
     # nothing" to be the fault it has.
     not_listening: tuple[str, ...]
 
-    # Config names that stayed up and whose port question could not be asked at all:
-    # no port or no protocols were resolved for the row, or the node's socket table
-    # could not be read. Sorted, and also a subset of ``staying_up``.
+    # Config names that stayed up and whose transport's OWN serving question was asked and
+    # answered NO — walk 4's two hosts: a data plane replaced by something that holds the
+    # port, and the real one holding a port and none of the peers it was given. Sorted,
+    # and a subset of ``staying_up``.
+    #
+    # Its own list rather than folded into ``not_listening`` for the reason the probe
+    # keeps the two apart (``NodeHealth.not_serving``): one says nothing holds the number,
+    # the other says what holds it is not doing the job, and an operator told the wrong
+    # one goes and looks at the wrong thing.
+    not_serving: tuple[str, ...]
+
+    # Config names that stayed up, were refused by nothing, and were CONFIRMED by nothing
+    # either. Sorted, and also a subset of ``staying_up``. Since walk 4 what confirms a
+    # config is its transport's own serving question when it declares one, and the held
+    # port when it does not — so a config is here when THAT reading could not be taken:
+    # the question could not be put (an image without the tool, an engine that would not
+    # exec it) or its reader declined to judge, or — for a transport with no question —
+    # no port was resolved for the row or the socket table could not be read.
     #
     # NOT A FAILURE AND NOT A CONFIRMATION, which is the point of it being its own list.
     # A host without ``ss`` still applies — refusing there would widen an apply's failure
     # surface on the strength of a missing tool — but nothing may be said about what it
-    # is serving, so a caller holding a finding about this node has not contradicted it.
+    # is serving, so a caller holding a finding about this node has not contradicted it,
+    # and a caller reporting success has to say that this part was not measured.
     unchecked: tuple[str, ...]
 
     # How long this took and how many times the node was asked, for the log line. Not
@@ -146,12 +175,13 @@ class Settled:
     def serving(self) -> dict[str, str]:
         """The configs this wait may honestly claim are serving, with their digests.
 
-        Staying up, and something holds the port they were given. Derived rather than
+        Staying up, and confirmed by the strongest reading this transport offers — its own
+        serving question, or the held port when it declares none. Derived rather than
         stored so it cannot disagree with the two lists it subtracts — the shape
         ``NodeHealth.unchecked_ports`` already keeps one zone over, and for the same
         reason: a second stored list is a second place for one answer to be wrong.
         """
-        withheld = set(self.not_listening) | set(self.unchecked)
+        withheld = set(self.not_listening) | set(self.not_serving) | set(self.unchecked)
         return {
             name: digest
             for name, digest in self.staying_up.items()
@@ -176,12 +206,19 @@ class _Reading:
     containers: node_stack.RunningContainers
     bound: dict[Layer4, frozenset[int]] | None
 
+    # Each running config's answer to its transport's OWN serving question — walk 4.
+    # ``True`` / ``False`` / ``None`` as ``edge.health.serving.ask`` gives them, and a
+    # config ABSENT here declared no question or was not running in this reading, which
+    # is a different fact from ``None`` (asked, and nobody could answer).
+    answers: dict[str, bool | None]
+
 
 async def confirm_serving(
     connection: NodeConnection,
     *,
     expected: Collection[str],
     listeners: Mapping[str, listening.Listener],
+    checks: Mapping[str, ServingCheck],
     interval: float,
     timeout: float,
 ) -> Settled:
@@ -193,6 +230,12 @@ async def confirm_serving(
     caller exactly as ``edge.health.probe`` requires them. It is REQUIRED rather than
     defaulted: a default of "ask nothing" is how the socket question went unasked through
     two walks, and a caller with nothing to pass says so by passing nothing.
+
+    ``checks`` is each placed config's transport's own serving question, built by the
+    caller (``apply.serving_checks``) for the same reason ``listeners`` is: which
+    transport rendered which config, and what was rendered, are the caller's facts.
+    REQUIRED for ``listeners``' reason — the port question went unasked for two walks
+    behind a default, and this one would go unasked behind one too.
 
     ``interval`` is how far apart two readings have to be before the pair means
     anything, and ``timeout`` is the ceiling on the whole wait. Both come from settings
@@ -217,6 +260,7 @@ async def confirm_serving(
             restarting=(),
             absent=(),
             not_listening=(),
+            not_serving=(),
             unchecked=(),
             waited=0.0,
             readings=0,
@@ -224,16 +268,22 @@ async def confirm_serving(
 
     readings = 1
     previous = None
-    current = await _read(connection, listeners)
+    current = await _read(connection, listeners, checks)
 
     while True:
         if previous is not None:
             settled = _one_life_across_both(previous, current, names)
-            # Confirmed means staying up AND not known to be holding nothing. A config
-            # whose port could not be asked about stops the loop with the others rather
-            # than holding it open to the ceiling: no amount of waiting installs ``ss``
-            # on that host, and the answer it gets is "unchecked" either way.
-            if len(settled) == len(names) and not _holding_nothing(
+            # Confirmed means staying up AND refused by no reading. A config whose
+            # reading could not be taken stops the loop with the others rather than
+            # holding it open to the ceiling: no amount of waiting installs ``ss`` on
+            # that host, and the answer it gets is "unchecked" either way.
+            #
+            # A NO from a transport's own question keeps the loop going exactly as an
+            # unheld port does, and for the same reason: a wg-family interface is
+            # configured some moments after its container starts, and asking at the
+            # instant of the last container reading would call a healthy late
+            # configurer dead — walk 2's false red, rebuilt one layer further in.
+            if len(settled) == len(names) and not _refused_by_a_reading(
                 current, listeners, settled
             ):
                 return _answer(settled, current, listeners, names, started_at, readings)
@@ -244,7 +294,7 @@ async def confirm_serving(
         # Never past the deadline, so the ceiling is a ceiling on the whole wait rather
         # than on the wait before the last interval.
         await asyncio.sleep(min(interval, remaining))
-        previous, current = current, await _read(connection, listeners)
+        previous, current = current, await _read(connection, listeners, checks)
         readings += 1
 
     settled = (
@@ -254,17 +304,28 @@ async def confirm_serving(
 
 
 async def _read(
-    connection: NodeConnection, listeners: Mapping[str, listening.Listener]
+    connection: NodeConnection,
+    listeners: Mapping[str, listening.Listener],
+    checks: Mapping[str, ServingCheck],
 ) -> _Reading:
-    """One reading of both questions, the containers first.
+    """One reading of all three questions, the containers first.
 
     The socket table is skipped entirely when no config has a port expectation, which is
     not an optimisation: an ``ss`` whose answer nothing could be compared against is a
     command run on a node for no reason, and this zone runs none of those.
+
+    The serving questions are put only to configs whose container is running in THIS
+    reading — the same rule ``edge.health.probe`` keeps: exec-ing into a container that
+    is not up turns one fault into two sentences about one host.
     """
     containers = await node_stack.running_containers(connection)
     bound = await listening.bound_ports(connection) if listeners else None
-    return _Reading(containers=containers, bound=bound)
+    answers = (
+        await serving_question.ask(connection, checks=checks, about=containers.loaded)
+        if checks
+        else {}
+    )
+    return _Reading(containers=containers, bound=bound, answers=answers)
 
 
 def _one_life_across_both(
@@ -311,20 +372,38 @@ def _answering(
     return listening.is_answering(reading.bound, listener)
 
 
-def _holding_nothing(
+def _refused_by_a_reading(
     reading: _Reading,
     listeners: Mapping[str, listening.Listener],
     staying_up: Mapping[str, str],
 ) -> bool:
-    """Is any config that stayed up known to be holding nothing, in this reading?
+    """Is any config that stayed up known NOT to be serving, in this reading?
 
-    Only ``False`` — a definite reading of a socket table that does not have the port in
-    it — keeps the loop going. ``None`` does not, for the reason ``confirm_serving`` gives
-    at the call site.
+    Two refusals: a definite reading of a socket table without the port in it, and a
+    transport's own question answered NO. ``None`` from either does not keep the loop
+    going, for the reason ``confirm_serving`` gives at the call site.
     """
     return any(
-        _answering(reading, listeners, name) is False for name in staying_up
+        _answering(reading, listeners, name) is False
+        or reading.answers.get(name) is False
+        for name in staying_up
     )
+
+
+def _confirmed(
+    reading: _Reading, listeners: Mapping[str, listening.Listener], name: str
+) -> bool:
+    """Whether the strongest reading this config's transport offers said YES.
+
+    THE TRANSPORT'S OWN QUESTION WHEN IT DECLARED ONE — walk 4 — and the held port only
+    when it did not. A held port is no longer what confirms a transport that can be asked
+    something sharper: ``nc`` holds a port, and so does a wg-family daemon holding none of
+    the peers it was given. Whether a config declared a question is read off the reading
+    (an entry in ``answers``), never off its transport's name.
+    """
+    if name in reading.answers:
+        return reading.answers[name] is True
+    return _answering(reading, listeners, name) is True
 
 
 def _answer(
@@ -339,15 +418,24 @@ def _answer(
     stayed up into exactly one socket answer."""
     unconfirmed = set(names) - set(staying_up)
     restarting = sorted(unconfirmed & set(current.containers.restarting))
-    answers = {
-        name: _answering(current, listeners, name) for name in staying_up
+    held = {name: _answering(current, listeners, name) for name in staying_up}
+    not_listening = {name for name, answer in held.items() if answer is False}
+    not_serving = {name for name in staying_up if current.answers.get(name) is False}
+    # Everything that stayed up, was refused by nothing and was confirmed by nothing.
+    unchecked = {
+        name
+        for name in staying_up
+        if name not in not_listening
+        and name not in not_serving
+        and not _confirmed(current, listeners, name)
     }
     answer = Settled(
         staying_up=dict(staying_up),
         restarting=tuple(restarting),
         absent=tuple(sorted(unconfirmed - set(restarting))),
-        not_listening=tuple(sorted(n for n, held in answers.items() if held is False)),
-        unchecked=tuple(sorted(n for n, held in answers.items() if held is None)),
+        not_listening=tuple(sorted(not_listening)),
+        not_serving=tuple(sorted(not_serving)),
+        unchecked=tuple(sorted(unchecked)),
         waited=time.monotonic() - started_at,
         readings=readings,
     )
@@ -357,11 +445,13 @@ def _answer(
     # like from here when somebody asks why an apply took twenty seconds.
     logger.info(
         "settled after %d readings in %.1fs: %d serving, %d up holding nothing, "
-        "%d unchecked, %d restarting, %d absent",
+        "%d up and not serving by their own check, %d unchecked, %d restarting, "
+        "%d absent",
         answer.readings,
         answer.waited,
         len(answer.serving),
         len(answer.not_listening),
+        len(answer.not_serving),
         len(answer.unchecked),
         len(answer.restarting),
         len(answer.absent),

@@ -251,6 +251,12 @@ class RevocationResponse(BaseModel):
 class ApplyResponse(BaseModel):
     node_id: str
     transports_applied: list[str]
+    # What this apply pushed and could NOT measure serving — fix round 5. Empty is the
+    # only answer under which a 200 means "pushed and measured"; a name here is a config
+    # that stayed up, was refused by nothing and was confirmed by nothing either (an image
+    # without its transport's own check, a host without ``ss``). Its own field because the
+    # walk read a success that could not take the reading byte-identical to one that did.
+    serving_unmeasured: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -288,6 +294,17 @@ class HealthResponse(BaseModel):
     # statement about something nobody measured.
     listening: list[str]
     not_listening: list[str]
+    # Transports whose OWN serving question was put to the node and answered yes / no —
+    # M26's fourth walk. A different question from the two above, asked of the transport
+    # rather than of the socket: a wg-family node answers it by holding the peers it was
+    # given, which ``nc`` on its port cannot fake. A running transport in neither list
+    # declares no such question, or could not be asked it.
+    serving: list[str] = Field(default_factory=list)
+    not_serving: list[str] = Field(default_factory=list)
+    # Transport name → what its yes (or its no) means, in the transport's own words, for
+    # every name in the two lists above. The console composes it into the sentence and
+    # must not invent it.
+    serving_means: dict[str, str] = Field(default_factory=dict)
     detail: str | None
 
     @property
