@@ -270,7 +270,7 @@ async def users_screen(
         screen="panel/screens/users.html",
         current="users",
         title="Users",
-        subtitle="who can dial the mesh, and the one URL each of them holds",
+        subtitle="who can dial the mesh, and the subscription each of them holds",
         context=await _users_context(session),
     )
 
@@ -2808,7 +2808,7 @@ async def create_user(
         events="users-created",
         context={
             "user": user,
-            "url": await console.subscription_url(
+            "handed": await console.links_for(
                 session, request.app.state.settings.public_base_url, user
             ),
             # THE SENTENCE THAT HAD TO BE HERE — M26's first acceptance walk. This is the
@@ -2827,7 +2827,7 @@ async def create_user(
 async def user_subscription(
     user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
-    """Show the URL to send this user, in its own dialog.
+    """Show the URL or URLs to send this user, in its own dialog.
 
     On demand rather than as a column in the users table: the table is the page the
     operator leaves open, and a live bearer credential should not sit on screen — or
@@ -2840,7 +2840,7 @@ async def user_subscription(
         "panel/subscription_dialog.html",
         {
             "user": user,
-            "url": await console.subscription_url(
+            "handed": await console.links_for(
                 session, request.app.state.settings.public_base_url, user
             ),
             # Read fresh here, like everything else in this dialog: a link shown an hour

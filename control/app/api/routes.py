@@ -20,6 +20,7 @@ from control.app.dependencies import session_dependency
 from control.app.models import NodeState
 from control.app.services import (
     apply,
+    console,
     health,
     nodes,
     relay,
@@ -28,7 +29,7 @@ from control.app.services import (
     transports,
     users,
 )
-from edge.registry import discover
+from edge.registry import SubscriptionFormat, discover
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_operator)])
 
@@ -220,21 +221,26 @@ async def create_user(
 async def user_subscription(
     user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
-    """The URL to send this user.
+    """The URLs to send this user — the subscription link, and the config-file link when held.
 
     Re-displayable rather than one-shot: a user who lost their link needs the same
     one back, because issuing a new one means they must re-import — and "users never
     re-add anything" is the charter's promise.
     """
     user = await users.get_user(session, user_id)
-    live = [s for s in user.subscriptions if s.is_active]
-    if not live:
+    # Composed by ``console.links_for``, the one place a token becomes a URL — this route
+    # used to build its own string, which was a second composer of a bearer credential
+    # and the reason the config-file link was a panel question and an API question.
+    handed = await console.links_for(
+        session, request.app.state.settings.public_base_url, user
+    )
+    if handed is None:
         from control.app.errors import NotFound
 
         raise NotFound("this user has no live subscription")
-    settings = request.app.state.settings
     return schemas.SubscriptionIssued(
-        url=f"{settings.public_base_url}/sub/{live[0].token}"
+        url=handed.url_for(SubscriptionFormat.V1_URI_LIST),
+        config_file_url=handed.url_for(SubscriptionFormat.CLIENT_CONFIG_FILE),
     )
 
 

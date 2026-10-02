@@ -211,9 +211,29 @@ class SubscriptionIssued(BaseModel):
     Returned when a subscription is created or re-displayed to the operator, because
     the operator has to be able to send it to their user. It is never logged and
     never included in any list endpoint.
+
+    ONE URL PER CONFIG SHAPE — M24, the owner's decision (``docs/decisions.md``,
+    2026-10-02). ``url`` is the subscription link and is unchanged; a user holding a
+    transport whose configuration is a file gets that shape's URL beside it, the same
+    token asking ``?format=`` for it. Two fields rather than one link that answers by
+    what a node serves, which is the alternative the owner rejected.
     """
 
-    url: str
+    url: str = Field(
+        description=(
+            "The subscription link, for an app that imports a subscription URL. Always "
+            "present; empty as a document while this user holds nothing that rides in it."
+        )
+    )
+    config_file_url: str | None = Field(
+        default=None,
+        description=(
+            "The config-file link — an archive of configuration files to unzip and import "
+            "into each protocol's own app, never into a subscription app. Present when, and "
+            "only when, this user holds a credential on an offered transport that declares "
+            "the client-config-file shape; null otherwise."
+        ),
+    )
 
 
 class RevocationResponse(BaseModel):

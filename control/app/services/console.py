@@ -73,7 +73,7 @@ from control.app.settings import (
     Settings,
 )
 from edge.bootstrap import node_stack
-from edge.registry import KeyScope, TransportMeta, discover
+from edge.registry import KeyScope, SubscriptionFormat, TransportMeta, discover
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +137,15 @@ TRANSPORT_NO_DELIVERY = "nothing a user can consume — hop use only"
 # It does not name the query parameter, and that is deliberate rather than coy: the
 # format is the one already printed in this row's own delivery column, so the sentence
 # stays one arm per FORMAT and gains nothing to edit when a third shape arrives.
+#
+# AND IT NOW SAYS WHERE THAT LINK IS — M24. It used to end "by asking for the shape
+# above", which was true and left the operator to compose a credential-bearing URL by
+# hand, because no screen showed one. The link dialog now shows a link per shape a user
+# holds (``links_for``), so the sentence sends the operator there instead.
 TRANSPORT_NOT_IN_THE_LINK = (
-    "not in the subscription link itself — a user's client gets it from that same link "
-    "by asking for the shape above"
+    "not in the subscription link itself — a user holding it is handed a second link "
+    "for the shape above, shown beside their subscription link under “show link” on "
+    "the Users screen"
 )
 
 # What it means, on the screen the operator learns the protocols from, that a transport
@@ -583,21 +589,21 @@ class KeyRow:
 # said exactly that and has been corrected with it.
 #
 # NOR MAY IT SAY THE USER SIMPLY GETS IT, which is the other way to be wrong here and
-# the more dangerous one: nothing in this panel hands the operator the URL that asks for
-# the file shape, so an operator told "delivered from that same link" would tell a user
-# to open the link they already have and the user would meet an empty page. That gap is
-# its own milestone and is not closed here. So the sentence says ONLY BY ASKING for the
-# shape — three facts, all true today, and none of them a decision that milestone has to
-# make: the host is told to serve it, it is not in the link itself, and the shape it
-# arrives in is a file.
+# the more dangerous one: an operator told "delivered from that same link" would tell a
+# user to open the link they already have and the user would meet an empty page. Until
+# M24 nothing in this panel showed the URL that asks for the file shape, so the sentence
+# said only "by asking for that shape". M24 closed that gap the owner's way — a SECOND
+# link per shape, beside the subscription link, in the link dialog (``links_for``) — so
+# the sentence now names where that link is, and still says it is a different link.
 #
 # Chosen by the transport's own derived declaration and never by a name, like every other
 # string in this module.
 OFFER_IN_EVERY_LINK = "offered — in every user's link at their next refresh"
 OFFER_NOT_IN_THE_LINK = (
     "offered — the node serves it once applied, but it is not in the subscription link "
-    "itself: this transport is a config file, and a user's client gets it from that same "
-    "link only by asking for that shape"
+    "itself: this transport is a config file, and each user holding it gets it from the "
+    "config-file link shown beside their subscription link under “show link” on the "
+    "Users screen"
 )
 OFFER_WITHDRAWN = (
     "withdrawn — out of every user's link. The node is still configured to serve it "
@@ -3000,12 +3006,19 @@ def offer_summary(node: str, transport: str, *, deliverable: bool) -> str:
     It says the material is MINTED rather than that nothing reaches anybody, because
     something does: the same token answers with this user's configuration file, so the
     honest report of this press is that everyone was granted and the link did not move.
+
+    AND IT SAYS WHAT THE OPERATOR NOW HAS TO DO — M24. A person handed only the
+    subscription link before this press has nothing that carries this protocol; the
+    config-file link appears in their link dialog from now on, and somebody has to hand
+    it over. Nothing else in the product tells them so at the moment it becomes true.
     """
     if not deliverable:
         return (
             f"{transport} offered again on {node} — every user is granted material on it, "
             "and the subscription link itself does not change: this transport is a config "
-            "file, which a user's client gets from that same link by asking for it."
+            "file, which each user gets from the config-file link shown beside their "
+            "subscription link under “show link” on the Users screen — hand it to anyone "
+            "who has only the subscription link."
         )
     return (
         f"{transport} offered again on {node} — in every user's link at their next "
@@ -3293,15 +3306,165 @@ def _plural(count: int, noun: str, tail: str) -> str:
     return f"{count} {noun}{'' if count == 1 else 's'} {tail}"
 
 
-async def subscription_url(
-    session: AsyncSession, base_url: str, user: User
-) -> str | None:
-    """The one URL a user holds, or ``None`` if they have no live subscription.
+# --- The links a user is handed (M24) ------------------------------------------
+#
+# ONE URL PER CONFIG SHAPE, NOT ONE POLYMORPHIC LINK — the owner's decision
+# (``docs/decisions.md``, 2026-10-02). A user whose credentials include a transport that
+# declares the config-file shape is shown a SECOND link beside the subscription link: the
+# same token, asking ``?format=`` for that shape. The token itself does not start
+# answering differently by what a node serves; the rejected alternative made one link
+# mean different documents on different days with nothing on the user's side changing.
+#
+# WHY A SECOND LINK HAS TO BE LABELLED AND NOT MERELY SHOWN. The two are the same token
+# and look identical but for a query string, and each is useless to the other's client:
+# a subscription app cannot read an archive, and a WireGuard-family app cannot import a
+# subscription URL. An operator who copies the wrong one hands a person something that
+# fails silently. So each link carries what it is FOR and what it carries for THIS user,
+# and the wording is keyed by the shape — never by a protocol — so a transport added later
+# is labelled by declaring its formats and nothing here is edited.
+#
+# WHAT IT IS ASKED OF is the user's own credentials, on rows that are offered to users
+# and on nodes that may still serve. Not ``nodes.serving_transports``: a node that is
+# draft or degraded RIGHT NOW is still where this person's tunnel will be, and an
+# operator handed only the subscription link while that node is momentarily degraded
+# would hand over the wrong link for good. ``apply.cannot_serve_again`` is the one
+# predicate for "this node is gone", asked rather than a literal state. A withdrawn row
+# keeps its credentials (``nodes.set_transport_enabled``) but is in no shape the token
+# answers with, so ``enabled`` is required.
 
-    Built here rather than in a route so there is a single place that composes a
-    bearer credential into a string. Every caller of this function is displaying it
-    inside a dialog and nowhere else: it must not reach a query string, a log line,
-    an error message or a ``title`` attribute (CLAUDE.md).
+# What each shape's link is called on screen. A short noun, because it is the heading the
+# operator reads first and the word on the copy button beneath it.
+LINK_HEADINGS: dict[SubscriptionFormat, str] = {
+    SubscriptionFormat.V1_URI_LIST: "subscription link",
+    SubscriptionFormat.CLIENT_CONFIG_FILE: "config-file link",
+}
+
+# Which app takes each link, and what that app does with it. The second half is what an
+# operator needs to tell the person, and it differs: a subscription app refreshes on its
+# own, an imported file does not — so "they never re-add anything" is true of the first
+# link only, and is said under the first link only.
+LINK_USES: dict[SubscriptionFormat, str] = {
+    SubscriptionFormat.V1_URI_LIST: (
+        "For an app that imports a subscription URL — paste it in once. The app fetches "
+        "it again on its own, so it keeps working when nodes or protocols change and "
+        "they never re-add it."
+    ),
+    SubscriptionFormat.CLIENT_CONFIG_FILE: (
+        "Not for a subscription app, which cannot read it. Opening it downloads an "
+        "archive of configuration files: unzip it and import each file into the app for "
+        "that protocol. Nothing fetches it again on its own — after a node of theirs "
+        "changes, they download it from this same link and import it again."
+    ),
+}
+
+# What the link carries for this person, named by transport. Names are data the operator
+# typed or the image ships, and listing them is not choosing between them.
+LINK_CARRIES = "Carries for {nickname}: {transports}."
+# The subscription link of a person who holds nothing that rides in it. Still handed over
+# — the owner's decision puts the second link BESIDE it, not instead of it — because a
+# protocol offered later that does ride in a link reaches them through this one with
+# nothing for them to do, and a person who was never given it would have to be found.
+LINK_CARRIES_NOTHING_YET = (
+    "Carries nothing {nickname} holds today, and opens as an empty document — not an "
+    "error. A protocol offered later that rides in a link arrives in it on its own."
+)
+
+# The sentence above the link or links. The first is the one this dialog always said,
+# and it is still true of a person with one link; the second is what replaces it when
+# there are two, because "one URL" is then false on the screen it is printed on.
+LINKS_ONE = "One URL, every serving node. Showing it again does not mint a new key."
+LINKS_SEVERAL = (
+    "One subscription, shown as {count} URLs — one per shape of configuration. Each app "
+    "reads only its own shape, so hand each link to the app named under it. Showing "
+    "them again does not mint a new key."
+)
+LINKS_ARE_THE_CREDENTIAL_ONE = (
+    "Anyone holding this URL has {nickname}'s access — it is the credential, not a link "
+    "to one."
+)
+LINKS_ARE_THE_CREDENTIAL_SEVERAL = (
+    "Anyone holding any of these URLs has {nickname}'s access — they are the credential, "
+    "not links to one."
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class HandedLink:
+    """One URL the operator may hand a user, with what it is for.
+
+    A bearer credential with its label attached. Every reader of one is displaying it
+    inside a dialog or returning it in the one API response that carries a token, and
+    nowhere else: it must not reach a query string, a log line, an error message, an
+    audit row or a ``title`` attribute (CLAUDE.md).
+    """
+
+    shape: SubscriptionFormat
+    url: str
+    heading: str
+    use: str
+    carries: str
+
+
+@dataclasses.dataclass(frozen=True)
+class HandedLinks:
+    """Everything the link dialog says, in the order it says it."""
+
+    intro: str
+    links: tuple[HandedLink, ...]
+    credential: str
+
+    def url_for(self, shape: SubscriptionFormat) -> str | None:
+        """The URL in this shape, or ``None`` when this person holds nothing in it."""
+        return next((link.url for link in self.links if link.shape is shape), None)
+
+
+def _link_url(base_url: str, token: str, shape: SubscriptionFormat) -> str:
+    """The one place a token and a shape become a URL.
+
+    The default shape takes NO query string, so the link every user already holds is
+    byte for byte the link they were given before M24 — the delivery route answers it
+    with the default (``api/delivery.py``). Every other shape is the same path asking
+    ``?format=`` for itself by its declared value, never by a protocol's name.
+    """
+    url = f"{base_url}/sub/{token}"
+    if shape is SubscriptionFormat.V1_URI_LIST:
+        return url
+    return f"{url}?format={shape.value}"
+
+
+async def shapes_held(session: AsyncSession, user: User) -> dict[SubscriptionFormat, list[str]]:
+    """Which shapes this person's credentials are in, each with the transports in it.
+
+    See the section comment above for which rows count and why. A transport this image no
+    longer ships is skipped rather than raised on: this is a screen, and the Transports
+    screen is where a missing package is reported.
+    """
+    result = await session.execute(
+        select(NodeTransport.transport_name, Node.state)
+        .join(Credential, Credential.node_transport_id == NodeTransport.id)
+        .join(Node, NodeTransport.node_id == Node.id)
+        .where(Credential.user_id == user.id)
+        .where(NodeTransport.enabled.is_(True))
+        .where(NodeTransport.purpose == TransportPurpose.USERS)
+    )
+    installed = discover()
+    held: dict[SubscriptionFormat, set[str]] = {}
+    for name, state in result.all():
+        meta = installed.get(name)
+        if meta is None or apply.cannot_serve_again(NodeState(state)):
+            continue
+        for shape in meta.subscription_formats:
+            held.setdefault(shape, set()).add(name)
+    return {shape: sorted(names) for shape, names in held.items()}
+
+
+async def links_for(session: AsyncSession, base_url: str, user: User) -> HandedLinks | None:
+    """The URLs to hand this user, labelled, or ``None`` with no live subscription.
+
+    Always the subscription link, first; then one link per OTHER shape this person holds
+    a credential in, in the vocabulary's own order. Built here rather than in a route so
+    there is a single place that composes a bearer credential into a string — the panel
+    dialog and the API both read it.
 
     Queried rather than read off ``user.subscriptions``, and that is not a style
     choice. The add-user flow calls this with a user created moments ago in the same
@@ -3313,7 +3476,37 @@ async def subscription_url(
         select(Subscription).where(Subscription.user_id == user.id)
     )
     live = [row for row in result.scalars().unique() if row.is_active]
-    return f"{base_url}/sub/{live[0].token}" if live else None
+    if not live:
+        return None
+    token = live[0].token
+    held = await shapes_held(session, user)
+
+    shapes = [SubscriptionFormat.V1_URI_LIST] + [
+        shape for shape in SubscriptionFormat
+        if shape is not SubscriptionFormat.V1_URI_LIST and shape in held
+    ]
+    links = tuple(
+        HandedLink(
+            shape=shape,
+            url=_link_url(base_url, token, shape),
+            heading=LINK_HEADINGS[shape],
+            use=LINK_USES[shape],
+            carries=(
+                LINK_CARRIES.format(nickname=user.nickname, transports=", ".join(held[shape]))
+                if shape in held
+                else LINK_CARRIES_NOTHING_YET.format(nickname=user.nickname)
+            ),
+        )
+        for shape in shapes
+    )
+    several = len(links) > 1
+    return HandedLinks(
+        intro=LINKS_SEVERAL.format(count=len(links)) if several else LINKS_ONE,
+        links=links,
+        credential=(
+            LINKS_ARE_THE_CREDENTIAL_SEVERAL if several else LINKS_ARE_THE_CREDENTIAL_ONE
+        ).format(nickname=user.nickname),
+    )
 
 
 # --- Settings (M10.2) ---------------------------------------------------------
@@ -3822,9 +4015,10 @@ POOL_BOX_RESIZE_HINT = (
 #
 # The second arm may not say the user cannot have it, and may not say they simply get
 # it — the same two failures ``OFFER_NOT_IN_THE_LINK`` names at length, and the same
-# wording is used here so the operator reads one fact in both places. Nothing in this
-# panel yet hands the operator the URL that asks for the file shape; closing that is its
-# own milestone and is not what this sentence may promise.
+# wording is used here so the operator reads one fact in both places. Since M24 the link
+# dialog shows the URL that asks for the file shape, so this sentence says so — and says
+# the part an operator is likeliest to miss: a person already handed only the
+# subscription link has to be handed the second one too.
 #
 # Chosen by ``subscription_expressible`` — whether the protocol rides in the base64 LINK
 # — and never by a name, like every other string in this module.
@@ -3834,8 +4028,9 @@ ENABLING_IN_EVERY_LINK = (
 )
 ENABLING_NOT_IN_THE_LINK = (
     "Enabling grants every active user material on this protocol and puts it in nobody's "
-    "link: this transport is a config file, and a user's client gets it from that same "
-    "link only by asking for that shape."
+    "subscription link: this transport is a config file, and each user gets it from a "
+    "second, config-file link their “show link” dialog then shows — anyone handed only "
+    "the subscription link has to be handed that one too."
 )
 
 
