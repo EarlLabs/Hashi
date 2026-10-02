@@ -192,8 +192,7 @@ def may_serve_delivery(node: Node, enabled: Sequence[NodeTransport]) -> bool:
     stays below with the caller that already holds a connection. The asymmetry that
     makes the split safe is the one M27.4 named: over-answering "yes" here costs a
     refused port on a host that turns out to be the control plane's own — where 443 is
-    already taken by the control plane's own Caddy, so the refusal is true anyway and
-    the runbook has said so since Shape A.
+    already taken by the control plane's own Caddy, so the refusal is true anyway.
     """
     if not any(row.purpose == TransportPurpose.USERS for row in enabled):
         return False

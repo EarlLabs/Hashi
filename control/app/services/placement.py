@@ -304,8 +304,7 @@ async def delivery_socket_is_free(
     the host: this runs on a form submission, and a check that dialled the node would make
     enabling a transport depend on the host being up. The over-answer is the co-located
     box, where the control plane's own Caddy holds the same port for the panel — so the
-    refusal is true there too, for a different holder, and the runbook has said so since
-    Shape A.
+    refusal is true there too, for a different holder.
 
     THE ORDERING HAZARD IS CLOSED ELSEWHERE, deliberately. An operator can put a
     transport on this socket while no certificate is configured and add one afterwards,

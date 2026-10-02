@@ -73,7 +73,7 @@ async def a_node(client, name: str, address: str) -> str:
 
 
 async def offered(client, node_id: str, params: dict) -> dict:
-    """The runbook's Shape A step 2: this transport, offered to users, on this box."""
+    """The runbook's one-box install: this transport, offered to users, on this box."""
     response = await client.post(
         f"/api/nodes/{node_id}/transports",
         json={
