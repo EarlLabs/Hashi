@@ -62,6 +62,26 @@ services:
       # is exactly how this pair shipped unreachable in the first place.
       HASHI_DELIVERY_CERTIFICATE_PATH: ${HASHI_DELIVERY_CERTIFICATE_PATH:-}
       HASHI_DELIVERY_KEY_PATH: ${HASHI_DELIVERY_KEY_PATH:-}
+      # Every OPTIONAL setting the control plane reads — M31.2. Blank when the operator
+      # left it out of .env, and blank means "not set": `Settings` is built with
+      # `env_ignore_empty`, so the default is the one written in control/app/settings.py
+      # and nowhere else. They are listed here for the reason the pair above is: this
+      # list is the whole of what the container can read, and the field walk of
+      # 2026-10-02 set HASHI_FINDING_REMEASURE_INTERVAL in .env and found nothing inside
+      # the container. The Settings screen names each of these as the variable that
+      # changes its row, so an operator who believed it was told something false.
+      #
+      # HASHI_FINDING_REMEASURE_INTERVAL=0 stops this control plane dialling, on its own,
+      # the nodes that carry a finding — which is what a restored one should not do before
+      # its operator has looked (scripts/backup.sh holds it at 0 after a restore from the
+      # bucket, until a publishing command brings this value back).
+      HASHI_FINDING_REMEASURE_INTERVAL: ${HASHI_FINDING_REMEASURE_INTERVAL:-}
+      HASHI_NODE_SETTLE_TIMEOUT: ${HASHI_NODE_SETTLE_TIMEOUT:-}
+      HASHI_NODE_SETTLE_INTERVAL: ${HASHI_NODE_SETTLE_INTERVAL:-}
+      HASHI_NODE_SSH_TIMEOUT: ${HASHI_NODE_SSH_TIMEOUT:-}
+      HASHI_NODE_CONNECT_TIMEOUT: ${HASHI_NODE_CONNECT_TIMEOUT:-}
+      HASHI_SESSION_MAX_AGE: ${HASHI_SESSION_MAX_AGE:-}
+      HASHI_AUDIT_RETENTION_DAYS: ${HASHI_AUDIT_RETENTION_DAYS:-}
     volumes:
       # The backup schedule's record, READ-ONLY — M28.5. It is written on the host by
       # scripts/backup-run.sh and holds dates, exit codes and the schedule's own settings:

@@ -316,3 +316,58 @@ def test_no_site_names_a_host_or_a_port_this_deployment_cannot_change(
             f"the site address {site.header!r} names no environment variable, so this "
             "deployment's hostname is baked into the image"
         )
+
+
+# --- M31.1: an unpublished stack asks no public CA for anything -------------------------
+
+BASE_COMPOSE = REPO / "deploy" / "docker-compose.yml"
+PUBLIC_OVERLAY = REPO / "deploy" / "docker-compose.public.yml"
+# The variable the public site's `tls` line reads, and the value it falls back to.
+PUBLIC_TLS = re.compile(r"^\s*tls\s+\{\$HASHI_PUBLIC_TLS:internal\}\s*$", re.M)
+
+
+def test_the_public_site_defaults_to_its_own_ca(
+    site_by_paths: dict[frozenset[str], Block],
+) -> None:
+    """M31.1, the restore walk: an unpublished Caddy began public issuance at boot.
+
+    The base stack — what ``make panel-bootstrap`` and ``make restore-from-bucket`` bring
+    up — publishes no port, so no CA's validation can reach it; on the walk
+    ``/data/caddy/acme`` nevertheless held Let's Encrypt and ZeroSSL accounts, a lock and a
+    challenge token, and every failed validation counts against the live domain's rate
+    limit. Left to automatic HTTPS, a public name gets a public issuer. Red before M31: the
+    public site carried no ``tls`` line at all.
+    """
+    public = site_by_paths[frozenset(PUBLIC_PATHS)]
+    assert PUBLIC_TLS.search(public.body), (
+        "the public site does not default to Caddy's own CA, so a stack that publishes "
+        "nothing still asks a public CA for its name the moment it boots"
+    )
+
+
+def test_only_the_publishing_overlay_switches_public_issuance_on() -> None:
+    """The other half: the switch is set where 80 and 443 are published, and only there.
+
+    Set in the base file it would be the defect back; set nowhere, a deployed host would
+    serve every user a certificate no stock client accepts. ``public.yml`` is the file
+    both ``make up-panel`` and ``make up-panel-over-ssh`` load (the tunnel overlay is
+    always on top of it), and it is the one that publishes the ports a CA validates on.
+    """
+    import yaml
+
+    base = yaml.safe_load(BASE_COMPOSE.read_text())["services"]["caddy"]
+    assert "HASHI_PUBLIC_TLS" not in (base.get("environment") or {}), (
+        "the base stack switches public issuance on, and it publishes nothing a CA "
+        "could validate against"
+    )
+    public = yaml.safe_load(PUBLIC_OVERLAY.read_text())["services"]["caddy"]
+    value = (public.get("environment") or {}).get("HASHI_PUBLIC_TLS", "")
+    assert value.startswith("${CADDY_ACME_EMAIL:?"), (
+        f"the publishing overlay sets HASHI_PUBLIC_TLS to {value!r}; it has to be the "
+        "ACME account's email, required, which is what Caddy's `tls` takes to mean "
+        "'a public CA, as this account'"
+    )
+    assert any("80:80" in str(port) for port in public["ports"]), (
+        "the file that switches public issuance on no longer publishes port 80, so the "
+        "CA's HTTP challenge cannot reach the container it switched on"
+    )

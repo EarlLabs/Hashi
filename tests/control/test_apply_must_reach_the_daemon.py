@@ -255,7 +255,7 @@ async def test_the_running_container_carries_the_digest_that_was_applied(
     host = host_for(monkeypatch, _FakeHost())
     node_id = await a_node_with_a_transport(client, session, reality_params)
 
-    configs = await apply.apply_node(session, node_id=node_id)
+    configs = (await apply.apply_node(session, node_id=node_id)).configs
 
     row = (
         await session.execute(
@@ -299,10 +299,18 @@ async def test_a_daemon_that_did_not_come_back_on_this_config_fails_loudly(
     # With ``expire_on_commit=False`` a plain ``get`` short-circuits on the stale copy and
     # this reads ``active`` — the zone's usual idiom before re-reading what a request
     # wrote (``test_a_retired_node_is_never_applied_back_into_service``).
+    #
+    # ACTIVE AND NOT DEGRADED since M26's fix round 5, and that is the owner's rule rather
+    # than a weaker test: a health verdict may warn the operator, it may never be why a
+    # user's link comes back empty. This node was serving before the press, the files
+    # landed whole, and what failed is a measurement — so it stays in users' links and the
+    # verdict is the finding on its row. The loud failure M1 asked for is unchanged: the
+    # 502 above and its sentence.
     session.expire_all()
     node = await nodes.get_node(session, node_id)
-    assert node.state == NodeState.DEGRADED
-    assert "still running an older configuration" in node.state_detail
+    assert node.state == NodeState.ACTIVE
+    assert "still running an older configuration" in (node.last_probe_finding or "")
+    assert "stays in users' links" in message
     # Core invariants §4 and §3 together: no address, and nothing that names a person.
     assert NODE_ADDRESS not in message
 

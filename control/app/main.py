@@ -24,7 +24,7 @@ from control.app.crypto import SecretBox, session_secret
 from control.app.db import Database
 from control.app.models.base import bind_secret_box
 from control.app.panel import routes as panel_routes
-from control.app.services import apply, audit
+from control.app.services import apply, audit, health
 from control.app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -90,9 +90,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.audit_sweeper = audit.start_sweeper(
             app.state.database, retention_days=settings.audit_retention_days
         )
+        # And the loop that re-measures a node in service carrying a finding — fix round
+        # 5. Started here for the sweeper's reason: this is the only place in the process
+        # that outlives a request. ``None`` when the setting turns it off.
+        app.state.finding_remeasurer = health.start_remeasurer(
+            app.state.database, interval=settings.finding_remeasure_interval
+        )
         try:
             yield
         finally:
+            await health.stop_remeasurer(app.state.finding_remeasurer)
             # Cancelled BEFORE the pool is disposed: the sweeper holds a session while
             # it runs, and disposing an engine out from under it is how a clean
             # shutdown turns into a traceback nobody reads.

@@ -101,6 +101,28 @@ http://{$HASHI_PUBLIC_HOST} {
 		output discard
 	}
 
+	# WHO ISSUES THIS NAME'S CERTIFICATE, and the default is nobody on the internet — M31.1.
+	# `internal` (Caddy's own CA) unless HASHI_PUBLIC_TLS says otherwise, and the only
+	# file that says otherwise is deploy/docker-compose.public.yml, which sets it to the
+	# ACME account's email: that is the overlay that publishes 80 and 443, so it is the
+	# one shape in which a CA's validation can reach this container at all.
+	#
+	# The base stack publishes nothing, and it is what `make panel-bootstrap` and
+	# `make restore-from-bucket` bring up. With automatic HTTPS left to decide, Caddy
+	# began public issuance for this name the moment that stack booted — a restore walk
+	# found Let's Encrypt and ZeroSSL accounts, an issuance lock and a challenge token
+	# in /data/caddy/acme — and every validation that cannot succeed counts against the
+	# live domain's rate limits, during a disaster restore of all moments. An unpublished
+	# stack serving this name from its own CA serves nobody either way; the difference
+	# is that it asks nothing of anyone.
+	#
+	# A switch in the environment rather than a second Caddyfile, because the image
+	# carries exactly one Caddyfile (deploy/docker/caddy.Dockerfile) and a second copy of
+	# this block is a second place for the delivery rules below to drift. Rejected:
+	# `auto_https off` in the base shape — it switches off the HTTP redirect site and the
+	# console's own certificate too, which the base stack still serves inside its network.
+	tls {$HASHI_PUBLIC_TLS:internal}
+
 	@delivery path /sub/*
 	handle @delivery {
 		reverse_proxy control:8000

@@ -1919,7 +1919,14 @@ def test_the_last_screen_only_names_commands_this_host_can_actually_run(rescue) 
     assert "make down && make up" not in said, (
         "the rebuild still ends by telling a deployed host to unpublish itself"
     )
-    assert "make restart-control" in said
+    # M31.8: the restore restarts the control plane itself, and says so, rather than
+    # leaving an instruction that the closing screen then contradicted.
+    assert "Restarted the control plane on the restored database." in said, said[-3000:]
+    # M31.6: what the artifact held, counted — one node and one user in this fleet.
+    assert "holds 1 node(s) and 1 user(s)" in said, said[-3000:]
+    assert "what that artifact held: 1 node(s)" in said, said[-3000:]
+    # M31.2: a control plane rebuilt from the bucket dials nobody on its own yet.
+    assert "It dials no node on its own" in said, said[-3000:]
 
     assert "make up-panel-over-ssh" in closing, (
         "the only publication offered is the one that needs a tunnel this machine has not "

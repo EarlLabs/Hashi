@@ -54,7 +54,7 @@
     {#
       IN THE DANGER HUE, not the muted body it used to wear — M17.2's acceptance. This is
       the answer to what the operator just asked for, and it was drawn in the same grey as
-      the "they get one subscription URL" consequence line under the ordinary form, which
+      the "they get one subscription" consequence line under the ordinary form, which
       an acceptance walk read straight past. See .dialog-refusal in app.css.
     #}
     <div class="dialog-refusal" id="add-user-no-room">
@@ -89,15 +89,18 @@
         {% endif %}
       </div>
       <div class="dialog-body">
-        They get one subscription URL covering every serving node. Nothing else is
-        stored about them.
+        They get one subscription covering every serving node — one URL, and a second
+        beside it if they hold a protocol whose configuration is a file. Nothing else
+        is stored about them.
       </div>
       {#
         "issue subscription", NOT "add user" — the header's own primary is called "add
         user" and opens this dialog, and one name for two buttons on one page is what cost
         M26's third walk an action budget on the Nodes screen. It also says what the press
-        actually does to the mesh (UI-PATTERNS §13): this person gets one subscription URL
-        covering every serving node, which is the sentence directly above it.
+        actually does to the mesh (UI-PATTERNS §13): this person gets one subscription
+        covering every serving node, which is the sentence directly above it. That
+        sentence said "one subscription URL" until M24, and it was false for anyone
+        holding a config-file protocol: they are handed two.
       #}
       <div class="dialog-actions">
         <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>

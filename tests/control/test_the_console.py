@@ -827,7 +827,7 @@ async def test_applying_a_node_names_it_in_a_toast(client, monkeypatch) -> None:
     ).json()["id"]
 
     async def applied(session, *, node_id):
-        return {"vless-reality": "config"}
+        return apply_service.Applied(configs={"vless-reality": "config"})
 
     monkeypatch.setattr(apply_service, "apply_node", applied)
 

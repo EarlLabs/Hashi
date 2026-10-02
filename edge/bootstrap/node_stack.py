@@ -16,7 +16,8 @@ HOW:  rendering the compose file is pure and lives here; the SSH sequences take 
 import hashlib
 import logging
 import re
-from collections.abc import Mapping
+import shlex
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
@@ -672,6 +673,34 @@ async def restart(connection: NodeConnection) -> None:
     job either way.
     """
     await connection.run(f"cd {NODE_ROOT} && docker compose up -d --remove-orphans")
+
+
+async def restart_services(connection: NodeConnection, services: Collection[str]) -> None:
+    """Restart these services' containers in place, on the definition they already have.
+
+    The one case ``restart`` above cannot reach — M31.3, measured on real hosts. ``up -d``
+    is declarative: a service whose definition did not change is left exactly as it is,
+    which is right for a healthy one and leaves a broken one broken. The field walk
+    removed a wg-family daemon's peer live on the host (``awg set <if> peer <key>
+    remove``); the config file, and so the digest and the definition, were unchanged, so
+    every apply after that pushed the same file, ran ``up -d``, changed nothing, and the
+    interface went on holding none of its peers. ``docker compose restart <service>`` —
+    the data plane's own ``up`` run again from the file on disk — is what repaired it.
+
+    ``restart`` rather than ``up -d --force-recreate``: it is the command that was measured
+    to repair the host, it keeps the container (and its config-digest label, which is
+    what the next reading compares), and the definition is not what is wrong. A reading of
+    a host and a decision about whether to restart anything are the caller's; this does
+    exactly what it is told and nothing when told nothing.
+
+    Every name is quoted, though each is a config name this zone validated on its way
+    in (``config_name_is_usable``): a name reaches a shell here, and "it was checked
+    upstream" is a property of today's callers rather than of this function.
+    """
+    if not services:
+        return
+    named = " ".join(shlex.quote(service) for service in sorted(services))
+    await connection.run(f"cd {NODE_ROOT} && docker compose restart {named}")
 
 
 async def compose_projects(connection: NodeConnection) -> frozenset[str]:

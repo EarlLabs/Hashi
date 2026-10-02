@@ -42,7 +42,19 @@ class OperatorHashMalformed(RuntimeError):
 class Settings(BaseSettings):
     """Runtime configuration, read from ``HASHI_``-prefixed environment vars."""
 
-    model_config = SettingsConfigDict(env_prefix="HASHI_")
+    # ``env_ignore_empty`` — M31.2: a variable that is SET BUT BLANK is read as not set,
+    # so the field takes the default written below. That is what lets
+    # deploy/docker-compose.yml pass an optional setting through as ``${VAR:-}``: the
+    # compose file is the whole list of what this process can read, a setting missing
+    # from it does not exist in here however carefully the operator set it (the field
+    # walk set HASHI_FINDING_REMEASURE_INTERVAL and ``env`` inside the container showed
+    # nothing), and a blank pass-through with the default kept HERE is one default
+    # rather than a second copy in the compose file that drifts from this one.
+    #
+    # It loosens nothing a required field relies on: a blank ``HASHI_SECRET_KEY`` or
+    # operator hash is now "missing" rather than "too short" or "malformed", which
+    # refuses to boot exactly as loudly.
+    model_config = SettingsConfigDict(env_prefix="HASHI_", env_ignore_empty=True)
 
     # No default on purpose: this key encrypts node credentials at rest, and a
     # generated-on-boot fallback would silently make yesterday's backup
@@ -132,6 +144,17 @@ class Settings(BaseSettings):
     # it, and short enough that a healthy apply costs one of them.
     node_settle_timeout: float = 20.0
     node_settle_interval: float = 2.0
+
+    # How often, in seconds, this control plane re-measures a node that is IN SERVICE and
+    # carries a finding — fix round 5, walk 4's fourth finding. The walk saw a node serving
+    # at 0% loss 35 seconds after an apply's wait ended, with the panel still reading the
+    # verdict, because nothing measured again until a human pressed probe. Sixty seconds
+    # because a slow host's late start is the case, and it is measured in tens of seconds;
+    # and because each pass dials only the nodes that carry a finding, so a healthy fleet
+    # costs nothing. ``0`` turns it off — a setting rather than a constant for the
+    # settle window's reason: it is what a real fleet (or this test suite) has to be able
+    # to change. See ``services/health.remeasure_findings`` for what it may and may not do.
+    finding_remeasure_interval: float = Field(default=60.0, ge=0)
 
     # How long the audit trail keeps an entry, in days. Thirty rather than ninety or
     # forever: what the trail answers — did I do this, what did I change before it

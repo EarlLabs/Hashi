@@ -135,8 +135,17 @@ async def test_the_users_screen_says_it_too_and_not_only_about_a_withdrawal(
     different consequences of it, and M23's own reasoning for splitting its pair applies
     unchanged: one sentence covering both would have to drop the instruction from one of
     them.
+
+    SOMEBODY IS REVOKED FIRST since M26's fix round 5, which is what makes the withdrawal
+    note true of this fleet at all: it is about access taken away, and a panel with no
+    revoked user has nobody it could be about (the test below). The revocation's own
+    fan-out applies the node, so the user added afterwards is what leaves it behind.
     """
     await a_serving_node(client, reality_params)
+    gone = await client.post("/api/users", json={"nickname": "gone-user"})
+    assert gone.status_code == 201, gone.text
+    revoked = await client.post(f"/api/users/{gone.json()['id']}/revoke")
+    assert revoked.status_code == 200, revoked.text
     created = await client.post("/api/users", json={"nickname": "acc-user"})
     assert created.status_code == 201, created.text
 
@@ -148,6 +157,33 @@ async def test_the_users_screen_says_it_too_and_not_only_about_a_withdrawal(
     assert THE_OTHER_NOTE in said, (
         "the withdrawal note has gone from a fleet it is still true of — this milestone "
         "adds a sentence beside it and takes none away"
+    )
+
+
+async def test_no_withdrawal_note_when_nobody_was_withdrawn(
+    client, session, reality_params, accepting_nodes
+) -> None:
+    """Walk 4's low finding: the note fired with ZERO revoked users.
+
+    Three walks tripped on it. The node is behind — a user was added since its last apply
+    — and that is all the old condition asked; but the note is about access WITHDRAWN and
+    not confirmed gone, and on a panel where nobody has been withdrawn it is a warning
+    about nobody. The added-user sentence, which IS about this fleet, stays.
+
+    Red on the commit before fix round 5: the note was on this screen.
+    """
+    await a_serving_node(client, reality_params)
+    created = await client.post("/api/users", json={"nickname": "acc-user"})
+    assert created.status_code == 201, created.text
+
+    table = await client.get("/panel/users/table")
+
+    assert table.status_code == 200, table.text
+    said = " ".join(table.text.split())
+    assert "A user added here is not on leaf-acc yet" in said, said
+    assert THE_OTHER_NOTE not in said, (
+        "the Users screen warns about withdrawn access on a panel where nobody's access "
+        "was withdrawn"
     )
 
 

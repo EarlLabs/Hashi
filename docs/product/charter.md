@@ -26,9 +26,18 @@ shipped first.
 | Owner (operator) | Add/remove nodes and transports, watch node health, issue and revoke access, rotate anything that gets blocked — all from one admin panel |
 | Users (~30–50) | Paste one subscription URL into a standard client (Amnezia / Hiddify / v2rayNG / streisand) once, and thereafter just connect; pick an exit country |
 
-Users never receive raw configs and never re-add anything. The subscription URL
-is the only artefact they hold — that is what makes "swap a protocol in minutes"
-real rather than theoretical.
+A user whose protocols are link-shaped (the VLESS pair) never receives a raw config
+and never re-adds anything: the subscription URL is the only artefact they hold, and
+that is what makes "swap a protocol in minutes" real rather than theoretical.
+
+**A user on a WireGuard-family protocol does, and the owner accepted that on
+2026-10-02** (`docs/decisions.md`). Those protocols are a config *file*, delivered by a
+second link beside the subscription link (M24), and an imported `.conf` does not refresh
+itself: after a key rotation, or a node of theirs replaced, that user downloads the
+config-file link again and re-imports it. The same holds for a WireGuard-family
+transport newly enabled for them. Everywhere this charter says users are not touched —
+the one-liner, criterion 3 — it holds for subscription-link users and not for this
+family.
 
 ## Non-goals
 
@@ -37,7 +46,7 @@ real rather than theoretical.
 - **No client application of our own.** Standard subscription formats only, so
   every existing client works.
 
-  **Open question, and the biggest one in phase 1** (raised 2026-08-02 by the
+  **The biggest open question of phase 1, settled below** (raised 2026-08-02 by the
   phase-1 protocol choice, against decision D of 2026-08-01 in
   `docs/product/backlog.md`): a v1 subscription is a base64 list of client-entry
   URIs, and **AmneziaWG has no URI form** — it is a config file, not a link.
@@ -48,6 +57,13 @@ real rather than theoretical.
   ("onboarding is one link") weakens for these transports. **Which one is a
   product decision, not an implementation detail** — it must be settled with a
   real client before the first transport is built, not discovered during it.
+
+  **Settled.** The owner chose the second (2026-08-09, `docs/product/backlog.md`,
+  Q11): the delivery endpoint serves per-client config files behind the same token.
+  M24 (2026-10-02) made it one URL per config shape — a WireGuard-family user is handed
+  a config-file link beside the subscription link — so criterion 5 holds as *one token*
+  and, for this family, two links; and a config-file user re-imports after a change,
+  which the owner accepted the same day (*Users and jobs*, above).
 - **No reseller / multi-tenancy.** One operator, one fleet.
 - **No traffic logging, no DNS logs, no per-user analytics.** Not "off by
   default" — absent, so there is nothing to seize or subpoena.

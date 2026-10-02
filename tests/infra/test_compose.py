@@ -177,14 +177,31 @@ def test_published_ports_avoid_service_defaults() -> None:
 # its own users' subscription refreshes", which is a supported shape and the shipped one,
 # so `:?` would refuse to start the fleet that has not got that feature.
 #
-# An allowlist and not a pattern, so that making a REQUIRED variable optional — which is
-# the same defect wearing the opposite sign — turns this test red rather than reading as
-# intentional.
-MAY_BE_BLANK = {"HASHI_DELIVERY_CERTIFICATE_PATH", "HASHI_DELIVERY_KEY_PATH"}
+# Which interpolations may be blank, DERIVED from the settings model rather than listed
+# here — M31.2. A blank is safe for exactly one kind of variable: a ``Settings`` field with
+# a default, because ``Settings`` reads a set-but-empty variable as unset
+# (``env_ignore_empty``) and so takes the default written in control/app/settings.py.
+#
+# Derived and not an allowlist since M31, and the direction still holds: a REQUIRED field
+# made optional in this file (``${HASHI_SECRET_KEY:-}``) is not in this set, so it is still
+# red rather than reading as intentional — and so is any non-``HASHI_`` variable, which no
+# default of ours can catch.
+SETTINGS_WITH_A_DEFAULT = {
+    f"HASHI_{name.upper()}"
+    for name, field in Settings.model_fields.items()
+    if not field.is_required()
+}
 
 
 def test_required_env_vars_fail_loudly() -> None:
-    """`${VAR}` silently becomes '' without --env-file; `${VAR:?msg}` does not."""
+    """`${VAR}` silently becomes '' without --env-file; `${VAR:?msg}` does not.
+
+    And `${VAR:-}` — blank on purpose — only for a setting whose blank is its default.
+    """
+    assert Settings.model_config.get("env_ignore_empty") is True, (
+        "Settings no longer reads a blank variable as unset, so every `${VAR:-}` below "
+        "hands the control plane an empty string it will refuse to boot on"
+    )
     bad = []
     for line in BASE.read_text().splitlines():
         if line.lstrip().startswith("#"):
@@ -195,37 +212,84 @@ def test_required_env_vars_fail_loudly() -> None:
         if "${" not in without_escapes:
             continue
         named = re.findall(r"\$\{([A-Z0-9_]+)", without_escapes)
-        if ":?" not in without_escapes and not (set(named) & MAY_BE_BLANK):
+        if ":?" not in without_escapes and not set(named) <= SETTINGS_WITH_A_DEFAULT:
             bad.append(line.strip())
     assert bad == [], f"interpolations without a :? guard: {bad}"
 
 
+# The settings a DEPLOYED control plane deliberately cannot be handed, each with the
+# reason. Everything else ``Settings`` declares must be in ``control.environment`` —
+# M31.2. Kept as a dict with its reasons beside it so that adding a name here is a
+# sentence somebody has to write, rather than a quiet way to make the test below pass.
+NOT_FOR_A_DEPLOYMENT = {
+    # Off only in the e2e overlay, which talks to the control plane over plain HTTP. The
+    # base file leaving it out is what keeps a deployment from inheriting it from a laptop
+    # (deploy/docker-compose.e2e.yml says so where it sets it).
+    "HASHI_PUBLIC_HTTPS",
+    # Its default IS the read-only mount point this file declares; a value set in .env
+    # would name a path inside the container that nothing mounts. The suite points it at
+    # a record it wrote itself, which is the only reason it is a setting at all.
+    "HASHI_BACKUP_RECORD",
+}
+
+
 def test_a_setting_the_operator_is_told_to_fill_reaches_the_container() -> None:
-    """The defect this is the guard for shipped once, in M27.6, and could not be seen.
+    """The defect this is the guard for shipped twice and could not be seen either time.
 
     `control.environment` enumerates what the control plane may read, there is no
-    `env_file`, and `.env` is excluded from the build context — so a variable documented
-    in `.env.example` and missing from that list does not exist inside the container
-    however carefully the operator sets it. There is no error: the setting takes its
-    default, and the feature it configures is simply absent.
+    `env_file`, and `.env` is excluded from the build context — so a variable missing from
+    that list does not exist inside the container however carefully the operator sets it.
+    There is no error: the setting takes its default, and the feature it configures is
+    simply absent. M27.6 shipped the delivery certificate pair that way.
 
-    Asked of the SETTINGS MODEL and not of a list kept here, so a field added to
-    ``Settings`` and documented for the operator is covered by existing.
+    WHY THIS RULE MISSED THE SECOND ONE (M31.2). It asked only about settings documented
+    in ``.env.example``, and ``HASHI_FINDING_REMEASURE_INTERVAL`` was documented in
+    ``docs/decisions.md``, in the settings model and nowhere an ``^VAR=`` line could be
+    found — so it was outside the rule's question entirely, and so were five more that the
+    Settings screen tells the operator to change (``HASHI_SESSION_MAX_AGE``,
+    ``HASHI_NODE_SSH_TIMEOUT``, …). The field walk set it in ``.env`` and ``env`` inside
+    the container showed nothing.
+
+    So the question is now asked of the SETTINGS MODEL ALONE: every field is passed
+    through, or is named in ``NOT_FOR_A_DEPLOYMENT`` with the reason it must not be.
+    Where the operator happened to read about a variable no longer decides whether it
+    works.
     """
-    documented = {
-        match.group(1)
-        for match in re.finditer(
-            r"^([A-Z0-9_]+)=", (DEPLOY.parent / ".env.example").read_text(), re.M
-        )
-    }
     readable = {f"HASHI_{name.upper()}" for name in Settings.model_fields}
     passed_through = set(
         yaml.safe_load(BASE.read_text())["services"]["control"]["environment"]
     )
-    unreachable = sorted((documented & readable) - passed_through)
+    unreachable = sorted(readable - passed_through - NOT_FOR_A_DEPLOYMENT)
     assert unreachable == [], (
-        "these are documented in .env.example and read by control/app/settings.py, and "
-        f"deploy/docker-compose.yml does not pass them into the container: {unreachable}"
+        "control/app/settings.py reads these, and deploy/docker-compose.yml does not pass "
+        f"them into the container, so setting them in .env does nothing: {unreachable}"
+    )
+    assert NOT_FOR_A_DEPLOYMENT <= readable, (
+        "NOT_FOR_A_DEPLOYMENT names a setting that no longer exists: "
+        f"{sorted(NOT_FOR_A_DEPLOYMENT - readable)}"
+    )
+    assert not NOT_FOR_A_DEPLOYMENT & passed_through, (
+        "a setting kept off deployments on purpose is passed through after all: "
+        f"{sorted(NOT_FOR_A_DEPLOYMENT & passed_through)}"
+    )
+
+
+def test_the_remeasure_interval_is_documented_with_its_off_switch() -> None:
+    """M31.2's other half: the operator can find it, and finds out what 0 does."""
+    lines = (DEPLOY.parent / ".env.example").read_text().splitlines()
+    at = next(
+        (i for i, line in enumerate(lines) if line.startswith("HASHI_FINDING_REMEASURE_INTERVAL=")),
+        None,
+    )
+    assert at is not None, ".env.example does not name HASHI_FINDING_REMEASURE_INTERVAL"
+    # The comment paragraph directly above the line, and nothing further up.
+    above = []
+    for line in reversed(lines[:at]):
+        if not line.startswith("#"):
+            break
+        above.append(line)
+    assert "HASHI_FINDING_REMEASURE_INTERVAL=0" in "\n".join(above), (
+        ".env.example names the interval without saying that 0 switches it off"
     )
 
 

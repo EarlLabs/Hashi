@@ -45,6 +45,20 @@ env:
 	@test -f .env || { cp .env.example .env; echo ".env created from .env.example — fill it in"; }
 	@mkdir -p backups/state deploy/delivery
 
+# Every script under scripts/ is a bash script (`#!/usr/bin/env bash`), and Make runs
+# recipes with /bin/sh — so a host without bash used to meet `env: can't execute 'bash'`,
+# exit 127, before a single one of the script's own prerequisite checks could say anything
+# (M31.7, the restore walk on a minimal image). Asked here, in sh, before the script is
+# started; every recipe that runs one of them starts with it, which
+# tests/infra/test_a_bare_host_can_finish_the_restore.py holds them to.
+define need_bash
+@command -v bash >/dev/null 2>&1 || { \
+  echo "this command runs a bash script, and this machine has no bash."; \
+  echo "Install it with the package manager (e.g. apk add bash, apt-get install bash),"; \
+  echo "then run the same command again. Nothing has been changed."; \
+  exit 1; }
+endef
+
 # Every verify target needs the venv. Fail with an instruction, not a traceback.
 define need_venv
 @test -x $(PY) || { echo "no $(VENV) yet — run: make setup"; exit 1; }
@@ -226,6 +240,7 @@ ps:
 .PHONY: panel-bootstrap
 
 panel-bootstrap:
+	$(need_bash)
 	@scripts/panel-bootstrap.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
 
 # The one value in .env that cannot be typed, on a host where nothing can produce it.
@@ -242,6 +257,7 @@ panel-bootstrap:
 # but a container runtime. Nothing here reads an env file — it cannot, because the file
 # is what this command exists to help fill in.
 hash-password:
+	$(need_bash)
 	@scripts/hash-password.sh
 
 ## --- preparing a host to be a node (see scripts/node-bootstrap.sh) ----------
@@ -290,26 +306,31 @@ node-bootstrap:
 # 04:00 for a day that already had one. What it prints is scripts/backup.sh's own output,
 # unchanged, and it exits with the same 0/1/3.
 backup:
+	$(need_bash)
 	@scripts/backup-run.sh now
 
 # The schedule itself. Idempotent: it replaces its own block in this account's crontab and
 # leaves every other line alone. No root, no new package, no daemon of ours — see the
 # script's header for why a container with the docker socket was rejected instead.
 backup-schedule:
+	$(need_bash)
 	@scripts/backup-schedule.sh install
 
 backup-unschedule:
+	$(need_bash)
 	@scripts/backup-schedule.sh remove
 
 # "When did a backup last succeed, and has one failed since?" — answered from the record
 # on this host, because the credential here may only write and cannot look in the bucket.
 backup-status:
+	$(need_bash)
 	@scripts/backup-run.sh status
 
 # What exit 3 leaves you holding. Sends an artifact that is already on disk, and never
 # dumps — so it costs the database nothing and can be retried as often as the store needs.
 backup-upload:
 	@test -n "$(FROM)" || { echo "usage: make backup-upload FROM=backups/hashi-....sql.gz.age"; exit 2; }
+	$(need_bash)
 	@scripts/backup.sh upload "$(FROM)"
 
 # Deliberately requires the path on the command line rather than picking the newest
@@ -322,6 +343,7 @@ backup-upload:
 # and needs no identity. The script tells the two apart by reading the file, not its name.
 restore:
 	@test -n "$(FROM)" || { echo "usage: make restore FROM=backups/hashi-....sql.gz.age"; exit 2; }
+	$(need_bash)
 	@scripts/backup.sh restore "$(FROM)"
 
 # The one for the day the machine is gone, and the only verb here that is a whole rebuild
@@ -350,10 +372,12 @@ restore:
 # command. A restored control plane on a new address that the old name still does not
 # point at serves nobody.
 restore-from-bucket:
+	$(need_bash)
 	@scripts/backup.sh restore-from-bucket $(if $(OBJECT),"$(OBJECT)",)
 
 # Fetch the upstream data-plane checkers, so the validation tests stop skipping.
 checkers:
+	$(need_bash)
 	@scripts/fetch-upstream-checkers.sh
 
 ## --- warden: the tracker integration (see deploy/warden/README.md) ----------

@@ -47,6 +47,7 @@ from edge.bootstrap import NodeConnection, node_stack
 from edge.bootstrap import delivery as node_delivery
 from edge.bootstrap import delivery_site as node_delivery_site
 from edge.health import listening
+from edge.health import serving as serving_question
 from edge.registry import Layer4, discover
 
 # Where the tests find a database. Defaults to the dev stack's published Postgres, so
@@ -609,6 +610,15 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     async def restart(connection) -> None:
         return None
 
+    async def restart_services(connection, services) -> None:
+        # M31.3's repair — a restart of a service ``up -d`` left alone and that a reading
+        # refused. This double's containers keep ONE life for the whole test (see
+        # ``running_containers`` below), so every refused config here reads as left alone,
+        # and a test that refuses one exercises the repair too. Accepted and recorded, like
+        # every other step of an apply on this node: whether it then serves is what the
+        # test's own readings say.
+        connection.restarted = [*getattr(connection, "restarted", []), *sorted(services)]
+
     async def running_containers(connection) -> node_stack.RunningContainers:
         # A node whose restart DID take: every container comes back on the config it
         # was just handed, and stays. ``digest_of`` is the real one, so this is the
@@ -642,7 +652,18 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
         # so in its own file.
         return _EVERY_PORT_HELD
 
+    async def ask(connection, *, checks, about) -> dict[str, bool | None]:
+        # AND THE TRANSPORT'S OWN SERVING QUESTION — M26's fourth walk, fix round 5,
+        # which taught the apply to put it to every placed config whose transport
+        # declares one. Answered YES for each of them, for ``bound_ports``' reason: this
+        # double is the node where every step of an apply works, and a wg-family
+        # interface holding the peers it was given is part of that. Without it the
+        # double has no ``run`` and every apply of such a transport dies in the settle
+        # loop. A test about a node that answers NO builds its own fake and says so.
+        return {name: True for name in sorted(set(about)) if name in checks}
+
     pinned(monkeypatch, listening, "bound_ports", bound_ports)
+    pinned(monkeypatch, serving_question, "ask", ask)
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)
@@ -658,6 +679,7 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned(monkeypatch, node_delivery_site, "remove_delivery_site", remove_delivery_site)
     pinned(monkeypatch, node_stack, "compose_projects", compose_projects)
     pinned(monkeypatch, node_stack, "restart", restart)
+    pinned(monkeypatch, node_stack, "restart_services", restart_services)
     pinned(monkeypatch, node_stack, "running_containers", running_containers)
 
 

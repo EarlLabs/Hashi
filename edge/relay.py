@@ -267,11 +267,11 @@ def exit_via(entry: HopEnd) -> str:
     **This replaces M3's own sketch, and the reason is worth having here rather than in a
     commit message.** The plan called for the entry to target the LEAF's in-tunnel
     address as an outbound destination. Nothing listens there: a leaf runs one hop end
-    and no proxy (see the runbook's shapes B and C), so there is no address on the leaf to
-    dial. What the leaf offers is a route — it forwards and masquerades whatever arrives
-    over the hop — and the only way to hand a packet to that route is to send it THROUGH
-    the tunnel rather than TO the far end of it. Which is what an address to send from
-    buys: the kernel does the rest, and no config anywhere learns what the hop is made of.
+    and no proxy, so there is no address on the leaf to dial. What the leaf offers is a
+    route — it forwards and masquerades whatever arrives over the hop — and the only way
+    to hand a packet to that route is to send it THROUGH the tunnel rather than TO the far
+    end of it. Which is what an address to send from buys: the kernel does the rest, and
+    no config anywhere learns what the hop is made of.
     """
     return str(ipaddress.ip_interface(entry.tunnel_address).ip)
 

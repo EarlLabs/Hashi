@@ -57,6 +57,16 @@ class NodeResponse(BaseModel):
     resolver: str | None
     state: str
     state_detail: str | None
+    # What the last measurement of this host found, and when — M31.4. ``state_detail`` is
+    # only ever the reason a node was taken OUT of service; since fix round 5 a node left
+    # IN service carries its verdict here instead, and the field walk read ``active``,
+    # ``state_detail: null`` beside an apply that had just said "the finding stays on its
+    # row" — a row this response did not show. ``null`` finding with a time is a probe
+    # that found nothing; both ``null`` is a host nobody has measured since it was last
+    # applied. The sentence names transports and containers, never a person (see
+    # ``nodes.record_probe``).
+    last_probe_finding: str | None = None
+    last_probe_at: datetime.datetime | None = None
     created_at: datetime.datetime
 
 
@@ -201,9 +211,29 @@ class SubscriptionIssued(BaseModel):
     Returned when a subscription is created or re-displayed to the operator, because
     the operator has to be able to send it to their user. It is never logged and
     never included in any list endpoint.
+
+    ONE URL PER CONFIG SHAPE — M24, the owner's decision (``docs/decisions.md``,
+    2026-10-02). ``url`` is the subscription link and is unchanged; a user holding a
+    transport whose configuration is a file gets that shape's URL beside it, the same
+    token asking ``?format=`` for it. Two fields rather than one link that answers by
+    what a node serves, which is the alternative the owner rejected.
     """
 
-    url: str
+    url: str = Field(
+        description=(
+            "The subscription link, for an app that imports a subscription URL. Always "
+            "present; empty as a document while this user holds nothing that rides in it."
+        )
+    )
+    config_file_url: str | None = Field(
+        default=None,
+        description=(
+            "The config-file link — an archive of configuration files to unzip and import "
+            "into each protocol's own app, never into a subscription app. Present when, and "
+            "only when, this user holds a credential on an offered transport that declares "
+            "the client-config-file shape; null otherwise."
+        ),
+    )
 
 
 class RevocationResponse(BaseModel):
@@ -251,6 +281,28 @@ class RevocationResponse(BaseModel):
 class ApplyResponse(BaseModel):
     node_id: str
     transports_applied: list[str]
+    # What this apply pushed and could NOT measure serving — fix round 5. A name here is a
+    # config that stayed up, was refused by nothing and was confirmed by nothing either (an
+    # image without its transport's own check, a host without ``ss``). Its own field
+    # because the walk read a success that could not take the reading byte-identical to one
+    # that did.
+    #
+    # EMPTY MEANS EVERY CONFIG WAS MEASURED, AND NOT HOW STRONGLY — M31.5. This comment
+    # used to call an empty list "pushed and measured", and the field walk read exactly
+    # that for ``vless-reality``, whose only measurement is that something holds its port.
+    # How each config was measured is the next field.
+    serving_unmeasured: list[str] = Field(default_factory=list)
+    # Configs measured serving by their HELD PORT alone, because their transport declares
+    # no serving question of its own — M31.5. Measured, and weaker than the rest: ``nc``
+    # holding the number satisfies it as well as the daemon does (M26, walk 4). A config
+    # in neither list answered its transport's own serving question YES.
+    serving_port_only: list[str] = Field(default_factory=list)
+    # Configs this apply found running the configuration it pushed, refused by their own
+    # reading, in a container its ``docker compose up -d`` had left alone — and restarted
+    # once, after which nothing refused them — M31.3 (whether something CONFIRMED them is
+    # the two fields above, as for every config). Named because a restart drops every
+    # session on that transport, and an apply that did one should say so.
+    restarted_to_serve: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -288,6 +340,17 @@ class HealthResponse(BaseModel):
     # statement about something nobody measured.
     listening: list[str]
     not_listening: list[str]
+    # Transports whose OWN serving question was put to the node and answered yes / no —
+    # M26's fourth walk. A different question from the two above, asked of the transport
+    # rather than of the socket: a wg-family node answers it by holding the peers it was
+    # given, which ``nc`` on its port cannot fake. A running transport in neither list
+    # declares no such question, or could not be asked it.
+    serving: list[str] = Field(default_factory=list)
+    not_serving: list[str] = Field(default_factory=list)
+    # Transport name → what its yes (or its no) means, in the transport's own words, for
+    # every name in the two lists above. The console composes it into the sentence and
+    # must not invent it.
+    serving_means: dict[str, str] = Field(default_factory=dict)
     detail: str | None
 
     @property

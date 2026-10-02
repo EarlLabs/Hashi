@@ -569,6 +569,90 @@ remove_staged() {
   STAGED=""
 }
 
+# WHICH compose project the running database belongs to — M31.9. Asked of the container
+# itself (the label compose stamps on everything it creates) rather than worked out from
+# COMPOSE_PROJECT_NAME: unset, that variable says nothing, and the confirmation used to print
+# a placeholder about the directory name while the project was in fact `hashi`, named by the
+# compose file's own `name:`. The container is the stack this restore will write into,
+# whichever of the three decided its name.
+compose_project() {
+  local id project=""
+  id="$("${COMPOSE[@]}" ps -q "${SERVICE}" 2>/dev/null | awk 'NR==1')"
+  if [ -n "${id}" ]; then
+    project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' \
+      "${id}" 2>/dev/null | tr -d '\r\n' || true)"
+  fi
+  printf '%s' "${project:-unknown — the database container did not say}"
+}
+
+# How many nodes and users the database holds NOW, as "<nodes> <users>" — M31.6. Read after
+# a restore, so an artifact written before the fleet existed is visible on the screen rather
+# than discovered at the panel: the restore walk restored one with nothing in it and was told
+# only that the users and nodes it held were back. The two tables are named here, which
+# `rows_at_stake` deliberately does not do, because "how many nodes" is the question the
+# operator is asking and no catalogue walk can answer it. Empty output when it cannot be read.
+held_counts() {
+  local user="$1" name="$2"
+  "${COMPOSE[@]}" exec -T "${SERVICE}" \
+    psql --username="${user}" --dbname="${name}" --tuples-only --no-align --quiet \
+    --command "select (select count(*) from nodes) || ' ' || (select count(*) from users)" \
+    2>/dev/null | tr -d '\r' | awk 'NF==2 {print; exit}'
+}
+
+# The one failure a restore cannot see, in one sentence both restore paths print — M31.8.
+# There used to be two accounts of it — the app announcing it on first use, mid-run, and
+# "open the panel" on the closing screen. This is what the control plane actually does: any
+# request that reads a stored credential is refused with the sentence quoted here
+# (control/app/errors.py, `secret_unreadable_handler`), and nothing else looks wrong.
+WRONG_KEY_SENTENCE="One thing no restore can check: whether HASHI_SECRET_KEY in ${ENV_FILE}
+is the key this artifact was written under. The rows arrive either way and
+the columns holding node and user secrets simply stay shut. Open the panel:
+if a node or user screen, or an apply, answers
+  \"The data is intact; the key is wrong.\"
+then it is not — and the fix is that one line, not another artifact."
+
+# Set by `held_counts` through `command_restore`, read by the bucket's closing screen.
+RESTORED_NODES="unknown"
+RESTORED_USERS="unknown"
+
+# Bring the control plane back on the database just restored — M31.8, and it is done here
+# rather than left as an instruction. `pg_dump --clean` drops and recreates every table, and
+# the control plane's database driver caches prepared statements per pooled connection; a
+# statement cached against the tables that were just dropped fails the first time each
+# connection reuses it. A restart clears every one of them. The walk saw `/sub` answer
+# without it, which is true and is luck — which connection, which statement.
+#
+# `restart`, which changes nothing about what this host publishes whichever `up` brought it
+# up (M28.10, finding 3) — EXCEPT on the bucket path, which holds the re-measure loop at 0
+# (HOLD_REMEASURE=1, set by command_restore_from_bucket): a control plane rebuilt from a
+# backup should not start dialling the nodes that carry a finding before its operator has
+# looked (M31.2). A changed environment needs `up -d`, and on that path the stack is the
+# base file's alone — the bootstrap just converged it — so recreating `control` from the base
+# file loses no published port. `make up-panel` / `make up-panel-over-ssh` recreate it again
+# with the env file's value, which is the operator's act this waits for.
+restart_control() {
+  if [ "${HOLD_REMEASURE:-0}" = "1" ]; then
+    HASHI_FINDING_REMEASURE_INTERVAL=0 "${COMPOSE[@]}" up -d --no-deps --no-build control >&2 \
+      || return 1
+  else
+    "${COMPOSE[@]}" restart control >&2 || return 1
+  fi
+  # Healthy, not merely started: the closing screen asks the container questions, and an
+  # operator told "restarted" opens the panel next.
+  local id status waited=0 limit="${CONTROL_HEALTH_TIMEOUT:-180}"
+  while [ "${waited}" -lt "${limit}" ]; do
+    id="$("${COMPOSE[@]}" ps -q control 2>/dev/null | awk 'NR==1')"
+    status=""
+    if [ -n "${id}" ]; then
+      status="$(docker inspect --format '{{.State.Health.Status}}' "${id}" 2>/dev/null || true)"
+    fi
+    [ "${status}" = "healthy" ] && return 0
+    sleep 2
+    waited=$((waited + 2))
+  done
+  return 1
+}
+
 command_restore() {
   local input="${1:-}"
   [ -n "${input}" ] || usage
@@ -638,7 +722,7 @@ MSG
     # and the confirmation would look identical. So it shows what it resolved.
     echo "About to restore into:" >&2
     echo "  env file: ${ENV_FILE}" >&2
-    echo "  compose project: ${COMPOSE_PROJECT_NAME:-<default: the directory name>}" >&2
+    echo "  compose project: $(compose_project)" >&2
     echo "  database: ${name}" >&2
     if [ "${at_stake}" = "0" ]; then
       # The case this whole command exists for, and the one the old prompt lied about.
@@ -707,16 +791,42 @@ MSG
   fi
 
   echo "restored." >&2
-  # NOT `make down && make up`, which is what this line used to say. On a deployed host
-  # that sequence converges the stack back to the base file's shape and takes away every
-  # published port — the Makefile's own comment on `up-panel` warns against exactly it —
-  # so the instruction that was meant to finish a rebuild ended with a panel nobody could
-  # reach, two paragraphs above the same screen recommending `make up-panel` (M28.10,
-  # finding 3). `restart` restarts what is running and changes nothing about what this
-  # host publishes, whichever `up` brought it up.
-  echo "Restart the control plane so it reconnects: make restart-control" >&2
-  echo "If users cannot connect afterwards, HASHI_SECRET_KEY does not match the" >&2
-  echo "one this dump was written with — the app will say so loudly on first use." >&2
+
+  # What it held, counted rather than asserted — M31.6.
+  local held
+  held="$(held_counts "${user}" "${name}" || true)"
+  if [ -n "${held}" ]; then
+    read -r RESTORED_NODES RESTORED_USERS <<< "${held}"
+    echo "The database now holds ${RESTORED_NODES} node(s) and ${RESTORED_USERS} user(s)." >&2
+    if [ "${RESTORED_NODES}" = "0" ] && [ "${RESTORED_USERS}" = "0" ]; then
+      cat >&2 <<'MSG'
+That is NO nodes and NO users: this artifact was written by a control plane nothing had
+been registered on yet — a backup older than the fleet, or one taken from an empty
+install. If you expected a fleet, this is not its backup; restore an older artifact by
+name (OBJECT=… for the bucket, FROM=… for a file you hold).
+MSG
+    fi
+  else
+    echo "The database could not be counted after the restore; open the panel to see what it holds." >&2
+  fi
+
+  # NOT `make down && make up` (M28.10, finding 3) and no longer an instruction at all
+  # (M31.8): see `restart_control` for why the restore does it, and how.
+  if restart_control; then
+    echo "Restarted the control plane on the restored database." >&2
+  else
+    echo "" >&2
+    echo "The restore itself succeeded, and restarting the control plane on it did not" >&2
+    echo "finish (it is not healthy yet). Run: make restart-control — or make logs to see why." >&2
+  fi
+  # Said here only when nothing follows. The bucket path ends on a closing screen that
+  # carries this same sentence as its last word, and the real-host re-walk of 2026-10-02
+  # read it twice, word for word, a screen apart — M31.8 asks for one account said once.
+  # CLOSING_SCREEN_FOLLOWS=1 is set by command_restore_from_bucket and by nothing else.
+  if [ "${CLOSING_SCREEN_FOLLOWS:-0}" != "1" ]; then
+    echo "" >&2
+    printf '%s\n' "${WRONG_KEY_SENTENCE}" >&2
+  fi
 }
 
 # --- coming back from the bucket, M28.8 ---------------------------------------
@@ -1090,7 +1200,7 @@ MSG
   echo "" >&2
   echo "restoring ${chosen}" >&2
   echo "" >&2
-  command_restore "${chosen}"
+  HOLD_REMEASURE=1 CLOSING_SCREEN_FOLLOWS=1 command_restore "${chosen}"
 
   # --- 6. and what it did not do ----------------------------------------------
   #
@@ -1132,10 +1242,36 @@ S3 block, then \`make backup-schedule\`. Until you do, this fleet has exactly on
 copy of itself and it is this machine."
   fi
 
+  # The empty-artifact warning, again on the screen the operator reads last (M31.6).
+  local held_note=""
+  if [ "${RESTORED_NODES}" = "0" ] && [ "${RESTORED_USERS}" = "0" ]; then
+    held_note="
+That is NOTHING — an artifact older than the fleet. If you expected one, name an
+older object: … make restore-from-bucket OBJECT=<one of the names listed above>"
+  fi
+
+  # Whether this control plane will dial any node on its own yet — M31.2. Asked of the
+  # running container, so the sentence is about what is true rather than what was intended.
+  local dialling
+  if [ "$("${COMPOSE[@]}" exec -T control printenv HASHI_FINDING_REMEASURE_INTERVAL 2>/dev/null \
+        | tr -d '\r\n' || true)" = "0" ]; then
+    dialling="It dials no node on its own: re-measuring is held at 0 until you publish
+the panel below, which brings back the value in ${ENV_FILE} (blank is every
+60 s; set HASHI_FINDING_REMEASURE_INTERVAL=0 there to keep it off)."
+  else
+    dialling="It may already be re-measuring nodes that carry a finding (read-only
+probes); to stop that until you have looked, set
+HASHI_FINDING_REMEASURE_INTERVAL=0 in ${ENV_FILE} and run the publishing
+command below — a restart alone does not re-read the env file."
+  fi
+
   cat >&2 <<MSG
 
 ──────────────────────────────────────────────────────────────────────────────
-The control plane is back, with the users, nodes and tokens that artifact held.
+The control plane is back with what that artifact held: ${RESTORED_NODES} node(s),
+${RESTORED_USERS} user(s).${held_note}
+${dialling}
+
 Three things it did NOT do, and each of them is yours:
 
   1. DNS. Nothing here moved a record. ${delivery} still points at the machine
@@ -1144,12 +1280,13 @@ Three things it did NOT do, and each of them is yours:
      one that leaves a perfectly restored control plane serving nobody.
 
   2. The delivery endpoint's certificate. It was deliberately not in the backup
-     — the old host's private keys are to be presumed compromised. Caddy asks a
-     public CA for a new one the first time that name resolves HERE and inbound
-     80 and 443 reach this machine, which cannot happen before 1. Until then
-     /sub/* serves nothing. The panel is unaffected: it is served by Caddy's own
-     CA, which is new, so each of your own devices is asked to trust the console
-     once more.
+     — the old host's private keys are to be presumed compromised. This stack
+     publishes nothing and has asked no CA for anything. Caddy asks a public CA
+     for a new one when you publish 80 and 443 (below), and it succeeds only if
+     that name resolves HERE by then — so do 1 first: every failed validation
+     counts against the live name's rate limit. Until then /sub/* serves
+     nothing. The panel is unaffected: it is served by Caddy's own CA, which is
+     new, so each of your own devices is asked to trust the console once more.
 
   3. Telling anybody. No message goes to any user from this command or from the
      control plane — there is no channel, and that is a charter decision rather
@@ -1174,12 +1311,7 @@ fails on a bind docker cannot make.
 
 ${backup_standing}
 
-And one thing this command cannot check for you. Whether HASHI_SECRET_KEY in
-${ENV_FILE} is the key this artifact was written under: the restore succeeds
-either way, because the rows arrive whatever the key is and the columns holding
-node and user secrets simply stay shut. Open the panel — if the screens that
-touch a node or a user say "The data is intact; the key is wrong.", then it is
-not, and the fix is that one line rather than another artifact.
+${WRONG_KEY_SENTENCE}
 ──────────────────────────────────────────────────────────────────────────────
 MSG
 }

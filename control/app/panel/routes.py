@@ -270,7 +270,7 @@ async def users_screen(
         screen="panel/screens/users.html",
         current="users",
         title="Users",
-        subtitle="who can dial the mesh, and the one URL each of them holds",
+        subtitle="who can dial the mesh, and the subscription each of them holds",
         context=await _users_context(session),
     )
 
@@ -292,8 +292,9 @@ async def _users_context(session: AsyncSession) -> dict:
     # they come to disagree: the cell may only say the access is gone while the note says
     # nothing is in doubt.
     unconfirmed = await console.unconfirmed_nodes(session)
+    rows = await console.user_rows(session)
     return {
-        "users": await console.user_rows(session),
+        "users": rows,
         "serving": len(await nodes.serving_transports(session)),
         # What adding a user does NOT do — M26's first acceptance walk. The walk added a
         # user, opened their link and got a correct configuration file for a node that
@@ -307,7 +308,16 @@ async def _users_context(session: AsyncSession) -> dict:
         # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
         # services/console.py from the Nodes screen's own two readings, and ``None`` on a
         # fleet where every host is confirmed, so the table carries no standing warning.
-        "withdrawal_doubt": console.withdrawal_doubt(unconfirmed),
+        #
+        # AND ONLY WHEN SOMEBODY'S ACCESS HAS BEEN WITHDRAWN — fix round 5. The note is
+        # about what a withdrawal cannot promise, and three walks read it on a panel with
+        # no revoked user at all, fired by any node that was merely behind: a warning
+        # about nobody, on the screen of a fleet with a node to apply. A revocation keeps
+        # the user's row (``users.revoke`` deletes credentials, not the person), so
+        # "nobody here is revoked" is exactly "nobody here was withdrawn".
+        "withdrawal_doubt": console.withdrawal_doubt(
+            unconfirmed if any(not row.is_active for row in rows) else []
+        ),
         # The cell that used to read "no access", and since round 3 reads nothing at all
         # while that note is up. Passed in rather than written in the template because
         # whether it may be said is a decision this zone makes — see ``withdrawn_cell``.
@@ -2329,9 +2339,10 @@ async def apply_node(
             events="nodes-changed",
         )
     except DomainError as exc:
-        # Shown, not raised: a failed apply has already recorded its reason and marked
-        # the node degraded, and what the operator needs is the sentence on the screen
-        # they are on rather than an error envelope.
+        # Shown, not raised: a failed apply has already recorded its reason — on a
+        # degraded node's row, or since fix round 5 as the finding on a node it left in
+        # service — and what the operator needs is the sentence on the screen they are on
+        # rather than an error envelope. The sentence says which of the two happened.
         return _mutation(
             request,
             banner=exc.message,
@@ -2343,9 +2354,23 @@ async def apply_node(
     # an empty mapping. The branch that used to toast "nothing enabled to apply" went
     # with it — it described an outcome this button never actually had, since the push it
     # was written for failed and degraded the node instead.
+    if applied.unmeasured:
+        # NOT THE SAME WORDS AS A MEASURED SUCCESS — fix round 5, walk 4's third finding.
+        # With ``ss`` removed from the host the toast below was byte-identical to a
+        # healthy run's, over an apply that had established nothing about serving. A
+        # notice rather than a toast because it is a standing qualification of the
+        # answer, and a qualification that disappears after two seconds was not given.
+        return _mutation(
+            request,
+            notice=console.applied_unmeasured(
+                node.name, sorted(applied.configs), applied.unmeasured
+            ),
+            keeping=node.name,
+            events="nodes-changed",
+        )
     return _mutation(
         request,
-        toast=f"config applied to {node.name} — {', '.join(sorted(applied))}",
+        toast=console.applied_toast(node.name, sorted(applied.configs), applied.restarted),
         keeping=node.name,
         events="nodes-changed",
     )
@@ -2783,7 +2808,7 @@ async def create_user(
         events="users-created",
         context={
             "user": user,
-            "url": await console.subscription_url(
+            "handed": await console.links_for(
                 session, request.app.state.settings.public_base_url, user
             ),
             # THE SENTENCE THAT HAD TO BE HERE — M26's first acceptance walk. This is the
@@ -2802,7 +2827,7 @@ async def create_user(
 async def user_subscription(
     user_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
 ):
-    """Show the URL to send this user, in its own dialog.
+    """Show the URL or URLs to send this user, in its own dialog.
 
     On demand rather than as a column in the users table: the table is the page the
     operator leaves open, and a live bearer credential should not sit on screen — or
@@ -2815,7 +2840,7 @@ async def user_subscription(
         "panel/subscription_dialog.html",
         {
             "user": user,
-            "url": await console.subscription_url(
+            "handed": await console.links_for(
                 session, request.app.state.settings.public_base_url, user
             ),
             # Read fresh here, like everything else in this dialog: a link shown an hour

@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M31 — fix the real-host field walk's and the restore walk's defects (2026-10-02)"
+state: done
+progress: "all ten closed in code; review-loop clean in round 1; awaits the orchestrator's real-host re-walk"
+blockers: null
+updated_at: 2026-10-02T00:00:00Z

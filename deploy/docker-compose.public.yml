@@ -24,6 +24,14 @@
 
 services:
   caddy:
+    environment:
+      # Public issuance for the delivery name, switched on HERE and nowhere else — M31.1.
+      # The Caddyfile serves that name from Caddy's own CA unless this is set, and this
+      # is the file that publishes 80 and 443: a CA's validation can reach the container
+      # only in the shape this file builds, so this is the only shape that may ask one.
+      # The value is the ACME account's email, which is what Caddy's `tls` directive
+      # takes to mean "a public CA, as this account". See the Caddyfile's public site.
+      HASHI_PUBLIC_TLS: ${CADDY_ACME_EMAIL:?set CADDY_ACME_EMAIL in .env}
     ports:
       # The delivery endpoint, and the ACME challenge that keeps its certificate
       # alive. Deliberately UNBOUND — every other published port in this repository

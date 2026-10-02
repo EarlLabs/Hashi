@@ -189,8 +189,9 @@
       <p class="empty-body text-muted">
         {% if serving %}
         Use "add user" in the header. You give them a nickname; they get one
-        subscription URL covering every serving node, and nothing else about them is
-        ever stored.
+        subscription covering every serving node — one URL, and a second beside it if
+        they hold a protocol whose configuration is a file — and nothing else about
+        them is ever stored.
         {% else %}
         Nothing is serving yet, so a link issued now would resolve to an empty
         configuration. Add a node and put it into service first — then "add user" in

@@ -355,7 +355,14 @@ async def test_an_apply_that_could_not_confirm_the_daemon_clears_nothing(
     assert node.last_probe_finding == found, (
         "an apply that could not confirm the daemon deleted a true probe finding"
     )
-    assert node.state_detail, "the failed apply left no reason of its own on the row"
+    # ITS OWN REASON IS ON THE BANNER, AND THE NODE STAYS IN SERVICE — M26's fix round 5.
+    # This asserted a ``state_detail``, which only a demotion writes; the owner's rule
+    # since then is that a health verdict may warn and may never empty a user's link, so
+    # a node that was serving keeps its state and the row keeps the probe's finding — the
+    # fuller of the two sentences, about the same fault this apply reproduced.
+    assert str(node.state) == "active", node.state
+    assert "these did not come up" in applied.text, applied.text
+    assert "stays in users' links" in applied.text, applied.text
 
 
 def _pushes_but_never_comes_up(host):

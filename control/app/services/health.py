@@ -31,14 +31,24 @@ HOW:  renders through the same function the apply path uses, so "drifted" means 
       answers per transport rather than two — listening, not listening, and nobody
       could ask — because collapsing the third into the second reports a host whose
       socket table could not be read as a fleet-wide outage.
+
+      AND EACH TRANSPORT'S OWN SERVING QUESTION — M26's fourth walk, fix round 5. The
+      held port was satisfied by ``nc`` and by a wg-family daemon holding none of its
+      peers; a transport that declares what serving means for it is now asked that, and
+      its NO is a finding like any other (``apply.serving_checks`` builds the questions).
 """
 
+import asyncio
+import contextlib
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.api import schemas
-from control.app.errors import NodeCannotServe
+from control.app.db import Database
+from control.app.errors import DomainError, NodeCannotServe
+from control.app.models import Node, NodeState
 
 # ``console`` for one function: the sentence a probe's answer becomes. It is composed
 # there because the banner, the notice and now the node's own row must not come to three
@@ -82,11 +92,20 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
     # off the transport's declaration. A row neither can be resolved for is absent here,
     # and the probe then says its port was not checked rather than that it is silent.
     listeners = await apply.placed_listeners(session, node)
+    # And each placed config's transport's OWN serving question — M26's fourth walk, the
+    # one the port question above could not stand in for: ``nc`` on the number satisfied
+    # it, and so did the real daemon holding none of its peers. Judged against the same
+    # render as ``expected``, so "the peers it should hold" means what an apply would push.
+    checks = apply.serving_checks(placed, expected)
 
     try:
         async with NodeConnection(apply.target_for(node, apply.settings())) as connection:
             health = await probe(
-                connection, expected=expected, transports=placed, listeners=listeners
+                connection,
+                expected=expected,
+                transports=placed,
+                listeners=listeners,
+                serving_checks=checks,
             )
     except NodeUnreachable as exc:
         unreachable = schemas.HealthResponse(
@@ -127,6 +146,20 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
         stale=health.stale,
         listening=health.listening,
         not_listening=health.not_listening,
+        serving=health.serving,
+        not_serving=health.not_serving,
+        # What each answer MEANS, in the transport's own words — the console has no way
+        # to know what a protocol's yes established, and must not guess.
+        serving_means={
+            name: checks[name].question.confirms
+            for name in health.serving
+            if name in checks
+        }
+        | {
+            name: checks[name].question.refutes
+            for name in health.not_serving
+            if name in checks
+        },
         detail=health.detail,
     )
     # ``None`` on a healthy answer, and the timestamp is written either way: a probe that
@@ -138,3 +171,107 @@ async def check_node(session: AsyncSession, *, node_id: str) -> schemas.HealthRe
         finding=None if answer.healthy else console.health_summary(node.name, answer),
     )
     return answer
+
+
+# --- re-measuring a finding nobody pressed probe on — fix round 5 ------------------------
+#
+# WALK 4's FOURTH FINDING: a verdict never improved on its own. The apply waits a bounded
+# window and stops; 35 seconds after one refused, the node was serving at 0% loss and the
+# panel still read the refusal, because nothing measured the host again until a human
+# pressed probe. Since this round a verdict on a node in service no longer demotes it (see
+# ``apply.apply_node``), so what is left standing is a FINDING on a serving node's row —
+# and a finding that is never re-measured is a warning that outlives its truth.
+#
+# DECIDED (docs/decisions.md, 2026-10-02):
+#
+# * A node IN SERVICE that carries a finding is re-measured on a timer, by exactly the
+#   probe an operator would press (``check_node``), so the row's finding is cleared or
+#   restated by a measurement of the same kind — the rule an apply already keeps.
+# * A DEGRADED node is NOT re-measured automatically. Its way back into users' links is an
+#   apply, which grants, pushes and re-measures in one act; a timer that found it serving
+#   could only either promote it — putting a node into every user's link with no operator
+#   act, which is the decision this panel exists to leave with the operator — or write a
+#   note beside a state it cannot change. Neither is the smallest honest thing.
+# * Nothing here changes a node's state, writes an applied digest or touches a user. It
+#   records what a probe found, which is all a probe ever does.
+#
+# The loop is the control plane polling, which is the direction the topology allows: a
+# node never dials in. It logs node ids and counts only — never an address, a transport
+# parameter or anything a host printed.
+
+
+async def nodes_to_remeasure(session: AsyncSession) -> list[str]:
+    """The ids of every node in service that carries a finding, oldest finding first."""
+    result = await session.execute(
+        select(Node.id)
+        .where(Node.state.in_(NodeState.serving()))
+        .where(Node.last_probe_finding.is_not(None))
+        .order_by(Node.last_probe_at, Node.id)
+    )
+    return list(result.scalars())
+
+
+async def remeasure_findings(database: Database) -> int:
+    """One pass: probe each node in service that carries a finding. Returns how many.
+
+    One session per node, so a host that hangs or a probe that raises costs that node's
+    reading and nobody else's. A refusal (``NodeCannotServe`` — the node left service
+    between the select and the probe) and any other domain error are skipped quietly:
+    the row already says what an operator needs, and this pass has nothing to add to it.
+    """
+    ids: list[str] = []
+    async for session in database.session():
+        ids = await nodes_to_remeasure(session)
+    for node_id in ids:
+        try:
+            async for session in database.session():
+                await check_node(session, node_id=node_id)
+        except DomainError:
+            continue
+        except Exception as exc:
+            # The TYPE only, never ``str(exc)``: an arbitrary error out of the SSH layer
+            # can carry the host's address, and this line is written with nobody
+            # watching. One node's failure does not end the pass for the others.
+            logger.error("re-measuring node %s failed: %s", node_id, type(exc).__name__)
+    return len(ids)
+
+
+async def remeasure_forever(database: Database, *, interval: float) -> None:
+    """Sleep, re-measure, repeat — until cancelled.
+
+    Sleeps FIRST: a control plane that has just started has no reason to dial a host in
+    its first second, and an apply that just recorded a verdict deserves the interval
+    before a probe second-guesses it. A pass that fails is logged and the loop goes on —
+    the audit sweeper's rule, for its reason: a loop that dies once dies silently.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            remeasured = await remeasure_findings(database)
+            if remeasured:
+                logger.info("re-measured %d node(s) carrying a finding", remeasured)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "re-measuring nodes that carry a finding failed; next pass in %.0f seconds",
+                interval,
+            )
+
+
+def start_remeasurer(database: Database, *, interval: float) -> asyncio.Task | None:
+    """The loop as a task for the lifespan to hold, or ``None`` when it is turned off."""
+    if interval <= 0:
+        return None
+    return asyncio.create_task(
+        remeasure_forever(database, interval=interval), name="finding-remeasure"
+    )
+
+
+async def stop_remeasurer(task: asyncio.Task | None) -> None:
+    """Cancel the loop and wait for it, for ``audit.stop_sweeper``'s reason."""
+    if task is None:
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task

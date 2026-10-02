@@ -653,6 +653,11 @@ def test_the_last_thing_on_the_screen_is_what_it_did_not_do(script: str) -> None
     assert "certificate" in closing
     assert re.search(r"Telling anybody|no message goes to any user", closing, re.I)
     # The one failure it cannot see, named rather than left to be discovered.
+    # Since M31.8 the sentence is one variable both restore paths print, so the closing
+    # screen carries it by name and the definition carries the words.
+    if "${WRONG_KEY_SENTENCE}" in closing:
+        definition = script[script.index('WRONG_KEY_SENTENCE="'):]
+        closing = definition[: definition.index('artifact."\n')].replace('\\"', '"')
     assert "The data is intact; the key is wrong." in closing, (
         "the closing screen does not tell the operator what a wrong HASHI_SECRET_KEY looks "
         "like, and it is the only failure here that leaves everything looking fine"

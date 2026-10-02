@@ -499,7 +499,7 @@ async def test_a_ceiling_shorter_than_one_interval_confirms_nothing(
     await host.run("cd /opt/hashi && docker compose up -d")
 
     settled = await serving.confirm_serving(
-        host, expected=[TRANSPORT], listeners={}, interval=0.05, timeout=0.0
+        host, expected=[TRANSPORT], listeners={}, checks={}, interval=0.05, timeout=0.0
     )
 
     assert settled.staying_up == {}, (

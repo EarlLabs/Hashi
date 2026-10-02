@@ -1,4 +1,7 @@
-"""Following the runbook's own Shape A advice, then adding the hop it mandates.
+"""Following the runbook's own one-box advice, then adding the hop it mandates.
+
+(Named for the runbook's "Shape A", which M27.8 folded into one installation procedure;
+the one-box install is the same sequence.)
 
 WHAT: one box registered as its own node, the transport the runbook names for users
       enabled on it, and then the entry→leaf hop the runbook requires — over the SAME
@@ -40,9 +43,8 @@ import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 
-# The transport the runbook names TWICE — "enable a transport: amneziawg (or wireguard)
-# on UDP 51820" for Shape A's users, and "transport = amneziawg" for the hop in Shape
-# B. Naming it here is the point of the scenario rather than a shortcut: the collision
+# The transport the runbook names TWICE — `amneziawg` for the users of a node with no
+# hop, and "transport = amneziawg" for the hop. Naming it here is the point of the scenario rather than a shortcut: the collision
 # exists because one protocol is the right answer to both questions.
 RUNBOOK_TRANSPORT = "amneziawg"
 
@@ -110,11 +112,11 @@ async def a_node(operator, name: str, address: str, label: str) -> str:
 
 
 async def shape_a_box(operator, unique: str) -> tuple[str, str]:
-    """The runbook's Shape A, as far as it goes: one box, one user-facing transport.
+    """The runbook's one-box install, as far as it goes: one box, one user-facing transport.
 
-    Returns the node's id and its user-facing row's id. Steps 1 and 2 of *Register the
-    box as its own node* — the apply in step 3 needs a real host and is the owner's field
-    check, never this suite's.
+    Returns the node's id and its user-facing row's id. *Register each box as a node* and
+    *Enable a user-facing transport on the entry* — the apply after them needs a real host
+    and is the owner's field check, never this suite's.
     """
     node_id = await a_node(operator, f"box-{unique}", "192.0.2.30", f"Boxland-{unique}")
     offered = await operator.post(
@@ -138,7 +140,7 @@ async def test_the_box_the_runbook_describes_can_also_carry_the_hop_it_requires(
     *"'amneziawg' is already configured on node ..."*, and there was no way back from it
     short of editing the database by hand.
 
-    The box is the end that WAITS, which is what an operator growing out of Shape A
+    The box is the end that WAITS, which is what an operator growing out of one box
     actually has: the box they already run abroad keeps its users and becomes the far end
     of the hop a new Russian entry dials. Making it the DIALLING end is the other half of
     this file — refused, and asserted two tests down.
