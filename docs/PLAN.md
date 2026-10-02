@@ -55,155 +55,71 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
-**Run stopped by the owner on 2026-09-16, on quota.** Nothing is half-applied:
-the tree is clean, the gate is green, and every agent was stopped. What follows
-is where to pick it up.
+**As of 2026-10-02. 26 of 31 milestones are closed (✅); five are open — M24, M26, M27,
+M30, M31.** Everything before that is in the milestone sections below and in git.
 
-**24 of 26 milestones closed.** M26 is open but its question is answered; M24 is
-built (2026-10-02) and awaits its real-host walk.
+**Where the code is.** `develop` holds M27's steps 27.1–27.7 and 27.9 (PR #4). Nothing
+since is merged: `task/M26-fix-round-5` → `task/M31` → `task/M24` → `task/M27.8` are
+stacked in that order, each on the one before, and none of them is pushed.
 
-### M26 — the owner's question is settled; one code path is not
+### Built and closed in code on 2026-10-02
 
-The owner asked whether a leaf and an entry can be deployed by one command. **They
-cannot, and the scheme the owner accepted instead is exactly what ships:** one
-script per host, ending by printing what the operator types into the panel.
+- **M26 fix round 5, and the owner's decision on an unreachable host.** Walk 4's two
+  blockers — *a port held is not a node serving* and *a condemned node empties every
+  link* — are fixed, and **both were confirmed on real hosts on 2026-10-02** (below). The
+  owner's rule that came with it: *a health verdict may warn the operator; it may never be
+  why a user's link comes back empty* (`docs/decisions.md`, 2026-10-02).
+- **M31** — the ten defects the 2026-10-02 field walk and restore walk found. Review clean
+  in round 1. **Awaits a real-host re-walk.**
+- **M24** — the panel hands over the config-file link beside the subscription link (the
+  owner's *one URL per config shape*). The owner accepted, the same day, that a config-file
+  user re-imports after a key rotation or a replaced node; the charter now says its "never
+  re-add anything" holds for subscription-link users. **Awaits a real-host walk.**
+- **M27.8** — the runbook is one installation procedure; see M27.
 
-**Measured independently three times, and now matching the charter's own table:**
+Closed before this and unchanged: **M28** (restorable on a machine it never ran on, done
+2026-09-26) and **M29** (one word for the person who uses this, done 2026-09-23).
 
-| from | commands | panel actions |
-|---|---|---|
-| bare host → node serving | 1 | 3 — add node, enable transport, apply |
-| bare host → a user's packets moving | 1 | 5 — those three, add the user, apply again |
-| two bare hosts → an established entry→leaf hop | 2 | 6 |
-| bare host → the control plane | 13 (14 on a truly bare box) | 0 |
+### What the real hosts showed on 2026-10-02
 
-**Walk 3 carried a user across a hop built this way** — hop `established`, both
-ends handshaking, a stock client built from the subscription URL alone fetching
-`http=200`, the leaf's MASQUERADE counter moving 0 → 2 packets. The charter's
-overstatements (*"from a bare host to serving traffic"*, *"the node answers a
-health probe"*) are gone, and criterion 2 no longer claims a replacement is
-bootstrapped from the panel.
+Two test hosts: one in Russia carrying the control plane and the entry, one abroad
+carrying the leaf — the co-located arrangement **C+E | L** (the notation of M27.4's
+table), which is the arrangement the owner runs, there with several leaves abroad.
 
-**Four walks, three fix rounds landed and pushed.** Closed and re-verified by a
-later independent walk: the charter's two overstatements; a user added but not
-applied (now announced on all four surfaces, the claim true, all four silent
-after the apply); a probe finding erased by a page reload; the apply's check
-racing in both directions; the apply measuring container liveness instead of
-serving; the hop form's unanswerable boxes; a dialog whose submit shared its
-label with the button that opened it; `node-bootstrap.sh` claiming ufw logging
-was off before the check that could contradict it.
+- **A fresh install of that arrangement, from `task/M26-fix-round-5`.** `vless-reality` on
+  the entry with a decoy of its own, an `amneziawg` hop entry → leaf. A stock xray client
+  built from the subscription URL alone, run from a throwaway container: its exit address
+  was the leaf's; 8 of 8 DNS lookups crossed the hop interface and none left by the entry's
+  uplink; stopping the hop stopped the traffic, with no fallback to the entry's address.
+- **M26 on real hosts.** Removing the hop's peer live made the probe report `not_serving`
+  with the transport's own explanation. Stopping the entry's xray left the node `active`
+  and the subscription still carrying its entry.
+- **Backups.** The daily schedule installed and the first offsite upload succeeded.
+  Restore from the bucket on a machine that had never run this (a privileged dind
+  container), with the CA endpoints and port 22 blocked: one command; the restored
+  subscription body was sha256-identical to the live one, and the node, user,
+  subscription, credential and node-transport counts were equal. That walk is where M31's
+  defects came from.
 
-### Fix round 5 (2026-10-02) — walk 4's findings, fixed in code, not yet walked
+**Not proven by any of it, or by anything else:** surviving a Russian mobile whitelist
+shutdown. That is a field observation on a real Russian network.
 
-On branch `task/M26-fix-round-5`, not pushed. **Code and a disposable test database
-only; no real host was touched.** Every item below except the 14 hand-typed numbers
-(skipped by the owner) is closed in code with a test that was red before it — see
-`docs/tracker/M26/fix-round-5.md` and the 2026-10-02 rows in `docs/decisions.md`:
+### What is open
 
-- **blocker 2 (a condemned node empties every link)** — a measurement no longer demotes a
-  node that was serving; it stays in every user's link and the verdict is the row's
-  finding. *A health verdict may warn the operator; it may never be why a user's link
-  comes back empty.*
-- **blocker 1 (port held ≠ serving)** — apply and probe put each transport's own serving
-  question (`36d6b1b`'s edge half, now wired); for the wg family, holding the rendered
-  peers confirms it and the held port does not.
-- **high** — an apply that could not take its reading names what was unmeasured
-  (`serving_unmeasured`, a panel notice) instead of the healthy line.
-- **medium** — an `active` node carrying a finding is re-measured every 60 s; a degraded
-  node is deliberately not.
-- **low** — the withdrawn-access note needs somebody withdrawn.
+- **The re-walk of M31 and M24 on the real hosts** — run by the orchestrator next. What it
+  must see: `docs/tracker/M31/carry-over.md`, `docs/tracker/M24/carry-over.md`.
+- **M26** — its loop ends with a walk that finds nothing blocking. The 2026-10-02 walk
+  found M31's defects, so the M31 re-walk is the next walk of that loop; the 14 hand-typed
+  numbers per hop stay skipped by the owner.
+- **M27** — built and merged except 27.8, which lands on `task/M27.8`. **No real host has
+  run the arrangement it exists for** (C+L | E, an entry answering its own users'
+  refreshes while the control plane is abroad); its acceptance walk has not happened.
+- **M30** — wildcard issuance by the control plane. The owner approved the dependency in
+  principle (2026-10-02) and has not chosen a provider. Not needed for C+E | L — see M30.
+- **M16.3** — seven resolver acceptance findings, recorded as carry-over
+  (`docs/tracker/M16/carry-over.md`), never dispatched.
 
-**Still needed before M26 can close: an independent walk on real hosts** (walk 5) —
-walk 4's two contrived hosts again, and the false red on the owner's one-box Shape.
-
-The list below is walk 4's original record, kept as it was found.
-
-### What was open in M26 — walk 4's findings, as recorded before round 5
-
-Fix round 4 was stopped part-way. `36d6b1b` on `develop` is its **edge** half — a
-transport declares how to ask whether it is serving — committed, green, and with
-no caller yet. Its control half was discarded rather than left half-applied.
-
-1. **blocker — "the port is held" is not "the node is serving."** The check asks
-   whether the port number is held, never by what. Proven twice: `nc` squatting
-   on the port (apply → success at 100% packet loss), and — **with nothing
-   contrived** — the real daemon up with **the peer removed**, which is exactly a
-   node with a wrong peer key or endpoint. Device present, right daemon, right
-   port, `peers=[]`, 100% loss, **apply → success, probe → green.** An ordinary
-   typo produces a node that passes every check the product has and carries
-   nothing. *The fix `36d6b1b` starts: only the transport knows what serving
-   means for its own protocol — a wg-family node is serving when its interface
-   holds the peers that were rendered into its config.*
-2. **blocker — a condemned node empties every user's link.** A ~20-second false
-   red on the entry made `GET /sub/{token}` return **nothing at all**, while on
-   that host Xray was listening, the tunnel daemon held its port and the hop
-   handshake was 27 seconds old. **A slow VPS silently takes every user
-   offline.** Rule to build on: a health verdict may warn the operator, it may
-   never be why a user's link comes back empty.
-3. **high — an apply that could not take the reading says the same words as one
-   that took it and passed.** With `ss` removed from the host, the success line
-   was byte-identical to the healthy run. The state is right (it clears nothing);
-   only the sentence lies. The probe is honest in the same case.
-4. **medium — a verdict never improves on its own.** The apply waits ~20 seconds,
-   hard; 35 seconds after a refusal the node was serving at 0% loss and the panel
-   still read `degraded`. Nothing re-measures until a human presses probe.
-5. **low** — the Users screen warns about withdrawn access with zero revoked
-   users (M23's note firing on any behind-node; three walks have tripped on
-   it). **low** — 14 hand-typed numbers per hop remain, `port` the one new
-   candidate for a defensible default.
-
-**The outer edge of the waiting window was never tested** — a container down
-*past* the window that then recovers. Nobody knows what it does.
-
-### The defect class this milestone kept producing
-
-Every M26 blocker was one shape: **the panel claiming a node was fine when it was
-carrying nothing.** Four forms, each subtler — an erased measurement, a race, the
-wrong quantity, and the right quantity asked of the wrong thing. Three of the
-four fixes were themselves correct and insufficient. This is the project's
-signature defect (**a verification that cannot fail**, ~17 occurrences) and this
-code path is where it lives.
-
-### Also open
-
-- **M24** — the panel never showed `?format=client-config-file`. The owner chose one
-  URL per config shape (2026-10-02); **built 2026-10-02** on `task/M24`: the link
-  dialog and the API hand over a labelled config-file link beside the subscription
-  link. Awaits the real-host walk.
-- **M16.3** — seven resolver acceptance findings, recorded as carry-over, never
-  dispatched.
-
-### The live fleet was never written to
-
-Across 15 walks in M23, M25 and M26, no agent wrote a file under `/opt/hashi/conf`
-on either live host, restarted a container there, or ran an apply against them.
-The owner's hop was baselined before and after every walk and moved every time.
-
-One host, rented and live: **Amsterdam, NL — 45.151.69.107**, AS216139 Iron
-Hosting Centre, Ubuntu 22.04, 1 vCPU, 957 Mi RAM. Runbook **Shape A**: control
-plane, panel, delivery endpoint and one node on the same box.
-
-**Works, verified over the public internet:** `panel-bootstrap.sh` → Let's Encrypt
-certificate → panel login → register node → enable transport → `apply` → user →
-subscription → a real client connects and carries traffic. Operator auth fails
-closed (401 unauthenticated). The API returns public keys and withholds private
-and preshared ones.
-
-**The charter's hardest invariant holds on real hardware.** A live subscription
-token appears **zero** times in container logs and **zero** times in Docker's
-on-disk JSON logs; `/sub/` is never recorded; uvicorn's access log is empty and
-Caddy emitted four lines across the whole deployment. No unit test could have
-established this.
-
-**Two hosts as of 2026-09-08, roles set by the owner.** The Amsterdam box is the
-**leaf** and exits traffic. A second host — 3.9 Gi RAM, in Russia — is the
-**entry**, and carries the control plane and the panel as well. That moves the
-control plane off the 957 Mi box, which had 463 Mi free while running control,
-Postgres, Caddy and a node together. It also puts every node key and every user
-credential on a Russian host: deliberate, and the reason M7 stops being optional.
-
-**Does not work:** everything in M1–M3 below. The pattern is worth stating once,
-because it is the lesson of the whole exercise:
+The lesson that opened this plan still holds:
 
 > Everything checkable by **rendering** works. Everything checkable only by
 > **running** does not.
@@ -2258,7 +2174,7 @@ this milestone's subject.
 
 ---
 
-## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); fix round 5 (2026-10-02) closed walk 4's findings in code and awaits a real-host walk, see "Where things stand"
+## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); fix round 5 (2026-10-02) fixed walk 4's two blockers — the serving check and the empty link — and both were confirmed on real hosts on 2026-10-02; the loop's next walk is M31's re-walk, see "Where things stand"
 
 **Approved by the owner on 2026-09-16**, who asked whether a leaf and an entry
 can be deployed by one command, and — being told the answer was probably no —
@@ -2365,7 +2281,18 @@ way M23 was run.
 **Fix round 5 — 2026-10-02, asked for by the owner.** Walk 4's blockers, high, medium and
 the Users-screen low, closed in code on `task/M26-fix-round-5` (not pushed); the "14
 hand-typed numbers per hop" low was skipped by the owner. Record:
-`docs/tracker/M26/fix-round-5.md`. The loop's next step is walk 5 on real hosts.
+`docs/tracker/M26/fix-round-5.md`. The owner's decision that came with it — a serving host
+an apply could not reach at all stays in users' links — is the 2026-10-02 row in
+`docs/decisions.md` that opens with those words.
+
+**Confirmed on real hosts, 2026-10-02**, on a fresh install of the co-located arrangement
+(control plane and entry on one box in Russia, the leaf abroad) from
+`task/M26-fix-round-5`: removing the hop's peer live made the probe report `not_serving`
+with the transport's own explanation — blocker 1, the check now asks the transport rather
+than the port; and stopping the entry's xray left the node `active` and the subscription
+still carrying its entry — blocker 2, a verdict no longer empties a link. That walk also
+found the ten defects that became M31, so it did not come back with nothing blocking; **the
+M31 re-walk is the next walk of this loop.**
 
 ---
 
@@ -4016,11 +3943,13 @@ medium or low findings. Details: `docs/tracker/M31/step-notes.md`; what the re-w
 ### Acceptance
 
 **Yes — a real-host re-walk**, run by the orchestrator after this milestone lands, not by
-the implementer. What it must confirm is in `docs/tracker/M31/carry-over.md`.
+the implementer. What it must confirm is in `docs/tracker/M31/carry-over.md`. Its item 8
+names *Shape B*: since M27.8 that account's text is in the runbook's *Installing hashi*,
+under *Prepare every other box* and *Register each box as a node*.
 
 ---
 
-## → M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27
+## → M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27 · dependency approved in principle by the owner 2026-10-02, none chosen · still PROPOSED, for the split arrangements only
 
 **Deferred out of M27.6 on purpose, and the reason is `CLAUDE.md`'s own rule.** The owner chose
 a wildcard issued by the control plane over DNS-01 and pushed on apply, because a per-host
@@ -4039,6 +3968,17 @@ new dependencies, works today. The cost is manual renewal roughly every ninety d
 because a pushed certificate is renewed by an apply, the operator must also apply afterwards
 or delivery stands down at expiry with the listener removed.
 
+**Not needed for the arrangement the owner runs — an observation of 2026-10-02, not a
+decision.** The owner runs the co-located arrangement, **C+E | L**: control plane and entry
+on one box in Russia, several leaves abroad. There the host users refresh from is the
+control plane's own `HASHI_PUBLIC_HOST`, served by its own Caddy under the ordinary
+certificate Caddy obtains for that name, and by M27.4's predicate no node in that fleet is
+a delivery host — so no wildcard is pushed anywhere, issued by hand or by this milestone.
+**It stays PROPOSED for the split arrangements** (C+L | E, C | E | L), where an entry answers
+its own users' refreshes under the wildcard. The owner approved adding a dependency for it
+in principle (`docs/decisions.md`, 2026-10-02) and has not chosen one, nor a DNS provider;
+that choice gets its own row before `pyproject.toml` or an image changes.
+
 **Done when**
 - [ ] The control plane obtains and renews the wildcard itself, without the operator touching a
       file.
@@ -4056,11 +3996,22 @@ delivery host picks the new pair up on the next apply without an operator touchi
 
 ---
 
-## → M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · PROPOSED
+## → M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · built 2026-09-26 to 2026-10-02 (27.1–27.7 and 27.9 merged to `develop` in PR #4; 27.8 on `task/M27.8`) · acceptance: yes, NOT WALKED — it needs real hosts in the C+L | E arrangement
 
-**Not started.**
+**Status, 2026-10-02.** Every step is built. 27.1–27.7 and 27.9 are on `develop` (PR #4);
+27.8 — the runbook — is on `task/M27.8`, stacked on `task/M24`. What each step settled is in
+`docs/decisions.md` (the 2026-09-26 and 2026-09-27 rows) and
+`docs/tracker/M27/step-notes.md`; what is known to be wrong and was left is
+`docs/tracker/M27/carry-over.md`. **The acceptance walk has not happened.** No real host has
+run C+L | E or C | E | L, so nothing has shown an entry answering its own users' refreshes
+while the control plane is out of reach. The co-located C+E | L was installed fresh on real
+hosts on 2026-10-02 for M26, and refreshes there came from the control plane's own name
+and certificate — but that walk was not this milestone's acceptance and did not inspect the
+entry for delivery material.
 
-### The coupling, stated plainly
+The two sections below describe the product as it was when this was planned (2026-09-22).
+
+### The coupling, stated plainly — as planned, 2026-09-22
 
 `deploy/caddy/Caddyfile` serves the public site and the private site as two blocks
 in **one** Caddy container, on **one** box. So `/sub/*` — the endpoint a user
@@ -4246,11 +4197,24 @@ The milestone is not done while this is implied rather than recorded.
 
 ### M27.8 — The runbook collapses its three shapes into one installation with a field in it
 
-**The test of this milestone is the runbook, not the code.** Today
-`docs/deploy/runbook.md` carries three shapes with three procedures and a migration
-section between them, and ends *Shape C* with *"today you choose one location for
+**The test of this milestone is the runbook, not the code.** When this was planned,
+`docs/deploy/runbook.md` carried three shapes with three procedures and a migration
+section between them, and ended *Shape C* with *"today you choose one location for
 both."* If this milestone lands and that structure survives unchanged, the point
 was missed.
+
+**Built 2026-10-02**, on `task/M27.8`. The runbook now opens with *Where the three roles
+go* — the four arrangements of the table in M27.4 and what each costs — and installs by
+one procedure, *Installing hashi*, whose steps are the same for every arrangement: the
+arrangement is which box you type each step on and which values a node record carries
+(its `address` above all), never a setting and never a question the page asks. *Which host
+answers a refresh* states the derived predicate; *The delivery certificate* is the first
+runbook text for the wildcard pair; *Growing out of one box* replaces *Growing out of
+Shape A*. The shape sections and *"today you choose one location for both"* are gone.
+Carried in from M27.6: the 443 rule names the shipped default in which no host loses the
+port, and the backup table lists `deploy/delivery/`. Carried in from the done-when list
+below: what a delivery host holds, when an apply takes it away, and the three states no
+apply reaches. `tests/infra/test_deploy_runbook.py` holds the structure.
 
 ### M27.9 — `infra`: the gate is red for four hours a day · found building M27.4, 2026-09-27
 
@@ -4304,20 +4268,27 @@ show the feature is absent when co-located, and cannot show a border.
 
 **Done when**
 - [ ] With the control plane's box unreachable from Russia, a user inside Russia
-      fetches a refreshed subscription and connects on it.
+      fetches a refreshed subscription and connects on it. *Not walked: needs real
+      hosts in C+L | E.*
 - [ ] **All four arrangements in the table above install by one procedure**, and the
       co-located ones need no second domain, no second certificate and no additional
       configuration — an operator who has never read this milestone cannot arrive at
-      the wrong shape by following the panel.
+      the wrong shape by following the panel. *Written (M27.8: one procedure) and held on
+      the stand (M27.4: a co-located box is never a delivery host). Unticked until a
+      real-host walk follows that procedure in both C+L | E and C+E | L.*
 - [ ] No new surface records a token, an address, or who fetched what — checked on
-      every host that can serve delivery, not only on the control plane's.
-- [ ] What a seized delivery host yields is written down and is no wider than it is
-      today, or the widening is a recorded decision in `docs/decisions.md`.
-- [ ] How the delivery endpoint is moved, and what users have to be told when it
-      moves, is decided and written down rather than left implied.
-- [ ] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
+      every host that can serve delivery, not only on the control plane's. *Measured on
+      a real Caddy engine on the stand (M27.3, M27.6); not yet on a real delivery host.*
+- [x] What a seized delivery host yields is written down and is no wider than it is
+      today, or the widening is a recorded decision in `docs/decisions.md`. *The
+      2026-09-27 seizure inventory, which records the wildcard key as the widening.*
+- [x] How the delivery endpoint is moved, and what users have to be told when it
+      moves, is decided and written down rather than left implied. *M27.7: out-of-band,
+      in `docs/decisions.md` and the runbook.*
+- [x] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
       for both"* **and its three-shape structure**, because neither is true any more.
-- [ ] **A host that STOPS being a delivery host does not keep its material.** There is no
+      *M27.8.*
+- [x] **A host that STOPS being a delivery host does not keep its material.** There is no
       teardown in this product — recorded twice on 2026-09-13, and measured with a leaf's
       `wireguard.conf` and its `PrivateKey` still on disk after the row was deleted — so
       delivery inherits that gap rather than a cleanup. A node that stops carrying users
@@ -4328,7 +4299,10 @@ show the feature is absent when co-located, and cannot show a border.
       `docs/decisions.md` **(done — M27.2's rows name three states, and a test pins the one
       that is not closed)** and in the runbook where an operator will look — **M27.8 owns the
       runbook half**, and nothing in the runbook yet says a node carries pushed material at
-      all. The removal path itself is **M27.4's**, per M27.2's rows.
+      all. The removal path itself is **M27.4's**, per M27.2's rows. *Closed: M27.4
+      built the removal, including on a refused apply; the three states no apply
+      reaches are named in `docs/decisions.md` and, since M27.8, in the runbook's "When a
+      delivery host stops being one".*
 
 acceptance: yes
 Walk it on the two arrangements that differ, not only on the one that motivated it.
@@ -5075,8 +5049,9 @@ you, E wanted by M4.
   *Russian* services reachable. No item here moves it, and none pretends to.
 - **Throughput and DPI survival.** The live client proves a tunnel carries traffic;
   it proves nothing about speed, or about how long this IP stays unblocked.
-- **The second host.** Nothing here requires it, and M2 and M3 should land before
-  it is rented.
+- **Every arrangement on real hosts.** The co-located C+E | L has been walked on real
+  hosts (2026-10-02); C+L | E and C | E | L — the arrangements in which an entry answers
+  its own users' refreshes — have run on the disposable stand only (M27).
 - **A leaf node's console.** There is none, deliberately — a node runs only its
   data-plane container, exposes nothing for management, and never dials the control
   plane. Nothing to build.
