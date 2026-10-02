@@ -277,6 +277,14 @@ async def test_a_withdrawn_config_file_row_takes_its_link_away_and_a_degraded_no
 
     await nodes_service.set_node_state(session, node_id=node_id, state=NodeState.DEGRADED)
     assert await config_file_url(), "a degraded node's user lost the link that will work again"
+    # …and the dialog does not say it CARRIES anything meanwhile: a node that is not
+    # serving is in nobody's document, so the archive is empty right now (review round 1).
+    said = _reading((await client.get(f"/panel/users/{user_id}/subscription")).text)
+    assert (
+        console_service.LINK_CARRIES_ONLY_LATER.format(nickname="dana", waiting=FILE_ONLY[0])
+        in said
+    ), said
+    assert console_service.LINK_CARRIES.format(nickname="dana", transports=FILE_ONLY[0]) not in said
 
     withdrawn = await client.post(f"/api/transports/{row_id}/state", json={"enabled": False})
     assert withdrawn.status_code == 200, withdrawn.text

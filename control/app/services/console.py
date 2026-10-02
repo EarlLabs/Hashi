@@ -3360,6 +3360,18 @@ LINK_USES: dict[SubscriptionFormat, str] = {
 # What the link carries for this person, named by transport. Names are data the operator
 # typed or the image ships, and listing them is not choosing between them.
 LINK_CARRIES = "Carries for {nickname}: {transports}."
+# The same, for a person some of whose protocols are on a node that is not serving right
+# now (draft, or degraded). Review round 1: the link is still the right one to hand over —
+# that is why such a node counts above — but a node that is not serving is in nobody's
+# document (``nodes.serving_transports``), so saying it is CARRIED would be false until it
+# serves. The first form when some of them are carried, the second when none are.
+LINK_CARRIES_AND_WAITS = (
+    "Carries for {nickname}: {transports} — and {waiting} once its node is serving."
+)
+LINK_CARRIES_ONLY_LATER = (
+    "Carries nothing for {nickname} right now and opens empty — not an error: "
+    "{waiting} arrives in it once its node is serving."
+)
 # The subscription link of a person who holds nothing that rides in it. Still handed over
 # — the owner's decision puts the second link BESIDE it, not instead of it — because a
 # protocol offered later that does ride in a link reaches them through this one with
@@ -3432,12 +3444,22 @@ def _link_url(base_url: str, token: str, shape: SubscriptionFormat) -> str:
     return f"{url}?format={shape.value}"
 
 
-async def shapes_held(session: AsyncSession, user: User) -> dict[SubscriptionFormat, list[str]]:
+@dataclasses.dataclass(frozen=True)
+class ShapeHeld:
+    """The transports one person holds in one shape: those carried now, and those that
+    will be once their node serves (draft or degraded — named only if not also carried)."""
+
+    serving: tuple[str, ...]
+    waiting: tuple[str, ...]
+
+
+async def shapes_held(session: AsyncSession, user: User) -> dict[SubscriptionFormat, ShapeHeld]:
     """Which shapes this person's credentials are in, each with the transports in it.
 
-    See the section comment above for which rows count and why. A transport this image no
-    longer ships is skipped rather than raised on: this is a screen, and the Transports
-    screen is where a missing package is reported.
+    See the section comment above for which rows count and why; "serving" is
+    ``NodeState.serving()``, the same answer the delivery route's documents are built
+    from. A transport this image no longer ships is skipped rather than raised on: this
+    is a screen, and the Transports screen is where a missing package is reported.
     """
     result = await session.execute(
         select(NodeTransport.transport_name, Node.state)
@@ -3448,14 +3470,34 @@ async def shapes_held(session: AsyncSession, user: User) -> dict[SubscriptionFor
         .where(NodeTransport.purpose == TransportPurpose.USERS)
     )
     installed = discover()
-    held: dict[SubscriptionFormat, set[str]] = {}
+    serving: dict[SubscriptionFormat, set[str]] = {}
+    waiting: dict[SubscriptionFormat, set[str]] = {}
     for name, state in result.all():
         meta = installed.get(name)
         if meta is None or apply.cannot_serve_again(NodeState(state)):
             continue
+        into = serving if NodeState(state) in NodeState.serving() else waiting
         for shape in meta.subscription_formats:
-            held.setdefault(shape, set()).add(name)
-    return {shape: sorted(names) for shape, names in held.items()}
+            into.setdefault(shape, set()).add(name)
+    return {
+        shape: ShapeHeld(
+            serving=tuple(sorted(serving.get(shape, set()))),
+            waiting=tuple(sorted(waiting.get(shape, set()) - serving.get(shape, set()))),
+        )
+        for shape in serving.keys() | waiting.keys()
+    }
+
+
+def _carries(nickname: str, held: ShapeHeld | None) -> str:
+    """What one link carries for this person, in the one sentence that is true of it."""
+    if held is None:
+        return LINK_CARRIES_NOTHING_YET.format(nickname=nickname)
+    now, later = ", ".join(held.serving), ", ".join(held.waiting)
+    if not held.waiting:
+        return LINK_CARRIES.format(nickname=nickname, transports=now)
+    if not held.serving:
+        return LINK_CARRIES_ONLY_LATER.format(nickname=nickname, waiting=later)
+    return LINK_CARRIES_AND_WAITS.format(nickname=nickname, transports=now, waiting=later)
 
 
 async def links_for(session: AsyncSession, base_url: str, user: User) -> HandedLinks | None:
@@ -3491,11 +3533,7 @@ async def links_for(session: AsyncSession, base_url: str, user: User) -> HandedL
             url=_link_url(base_url, token, shape),
             heading=LINK_HEADINGS[shape],
             use=LINK_USES[shape],
-            carries=(
-                LINK_CARRIES.format(nickname=user.nickname, transports=", ".join(held[shape]))
-                if shape in held
-                else LINK_CARRIES_NOTHING_YET.format(nickname=user.nickname)
-            ),
+            carries=_carries(user.nickname, held.get(shape)),
         )
         for shape in shapes
     )
