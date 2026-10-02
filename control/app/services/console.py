@@ -605,6 +605,17 @@ OFFER_NOT_IN_THE_LINK = (
     "config-file link shown beside their subscription link under “show link” on the "
     "Users screen"
 )
+# The same row once an apply has pushed it — M31.10, from the real-host re-walk of
+# 2026-10-02, which read "serves it once applied" on a row that had been applied and was
+# serving. "Once applied" is true only of a row no apply has reached yet, so this one says
+# nothing about applying. Nor does it claim the node is serving it now: ``applied_at``
+# records that a push landed, not what the host is running today, which is the drift
+# column's question and not this sentence's.
+OFFER_NOT_IN_THE_LINK_APPLIED = (
+    "offered — not in the subscription link itself: this transport is a config file, and "
+    "each user holding it gets it from the config-file link shown beside their "
+    "subscription link under “show link” on the Users screen"
+)
 OFFER_WITHDRAWN = (
     "withdrawn — out of every user's link. The node is still configured to serve it "
     "until you apply the node without it."
@@ -2341,6 +2352,7 @@ async def offers_on(session: AsyncSession, node_id: str) -> list[OfferRow]:
                 row.enabled,
                 nothing_left_enabled=nothing_left_enabled,
                 deliverable=delivers[row.id],
+                applied=row.applied_at is not None,
             ),
             deliverable=delivers[row.id],
             offerable_again=row.transport_name in offerable,
@@ -2413,8 +2425,9 @@ def _standing(
     *,
     nothing_left_enabled: bool,
     deliverable: bool,
+    applied: bool,
 ) -> str:
-    """Which of the five sentences this row is in.
+    """Which of the six sentences this row is in.
 
     A branch on our own topology, on the operator's own flag and on the transport's own
     declaration — never on a protocol. A hop end is answered first because ``enabled``
@@ -2436,11 +2449,17 @@ def _standing(
     in no link. The withdrawn sentences are left alone deliberately: "out of every user's
     link" claims nothing about having been in one, so it is true of both kinds and stays
     one sentence.
+
+    ``applied`` is whether an apply has ever pushed THIS row (its own ``applied_at``). It
+    only chooses between the two config-file sentences: one says the node serves it once
+    applied, which is false of a row that has been (M31.10).
     """
     if purpose != TransportPurpose.USERS:
         return OFFER_HOP_END
     if enabled:
-        return OFFER_IN_EVERY_LINK if deliverable else OFFER_NOT_IN_THE_LINK
+        if deliverable:
+            return OFFER_IN_EVERY_LINK
+        return OFFER_NOT_IN_THE_LINK_APPLIED if applied else OFFER_NOT_IN_THE_LINK
     return OFFER_WITHDRAWN_LAST_ON_THE_NODE if nothing_left_enabled else OFFER_WITHDRAWN
 
 

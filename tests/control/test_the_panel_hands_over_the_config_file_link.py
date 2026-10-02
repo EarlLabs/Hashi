@@ -22,6 +22,7 @@ the dialog printed one URL and the words "One URL, every serving node" whatever 
 held.
 """
 
+import datetime
 import html
 import io
 import logging
@@ -32,7 +33,7 @@ from urllib.parse import urlsplit
 import pytest
 from sqlalchemy import select
 
-from control.app.models import AuditEntry, NodeState
+from control.app.models import AuditEntry, NodeState, NodeTransport
 from control.app.services import console as console_service
 from control.app.services import nodes as nodes_service
 from control.app.services import transports as transports_service
@@ -372,6 +373,7 @@ def test_every_sentence_about_a_config_file_transport_names_the_link_that_delive
     names the link the dialog actually prints, by the heading it prints it under."""
     for sentence in (
         console_service.OFFER_NOT_IN_THE_LINK,
+        console_service.OFFER_NOT_IN_THE_LINK_APPLIED,
         console_service.ENABLING_NOT_IN_THE_LINK,
         console_service.offer_summary("n", "t", deliverable=False),
     ):
@@ -393,3 +395,38 @@ async def test_no_screen_still_promises_one_url(client, session) -> None:
         said = _reading(body.text).lower()
         assert "one subscription url" not in said, path
         assert "the one url each" not in said, path
+
+
+# --- M31.10, found in the real-host re-walk of 2026-10-02 --------------------------------
+
+
+async def test_an_applied_config_file_row_does_not_say_it_will_serve_once_applied(
+    client, session
+) -> None:
+    """The Nodes screen's transports row read "the node serves it once applied" on an
+    `amneziawg` row that had been applied and was serving.
+
+    A sentence about behaviour names the state it holds for: "once applied" holds for a
+    row no apply has reached. Same node, same row, before and after a push is recorded —
+    stamped the way a successful apply stamps it, because nothing in this zone can push.
+    """
+    node_id = await _a_node(client, session, "file-applied", "198.51.100.61")
+    row_id = await _offer_file(client, node_id)
+    await _serve(session, node_id)
+
+    before = _reading((await client.get(f"/panel/nodes/{node_id}/transports")).text)
+    assert console_service.OFFER_NOT_IN_THE_LINK in before
+    assert "once applied" in before
+
+    row = await session.get(NodeTransport, row_id)
+    row.applied_at = datetime.datetime.now(datetime.UTC)
+    row.applied_digest = "0" * 64
+    await session.commit()
+
+    after = _reading((await client.get(f"/panel/nodes/{node_id}/transports")).text)
+    assert console_service.OFFER_NOT_IN_THE_LINK_APPLIED in after
+    assert "once applied" not in after, (
+        "an applied, serving row still tells the operator the node serves it once applied"
+    )
+    # And the half of the sentence that is still true is still said.
+    assert FILE_HEADING in console_service.OFFER_NOT_IN_THE_LINK_APPLIED
