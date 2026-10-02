@@ -400,6 +400,11 @@ def _confirmed(
     something sharper: ``nc`` holds a port, and so does a wg-family daemon holding none of
     the peers it was given. Whether a config declared a question is read off the reading
     (an entry in ``answers``), never off its transport's name.
+
+    What the port no longer does is CONFIRM such a config; it can still REFUSE it
+    (``_refused_by_a_reading``). A definite socket table without the declared port is a
+    fault whatever the transport says about itself, and keeping that refusal costs
+    nothing for a data plane whose socket ``ss`` lists — which the shipped wg family's is.
     """
     if name in reading.answers:
         return reading.answers[name] is True
