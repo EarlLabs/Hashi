@@ -42,7 +42,19 @@ class OperatorHashMalformed(RuntimeError):
 class Settings(BaseSettings):
     """Runtime configuration, read from ``HASHI_``-prefixed environment vars."""
 
-    model_config = SettingsConfigDict(env_prefix="HASHI_")
+    # ``env_ignore_empty`` — M31.2: a variable that is SET BUT BLANK is read as not set,
+    # so the field takes the default written below. That is what lets
+    # deploy/docker-compose.yml pass an optional setting through as ``${VAR:-}``: the
+    # compose file is the whole list of what this process can read, a setting missing
+    # from it does not exist in here however carefully the operator set it (the field
+    # walk set HASHI_FINDING_REMEASURE_INTERVAL and ``env`` inside the container showed
+    # nothing), and a blank pass-through with the default kept HERE is one default
+    # rather than a second copy in the compose file that drifts from this one.
+    #
+    # It loosens nothing a required field relies on: a blank ``HASHI_SECRET_KEY`` or
+    # operator hash is now "missing" rather than "too short" or "malformed", which
+    # refuses to boot exactly as loudly.
+    model_config = SettingsConfigDict(env_prefix="HASHI_", env_ignore_empty=True)
 
     # No default on purpose: this key encrypts node credentials at rest, and a
     # generated-on-boot fallback would silently make yesterday's backup
