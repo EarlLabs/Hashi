@@ -75,8 +75,17 @@ defeats the encryption.
 ### DNS
 
 Point an **A record** for your panel hostname at the control-plane box *before* you
-bootstrap. Caddy asks a public CA for a certificate the moment it starts, and a name
-that does not resolve to that box means it retries forever while serving nothing.
+publish it. Caddy asks a public CA for the delivery name's certificate the moment
+`make up-panel` (or `make up-panel-over-ssh`) publishes 80 and 443, and a name that does
+not resolve to that box then fails validation over and over — and every failure counts
+against that name's issuance rate limit.
+
+**Not before.** The stack `make panel-bootstrap` and `make restore-from-bucket` bring up
+publishes nothing, so no CA could validate it, and it asks none: it serves the delivery
+name from Caddy's own CA until a publishing command switches public issuance on
+(`HASHI_PUBLIC_TLS`, set by `deploy/docker-compose.public.yml` and by nothing else — M31.1).
+Until M31 it asked anyway, from the first boot, and a restore walk found the ACME accounts
+and a challenge token already on a host whose ports were closed.
 
 ### What every box must already have
 
@@ -1682,10 +1691,12 @@ that *serves somebody*.
 2. **It does not re-issue the delivery endpoint's certificate.** `caddy_data` is
    deliberately not in the backup (see *What belongs in a backup, and what does not*): the
    old host's private keys are to be presumed compromised. Caddy asks a public CA for a new
-   one the first time the name resolves *here* and inbound `:80`/`:443` reach this machine
-   — which cannot happen before 1, and cannot happen at all until `make up-panel` (or
-   `make up-panel-over-ssh`, on a host with no tunnel yet) publishes those ports, because
-   the base stack publishes none. Until then `/sub/*` serves nothing.
+   one only once `make up-panel` (or `make up-panel-over-ssh`, on a host with no tunnel
+   yet) publishes `:80`/`:443` — the stack this command brings up publishes neither and
+   asks no CA anything (M31.1) — and the request succeeds only once the name resolves
+   *here*, which cannot happen before 1. **Do 1 first, then publish**: a publication
+   whose name still points at the lost machine fails validation, and each failure counts
+   against the live domain's rate limit. Until then `/sub/*` serves nothing.
    The panel itself is unaffected: it is served by Caddy's own CA, which is new, so each of
    your own devices is asked to trust the console once more. The costs and the issuance
    limits are in *The `caddy_data` cost, stated rather than waved at*.
@@ -2159,9 +2170,11 @@ It does not give you back:
 ### The `caddy_data` cost, stated rather than waved at
 
 On a new host Caddy registers a fresh ACME account and requests a fresh certificate for
-`HASHI_PUBLIC_HOST` the first time it boots. That needs the name to already resolve to
-the new machine and inbound `:80`/`:443` to reach it; until both are true, `/sub/*`
-serves nothing. Users with a working config are unaffected — a user who needs to
+`HASHI_PUBLIC_HOST` the first time a publishing command (`make up-panel`,
+`make up-panel-over-ssh`) brings it up — not when the restore boots it, because that
+stack publishes nothing and asks no CA (M31.1). Issuance needs the name to already
+resolve to the new machine and inbound `:80`/`:443` to reach it; until both are true,
+`/sub/*` serves nothing, so move the record before you publish. Users with a working config are unaffected — a user who needs to
 *refresh* one is not.
 
 Issuance is rate-limited at the CA, and the binding limit for a rebuild is the
