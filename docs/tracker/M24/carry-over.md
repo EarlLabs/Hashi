@@ -45,3 +45,16 @@ What it must see with its own eyes:
 - **Per-host delivery URLs (M27.7)** are still composed by no screen — M27's, not M24's.
 - The 3 edge failures in `tests/edge/test_upstream_validation.py` (`[wireguard]`) are
   environmental (the system `wg-quick` calls `sudo`). Reported, not fixed.
+
+## Appended 2026-10-02 — what the real-host walk saw (orchestrator-reported)
+
+- A user-facing `amneziawg` on an entry that dials a hop is refused 409
+  `no_exit_through_the_hop` — the runbook's documented "one combination that will not
+  render", not a defect. So the config-file flow was walked on the **leaf**: the archive
+  from the config-file link held `<the leaf's config name>.conf`; imported by
+  `amneziawg-go` 3.0.3 in a container it handshook and carried traffic that exited at the
+  leaf. **A real phone or desktop app was not tried.** M24's first done-when is ticked in
+  `docs/PLAN.md` with that qualification stated.
+- The re-walk's one M24-adjacent low — the Nodes row still saying "serves it once applied"
+  on an applied, serving `amneziawg` row — is fixed under M31's record
+  (`docs/tracker/M31/step-notes.md`, appended the same day).

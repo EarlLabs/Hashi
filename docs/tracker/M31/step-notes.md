@@ -27,3 +27,20 @@ Tests changed rather than added, and why none is weaker:
   (strictly wider), and the blank-allowed set is derived from fields with defaults.
 - `conftest.accepting_nodes` pins `restart_services` as an accepted step, like `restart`.
 - e2e S16 — asserts the restart, the counts and the hold instead of the old instruction.
+
+## Appended 2026-10-02 — two lows from the real-host re-walk, fixed on `task/M27.8`
+
+Reported by the orchestrator from its re-walk of M31 and M24 on the real hosts; fixed in
+commits tagged `M31.10 (infra)` and `M31.10 (control)` (the tag the request named — not the
+M31.10 step of this milestone, which is the Shape B account text).
+
+- **infra** — `make restore-from-bucket` printed the wrong-key paragraph twice, word for word.
+  `command_restore` now skips it when `CLOSING_SCREEN_FOLLOWS=1`, which only
+  `command_restore_from_bucket` sets; its closing screen keeps it as the last paragraph.
+  Test: `tests/infra/test_what_a_restore_says_it_did.py::test_the_bucket_path_says_the_wrong_key_sentence_once`
+  (red on the previous script).
+- **control** — an applied, serving `amneziawg` row on the Nodes screen still said "the node
+  serves it once applied". `console._standing` takes the row's own `applied_at`;
+  `OFFER_NOT_IN_THE_LINK_APPLIED` is the applied variant. Test:
+  `tests/control/test_the_panel_hands_over_the_config_file_link.py::test_an_applied_config_file_row_does_not_say_it_will_serve_once_applied`
+  (red on the previous console).

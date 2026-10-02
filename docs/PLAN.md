@@ -70,11 +70,15 @@ stacked in that order, each on the one before, and none of them is pushed.
   owner's rule that came with it: *a health verdict may warn the operator; it may never be
   why a user's link comes back empty* (`docs/decisions.md`, 2026-10-02).
 - **M31** — the ten defects the 2026-10-02 field walk and restore walk found. Review clean
-  in round 1. **Awaits a real-host re-walk.**
+  in round 1. The real-host re-walk ran the same day and reported two lows, both fixed on
+  `task/M27.8` (M31, *Found in the real-host re-walk*); its verdict on the rest is the
+  orchestrator's to record.
 - **M24** — the panel hands over the config-file link beside the subscription link (the
   owner's *one URL per config shape*). The owner accepted, the same day, that a config-file
   user re-imports after a key rotation or a replaced node; the charter now says its "never
-  re-add anything" holds for subscription-link users. **Awaits a real-host walk.**
+  re-add anything" holds for subscription-link users. Walked on real hosts the same day:
+  the config-file flow worked on the leaf in a container client; no real phone or desktop
+  app was tried (M24's done-when).
 - **M27.8** — the runbook is one installation procedure; see M27.
 
 Closed before this and unchanged: **M28** (restorable on a machine it never ran on, done
@@ -106,11 +110,14 @@ shutdown. That is a field observation on a real Russian network.
 
 ### What is open
 
-- **The re-walk of M31 and M24 on the real hosts** — run by the orchestrator next. What it
-  must see: `docs/tracker/M31/carry-over.md`, `docs/tracker/M24/carry-over.md`.
+- **M31 and M24's acceptance** — the real-host re-walk ran on 2026-10-02; its two lows are
+  fixed, and closing either milestone is the orchestrator's verdict, not yet recorded here.
+  What it was to see: `docs/tracker/M31/carry-over.md`, `docs/tracker/M24/carry-over.md`.
 - **M26** — its loop ends with a walk that finds nothing blocking. The 2026-10-02 walk
-  found M31's defects, so the M31 re-walk is the next walk of that loop; the 14 hand-typed
-  numbers per hop stay skipped by the owner.
+  found M31's defects, so the M31 re-walk (also 2026-10-02) is the next walk of that loop.
+  It reported two lows and nothing blocking that this plan has been told of; whether it
+  ends the loop is the orchestrator's verdict. The 14 hand-typed numbers per hop stay
+  skipped by the owner.
 - **M27** — built and merged except 27.8, which lands on `task/M27.8`. **No real host has
   run the arrangement it exists for** (C+L | E, an entry answering its own users'
   refreshes while the control plane is abroad); its acceptance walk has not happened.
@@ -2292,7 +2299,8 @@ with the transport's own explanation — blocker 1, the check now asks the trans
 than the port; and stopping the entry's xray left the node `active` and the subscription
 still carrying its entry — blocker 2, a verdict no longer empties a link. That walk also
 found the ten defects that became M31, so it did not come back with nothing blocking; **the
-M31 re-walk is the next walk of this loop.**
+M31 re-walk, the same day, is the next walk of this loop** — it reported two lows, fixed
+(M31), and whether it closes the loop is the orchestrator's verdict.
 
 ---
 
@@ -3940,6 +3948,23 @@ the re-walk is the first run of it end to end. Review: `reviewer-strict`, round 
 medium or low findings. Details: `docs/tracker/M31/step-notes.md`; what the re-walk must see:
 `docs/tracker/M31/carry-over.md`.
 
+### Found in the real-host re-walk of 2026-10-02, and fixed
+
+The orchestrator's re-walk of M31 and M24 on the real hosts found two low defects, fixed on
+`task/M27.8` in commits tagged `M31.10 (infra)` and `M31.10 (control)` — the tag the
+request named; they are not the M31.10 step above. Each has a test that was red before it.
+
+- **(low, infra) The wrong-key sentence said twice.** `make restore-from-bucket` printed
+  *"One thing no restore can check: whether HASHI_SECRET_KEY …"* word for word after
+  *"Restarted the control plane…"* and again at the end of the closing screen — M31.8's
+  done-when asks for one account said once. The bucket path now tells the restore a
+  closing screen follows, and the sentence is said there only; a file restore, which has
+  no closing screen, still says it.
+- **(low, control) "Serves it once applied" on a row that was.** The Nodes screen's
+  transports row for an `amneziawg` row already applied and serving still read *"the node
+  serves it once applied"*. A row carrying its own `applied_at` now reads a sentence that
+  says where the config-file link is and claims nothing about applying.
+
 ### Acceptance
 
 **Yes — a real-host re-walk**, run by the orchestrator after this milestone lands, not by
@@ -4402,14 +4427,18 @@ would have been green either way.*
    history, a bookmark or a chat log.
 
 **Done when**
-- [ ] An operator following only what the panel shows can give a user on a
+- [x] An operator following only what the panel shows can give a user on a
       WireGuard-family-only node something that works. *Built and proven on the stand
       as far as the bytes: the URL the dialog prints under "config-file link", fetched
       exactly as printed, is an archive holding that user's `.conf`
       (`tests/control/test_the_panel_hands_over_the_config_file_link.py`, e2e
-      `test_the_panel_hands_over_the_link_that_delivers_a_config_file.py`). "Works" — a
-      device imports it and carries traffic — is the real-host walk's; left unticked
-      until it has been seen.*
+      `test_the_panel_hands_over_the_link_that_delivers_a_config_file.py`). **Seen on real
+      hosts, 2026-10-02, with one qualification:** the archive's `.conf` for a user-facing
+      `amneziawg` on the LEAF, imported by `amneziawg-go` 3.0.3 in a container, handshook
+      and carried traffic that exited at the leaf. A real phone or desktop app was not
+      tried. It was walked on the leaf because a user-facing `amneziawg` on an entry that
+      dials a hop is refused with 409 `no_exit_through_the_hop` — the runbook's documented
+      "one combination that will not render", not a defect.*
 - [x] Every sentence the panel says about what a link contains is true for every
       combination of enabled transports — link only, file only, both, a withdrawn
       file row, a degraded or retired node; each tested.
