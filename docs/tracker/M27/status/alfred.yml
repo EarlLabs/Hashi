@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M27.8 — the runbook as one installation; PLAN status for 2026-10-02; M24 owner acceptance; two M31 re-walk lows"
+state: done
+progress: "built on task/M27.8; review-loop converged clean in round 2 (round 1: 1 high, 1 medium, 2 low — all fixed)"
+blockers: null
+updated_at: 2026-10-02
