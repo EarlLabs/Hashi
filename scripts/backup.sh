@@ -1144,12 +1144,13 @@ Three things it did NOT do, and each of them is yours:
      one that leaves a perfectly restored control plane serving nobody.
 
   2. The delivery endpoint's certificate. It was deliberately not in the backup
-     — the old host's private keys are to be presumed compromised. Caddy asks a
-     public CA for a new one the first time that name resolves HERE and inbound
-     80 and 443 reach this machine, which cannot happen before 1. Until then
-     /sub/* serves nothing. The panel is unaffected: it is served by Caddy's own
-     CA, which is new, so each of your own devices is asked to trust the console
-     once more.
+     — the old host's private keys are to be presumed compromised. This stack
+     publishes nothing and has asked no CA for anything. Caddy asks a public CA
+     for a new one when you publish 80 and 443 (below), and it succeeds only if
+     that name resolves HERE by then — so do 1 first: every failed validation
+     counts against the live name's rate limit. Until then /sub/* serves
+     nothing. The panel is unaffected: it is served by Caddy's own CA, which is
+     new, so each of your own devices is asked to trust the console once more.
 
   3. Telling anybody. No message goes to any user from this command or from the
      control plane — there is no channel, and that is a charter decision rather
