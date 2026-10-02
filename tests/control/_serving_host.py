@@ -22,7 +22,7 @@ HOW:  the real compose render, the real ``docker inspect`` parser, the real ``ss
 import yaml
 
 from edge.bootstrap import node_stack
-from edge.bootstrap.ssh import CommandResult
+from edge.bootstrap.ssh import CommandResult, NodeUnreachable
 from edge.health import listening
 from edge.transports.amneziawg.serving import authorised_peers
 
@@ -75,9 +75,16 @@ class ServingHost:
         # prove the question was put at all rather than inferring it from a verdict.
         self.asked: list[str] = []
         self.dialled = 0
+        # ``unreachable``: no session at all, the way a connect timeout looks.
+        # ``drops_at_restart``: a session that opens, takes the files, and dies at the
+        # restart — a half-written host.
+        self.unreachable = False
+        self.drops_at_restart = False
 
     async def __aenter__(self):
         self.dialled += 1
+        if self.unreachable:
+            raise NodeUnreachable("could not connect to the node: connection timed out")
         return self
 
     async def __aexit__(self, *_exc_info) -> bool:
@@ -114,6 +121,9 @@ class ServingHost:
         if "docker compose exec -T" in command:
             service = command.split("docker compose exec -T ", 1)[1].split()[0]
             return self.peers_answer(service.strip("'"))
+
+        if "docker compose up -d" in command and self.drops_at_restart:
+            raise NodeUnreachable("command timed out or failed to start")
 
         if "docker compose up -d" in command:
             self.services = list(

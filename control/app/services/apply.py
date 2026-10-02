@@ -1217,6 +1217,19 @@ KEPT_IN_SERVICE_FINDING = (
 )
 
 
+# What an apply that could not reach a serving host at all says and records — the owner's
+# decision of 2026-10-02. The same two-string shape as the pair above, for its reason.
+UNREACHED_KEPT = (
+    "the node could not be reached, so nothing was pushed and nothing on it changed: "
+    "{reason}. It stays in users' links, running the configuration it was last given — "
+    "not reaching a host never takes it out of them. Apply it again once it can be "
+    "reached; until then it is not running anything changed since its last apply."
+)
+UNREACHED_KEPT_FINDING = (
+    "an apply could not reach it ({reason}); nothing was pushed, still in users' links"
+)
+
+
 async def apply_node(
     session: AsyncSession, *, node_id: str, only_if_serving: bool = False
 ) -> Applied:
@@ -1446,8 +1459,13 @@ async def apply_node(
         await _record_failure(session, node, exc.message, granted)
         raise
 
+    # Whether a session was opened at all — fix round 5, the owner's decision of
+    # 2026-10-02. False until the line inside ``async with`` runs, so a NodeUnreachable
+    # raised while it is False is a host this apply never reached and never wrote to.
+    reached = False
     try:
         async with NodeConnection(target) as connection:
+            reached = True
             # Persist a learned host key on the FIRST successful connection, so every
             # later connection is pinned and an interception fails loudly.
             if connection.learned_host_key and not node.ssh_host_key:
@@ -1635,6 +1653,30 @@ async def apply_node(
                 await delivery_site.remove_delivery_site(connection)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
+        if not reached and not becoming_serving:
+            # A SERVING HOST THIS APPLY COULD NOT REACH AT ALL STAYS IN USERS' LINKS — the
+            # owner's decision of 2026-10-02, closing the residual the round 5 verdict
+            # row left open. Nothing was written, so the host is exactly as it was
+            # before the press, still running the configuration it was last given. Not
+            # reaching it is a reading about the path from this control plane, and the
+            # rule for readings is the one the measurement arm below keeps: it may warn
+            # the operator, it may never be why a user's link comes back empty. So the
+            # state is left alone and the reason becomes the row's finding (unless one is
+            # already standing), and the re-measure loop dials it again later.
+            #
+            # Narrow on purpose: a host that dropped AFTER the session opened may be
+            # half-written, and that is still degraded (core invariants §4); a node not
+            # yet serving stays out; and a record that cannot produce a session at all
+            # (``target_for`` above) is the operator's record to fix, not a reading.
+            reason = str(exc)
+            logger.error("apply could not reach node %s, left in service: %s", node.id, reason)
+            if node.last_probe_finding is None:
+                await nodes.record_probe(
+                    session, node, finding=UNREACHED_KEPT_FINDING.format(reason=reason)
+                )
+            else:
+                await session.commit()
+            raise NodeOperationFailed(UNREACHED_KEPT.format(reason=reason)) from exc
         await _record_failure(session, node, str(exc), granted)
         raise NodeOperationFailed(
             f"the node could not be configured and has been marked degraded: {exc}"

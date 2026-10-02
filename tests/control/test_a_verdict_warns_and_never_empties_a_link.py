@@ -184,6 +184,76 @@ async def test_a_red_verdict_never_adds_a_node_to_a_link(
     )
 
 
+async def test_a_serving_node_nobody_could_reach_stays_in_every_link(
+    client, session, anonymous, reality_params, monkeypatch
+) -> None:
+    """The owner's decision of 2026-10-02, on the residual round 5 left open.
+
+    The user's only node is serving; the next apply cannot open a session at all (a
+    connect timeout — a slow or briefly blocked path). Nothing was written, so the host
+    is running exactly what it was, and the link must still carry it. The operator is
+    still told, on the banner and on the row.
+
+    Red on the commit before this change: the node went ``degraded`` and the link was
+    empty.
+    """
+    host = reach(monkeypatch, ServingHost(port=reality_params["port"], protocol="tcp"))
+    node_id = await a_node(
+        client, name="entry", address=ENTRY_ADDRESS, transport=REALITY, params=reality_params
+    )
+    token = await a_user_token(client, "olya")
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+    before = await link(anonymous, token)
+    assert "vless://" in before, "the premise: the link carries the user's only node"
+
+    host.unreachable = True
+    unreached = await client.post(f"/api/nodes/{node_id}/apply")
+
+    assert unreached.status_code == 502, unreached.text
+    after = await link(anonymous, token)
+    assert after == before, "not reaching a serving host emptied a user's link"
+    message = unreached.json()["error"]["message"]
+    assert "could not be reached" in message and "stays in users' links" in message, message
+    node = await reread(session, node_id)
+    assert node.state == NodeState.ACTIVE, node.state
+    assert "could not reach" in (node.last_probe_finding or ""), node.last_probe_finding
+
+
+async def test_an_unreachable_node_not_yet_serving_stays_out(
+    client, session, anonymous, reality_params, monkeypatch
+) -> None:
+    """The half of the decision that does not change: a draft that could not be reached
+    is not put into anybody's link by the attempt."""
+    host = reach(monkeypatch, ServingHost(port=reality_params["port"], protocol="tcp"))
+    host.unreachable = True
+    node_id = await a_node(
+        client, name="entry", address=ENTRY_ADDRESS, transport=REALITY, params=reality_params
+    )
+    token = await a_user_token(client, "olya")
+
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 502
+
+    assert (await reread(session, node_id)).state == NodeState.DEGRADED
+    assert "vless://" not in await link(anonymous, token)
+
+
+async def test_a_host_that_drops_after_the_session_opened_is_still_degraded(
+    client, session, reality_params, monkeypatch
+) -> None:
+    """Core invariants §4 is untouched: a session that opened and died mid-push may have
+    left a half-written host, and that is not a reading — it is still degraded."""
+    host = reach(monkeypatch, ServingHost(port=reality_params["port"], protocol="tcp"))
+    node_id = await a_node(
+        client, name="entry", address=ENTRY_ADDRESS, transport=REALITY, params=reality_params
+    )
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 200
+
+    host.drops_at_restart = True
+    assert (await client.post(f"/api/nodes/{node_id}/apply")).status_code == 502
+
+    assert (await reread(session, node_id)).state == NodeState.DEGRADED
+
+
 # --- blocker 2: the port is held is not the node is serving ------------------------------
 
 
