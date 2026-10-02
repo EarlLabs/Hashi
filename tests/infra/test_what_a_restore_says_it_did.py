@@ -139,6 +139,31 @@ def test_a_rebuild_from_the_bucket_holds_the_remeasure_loop(backup: str) -> None
     assert "HASHI_FINDING_REMEASURE_INTERVAL=0" in restart
     assert "up -d --no-deps --no-build control" in restart
     assert "restart control" in restart, "the ordinary restore no longer just restarts"
-    assert "HOLD_REMEASURE=1 command_restore" in function(
-        backup, "command_restore_from_bucket"
+    assert re.search(
+        r"HOLD_REMEASURE=1 (?:[A-Z_]+=\S+ )*command_restore ",
+        function(backup, "command_restore_from_bucket"),
     )
+
+
+# --- M31.10, found in the real-host re-walk of 2026-10-02 --------------------------------
+
+
+def test_the_bucket_path_says_the_wrong_key_sentence_once(backup: str) -> None:
+    """The re-walk read "One thing no restore can check…" twice, word for word.
+
+    ``command_restore`` printed it after the restart, and the bucket path's closing screen
+    — which ``command_restore`` runs inside — printed it again as its last paragraph. M31.8
+    asks for one account, said once. The file restore has no closing screen, so it keeps
+    saying it; the bucket path tells ``command_restore`` a closing screen follows, and the
+    sentence is said there and only there.
+    """
+    restore = function(backup, "command_restore")
+    printed = restore.index('"${WRONG_KEY_SENTENCE}"')
+    guard = restore.rfind('if [ "${CLOSING_SCREEN_FOLLOWS:-0}" != "1" ]; then', 0, printed)
+    assert guard != -1 and "fi" not in restore[guard:printed].split(), (
+        "command_restore prints the wrong-key sentence even when the bucket's closing "
+        "screen is about to print it again"
+    )
+    bucket = function(backup, "command_restore_from_bucket")
+    assert "CLOSING_SCREEN_FOLLOWS=1 command_restore" in bucket
+    assert "${WRONG_KEY_SENTENCE}" in bucket, "and then neither path would say it"

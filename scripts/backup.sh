@@ -819,8 +819,14 @@ MSG
     echo "The restore itself succeeded, and restarting the control plane on it did not" >&2
     echo "finish (it is not healthy yet). Run: make restart-control — or make logs to see why." >&2
   fi
-  echo "" >&2
-  printf '%s\n' "${WRONG_KEY_SENTENCE}" >&2
+  # Said here only when nothing follows. The bucket path ends on a closing screen that
+  # carries this same sentence as its last word, and the real-host re-walk of 2026-10-02
+  # read it twice, word for word, a screen apart — M31.8 asks for one account said once.
+  # CLOSING_SCREEN_FOLLOWS=1 is set by command_restore_from_bucket and by nothing else.
+  if [ "${CLOSING_SCREEN_FOLLOWS:-0}" != "1" ]; then
+    echo "" >&2
+    printf '%s\n' "${WRONG_KEY_SENTENCE}" >&2
+  fi
 }
 
 # --- coming back from the bucket, M28.8 ---------------------------------------
@@ -1194,7 +1200,7 @@ MSG
   echo "" >&2
   echo "restoring ${chosen}" >&2
   echo "" >&2
-  HOLD_REMEASURE=1 command_restore "${chosen}"
+  HOLD_REMEASURE=1 CLOSING_SCREEN_FOLLOWS=1 command_restore "${chosen}"
 
   # --- 6. and what it did not do ----------------------------------------------
   #
