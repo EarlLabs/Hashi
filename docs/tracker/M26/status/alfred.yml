@@ -1,7 +1,7 @@
 agent: alfred
 role: overseer
 task: "M26 fix round 5 — walk 4's findings"
-state: in_progress
-progress: "design done; implementing control half of the serving check"
+state: done
+progress: "closed in code; review-loop converged clean in round 1; awaits real-host walk 5"
 blockers: null
 updated_at: 2026-10-02T00:00:00Z
