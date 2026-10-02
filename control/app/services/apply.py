@@ -1669,10 +1669,15 @@ async def apply_node(
     # applied before a certificate was ever configured has every row stamped and nothing
     # on it, which is the state every fleet is in the day the feature becomes reachable.
     #
-    # Past the failure arms with the state write below, and for the same reason: an apply
-    # that did not get this far either placed nothing or is degraded over what it placed,
-    # and in both cases the previous record is the truer one — the host still holds
-    # whatever the last apply that DID get here left on it.
+    # Past the failure arms with the state write below, which makes this the NARROW
+    # claim: a listener that was placed AND watched serving, never one that was merely
+    # written to the host. That matters in one state and the trade is deliberate. An
+    # apply whose files landed and whose container then did not come up leaves the
+    # PREVIOUS record standing, so the screen understates what is on that host by one
+    # apply — beside a row this same function is about to mark degraded, with the
+    # delivery service named in its reason. The other direction would have the screen
+    # announce a listener and a shutdown horizon for a container that never started,
+    # which is the failure this record was added to end.
     #
     # ``serves_delivery`` and not ``listener is not None``: a co-located box is handed no
     # listener however usable this control plane's certificate is, and recording one for
