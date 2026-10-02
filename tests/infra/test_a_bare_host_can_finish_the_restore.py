@@ -277,6 +277,8 @@ def test_the_restore_does_not_end_by_unpublishing_the_host(backup: str, makefile
     assert "make down && make up" not in code_only(backup), (
         "the restore still tells a deployed host to run the one sequence that unpublishes it"
     )
+    # Since M31.8 the restore restarts the control plane itself rather than instructing it;
+    # `make restart-control` survives as the fallback when that restart does not finish.
     assert "make restart-control" in backup
     assert "restart-control:" in makefile
     recipe = makefile.split("restart-control:")[1].splitlines()[1]
