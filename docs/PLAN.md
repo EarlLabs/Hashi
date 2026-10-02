@@ -93,7 +93,32 @@ serving; the hop form's unanswerable boxes; a dialog whose submit shared its
 label with the button that opened it; `node-bootstrap.sh` claiming ufw logging
 was off before the check that could contradict it.
 
-### What is still open in M26 — walk 4's findings, unfixed
+### Fix round 5 (2026-10-02) — walk 4's findings, fixed in code, not yet walked
+
+On branch `task/M26-fix-round-5`, not pushed. **Code and a disposable test database
+only; no real host was touched.** Every item below except the 14 hand-typed numbers
+(skipped by the owner) is closed in code with a test that was red before it — see
+`docs/tracker/M26/fix-round-5.md` and the 2026-10-02 rows in `docs/decisions.md`:
+
+- **blocker 2 (a condemned node empties every link)** — a measurement no longer demotes a
+  node that was serving; it stays in every user's link and the verdict is the row's
+  finding. *A health verdict may warn the operator; it may never be why a user's link
+  comes back empty.*
+- **blocker 1 (port held ≠ serving)** — apply and probe put each transport's own serving
+  question (`36d6b1b`'s edge half, now wired); for the wg family, holding the rendered
+  peers confirms it and the held port does not.
+- **high** — an apply that could not take its reading names what was unmeasured
+  (`serving_unmeasured`, a panel notice) instead of the healthy line.
+- **medium** — an `active` node carrying a finding is re-measured every 60 s; a degraded
+  node is deliberately not.
+- **low** — the withdrawn-access note needs somebody withdrawn.
+
+**Still needed before M26 can close: an independent walk on real hosts** (walk 5) —
+walk 4's two contrived hosts again, and the false red on the owner's one-box Shape.
+
+The list below is walk 4's original record, kept as it was found.
+
+### What was open in M26 — walk 4's findings, as recorded before round 5
 
 Fix round 4 was stopped part-way. `36d6b1b` on `develop` is its **edge** half — a
 transport declares how to ask whether it is serving — committed, green, and with
@@ -2234,7 +2259,7 @@ this milestone's subject.
 
 ---
 
-## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL, run stopped 2026-09-16 — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); the serving check is not finished, see "Where things stand"
+## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); fix round 5 (2026-10-02) closed walk 4's findings in code and awaits a real-host walk, see "Where things stand"
 
 **Approved by the owner on 2026-09-16**, who asked whether a leaf and an entry
 can be deployed by one command, and — being told the answer was probably no —
@@ -2337,6 +2362,11 @@ whether the charter's sentence is true.
 independent acceptance walk, and **fixed in a loop — walk, record every finding,
 fix them all, walk again — until a walk comes back with nothing blocking**, the
 way M23 was run.
+
+**Fix round 5 — 2026-10-02, asked for by the owner.** Walk 4's blockers, high, medium and
+the Users-screen low, closed in code on `task/M26-fix-round-5` (not pushed); the "14
+hand-typed numbers per hop" low was skipped by the owner. Record:
+`docs/tracker/M26/fix-round-5.md`. The loop's next step is walk 5 on real hosts.
 
 ---
 
