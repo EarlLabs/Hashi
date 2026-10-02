@@ -8,8 +8,12 @@ WHY:  a schedule that silently skips a day is discovered during a restore, and b
       verbs are run, with a real clock, a real env file and a seeded record, and no Docker
       anywhere.
 HOW:  ``due`` answers "what would a tick do right now" and changes nothing, so every
-      scheduling decision is reachable without dumping a database. ``tick``, ``now`` and a
-      real backup are the e2e tier's — ``tests/e2e/infra/test_restore_proves_the_backup.py``
+      scheduling decision is reachable without dumping a database. The clock is the host's
+      own and is never frozen, so a fixture seeding the date the schedule is on asks
+      ``day_owed_in`` for it and never the calendar — the two answers differ at every hour
+      before the configured one, which is where M27.9 found a suite red.
+      ``tick``, ``now`` and a real backup are the e2e tier's —
+      ``tests/e2e/infra/test_restore_proves_the_backup.py``
       is where the schedule is watched actually firing against a booted stack.
 
       What is NOT proven anywhere, stated rather than implied: that a host's ``cron``
@@ -19,6 +23,7 @@ HOW:  ``due`` answers "what would a tick do right now" and changes nothing, so e
       installed without disturbing the operator's other entries.
 """
 
+import datetime
 import json
 import os
 import pathlib
@@ -154,12 +159,120 @@ def seed(state: pathlib.Path, **fields) -> pathlib.Path:
     return state / "last-run.json"
 
 
-def today_in(zone: str) -> str:
+# The hour as ``scripts/backup-run.sh::resolve_schedule`` reads one: the characters it
+# keeps, the shape it accepts, and the zero-padding it applies. Copied here rather than
+# elided because ``4:00`` is supported operator input — pinned by
+# ``test_a_time_that_is_not_a_time_falls_back_and_says_so`` below — and an oracle that
+# compared a wall clock against the raw string answered a day early for every hour of a
+# two-digit clock. Held to the script by
+# ``test_the_day_this_suite_seeds_is_the_day_the_script_owes``; change this only with a run
+# of that.
+AT_SHAPE = re.compile(r"^([0-9]|[01][0-9]|2[0-3]):[0-5][0-9]$")
+AT_KEEPS = re.compile(r"[^A-Za-z0-9_+:/.-]")
+AT_WHEN_THERE_IS_NONE = "04:00"
+
+
+def the_hour_the_script_resolves(at: str) -> str:
+    """``at`` as the script will hold it, which is not always as the env file spells it."""
+    kept = AT_KEEPS.sub("", at)[:64]
+    if not AT_SHAPE.match(kept):
+        return AT_WHEN_THERE_IS_NONE
+    hour, _, minute = kept.partition(":")
+    return f"{int(hour, 10):02d}:{minute}"
+
+
+def day_owed_in(zone: str, at: str) -> str:
+    """The date whose backup a schedule of ``at`` in ``zone`` owes at this instant.
+
+    The rule is ``scripts/backup-run.sh::due_date``'s and this is a second implementation
+    of it rather than a reading of the script. WHICH OF THE TWO A TEST WANTS, because the
+    file next door states the opposite rule and both are right about their own subject:
+    **implement the date here when the assertion is ABOUT the date** — that the tick wrote
+    the day it owes, that a record dated now is not called ahead — because asking the
+    script would make the assertion agree with whatever the script does; **ask the script
+    for it** when the date is only scaffolding under some other assertion, which is the
+    canonical second case and is
+    ``test_the_backup_surfaces_record_nobody.py::test_a_tick_with_nothing_owed_says_nothing_at_all``.
+
+    WHY THE CALENDAR'S DATE IS NOT THIS DATE, which is the whole of M27.9 and the reason the
+    helper that returned it (``today_in``) is gone rather than left beside this one for the
+    next fixture to reach for. Before ``at`` the day owed is still the previous one, so a
+    record seeded with the calendar's date is a record dated AHEAD of the schedule for those
+    hours and the script says so — three tests in
+    ``test_what_the_command_line_may_say_about_a_backup.py`` were green for twenty hours a
+    day and red for four, against a product that was right at all twenty-four, and four
+    here were the same defect in the one minute before ``00:01``. Ask this with the pair the
+    env file under test names, never with a pair typed beside it.
+
+    The zone is handed to ``date`` as it was written, deliberately: the script resolves an
+    unusable one to UTC, and ``TZ=<not a zone> date`` prints UTC too (measured on this host,
+    and the script's own comment records it), so the two agree without a second copy of
+    that fallback. The hour has no such luck and goes through
+    ``the_hour_the_script_resolves``.
+
+    One ``date`` call for both halves, because two would let the day and the hour come from
+    opposite sides of a midnight — which is one more than the script itself manages, and the
+    only place this implementation is deliberately not a mirror.
+    """
     result = subprocess.run(
-        ["date", "+%F"], capture_output=True, text=True, timeout=30,
+        ["date", "+%F %H:%M"], capture_output=True, text=True, timeout=30,
         env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TZ": zone},
     )
-    return result.stdout.strip()
+    day, _, hour = result.stdout.strip().partition(" ")
+    if hour < the_hour_the_script_resolves(at):
+        day = (datetime.date.fromisoformat(day) - datetime.timedelta(days=1)).isoformat()
+    return day
+
+
+# --- the oracle this suite seeds with, held against the script ------------------
+
+
+# The grid is chosen by OFFSET and not by hour, so whatever the wall clock is when this
+# runs, it holds zones on both sides of every hour below — a pin written against one zone
+# would itself be green only at some hours, which is M27.9's defect a third time. The last
+# zone is not a zone: the script resolves an unusable one to UTC, `date` does too, and this
+# is where that agreement is checked rather than assumed.
+@pytest.mark.parametrize(
+    "at",
+    # The last four are the spellings the script does not hold as they were written: `4:00`
+    # and `9:30` are accepted and PADDED, `25:00` is refused and falls back to the hour it
+    # uses when there is none, and `1 2:00` is stripped down to a time it then accepts. An
+    # oracle comparing a clock against the raw string answers a day out for all four, and
+    # was measured doing exactly that before this test existed.
+    ["00:01", "04:00", "12:00", "23:59", "4:00", "9:30", "25:00", "1 2:00"],
+)
+@pytest.mark.parametrize(
+    "zone", ["Etc/GMT+11", "Etc/GMT+5", "Etc/UTC", "Etc/GMT-5", "Etc/GMT-13", "Nowhere/Useful"],
+)
+def test_the_day_this_suite_seeds_is_the_day_the_script_owes(tmp_path, zone, at) -> None:
+    """``day_owed_in`` is a second implementation of ``due_date`` and nothing held it there.
+
+    Every fixture in this zone that seeds a current due date is dated by that helper, so a
+    helper that drifts from the script does not fail — it seeds records the script reads as
+    dated ahead or behind, and the tests around it then assert whatever the drift produces.
+    That is M28.12's two-readers defect arriving in the harness instead of the product, and
+    it was already here when the helper was born: the raw-string comparison it shipped with
+    answered ``2026-09-26`` where the script answered ``2026-09-27`` for ``at=4:00`` in
+    ``Etc/GMT-8`` — measured, at 02:24 UTC on the day this test was written.
+
+    The oracle is read on both sides of the invocation because the two clocks are read a
+    moment apart: a comparison taken across the configured minute would be red for one
+    second a day, which is the shape this whole step is about.
+    """
+    state = tmp_path / "state"
+    state.mkdir()
+    path = env_file(tmp_path, HASHI_BACKUP_AT=at, HASHI_BACKUP_TZ=zone)
+
+    before = day_owed_in(zone, at)
+    answered = verdict(run("due", path, state))["due"]
+    after = day_owed_in(zone, at)
+
+    assert answered in {before, after}, (
+        f"the date this suite seeds and the date the script owes have parted at "
+        f"{zone} {at!r}: the script says {answered}, the oracle says {before} — every "
+        "fixture dated by that helper is now seeding a record the script reads as dated "
+        "ahead or behind"
+    )
 
 
 # --- what 04:00 means ---------------------------------------------------------
@@ -268,10 +381,11 @@ def test_a_day_the_box_was_down_is_owed_rather_than_skipped(tmp_path) -> None:
     carrying an hour would have done, silently, for the fifth day running.
     """
     state = tmp_path / "state"
-    path = env_file(tmp_path, HASHI_BACKUP_AT="04:00", HASHI_BACKUP_TZ="Etc/UTC")
-    today = today_in("Etc/UTC")
+    at, zone = "04:00", "Etc/UTC"
+    path = env_file(tmp_path, HASHI_BACKUP_AT=at, HASHI_BACKUP_TZ=zone)
+    owed = day_owed_in(zone, at)
     old = subprocess.run(
-        ["date", "-d", f"{today} - 5 days", "+%F"], capture_output=True, text=True, timeout=30,
+        ["date", "-d", f"{owed} - 5 days", "+%F"], capture_output=True, text=True, timeout=30,
         env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
     ).stdout.strip()
 
@@ -287,11 +401,12 @@ def test_the_days_that_had_no_backup_are_named_by_date(tmp_path) -> None:
     artifact are the ones in the gap.
     """
     state = tmp_path / "state"
-    path = env_file(tmp_path, HASHI_BACKUP_AT="00:01", HASHI_BACKUP_TZ="Etc/UTC")
-    today = today_in("Etc/UTC")
+    at, zone = "00:01", "Etc/UTC"
+    path = env_file(tmp_path, HASHI_BACKUP_AT=at, HASHI_BACKUP_TZ=zone)
+    owed = day_owed_in(zone, at)
     dates = [
         subprocess.run(
-            ["date", "-d", f"{today} - {back} days", "+%F"],
+            ["date", "-d", f"{owed} - {back} days", "+%F"],
             capture_output=True, text=True, timeout=30,
             env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
         ).stdout.strip()
@@ -309,8 +424,9 @@ def test_the_days_that_had_no_backup_are_named_by_date(tmp_path) -> None:
 def test_a_day_that_already_has_a_backup_is_not_taken_twice(tmp_path) -> None:
     """The other half: a tick every fifteen minutes must be quiet 95 times out of 96."""
     state = tmp_path / "state"
-    path = env_file(tmp_path, HASHI_BACKUP_AT="00:01", HASHI_BACKUP_TZ="Etc/UTC")
-    seed(state, due_date=today_in("Etc/UTC"))
+    at, zone = "00:01", "Etc/UTC"
+    path = env_file(tmp_path, HASHI_BACKUP_AT=at, HASHI_BACKUP_TZ=zone)
+    seed(state, due_date=day_owed_in(zone, at))
     answer = verdict(run("due", path, state))
     assert answer["action"] == "wait"
     assert answer["missed"] == "none"
@@ -330,16 +446,17 @@ def test_an_artifact_that_did_not_leave_the_machine_is_not_dumped_again(tmp_path
     store refused it; `make backup-upload FROM=<path>` sends the one already on disk.
     """
     state = tmp_path / "state"
-    path = env_file(tmp_path, HASHI_BACKUP_AT="00:01", HASHI_BACKUP_TZ="Etc/UTC")
-    today = today_in("Etc/UTC")
+    at, zone = "00:01", "Etc/UTC"
+    path = env_file(tmp_path, HASHI_BACKUP_AT=at, HASHI_BACKUP_TZ=zone)
+    owed = day_owed_in(zone, at)
     seed(
         state,
-        due_date=today,
+        due_date=owed,
         attempts=1,
         retry_not_before="",
-        last_attempt={"at": "2026-01-01T04:00:00Z", "due_date": today,
+        last_attempt={"at": "2026-01-01T04:00:00Z", "due_date": owed,
                       "exit_code": 3, "outcome": "not-sent"},
-        last_failure={"at": "2026-01-01T04:00:00Z", "due_date": today,
+        last_failure={"at": "2026-01-01T04:00:00Z", "due_date": owed,
                       "exit_code": 3, "outcome": "not-sent"},
     )
     answer = run("due", path, state)
@@ -354,26 +471,27 @@ def test_a_run_that_produced_nothing_is_retried_but_not_without_limit(tmp_path) 
     once every tick, and it must not keep trying for ever into tomorrow's window either.
     """
     state = tmp_path / "state"
-    path = env_file(tmp_path, HASHI_BACKUP_AT="00:01", HASHI_BACKUP_TZ="Etc/UTC")
-    today = today_in("Etc/UTC")
-    failed = {"at": "2026-01-01T04:00:00Z", "due_date": today,
+    at, zone = "00:01", "Etc/UTC"
+    path = env_file(tmp_path, HASHI_BACKUP_AT=at, HASHI_BACKUP_TZ=zone)
+    owed = day_owed_in(zone, at)
+    failed = {"at": "2026-01-01T04:00:00Z", "due_date": owed,
               "exit_code": 1, "outcome": "no-artifact"}
 
     waiting = run("due", path, seed(
-        state, due_date=today, attempts=1, retry_not_before="2999-01-01T00:00:00Z",
+        state, due_date=owed, attempts=1, retry_not_before="2999-01-01T00:00:00Z",
         last_attempt=failed, last_failure=failed,
     ).parent)
     assert verdict(waiting)["action"] == "wait"
     assert "not before" in waiting.stdout
 
     ready = run("due", path, seed(
-        state, due_date=today, attempts=1, retry_not_before="2000-01-01T00:00:00Z",
+        state, due_date=owed, attempts=1, retry_not_before="2000-01-01T00:00:00Z",
         last_attempt=failed, last_failure=failed,
     ).parent)
     assert verdict(ready)["action"] == "run"
 
     spent = run("due", path, seed(
-        state, due_date=today, attempts=99, retry_not_before="2000-01-01T00:00:00Z",
+        state, due_date=owed, attempts=99, retry_not_before="2000-01-01T00:00:00Z",
         last_attempt=failed, last_failure=failed,
     ).parent)
     assert verdict(spent)["action"] == "wait"

@@ -707,7 +707,7 @@ async def test_the_port_constraint_is_per_node_and_not_fleet_wide(
 # --- the name allocation ------------------------------------------------------
 
 async def test_a_transport_that_names_no_port_collides_over_nothing(
-    client, session, wg_params
+    client, session, wg_params, settings
 ) -> None:
     """A row with no port in its parameters is not constrained by the port rule.
 
@@ -723,12 +723,12 @@ async def test_a_transport_that_names_no_port_collides_over_nothing(
     assert placement.port_of({}) is None
     # No refusal, and the name offered is still the free one.
     assert await placement.claim(
-        session, node=node, transport_name="vless-reality", params={}
+        session, settings=settings, node=node, transport_name="vless-reality", params={}
     ) == "vless-reality"
 
 
 async def test_the_second_instance_takes_a_name_the_kernel_would_accept(
-    client, session, wg_params
+    client, session, wg_params, settings
 ) -> None:
     """The suffixed name is ours to choose, so it is measured against the tool's rule."""
     node_id = await a_node(client, "name-1", "192.0.2.99")
@@ -737,6 +737,7 @@ async def test_the_second_instance_takes_a_name_the_kernel_would_accept(
 
     chosen = await placement.claim(
         session,
+        settings=settings,
         node=node,
         transport_name=HOP_TRANSPORT,
         # ITS OWN RANGE as well as its own port, since M17.1c: a second tunnel on this

@@ -59,6 +59,7 @@ from control.app.services import (
     apply,
     audit,
     backups,
+    delivery,
     keymaterial,
     nodes,
     relay,
@@ -361,6 +362,12 @@ class NodeRow:
     # question and stays the other question — that one is about what WE have pushed and
     # needs no network; this one is what the HOST last said, and only a press gets it.
     probe: str | None = None
+    # WHETHER THIS HOST ANSWERS ITS OWN USERS' REFRESHES, and until when — M27.6, and
+    # ``None`` on every node the question is not about, which is every node carrying no
+    # user-facing row. It is the one place the operator is told how long the delivery
+    # endpoint on this host goes on working, and the whole reason it is on a screen is
+    # that the answer has to be known BEFORE a border shuts and not discovered after.
+    delivery: str | None = None
     # What this node runs. A configuration fact and nothing else: it moves when the
     # OPERATOR enables or withdraws a protocol and never when a user connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
@@ -1544,6 +1551,234 @@ async def drift_of(session: AsyncSession, node: Node) -> str:
 PROBE_FINDING = "probe, {when} UTC — {finding}"
 
 
+# How long is left before the operator is told in DAYS rather than only a date. Not a
+# threshold for a warning — there is no warning, and a line that only appeared when
+# somebody had already decided it was urgent is a line an operator has never read before
+# the day it matters. It is the granularity: past this, the date is what is actionable
+# and a day count is noise.
+DELIVERY_DAYS_WORTH_COUNTING = 30
+
+# WHAT TRAVELS WITH A DELIVERY URL — M27.7, and the product has nowhere else to put it.
+#
+# A delivery host serves a SLICE. Its artifact holds that host's own client entries and
+# nothing else (``services/delivery.artifacts_for_node``), so a client that REPLACES its
+# subscription URL with a delivery URL silently loses every node the person holds
+# anywhere else — and what they see is indistinguishable from having been cut off.
+#
+# IT CANNOT LIVE IN THE DOCUMENT, which is why it lives in a string. M27.5 weighed a
+# sentence inside the artifact and refused: a truthful per-user version has to learn
+# whether that person holds material on another host, and writing that onto the most
+# seizable box in the fleet says "this person has other nodes" once per person — wider
+# than the addresses the narrowing was built to remove. So it travels BESIDE the URL, in
+# the operator's hands, and this is the one copy of it: the Nodes screen shows it to the
+# operator below, and ``docs/deploy/runbook.md`` quotes this exact string under "Moving
+# the delivery endpoint" for them to send on. ``tests/infra/test_deploy_runbook.py``
+# fails if the two part company.
+#
+# UNCONDITIONAL, which is what makes it safe to write down at all: it learns nothing
+# about anybody, so it is the same sentence for a person holding one node and for a
+# person holding five, and it is true before the second host exists.
+DELIVERY_URL_GOES_ALONGSIDE = (
+    "Add this link to your app alongside the link you already have — do not replace it. "
+    "It is answered by one server and carries only what that server can give you, so an "
+    "app left holding this one alone loses everything the other link still has in it, "
+    "and that looks exactly like being cut off."
+)
+
+# And how the operator meets it, on the row for the host the link would be on. The panel
+# composes no delivery URL anywhere — the path is a per-host digest of the person's token
+# (``services/delivery.artifact_name``), which nothing outside the push reads — so the
+# operator is the whole channel, and this is where they are told what has to go with it.
+# ``tests/control/test_what_travels_with_a_delivery_url.py`` pins that first clause
+# against the source rather than leaving it as prose that quietly stops being true.
+DELIVERY_HANDED_OVER_BY_YOU = (
+    " A link on this host is shown nowhere in this panel and is handed over out of band "
+    "— docs/deploy/runbook.md, “Moving the delivery endpoint” — with these words beside "
+    "it: “{alongside}”"
+)
+
+# What the Nodes screen says about a host that answers its own users' refreshes.
+#
+# IT NO LONGER HEDGES ON CO-LOCATION, and the reason is the record it is now composed
+# from. The second half of "is this a delivery host" is a reading of the BOX taken over
+# SSH during an apply (``delivery.is_delivery_host``) and this screen touches no network
+# — so it used to say "unless this is the box this control plane runs on, which already
+# answers". That reading is now recorded when it is taken: an apply writes what it PLACED
+# (``Node.delivery_placed_digest``), and it places nothing on the control plane's own
+# box, so a row carrying the digest of this listener is a host that was measured not to
+# be it.
+#
+# WHICH IS ALSO WHY THE SENTENCE IS TRUE AT ALL. It used to be chosen on
+# ``any(row.applied_at …)`` — a transport row having been pushed, which says nothing
+# about a listener — so a host applied before a delivery certificate was ever configured
+# read as serving refreshes, with a date, while it had no listener, no certificate and no
+# container. That is the state every fleet is in the day the feature becomes reachable.
+#
+# AND IT STATES THE BOUND RATHER THAN A REASSURANCE. A certificate is pushed by an apply
+# and this control plane cannot reach a host across a shut border, so what the product
+# promises is finite and this is where the number is: a shutdown longer than this ends
+# refreshes from this host and there is nothing the product can do about it. The date is
+# read off what was PLACED and never off the pair on this control plane's disk — after a
+# renewal those are two different certificates until an apply reaches the host, and the
+# one the host is holding is the one the bound is about.
+DELIVERY_SERVED = (
+    "delivery — the last apply put a listener on this host, so users can refresh from "
+    "https://{name}/sub/… without reaching this control plane. The certificate it was "
+    "given is good until {until} UTC{countdown}: a shutdown longer than that ends "
+    "refreshes from here, because nothing can renew it while this control plane cannot "
+    "reach the host."
+)
+
+# And the two states where the host is answering on something OTHER than what this
+# control plane would place now — a certificate renewed since the last apply, or an
+# address corrected since it. They are separate from the sentence above because the
+# expiry that matters is the one on the host, and separate from each other because one
+# of them is a host that has already stopped working.
+#
+# The operator's action is the same in both and is named in both: press Apply. What
+# differs is what is true until they do.
+DELIVERY_HOLDING_AN_EARLIER_ONE = (
+    "delivery — this host is answering with what an earlier apply put there, which is "
+    "not what this control plane would place now: the certificate has been replaced, or "
+    "this host's name has changed, since. What it is holding is good until {held} "
+    "UTC{countdown}. That is the bound, and not the pair on this control plane's disk: "
+    "the next apply puts the current one there, good until {until} UTC."
+)
+DELIVERY_HOLDING_AN_EXPIRED_ONE = (
+    "delivery — this host is answering with a certificate that expired {held} UTC, so "
+    "every stock client refuses it and refreshes from here are failing now. It is still "
+    "holding what an earlier apply put there; the current certificate, good until "
+    "{until} UTC, reaches it on the next apply."
+)
+
+# And the same host before any apply has reached it, which is a different sentence and
+# not a hedge on that one. Nothing is on the host yet — no listener, no certificate, no
+# container — so a line saying users can refresh from it would be describing a machine
+# that answers nothing. It names the press that changes it, which is the only action
+# there is.
+DELIVERY_ON_THE_NEXT_APPLY = (
+    "delivery — nothing on this host serves refreshes yet. The next apply puts a "
+    "listener there under https://{name}/sub/… with a certificate good until {until} "
+    "UTC{countdown}, unless this is the box this control plane runs on, which already "
+    "answers."
+)
+
+# And the three ways a host that carries users serves none, each naming the one thing
+# that would change it. Separate sentences rather than one hedged one, because the
+# repairs are three different actions and two of them are not on this screen.
+DELIVERY_NO_NAME = (
+    "delivery — not served from this host: it is registered as {address}, and a public "
+    "certificate authority will not issue for an address. Users refresh from this "
+    "control plane instead. Register this host under a name that resolves to it to "
+    "serve refreshes from the host itself."
+)
+DELIVERY_NO_CERTIFICATE = (
+    "delivery — not served from any host: this control plane holds no delivery "
+    "certificate. Users refresh from this control plane instead, which is behind "
+    "whichever border it is on."
+)
+DELIVERY_EXPIRED = (
+    "delivery — not served from any host: the delivery certificate expired {until} UTC, "
+    "and every client refuses an expired one. The next apply takes the listener and its "
+    "private key off this host. Users refresh from this control plane instead."
+)
+DELIVERY_UNUSABLE = "delivery — not served from any host: {problem}"
+
+
+def _expiry_and_countdown(until: datetime.datetime) -> tuple[str, str]:
+    """A certificate's expiry as this screen prints it: the date, and a day count or not.
+
+    One helper because the screen now names up to two certificates in one sentence — the
+    one a host is holding and the one it would be given — and two spellings of a date on
+    one row is a row a reader has to decode.
+
+    Not ``_how_long``, which is this module's backup reading and takes a duration: two
+    functions of one name in one file leaves whichever is defined second, and the first
+    caller to find out is a test.
+    """
+    days = (until - datetime.datetime.now(datetime.UTC)).days
+    countdown = f" — {days} days" if days <= DELIVERY_DAYS_WORTH_COUNTING else ""
+    return until.strftime("%Y-%m-%d %H:%M"), countdown
+
+
+def delivery_note(node: Node, settings: Settings) -> str | None:
+    """What this screen says about this host answering its own users' refreshes — M27.6.
+
+    ``None`` for a node the question is not about, which is any node carrying no
+    user-facing row: a leaf answers nobody, so a line saying it serves no refreshes
+    would be a sentence about a thing that was never in question. Every other node gets
+    one, including the three that serve none — because "nothing here" is exactly the
+    state an operator can sit in for months without noticing.
+
+    IT DOES NOT DIAL THE HOST and it no longer needs to hedge for that — M27.7. What is
+    on the host is read off what the last apply RECORDED placing there
+    (``delivery.placed_listener``), which is a measurement taken over SSH at the moment
+    it was true, so the only network reading this sentence rests on is one that already
+    happened. Before that record existed this chose between two sentences on
+    ``applied_at``, and a pushed transport row is not a placed listener: a host applied
+    before a delivery certificate was ever configured was described as serving refreshes
+    it could not serve.
+
+    The certificate is read here rather than passed in for the same reason it is read
+    per apply: a renewal that this screen went on ignoring until the process restarted
+    is the expiry it exists to prevent. What that read decides is what the host WOULD be
+    given; the bound it is under until then is the placed one.
+    """
+    if not any(
+        row.enabled and row.purpose == TransportPurpose.USERS for row in node.transports
+    ):
+        return None
+    try:
+        listener = delivery.listener_for(node, settings)
+    except delivery.DeliveryCertificateUnusable as exc:
+        return DELIVERY_UNUSABLE.format(problem=exc)
+    if listener is not None:
+        name = delivery.delivery_site_address(node)
+        until, countdown = _expiry_and_countdown(listener.certificate.not_after)
+        handover = DELIVERY_HANDED_OVER_BY_YOU.format(
+            alongside=DELIVERY_URL_GOES_ALONGSIDE
+        )
+        placed = delivery.placed_listener(node)
+        if placed is None:
+            # NOTHING HAS BEEN PUT THERE — no listener, no certificate, no container —
+            # so a line saying users can refresh from it would describe a machine that
+            # answers nothing. This is also every co-located box: an apply places no
+            # listener on the host this control plane runs on, so it records none, and
+            # the sentence keeps the hedge the other three have no need of.
+            return DELIVERY_ON_THE_NEXT_APPLY.format(
+                name=name, until=until, countdown=countdown
+            )
+        if placed.digest == node_stack.digest_of(listener.site):
+            served = DELIVERY_SERVED.format(name=name, until=until, countdown=countdown)
+            return served + handover
+        # THE HOST IS HOLDING SOMETHING ELSE. The site file carries the certificate's own
+        # digest, so this arm is a renewed pair or a corrected address, and in both the
+        # expiry that bounds refreshes from this host is the placed one. Whether that has
+        # already run out is the difference between a host that is still answering and
+        # one every client is refusing, which is not a distinction to leave to a date the
+        # operator has to read twice.
+        held, held_countdown = _expiry_and_countdown(placed.certificate_until)
+        if placed.certificate_until <= datetime.datetime.now(datetime.UTC):
+            return DELIVERY_HOLDING_AN_EXPIRED_ONE.format(held=held, until=until)
+        earlier = DELIVERY_HOLDING_AN_EARLIER_ONE.format(
+            held=held, countdown=held_countdown, until=until
+        )
+        return earlier + handover
+    # ONE VERDICT, THREE REASONS. Whether this host serves refreshes is
+    # ``delivery.listener_for`` above — the same call the apply makes and the same one
+    # ``placement`` refuses a port on, so the three cannot disagree. What is composed
+    # below is only WHY it does not, which is the operator's to act on and nobody
+    # else's.
+    if delivery.delivery_site_address(node) is None:
+        return DELIVERY_NO_NAME.format(address=node.address)
+    certificate = delivery.configured_certificate(settings)
+    if certificate is None:
+        return DELIVERY_NO_CERTIFICATE
+    return DELIVERY_EXPIRED.format(
+        until=certificate.not_after.strftime("%Y-%m-%d %H:%M")
+    )
+
+
 def probe_note(node: Node) -> str | None:
     """What the last probe of this node found, or ``None`` when there is nothing to say.
 
@@ -1564,7 +1799,7 @@ def probe_note(node: Node) -> str | None:
     )
 
 
-async def node_rows(session: AsyncSession) -> list[NodeRow]:
+async def node_rows(session: AsyncSession, settings: Settings) -> list[NodeRow]:
     """Every node, with its drift cell computed.
 
     One render per node per screen load, which is the cost of the drift cell being
@@ -1583,6 +1818,7 @@ async def node_rows(session: AsyncSession) -> list[NodeRow]:
             state_detail=node.state_detail,
             drift=await drift_of(session, node),
             probe=probe_note(node),
+            delivery=delivery_note(node, settings),
             transports=tuple(
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
@@ -2745,7 +2981,9 @@ def tear_down_summary(affected: list[str]) -> str:
     )
 
 
-async def overview(session: AsyncSession, *, backup: backups.Reading) -> Overview:
+async def overview(
+    session: AsyncSession, *, settings: Settings, backup: backups.Reading
+) -> Overview:
     """The Overview screen's whole content, in one call.
 
     ``backup`` is read by the CALLER and handed in, which is the only thing on this screen
@@ -2778,7 +3016,11 @@ async def overview(session: AsyncSession, *, backup: backups.Reading) -> Overvie
     "hops established" beside it do, and the zero it shows is then the same zero the card
     to its left is showing for the same reason.
     """
-    rows = await node_rows(session)
+    # The rows for their STATES, and the delivery line each one composes is thrown away
+    # here: this card counts machines and the sentence belongs to the screen that shows
+    # one row per machine. ``settings`` is threaded rather than defaulted so that a new
+    # caller has to decide, instead of quietly getting rows with the line missing.
+    rows = await node_rows(session, settings)
     people = await user_rows(session)
     hops = await relay.list_hops(session)
 

@@ -508,7 +508,7 @@ def digest_of(config: str) -> str:
     return hashlib.sha256(config.encode()).hexdigest()
 
 
-def render_compose(*, transports: list[dict]) -> str:
+def render_compose(*, transports: list[dict], delivery: Mapping | None = None) -> str:
     """The node's docker-compose.yml.
 
     Pure. ``transports`` is a list of dicts carrying ``name``, ``config_path``,
@@ -522,9 +522,31 @@ def render_compose(*, transports: list[dict]) -> str:
     compose file, and DIFFERENT configs render a different one. The second half is not
     a nicety — it is what makes `docker compose up -d` recreate a container whose
     config changed. See ``CONFIG_DIGEST_LABEL``.
+
+    ``delivery`` is one more service, and ``None`` — the default, and what every caller
+    passes today — renders a file byte for byte identical to the one this function has
+    always produced. It is built by ``delivery_site.compose_service``, which this module
+    does not import: the delivery listener knows about the node stack's paths and the
+    node stack does not need to know about it, and reaching the other way would be a
+    cycle. Whether a host gets one is a question about the FLEET rather than about a
+    node's configs, so nothing here can answer it and nothing here tries.
     """
+    if delivery and any(one["name"] == delivery["name"] for one in transports):
+        # A compose file with two services of one name is one service: the second
+        # mapping key silently wins, and what disappears is either a transport nobody
+        # can find or the listener. Refused here because this is where the two lists
+        # meet for the only time.
+        raise UnrunnableTransport(
+            f"a transport on this node is placed under the name {delivery['name']!r}, "
+            "which is the name the delivery listener's own compose service takes — "
+            "rename the transport, or this node's compose file would declare one of "
+            "the two and not the other"
+        )
     return _TEMPLATES.get_template("node-compose.yml.j2").render(
-        transports=transports, config_dir=CONFIG_DIR, digest_label=CONFIG_DIGEST_LABEL
+        transports=transports,
+        delivery=delivery,
+        config_dir=CONFIG_DIR,
+        digest_label=CONFIG_DIGEST_LABEL,
     )
 
 
@@ -650,6 +672,36 @@ async def restart(connection: NodeConnection) -> None:
     job either way.
     """
     await connection.run(f"cd {NODE_ROOT} && docker compose up -d --remove-orphans")
+
+
+async def compose_projects(connection: NodeConnection) -> frozenset[str]:
+    """Every compose project this host holds, by name, running or stopped.
+
+    A reading of the host and nothing else: this package has no opinion about which
+    names mean anything, and the caller that does is the one that knows what else it
+    deploys. It exists because "what else is on this box" cannot be answered from a node
+    record — an address the operator typed is a spelling, and two spellings of one
+    machine are not one string.
+
+    ``--all`` so a project whose containers are stopped is still an answer. A stack that
+    is down is still installed on this host: it owns its ports and its name the moment
+    somebody brings it back, and a caller deciding whether to put a second one beside it
+    has to count it.
+
+    ``--quiet`` so the answer is one name per line, rather than the table Compose prints
+    for a person or the JSON whose shape has changed between versions — the same reason
+    ``running_containers`` reads ``docker inspect --format`` instead of ``compose ps
+    --format json``.
+
+    Not ``check=False``: a host that cannot answer this has no working ``docker
+    compose``, which is the whole of how this package runs a data plane, and a silent
+    empty answer would read as "nothing else is here" — the answer that puts a second
+    stack on a box that already has one.
+    """
+    result = await connection.run("docker compose ls --all --quiet")
+    return frozenset(
+        line.strip() for line in result.stdout.splitlines() if line.strip()
+    )
 
 
 @dataclass(frozen=True)

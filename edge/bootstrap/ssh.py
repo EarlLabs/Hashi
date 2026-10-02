@@ -362,20 +362,27 @@ class NodeConnection:
             )
         return result
 
-    async def write_file(self, path: str, content: str, *, mode: int = 0o600) -> None:
+    async def write_file(self, path: str, content: str | bytes, *, mode: int = 0o600) -> None:
         """Place a file on the node, created with restrictive permissions.
 
         The permissions are applied to the temporary path BEFORE the content is
         written and the file is then moved into place, so there is no window in
         which a rendered config — which contains a node's private key — is readable
         by another user on the host.
+
+        ``bytes`` is placed as it is rather than being decoded — M27.2, which pushes a
+        pre-rendered archive to a node. The mode is chosen from the type of the content
+        rather than by a flag, so a caller cannot ask for one and pass the other: SFTP's
+        text mode encodes on the way out and would raise on bytes, and its binary mode
+        would raise on a str.
         """
         assert self._connection is not None
         temporary = f"{path}.incoming"
+        opened_as = "wb" if isinstance(content, bytes) else "w"
 
         async def transfer() -> None:
             async with self._connection.start_sftp_client() as sftp:
-                async with sftp.open(temporary, "w") as handle:
+                async with sftp.open(temporary, opened_as) as handle:
                     await handle.write(content)
                 await sftp.chmod(temporary, mode)
                 # Atomic within a filesystem: a daemon reloading mid-write must never

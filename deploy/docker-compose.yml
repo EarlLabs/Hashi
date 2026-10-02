@@ -49,6 +49,19 @@ services:
       # owner's machine and never enters this file.
       HASHI_OPERATOR_USERNAME: ${HASHI_OPERATOR_USERNAME:?set HASHI_OPERATOR_USERNAME in .env}
       HASHI_OPERATOR_PASSWORD_HASH: ${HASHI_OPERATOR_PASSWORD_HASH:?set HASHI_OPERATOR_PASSWORD_HASH in .env}
+      # The certificate delivery hosts are served under, by path INSIDE this container —
+      # M27.6. Blank by default and NOT `:?`, because no host serving its own users'
+      # subscription refreshes is a supported shape and is the shipped one: with these
+      # unset every user refreshes from this control plane exactly as they always have.
+      #
+      # This service reads the two files and pushes their contents to a node on apply, so
+      # the control plane needs them readable and the node needs no certificate authority.
+      # They are named here rather than left to an `env_file` because this file
+      # enumerates what the control plane may read, and a variable that is not on this
+      # list does not exist inside the container however well it is set in `.env` — which
+      # is exactly how this pair shipped unreachable in the first place.
+      HASHI_DELIVERY_CERTIFICATE_PATH: ${HASHI_DELIVERY_CERTIFICATE_PATH:-}
+      HASHI_DELIVERY_KEY_PATH: ${HASHI_DELIVERY_KEY_PATH:-}
     volumes:
       # The backup schedule's record, READ-ONLY — M28.5. It is written on the host by
       # scripts/backup-run.sh and holds dates, exit codes and the schedule's own settings:
@@ -67,6 +80,23 @@ services:
       # backup has been recorded" rather than as a wrong answer. `make env` creates the
       # directory before any `up`, so the daemon never creates it as root.
       - ../backups/state:/var/lib/hashi/backup:ro
+      # The delivery certificate and its key, READ-ONLY — M27.6. A relative path like
+      # every other mount here, so the control plane stays relocatable, and read-only
+      # because this service pushes these bytes and never writes them: renewal is the
+      # operator replacing two files on the host, and a control plane that could write
+      # into this directory could rewrite what it will push next.
+      #
+      # A DIRECTORY rather than two file mounts, and that is what makes renewal a copy
+      # rather than a restart: a bind-mounted FILE is resolved once, when the container
+      # is created, so replacing it on the host leaves the container reading the old
+      # inode — the same trap `deploy/docker/caddy.Dockerfile` describes, pointed the
+      # other way. Through a directory the container sees whatever is in it now, which
+      # is what `services/delivery.configured_certificate` reads on every apply.
+      #
+      # Empty on a fleet that serves no delivery, which is the shipped shape. `make env`
+      # creates it before any `up` so the daemon never creates it as root, exactly as it
+      # does for the backup record above.
+      - ../deploy/delivery:/etc/hashi/delivery:ro
     depends_on:
       db:
         condition: service_healthy

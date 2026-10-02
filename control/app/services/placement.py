@@ -88,11 +88,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.app.errors import Conflict
-from control.app.models import Node, NodeTransport
-from control.app.services import addresses
+from control.app.models import Node, NodeTransport, TransportPurpose
+from control.app.services import addresses, delivery
 from control.app.services.transports import PORT_FIELD
+from control.app.settings import Settings
 from edge.addressing import networks_overlap
-from edge.bootstrap import node_stack
+from edge.bootstrap import delivery_site, node_stack
 from edge.registry import Layer4, discover, profile
 
 # What an operator is told when the port they chose is already spoken for on that node.
@@ -217,6 +218,10 @@ async def port_is_free(
     creating one — without it a row would collide with itself and no port could ever be
     replaced by the value it already has.
 
+    TRANSPORT AGAINST TRANSPORT ONLY. The socket a delivery host's own listener holds is
+    ``delivery_socket_is_free`` below, a separate call for a separate holder — every
+    caller of this one makes that one too.
+
     A row whose transport this image no longer ships is skipped rather than guessed at:
     nothing can say what it binds, and inventing an answer would either refuse a port
     that is free or allow one that is not. Such a node cannot be rendered or applied at
@@ -242,6 +247,146 @@ async def port_is_free(
                     holder=row.transport_name,
                 )
             )
+
+
+# What an operator is told when the port they chose is the one their users refresh their
+# configuration on — M27.6, and the owner's decision of 2026-09-27 that delivery gets it.
+#
+# It names what holds the port rather than saying "reserved", because the thing holding
+# it is not a transport and does not appear in the operator's own inventory of this node:
+# a refusal that named nothing would read as a bug. And it states the COST of the repair
+# in the same breath, because the repair is not free and the operator is the only one who
+# can weigh it — on an entry node the transport this refuses is usually the one whose
+# camouflage is being on the port an ordinary website is on.
+PORT_IS_DELIVERYS = (
+    "node {node!r} answers its own users' subscription refreshes on {protocol} port "
+    "{port}, so no transport on it can hold that port. That endpoint is what somebody "
+    "fetches a new configuration from at the moment a node has been blocked, so it has "
+    "to be on the port an ordinary HTTPS client reaches. Give this transport another "
+    "port — and weigh what that costs here, because a TLS transport answering on an "
+    "unusual port is itself a signal. A host that is not to serve refreshes of its own "
+    "is one with no user-facing transport on it."
+)
+
+
+async def delivery_socket_is_free(
+    session: AsyncSession,
+    *,
+    node: Node,
+    transport_name: str,
+    port: str | None,
+    settings: Settings,
+    purpose: TransportPurpose = TransportPurpose.USERS,
+    excluding: str | None = None,
+) -> None:
+    """Refuse a transport that would fight this node's own delivery listener — M27.6.
+
+    THE THIRD OCCUPANT OF A TABLE THAT ALREADY HAD TWO, and that is why it is here
+    rather than anywhere else. A delivery host runs one more container on the node's
+    real interface, exactly as every data plane does, and the rule that two things on
+    one node cannot hold one socket is this module's. What is new is only that the third
+    occupant is not a row an operator can see, so the refusal has to name it.
+
+    WHICH SOCKET IS ASKED OF ``edge``. ``delivery_site.DELIVERY_PORT`` is that zone's
+    measurement of what its own rendered site binds, not a number chosen here — nothing
+    in this file may name a port, and a copy of that one would be the drift this module's
+    header refuses for ``config_format`` and for ``listens_on``.
+
+    WHETHER THIS NODE IS ONE IS ``delivery.listener_for``, the same call the apply makes
+    and the same one the Nodes screen composes its sentence from — so the refusal and the
+    screen cannot come to different views of one host. A fleet holding no certificate
+    serves no refreshes from anywhere, and reserving the socket there would tax every
+    operator who never asked for the feature with a sentence that is not true of their
+    fleet: the screen would say "not served from any host" while the form said the host
+    answers refreshes on that port.
+
+    It is the DATABASE and CONFIGURATION halves of the question and never the reading of
+    the host: this runs on a form submission, and a check that dialled the node would make
+    enabling a transport depend on the host being up. The over-answer is the co-located
+    box, where the control plane's own Caddy holds the same port for the panel — so the
+    refusal is true there too, for a different holder, and the runbook has said so since
+    Shape A.
+
+    THE ORDERING HAZARD IS CLOSED ELSEWHERE, deliberately. An operator can put a
+    transport on this socket while no certificate is configured and add one afterwards,
+    and this check cannot see the future. What catches it is the apply: the delivery
+    service is watched like every other container on the node, so a listener that cannot
+    bind leaves the node degraded with the port named — rather than being pre-empted here
+    by a refusal nobody could act on yet.
+
+    IT READS ``_rows_on`` AND THEREFORE IGNORES ``enabled``, unlike the same row question
+    asked during an apply (``delivery.may_serve_delivery``, which is handed the rows that
+    apply is pushing). That is this module's own rule rather than a divergence from that
+    one: a disabled row still holds its port and its name, because freeing them would
+    move the collision to the moment somebody switches it back on. A node whose only
+    user-facing row is switched off is not serving refreshes today and will be the
+    instant it is switched on, so the socket is held for it here — while the apply, which
+    is describing a host as it is about to be, reads what is actually enabled.
+
+    BOTH DIRECTIONS, because a node becomes a delivery host by gaining a user-facing row
+    and not only by being one already. Enabling something on the port is refused when the
+    node carries users; enabling a user-facing row is refused when something already
+    holds the port. Without the second, the two rows could be created in the order that
+    passes and the collision would appear on the node, at apply, as a container that
+    will not bind.
+    """
+    try:
+        if delivery.listener_for(node, settings) is None:
+            # Nothing would answer refreshes here — no name a certificate can be issued
+            # for, or no usable certificate anywhere in the fleet — so this node's ports
+            # are entirely its transports'.
+            return
+    except delivery.DeliveryCertificateUnusable:
+        # A configured pair this control plane cannot load. It is a fleet-wide fault with
+        # a sentence of its own on the Nodes screen, and it is not this form's to answer:
+        # refusing a port over it would be a second report of one problem, on a screen
+        # that cannot fix it. No host serves delivery in that state either.
+        return
+    rows = await _rows_on(session, node.id, excluding=excluding)
+    claiming_users = purpose == TransportPurpose.USERS
+    if not claiming_users and not any(
+        row.purpose == TransportPurpose.USERS for row in rows
+    ):
+        return
+
+    def refuse() -> None:
+        raise Conflict(
+            PORT_IS_DELIVERYS.format(
+                node=node.name,
+                protocol=str(delivery_site.DELIVERY_LAYER4).upper(),
+                port=delivery_site.DELIVERY_PORT,
+            )
+        )
+
+    if _holds_the_delivery_socket(transport_name, port):
+        refuse()
+    # AND THE OTHER DIRECTION, BUT ONLY WHEN THIS CLAIM IS WHAT CREATES THE COLLISION.
+    # A node becomes a delivery host by gaining a user-facing row, so a user-facing row
+    # arriving on a host where something already holds the socket is refused here rather
+    # than discovered on the node as a container that will not bind.
+    #
+    # It is NOT asked of every other claim on such a node, and the narrowing is the rule
+    # that a refusal is about what was submitted. A node whose rows already collide can
+    # only have been written before this check existed; answering an operator laying a
+    # HOP with a sentence about a user-facing transport they did not touch, on a form
+    # that cannot fix it, is the defect M23's thirteenth round found in the revocation
+    # banner — a true sentence that sends somebody nowhere.
+    if claiming_users:
+        for row in rows:
+            if _holds_the_delivery_socket(row.transport_name, port_of(row.params)):
+                refuse()
+
+
+def _holds_the_delivery_socket(transport_name: str, port: str | None) -> bool:
+    """Would this transport, on this port, bind the socket a delivery listener holds.
+
+    A row whose transport this image no longer ships is skipped for ``port_is_free``'s
+    reason: nothing can say what it binds, and inventing an answer would either refuse a
+    port that is free or allow one that is not.
+    """
+    if port != str(delivery_site.DELIVERY_PORT) or transport_name not in discover():
+        return False
+    return delivery_site.DELIVERY_LAYER4 in binds_of(transport_name)
 
 
 def tunnel_of(transport_name: str, params: Mapping[str, object]) -> str | None:
@@ -305,7 +450,13 @@ async def tunnel_network_is_free(
 
 
 async def claim(
-    session: AsyncSession, *, node: Node, transport_name: str, params: Mapping[str, object]
+    session: AsyncSession,
+    *,
+    node: Node,
+    transport_name: str,
+    params: Mapping[str, object],
+    settings: Settings,
+    purpose: TransportPurpose = TransportPurpose.USERS,
 ) -> str:
     """Refuse what this row would collide with, and answer with the name it takes.
 
@@ -322,6 +473,17 @@ async def claim(
     """
     await port_is_free(
         session, node=node, transport_name=transport_name, port=port_of(params)
+    )
+    # And against the one occupant of this node's sockets that is not a row — M27.6.
+    # After the transport-against-transport rule, so a row that collides with both is
+    # answered about the one whose holder the operator can see on their own screen.
+    await delivery_socket_is_free(
+        session,
+        node=node,
+        transport_name=transport_name,
+        port=port_of(params),
+        settings=settings,
+        purpose=purpose,
     )
     # AFTER the port and before the name, so a request that gets both wrong is answered
     # about the port first — the older refusal, the one every existing caller asserts on.

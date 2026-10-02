@@ -59,6 +59,23 @@ class Settings(BaseSettings):
     # control plane directly rather than through Caddy.
     public_https: bool = True
 
+    # The certificate every delivery host is served under, and its private key, by path
+    # on THIS host — M27.6. One wildcard for the fleet: a certificate per delivery host
+    # would publish each Russian entry's name in a Certificate Transparency log as it
+    # was issued, which is a feed anyone can subscribe to.
+    #
+    # BOTH EMPTY IS A SUPPORTED MODE and is the default: no host then serves
+    # subscription refreshes of its own, every user refreshes against this control plane
+    # exactly as they did before, and the co-located arrangements — where that is the
+    # same box anyway — need neither of these set. They are NOT the switch M27.4 forbids:
+    # a certificate is material, like ``secret_key``, and setting one cannot produce the
+    # wrong arrangement. Which hosts serve delivery is derived and has no setting.
+    #
+    # A PATH rather than the material, so that renewal replaces a file and needs no
+    # migration, no screen and no restart — the pair is read per apply and never cached.
+    delivery_certificate_path: str = ""
+    delivery_key_path: str = ""
+
     # SQLAlchemy URL for the control database, e.g.
     # postgresql+asyncpg://hashi:...@db:5432/hashi
     #
@@ -190,3 +207,30 @@ class Settings(BaseSettings):
         """The origin a user's client dials. Built here, so nothing hardcodes it."""
         scheme = "https" if self.public_https else "http"
         return f"{scheme}://{self.public_host}"
+
+
+# The one ``Settings`` this process is running on, bound once at boot.
+#
+# IT LIVES HERE rather than beside any one service, which is where it used to be
+# (``services/apply``), because more than one service now needs it and the import that
+# would take: ``apply`` imports ``nodes``, ``placement`` and ``relay``, so any of those
+# reaching back for it is a cycle. This module imports nothing from ``services`` and can
+# never grow a cycle with one.
+#
+# WHAT READS IT IS A BOUNDARY AND NEVER A RULE. A service function that is the entry
+# point of an operation reads the binding; the rule it then applies takes the value as an
+# argument (``placement.delivery_socket_is_free``). A rule that read a process-wide global
+# would be a rule no test could state a premise for.
+_bound: Settings | None = None
+
+
+def bind_settings(settings: Settings) -> None:
+    global _bound
+    _bound = settings
+
+
+def bound_settings() -> Settings:
+    """The bound settings, or a loud failure rather than a default nobody chose."""
+    if _bound is None:
+        raise RuntimeError("bind_settings() must run before any node operation")
+    return _bound

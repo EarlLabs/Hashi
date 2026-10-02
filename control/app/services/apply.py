@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from control.app import settings as settings_module
 from control.app.crypto import SecretUnreadable
 from control.app.errors import (
     ConfigNotServing,
@@ -53,10 +54,14 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, nodes, placement, relay, serving
+from control.app.services import addresses, audit, delivery, nodes, placement, relay, serving
 from control.app.settings import Settings
 from edge import checker
-from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, node_stack
+from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, delivery_site, node_stack
+
+# Aliased because both halves of M27.2 are called ``delivery`` and both are read in this
+# file: ``services.delivery`` renders what a host is given, and this one places it.
+from edge.bootstrap import delivery as node_delivery
 from edge.egress import ResolverMissing
 from edge.health import Listener
 from edge.registry import discover, profile
@@ -237,6 +242,61 @@ NOTHING_LEFT_TO_APPLY_UNPUSHED = (
     "been applied: whatever this host was last given it keeps running, and an apply "
     "cannot change that while there is nothing to push. "
     f"{OFFER_ONE_AGAIN} {NOTHING_STOPS_A_SERVING_HOST}"
+)
+
+# The clause each of the three refusals above ends its first sentence with, named here
+# because M27.4 made it conditional — and the sentence that replaces it when it is not
+# true any more.
+#
+# A refused apply now REMOVES this host's delivery material before it refuses (see
+# ``apply_node``), so on a host that was holding some, "nothing on the node was changed"
+# is false. It is a replacement rather than an addition on purpose: an operator cannot be
+# told in one paragraph both that nothing changed and that something was taken away, and
+# the clause it replaces is the one making the false half of that claim.
+#
+# The substitution is the same mechanism ``panel/wording`` already uses on these
+# sentences — a named clause swapped for another named clause — rather than a second set
+# of three constants, which would have to be kept in step with these by hand.
+NOTHING_CHANGED_ON_THE_NODE = "nothing was pushed and nothing on the node was changed"
+
+# IT NAMES THE DIRECTORY AND NOT WHAT WAS IN IT, and that is the whole of the second
+# version of this sentence. ``remove_delivery`` answers about the LIVE DIRECTORY —
+# whether one was there — and a directory this product itself leaves EMPTY is a state it
+# creates on purpose: a host that serves delivery and carries nobody right now is pushed
+# an empty one (``place_delivery`` with no artifacts). The first version said "the
+# pre-rendered subscriptions have been removed", which is false on exactly that host,
+# and telling an operator somebody's configurations were taken off a box that held none
+# is the failure this milestone keeps producing — a sentence true of the state it was
+# written for and false in the neighbouring one the same code reaches.
+#
+# Counting what was in it was weighed and refused: it is a second reading of the host
+# for a distinction that changes nothing the operator would do, since either way this
+# host no longer has a place delivery can be served from. "With whatever it was holding"
+# is true of both states and claims neither.
+DELIVERY_TAKEN_BACK = (
+    "nothing was pushed, and the one thing that did change on the node is that the "
+    "delivery directory an earlier apply left there is gone, with whatever it was "
+    "holding — a host this control plane no longer hands anybody's material to does not "
+    "keep the place it was served from"
+)
+
+# And when the host could not be reached to do that. Appended rather than substituted,
+# because here "nothing on the node was changed" is exactly true: nothing was, including
+# the removal. What the operator would otherwise not learn is that the material is still
+# sitting there — which on a host nobody is pushing to any more is other people's
+# configurations with no end date.
+#
+# ON ONE OF THE THREE REFUSALS ONLY, and it is the one that already claims to know what
+# this host is running: a surviving row carries an ``applied_at``, so this control plane
+# has pushed here and may have left material. The other two say in their own words that
+# they cannot tell what was ever pushed to this host — a removed row takes the record of
+# its own apply with it — and a hedge added to them would be a second sentence saying
+# "something might be there" on the refusal an operator reads on a node they created a
+# minute ago. The removal is still ATTEMPTED on all three: what is conditional is the
+# claim, not the reach.
+DELIVERY_MAY_STILL_BE_THERE = (
+    " This control plane could not reach the node to take back the delivery directory "
+    "an earlier apply may have left on it, so whatever is there is still there."
 )
 
 # What an apply is refused with when the node it would put into service has a pool that
@@ -810,8 +870,19 @@ def validate_before_push(transport_name: str, config: str, config_format) -> Non
     )
 
 
-async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
-    """Which of the three refusals this node gets.
+async def _nothing_to_apply(
+    session: AsyncSession, node: Node, *, delivery_material: bool | None
+) -> str:
+    """Which of the three refusals this node gets, and what it says about the host.
+
+    ``delivery_material`` is what the removal below the refusal found: ``True`` when this
+    host had a delivery directory and no longer does, ``False`` when it had none, and
+    ``None`` when the host could not be reached to ask. Required rather than defaulted:
+    "the host held none" is a measurement, and a second caller that inherited it as a
+    default would be making that claim without having looked. The first makes the
+    refusal's "nothing on the node was changed" false and replaces that clause; the third
+    is said only where this node's own rows show it was ever applied, which is the same
+    axis the three refusals are already chosen on — see ``DELIVERY_MAY_STILL_BE_THERE``.
 
     One query, on the refusal path only, and it reads both axes off one column.
     ``enabled_transports`` already filtered to the offered rows and came back empty, so
@@ -837,10 +908,100 @@ async def _nothing_to_apply(session: AsyncSession, node: Node) -> str:
     )
     stamps = applied_at.scalars().all()
     if not stamps:
-        return NOTHING_TO_APPLY_YET
-    if any(stamp is not None for stamp in stamps):
-        return NOTHING_LEFT_TO_APPLY
-    return NOTHING_LEFT_TO_APPLY_UNPUSHED
+        refusal = NOTHING_TO_APPLY_YET
+    elif any(stamp is not None for stamp in stamps):
+        refusal = NOTHING_LEFT_TO_APPLY
+    else:
+        refusal = NOTHING_LEFT_TO_APPLY_UNPUSHED
+    if delivery_material is None:
+        return (
+            refusal + DELIVERY_MAY_STILL_BE_THERE
+            if refusal == NOTHING_LEFT_TO_APPLY
+            else refusal
+        )
+    if delivery_material:
+        return refusal.replace(NOTHING_CHANGED_ON_THE_NODE, DELIVERY_TAKEN_BACK)
+    return refusal
+
+
+async def _take_delivery_back(node: Node, node_settings: Settings) -> bool | None:
+    """Take this host's delivery material off it when its apply is refused — M27.4.
+
+    ``True`` when the host was holding some and no longer is, ``False`` when it was
+    holding none, ``None`` when the host could not be reached to ask.
+
+    WHY A REFUSED APPLY REACHES A HOST AT ALL. ``apply_node`` refuses a node with nothing
+    enabled above everything it writes, so the ordinary way a host stops carrying users —
+    withdraw its last transport, press apply — never reached the push, and the host kept
+    its ex-users' rendered subscriptions, including a WireGuard-family client file's
+    ``PrivateKey``, which the node's own server config never held. A host nothing will
+    ever push to again keeping other people's configurations is not "absent" by any
+    reading, and there is no other path in this product that would ever come back for it.
+
+    M27.2 WEIGHED REACHING IT AND REFUSED, on three grounds, and this is a REMOVAL rather
+    than the push it refused:
+
+    * a push needs ``node_stack.prepare``, which has not run here. This creates nothing —
+      ``rm -rf`` on a path that is not there succeeds — so it cannot make ``NODE_ROOT``
+      under an account that should not own it, and it cannot reintroduce the raw
+      ``Permission denied`` that ``HOST_NOT_PREPARED`` was written to replace;
+    * the three refusals say "nothing on the node was changed". That clause is now
+      conditional and is replaced on the one host where it is false — see
+      ``DELIVERY_TAKEN_BACK``;
+    * and a failure had nowhere to go. It has one now: ``None`` reaches the operator as
+      ``DELIVERY_MAY_STILL_BE_THERE``. It is NOT a reason to degrade the node or to
+      answer the apply with a failure — M18.1 settled that a node with nothing enabled is
+      not a failed node, and a host we could not reach is in exactly the state the
+      refusal already describes.
+
+    Nothing about the node's record is written here, including a host key learned on a
+    first connection: this path exists to take something off a host, and a refused apply
+    that quietly edited the row would be a change nobody asked for.
+    """
+    try:
+        target = target_for(node, node_settings)
+    except NodeOperationFailed:
+        # No address, no key, or a key this control plane cannot read. Nothing was
+        # dialled, so nothing can be said about what is on the host.
+        return None
+    try:
+        async with NodeConnection(target) as connection:
+            held = await node_delivery.remove_delivery(connection)
+            # AND THE LISTENER'S OWN FILES — M27.6. A host with nothing enabled carries
+            # nobody, so it is not a delivery host by the first half of that question,
+            # and the site configuration, the certificate and its private key go the same
+            # way its material does. It creates nothing either, so nothing above changes.
+            #
+            # The container is not stopped here and cannot be: this path places no
+            # compose file and runs no restart. It is stopped by the next apply that
+            # succeeds, or by the operator; what is taken away now is the key, which is
+            # the part that keeps working on a host nobody drives.
+            await delivery_site.remove_delivery_site(connection)
+            return held
+    except NodeUnreachable:
+        # The expected one, and not worth a traceback: a host that did not answer is a
+        # state this function has an answer for.
+        return None
+    except _NOT_PER_NODE:
+        # Not this node's fault and not this node's sentence — the same pass-through
+        # ``apply_node`` gives it, so "this control plane cannot read its own secrets"
+        # reaches the operator instead of being reported as a host that went quiet.
+        raise
+    except Exception:
+        # EVERYTHING ELSE IS ALSO "we did not get there", and the arm is wide because
+        # this call sits ABOVE both of ``apply_node``'s try blocks: an exception
+        # escaping here escapes the function, and a refusal that is not a failure would
+        # be answered as an internal error. The reachable one today is a stored SSH HOST
+        # key that will not import — ``target_for`` guards the private key
+        # (``nodes.ssh_key_is_usable``) and nothing guards that one, and
+        # ``NodeConnection`` imports it before the block that turns a failure into
+        # ``NodeUnreachable``.
+        #
+        # Logged with its traceback, because that is the difference between a wide arm
+        # and a swallowed one: nothing about this node's material can be claimed now, the
+        # operator is told the refusal, and the bug is still readable here.
+        logger.exception("could not take delivery material back from node %s", node.id)
+        return None
 
 
 async def _record_failure(
@@ -1075,7 +1236,19 @@ async def apply_node(
     # the old answer came from: zero services renders an empty ``services:`` mapping,
     # which the daemon rejects, and the operator was handed that rejection.
     if not enabled:
-        raise NothingToApply(await _nothing_to_apply(session, node))
+        # AND THE HOST IS STILL REACHED, for the one thing a refusal must not leave
+        # behind — M27.4. Everything else about this refusal is unchanged: no state is
+        # written, nothing is rendered, nothing is pushed, and the node goes on serving
+        # whatever it was last given. See ``_take_delivery_back`` for why a removal is
+        # allowed on a path a push was refused on, and ``_nothing_to_apply`` for what the
+        # operator is told in each of its three outcomes.
+        raise NothingToApply(
+            await _nothing_to_apply(
+                session,
+                node,
+                delivery_material=await _take_delivery_back(node, node_settings),
+            )
+        )
 
     # Whether this apply is what PUTS the node into service, read before the line that
     # does it — M23. The answer is not "did the state change": a re-apply of an active
@@ -1114,6 +1287,23 @@ async def apply_node(
     # See ``services/serving`` for the whole of that argument.
     listeners = await placed_listeners(session, node)
 
+    # AND WHAT A USER WOULD FETCH FROM THIS HOST — M27.2. Rendered here, above the
+    # connection, for ``listeners``' reason: it is a database question, asked over the
+    # rows this apply is pushing so that the material describes the configuration the
+    # host is about to be given rather than what the fleet was serving a moment ago.
+    #
+    # It carries no other node's material — see ``services/delivery``, which holds that
+    # narrowing at its own seam.
+    #
+    # Rendered before it is known whether this host is a delivery host at all, and that
+    # is deliberate rather than an oversight: the second half of that question is a
+    # reading of the HOST (``delivery.is_delivery_host``) and cannot be asked above the
+    # connection, while this is a database question and this is where those are asked.
+    # What it costs on a host that turns out not to be one is a render that is thrown
+    # away; what the alternative costs is a database read inside the connection block,
+    # where a slow query holds a half-restarted node open.
+    artifacts = await delivery.artifacts_for_node(session, node, enabled)
+
     for config_name, config in configs.items():
         # The FORMAT comes from the transport's own declaration, so the right checker
         # runs without this module knowing which protocol it is looking at.
@@ -1127,10 +1317,44 @@ async def apply_node(
     # container whose config changed. Sorted so the rendered compose file is byte-stable
     # regardless of the order the transports were read in — an unstable one would
     # recreate every container on every apply.
-    compose = node_stack.render_compose(
-        transports=node_stack.services_for(
-            {name: configs[name] for name in sorted(configs)}, transports=placed
-        )
+    services = node_stack.services_for(
+        {name: configs[name] for name in sorted(configs)}, transports=placed
+    )
+    compose = node_stack.render_compose(transports=services)
+
+    # AND THE SAME FILE WITH THE DELIVERY LISTENER IN IT — M27.6. Both are rendered here,
+    # above the connection, and the one that is placed is chosen inside it, because the
+    # two halves of "is this a delivery host" are asked in two different places: what
+    # this node is FOR is a database question and belongs up here with the others, and
+    # whether this BOX is already the one answering ``/sub/`` is a reading of the host.
+    # Rendering the variant that is thrown away costs nothing — both are pure — and the
+    # alternative is a compose render inside the connection block, where a node sits
+    # half-restarted while this process works.
+    #
+    # ``None`` when this host can never serve delivery or this control plane holds no
+    # certificate, and then nothing below stands a listener up. The two are different
+    # states and the operator is told which on the Nodes screen
+    # (``services/console.delivery_note``); here they are one thing, because what an
+    # apply does about either is identical.
+    try:
+        listener = delivery.listener_for(node, node_settings)
+    except delivery.DeliveryCertificateUnusable as exc:
+        # NOT A FAILED APPLY, and the asymmetry is the decision. An apply is how a node's
+        # data plane is repaired, so a configured certificate this control plane cannot
+        # load must not be what stops an operator restarting a blocked node's transports
+        # in the middle of an outage. The host gets no listener and loses whatever an
+        # earlier apply left, which is what happens for every other reason a host does
+        # not serve delivery; what an operator has to act on is said where they will
+        # meet it, on the Nodes screen (``console.delivery_note``).
+        #
+        # The sentence names a path on THIS host and nothing about a node or a user, so
+        # it is the one thing in this file's log that is about our own configuration.
+        logger.warning("no delivery listener on any node: %s", exc)
+        listener = None
+    compose_with_delivery = (
+        node_stack.render_compose(transports=services, delivery=listener.service)
+        if listener
+        else None
     )
 
     # Built before the connection, and its refusal RECORDED. A record that cannot
@@ -1160,7 +1384,30 @@ async def apply_node(
                     config=config,
                     path=node_stack.config_path_of(config_name, placed[config_name]),
                 )
-            await node_stack.place_compose(connection, compose=compose)
+            # WHETHER THIS HOST ANSWERS ITS OWN USERS' REFRESHES, and it is read here
+            # rather than after the restart because the answer decides which compose
+            # file is placed. ``is_delivery_host`` is the whole of the decision and it
+            # takes no setting from anybody — see it for how both halves are read off
+            # what is already true.
+            serves_delivery = listener is not None and await delivery.is_delivery_host(
+                connection, node=node, enabled=enabled
+            )
+            if serves_delivery:
+                # BEFORE THE COMPOSE FILE AND THEREFORE BEFORE THE RESTART. The listener
+                # reads all three at start and a bind mount of a path nothing placed does
+                # not fail — the engine creates a DIRECTORY there — so a container
+                # recreated ahead of these files would come up against two directories
+                # and one missing certificate, and would stay down.
+                await delivery_site.place_delivery_certificate(
+                    connection,
+                    certificate=listener.certificate.certificate,
+                    key=listener.certificate.key,
+                )
+                await delivery_site.place_delivery_site(connection, site=listener.site)
+            await node_stack.place_compose(
+                connection,
+                compose=compose_with_delivery if serves_delivery else compose,
+            )
             await node_stack.restart(connection)
 
             # Verify rather than assume, and verify the right thing. `docker compose
@@ -1194,9 +1441,30 @@ async def apply_node(
             # whatever it did, so a data plane that does nothing successfully is up for
             # ever. The walk built exactly that image and the apply reported success over
             # a host with no tunnel device and 100% loss across its hop.
+            # AND THE DELIVERY LISTENER IS WATCHED LIKE EVERY OTHER CONTAINER — M27.6,
+            # and it is what keeps the Nodes screen's sentence about this host honest.
+            # Without it the one container this node runs for a PERSON rather than for a
+            # client of a transport was the only one nothing confirmed: it declares
+            # ``logging: driver: none``, so a listener that will not bind leaves no
+            # diagnostics, and the apply reported success over a host answering no
+            # refresh at all. It costs nothing to ask — the service carries the same
+            # config-digest label the data planes do, and ``running_containers`` keys its
+            # answer by compose service name, so it arrives in the same reading.
+            #
+            # It is also what closes the ordering hazard ``placement`` deliberately
+            # leaves open: a transport put on this socket before a certificate existed is
+            # met here, with the port named, rather than by a refusal nobody could have
+            # acted on at the time.
+            watched = dict(configs)
+            if serves_delivery:
+                watched[delivery_site.DELIVERY_SERVICE] = listener.site
+                listeners[delivery_site.DELIVERY_SERVICE] = Listener(
+                    port=delivery_site.DELIVERY_PORT,
+                    protocols=frozenset({delivery_site.DELIVERY_LAYER4}),
+                )
             settled = await serving.confirm_serving(
                 connection,
-                expected=configs,
+                expected=watched,
                 listeners=listeners,
                 interval=node_settings.node_settle_interval,
                 timeout=node_settings.node_settle_timeout,
@@ -1216,9 +1484,15 @@ async def apply_node(
             # the clearing of the probe finding below, which is the claim it actually
             # undermines.
             not_listening = list(settled.not_listening)
+            # Over ``watched`` and not ``configs``: the site file is the delivery
+            # service's configuration exactly as a rendered config is a transport's, and
+            # the digest the service was created with is the digest of that text — so a
+            # host handed a renewed certificate under a container Compose did not
+            # recreate is named here, by the same comparison, rather than serving the
+            # expired one while the apply reports success.
             stale = sorted(
                 name
-                for name, config in configs.items()
+                for name, config in watched.items()
                 if name in loaded and loaded[name] != node_stack.digest_of(config)
             )
             # What this apply may say it re-measured for itself. Read inside the
@@ -1226,6 +1500,50 @@ async def apply_node(
             # used far below, where the last probe's finding is either contradicted or
             # left standing.
             unchecked_ports = list(settled.unchecked)
+
+            # THE DELIVERY MATERIAL, LAST — M27.2, and the position is the decision.
+            # Placing it before the restart would put a file nothing reads between a
+            # revocation and the daemon that is still authorising the person it
+            # removed; nothing this pushes is worth delaying that by one step.
+            #
+            # Inside the connection block, so a failure here degrades the node like
+            # every other write to a host does (core invariants §4) rather than being
+            # swallowed. That is knowingly strict while nothing serves the directory:
+            # a host whose data plane came back correctly can be marked degraded over
+            # material no user can currently fetch. The alternative — carrying on and
+            # logging — is the silent half-applied host this file exists to refuse.
+            #
+            # AFTER THE READINGS AND NOT AFTER THE VERDICT, which is not the same
+            # thing: ``confirm_serving`` measures, and whether those measurements are a
+            # failure is decided below this block. So a node whose data plane did not
+            # come back is handed fresh material and then marked degraded. Deliberate —
+            # what is placed is a function of the database and not of whether the
+            # daemon came back, and withholding it would leave the STALER directory on
+            # a host that is about to be repaired.
+            #
+            # AN EMPTY ``artifacts`` IS NOT SKIPPED: it is how a node that still has a
+            # transport enabled but no longer carries anybody stops holding delivery
+            # material.
+            #
+            # AND WHICH OF THE TWO CALLS BELOW IS MADE IS DERIVED — M27.4. A host that
+            # is not a delivery host does not hold an emptied directory, it holds no
+            # directory: the feature is ABSENT there rather than switched off, which is
+            # what the co-located arrangements require and what the same call gives a
+            # host that has STOPPED being one. ``is_delivery_host`` is the whole of the
+            # decision and it takes no setting from anybody — see it for how both halves
+            # are read off what is already true.
+            if serves_delivery:
+                await node_delivery.place_delivery(connection, artifacts=artifacts)
+            else:
+                await node_delivery.remove_delivery(connection)
+                # AND THE LISTENER'S OWN FILES, which are not the material and are not
+                # ``remove_delivery``'s — M27.6. The container is already gone: it is a
+                # service in the compose file placed above, and ``restart`` runs with
+                # ``--remove-orphans``. What is left is the site configuration, the
+                # certificate and its PRIVATE KEY, and the key is why this call exists —
+                # a host that has stopped being a delivery host and keeps it can still
+                # answer for the delivery name, from a box the fleet no longer drives.
+                await delivery_site.remove_delivery_site(connection)
 
     except (NodeUnreachable, node_stack.NodeStackUnsupported) as exc:
         await _record_failure(session, node, str(exc), granted)
@@ -1339,6 +1657,32 @@ async def apply_node(
         node_transport.applied_digest = node_stack.digest_of(
             configs[node_transport.config_name]
         )
+
+    # AND WHAT THIS APPLY PUT ON THE HOST TO SERVE REFRESHES — M27.7. The same write as
+    # the digests above, for the same reason and in the same transaction: a listener was
+    # placed or was taken back off a few lines up, and the only record of which is this
+    # one.
+    #
+    # It is not derivable from anything else on the row, which is the defect it closes.
+    # ``console.delivery_note`` chose "the last apply put a listener on this host" from
+    # ``applied_at``, and an applied transport row is not a placed listener: a host
+    # applied before a certificate was ever configured has every row stamped and nothing
+    # on it, which is the state every fleet is in the day the feature becomes reachable.
+    #
+    # Past the failure arms with the state write below, which makes this the NARROW
+    # claim: a listener that was placed AND watched serving, never one that was merely
+    # written to the host. That matters in one state and the trade is deliberate. An
+    # apply whose files landed and whose container then did not come up leaves the
+    # PREVIOUS record standing, so the screen understates what is on that host by one
+    # apply — beside a row this same function is about to mark degraded, with the
+    # delivery service named in its reason. The other direction would have the screen
+    # announce a listener and a shutdown horizon for a container that never started,
+    # which is the failure this record was added to end.
+    #
+    # ``serves_delivery`` and not ``listener is not None``: a co-located box is handed no
+    # listener however usable this control plane's certificate is, and recording one for
+    # it would put the feature back on the screen it is absent from.
+    delivery.record_placed_listener(node, listener if serves_delivery else None)
 
     # THE ONE PLACE THE STATE MOVES, past every failure arm above — which is the whole
     # of ``_take_into_service``'s second decision: the fan-out runs before the render and
@@ -1614,16 +1958,18 @@ async def apply_many(
 # parameter on every function because these are called from routes, from the panel
 # and from revocation, and threading settings through all three adds a parameter
 # nobody reads.
-_settings_instance: Settings | None = None
 
 
 def bind_settings(settings: Settings) -> None:
-    global _settings_instance
-    _settings_instance = settings
+    """Bind the process's settings. Kept here because ``main`` calls it by this name.
+
+    The binding itself moved to ``control.app.settings`` in M27.6: ``placement`` needs it
+    too, and this module imports ``placement``, so a second reader reaching back here
+    would be a cycle. One object, one place, two names for the call.
+    """
+    settings_module.bind_settings(settings)
 
 
 def settings() -> Settings:
     """The bound settings, or a loud failure. Public: services/health.py uses it."""
-    if _settings_instance is None:
-        raise RuntimeError("bind_settings() must run before any node operation")
-    return _settings_instance
+    return settings_module.bound_settings()

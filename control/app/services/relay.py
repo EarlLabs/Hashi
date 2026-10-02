@@ -34,6 +34,7 @@ from control.app.errors import (
 )
 from control.app.models import AuditAction, Node, NodeTransport, TransportPurpose
 from control.app.services import audit, keymaterial, nodes, placement, transports
+from control.app.settings import bound_settings
 from edge import relay as edge_relay
 from edge.registry import KeyScope, discover, profile
 
@@ -496,7 +497,15 @@ async def establish_hop(
         # asks — M15. Per end rather than per hop: the two ends are on two different
         # nodes and each is placed against whatever that node already runs.
         config_name = await placement.claim(
-            session, node=node, transport_name=transport_name, params=validated
+            session,
+            node=node,
+            transport_name=transport_name,
+            params=validated,
+            settings=bound_settings(),
+            # A hop end is not a user-facing row, and the delivery rule cares which:
+            # a node that carries only hop ends answers nobody and serves no
+            # subscription refreshes, so its ports are entirely its transports'.
+            purpose=purpose,
         )
 
         secret_keys = set(minted.secrets)

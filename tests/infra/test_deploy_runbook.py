@@ -967,12 +967,21 @@ def _claim_refusals() -> set[str]:
 def test_a_new_collision_check_cannot_be_added_without_the_page_gaining_a_sentence() -> None:
     """The list the runbook commits to is closed, so the code's list has to be pinned.
 
-    ``claim`` refuses on a port, on a tunnel range and — by having no name left — on the
-    config name, which is the one it answers with rather than the one it checks. Three,
-    and the page says "Nothing else collides". A fourth check added here is a fourth
-    thing an operator has to be told about, and this is what says so.
+    ``claim`` refuses on a port, on a tunnel range, on the socket a delivery host's own
+    listener holds (M27.6), and — by having no name left — on the config name, which is
+    the one it answers with rather than the one it checks. Four, and the page says
+    "Nothing else collides". A fifth check added here is a fifth thing an operator has
+    to be told about, and this is what says so.
+
+    ``delivery_socket_is_free`` is the one that proved the guard works: it was added to
+    ``claim`` and this test went red in the same run, which is how the runbook gained
+    the paragraph about 443 rather than going quietly false.
     """
-    assert _claim_refusals() == {"port_is_free", "tunnel_network_is_free"}, (
+    assert _claim_refusals() == {
+        "port_is_free",
+        "tunnel_network_is_free",
+        "delivery_socket_is_free",
+    }, (
         "placement.claim's collision checks have changed. The runbook's *Rules that are "
         "not optional* lists them for the operator and closes the list — update the "
         "bullet, then this test"
@@ -1523,4 +1532,74 @@ def test_the_env_file_sends_the_operator_to_the_section_that_decides_retention(
     assert "VERSIONING" in said, (
         "the comment beside the write-only key does not name the mechanism that makes "
         "write-only stick, so the key reads as sufficient on its own"
+    )
+
+
+# M27.7's section, by its exact title. The one place the product writes down how the
+# delivery endpoint moves and what has to be said when it does — the milestone's own
+# "decided and written down rather than left implied".
+MOVING_DELIVERY_SECTION = "Moving the delivery endpoint, and what users have to be told"
+
+
+def test_the_runbook_says_moving_delivery_is_an_out_of_band_event(runbook: str) -> None:
+    """The decision itself, on the page an operator follows — M27.7.
+
+    Not that a sentence exists: that the two halves which make it actionable are both
+    here. A channel that is not this product, and the fact that having one is a thing to
+    arrange before it is needed — because the failure this section is about is discovering
+    at the moment of a block that the only address you have for anybody is the dead one.
+    """
+    assert f"## {MOVING_DELIVERY_SECTION}" in runbook, (
+        "the runbook no longer says how the delivery endpoint moves; M27's done-when "
+        "asks for exactly this, written down rather than implied"
+    )
+    section = _flat(runbook.split(f"## {MOVING_DELIVERY_SECTION}")[1].split("\n## ")[0])
+    # Emphasis dropped: the phrases below are load-bearing as words, and which of them
+    # this page has chosen to bold is typography.
+    said = section.replace("*", "")
+    assert "out-of-band event" in said
+    assert "channel that is not this product" in said
+    assert "before a block" in said and "because of one" in said
+
+
+def test_the_runbook_quotes_the_words_that_go_with_a_delivery_link(runbook: str) -> None:
+    """And it quotes the product's own string, not a paraphrase of it — M27.5's
+    requirement on M27.7.
+
+    A delivery host serves a slice, so a client that REPLACES its subscription with a
+    delivery link loses every node on every other host and cannot tell that apart from a
+    revocation. The artifact cannot carry the warning — a truthful per-user version writes
+    "this person has other nodes" onto the most seizable box in the fleet — so the whole
+    of the protection is this sentence going with the link every time. Two copies of it
+    that have drifted are one copy and one near-miss, which is why this compares rather
+    than searching for a phrase.
+    """
+    quoted = _flat(re.sub(r"^[ \t]*> ?", "", runbook, flags=re.M))
+    assert _flat(console.DELIVERY_URL_GOES_ALONGSIDE) in quoted, (
+        "the runbook's copy of what must travel with a delivery URL is not what the "
+        "panel says any more — the product's own wording is "
+        f"console.DELIVERY_URL_GOES_ALONGSIDE, which now reads "
+        f"{console.DELIVERY_URL_GOES_ALONGSIDE!r}"
+    )
+
+
+def test_the_panel_points_at_a_section_this_page_actually_has(runbook: str) -> None:
+    """The Nodes screen sends the operator here by name, so the name is pinned — M27.7.
+
+    Same rule as M16's resolver section and M28.4's retention one: a pointer is checked
+    against the heading it points at, rather than left to be found broken by whoever
+    followed it. The panel names the section's opening phrase, not its whole title, which
+    is what ``startswith`` allows and a rename does not.
+    """
+    pointed = re.search(
+        "“([^”]+)”", console.DELIVERY_HANDED_OVER_BY_YOU.format(alongside="")
+    )
+    assert pointed, (
+        "the Nodes screen no longer points anywhere for how a link on a delivery host "
+        "is handed over"
+    )
+    assert f"## {MOVING_DELIVERY_SECTION}" in runbook
+    assert MOVING_DELIVERY_SECTION.startswith(pointed.group(1)), (
+        f"the panel sends the operator to {pointed.group(1)!r} and this page's section "
+        f"is called {MOVING_DELIVERY_SECTION!r}"
     )

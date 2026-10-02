@@ -38,6 +38,7 @@ from control.app.models import (
     TransportPurpose,
 )
 from control.app.services import addresses, audit, keymaterial, placement, transports
+from control.app.settings import bound_settings
 from edge.addressing import pool_problem
 from edge.egress import Egress, resolver_problem
 from edge.node import NodeView
@@ -797,7 +798,15 @@ async def _enable(
     # validation, because the port that matters is the one that will be stored, which
     # for a transport that defaults its port is not a value the operator typed.
     config_name = await placement.claim(
-        session, node=node, transport_name=transport_name, params=validated
+        session,
+        node=node,
+        transport_name=transport_name,
+        params=validated,
+        # The boundary reads the process's settings and the RULE takes the value — see
+        # ``control.app.settings.bound_settings``. What they are needed for here is the
+        # one socket a delivery host's own listener holds, which is a property of the
+        # fleet's configuration rather than of this node's rows.
+        settings=bound_settings(),
     )
 
     # How many people this row can hand an address to — M17. AFTER ``claim`` on purpose:

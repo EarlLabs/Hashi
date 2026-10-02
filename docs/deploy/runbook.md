@@ -1243,6 +1243,86 @@ undefined table or column.
 
 ---
 
+## Moving the delivery endpoint, and what users have to be told
+
+**Moving delivery is an out-of-band event. Work out what your channel is before you need
+it, because the one channel this product has is the thing that stops working.**
+
+A subscription link names a host. The link every user holds today is this control
+plane's — `https://<HASHI_PUBLIC_HOST>/sub/<their token>` — and it does not move: it is
+the same string for the life of that subscription, wherever the fleet goes. A **delivery**
+link is a different thing. A host that answers its own users' refreshes answers under
+**its own name**, on a path derived for that host alone, so a delivery link is a *second*
+link and not the same link served from somewhere else. Change which host serves delivery
+and every delivery link already handed out is dead — there is no record you can move to
+save it, and no message this product can send to say so, because the only address it
+could send one to is the one that just died.
+
+**So it works if you move *before* a block, and it is impossible if you move *because* of
+one** — which is exactly when you will want to. That is the limit. It is stated here
+rather than engineered around: the alternative considered and rejected on 2026-09-27 was
+issuing every subscription with several delivery links to fall back between, which
+doubles the places a credential can be recorded, puts a Russian host's address into a
+foreign host's artifact and the reverse, and does not answer the case anyway — those
+links, too, have to be handed out before the block. See `docs/decisions.md` for the whole
+of that argument.
+
+### What is true today, before you plan around it
+
+**This panel hands you no delivery link.** The Nodes screen tells you that a host is
+answering refreshes and under which name, and it states how long the certificate it is
+holding has left. It does not compose a link for a particular person, and nothing else
+here does either.
+
+So nobody is holding a delivery link yet, and until something hands them out, moving
+delivery costs a user nothing: you enable or withdraw transports, press **Apply**, and
+which hosts hold a listener follows from that. It is derived from what the fleet already
+knows — there is no setting for it, and there is nothing to switch off on the hosts that
+should not have one.
+
+### Every delivery link you ever hand over travels with this sentence
+
+> Add this link to your app alongside the link you already have — do not replace it. It
+> is answered by one server and carries only what that server can give you, so an app
+> left holding this one alone loses everything the other link still has in it, and that
+> looks exactly like being cut off.
+
+**This is not advice, and it is not optional.** A delivery host serves a **slice**: the
+material it holds is its own users' configurations for *that host*, and nothing from any
+other node in the fleet — deliberately, so that seizing it yields no other node's address.
+A client that *replaces* its subscription with a delivery link therefore loses every node
+the person holds anywhere else, silently, in a way they cannot tell apart from having been
+cut off. The document itself cannot warn them: a truthful warning would have to say
+whether *that person* has nodes elsewhere, and writing that onto the most seizable machine
+in the fleet gives a seizer more than the addresses were hidden to withhold. The sentence
+above is the whole of the protection, and it only works if it goes with the link every
+time.
+
+Send it word for word. The panel shows you the same sentence on the row of any host that
+is answering, so you can copy it from there; it is one string in the product, and
+`tests/infra/test_deploy_runbook.py` fails if this copy and that one part company.
+
+### When a delivery host stops being one
+
+1. **Do it before you have to.** A host you are decommissioning, replacing or moving out
+   of the country is a planned move; a blocked one is not, and by then the people you
+   need to reach are the people who cannot reach you.
+2. **Reach every user holding a link on that host, through a channel that is not this
+   product.** Whatever you already use to hand someone their first link is the channel
+   this depends on — this runbook cannot choose it for you, and the product has none.
+3. **Tell them three things:** the old link is dead and can be deleted; here is the new
+   one, if there is one; and add it *alongside* the link they already have, in the words
+   above.
+4. **Nobody is left with nothing**, and that is what makes this affordable rather than
+   merely cheap. Because a delivery link is only ever *added* to the one they already
+   hold, a user whose delivery host disappears still has the control plane's link in
+   their app and keeps working — as long as they can reach this control plane. Which is
+   the state the whole fleet was in before delivery hosts existed, and is exactly the
+   state delivery hosts exist to improve on, so **do not treat it as a reason to delay
+   step 1**: under a shutdown, that fallback is the thing that is unreachable.
+
+---
+
 ## Rules that are not optional
 
 - **Never plain WireGuard on the entry→leaf hop.** That hop crosses the border by
@@ -1274,10 +1354,32 @@ undefined table or column.
   swallows the narrower one beside it, and that is the pair written by accident. This
   is the rule that meets you when you follow Shape A and then the hop it mandates on
   the same box — users and hop are two `amneziawg` rows on that node, and they need
-  two ranges as much as they need two ports. Nothing else collides. A **disabled** row
-  still holds all three, because freeing them would move the collision to the moment
-  somebody switches it back on; removing the row is the only thing that gives them
-  back.
+  two ranges as much as they need two ports. A **disabled** row still holds all three,
+  because freeing them would move the collision to the moment somebody switches it back
+  on; removing the row is the only thing that gives them back.
+
+  **And one thing on a node that is not a row at all collides too — TCP 443, on any host
+  that carries a user-facing transport and is registered under a name.** That host
+  answers its own users' subscription refreshes, which is what makes a refresh work
+  while this control plane is behind a closed border, and the endpoint has to be on the
+  port an ordinary HTTPS client reaches. So the panel refuses a transport there, under
+  the box you typed it in:
+
+  > node `E` answers its own users' subscription refreshes on TCP port 443, so no
+  > transport on it can hold that port. *…Give this transport another port — and weigh
+  > what that costs here, because a TLS transport answering on an unusual port is itself
+  > a signal.*
+
+  **Read that cost before you plan a shape around it.** It is `vless-reality` this
+  usually refuses, and Reality's whole camouflage is being on 443 — so an entry node that
+  serves its own users' refreshes cannot also be a website on the ordinary port. That is a
+  real loss and it was taken knowingly, on 2026-09-27: the alternative put the refresh
+  endpoint behind the same name the tunnel hides under, so that blocking one name killed
+  both at the same instant — in exactly the arrangement the endpoint exists for. A host
+  with no user-facing transport, or one registered by IP address, keeps 443 for its
+  transports, because neither answers a refresh.
+
+  Nothing else collides.
 - **A user-facing kernel tunnel and the hop a node DIALS still cannot share that
   node**, which is a different rule and the one that bites — *The one combination that
   will not render*, above. **Which end of the hop it is decides the answer**, so this

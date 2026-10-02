@@ -221,7 +221,9 @@ async def _overview(request: Request, session: AsyncSession) -> console.Overview
     wrote a file badly must not be able to take the panel's front page down.
     """
     return await console.overview(
-        session, backup=await backups.read(request.app.state.settings.backup_record)
+        session,
+        settings=request.app.state.settings,
+        backup=await backups.read(request.app.state.settings.backup_record),
     )
 
 
@@ -378,7 +380,9 @@ async def nodes_screen(
             "the machines a user's link resolves to, and whether each is running "
             "what you told it to"
         ),
-        context={"nodes": await console.node_rows(session)},
+        context={
+            "nodes": await console.node_rows(session, request.app.state.settings)
+        },
     )
 
 
@@ -388,7 +392,9 @@ async def nodes_table(
 ):
     """The nodes table on its own, for the refresh after a mutation."""
     return TEMPLATES.TemplateResponse(
-        request, "panel/nodes_table.html", {"nodes": await console.node_rows(session)}
+        request,
+        "panel/nodes_table.html",
+        {"nodes": await console.node_rows(session, request.app.state.settings)},
     )
 
 

@@ -14,6 +14,8 @@ import re
 import pytest
 import yaml
 
+from control.app.settings import Settings
+
 DEPLOY = pathlib.Path(__file__).resolve().parents[2] / "deploy"
 BASE = DEPLOY / "docker-compose.yml"
 DEV = DEPLOY / "docker-compose.dev.yml"
@@ -168,6 +170,19 @@ def test_published_ports_avoid_service_defaults() -> None:
     )
 
 
+# The variables this stack is allowed to leave UNSET, spelled out rather than inferred
+# from the form they are written in — M27.6. Every other interpolation must carry `:?`,
+# because `${VAR}` silently becomes '' without `--env-file` and the stack then comes up
+# configured for nothing. These two are different in kind: blank means "no node serves
+# its own users' subscription refreshes", which is a supported shape and the shipped one,
+# so `:?` would refuse to start the fleet that has not got that feature.
+#
+# An allowlist and not a pattern, so that making a REQUIRED variable optional — which is
+# the same defect wearing the opposite sign — turns this test red rather than reading as
+# intentional.
+MAY_BE_BLANK = {"HASHI_DELIVERY_CERTIFICATE_PATH", "HASHI_DELIVERY_KEY_PATH"}
+
+
 def test_required_env_vars_fail_loudly() -> None:
     """`${VAR}` silently becomes '' without --env-file; `${VAR:?msg}` does not."""
     bad = []
@@ -177,9 +192,91 @@ def test_required_env_vars_fail_loudly() -> None:
         # `$$` is compose's escape: it reaches the container as a literal `$` and
         # is expanded there, so it is not a compose interpolation at all.
         without_escapes = line.replace("$$", "")
-        if "${" in without_escapes and ":?" not in without_escapes:
+        if "${" not in without_escapes:
+            continue
+        named = re.findall(r"\$\{([A-Z0-9_]+)", without_escapes)
+        if ":?" not in without_escapes and not (set(named) & MAY_BE_BLANK):
             bad.append(line.strip())
     assert bad == [], f"interpolations without a :? guard: {bad}"
+
+
+def test_a_setting_the_operator_is_told_to_fill_reaches_the_container() -> None:
+    """The defect this is the guard for shipped once, in M27.6, and could not be seen.
+
+    `control.environment` enumerates what the control plane may read, there is no
+    `env_file`, and `.env` is excluded from the build context — so a variable documented
+    in `.env.example` and missing from that list does not exist inside the container
+    however carefully the operator sets it. There is no error: the setting takes its
+    default, and the feature it configures is simply absent.
+
+    Asked of the SETTINGS MODEL and not of a list kept here, so a field added to
+    ``Settings`` and documented for the operator is covered by existing.
+    """
+    documented = {
+        match.group(1)
+        for match in re.finditer(
+            r"^([A-Z0-9_]+)=", (DEPLOY.parent / ".env.example").read_text(), re.M
+        )
+    }
+    readable = {f"HASHI_{name.upper()}" for name in Settings.model_fields}
+    passed_through = set(
+        yaml.safe_load(BASE.read_text())["services"]["control"]["environment"]
+    )
+    unreachable = sorted((documented & readable) - passed_through)
+    assert unreachable == [], (
+        "these are documented in .env.example and read by control/app/settings.py, and "
+        f"deploy/docker-compose.yml does not pass them into the container: {unreachable}"
+    )
+
+
+def test_the_delivery_certificate_is_readable_where_its_path_points() -> None:
+    """Passing the PATHS through is half of it — M27.6.
+
+    The control plane reads those two files and pushes their contents to a node, so a
+    path naming somewhere the container cannot open fails exactly as leaving them blank
+    does. `.env.example` tells the operator to put the pair in `deploy/delivery/` and to
+    name them under `/etc/hashi/delivery`; this is what holds those two sentences to the
+    mount that makes them true.
+    """
+    mounts = yaml.safe_load(BASE.read_text())["services"]["control"]["volumes"]
+    assert "../deploy/delivery:/etc/hashi/delivery:ro" in mounts, mounts
+    guidance = (DEPLOY.parent / ".env.example").read_text()
+    assert "/etc/hashi/delivery/" in guidance
+    assert "deploy/delivery/" in guidance
+
+
+def test_the_operator_is_told_the_pair_must_be_readable_by_the_container() -> None:
+    """The other half of "readable", and the one following the instructions loses — M27.7.
+
+    The control plane runs as a system account in its own image (uid 999, measured on a
+    built image on 2026-09-27) and the files belong to whoever placed them. At the 0600 a
+    private key normally carries the read fails, the pair is refused, and no host serves
+    refreshes — so an operator who does exactly as told, with a correctly permissioned
+    key, gets the same outcome as one who configured nothing.
+
+    AND IT IS CHECKED BESIDE THE RENEWAL INSTRUCTION, not only beside the placement one.
+    Renewal is "replace the two files", which is where `cp -p` and a certbot deploy hook
+    put the issuer's own mode back — a step an operator takes every few months, long
+    after reading the paragraph above it.
+    """
+    guidance = (DEPLOY.parent / ".env.example").read_text()
+    assert "uid 999" in guidance, (
+        "`.env.example` no longer says which account inside the container has to be able "
+        "to read the delivery pair"
+    )
+    renewal = next(
+        (
+            paragraph
+            for paragraph in guidance.split("#\n")
+            if "Renewal is replacing the two files" in paragraph
+        ),
+        "",
+    )
+    assert renewal, "the renewal instruction for the delivery pair is gone"
+    assert "mode" in renewal, (
+        "the renewal instruction no longer says to check the mode — this is the step "
+        "that reintroduces a 0600 key the container cannot open"
+    )
 
 
 def split_mapping(mapping: str) -> list[str]:

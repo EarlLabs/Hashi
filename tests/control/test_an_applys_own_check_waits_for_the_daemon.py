@@ -279,7 +279,7 @@ async def test_a_container_that_never_stays_up_is_never_reported_as_serving(
 
 
 async def test_what_the_walk_saw_the_row_say_is_not_what_it_says_now(
-    client, session, reality_params, monkeypatch
+    client, session, reality_params, monkeypatch, settings
 ) -> None:
     """The whole finding, end to end, on the two screens the walk read.
 
@@ -302,7 +302,7 @@ async def test_what_the_walk_saw_the_row_say_is_not_what_it_says_now(
     await client.post(f"/panel/nodes/{node_id}/probe")
     await client.post(f"/api/nodes/{node_id}/apply")
 
-    rows = await console.node_rows(session)
+    rows = await console.node_rows(session, settings)
     row = next(row for row in rows if row.id == node_id)
 
     assert row.state != "active", (

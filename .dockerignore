@@ -8,8 +8,20 @@
 # HOW:  deny the risky and the useless; the Dockerfile names what it wants.
 
 .env
-*.key
-*.pem
+# EVERY DEPTH, and the `**` is the whole of the fix — M27.7. A pattern here is matched
+# against the WHOLE relative path (Go's filepath.Match, which no `*` crosses a `/` in),
+# so the `*.key` and `*.pem` that stood here reached the repository root and nothing
+# else. Measured on 2026-09-27 with a build that copied the directory below: the private
+# half of the fleet's delivery wildcard — which answers for every delivery name until it
+# expires — was in the layer. Nothing ships it today, for the same reason nothing ships
+# `.env`: `control.Dockerfile` copies only pyproject.toml, control/ and edge/.
+**/*.key
+**/*.pem
+# And the directory itself, because the guard above is about the extension and this is
+# about the contents: `.env.example` tells the operator to put the delivery pair here
+# under whatever names their issuer produced, and a `fullchain.crt` is the same key
+# material with a name no pattern above matches.
+deploy/delivery/
 secrets/
 
 .venv/

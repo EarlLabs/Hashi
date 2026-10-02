@@ -3845,6 +3845,42 @@ command to get there.
 
 ---
 
+## → M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27
+
+**Deferred out of M27.6 on purpose, and the reason is `CLAUDE.md`'s own rule.** The owner chose
+a wildcard issued by the control plane over DNS-01 and pushed on apply, because a per-host
+certificate publishes every Russian entry's name in Certificate Transparency — public,
+permanent, near-real-time. Everything downstream of issuance is built: the control plane reads
+the pair from `HASHI_DELIVERY_CERTIFICATE_PATH` / `HASHI_DELIVERY_KEY_PATH`, distributes it on
+apply, stands a listener down when it expires and takes the key off the host.
+
+**What is not built is the issuance**, because DNS-01 needs either an ACME client library or a
+Caddy rebuilt with a provider module, and **adding a dependency is an architect decision, not
+an implementation detail.** The implementer raised it instead of adding it, which is what the
+rule is for.
+
+**So the shipped mode is: the operator obtains the wildcard and puts it at those paths.** Zero
+new dependencies, works today. The cost is manual renewal roughly every ninety days — and
+because a pushed certificate is renewed by an apply, the operator must also apply afterwards
+or delivery stands down at expiry with the listener removed.
+
+**Done when**
+- [ ] The control plane obtains and renews the wildcard itself, without the operator touching a
+      file.
+- [ ] The DNS credential lives only on the control plane — **never on a node**, because it can
+      rewrite the fleet's records.
+- [ ] The dependency this needs is the owner's decision, recorded in `docs/decisions.md` before
+      it is added.
+- [ ] Nothing in the issuance path publishes an individual delivery hostname; that is what the
+      wildcard is for.
+
+acceptance: yes
+On a stand, with a test zone: let the control plane obtain a wildcard from scratch, push it,
+and serve a subscription over it. Then let it renew one that is near expiry and confirm a
+delivery host picks the new pair up on the next apply without an operator touching anything.
+
+---
+
 ## → M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · PROPOSED
 
 **Not started.**
@@ -3968,6 +4004,17 @@ the arrangement of them is data too.
 | 2 | C + L \| E | the case that needs the work |
 | 3 | C \| E \| L | the case that needs the work |
 
+**This step also owns the removal path for a host whose apply is refused** — added
+2026-09-26, from M27.2's review. `apply_node` raises `NothingToApply` above the delivery push,
+so the ordinary way a host stops carrying users (disable its last transport, press Apply)
+never reaches it and the host keeps its ex-users' rendered subscriptions — including a
+WireGuard client `PrivateKey` its own server config never held. **That is not what "absent,
+not inert" means** and the decisions rows are at pains to say so: this step is the home for it
+because it is the step that introduces the predicate *"is this host a delivery host"*, and the
+removal path for a host that is **not** one is the same path a host that **stopped** being one
+needs. Both must reach a host whose apply is refused. `tests/control/test_an_apply_hands_a_node_the_subscriptions_it_serves.py`
+pins the uncovered state and goes red the day anything reaches that host.
+
 **Where the roles are co-located the feature must be ABSENT, not merely inert.**
 No second domain, no second certificate, no second listener, no extra key in
 `.env` — and **no flag the operator has to know to leave off**, because a flag like
@@ -4002,6 +4049,16 @@ want to.
 
 So one of these is decided deliberately and recorded:
 
+**A requirement this step inherits, not a suggestion — from M27.5, 2026-09-27.** The wording
+that travels with a delivery URL must say **add it alongside the link you already have, do not
+replace it.** A delivery host serves a *slice* — only its own material — so a client that
+replaces its subscription URL with a delivery URL silently loses every node not on that host,
+and it looks exactly like a revocation. M27.5 weighed putting that warning *inside* the
+artifact and refused: a truthful per-user version writes *"this person has other nodes"* onto
+the most seizable box in the fleet, once per person, which yields a seizer more than the leaf
+addresses narrowing was built to hide. **So the protection cannot live in the document. This
+step is the only place it can live.**
+
 - a subscription carries **more than one** delivery URL from the day it is issued,
   and a client falls back — which doubles the number of places a bearer token can
   be recorded, and puts a Russian-side address into every foreign artifact and the
@@ -4019,6 +4076,51 @@ The milestone is not done while this is implied rather than recorded.
 section between them, and ends *Shape C* with *"today you choose one location for
 both."* If this milestone lands and that structure survives unchanged, the point
 was missed.
+
+### M27.9 — `infra`: the gate is red for four hours a day · found building M27.4, 2026-09-27
+
+**Not M27's subject, and it is here because every remaining step of M27 gates on `make verify`.**
+
+Between **00:00 and 04:00 UTC**, three tests in
+`tests/infra/test_what_the_command_line_may_say_about_a_backup.py` fail —
+`test_the_tick_that_takes_it_leaves_a_record_this_clock_can_read`,
+`test_a_run_timestamp_ahead_does_not_make_the_tick_dump`, and
+`test_an_ordinary_record_says_none_of_that`. Confirmed at 00:54 UTC; the same three are green at
+other hours, and were green three times on the same diff earlier the same evening.
+
+**The product is right and the fixture is wrong.** The module builds
+`A_REAL_RUN_HALF_AN_HOUR_AGO` at import with `due_date = today_in("Etc/UTC")`, while
+`scripts/backup-run.sh` computes the schedule's due date from the configured `at=04:00` window. So
+inside that window the fixture's record is dated a day **ahead** of the schedule's own due date,
+and the script correctly answers `clock=ahead` — the behaviour M28.19 built and M28.22 measured
+across every offset. The test asserts the answer it gets during the other twenty hours.
+
+**Proven pre-existing**, so this is not M27's doing: the same three fail at `530e61b` in a clean
+worktree at the same wall clock, and M27.4 touches no infra file `make test-infra` collects.
+
+**Why it earns a step rather than a carry-over line.** A gate that is green in every run anyone
+happens to make is the exact defect this codebase has spent two milestones learning to name — M28
+found eight surfaces of *a check that can be satisfied by the absence of the thing it checks*, and
+this is the same shape wearing a clock. It has been in `develop` since M28 merged, so **every
+`make verify` this project has run in that window reported a failure nobody could act on**, and
+every one outside it reported a pass that did not cover this. Four more M27 steps gate on it.
+
+**Fix the fixture, not the product**, and fix the class rather than the three: build the record's
+dates from the **schedule's own due-date rule** — the same computation `backup-run.sh` uses — so
+the fixture is correct at every hour, rather than adding a window guard or freezing a clock.
+`docs/tracker/M28/step-notes.md` records the measured rule (`offset − ceil(at)`, floored at zero,
+and the boundary `due_date > (reader's UTC date + 1 day)`), and M28.22's sweep is the reference for
+what the schedule actually computes at each hour.
+
+**Then sweep `tests/infra/` for the shape**, not for these three: any fixture whose value is
+derived from `today`, `now` or an import-time clock while the code under test derives the same
+value from configuration. Report what the sweep finds even where you do not fix it.
+
+**Run the suite at a simulated hour inside the window and outside it, and report both** — a fix
+verified only at the hour you happen to be working is the defect again.
+
+Gate: `make test-infra`, then `make verify`, with **e2e 239 passed / 0 skipped**.
+
 
 **E2E:** `tests/e2e/control/` for what is pushed on apply and `tests/e2e/infra/`
 for what a delivery host serves and does not log. The arrangements themselves need
@@ -4040,6 +4142,18 @@ show the feature is absent when co-located, and cannot show a border.
       moves, is decided and written down rather than left implied.
 - [ ] `docs/deploy/runbook.md` loses the sentence *"today you choose one location
       for both"* **and its three-shape structure**, because neither is true any more.
+- [ ] **A host that STOPS being a delivery host does not keep its material.** There is no
+      teardown in this product — recorded twice on 2026-09-13, and measured with a leaf's
+      `wireguard.conf` and its `PrivateKey` still on disk after the row was deleted — so
+      delivery inherits that gap rather than a cleanup. A node that stops carrying users
+      keeps its ex-users' rendered subscriptions, and a WireGuard-family client file carries
+      a `PrivateKey` the node's own server config does not. **M27.4's "absent, not inert" does
+      not cover this**: that requirement is about a host which never served delivery, not one
+      which stops. Either the material goes, or what survives is named in
+      `docs/decisions.md` **(done — M27.2's rows name three states, and a test pins the one
+      that is not closed)** and in the runbook where an operator will look — **M27.8 owns the
+      runbook half**, and nothing in the runbook yet says a node carries pushed material at
+      all. The removal path itself is **M27.4's**, per M27.2's rows.
 
 acceptance: yes
 Walk it on the two arrangements that differ, not only on the one that motivated it.

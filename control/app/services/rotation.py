@@ -50,6 +50,7 @@ from control.app.services import (
     placement,
     relay,
 )
+from control.app.settings import bound_settings
 from edge.registry import KeyScope, discover, profile
 
 logger = logging.getLogger(__name__)
@@ -468,6 +469,19 @@ async def replace_params(
         node=node,
         transport_name=node_transport.transport_name,
         port=placement.port_of(validated),
+        excluding=node_transport.id,
+    )
+    # And against the delivery listener's own socket — M27.6, the third path this family
+    # of rules is asked on. Retyping a port onto the one a delivery host answers
+    # refreshes on is the same collision as enabling a transport there, and this is the
+    # only place this path is asked it.
+    await placement.delivery_socket_is_free(
+        session,
+        node=node,
+        transport_name=node_transport.transport_name,
+        port=placement.port_of(validated),
+        settings=bound_settings(),
+        purpose=node_transport.purpose,
         excluding=node_transport.id,
     )
     # And the tunnel's own range against every other tunnel on that node — M17.1c, the

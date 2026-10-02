@@ -55,6 +55,21 @@ def configure_logging() -> None:
     logging.getLogger("uvicorn.access").disabled = True
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
+    # Pinned rather than left to inherit the root, for the reason the root is WARNING —
+    # and measured rather than assumed (M27.3). At DEBUG, asyncssh writes one line per
+    # SFTP operation naming the REMOTE PATH: every config file placed on a node, and,
+    # since M27.2, every pushed delivery artifact, whose file name is derived from one
+    # user's subscription token. Raising the root to DEBUG to debug something else would
+    # start writing per-subscription identifiers into this control plane's log, which
+    # CLAUDE.md forbids at every level including debug. Set this logger explicitly to
+    # get that back deliberately.
+    #
+    # The exception path does NOT carry one: an SFTP failure against a real OpenSSH
+    # server was forced on 2026-09-26 and the message is the server's own generic reason
+    # — `No such file`, `Permission denied` — with no path in it, so what
+    # ``services/apply`` logs with the traceback names nothing.
+    logging.getLogger("asyncssh").setLevel(logging.WARNING)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. Pass ``settings`` in tests; production reads env."""

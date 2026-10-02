@@ -21,6 +21,7 @@ suite that silently passes without a database is a suite that proves nothing.
 """
 
 import dataclasses
+import datetime
 import inspect
 import os
 import pathlib
@@ -30,6 +31,10 @@ from typing import NamedTuple
 
 import asyncssh
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -39,6 +44,8 @@ from control.app.models import Base
 from control.app.services import transports as transports_service
 from control.app.settings import Settings
 from edge.bootstrap import NodeConnection, node_stack
+from edge.bootstrap import delivery as node_delivery
+from edge.bootstrap import delivery_site as node_delivery_site
 from edge.health import listening
 from edge.registry import Layer4, discover
 
@@ -150,12 +157,74 @@ def backup_record(tmp_path) -> pathlib.Path:
     return tmp_path / "backup" / "last-run.json"
 
 
+# How long the suite's delivery certificate has left. Far enough out that no test is
+# near the edge of it, and finite because the product's answer to expiry is a NUMBER an
+# operator is shown — a certificate that never expired would make that sentence
+# untestable. The one file that is about expiry writes its own.
+DELIVERY_CERTIFICATE_DAYS = 60
+
+
+def a_delivery_certificate(directory: pathlib.Path, *, days: int) -> tuple[str, str]:
+    """A self-signed wildcard and its key, written to ``directory``, as two paths.
+
+    Self-signed on purpose: nothing in this product validates a chain — the control
+    plane reads the expiry and pushes the bytes, and the daemon on the node serves them
+    — so a real chain here would be a fixture proving something no code asks.
+
+    A WILDCARD, because that is the shape the fleet's certificate has: one for the zone
+    rather than one per delivery host, so that no host's name is published in a
+    Certificate Transparency log as it is created.
+    """
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "*.example.test")])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=days))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("*.example.test")]), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    certificate_path = directory / "delivery-cert.pem"
+    key_path = directory / "delivery-key.pem"
+    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    return str(certificate_path), str(key_path)
+
+
+@pytest.fixture
+def delivery_certificate(tmp_path: pathlib.Path) -> tuple[str, str]:
+    """The certificate this control plane holds for the whole fleet — M27.6.
+
+    Configured for the WHOLE suite rather than only where delivery is the subject,
+    because without one no host serves delivery and no host is handed material: a
+    certificate is what makes the endpoint exist at all, so a suite without one would
+    describe a fleet that has not got the feature. The file that is about having none
+    overrides this fixture.
+    """
+    return a_delivery_certificate(tmp_path / "delivery", days=DELIVERY_CERTIFICATE_DAYS)
+
+
 @pytest.fixture
 async def settings(
     clean_database,
     operator_password_hash: str,
     settle_window: tuple[float, float],
     backup_record: pathlib.Path,
+    delivery_certificate: tuple[str, str],
 ) -> Settings:
     return Settings(
         secret_key=TEST_SECRET_KEY,
@@ -194,6 +263,11 @@ async def settings(
         # the suite must not depend on what is on the machine running pytest, and because
         # the one file that is about this points it at a record it wrote.
         backup_record=backup_record,
+        # Off its declared default (unset, and no host serves delivery) for the reason
+        # ``delivery_certificate`` gives: without one this suite would describe a fleet
+        # that has not got the endpoint this milestone is about.
+        delivery_certificate_path=delivery_certificate[0],
+        delivery_key_path=delivery_certificate[1],
     )
 
 
@@ -420,6 +494,17 @@ class AcceptingNode:
 
     def __init__(self) -> None:
         self.placed: dict[str, str] = {}
+        # Every delivery artifact this apply handed the host — M27.2. Kept whole rather
+        # than digested, unlike ``placed`` above: a test about what a host is given has
+        # to be able to read the document, and the name is derived rather than stored,
+        # so a digest of it would be a second derivation nothing pins.
+        self.delivered: list[node_delivery.Artifact] = []
+        # The listener's own three files — M27.6. ``None`` is a host that has never been
+        # given one, which is not the same as a host that was given one and had it taken
+        # back: the removal sets these to ``False``, so a test can tell "never stood up"
+        # from "stood down" without a second attribute for each.
+        self.site: str | None | bool = None
+        self.certificate: tuple[str, str] | None | bool = None
 
     # Untyped return: the class is its own annotation and py314 still needs a string
     # for that, which this repo's ruff rules reject (UP037).
@@ -432,7 +517,15 @@ class AcceptingNode:
 
 @pytest.fixture
 def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the five node_stack calls that touch a host, and nothing else."""
+    """Replace the eleven calls that touch a host, and nothing else.
+
+    Six in ``node_stack``, two in ``edge.bootstrap.delivery`` since M27.2, and three in
+    ``edge.bootstrap.delivery_site`` since M27.6 — a node is handed its users'
+    pre-rendered subscriptions on every apply and, where it serves them itself, the site
+    configuration and the certificate too, so a fixture that left any of those real would
+    reach a stub connection with no ``run`` on it and every apply in this suite would die
+    inside it.
+    """
     from control.app.services import apply
 
     def connection_for(target):
@@ -467,6 +560,51 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
 
     async def place_compose(connection, *, compose: str) -> None:
         return None
+
+    async def place_delivery(connection, *, artifacts) -> None:
+        # REPLACES rather than extends, because the real one replaces the host's whole
+        # delivery directory: a double that appended would let a test see material a
+        # second apply did not push.
+        connection.delivered = list(artifacts)
+
+    async def place_delivery_site(connection, *, site: str) -> None:
+        connection.site = site
+        # AND THE CONTAINER COMES BACK UP ON IT, which is what makes this double stand
+        # for "a node where every step of an apply works" now that the apply watches the
+        # delivery listener like every other container (M27.6). ``running_containers``
+        # below answers out of ``placed``, so a site placed and not recorded here is a
+        # node whose listener never came up — and every apply in this suite would be
+        # reported as degraded, correctly.
+        connection.placed[node_delivery_site.DELIVERY_SERVICE] = node_stack.digest_of(site)
+
+    async def place_delivery_certificate(connection, *, certificate: str, key: str) -> None:
+        connection.certificate = (certificate, key)
+
+    async def remove_delivery_site(connection) -> None:
+        # ``False`` rather than ``None``, so a host this apply stood DOWN is
+        # distinguishable from one nothing ever stood up — see ``AcceptingNode``.
+        connection.site = False
+        connection.certificate = False
+        # And the container goes with the files: on a real host it is dropped from the
+        # compose file and ``restart`` runs with ``--remove-orphans``.
+        connection.placed.pop(node_delivery_site.DELIVERY_SERVICE, None)
+
+    async def remove_delivery(connection) -> bool:
+        # The host is left holding nothing, which is what the real one leaves behind —
+        # and it answers ``True``, the host that WAS holding some. That is the answer
+        # this fixture's node has always stood for: one every step of an apply works on.
+        # A test about a host that held none builds its own double and says so in its
+        # own file.
+        connection.delivered = []
+        return True
+
+    async def compose_projects(connection) -> frozenset[str]:
+        # A NODE, and not the box this control plane is deployed on — M27.4. The
+        # co-located arrangement is a different host and a different answer, and a
+        # test about it says so in its own file: this fixture has always stood for the
+        # ordinary node, and the ordinary node runs the node stack and nothing of ours
+        # besides.
+        return frozenset({"hashi-node"})
 
     async def restart(connection) -> None:
         return None
@@ -508,6 +646,17 @@ def accepting_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned(monkeypatch, node_stack, "prepare", prepare)
     pinned(monkeypatch, node_stack, "place_config", place_config)
     pinned(monkeypatch, node_stack, "place_compose", place_compose)
+    pinned(monkeypatch, node_delivery, "place_delivery", place_delivery)
+    pinned(monkeypatch, node_delivery, "remove_delivery", remove_delivery)
+    pinned(monkeypatch, node_delivery_site, "place_delivery_site", place_delivery_site)
+    pinned(
+        monkeypatch,
+        node_delivery_site,
+        "place_delivery_certificate",
+        place_delivery_certificate,
+    )
+    pinned(monkeypatch, node_delivery_site, "remove_delivery_site", remove_delivery_site)
+    pinned(monkeypatch, node_stack, "compose_projects", compose_projects)
     pinned(monkeypatch, node_stack, "restart", restart)
     pinned(monkeypatch, node_stack, "running_containers", running_containers)
 
