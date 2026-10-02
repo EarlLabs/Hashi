@@ -60,7 +60,7 @@ the tree is clean, the gate is green, and every agent was stopped. What follows
 is where to pick it up.
 
 **24 of 26 milestones closed.** M26 is open but its question is answered; M24 is
-not started.
+built (2026-10-02) and awaits its real-host walk.
 
 ### M26 — the owner's question is settled; one code path is not
 
@@ -166,11 +166,10 @@ code path is where it lives.
 
 ### Also open
 
-- **M24** — the panel never shows `?format=client-config-file`, so an operator
-  following the panel hands a WireGuard-family user a link that returns an
-  empty document. Not started. Its open design question: one link that answers by
-  what the node serves, or one URL per shape. *The first keeps "one link, every
-  serving node" true and quietly makes a subscription token polymorphic.*
+- **M24** — the panel never showed `?format=client-config-file`. The owner chose one
+  URL per config shape (2026-10-02); **built 2026-10-02** on `task/M24`: the link
+  dialog and the API hand over a labelled config-file link beside the subscription
+  link. Awaits the real-host walk.
 - **M16.3** — seven resolver acceptance findings, recorded as carry-over, never
   dispatched.
 
@@ -4347,9 +4346,34 @@ the feature was built as a switch instead of as a consequence.
 
 ---
 
-## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day
+## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day · decided by the owner 2026-10-02 (one URL per config shape) · built 2026-10-02 · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
 
-**Not started.**
+**Built 2026-10-02** on branch `task/M24`, stacked on `task/M31`. Code, tests and a
+disposable stand only — no real host was touched. What closed, the gate and what the
+real-host walk must see: *What closed* at the end of this section, and
+`docs/tracker/M24/`.
+
+### Premise corrected again, when the work started (2026-10-02)
+
+Read against the tree on the day it was built, three sentences below were out of date:
+
+- **There were two composers, not one line.** `control/app/api/routes.py` built
+  `{public_base_url}/sub/{token}` for the API, and `console.subscription_url` built the
+  same string for the panel's link dialog — opened from the Users screen's *show link*,
+  the Overview's *link* and the add-user exchange. Both composed the plain shape only.
+  M24 makes them one (`console.links_for`).
+- **The two sentences in the table below were no longer the ones on screen.** M20's fix
+  round had already replaced both — and two more beside them (the enable dialog's footer
+  and the re-offer toast) — with *"…gets it from that same link only by asking for that
+  shape"*. True, and an instruction to compose a bearer credential by hand, because no
+  screen showed the URL. Five further sentences said a user gets **"one subscription
+  URL"** (Users screen, its empty state, the add-user dialog, the Overview's empty state,
+  the Users subtitle), false for anyone holding a config-file protocol once the owner's
+  decision gave them two.
+- **Question 1 is the owner's, answered 2026-10-02** (`docs/decisions.md`): *one URL per
+  config shape, not one polymorphic link.* Question 2 follows from it — a node serving
+  both families puts a person in both links, and each link says which of their
+  protocols it carries.
 
 ### The correction that defines this milestone
 
@@ -4404,15 +4428,62 @@ would have been green either way.*
 
 **Done when**
 - [ ] An operator following only what the panel shows can give a user on a
-      WireGuard-family-only node something that works.
-- [ ] Every sentence the panel says about what a link contains is true for every
-      combination of enabled transports.
-- [ ] No new surface records a token, an address, or who fetched what.
+      WireGuard-family-only node something that works. *Built and proven on the stand
+      as far as the bytes: the URL the dialog prints under "config-file link", fetched
+      exactly as printed, is an archive holding that user's `.conf`
+      (`tests/control/test_the_panel_hands_over_the_config_file_link.py`, e2e
+      `test_the_panel_hands_over_the_link_that_delivers_a_config_file.py`). "Works" — a
+      device imports it and carries traffic — is the real-host walk's; left unticked
+      until it has been seen.*
+- [x] Every sentence the panel says about what a link contains is true for every
+      combination of enabled transports — link only, file only, both, a withdrawn
+      file row, a degraded or retired node; each tested.
+- [x] No new surface records a token, an address, or who fetched what — no log record,
+      audit row, attribute or cached response carries either URL (tested); the second
+      link is text in the same `no-store` dialog and the same API response as the first.
 
 acceptance: yes
 Take a user on a node serving only `amneziawg`. Follow exactly what the panel
 hands the operator — nothing learned from the source — and get a working
 configuration onto a device.
+
+### What was built (M24.1–M24.2)
+
+- **M24.1 (control)** — `console.links_for` composes every URL a user is handed: the
+  subscription link always (byte for byte the old one), and the same token asking
+  `?format=client-config-file` **when, and only when,** the user holds a credential on
+  an *offered* (enabled, user-facing) row, on a node that may serve again (draft, active
+  or degraded — not retired), whose transport declares that shape in
+  `subscription_formats`. No `if transport ==`: headings and wording are keyed by
+  `SubscriptionFormat`, and each link names the transports it carries for that person.
+  - **Link dialog**: one block per link — heading (*subscription link* / *config-file
+    link*), the URL, which app takes it, what it carries for this person, its own copy
+    button. The config-file link says it is not for a subscription app, is an archive to
+    unzip and import, and **does not refresh itself** — after a node of theirs changes
+    they download it again. A subscription link carrying nothing for this person says so
+    (*"opens as an empty document — not an error"*) and is still handed over, because a
+    link-shaped protocol offered later arrives in it.
+  - **API** `GET /api/users/{id}/subscription`: `url` unchanged, `config_file_url` added
+    (`null` unless held), composed by the same function.
+  - **Nodes row, enable dialog, re-offer toast, Transports screen**: name the config-file
+    link and where it is shown, instead of "only by asking for that shape"; the enable
+    dialog and the re-offer toast also say that a person already handed only the
+    subscription link must be handed the second.
+  - **"One subscription URL"** removed from the five sentences that said it.
+- **M24.2 (docs)** — runbook Shape A step 4 and *The two families are delivered
+  differently* follow the dialog; this section; `docs/decisions.md`; `docs/tracker/M24/`.
+
+### Not done here, deliberately
+
+- **Per-host delivery URLs (M27.7).** The 2026-09-27 row says M24 owns "which URL an
+  operator is handed" and that a delivery host's URL is the same question. The owner's
+  decision for M24 covers the config-file shape on the control plane's own link only; the
+  panel still composes no delivery URL (`test_this_panel_composes_no_delivery_url_anywhere`
+  stays green). That stays M27's.
+- **A config-file user re-imports after a rotation.** Not new — it is what option (b)
+  (2026-08-09) always meant — but it qualifies the charter's *"users never re-add
+  anything"* for this family, and the dialog now says so to the operator instead of the
+  opposite. Raised to the owner rather than decided here.
 
 ---
 

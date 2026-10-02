@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M24 — the panel shows the URL that delivers a config-file transport (one URL per config shape)"
+state: in_progress
+progress: "built; gate running; review-loop next"
+blockers: null
+updated_at: 2026-10-02T00:00:00Z

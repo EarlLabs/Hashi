@@ -686,10 +686,14 @@ public hostname (*Reaching the panel*):
    today's: the number is a ceiling, raising it later is a resize, and the box says how
    many people it is being measured against.
 3. **Apply.** The node is serving at this point and nobody is on it yet.
-4. **Add a user**, open their subscription link, load it into a stock client. The
-   WireGuard family is a config *file* rather than a URI, so it is the
-   `?format=client-config-file` form of that link that carries it — the plain link is
-   empty on a box that offers only `amneziawg`, and empty is not an error.
+4. **Add a user**, and read the dialog that opens. The WireGuard family is a config
+   *file* rather than a URI, so a user holding `amneziawg` is shown **two links**: the
+   *subscription link*, and beneath it the *config-file link* — the same token asking
+   `?format=client-config-file`. The config-file link downloads an archive; unzip it and
+   import the `.conf` into the AmneziaWG app. The subscription link is empty on a box
+   that offers only `amneziawg` — the dialog says so under it — and empty is not an
+   error. Hand the user both: a link-shaped protocol offered later arrives in the first
+   on its own. **"show link"** on the Users screen opens the same dialog again.
 5. **Apply again.** This is the step an acceptance walk had to work out for itself, and
    the one that costs a user an evening: adding a user changes what the panel *would*
    push and touches no host. Their configuration file is complete and correct the moment
@@ -1017,12 +1021,19 @@ exactly who this page tells to *"load it into a stock client"*.
 lookups through the tunnel; without it their device keeps asking a resolver it can no
 longer reach, and the tunnel that looked fixed resolves no names at all.
 
-**The two families are delivered differently, and you find that out before your users
-do.** A VLESS transport rides the subscription link the panel shows. The WireGuard family
-is a config file: the same token, `?format=client-config-file`, an archive. A user whose
-node offers only AmneziaWG and whose client opens the plain link gets an empty document
-rather than an error — so hand them the `?format=` URL, and expect the plain link to carry
-entries again once that node's users are on a VLESS transport.
+**The two families are delivered differently, and the link dialog says which is which.**
+A VLESS transport rides the *subscription link*. The WireGuard family is a config file:
+the same token, `?format=client-config-file`, an archive — shown in the user's link dialog
+as a second, *config-file link* whenever they hold a credential on a config-file transport
+that is offered, and not shown otherwise. Each link is labelled with the app that takes it
+and what it carries for that person. A user whose node offers only AmneziaWG and whose
+client opens the subscription link gets an empty document rather than an error — so hand
+them the config-file link too, and expect the subscription link to carry entries once a
+VLESS transport is offered to them. **A file does not refresh itself:** after a node of
+theirs changes (a key rotated, a node replaced), they download the config-file link again
+and re-import. **Offering a config-file transport to a fleet whose users already hold only
+the subscription link** means each of them now has a second link to be handed — the
+enable dialog says so before the press, and the toast of offering it again does after.
 
 ### If you already built it the other way
 
