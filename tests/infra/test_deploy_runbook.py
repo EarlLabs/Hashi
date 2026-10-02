@@ -701,12 +701,46 @@ def test_the_table_says_why_a_transport_it_no_longer_recommends_is_not_offered(
         )
 
 
+# M27.8: the two sections an operator types an installation from, by their titles. Until
+# M27.8 the instructions were three ``## Shape X`` sections, one per arrangement of the
+# three roles; they are now ONE procedure whose steps do not depend on the arrangement,
+# plus the one move between arrangements. Every check that used to run per shape runs
+# over both of these, keyed by title so a failure names the section it read.
+INSTALLATION_SECTION = "Installing hashi"
+GROWTH_SECTION = "Growing out of one box"
+
+
 @pytest.fixture(scope="module")
 def shapes(runbook: str) -> dict[str, str]:
-    """Each ``## Shape X`` section, by its letter."""
-    sections = re.findall(r"^## Shape (\w) — [^\n]*\n((?:.*\n)*?)(?=^## )", runbook, re.M)
-    assert sections, "the runbook no longer describes a deployment shape"
-    return {letter: body for letter, body in sections}
+    """The installation procedure and the growth path, by section title.
+
+    The fixture keeps its old name because every test below reads it as "the
+    instructions an operator follows", which is still what it returns.
+    """
+    found = {}
+    for title in (INSTALLATION_SECTION, GROWTH_SECTION):
+        section = re.search(
+            rf"^## {re.escape(title)}(?: — [^\n]*)?\n((?:.*\n)*?)(?=^## )", runbook, re.M
+        )
+        assert section, f"the runbook no longer has its {title!r} section"
+        found[title] = section.group(1)
+    return found
+
+
+def _instructions(body: str) -> list[str]:
+    """Every numbered step and every prose paragraph of a procedure.
+
+    The installation procedure gives some of its instructions as paragraphs under a
+    ``###`` step heading rather than as numbered items, so a check that read numbered
+    steps alone would skip exactly the instruction it exists for.
+    """
+    steps = _numbered_steps(body)
+    rest = body
+    for step in steps:
+        # Taken out of the prose before it is split, so a numbered list is read one step
+        # at a time and never as one paragraph holding every step's transports at once.
+        rest = rest.replace(step, "\n")
+    return steps + _prose_paragraphs(rest)
 
 
 def test_every_hop_the_runbook_builds_is_over_a_transport_that_can_carry_one(
@@ -724,7 +758,7 @@ def test_every_hop_the_runbook_builds_is_over_a_transport_that_can_carry_one(
     named = {
         name for body in shapes.values() for name in re.findall(HOP_FIELD, body)
     }
-    assert named, "no shape builds a hop, so the topology the charter needs is undocumented"
+    assert named, "no procedure builds a hop, so the topology the charter needs is undocumented"
     assert named <= offered, (
         f"the runbook builds a hop over {sorted(named - offered)}, which the panel's hop "
         "form does not offer"
@@ -736,23 +770,23 @@ def test_no_shape_tells_an_operator_to_enable_a_retired_transport(
 ) -> None:
     """The steps an operator actually types from, against the panel they type them into.
 
-    The capability table is reference and the shapes are instructions, and an operator
-    following Shape A at 3am reads the second — so a retired transport named there is a
+    The capability table is reference and the procedures are instructions, and an
+    operator installing at 3am reads the second — so a retired transport named there is a
     protocol they will look for on a dialog that does not list it, and then enable over
     the API because the runbook said to. The table being right is not enough.
 
-    Over every backticked name in the shape, rather than over one instruction's phrasing:
-    the runbook writes "Enable a transport: `x`" in one shape and "Enable a
-    **user-facing** transport on E — `x`" in another, and a check tied to either
-    sentence would be a check that a paraphrase turns green.
+    Over every backticked name in the procedure, rather than over one instruction's
+    phrasing: the runbook words the same instruction differently in the installation and
+    in the growth path, and a check tied to either sentence would be a check that a
+    paraphrase turns green.
     """
     retired = set(retired_transports())
     if not retired:
-        pytest.skip("this image retires no transport, so no shape can recommend one")
+        pytest.skip("this image retires no transport, so no procedure can recommend one")
 
     named = {
-        (letter, name)
-        for letter, body in shapes.items()
+        (title, name)
+        for title, body in shapes.items()
         for name in retired
         if re.search(rf"`{re.escape(name)}`", body)
     }
@@ -767,33 +801,36 @@ def test_no_shape_that_builds_a_hop_offers_its_users_a_kernel_tunnel(
 ) -> None:
     """The contradiction M15 was found in the field, guarded where it was written.
 
-    A shape that builds a hop is a shape whose entry node dials one, so the transport it
+    A procedure that builds a hop has an entry node that dials one, so the transport it
     tells an operator to enable for that node's users must be one the table above marks
-    yes. Checked per shape rather than per file, because the same transport is the right
-    answer in Shape A — one box, no hop — and the wrong one on the box that dials a hop,
-    and a check that could not tell the two apart would have to forbid the correct advice
-    to catch the incorrect one.
+    yes. Checked per INSTRUCTION — each numbered step and each paragraph that says
+    "user-facing" — rather than per section, because since M27.8 one procedure carries
+    both answers: the same transport is right for a node with no hop and wrong on the box
+    that dials one, and a check that could not tell the two apart would have to forbid
+    the correct advice to catch the incorrect one. The runbook keeps the no-hop advice in
+    a paragraph of its own for that reason, and a paragraph that mixed the two would go
+    red here.
 
-    Each such shape must also point at the section that explains the refusal: an operator
-    who reads only their own shape has to be able to get there, since that is where the
-    way out of it is written.
+    Each such procedure must also point at the section that explains the refusal: an
+    operator who reads only the procedure has to be able to get there, since that is
+    where the way out of it is written.
     """
-    for letter, body in shapes.items():
+    for title, body in shapes.items():
         if not re.search(HOP_FIELD, body):
             continue
-        steps = [step for step in _numbered_steps(body) if "user-facing" in step]
+        steps = [step for step in _instructions(body) if "user-facing" in step]
         assert steps, (
-            f"Shape {letter} builds a hop and never says to enable a user-facing "
+            f"{title!r} builds a hop and never says to enable a user-facing "
             "transport, so it produces an entry node nobody can dial"
         )
         for step in steps:
             for name in _transport_names(step):
                 assert _answer(capability_table[name][0]) == "yes", (
-                    f"Shape {letter} names {name} where it tells an operator what to give "
+                    f"{title!r} names {name} where it tells an operator what to give "
                     f"the users of a node that dials a hop: {step.strip()!r}"
                 )
         assert "The one combination that will not render" in _flat(body), (
-            f"Shape {letter} builds a hop and does not point at the section that says "
+            f"{title!r} builds a hop and does not point at the section that says "
             "which user-facing transport such a node can actually render"
         )
 
@@ -920,11 +957,11 @@ def test_every_shape_that_builds_a_hop_gives_its_entry_a_resolver(
     shapes: dict[str, str],
 ) -> None:
     """Where an operator actually registers the entry node is where they have to hear it."""
-    for letter, body in shapes.items():
+    for title, body in shapes.items():
         if not re.search(HOP_FIELD, body):
             continue
         assert RESOLVER_SECTION in _flat(body), (
-            f"Shape {letter} builds a hop and never says its entry node needs a resolver"
+            f"{title!r} builds a hop and never says its entry node needs a resolver"
         )
 
 
@@ -995,7 +1032,7 @@ def test_no_paragraph_lists_what_two_rows_collide_on_and_leaves_the_range_out(
 
     Per paragraph rather than per section: the claim was made twice, in two sections,
     and the one that was corrected in M17.2's docs commit was not the one an operator
-    following Shape A reads first.
+    installing on one box reads first.
     """
     claims = [
         paragraph
@@ -1004,7 +1041,7 @@ def test_no_paragraph_lists_what_two_rows_collide_on_and_leaves_the_range_out(
     ]
     assert claims, (
         "no paragraph of the runbook says what two rows on one node collide on, so the "
-        "operator following Shape A and then its hop has nothing to read"
+        "operator installing on one box and then building its hop has nothing to read"
     )
     for paragraph in claims:
         flat = _flat(paragraph)
@@ -1098,12 +1135,13 @@ def test_the_account_change_section_does_not_instruct_a_step_with_no_surface(
 def growth_section(runbook: str) -> str:
     """The section that takes an operator from one box to the charter's topology."""
     section = re.search(
-        r"^## Growing out of Shape A — [^\n]*\n(?:.*\n)*?(?=^## |^---$)", runbook, re.M
+        rf"^## {re.escape(GROWTH_SECTION)} — [^\n]*\n(?:.*\n)*?(?=^## |^---$)", runbook, re.M
     )
     assert section, (
-        "the runbook describes three shapes and no move between them — so an operator who "
-        "ran Shape A and then rented a Russian box has only Shape B to read, and following "
-        "it destroys every credential their users are connecting on"
+        "the runbook describes an installation and no move between arrangements — so an "
+        "operator who installed on one box and then rented a Russian box will make the box "
+        "they have the entry, and that destroys every credential their users are "
+        "connecting on"
     )
     return section.group(0)
 
@@ -1266,27 +1304,27 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
     no peer for them and their client would have handshaked into nothing. A second apply,
     three minutes later, is what made it true.
 
-    Both shapes that add users read *"Apply … Add users"*, in that order, which is the
-    right order for a node and the wrong one for a person. So a shape whose steps add a
-    user has to apply AFTER it, and this asserts the order rather than the presence of the
+    Both shapes that added users read *"Apply … Add users"*, in that order, which is the
+    right order for a node and the wrong one for a person. So a procedure whose steps add
+    a user has to apply AFTER it, and this asserts the order rather than the presence of the
     word: an apply above the add-user step is the version the walk followed.
 
-    THE ORDER CHECK SKIPS A SHAPE WHOSE ADD STEP IT CANNOT RECOGNISE, so it is bracketed
+    THE ORDER CHECK SKIPS A PROCEDURE WHOSE ADD STEP IT CANNOT RECOGNISE, so it is bracketed
     by two assertions that can fail on their own — "a verification that cannot fail" is
     this repository's signature defect and the skip is one waiting to happen. One end
     catches the specific way it would happen (a step reverting to the retired word, which
     M29 took out of this page and which this regex no longer matches); the other catches
-    the general one (no shape matched at all, so nothing below ran), and is the same
+    the general one (no procedure matched at all, so nothing below ran), and is the same
     ``assert steps`` the two ``user-facing`` filters above carry for the same reason.
     """
     covered = set()
-    for letter, body in shapes.items():
+    for title, body in shapes.items():
         steps = _numbered_steps(body)
         retired = [
             step for step in steps if re.search(r"add (?:a )?friends?\b", step, re.I)
         ]
         assert not retired, (
-            f"Shape {letter} tells an operator to add a friend. The word is `user` "
+            f"{title!r} tells an operator to add a friend. The word is `user` "
             "(docs/decisions.md, 2026-09-22) — and the order check below does not "
             f"recognise this step, so it skips the shape silently: "
             f"{[step.strip() for step in retired]!r}"
@@ -1298,18 +1336,18 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
         ]
         if not adding:
             continue
-        covered.add(letter)
+        covered.add(title)
         applying = [
             index
             for index, step in enumerate(steps)
             if re.search(r"\bapply\b", step, re.I)
         ]
         assert any(index > adding[0] for index in applying), (
-            f"Shape {letter} adds a user and never applies afterwards, so the user it "
+            f"{title!r} adds a user and never applies afterwards, so the user it "
             "hands a link to is on no node until the operator works that out themselves"
         )
     assert covered, (
-        "no shape adds a user at all, so the order this test exists to check was not "
+        "no procedure adds a user at all, so the order this test exists to check was not "
         "checked anywhere — either the runbook stopped telling an operator to add one, "
         "or it words it in a way this no longer matches"
     )
@@ -1602,4 +1640,78 @@ def test_the_panel_points_at_a_section_this_page_actually_has(runbook: str) -> N
     assert MOVING_DELIVERY_SECTION.startswith(pointed.group(1)), (
         f"the panel sends the operator to {pointed.group(1)!r} and this page's section "
         f"is called {MOVING_DELIVERY_SECTION!r}"
+    )
+
+
+# --- M27.8: one installation, and the arrangement is not a setting ---------------------
+#
+# M27's done-when: the runbook loses "today you choose one location for both" and its
+# three-shape structure, because neither is true once a delivery host can answer its own
+# users' refreshes. Which host does so is derived (docs/decisions.md, M27.4), so the page
+# must not grow a step that asks the operator which arrangement they are building.
+
+# The section the installation sends an operator to for which host answers a refresh.
+DELIVERY_HOST_SECTION = "Which host answers a refresh"
+
+
+def test_the_runbook_is_one_installation_and_not_three_shapes(
+    runbook: str, shapes: dict[str, str]
+) -> None:
+    """The structure M27.8 exists to remove, and the sentence that described it."""
+    assert not re.search(r"^## Shape ", runbook, re.M), (
+        "the runbook still has a section per deployment shape; M27.8 collapsed them into "
+        f"{INSTALLATION_SECTION!r}, whose steps do not depend on the arrangement"
+    )
+    assert "choose one location for both" not in _flat(runbook), (
+        "the runbook still says the panel and the delivery endpoint must share a location, "
+        "which stopped being true when a node could answer its own users' refreshes"
+    )
+    assert f"### {DELIVERY_HOST_SECTION}" in shapes[INSTALLATION_SECTION], (
+        "the installation no longer says which host answers a refresh, so an operator "
+        "cannot tell what the arrangement they built does for delivery"
+    )
+
+
+def test_the_installation_names_every_arrangement_the_plan_does(runbook: str) -> None:
+    """One, two or three machines, in the four arrangements M27.4's table names.
+
+    Read off the table that opens the page, by the notation the plan uses, so an
+    arrangement dropped from the page is caught rather than quietly left without a row.
+    """
+    section = re.search(r"^## Where the three roles go\n((?:.*\n)*?)(?=^## )", runbook, re.M)
+    assert section, "the runbook no longer says where the three roles can go"
+    rows = _flat(section.group(1)).replace("\\|", "|")
+    for arrangement in ("C+E+L", "C+E | L", "C+L | E", "C | E | L"):
+        assert f"**{arrangement}" in rows, (
+            f"the arrangement {arrangement} has no row in the table an operator chooses from"
+        )
+
+
+def test_the_443_rule_names_the_default_in_which_no_host_answers_a_refresh(
+    runbook: str,
+) -> None:
+    """M27.6's carry-over: the paragraph listed its exemptions and closed the list without
+    the one every fleet starts in.
+
+    ``placement.delivery_socket_is_free`` refuses nothing while no usable delivery
+    certificate is configured, because then no host answers a refresh — and both paths
+    blank is the shipped default. A paragraph about who loses 443 that does not say so is
+    false for every fleet that never set the pair.
+    """
+    paragraphs = [
+        paragraph
+        for paragraph in _prose_paragraphs(runbook)
+        if "TCP 443" in paragraph
+        and "refresh" in paragraph
+        and "registered under a name" in paragraph
+    ]
+    assert paragraphs, "the runbook no longer says which hosts lose TCP 443 to delivery"
+    said = " ".join(paragraphs) + " " + " ".join(
+        paragraph
+        for paragraph in _prose_paragraphs(runbook)
+        if "keeps 443" in paragraph
+    )
+    assert "delivery certificate" in said and "HASHI_DELIVERY_" in said, (
+        "the 443 rule does not say it holds only while a delivery certificate is "
+        "configured, so it is false for the default fleet"
     )

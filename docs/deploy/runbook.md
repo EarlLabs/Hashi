@@ -1,41 +1,60 @@
 # Deploying hashi
 
-**WHAT:** the commands to bring hashi up on real hosts, in the three topologies that
-make sense, and the traps that are known, named and not yet fixed.
+**WHAT:** the commands to bring hashi up on real hosts — one installation procedure,
+whichever machines the three roles end up on — and the traps that are known, named and
+not yet fixed.
 
 **WHY:** the repository proves that the code holds together. It does not tell you which
 machines to rent, which port each thing wants, or which two of those wants collide. This
 file is that, and it is written to be followed at 3am from a phone tether.
 
-**HOW:** pick a shape, run the shared preparation once, then the section for your shape.
-Every command below is idempotent — re-running is always safe.
+**HOW:** decide where the three roles go, run the shared preparation once, then follow
+*Installing hashi* from the top. The arrangement you chose changes which box you type
+each step on and which values you put in a node record; it never changes the steps, and
+no step asks you which arrangement you built. Every command below is idempotent —
+re-running is always safe.
 
 ---
 
-## Pick a shape
+## Where the three roles go
 
-| | Boxes | What it proves | What it costs you |
-|---|---|---|---|
-| **A — one box** | 1 abroad | the whole pipeline: panel → SSH push → subscription link → a stock client connects | nothing about the Russian topology, and Reality cannot have port 443 |
-| **B — two boxes** | 1 in RU (entry + control plane), 1 abroad (leaf) | the charter's real topology: users dial the entry, traffic leaves from the leaf | your panel and your user-facing transport fight over 443, and `HASHI_SECRET_KEY` ends up on the host most likely to be seized |
-| **C — three boxes** | control plane, entry in RU, leaf abroad | the same, with no compromise | one more rental |
+hashi has three roles: the **control plane** (**C** — the database, the panel and the
+endpoint a user's app refreshes its subscription from), an **entry** node (**E** — what a
+user's device dials) and a **leaf** node (**L** — where a user's traffic leaves for the
+internet, reached from the entry over a hop). They go on one, two or three machines in any
+combination, and none of them is a setting: the arrangement is wherever you ran each
+step.
 
-**Shape A is the right first run.** It is the cheapest way to find out whether the images
-start, the SSH push works and a client accepts the link. Shape C is the right shape to
-actually live in.
+| Machines | Arrangement | Who answers a user's refresh | Where `HASHI_SECRET_KEY` lives | Who holds TCP 443 |
+|---|---|---|---|---|
+| 1 | **C+E+L** — one box, no hop | the control plane, on `HASHI_PUBLIC_HOST` | on that box | the control plane's Caddy, so a user-facing transport goes on another port |
+| 2 | **C+E \| L** — control plane on the entry | the control plane, on `HASHI_PUBLIC_HOST` — which is the entry's own box | on the entry | the control plane's Caddy, on the entry |
+| 2 | **C+L \| E** — control plane on the leaf | the control plane; **and** the entry, for its own users, once it is a delivery host (*Which host answers a refresh*, below) | abroad, with the leaf | the control plane's Caddy on C+L; on E, the delivery listener once it is one |
+| 3 | **C \| E \| L** | as for C+L \| E | on C | as for C+L \| E |
 
-**And a shape is not a choice you make once.** Going from the box you started with to the
-charter's topology has a section of its own — *Growing out of Shape A*, below — because
-the obvious way to read Shape B as a migration is the way that destroys every credential
-your users are connecting on today.
+**What each one costs is in that table and nowhere else in the procedure.** Put the
+control plane on the entry and the key that decrypts every credential sits on the machine
+most likely to be seized, beside the database it opens — the charter's own condition for
+putting the panel inside Russia is a key that does *not* live on that host, and
+`panel-bootstrap.sh` requires it in that host's env file, so that arrangement violates the
+condition and is run knowingly or not at all. Put the control plane abroad and the
+key is out of reach, but its own refresh URL is behind the border at the moment a
+whitelist shutdown makes a user need it — which is the gap a delivery host exists to
+close, for as long as the certificate it holds lasts.
 
-None of the three proves the charter's first success criterion. "Survives a mobile
-whitelist shutdown" is a field observation on a real Russian network, made with your own
-phone. No test in this repository claims it and none ever will.
+**A one-box install is the right first run.** It is the cheapest way to find out whether
+the images start, the SSH push works and a client accepts the link. Growing from it to the
+charter's topology has a section of its own — *Growing out of one box*, below — because the
+obvious way to grow it, making the box you have the entry, is the way that destroys every
+credential your users are connecting on today.
+
+None of these proves the charter's first success criterion. "Survives a mobile whitelist
+shutdown" is a field observation on a real Russian network, made with your own phone. No
+test in this repository claims it and none ever will.
 
 ---
 
-## Before any shape
+## Before you install
 
 ### On your own machine
 
@@ -131,6 +150,7 @@ On the control-plane box, `cp .env.example .env` and fill in:
 | `HASHI_PRIVATE_PORT` | where Caddy serves the console; the same variable drives the listener and the published mapping, so they cannot drift |
 | `HASHI_PRIVATE_BIND_ADDR` | which address on **this** host the console is published on. The tunnel's, never loopback — see *Reaching the panel*. Read only by `make up-panel`; a host with no tunnel yet leaves it unset and publishes with `make up-panel-over-ssh` |
 | `HASHI_MGMT_*` | optional: the management tunnel's own address, port, endpoint, MTU and device list. Absent means no tunnel is generated |
+| `HASHI_DELIVERY_CERTIFICATE_PATH` / `HASHI_DELIVERY_KEY_PATH` | optional, and blank is the default: no node answers refreshes of its own. Set only when an entry that is not this box should — *The delivery certificate*, below |
 
 **Paste the hash exactly as `hash-password` printed it, doubled `$$` and all.** The
 command now prints `scrypt$$32768$$8$$1$$…` rather than `scrypt$32768$8$1$…`, and the
@@ -334,7 +354,7 @@ you would actually be on.
 ## Preparing a leaf
 
 A rented host, an SSH session, and ten minutes. This section is every node — the leaf
-abroad, the entry in Russia, and the box in shape A that is also its own node — because
+abroad, the entry in Russia, and the control plane's own box when it is also a node — because
 they are prepared the same way: **one script, `scripts/node-bootstrap.sh`, and nothing by
 hand.** A hand-prepared host is a host you cannot rebuild at three in the morning, which
 is precisely when you rebuild one.
@@ -387,7 +407,7 @@ mistake you want stopped here rather than found on a node that says it is ready:
 - **No key, or a key that is not a public key.** The private half belongs in the node
   record, encrypted, and never on a node — a key generated or pasted on the host would sit
   in clear on the machine most likely to be seized. Generate the pair where the control
-  plane lives (*Before any shape*, above) and pass the `.pub` half.
+  plane lives (*Before you install*, above) and pass the `.pub` half.
 - **More than one key.** `authorized_keys` holds one key per line, so a value with a
   newline in it authorises *every* line in it for that account — including one you did not
   read. `--authorized-key-file` reads the whole file for the same reason: it used to take
@@ -614,11 +634,16 @@ open the whole time.
 
 ---
 
-## Shape A — one box
+## Installing hashi
 
-One VPS abroad, carrying the control plane and one node at the same time.
+One procedure for every arrangement in *Where the three roles go*. Where a step reads
+differently on a box that carries more than one role, the step says so; there is no other
+branch. On a one-box install, the steps that name a second box (the hop, the leaf's
+preparation) are the ones you skip, and the rest are typed on that one box.
 
 ### Bring up the control plane
+
+On the box you chose for **C**.
 
 **This is 13 commands on 11 lines, and `panel-bootstrap.sh` is one of them.** It is the
 honest one — it refuses to invent your secret key, it verifies the control plane answers
@@ -635,7 +660,7 @@ ufw logging off                                # FIRST, always — see below
 ufw allow <the port sshd listens on>/tcp       # sshd -T | awk '/^port /{print $2}'
 ufw allow <Caddy's plain-HTTP port>/tcp        # the ACME challenge and the redirect
 ufw allow <Caddy's HTTPS port>/tcp             # the DELIVERY endpoint, not the console
-ufw allow <this node's transport port>/udp     # the number you enter in the node record
+ufw allow <this node's transport port>/udp     # only where this box is also a node
 ufw enable
 
 make panel-bootstrap
@@ -649,7 +674,7 @@ on the private site, reached over the management tunnel or over the SSH forward.
 *Reaching the panel* above, which is also where the console's own port is opened.
 
 Clone to `/opt/hashi-control`, **not** `/opt/hashi` — that path is the node stack's own
-root, and on this box both live on the same disk.
+root, and on a box that is also a node both live on the same disk.
 
 **`ufw logging off` comes first and is not optional.** `ufw enable` turns connection
 logging on by default and starts writing source addresses to `/var/log/ufw.log` from the
@@ -667,46 +692,119 @@ fleet cannot move away from — the same rule that keeps one out of the code. On
 is only a node, `scripts/node-bootstrap.sh` does this whole block for you, in the right
 order, from arguments.
 
-### Register the box as its own node
+### Prepare every other box
 
-In the panel — reached over the management tunnel or the SSH forward, never over the
-public hostname (*Reaching the panel*):
+Each box that carries **E** or **L** and is not the control plane's box gets one run of
+*Preparing a leaf* above — the script is the same whichever end a node turns out to be.
 
-1. **Add node.** `address` and `ssh_host` are both this box's public IP — the control
-   container dials out and back, which works; `172.17.0.1` is the fallback if the public
-   address is awkward. `ssh_user root`, port 22, private key = the contents of
-   `~/.ssh/hashi-node`.
-2. **Enable a transport: `amneziawg` on UDP 51820.** Right here it is the right choice,
-   because this box dials no hop. Its plain cousin is not offered — see *What to give an
-   entry node's users instead* for what was measured. Read *The one combination that
-   will not render* before you make it the entry end of one: once this box dials a hop,
-   this row is what the hop form refuses. The form asks one more
-   thing for this family — **how many users this row may hand an address to**, counted
-   up from `peer_tunnel_address`. Size it for the fleet you expect rather than for
-   today's: the number is a ceiling, raising it later is a resize, and the box says how
-   many people it is being measured against.
-3. **Apply.** The node is serving at this point and nobody is on it yet.
-4. **Add a user**, and read the dialog that opens. The WireGuard family is a config
-   *file* rather than a URI, so a user holding `amneziawg` is shown **two links**: the
-   *subscription link*, and beneath it the *config-file link* — the same token asking
-   `?format=client-config-file`. The config-file link downloads an archive; unzip it and
-   import the `.conf` into the AmneziaWG app. The subscription link is empty on a box
-   that offers only `amneziawg` — the dialog says so under it — and empty is not an
-   error. Hand the user both: a link-shaped protocol offered later arrives in the first
-   on its own. **"show link"** on the Users screen opens the same dialog again.
-5. **Apply again.** This is the step an acceptance walk had to work out for itself, and
-   the one that costs a user an evening: adding a user changes what the panel *would*
-   push and touches no host. Their configuration file is complete and correct the moment
-   it is issued — their own address, the node's real public key — while the node holds no
-   peer for them and their client handshakes into nothing. The panel says so now: the
-   Users screen and the dialog that hands the link over both name the nodes that are not
-   running what this panel would give them. **Any change to who may use a node — a user
+**Choose the hop's UDP port before you run the script on the leaf**, and pass it as a
+`--port` there: the leaf is the end that listens, `node-bootstrap.sh` is what opens the
+port in its firewall, and *Build the hop* is where the form asks you for that number. An
+acceptance walk did it in the other order, reached the hop form with a port nothing had
+opened, and had to run the script on the leaf a second time — safe, purely additive, and
+one more command than the procedure needs. Nothing in the product warns you, because the
+script is not told which role the host will be registered in.
+
+**On the control plane's own box, when it is also a node** (C+E+L, C+E | L, C+L | E), the
+firewall lines in the block above, and the key authorised under *What every box must
+already have*, already let the control plane reach it as root. **When
+you do not want root logging in by key** (M31.10, from the field walk of 2026-10-02),
+prepare that box with the node script like any other node, naming an ordinary account that
+has passwordless `sudo`:
+
+```bash
+make node-bootstrap NODE=<admin-account>@<this box's public address> \
+  ARGS="--user <node-account> --authorized-key '<the control plane's public key>' --port <port>/tcp"
+```
+
+and register it, below, with **`ssh_user` = `<node-account>`** — the account the run's last
+line names, not root. The control plane never escalates on a node (*Which accounts work*),
+so that account needs only what the script gave it: `/opt/hashi`, the `docker` group and
+the key.
+
+### Register each box as a node
+
+In the panel — reached over the management tunnel or the SSH forward, never over the public
+hostname (*Reaching the panel*) — **Add node** once per box that carries E or L. The values
+are the arrangement; the form is the same for all of them.
+
+- **`ssh_host`** — the address the control container reaches that box at over SSH. For the
+  control plane's own box that is **its own public address**, the same one users are given:
+  the control plane runs in a container, from inside it `localhost` is the container itself,
+  so it reaches its own host the way it reaches any other — out through that address and
+  back in over SSH (the 2026-10-02 field walk measured exactly this). `172.17.0.1` is the
+  fallback if the public address is awkward. For any other box, its real remote address;
+  the control container needs outbound SSH to each.
+- **`ssh_user`, `ssh_port`** — from the `register it in the panel` line of that box's
+  script run, or `root` and the port sshd listens on for a box prepared by the control-plane
+  block alone. The private key is the contents of `~/.ssh/hashi-node`.
+- **`address`** — what a user's device dials. **A name or an IP, and on the entry the
+  choice is not cosmetic:** a node registered under a name is one that can answer its own
+  users' refreshes (*Which host answers a refresh*, below), and one registered by IP never
+  is. On the control plane's own box it makes no difference to delivery — that box answers
+  refreshes as the control plane already.
+- **`resolver`** on the entry, whenever it dials a hop: such a node does not render without
+  one (*A node that dials a hop needs a resolver*, below).
+
+### Enable a user-facing transport on the entry
+
+On a node that dials **no** hop — a one-box install, or a leaf whose own users exit there —
+**`amneziawg`** is the right choice. Its plain cousin is not offered — see *What to give an
+entry node's users instead* for what was measured. The form asks one more thing for this
+family — **how many users this row may hand an address to**, counted up from
+`peer_tunnel_address`. Size it for the fleet you expect rather than for today's: the number
+is a ceiling, raising it later is a resize, and the box says how many people it is being
+measured against.
+
+On a node that **dials a hop** — the entry, in every arrangement with a separate leaf — enable
+a **user-facing** transport the table in *The one combination that will not render* (below)
+marks yes for a node with a hop: `vless-reality` unless you have a reason for the other one,
+with a `decoy_host` of your own choosing and never a shared one. The panel refuses a kernel
+tunnel there, in whichever order you build the two.
+
+Read *The one combination that will not render* before you make a one-box install's node the
+entry end of a hop: once a node dials a hop, the `amneziawg` row its users hold is what the
+hop form refuses. *Growing out of one box*, below, is the way round it.
+
+**And TCP 443 is not this transport's on every box.** On the control plane's own box Caddy
+holds it for the delivery endpoint; on a delivery host the delivery listener holds it, and
+the panel refuses the port (*Rules that are not optional*). Reality's whole camouflage is
+*being* on 443. Its declared range is `(443, 65535)`, so 8443 validates — but a TLS
+"website" answering on an odd port is a signal in itself, and that cost is the one the
+arrangement table names. Only an entry that is neither — no control plane on it and no
+delivery served from it — has 443 to give Reality.
+
+### Build the hop
+
+Skip this on a one-box install. Otherwise, from the panel's hop form: entry = E, leaf = L,
+transport = `amneziawg`. The entry dials the leaf, always — an entry sits behind a Russian
+carrier NAT and cannot be dialled — so L listens and E reaches out, on the port you opened
+when you prepared L.
+
+A hop is never granted to a user and never appears in a subscription: a user holding the
+entry↔leaf tunnel would route straight past the entry the topology exists to hide behind.
+
+### Apply, add users, apply again
+
+1. **Apply every node.** Until you do, the hop exists only in the database. Each node is
+   serving at this point and nobody is on it yet.
+2. **Add a user**, and read the dialog that opens. A user holding a link-shaped protocol
+   (the VLESS pair) is handed one link. The WireGuard family is a config *file* rather than a
+   URI, so a user holding `amneziawg` is shown **two links**: the *subscription link*, and
+   beneath it the *config-file link* — the same token asking `?format=client-config-file`.
+   The config-file link downloads an archive; unzip it and import the `.conf` into the
+   AmneziaWG app. The subscription link is empty for a user whose nodes offer only
+   `amneziawg` — the dialog says so under it — and empty is not an error. Hand the user both:
+   a link-shaped protocol offered later arrives in the first on its own. **"show link"** on
+   the Users screen opens the same dialog again.
+3. **Apply again**, on every node that serves them. This is the step an acceptance walk had
+   to work out for itself, and the one that costs a user an evening: adding a user changes
+   what the panel *would* push and touches no host. Their configuration is complete and
+   correct the moment it is issued — their own address, the node's real public key — while
+   the node holds nothing for them and their client handshakes into nothing. The panel says
+   so: the Users screen and the dialog that hands the link over both name the nodes that are
+   not running what this panel would give them. **Any change to who may use a node — a user
    added, a user revoked, a pool resized — is an apply, on every node that serves them.**
-
-**Not Reality on this box.** Caddy holds 443/TCP for the panel, and Reality's whole
-camouflage is *being* on 443. Its declared range is `(443, 65535)`, so 8443 validates —
-but a TLS "website" answering on an odd port is a signal in itself. Save Reality for a
-shape where the node is not sharing a host with the panel.
 
 ### Verify on the box
 
@@ -714,118 +812,97 @@ shape where the node is not sharing a host with the panel.
 cd /opt/hashi && docker compose ps      # the node stack, project: hashi-node
 ```
 
-Two data-plane containers on one host, in two compose projects (`hashi` and
-`hashi-node`), is the expected picture.
+On the control plane's own box, when it is also a node, two data-plane containers in two
+compose projects (`hashi` and `hashi-node`) is the expected picture. On a delivery host the
+node stack carries one more service, the listener that answers refreshes.
+
+### Which host answers a refresh
+
+**Every user's link is the control plane's, on every arrangement:**
+`https://<HASHI_PUBLIC_HOST>/sub/<token>`, answered by the box you ran the control-plane
+block on. That is the whole of delivery on C+E+L and C+E | L — the control plane's box is
+the entry's box, so a user's refresh already comes from the entry's side of the border —
+and nothing below needs doing there: no second name, no second certificate, nothing in
+`.env`.
+
+**On C+L | E and C | E | L, an entry can also answer its own users' refreshes**, so a
+refresh survives the control plane being behind a closed border. Nothing turns it on and
+nothing names it; an apply makes a node a **delivery host** when, at that apply, all four of
+these hold:
+
+1. the node carries an enabled **user-facing** transport — a leaf that holds only the far
+   end of a hop has nobody to answer;
+2. its `address` is a **name** (with a dot in it) and not an IP — a public certificate
+   authority does not issue for an address;
+3. this control plane holds a **usable, unexpired delivery certificate** (below);
+4. the box does **not** hold this control plane's own compose project (`hashi`) — read off
+   the host over the apply's own connection, which is why a co-located box never becomes
+   one whatever its record says.
+
+The Nodes screen says, per node, whether it answers refreshes, under which name, and how long
+the certificate it is holding has left. A delivery link is a second link and never the
+first one moved — *Moving the delivery endpoint, and what users have to be told* is what
+an operator owes users about it, and the panel composes no delivery link for a particular
+person today.
+
+**The name has to resolve to that host, and the product does nothing about DNS**: it
+creates no record, moves none and checks none.
+
+### The delivery certificate
+
+Needed only on C+L | E and C | E | L, and only if you want the entry to answer refreshes.
+**Both blank — the default — is a supported mode**: no node serves refreshes of its own and
+every user fetches from the control plane, exactly as on the other arrangements.
+
+**One wildcard for the fleet, issued by you, today.** The control plane does not issue it
+(that is M30, not built); you obtain a certificate for `*.<a zone you own>` and put the pair
+on the control plane's box:
+
+- **The files go in `deploy/delivery/`**, which compose mounts read-only inside the
+  control container at `/etc/hashi/delivery`; `HASHI_DELIVERY_CERTIFICATE_PATH` and
+  `HASHI_DELIVERY_KEY_PATH` name them **by their path inside the container**, and
+  `.env.example` gives the two values that work. A path on the host is a path the control
+  plane cannot open.
+- **Readable by uid 999**, the account the control plane runs as — `chown 999:999` both
+  files, or `chgrp 999` and `chmod 0640`. At the 0600 a private key normally carries the
+  control plane refuses the pair, and the Nodes screen says so and names the path.
+- **Issue it for a zone that carries nothing else, and never the one `HASHI_PUBLIC_HOST`
+  is in.** The private key is pushed to every delivery host — the machines most likely to
+  be seized — and whoever holds it can answer for any name the certificate covers, until it
+  expires. One wildcard rather than one per host because every issued certificate is
+  published in a Certificate Transparency log within minutes, and one per host would
+  publish every entry's name as it was created.
+- **Renewal is replacing the two files, then an apply on every delivery host.** The pair is
+  read on every apply and never cached, and a host is handed the current one only by an
+  apply that reaches it. Check the mode again each time: `cp -p` preserves the issuer's
+  0600, and a certbot deploy hook writes its own.
+
+**What a delivery host can do under a shutdown is bounded by the certificate it already
+holds.** Nothing renews it across a closed border, because renewal is an apply and an apply
+is the control plane reaching the node. An apply made while the control plane's pair is
+expired or unreadable stands that host's listener down and takes the key off it; a host no
+apply reaches goes on serving what it was last given, under a certificate that expires on
+its own date. The Nodes screen shows that date per host — read it before the border shuts,
+not after.
+
+**What a delivery host holds** is under `/opt/hashi` like everything else the control
+plane pushes: the site its listener serves, the certificate and its key, and the rendered
+subscription of each user it serves, in both shapes — that host's own entries and nothing
+from any other node, under a name derived from the token rather than the token itself. A WireGuard-family user's
+archive carries their client `PrivateKey`, which the node's own server config never holds.
+When the material goes, and the states in which it does not, is *When a delivery host
+stops being one*, below.
 
 ---
 
-## Shape B — two boxes
+## Growing out of one box — the box you have becomes the leaf
 
-Box **E** in Russia: control plane **and** entry node. Box **L** abroad: leaf node.
-Users only ever hold E's address; a blocked leaf is replaced by re-pointing one hop,
-with nobody touching their device.
-
-Everything from Shape A applies to box E, plus:
-
-1. Bootstrap the control plane on **E** exactly as in Shape A.
-2. Prepare **L** with *Preparing a leaf* above, then register **E** as a node
-   (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
-   from E). Give **E** a `resolver` as you register it: E dials a hop, and such a node does
-   not render without one (*A node that dials a hop needs a resolver*, below).
-
-   **Which account E is driven as, when you do not want root logging in by key** (M31.10,
-   from the field walk of 2026-10-02). Prepare E with the node script like any other node,
-   naming an ordinary account that has passwordless `sudo`:
-
-   ```bash
-   make node-bootstrap NODE=<admin-account>@<E's public address> \
-     ARGS="--user <node-account> --authorized-key '<the control plane's public key>' --port <port>/tcp"
-   ```
-
-   and register E with **`ssh_user` = `<node-account>`** — the account the run's last line
-   names, not root. The control plane never escalates on a node (*Which accounts work*), so
-   that account needs only what the script gave it: `/opt/hashi`, the `docker` group and the
-   key. **`ssh_host` = E's public address**, the same one users are given: the control
-   plane runs in a container on E, and from inside it `localhost` is the container itself,
-   so it reaches its own host the way it reaches any other — out through that address and
-   back in over SSH (the walk measured exactly this). E's firewall must let that SSH
-   connection in, which the node script's run already arranges for the port sshd listens
-   on.
-3. Enable a **user-facing** transport on E — `vless-reality` unless you have a reason
-   for the other one. E dials a hop, so it must be a transport the table in *The one
-   combination that will not render* (below) marks yes for a node with a hop; the panel
-   refuses a kernel tunnel here, in whichever order you build the two.
-4. Build the hop from the panel's hop form: entry = E, leaf = L, transport =
-   `amneziawg`. The entry dials the leaf, always — E sits behind a Russian carrier NAT
-   and cannot be dialled — so L listens and E reaches out.
-5. **Apply both nodes.** Until you do, the hop exists only in the database.
-
-### The two things shape B costs you
-
-**Port 443 is contested.** Caddy owns 443/TCP on box E for the panel, so the
-user-facing transport on E cannot be Reality on 443. Either put Reality on another
-port and accept the fingerprint cost, or move to shape C.
-
-**Your secret key sits in Russia.** The charter's condition for putting the database and
-panel inside Russia is that secrets are encrypted with a key that *does not live on that
-host* — and today `panel-bootstrap.sh` requires `HASHI_SECRET_KEY` to be present in the
-env file on the machine it installs. There is no supported way to keep it off that disk.
-Shape B therefore violates the charter's own condition; run it knowingly or run shape C.
-
----
-
-## Shape C — three boxes
-
-Box **C**: control plane alone. Box **E** in Russia: entry node. Box **L** abroad: leaf
-node. Nothing is contested and nothing is co-located.
-
-| Box | Runs | Inbound | Outbound |
-|---|---|---|---|
-| **C** control plane | Postgres, control, Caddy | 22/tcp, 80/tcp, 443/tcp | 22/tcp to E and L |
-| **E** entry (RU) | one user-facing transport, one hop end (dials) | 22/tcp from C, the user port | the hop's UDP port to L |
-| **L** leaf (abroad) | one hop end (listens) | 22/tcp from C, the hop's UDP port from E | — |
-
-1. Bootstrap the control plane on **C** (the Shape A control-plane block, unchanged).
-2. Prepare **E** and **L** with *Preparing a leaf* above — one script run each — and
-   register both as nodes. **Choose the hop's UDP port before you run either script**, and
-   pass it as a `--port` on **L**: the leaf is the end that listens, `node-bootstrap.sh`
-   is what opens the port in its firewall, and step 4 is where the form asks you for that
-   number. An acceptance walk did it in the printed order, reached the hop form with a
-   port nothing had opened, and had to run the script on the leaf a second time — safe,
-   purely additive, and a third command in a two-command procedure. Nothing in the product
-   warns you, because the script is not told which role the host will be registered in. Both `ssh_host` values are real remote addresses this time; the
-   control container needs outbound SSH to each. Give **E** a `resolver` as you register
-   it (*A node that dials a hop needs a resolver*).
-3. Enable **`vless-reality` on E, port 443** — free here, because the panel is on another
-   box. Give it a `decoy_host` of your own choosing. A VLESS transport is not merely
-   convenient here: E dials a hop, and that is the only kind of user-facing transport
-   such a node can render at all (*The one combination that will not render*).
-4. Build the hop: entry = E, leaf = L, transport = `amneziawg`.
-5. Apply both nodes. Until you do, the hop exists only in the database.
-6. Add users. Their subscription contains E and never L: a hop is never granted to a
-   user and never appears in a subscription, because a user holding the entry↔leaf
-   tunnel would route straight past the entry the topology exists to hide behind.
-7. **Apply E again**, for the reason Shape A's step 5 gives: a user added since the last
-   apply is a change no host has been told about, and their link is complete and correct
-   before any node has heard of them.
-
-Where to put box C is a real decision, not a formality. Outside Russia, it is out of
-seizure range but the delivery endpoint may be unreachable from a Russian network under
-whitelist mode — exactly when a user needs to refresh a config. Inside Russia, it is
-reachable but carries the problem described under shape B. The repository serves the
-panel and the delivery endpoint from one Caddy site, so today you choose one location for
-both.
-
----
-
-## Growing out of Shape A — the box you have becomes the leaf
-
-**This is the move most operators actually make, and Shape B read literally is not it.**
-You ran Shape A because this page calls it the right first run: one box abroad, carrying
-the control plane and a node, with `amneziawg` for your users. Months later you rent a
-Russian box, and the charter's topology becomes buildable for the first time. The shapes
-above are a choice between three fresh builds; this is the one migration between them,
-and it is written down because the obvious reading of it is expensive.
+**This is the move most operators actually make.** You ran a one-box install because this
+page calls it the right first run: one box abroad, carrying the control plane and a node,
+with `amneziawg` for your users. Months later you rent a Russian box, and the charter's
+topology becomes buildable for the first time. The arrangement goes from C+E+L to C+L | E,
+and the procedure above still describes every step of it — what is written here is which
+box takes which role, because the obvious reading of that is expensive.
 
 **Do not make the box you already have the entry.** Giving a hop to a node that already
 offers its users a kernel tunnel is refused at the hop form — *no hop was established —
@@ -861,12 +938,14 @@ else about them collides, and neither has to be taken away for the other to exis
 1. **Prepare the new box** with *Preparing a leaf* above — the script is the same
    whichever end a node turns out to be — and register it. Give it a `resolver` as you
    register it: it is about to dial a hop, and such a node does not render without one
-   (*A node that dials a hop needs a resolver*, below).
+   (*A node that dials a hop needs a resolver*, below). Register it under a **name** if you
+   want it to answer its own users' refreshes (*Which host answers a refresh*, above).
 2. **Enable a user-facing transport on it** — `vless-reality` unless you have a reason
    for the other one, with a `decoy_host` of your own choosing and never a shared one.
    This box dials a hop, so it is the one node in your fleet whose users may not be on
-   a kernel tunnel. Reality has the HTTPS port to itself here, unlike Shape A's box: the
-   panel is not on this machine.
+   a kernel tunnel. The panel is not on this machine, so 443 is Reality's here — unless
+   this box becomes a delivery host, whose listener holds it (*Enable a user-facing
+   transport on the entry*, above).
 3. **Build the hop** from the panel's hop form: entry = the box you rented, leaf = the
    box you already have, transport = `amneziawg`. The entry dials and the leaf listens,
    so the hop's UDP port is opened on the firewall of the box you have been running for
@@ -874,7 +953,7 @@ else about them collides, and neither has to be taken away for the other to exis
 4. **Apply both nodes.** Until you do, the hop exists only in the database.
 5. **Nothing your users already hold stops working.** Enabling that transport granted
    every active user material on it, so the new entry is in every subscription at the
-   next refresh — on the *plain* link, since the VLESS pair is a URI list while the
+   next refresh — on the *subscription* link, since the VLESS pair is a URI list while the
    `amneziawg` they are connecting on is a config file (*The one combination that will
    not render*, below). The tunnel on their device is untouched. Taking the new way up
    is them loading that link into a client that speaks VLESS, once, at their own pace.
@@ -888,21 +967,21 @@ everyone still on the old tunnel time to load the new link, because this is the 
 takes their working route away. Removal is the irreversible one and there is no reason at
 all to reach for it on this path.
 
-**What this costs, and it is not what Shape B costs.** Your control plane stays on the box
-abroad, so `HASHI_SECRET_KEY` never travels to Russia and Shape B's charter problem never
-arises. What you take on instead is the other half of that same decision: your delivery
-endpoint is now outside Russia, and a user inside it may be unable to refresh their
-subscription at exactly the moment a whitelist shutdown makes them need to — the choice
-set out at the end of *Shape C*, above. The third box buys you out of both, and this path
-leaves you one rental from it: move the control plane and neither node moves.
+**What this costs** is the C+L | E row of *Where the three roles go*: `HASHI_SECRET_KEY`
+never travels to Russia, and the control plane's own refresh URL is now outside it. The
+entry answers its own users' refreshes from inside only once it is a delivery host, which
+needs it registered under a name and the delivery certificate above; without those, a user
+inside Russia may be unable to refresh at exactly the moment a whitelist shutdown makes
+them need to.
 
 ---
 
 ## The one combination that will not render
 
 **On a node that dials a hop, users may not be on a kernel tunnel.** Following this
-runbook used to produce exactly that: `amneziawg` for box E's users, because Shape A
-names it, and `amneziawg` for the hop E dials, because the hop requires it.
+runbook used to produce exactly that: `amneziawg` for the entry's users, because the
+one-box install names it, and `amneziawg` for the hop the entry dials, because the hop
+requires it.
 
 **The panel refuses it at both doors, before anything is written.** Enable such a
 transport for the users of a node that already dials a hop and the dialog answers *nothing
@@ -968,8 +1047,8 @@ handshake, so give it a `decoy_host` of your own choosing and never a shared one
 nothing in this project puts them there — so it is the right answer only on a host where
 you already terminate TLS for a name you own.
 
-`amneziawg` stays exactly right for users on a node with **no** hop: Shape A's single
-box, and a leaf. There the same row renders a local exit, which is the shape a real client
+`amneziawg` stays exactly right for users on a node with **no** hop: a one-box
+install, and a leaf. There the same row renders a local exit, which is the shape a real client
 was measured carrying traffic on.
 
 **Its plain cousin does not, and is retired: the panel no longer offers it.** `wireguard`
@@ -1363,6 +1442,42 @@ is answering, so you can copy it from there; it is one string in the product, an
    state delivery hosts exist to improve on, so **do not treat it as a reason to delay
    step 1**: under a shutdown, that fallback is the thing that is unreachable.
 
+**And take the material off the host, which an apply does for you — in the states it
+reaches.** A delivery host holds what *Which host answers a refresh* lists: its users'
+rendered subscriptions (a WireGuard-family archive carries the user's client `PrivateKey`),
+the fleet's wildcard key and the site that serves them, under `/opt/hashi`. **An apply
+that finds a host is no longer a delivery host takes all of it away** — whatever the
+reason it stopped: its last user-facing transport withdrawn, its `address` changed to an
+IP, the certificate removed or expired, or the control plane now on that box. That holds
+for the apply the panel refuses too: withdrawing a host's last transport and pressing
+**Apply** answers that there is nothing to apply, and still takes its delivery material,
+the site and the key back first. That refused apply places no compose file, so the
+listener's container stays up with nothing left to serve until the next apply on that
+host succeeds. So the order for a host you are dropping is **withdraw its user-facing rows,
+Apply, and only then delete the record.**
+
+Three states no apply reaches, and in each the material stays on the host until you remove
+it yourself:
+
+- **a node the panel will not let serve again** — the Nodes screen already says nothing
+  from here reaches that host, and the way back is a new record;
+- **a node that is not serving when a user is revoked** — the revocation applies only to
+  nodes in service, so a degraded or draft host keeps that user's rendered subscription
+  until it is repaired and applied;
+- **a node whose record is deleted** — nothing ever applies to it again, which is why the
+  order above deletes last.
+
+By hand, on the host, as the account it was driven as:
+
+```bash
+rm -rf /opt/hashi/delivery /opt/hashi/delivery.incoming /opt/hashi/delivery.replaced \
+  /opt/hashi/delivery-site.Caddyfile /opt/hashi/delivery-cert.pem /opt/hashi/delivery-key.pem
+```
+
+A host no apply can reach — behind a closed border, or seized — keeps everything it was
+last given, and what that yields is recorded in `docs/decisions.md` (the seizure inventory
+of 2026-09-27).
+
 ---
 
 ## Rules that are not optional
@@ -1394,15 +1509,16 @@ is answering, so you can copy it from there; it is one string in the product, an
 
   Overlapping is not only the same range typed twice: a range you widen on one row
   swallows the narrower one beside it, and that is the pair written by accident. This
-  is the rule that meets you when you follow Shape A and then the hop it mandates on
-  the same box — users and hop are two `amneziawg` rows on that node, and they need
+  is the rule that meets you when you install on one box and then build a hop from
+  that same box — users and hop are two `amneziawg` rows on that node, and they need
   two ranges as much as they need two ports. A **disabled** row still holds all three,
   because freeing them would move the collision to the moment somebody switches it back
   on; removing the row is the only thing that gives them back.
 
   **And one thing on a node that is not a row at all collides too — TCP 443, on any host
-  that carries a user-facing transport and is registered under a name.** That host
-  answers its own users' subscription refreshes, which is what makes a refresh work
+  that carries a user-facing transport and is registered under a name, while this control
+  plane holds a usable delivery certificate** (*The delivery certificate*, above). That
+  host answers its own users' subscription refreshes, which is what makes a refresh work
   while this control plane is behind a closed border, and the endpoint has to be on the
   port an ordinary HTTPS client reaches. So the panel refuses a transport there, under
   the box you typed it in:
@@ -1412,14 +1528,18 @@ is answering, so you can copy it from there; it is one string in the product, an
   > what that costs here, because a TLS transport answering on an unusual port is itself
   > a signal.*
 
-  **Read that cost before you plan a shape around it.** It is `vless-reality` this
+  **Read that cost before you plan an arrangement around it.** It is `vless-reality` this
   usually refuses, and Reality's whole camouflage is being on 443 — so an entry node that
   serves its own users' refreshes cannot also be a website on the ordinary port. That is a
   real loss and it was taken knowingly, on 2026-09-27: the alternative put the refresh
   endpoint behind the same name the tunnel hides under, so that blocking one name killed
   both at the same instant — in exactly the arrangement the endpoint exists for. A host
   with no user-facing transport, or one registered by IP address, keeps 443 for its
-  transports, because neither answers a refresh.
+  transports, because neither answers a refresh — and so does every host while both
+  `HASHI_DELIVERY_*` paths are blank, the shipped default, because then no host answers
+  one. On the control plane's own box the refusal can fire too, when that box is
+  registered under a name: no listener goes there, but the control plane's Caddy already
+  holds 443 on it, so the refusal is true for a different holder.
 
   Nothing else collides.
 - **A user-facing kernel tunnel and the hop a node DIALS still cannot share that
@@ -1430,7 +1550,7 @@ is answering, so you can copy it from there; it is one string in the product, an
   change that, and one box carries `amneziawg` for its users and `amneziawg` for the
   leaf end of the hop with both enabled — two ports and two ranges apart, exactly as the
   rule above requires. It is the node that dials the hop that may not also hand one to
-  its users. That asymmetry is what makes *Growing out of Shape A*, above, possible at
+  its users. That asymmetry is what makes *Growing out of one box*, above, possible at
   all.
 - **A WireGuard-family row is told how many users it may serve, and the number is a
   ceiling.** AmneziaWG and plain WireGuard give every user their own address inside the
@@ -1457,6 +1577,9 @@ is answering, so you can copy it from there; it is one string in the product, an
   nothing regenerates it, so the reason above does not reach it, and what it holds is the
   node's private key and every user's credential for that transport. Delete those, after
   the apply that removed the service — see *If you already built it the other way*, above.
+  Delivery material is not an exception: an apply takes it away whenever the host stops
+  being a delivery host, and the states it cannot reach are listed under *When a delivery
+  host stops being one*, above.
 
 ## Known-unproven
 
@@ -1473,6 +1596,13 @@ in the tree turned out never to have existed at all.
 in *Backups* for not keeping `caddy_data` rests on issuance being automatic and on the
 CA's published rate limits, both read rather than observed. The first real rebuild is
 what turns that into a fact; if it does not go that way, that is a finding.
+
+**No delivery host has served a real user from a real host.** An entry answering its own
+users' refreshes — the C+L | E and C | E | L rows of *Where the three roles go* — has run
+on the disposable stand only, which can show what is placed, served and recorded and cannot
+show a border. Whether a refresh from inside Russia reaches it while the control plane is
+unreachable is a field observation nobody has made yet. The arrangement walked on real
+hosts is C+E | L (2026-10-02), where no delivery host exists by construction.
 
 ## Backups
 
@@ -2199,6 +2329,7 @@ self-evident at 3am and half of it is key material.
 | **`caddy_data`** (Caddy's ACME account key, its issued certificates, and the internal CA root the panel is served with) | **No** | Every byte of it regenerates on first boot with no operator action, and after a seizure the old host's private keys are to be presumed compromised — restoring them carries the seized machine's identity onto the new one. The cost of regenerating is real but bounded, and it is spelled out below rather than assumed. |
 | **`~/.hashi/management/`** (this host's management-tunnel private key, its per-host obfuscation values, and every enrolled device's public key and pre-shared key) | **Yes** — but only inside the age-encrypted artifact, never in the plain dump above | It is regenerable but **not reproducibly**: `scripts/management-tunnel.sh` prints each device's config exactly once and keeps no copy, so a fresh run invalidates every device already enrolled. Losing it means re-enrolling your laptop *and* your phone by copying a freshly printed private key out of an SSH session, at the moment the panel is unreachable and you are rebuilding under pressure — which is the one moment the tunnel exists for. It is 32 bytes and it is the difference between typing one new `Endpoint` line per device and re-doing the whole enrolment. |
 | **`.env`** | **NO. Not in the artifact, not in the bucket, not even encrypted.** | It holds `HASHI_SECRET_KEY`, which is the *only* thing standing between a reader of the bucket and every node credential and user token in the dump. Putting it beside the data defeats the encryption entirely: one stolen age identity would then yield both halves. Excluding it is what makes a restore cost **two** secrets that never meet on this host — the age identity and `HASHI_SECRET_KEY`, both carried by you. It also holds `HASHI_OPERATOR_PASSWORD_HASH`, so it is what lets you log in at all; see *What you carry*, below. Rebuild it on the new machine from `.env.example` plus what you carry. |
+| **`deploy/delivery/`** (the delivery wildcard and its private key, when you use one) | **No** — `make backup` does not read that directory | The same reasoning as `caddy_data`: a seized host's key is presumed compromised, and the wildcard is re-issuable. After a restore no host serves refreshes of its own until you put a pair back (*The delivery certificate*), and the Nodes screen says so. |
 | **`/opt/hashi` on a node** | **No**, explicitly | A node holds nothing that cannot be regenerated from the database — that is the invariant that makes replacing a node safe. Its rendered configs come back from an apply. Backing a node up would be backing up a derived artifact and calling it a source. |
 
 ### What a restore of the database actually gives you back
@@ -2225,6 +2356,10 @@ It does not give you back:
   believes in nodes that may be seized, blocked or gone; you re-apply to the ones you
   still hold and delete the ones you do not.
 - **The management tunnel**, unless you carried `~/.hashi/management/` (above).
+- **The delivery certificate.** `.env` names it and `deploy/delivery/` held it, and
+  neither is in the artifact. Until a pair is back there, each apply stands down the
+  listener of every host it reaches and takes the old key off it; a host no apply reaches
+  keeps serving what it held.
 
 ### The `caddy_data` cost, stated rather than waved at
 
