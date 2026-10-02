@@ -95,12 +95,15 @@ fails it stops and says so (`edge/bootstrap/node_stack.py`). You do not need to 
 SSH host keys: the first successful connect learns the node's host key and pins it from
 then on, so a later connection cannot be silently intercepted.
 
-**The control-plane box needs three more things, and a genuinely bare one has none of
+**The control-plane box needs four more things, and a genuinely bare one may have none of
 them:** a container runtime with the compose plugin, `git` — the stack is built from a
-clone of this repository, not from a published image — and `make`, because every command
-in the block below is a Make target. An acceptance walk on a bare host found all three
-missing and the runbook listing none of them, which is two extra commands before the
-first line of that block and an error message for each one you meet instead.
+clone of this repository, not from a published image — `make`, because every command
+in the block below is a Make target, and `bash`, because every script those targets run
+is a bash script. An acceptance walk on a bare host found the first three missing and the
+runbook listing none of them; the restore walk of 2026-10-02 met a minimal image without
+the fourth, and `make restore-from-bucket` died on `env: can't execute 'bash'` before any
+of its own checks could speak. Every such target now asks for bash first and says so in a
+sentence (M31.7), but install it with the others: `apt-get install bash`, `apk add bash`.
 
 **On a node, do neither of those by hand.** `scripts/node-bootstrap.sh` installs the
 runtime, authorises the key and brings the firewall up in one run that asks no questions,
@@ -725,6 +728,25 @@ Everything from Shape A applies to box E, plus:
    (`ssh_host` = its own IP) and **L** as a node (`ssh_host` = L's IP, reachable over SSH
    from E). Give **E** a `resolver` as you register it: E dials a hop, and such a node does
    not render without one (*A node that dials a hop needs a resolver*, below).
+
+   **Which account E is driven as, when you do not want root logging in by key** (M31.10,
+   from the field walk of 2026-10-02). Prepare E with the node script like any other node,
+   naming an ordinary account that has passwordless `sudo`:
+
+   ```bash
+   make node-bootstrap NODE=<admin-account>@<E's public address> \
+     ARGS="--user <node-account> --authorized-key '<the control plane's public key>' --port <port>/tcp"
+   ```
+
+   and register E with **`ssh_user` = `<node-account>`** — the account the run's last line
+   names, not root. The control plane never escalates on a node (*Which accounts work*), so
+   that account needs only what the script gave it: `/opt/hashi`, the `docker` group and the
+   key. **`ssh_host` = E's public address**, the same one users are given: the control
+   plane runs in a container on E, and from inside it `localhost` is the container itself,
+   so it reaches its own host the way it reaches any other — out through that address and
+   back in over SSH (the walk measured exactly this). E's firewall must let that SSH
+   connection in, which the node script's run already arranges for the port sshd listens
+   on.
 3. Enable a **user-facing** transport on E — `vless-reality` unless you have a reason
    for the other one. E dials a hop, so it must be a transport the table in *The one
    combination that will not render* (below) marks yes for a node with a hop; the panel
@@ -1504,9 +1526,24 @@ HASHI_RESTORE_AGE_IDENTITY=/path/to/hashi-backup-identity.txt \
 and the database it resolved, counts what is in that database, and asks you to type the
 database name — *unless there is nothing there*, in which case it says so and asks
 nothing. A database with rows in it and no terminal to answer on is a refusal with a
-sentence, not a silent exit; `FORCE=1` is the deliberate way past. Afterwards it prints
-`make restart-control`, which restarts the control plane without changing what this host
-publishes — **not** `make down && make up`, which would take every published port away.
+sentence, not a silent exit; `FORCE=1` is the deliberate way past.
+
+**What it says afterwards** (M31.6, M31.8, M31.9 — one account, the same in both restore
+commands): how many nodes and users the restored database now holds, and a warning in so
+many words when that is none — an artifact older than the fleet looks exactly like a good
+one otherwise. Then it **restarts the control plane itself** and waits for it to be
+healthy: the dump drops and recreates every table, and the control plane's database
+driver caches statements per connection against the tables that were dropped, so a
+restart is what makes the first requests after a restore not fail. It is `restart`, which
+changes nothing about what this host publishes — **not** `make down && make up`, which
+would take every published port away. `make restart-control` is printed only if that
+restart does not finish. The compose project it names in its confirmation is the one the
+running database container belongs to (`hashi`, unless you set `COMPOSE_PROJECT_NAME`).
+
+**The wrong `HASHI_SECRET_KEY` is the one failure it cannot see**, and it ends by saying
+so: the rows arrive whatever the key is. Open the panel — if a node or user screen, or an
+apply, answers *"The data is intact; the key is wrong."*, the fix is that one line in
+`.env` and not another artifact.
 
 `age` runs inside the control container, so nothing extra is installed on the box and any
 host that can run the stack can restore. If the control plane itself will not start, open
@@ -1589,6 +1626,16 @@ says so instead of asking — so the ordinary bare-host run needs no terminal at
 database does hold something and there is no tty (`ssh host 'make …'`, a wrapper, a cron
 entry), it stops **before the bucket is read** and says so, rather than printing a question
 into a session that cannot answer it. `FORCE=1` skips the question and nothing else.
+
+**It dials no node until you publish.** A control plane rebuilt from the bucket comes up
+with the re-measure loop held at `HASHI_FINDING_REMEASURE_INTERVAL=0` (M31.2): the restored
+database may hold nodes carrying a finding, and probing them on a timer from a machine
+nobody has looked at yet is not something to do on its own. The closing screen says whether
+the hold took. Publishing (`make up-panel` / `make up-panel-over-ssh`) recreates the
+control plane with the value in `.env` — blank is every 60 seconds — so to keep it off
+afterwards too, put `HASHI_FINDING_REMEASURE_INTERVAL=0` in `.env` before you publish. The
+same line stops it on any control plane: change `.env`, then run your publishing command
+again (a `make restart-control` alone does not re-read the env file).
 
 **Then publish the ports, and mind which command.** The command ends by naming them; the
 one to use on a freshly restored host is `make up-panel-over-ssh`, because `make up-panel`
@@ -1676,7 +1723,8 @@ minutes and an hour.** Every one of them names which of the three inputs is wron
 | The identity is not the one these artifacts were written to | *"The artifact is intact; the identity is wrong."* It stops rather than walking the history: every object was written to the same public half |
 | The newest artifact is damaged | Says what did not open, and tries the one before it. Five, then it stops and tells you to name one |
 | The restore itself fails part-way | The database is left exactly as it was — one transaction, `ON_ERROR_STOP` — and the artifact is still in `backups/` |
-| `HASHI_SECRET_KEY` is the wrong one | **Nothing.** The restore succeeds: the rows arrive whatever the key is, and the columns holding node and user secrets stay shut. This is the one failure the command cannot see, so it ends by naming it — open the panel, and if the screens that touch a node or a user say *"The data is intact; the key is wrong."*, it is that one line and not another artifact |
+| The artifact is older than the fleet | The restore succeeds, and says *"That is NO nodes and NO users"* beside the counts, and again on the last screen with the `OBJECT=` line to name an older one |
+| `HASHI_SECRET_KEY` is the wrong one | **Nothing.** The restore succeeds: the rows arrive whatever the key is, and the columns holding node and user secrets stay shut. This is the one failure the command cannot see, so it ends by naming it — open the panel, and if a node or user screen, or an apply, answers *"The data is intact; the key is wrong."*, it is that one line and not another artifact |
 
 ### What `make restore-from-bucket` does not do
 
