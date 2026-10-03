@@ -55,7 +55,7 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
-**Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Still open: M27** (the split arrangements have not been walked on real hosts) **and M30** (wildcard issuance; the co-located arrangement does not need it). M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
+**Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Still open: M27** (the split arrangements have not been walked on real hosts). **M30 was dropped** and **M35 deferred** by the owner on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
 
 **As of 2026-10-02. 26 of 31 milestones are closed (✅); five are open — M24, M26, M27,
 M30, M31.** Everything before that is in the milestone sections below and in git.
@@ -3811,7 +3811,7 @@ command to get there.
 
 ---
 
-## → M35 — Russian destinations bypass the tunnel on the user's device, by rules the subscription delivers · asked for by the owner 2026-10-03 · PROPOSED
+## → M35 — Russian destinations bypass the tunnel on the user's device, by rules the subscription delivers · asked for by the owner 2026-10-03 · PROPOSED · **DEFERRED by the owner 2026-10-03** (not now; the owner's phone uses a hand-added V2Box rule meanwhile)
 
 **Found on 2026-10-03, on the owner's phone, right after the fresh install.** With M34 on,
 the Ozon, hh and Gosuslugi apps still said "you are using a VPN". The cause is the
@@ -4335,7 +4335,7 @@ under *Prepare every other box* and *Register each box as a node*.
 
 ---
 
-## → M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27 · dependency approved in principle by the owner 2026-10-02, none chosen · still PROPOSED, for the split arrangements only
+## ✖ M30 — The wildcard for delivery is issued by this control plane, not by hand · PROPOSED 2026-09-27 · dependency approved in principle by the owner 2026-10-02, none chosen · still PROPOSED, for the split arrangements only · **DROPPED by the owner 2026-10-03**: the co-located arrangement in use needs no delivery wildcard, and manual issuance stays the documented mode for anyone who splits the roles
 
 **Deferred out of M27.6 on purpose, and the reason is `CLAUDE.md`'s own rule.** The owner chose
 a wildcard issued by the control plane over DNS-01 and pushed on apply, because a per-host
