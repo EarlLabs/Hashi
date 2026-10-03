@@ -3958,6 +3958,27 @@ CLEAN; one low carried — no browser-level test pins the htmx include semantics
 per-node chain relies on (correct for the vendored htmx 2.0.4). What the walk must see:
 `docs/tracker/M32/carry-over.md`.
 
+### The real-host walk (2026-10-03, orchestrator) — PASSED, except the phone import
+
+Passed: one add with no other press, and a stock client then exits at the leaf; a batch of
+three, each node started once; an unreachable leaf gives `✗` with a retry, the leaf stays
+`active` and in every link, and the retry turns it `✓`; the NOT APPLIED block on Overview,
+Users and Nodes and in the link dialog above the link, both buttons working; the per-node
+requests over the management tunnel and over loopback; closing the dialog midway leaves
+the rest in the block; the API's single and batch fields; logs clean. **NOT PROVEN:** the
+import on the owner's own phone — the owner's field observation, still pending.
+
+Two wording defects **found in the real-host walk, fixed in M32.4** (`task/M33`, which
+stacks on `task/M32`), each with a test that failed on the old text
+(`tests/control/test_adding_a_user_reaches_the_nodes.py`, end of file):
+- With more than one node pending the dialog read "…so a client that picks them gets no
+  connection until **them is** applied." The subject now has its own placeholder: "until
+  they are applied" / "until it is applied" (`console.LINK_NOT_YET_THROUGH`).
+- A failed row read "✗ leaf-ams — 'leaf-ams' was not updated — …", naming the node twice.
+  The row now renders the reason without its leading name
+  (`onboarding.why_not_reached_after_its_name`): "✗ leaf-ams was not updated — …". The
+  API's `summary` keeps the named sentence, where it is the only name.
+
 ---
 
 ## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · built 2026-10-02, review clean in round 1 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer), PENDING

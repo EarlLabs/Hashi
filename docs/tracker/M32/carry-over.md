@@ -28,3 +28,22 @@ walk is the orchestrator's; these are the observations no test can make.
    in the NOT APPLIED block. Expected, recorded in `docs/decisions.md`.
 7. **API.** `POST /api/users` answers `complete`, `nodes_updated`, `nodes_failed`,
    `summary`; `POST /api/users/batch` with `{"nicknames": [...]}` likewise, with `users`.
+
+## The walk's result (2026-10-03, orchestrator)
+
+PASSED: 1 (one add, no other press — a stock client exits at the leaf), 2 (batch of three,
+each node started once), 3 (unreachable leaf: `✗` + retry, leaf stays `active` and in links,
+retry `✓`), 4 (the NOT APPLIED block on Overview, Users, Nodes and in the dialog above the
+link; both buttons work), 5 (requests over the management tunnel and over loopback), 6
+(closing midway leaves the rest in the block), 7 (API single and batch fields); logs clean.
+
+**NOT PROVEN:** the import on the owner's own phone (item 1's last sentence) — the owner's
+field observation, pending.
+
+Found in the real-host walk, fixed in M32.4 (on `task/M33`):
+- the "works" line read "…until them is applied" with several nodes pending → "until they
+  are applied" / "until it is applied";
+- a failed row named its node twice ("✗ leaf-ams — 'leaf-ams' was not updated — …") → the
+  row now reads "✗ leaf-ams was not updated — …".
+Re-check both on the next walk (add a user with two nodes behind, and with the leaf
+unreachable).
