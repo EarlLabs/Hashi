@@ -361,6 +361,72 @@ else
   fi
 fi
 
+# --- 1c. the management tunnel's refusals, before anything is touched ----------
+#
+# M33.4, finding D2, from the real host. The tunnel used to be generated only in section
+# 3b, after the stack step — so a run whose env file no longer described the tunnel on
+# this host (a changed HASHI_MGMT_PORT) had ALREADY converged the stack, taking a
+# publishing host's 80/443 and console away, when the generator refused and said "nothing
+# was changed". The claim was false by the time it was printed.
+#
+# So the generator's every refusal runs HERE, with `--check`, which reads and refuses and
+# writes nothing. The generation itself stays in 3b, after the verification, so the device
+# configs it prints are the last thing on the terminal rather than buried under a build.
+# Rejected: moving the whole generation up here — a config printed before several minutes
+# of build output is a private key the operator has to scroll back through a build log for.
+#
+# AND IT IS SKIPPED WHEN THE BLOCK IS STILL THE TEMPLATE'S OWN (M28.12). `.env.example`
+# ships a complete HASHI_MGMT_* block — an address range, a port, an endpoint and two
+# example devices — so a host that copied the template and filled in the four values the
+# refusals above ask for arrives here with a block nobody chose. The generator then did
+# exactly what it is for: it wrote a tunnel config and printed a full device config,
+# private key included, for each of the template's example peers, at an operator who
+# asked for none of it and on a machine none of it points at. A private key on a terminal
+# is the class of thing M28.7 and M28.8 exist to prevent, and these were fabricated
+# credentials for an endpoint that is not this host.
+#
+# The comparison is against `.env.example`'s own lines, read out of the file exactly as
+# the password hash's is above, so the two cannot drift. Skipped and not refused: a host
+# with no tunnel is a supported mode, it is the mode every restored machine is in, and
+# refusing here would stop a rebuild over a thing that is not needed to run a panel.
+#
+# THREE KEYS RATHER THAN ONE, and it is not thoroughness: the address and the peer
+# addresses are values somebody could genuinely choose, so skipping on the address alone
+# would refuse a real deployment. Any of the three still being the template's is an
+# unfinished block, and the message names which — so the operator is told what to change
+# rather than being told no.
+#
+# VALUES, NOT LINES, through `env_value_of` at the top of this file — that is the whole
+# of round 1's finding, and the password-hash check up there is the other half of it.
+MGMT_TEMPLATE_KEYS=""
+mgmt_is_the_template() {
+  local key want have
+  MGMT_TEMPLATE_KEYS=""
+  [ -r "${TEMPLATE}" ] || return 1
+  for key in HASHI_MGMT_ADDRESS HASHI_MGMT_ENDPOINT HASHI_MGMT_PEERS; do
+    want="$(env_value_of "${TEMPLATE}" "${key}")"
+    [ -n "${want}" ] || continue
+    have="$(env_value_of "${ENV_FILE}" "${key}")"
+    if [ "${have}" = "${want}" ]; then
+      MGMT_TEMPLATE_KEYS="${MGMT_TEMPLATE_KEYS}${MGMT_TEMPLATE_KEYS:+ }${key}"
+    fi
+  done
+  [ -n "${MGMT_TEMPLATE_KEYS}" ]
+}
+
+MGMT_MODE=none
+if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
+  MGMT_MODE=template
+elif has_value HASHI_MGMT_ADDRESS; then
+  MGMT_MODE=generate
+  # No --out, as in 3b: HASHI_MGMT_DIR reaches the generator through the environment, so
+  # the check reads the same host file the generation will write.
+  "${REPO_ROOT}/scripts/management-tunnel.sh" --env-file "${ENV_FILE}" --check \
+    || fail "the management tunnel step refused, above, before this run touched the stack.
+  Nothing was installed, started or changed - the containers and what they publish are as
+  they were. Fix what it names and run this again."
+fi
+
 # --- 2. bring the stack up ----------------------------------------------------
 #
 # The BASE compose file only, never the dev overlay: the overlay is the only file that
@@ -525,46 +591,8 @@ say "the control plane answers on /healthz and routes /sub/{token}"
 # because its owner has not chosen a tunnel range yet would be this script deciding
 # something that is not its to decide. It says which mode it left the host in.
 #
-# AND IT IS SKIPPED WHEN THE BLOCK IS STILL THE TEMPLATE'S OWN (M28.12). `.env.example`
-# ships a complete HASHI_MGMT_* block — an address range, a port, an endpoint and two
-# example devices — so a host that copied the template and filled in the four values the
-# refusals above ask for arrives here with a block nobody chose. The generator then did
-# exactly what it is for: it wrote a tunnel config and printed a full device config,
-# private key included, for each of the template's example peers, at an operator who
-# asked for none of it and on a machine none of it points at. A private key on a terminal
-# is the class of thing M28.7 and M28.8 exist to prevent, and these were fabricated
-# credentials for an endpoint that is not this host.
-#
-# The comparison is against `.env.example`'s own lines, read out of the file exactly as
-# the password hash's is above, so the two cannot drift. Skipped and not refused: a host
-# with no tunnel is a supported mode, it is the mode every restored machine is in, and
-# refusing here would stop a rebuild over a thing that is not needed to run a panel.
-#
-# THREE KEYS RATHER THAN ONE, and it is not thoroughness: the address and the peer
-# addresses are values somebody could genuinely choose, so skipping on the address alone
-# would refuse a real deployment. Any of the three still being the template's is an
-# unfinished block, and the message names which — so the operator is told what to change
-# rather than being told no.
-#
-# VALUES, NOT LINES, through `env_value_of` at the top of this file — that is the whole
-# of round 1's finding, and the password-hash check up there is the other half of it.
-MGMT_TEMPLATE_KEYS=""
-mgmt_is_the_template() {
-  local key want have
-  MGMT_TEMPLATE_KEYS=""
-  [ -r "${TEMPLATE}" ] || return 1
-  for key in HASHI_MGMT_ADDRESS HASHI_MGMT_ENDPOINT HASHI_MGMT_PEERS; do
-    want="$(env_value_of "${TEMPLATE}" "${key}")"
-    [ -n "${want}" ] || continue
-    have="$(env_value_of "${ENV_FILE}" "${key}")"
-    if [ "${have}" = "${want}" ]; then
-      MGMT_TEMPLATE_KEYS="${MGMT_TEMPLATE_KEYS}${MGMT_TEMPLATE_KEYS:+ }${key}"
-    fi
-  done
-  [ -n "${MGMT_TEMPLATE_KEYS}" ]
-}
-
-if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
+# Which of the three it is was decided in section 1c, before the stack was touched.
+if [ "${MGMT_MODE}" = template ]; then
   say "still .env.example's own value(s) in ${ENV_FILE}: ${MGMT_TEMPLATE_KEYS}. NO
   management tunnel was generated. Generating one from the template would have written a
   tunnel here and printed a private key for each of the example devices in that file —
@@ -572,10 +600,13 @@ if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
   host.
 
   Fill the HASHI_MGMT_* block in with this deployment's own address range, port, endpoint
-  and devices, then run this again; a second run is safe and generates the tunnel then.
-  Until then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
+  and devices, then generate it with
+
+      make mgmt-tunnel
+
+  which touches no container, so a host that is already serving keeps serving. Until then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
   'Reaching the panel'. Nothing here published it either way."
-elif has_value HASHI_MGMT_ADDRESS; then
+elif [ "${MGMT_MODE}" = generate ]; then
   say "generating the management tunnel the panel is reached over"
   # No --out and no --configs-to on purpose: HASHI_MGMT_DIR and HASHI_MGMT_CONFIGS_TO
   # reach the generator through this process's environment, so `HASHI_MGMT_CONFIGS_TO=dir

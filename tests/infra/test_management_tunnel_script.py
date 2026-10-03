@@ -889,3 +889,37 @@ def test_a_relative_output_directory_is_printed_as_an_absolute_path(tmp_path) ->
     )
     assert result.returncode == 0, result.stderr
     assert f"ln -sfn {tmp_path}/management/awg-mgmt.conf " in result.stdout
+
+
+def test_a_check_run_creates_nothing_on_a_host_with_no_tunnel(tmp_path) -> None:
+    """``--check`` reads and refuses; it does not even make the output directory.
+
+    M33.4: panel-bootstrap calls it before touching the stack, and "nothing was created
+    or changed" is only true if the check itself wrote nothing.
+    """
+    out = tmp_path / "management"
+    result = run(env_file(tmp_path), out, extra=("--check",))
+    assert result.returncode == 0, result.stderr
+    assert not out.exists(), "a --check run created the output directory"
+    assert "PrivateKey" not in result.stdout
+
+
+def test_a_check_run_refuses_what_a_real_run_refuses_and_changes_nothing(tmp_path) -> None:
+    """The drift refusal is in the checked half — and a passing check adds no peer."""
+    out = tmp_path / "management"
+    assert run(env_file(tmp_path), out).returncode == 0
+    conf = out / "awg-mgmt.conf"
+    before = conf.read_bytes()
+
+    refused = run(env_file(tmp_path, HASHI_MGMT_PORT="51822"), out, extra=("--check",))
+    assert refused.returncode == 1
+    assert "HASHI_MGMT_PORT" in refused.stderr
+    assert conf.read_bytes() == before
+
+    more = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS=PEERS + ",tablet=10.77.0.4/32"),
+        out, extra=("--check",),
+    )
+    assert more.returncode == 0, more.stderr
+    assert conf.read_bytes() == before, "a --check run added a peer"
+    assert "PrivateKey" not in more.stdout

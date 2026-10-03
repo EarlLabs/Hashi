@@ -28,8 +28,16 @@
 #          `0.0.0.0/0` — rendering either would quietly turn the admin tunnel into an
 #          exit node. tests/infra/test_management_tunnel_script.py fails on both.
 # HOW:  scripts/management-tunnel.sh [--env-file PATH] [--out DIR] [--configs-to DIR]
-#       Normally not run by hand: `make panel-bootstrap` runs it, and passes
-#       HASHI_MGMT_DIR and HASHI_MGMT_CONFIGS_TO through from its own environment.
+#                                     [--check]
+#       Two ways in, both passing HASHI_MGMT_DIR and HASHI_MGMT_CONFIGS_TO through from
+#       their own environment: `make panel-bootstrap` runs it as part of an install,
+#       and `make mgmt-tunnel` runs it alone, touching no container — that is the one
+#       for adding or removing a device on a host that is already serving (M33.4).
+#
+#       --check runs every refusal below and then stops, having created and changed
+#       nothing. panel-bootstrap calls it BEFORE it touches the stack, so a tunnel the
+#       env file no longer describes stops an install while "nothing was changed" is
+#       still true (M33.4, finding D2).
 #
 # The properties this script holds itself to, each asserted by
 # tests/infra/test_management_tunnel_script.py rather than promised here:
@@ -76,6 +84,7 @@ OUT_DIR="${HASHI_MGMT_DIR:-${HOME:-/root}/.hashi/management}"
 # which runs this script with a fixed argument list, can be given it per run without
 # the operator editing the env file — it is a choice about this run, not about the host.
 CONFIGS_TO="${HASHI_MGMT_CONFIGS_TO:-}"
+CHECK_ONLY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -85,12 +94,13 @@ while [ $# -gt 0 ]; do
     --out=*) OUT_DIR="${1#*=}"; shift ;;
     --configs-to) CONFIGS_TO="$2"; shift 2 ;;
     --configs-to=*) CONFIGS_TO="${1#*=}"; shift ;;
+    --check) CHECK_ONLY=1; shift ;;
     -h|--help)
-      echo "usage: $0 [--env-file PATH] [--out DIR] [--configs-to DIR]"
+      echo "usage: $0 [--env-file PATH] [--out DIR] [--configs-to DIR] [--check]"
       exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
-      echo "usage: $0 [--env-file PATH] [--out DIR] [--configs-to DIR]" >&2
+      echo "usage: $0 [--env-file PATH] [--out DIR] [--configs-to DIR] [--check]" >&2
       exit 2 ;;
   esac
 done
@@ -172,8 +182,8 @@ if [ -n "${CONFIGS_TO}" ]; then
     "Pass --configs-to with a path outside the repository, or set HASHI_MGMT_CONFIGS_TO."
 fi
 
-mkdir -p "${OUT_DIR}"
-chmod 700 "${OUT_DIR}"
+# Named here and created only in section 5, after every refusal: section 4 reads it if it
+# exists, and a --check run must leave a host with no tunnel exactly as it found it.
 CONF="${OUT_DIR}/awg-mgmt.conf"
 
 # --- 3. key material -----------------------------------------------------------
@@ -438,7 +448,22 @@ if [ -n "${CONFIGS_TO}" ]; then
   done
 fi
 
+# --- 4e. a --check run ends here, with nothing created or changed
+#
+# Every refusal this script has is above this line, and nothing above it writes; that is
+# what lets a caller ask "would this run refuse?" before it does anything of its own. A
+# check that wrote, or that skipped a refusal, would make panel-bootstrap's "nothing was
+# changed" untrue in one direction or the other.
+if [ "${CHECK_ONLY}" = 1 ]; then
+  say "checked: the management tunnel ${ENV_FILE} describes can be written to ${CONF} -
+  nothing was created or changed by this check"
+  exit 0
+fi
+
 # --- 5. this host's end --------------------------------------------------------
+
+mkdir -p "${OUT_DIR}"
+chmod 700 "${OUT_DIR}"
 
 if [ -f "${CONF}" ]; then
   say "this host's tunnel already exists at ${CONF} - its keys and its obfuscation
