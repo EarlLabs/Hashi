@@ -717,3 +717,24 @@ async def test_a_list_of_escape_heavy_garbage_is_held_and_written(session, setti
     outcome = await routing.refresh_source(session, source, settings)
     assert outcome.outcome == "held"
     assert len(outcome.detail) <= 500
+
+
+async def test_one_source_that_cannot_be_taken_in_does_not_stop_the_others(
+    session, settings, monkeypatch
+):
+    """Review round 2: the failure of one source must leave the next one refreshed."""
+    first_id = (await a_source_in_force(session, settings, monkeypatch, name="a-first")).id
+    await a_source_in_force(session, settings, monkeypatch, name="b-second")
+    real_take_in = routing.take_in
+
+    async def take_in(session, source, body, **kwargs):
+        if source.name == "a-first":
+            raise RuntimeError("boom")
+        return await real_take_in(session, source, body, **kwargs)
+
+    monkeypatch.setattr(routing, "take_in", take_in)
+    monkeypatch.setattr(routing, "fetch_text", serving(NARROW + "late.example\n"))
+    outcomes = {o.source: o.outcome for o in await routing.refresh_all(session, settings)}
+    assert outcomes == {"a-first": "failed", "b-second": "in force"}
+    session.expire_all()
+    assert (await routing.in_force(session, first_id)).count == 40

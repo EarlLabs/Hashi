@@ -470,10 +470,15 @@ async def refresh_source(
 
 async def refresh_all(session: AsyncSession, settings) -> list[Refreshed]:
     """Refresh every source that is switched on, one after another."""
-    sources = [source for source in await list_sources(session) if source.enabled]
+    # Ids and names up front, and each source re-read in its own step: a rollback below
+    # expires every instance in the session, and a source object loaded before it would
+    # then lazy-load on an async session (MissingGreenlet) — review round 2.
+    wanted = [(s.id, s.name) for s in await list_sources(session) if s.enabled]
     results = []
-    for source in sources:
-        name = source.name
+    for source_id, name in wanted:
+        source = await session.get(RoutingSource, source_id)
+        if source is None:
+            continue
         try:
             results.append(await refresh_source(session, source, settings))
         except Exception as exc:
