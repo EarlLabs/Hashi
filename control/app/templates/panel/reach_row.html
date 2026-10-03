@@ -1,0 +1,31 @@
+{#
+  One node's answer to an add, a retry or an in-dialog Apply — M32. `row` comes from
+  panel/routes.py's `reach_node`: the node's name, whether it took the configuration,
+  and, when it did not, the sentence services/onboarding.py composes from the failure's
+  KIND and the node's name — never the failure's own text, which can quote a checker's
+  output and with it a private key. A retry is drawn only for a kind a retry can change.
+
+  The hidden inputs are what the retry sends (`hx-include="closest .reach-row"`): this
+  node, and the users the add dialog is measuring the link for, so the line saying where
+  their link works is re-measured after the retry too.
+#}
+<div class="reach-row {{ 'reach-ok' if row.ok else 'reach-failed' }}">
+  {% if row.ok %}
+  <span class="reach-mark" aria-hidden="true">✓</span>
+  <span><strong>{{ row.name }}</strong> — took the new configuration</span>
+  {% else %}
+  <span class="reach-mark" aria-hidden="true">✗</span>
+  <span><strong>{{ row.name }}</strong> — {{ row.why }}</span>
+  {% if row.retry %}
+  <input type="hidden" name="node" value="{{ row.id }}">
+  {% for user_id in user_ids %}<input type="hidden" name="user" value="{{ user_id }}">{% endfor %}
+  <button class="btn btn-secondary btn-sm" type="button"
+          hx-post="/panel/reach" hx-include="closest .reach-row"
+          hx-target="closest .reach-row" hx-swap="outerHTML"
+          hx-disabled-elt="this">
+    <span class="when-idle">retry</span>
+    <span class="when-busy">applying…</span>
+  </button>
+  {% endif %}
+  {% endif %}
+</div>

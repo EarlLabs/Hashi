@@ -1,27 +1,29 @@
-"""Adding a user does not reach a node, and the panel says so — M26, first walk.
+"""A node behind what this panel would give it is said, on every surface — M26, then M32.
 
-WHAT: that the three surfaces an operator meets while adding somebody — the Users
-      screen, the dialog that hands their link over, and the same dialog opened later —
-      say that the nodes are not yet holding what this panel would give them; and that
-      all three go quiet once the fleet has been applied.
-WHY:  the walk added ``acc-user`` and fetched ``…/sub/<token>?format=client-config-
-      file``. What came back was complete and correct — ``Address = 10.77.13.2/24``, the
-      node's real public key — while on the host ``grep -c "\\[Peer\\]"
-      /opt/hashi/conf/amneziawg.conf`` was 0 and ``awg show`` listed no peers. That
-      user's client would have handshaked into nothing. Only a second apply, three
-      minutes later by the audit trail, put the peer on the node and made the traffic
-      flow, and no screen had asked for it: the Users screen's one standing note is about
-      access WITHDRAWN and not confirmed gone, which is the other direction entirely.
+WHAT: that the surfaces an operator meets around adding somebody — the Users screen, the
+      dialog that hands their link over, and the same dialog opened later — say that a
+      serving node is not running what this panel would give it; and that all of them go
+      quiet once the fleet has been applied.
+WHY:  M26's first walk added ``acc-user`` and fetched ``…/sub/<token>?format=client-config-
+      file``. What came back was complete and correct while on the host ``awg show``
+      listed no peers; only a second apply put the peer there, and no screen had asked for
+      it. M26 answered with a sentence. On 2026-10-03 the owner read past it — a grey
+      paragraph under the link — and imported a link that timed out, which is M32: an add
+      now applies the nodes itself (``services/onboarding.py``), and a node still behind is
+      said as one block with an Apply button (``panel/not_pushed.html``).
 HOW:  the shared ``accepting_nodes`` harness, so an apply really succeeds and the node
-      really is in sync before the user arrives — otherwise the sentence under test would
-      be true for a reason that has nothing to do with the user. Both directions: the
-      accept case applies again and asserts every surface goes quiet, because a panel
-      that always warns is a panel nobody reads on the day it matters.
+      really is in sync before the user arrives. SINCE M32 the user who leaves the node
+      behind is registered through the database half of an add only
+      (``a_user_no_node_was_told_about``): an add through the API or the panel applies, so
+      it no longer leaves a node behind — which is what
+      ``test_adding_a_user_reaches_the_nodes.py`` holds — and the state this file is about
+      is now reached by everything an apply has not followed yet. The SENTENCE asserted is
+      ``console.NOT_PUSHED``'s, read off the constant, so a rewording is one place.
 """
 
 from control.app.services import console, nodes
 
-from .conftest import GENERATED_SSH_KEY
+from .conftest import GENERATED_SSH_KEY, a_user_no_node_was_told_about
 
 # RFC 5737 documentation address, as everywhere in this zone.
 NODE_ADDRESS = "192.0.2.41"
@@ -30,6 +32,9 @@ NODE_ADDRESS = "192.0.2.41"
 # The walk's finding is not that nothing was on screen — it is that what was on screen was
 # about the opposite thing.
 THE_OTHER_NOTE = "Withdrawn access is not confirmed"
+
+# What every surface says about a node behind, since M32 — the short line of the one block.
+BEHIND = "leaf-acc is still on the old configuration: your changes have not reached it."
 
 
 async def a_serving_node(client, reality_params, *, name: str = "leaf-acc") -> str:
@@ -69,53 +74,59 @@ async def test_a_node_holding_everything_is_not_warned_about(
     behind = await console.nodes_missing_what_they_would_be_given(session)
 
     assert behind == []
-    assert console.material_doubt(behind) is None
+    assert console.not_pushed(behind) is None
 
 
-async def test_adding_a_user_takes_the_node_out_of_in_sync(
+async def test_a_user_nobody_pushed_takes_the_node_out_of_in_sync(
     client, session, reality_params, accepting_nodes
 ) -> None:
-    """The fact the two screens are composed from, asserted where it is measured.
+    """The fact the surfaces are composed from, asserted where it is measured.
 
-    Adding a user changes what this panel would push to every serving node — that is what
-    a granted credential IS — so the node's own config cell stops reading ``in sync`` the
-    moment the user exists. That reading was already right; nothing carried it to the
-    person who had just pressed the button.
+    A user granted material on a serving node changes what this panel would push to it —
+    that is what a granted credential IS — so until something applies it the node's own
+    config cell stops reading ``in sync``. Since M32 the add applies it; the database half
+    on its own is what still leaves this state behind.
     """
     node_id = await a_serving_node(client, reality_params)
     node = await nodes.get_node(session, node_id)
     assert await console.drift_of(session, node) == console.IN_SYNC
 
-    created = await client.post("/api/users", json={"nickname": "acc-user"})
-    assert created.status_code == 201, created.text
+    await a_user_no_node_was_told_about(session, "acc-user")
 
     session.expire_all()
     node = await nodes.get_node(session, node_id)
     assert await console.drift_of(session, node) != console.IN_SYNC, (
         "a user was granted material on this node and the panel still calls it in sync"
     )
-    assert await console.nodes_missing_what_they_would_be_given(session) == ["leaf-acc"]
+    assert await console.nodes_missing_what_they_would_be_given(session) == [
+        console.BehindNode(id=node_id, name="leaf-acc")
+    ]
 
 
 async def test_the_dialog_that_hands_the_link_over_says_it_will_not_carry_yet(
     client, session, reality_params, accepting_nodes
 ) -> None:
-    """The exchange the walk actually made, and the moment the promise is delivered.
+    """The moment the promise is delivered — the dialog opened on a user nobody pushed.
 
-    Red against the previous commit: the response to "add user" is the subscription
-    dialog, and it said the link "keeps working when nodes or protocols change" and
-    nothing whatever about the node that had never heard of this person.
+    Red against M26's dialog in the way that matters: the sentence was there, in grey,
+    under the link. Since M32 it is the block, ABOVE the link, with a button that applies
+    the node from inside the dialog (``/panel/reach``) rather than one that sends the
+    operator to another screen and closes the dialog holding the link.
     """
-    await a_serving_node(client, reality_params)
+    node_id = await a_serving_node(client, reality_params)
+    user_id = await a_user_no_node_was_told_about(session, "acc-user")
 
-    added = await client.post("/panel/users", data={"nickname": "acc-user"})
+    dialog = await client.get(f"/panel/users/{user_id}/subscription")
 
-    assert added.status_code == 200, added.text
-    said = " ".join(added.text.split())
+    assert dialog.status_code == 200, dialog.text
+    said = " ".join(dialog.text.split())
     assert "copy link" in said, "this is no longer the dialog that hands the link over"
-    assert "A user added here is not on leaf-acc yet" in said, said
-    assert "Apply it on the Nodes screen" in said, (
-        "the sentence does not end where the press that fixes it is"
+    assert BEHIND in said, said
+    assert said.index(BEHIND) < said.index("copy link"), (
+        "the warning is under the link again, where the owner did not see it"
+    )
+    assert 'hx-post="/panel/reach"' in said and f'value="{node_id}"' in said, (
+        "the block in the dialog has no button applying the node it names"
     )
 
 
@@ -146,14 +157,13 @@ async def test_the_users_screen_says_it_too_and_not_only_about_a_withdrawal(
     assert gone.status_code == 201, gone.text
     revoked = await client.post(f"/api/users/{gone.json()['id']}/revoke")
     assert revoked.status_code == 200, revoked.text
-    created = await client.post("/api/users", json={"nickname": "acc-user"})
-    assert created.status_code == 201, created.text
+    await a_user_no_node_was_told_about(session, "acc-user")
 
     table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
-    assert "A user added here is not on leaf-acc yet" in said, said
+    assert BEHIND in said, said
     assert THE_OTHER_NOTE in said, (
         "the withdrawal note has gone from a fleet it is still true of — this milestone "
         "adds a sentence beside it and takes none away"
@@ -173,14 +183,13 @@ async def test_no_withdrawal_note_when_nobody_was_withdrawn(
     Red on the commit before fix round 5: the note was on this screen.
     """
     await a_serving_node(client, reality_params)
-    created = await client.post("/api/users", json={"nickname": "acc-user"})
-    assert created.status_code == 201, created.text
+    await a_user_no_node_was_told_about(session, "acc-user")
 
     table = await client.get("/panel/users/table")
 
     assert table.status_code == 200, table.text
     said = " ".join(table.text.split())
-    assert "A user added here is not on leaf-acc yet" in said, said
+    assert BEHIND in said, said
     assert THE_OTHER_NOTE not in said, (
         "the Users screen warns about withdrawn access on a panel where nobody's access "
         "was withdrawn"
@@ -191,17 +200,18 @@ async def test_the_link_dialog_opened_later_asks_the_question_again(
     client, session, reality_params, accepting_nodes
 ) -> None:
     """A link shown an hour later is a link to a fleet that may have moved since."""
-    await a_serving_node(client, reality_params)
-    user_id = (
-        await client.post("/api/users", json={"nickname": "acc-user"})
-    ).json()["id"]
+    node_id = await a_serving_node(client, reality_params)
+    user_id = await a_user_no_node_was_told_about(session, "acc-user")
+    first = await client.get(f"/panel/users/{user_id}/subscription")
+    assert BEHIND in " ".join(first.text.split()), first.text
 
+    # Somebody applies the node from elsewhere; the same dialog, opened again, reads anew.
+    applied = await client.post(f"/api/nodes/{node_id}/apply")
+    assert applied.status_code == 200, applied.text
     dialog = await client.get(f"/panel/users/{user_id}/subscription")
 
     assert dialog.status_code == 200, dialog.text
-    assert "A user added here is not on leaf-acc yet" in " ".join(
-        dialog.text.split()
-    ), dialog.text
+    assert BEHIND not in " ".join(dialog.text.split()), dialog.text
 
 
 async def test_applying_afterwards_takes_the_sentence_away_everywhere(
@@ -213,9 +223,7 @@ async def test_applying_afterwards_takes_the_sentence_away_everywhere(
     survived the press that fixes it would be the same defect as one that never appeared.
     """
     node_id = await a_serving_node(client, reality_params)
-    user_id = (
-        await client.post("/api/users", json={"nickname": "acc-user"})
-    ).json()["id"]
+    user_id = await a_user_no_node_was_told_about(session, "acc-user")
 
     applied = await client.post(f"/api/nodes/{node_id}/apply")
     assert applied.status_code == 200, applied.text
@@ -224,8 +232,8 @@ async def test_applying_afterwards_takes_the_sentence_away_everywhere(
     assert await console.nodes_missing_what_they_would_be_given(session) == []
     for response in (
         await client.get("/panel/users/table"),
+        await client.get("/panel/nodes/table"),
+        await client.get("/panel/overview/body"),
         await client.get(f"/panel/users/{user_id}/subscription"),
     ):
-        assert "A user added here is not on" not in " ".join(
-            response.text.split()
-        ), response.text
+        assert BEHIND not in " ".join(response.text.split()), response.text

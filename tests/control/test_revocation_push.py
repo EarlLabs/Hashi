@@ -50,7 +50,7 @@ from sqlalchemy.exc import MissingGreenlet
 from control.app.models import NodeState
 from edge.bootstrap import node_stack
 
-from .conftest import GENERATED_SSH_KEY, pinned
+from .conftest import GENERATED_SSH_KEY, a_user_no_node_was_told_about, pinned
 
 # A reserved documentation address (RFC 5737), as everywhere else in this zone. It is
 # never dialled here — the connection is replaced — but the record has to name
@@ -126,7 +126,10 @@ async def fleet_with_user(client, session, reality_params, ws_params):
     for node_id in node_ids:
         await nodes.set_node_state(session, node_id=node_id, state=NodeState.ACTIVE)
 
-    user_id = (await client.post("/api/users", json={"nickname": "kolya"})).json()["id"]
+    # The database half of an add only: since M32 an add through the API applies, and the
+    # fixtures that make one node's push fail would then fail the ADD's push instead of
+    # the revocation's this file is about.
+    user_id = await a_user_no_node_was_told_about(session, "kolya")
     return node_ids, user_id
 
 

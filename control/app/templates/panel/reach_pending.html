@@ -1,0 +1,27 @@
+{#
+  The node an add is applying NOW, and the ones after it — M32.
+
+  It asks for itself the moment it is on screen (`hx-trigger="load"`), and the answer
+  replaces it with that node's row followed by this element again for the nodes still to
+  do — so the dialog applies one node per request, one after another, each result on
+  screen as it lands. One request per node keeps every request the length of the Nodes
+  screen's own apply; see `create_user` in panel/routes.py for the alternative rejected.
+
+  `pending` is every node still to do, first one now; `user_ids` the people added.
+#}
+<div class="reach-pending"
+     hx-post="/panel/reach" hx-trigger="load" hx-include="this"
+     hx-target="this" hx-swap="outerHTML">
+  {% for node in pending %}<input type="hidden" name="node" value="{{ node.id }}">{% endfor %}
+  {% for user_id in user_ids %}<input type="hidden" name="user" value="{{ user_id }}">{% endfor %}
+  <div class="reach-row reach-busy">
+    <span class="reach-mark" aria-hidden="true">…</span>
+    <span><strong>{{ pending[0].name }}</strong> — applying; this takes up to a minute</span>
+  </div>
+  {% if pending|length > 1 %}
+  <div class="reach-row reach-waiting">
+    <span class="reach-mark" aria-hidden="true"></span>
+    <span>then {{ pending[1:]|map(attribute="name")|join(", ") }}</span>
+  </div>
+  {% endif %}
+</div>

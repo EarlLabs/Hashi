@@ -2350,7 +2350,7 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
     # The ordinary branch first, while there is still room, so the two assertions below
     # about the refusal branch are a pair rather than a description nothing can lose.
     ordinary = await client.get("/panel/users/new", headers=HTMX)
-    assert 'name="nickname"' in ordinary.text, ordinary.text
+    assert 'name="nicknames"' in ordinary.text, ordinary.text
     assert "add-user-no-room" not in ordinary.text, ordinary.text
     assert (
         await enable_pool(client, node_id, pool_transport, pool_size=1)
@@ -2361,7 +2361,7 @@ async def test_the_add_user_dialog_names_every_full_pool_and_offers_no_submit(
 
     assert dialog.status_code == 200
     assert "add user</button>" not in dialog.text, "a button whose every outcome is 409"
-    assert 'name="nickname"' not in dialog.text, "a field nothing can submit"
+    assert 'name="nicknames"' not in dialog.text, "a field nothing can submit"
     # And the answer is ANNOUNCED: focus lands on `close`, the only control in this
     # branch, so a dialog that did not describe itself would leave a screen-reader
     # operator to navigate backwards for the reason there is no form.

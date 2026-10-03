@@ -12,6 +12,11 @@ HOW:  ``grant_everywhere`` is called both when a user is created and when a new
       ``services/apply.py``, and ``revoke`` returns which nodes need it so the
       caller cannot forget.
 
+      Nothing here dials a node. Since M32 an add is the database half of
+      ``services/onboarding.py``'s operation, and ``create_users`` returns the nodes it
+      granted on so that caller cannot forget them — ``revoke``'s arrangement, the other
+      way.
+
       Since M17 granting has a second half: on a transport that gives each person an
       address of their own, the credential is not complete until it holds one. That is
       ``services/addresses.py``, called from inside this module's own transaction — so a
@@ -23,6 +28,7 @@ import datetime
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +44,11 @@ logger = logging.getLogger(__name__)
 # The width of ``User.nickname``. Stated here because this is the layer that
 # refuses a value the column could not hold; the model is the other half of the pair.
 NICKNAME_MAX_LENGTH = 64
+
+# How many people one add may register — M32. A bound so a pasted file cannot become one
+# transaction minting thousands of credentials; sized to the whole user base this product
+# is built for (the charter's 30–50), so no real add ever meets it.
+MAX_USERS_PER_ADD = 50
 
 # What the operator is told when two changes reached one address at the same instant —
 # M17. The allocator takes the lowest address nobody holds, which is a READ, and nothing
@@ -67,59 +78,127 @@ async def list_users(session: AsyncSession) -> list[User]:
 
 
 async def create_user(session: AsyncSession, *, nickname: str) -> User:
-    """Register a user, mint their subscription, and grant them every node.
+    """Register one user — ``create_users`` with a list of one. Pushes nothing.
 
-    All three in one operation because a user without a subscription cannot be
-    given anything, and a subscription with no credentials resolves to an empty
-    config — which a client reports as a broken link. There is no partially
-    onboarded state an operator can observe, on purpose.
+    Kept for the callers that add one person and read back one row. What reaches the
+    nodes afterwards is ``services/onboarding.py``'s, not this function's.
+    """
+    created = await create_users(session, nicknames=[nickname])
+    return created.users[0]
+
+
+@dataclass(frozen=True)
+class Created:
+    """The users one add registered, and the nodes that now hold something for them.
+
+    ``node_ids`` is what makes the add reach the nodes (M32): every SERVING node on which
+    this add minted a credential, each once, in the order the fleet is listed in. Taken
+    from the rows the grant actually wrote on, not from "every serving node", so a node
+    whose only transport this image does not ship — skipped by the grant — is not dialled
+    for nothing.
+    """
+
+    users: list[User]
+    node_ids: list[str]
+
+
+async def create_users(session: AsyncSession, *, nicknames: Sequence[str]) -> Created:
+    """Register users, mint each a subscription, and grant each every serving node.
+
+    All of it in one operation because a user without a subscription cannot be given
+    anything, and a subscription with no credentials resolves to an empty config — which a
+    client reports as a broken link. There is no partially onboarded state an operator can
+    observe, on purpose.
+
+    SEVERAL AT ONCE, AND ALL OR NONE — M32. Each node an add touches is restarted by the
+    apply that follows, which drops everyone connected to it for a second or two, so the
+    add dialog takes a list and the nodes are applied once for all of it. One transaction
+    for the whole list, so a nickname refused on line three refuses the add rather than
+    leaving lines one and two registered with an error the operator reads as "nothing
+    happened". The refusal names the line's nickname; nothing was written.
+
+    It pushes nothing: the database half only, exactly as before M32, and the reason it
+    stays that way is the order revocation keeps too — the durable state is committed
+    before any host is dialled, so a crash mid-push leaves "added, not yet pushed", which
+    the screens say and an apply completes.
     """
     # Checked here rather than in a route so both surfaces get the same answer, and so
     # a nickname that cannot be stored is refused with a sentence instead of arriving
     # at the database and coming back as an opaque 500. NICKNAME_MAX_LENGTH is the
     # column's own width — the two must not drift.
-    nickname = nickname.strip()
-    if not nickname:
+    wanted = [nickname.strip() for nickname in nicknames]
+    wanted = [nickname for nickname in wanted if nickname]
+    if not wanted:
         raise DomainError("a nickname is required — it is the only thing that identifies them")
-    if len(nickname) > NICKNAME_MAX_LENGTH:
+    if len(wanted) > MAX_USERS_PER_ADD:
         raise DomainError(
-            f"a nickname must be {NICKNAME_MAX_LENGTH} characters or fewer"
+            f"at most {MAX_USERS_PER_ADD} users can be added at once; this was "
+            f"{len(wanted)} — split the list and add the rest next"
+        )
+    for nickname in wanted:
+        if len(nickname) > NICKNAME_MAX_LENGTH:
+            raise DomainError(
+                f"a nickname must be {NICKNAME_MAX_LENGTH} characters or fewer — "
+                f"{nickname[:NICKNAME_MAX_LENGTH]!r}… is longer"
+                if len(wanted) > 1
+                else f"a nickname must be {NICKNAME_MAX_LENGTH} characters or fewer"
+            )
+    seen: set[str] = set()
+    for nickname in wanted:
+        if nickname in seen:
+            raise Conflict(f"{nickname!r} is in this list twice")
+        seen.add(nickname)
+
+    existing = await session.execute(select(User.nickname).where(User.nickname.in_(wanted)))
+    taken = sorted(existing.scalars())
+    if taken:
+        raise Conflict(
+            f"a user called {taken[0]!r} already exists"
+            if len(taken) == 1
+            else "users called " + ", ".join(repr(name) for name in taken) + " already exist"
         )
 
-    existing = await session.execute(select(User).where(User.nickname == nickname))
-    if existing.scalars().first() is not None:
-        raise Conflict(f"a user called {nickname!r} already exists")
-
     # BEFORE ANY WRITE — M17. A transport that gives each person an address of their own
-    # would refuse this user when ``settle`` ran, which is correct but late: the
-    # refusal would arrive with the user, their subscription and their credentials
-    # already built in this transaction, and the operator would be told "nothing was
-    # changed" by a path that had to roll back to make it true. Asked here, the pool is
-    # measured against the fleet the user is about to join (``extra=1``) and the answer
-    # names which pool and by how much, while nothing has been touched at all.
-    short = await addresses.shortfalls(session, extra=1)
+    # would refuse this add when ``settle`` ran, which is correct but late: the refusal
+    # would arrive with the users, their subscriptions and their credentials already built
+    # in this transaction, and the operator would be told "nothing was changed" by a path
+    # that had to roll back to make it true. Asked here, the pool is measured against the
+    # fleet these users are about to join (``extra`` is how many) and the answer names
+    # which pool and by how much, while nothing has been touched at all.
+    short = await addresses.shortfalls(session, extra=len(wanted))
     if short:
         raise Conflict(addresses.too_small(short))
 
-    user = User(nickname=nickname)
-    session.add(user)
-    # Flushed rather than committed: the user, their token and their credentials
-    # are one unit of work, and a crash between them would leave a user the
-    # operator believes has access.
-    await session.flush()
+    serving = await nodes.serving_transports(session)
+    created: list[User] = []
+    granted_on: set[str] = set()
+    for nickname in wanted:
+        user = User(nickname=nickname)
+        session.add(user)
+        # Flushed rather than committed: the users, their tokens and their credentials
+        # are one unit of work, and a crash between them would leave a user the
+        # operator believes has access.
+        await session.flush()
 
-    subscriptions.issue(session, user)
-    await grant_everywhere(session, user)
+        subscriptions.issue(session, user)
+        granted = await grant_on(session, user, serving)
+        granted_on.update(credential.node_transport_id for credential in granted)
 
-    # In the same transaction as the user, their token and their credentials, so the
-    # trail cannot name somebody the database does not have. The label is the nickname
-    # the operator just chose, copied whole — never the subscription URL, which is the
-    # one artefact of this operation that must never reach a durable record.
-    audit.record(session, AuditAction.USER_ADDED, first_label=user.nickname)
+        # In the same transaction as the user, their token and their credentials, so the
+        # trail cannot name somebody the database does not have. The label is the
+        # nickname the operator just chose, copied whole — never the subscription URL,
+        # which is the one artefact of this operation that must never reach a durable
+        # record. One entry per person, because each is one person added.
+        audit.record(session, AuditAction.USER_ADDED, first_label=user.nickname)
+        created.append(user)
+
+    # Read off the rows BEFORE the commit, while they are plain loaded objects.
+    node_ids = list(dict.fromkeys(row.node_id for row in serving if row.id in granted_on))
 
     await session.commit()
-    logger.info("user created: %s", user.id)
-    return user
+    for user in created:
+        logger.info("user created: %s", user.id)
+    return Created(users=created, node_ids=node_ids)
 
 
 async def grant_everywhere(session: AsyncSession, user: User) -> list[Credential]:

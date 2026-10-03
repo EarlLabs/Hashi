@@ -602,6 +602,92 @@
 
 .dialog-slot:empty { display: none; }
 
+/* ── the not-applied block, and the add dialog's per-node rows (M32) ──────── */
+
+/* A NODE THAT IS BEHIND, SEEN WITHOUT READING A PARAGRAPH. Until M32 it was a grey
+   `.banner` note on three screens and a `text-muted` paragraph under the link in the
+   link dialog, and on 2026-10-03 the owner imported a link that timed out without having
+   read it. The block is in the STEEL ACCENT — a 4px edge, the ramp's lightest step for
+   the ground and its dark steps for text — because UI-PATTERNS §4 keeps the danger hue
+   at the top of this file for a request that was refused or failed, and a fleet that is
+   behind is neither. It is the same weight as `.banner-failure` and a different colour,
+   so the two cannot be mistaken for each other or for the quiet note. */
+.banner-pending {
+  border-color: var(--color-accent-500);
+  border-left-width: 4px;
+  background: var(--color-accent-100);
+  color: var(--color-accent-900);
+}
+
+.banner-pending .banner-label { color: var(--color-accent-700); }
+
+.banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.banner-lead { font-weight: var(--font-heading-weight); }
+
+.banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* The long account, behind one word. The summary reads as a control and not a heading:
+   it is the optional half of a block whose required half is the line above it. */
+.banner-details > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-accent-700);
+}
+
+.banner-details > p { margin: var(--space-2) 0 0; max-width: 72ch; }
+
+/* A smaller button for a control inside a block or a row, where the design's full-height
+   button would be taller than the sentence it belongs to. Same family, padding only. */
+.btn-sm { padding: 3px var(--space-3); font-size: 12px; }
+
+/* A button that says what it is doing while its request is in flight — an apply is 20 s
+   or more, and a button that only dims for that long reads as one that did nothing. */
+.btn .when-busy { display: none; }
+.btn.htmx-request .when-busy { display: inline; }
+.btn.htmx-request .when-idle { display: none; }
+
+/* One node's answer. The mark is a fixed column so the names line up down the list. */
+.reach { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.reach-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.reach-mark { flex: none; width: 1.2em; font-weight: var(--font-heading-weight); }
+.reach-ok .reach-mark { color: var(--color-accent-700); }
+.reach-busy .reach-mark,
+.reach-waiting { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+
+/* A node that did NOT take it is a failed request, so it wears the danger hue — the one
+   place in this block where it may. */
+.reach-failed { color: var(--color-danger-900); }
+.reach-failed .reach-mark { color: var(--color-danger-700); }
+
+.reach-works { font-weight: var(--font-heading-weight); opacity: 1; }
+
+.dialog-subtitle {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  border-top: 1px solid var(--color-divider);
+  padding-top: var(--space-3);
+}
+
+.dialog-copy { display: flex; justify-content: flex-end; }
+
 /* ── toast ────────────────────────────────────────────────────────────────── */
 
 /* UI-PATTERNS §8: bottom right, one at a time, names its object. 24px inset and

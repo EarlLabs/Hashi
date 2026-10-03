@@ -375,9 +375,10 @@ async def test_a_refused_nickname_comes_back_on_the_field(client) -> None:
     assert duplicate.status_code == 422
     assert "already exists" in duplicate.text
     assert 'aria-invalid="true"' in duplicate.text
-    # Still the add dialog, with what was typed still in the field.
+    # Still the add dialog, with what was typed still in the box — a textarea since M32,
+    # which holds its text as content rather than in a ``value``.
     assert "Add a user" in duplicate.text
-    assert 'value="mira"' in duplicate.text
+    assert ">mira</textarea>" in duplicate.text
     assert len((await client.get("/api/users")).json()) == 1
 
 
@@ -6447,10 +6448,11 @@ async def test_no_sentence_a_service_composes_reaches_the_page_in_the_old_word(
     more — so this plants a refusal in the OLD vocabulary, one no module composes today,
     and watches the boundary still hand it to the page in the panel's words.
     """
-    async def refuse(session, *, nickname):
+    # ``create_users`` since M32: the panel's add takes a list, one nickname per line.
+    async def refuse(session, *, nicknames):
         raise Conflict("another friend already holds that nickname")
 
-    monkeypatch.setattr(users_service, "create_user", refuse)
+    monkeypatch.setattr(users_service, "create_users", refuse)
 
     response = await client.post("/panel/users", data={"nickname": "dima"})
 

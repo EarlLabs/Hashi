@@ -26,7 +26,7 @@ HOW:  real Postgres, ``accepting_nodes`` for the apply that must land, and the s
 from control.app.models import NodeState
 from control.app.services import console, nodes
 
-from .conftest import GENERATED_SSH_KEY
+from .conftest import GENERATED_SSH_KEY, a_user_no_node_was_told_about
 
 # RFC 5737 documentation address, as everywhere in this zone. Never dialled.
 NODE_ADDRESS = "192.0.2.80"
@@ -140,9 +140,9 @@ async def test_the_cells_the_finding_measured_as_correct_do_not_move(
     drifting = await an_applied_node(client, reality_params, name="ams-leaf")
 
     # One more person, so the applied node's rendered config no longer matches the bytes
-    # it was given: a peer block the host has not been told about.
-    added = await client.post("/api/users", json={"nickname": "kolya"})
-    assert added.status_code == 201, added.text
+    # it was given: a peer block the host has not been told about. The database half of
+    # an add only — since M32 an add through the API applies the node.
+    await a_user_no_node_was_told_about(session, "kolya")
 
     session.expire_all()
     assert (

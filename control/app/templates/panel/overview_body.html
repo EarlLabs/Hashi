@@ -10,7 +10,7 @@
   dialog that changes nothing on it.
 #}
 <div id="overview-body" class="overview-body"
-     hx-get="/panel/overview/body" hx-trigger="users-changed from:body"
+     hx-get="/panel/overview/body" hx-trigger="users-changed from:body, nodes-changed from:body"
      hx-target="this" hx-swap="outerHTML" hx-indicator="this"
      hx-disinherit="hx-indicator">
 
@@ -90,6 +90,7 @@
       Composed in services/console.py, one per thing this panel knows and is not
       showing in a number — never here, and never by counting anything in this file.
     #}
+    {% with not_pushed = overview.not_pushed %}{% include "panel/not_pushed.html" %}{% endwith %}
     {% for doubt in overview.doubts %}
     <div class="banner" role="status">
       <span class="banner-label">note</span>

@@ -1,0 +1,9 @@
+{#
+  `reach_node`'s answer: the node just applied, the element that applies the rest, and —
+  for the add dialog — a fresh reading of where the new users' link works, out of band.
+#}
+{% include "panel/reach_row.html" %}
+{% if pending %}{% include "panel/reach_pending.html" %}{% endif %}
+{% if works %}
+<div id="reach-works" class="dialog-body reach-works" hx-swap-oob="true">{{ works }}</div>
+{% endif %}

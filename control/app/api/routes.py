@@ -23,6 +23,7 @@ from control.app.services import (
     console,
     health,
     nodes,
+    onboarding,
     relay,
     revocation,
     rotation,
@@ -207,14 +208,51 @@ async def list_users(session: AsyncSession = Depends(session_dependency)):
     return await users.list_users(session)
 
 
+def _reached(outcome: onboarding.AddOutcome) -> dict:
+    """The per-node half both add endpoints return, from one outcome, in one place."""
+    return {
+        "complete": outcome.complete,
+        "nodes_updated": outcome.nodes_updated,
+        "nodes_failed": outcome.nodes_failed,
+        "summary": outcome.summary(),
+    }
+
+
 @router.post(
-    "/users", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED
+    "/users", response_model=schemas.UserCreated, status_code=status.HTTP_201_CREATED
 )
 async def create_user(
     payload: schemas.UserCreate, session: AsyncSession = Depends(session_dependency)
 ):
-    """Create a user, mint their subscription, and grant every serving node."""
-    return await users.create_user(session, nickname=payload.nickname)
+    """Create a user, grant every serving node, and apply each node they were given.
+
+    201 whenever the user was created, including when a node could not be updated: the
+    user exists either way, and ``complete``/``nodes_failed``/``summary`` say which nodes
+    do not know them yet — revocation's contract, in the other direction (M32).
+    """
+    outcome = await onboarding.add_users(session, nicknames=[payload.nickname])
+    user = outcome.users[0]
+    return schemas.UserCreated(
+        **schemas.UserResponse.model_validate(user).model_dump(), **_reached(outcome)
+    )
+
+
+@router.post(
+    "/users/batch", response_model=schemas.UsersCreated, status_code=status.HTTP_201_CREATED
+)
+async def create_users(
+    payload: schemas.UsersCreate, session: AsyncSession = Depends(session_dependency)
+):
+    """Create several users in one transaction, then apply each affected node ONCE.
+
+    Every apply restarts the daemons it changes and drops whoever is connected for a
+    second or two, so adding five people is one restart per node rather than five (M32).
+    """
+    outcome = await onboarding.add_users(session, nicknames=payload.nicknames)
+    return schemas.UsersCreated(
+        users=[schemas.UserResponse.model_validate(user) for user in outcome.users],
+        **_reached(outcome),
+    )
 
 
 @router.get("/users/{user_id}/subscription", response_model=schemas.SubscriptionIssued)

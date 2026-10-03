@@ -40,6 +40,13 @@
               hx-target="#dialog-slot" hx-swap="innerHTML">add node</button>
     </div>
 
+    {#
+      The not-applied block — M32, the same one the Overview, the Users screen and the
+      link dialog draw, composed from these rows so the block and each row's config
+      cell are one reading.
+    #}
+    {% include "panel/not_pushed.html" %}
+
     {% if nodes %}
     <div class="table-scroll">
       <table class="table">

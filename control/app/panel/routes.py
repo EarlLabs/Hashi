@@ -75,6 +75,7 @@ from control.app.services import (
     console,
     health,
     nodes,
+    onboarding,
     relay,
     revocation,
     rotation,
@@ -296,13 +297,10 @@ async def _users_context(session: AsyncSession) -> dict:
     return {
         "users": rows,
         "serving": len(await nodes.serving_transports(session)),
-        # What adding a user does NOT do — M26's first acceptance walk. The walk added a
-        # user, opened their link and got a correct configuration file for a node that
-        # held no peer for them; only a second apply made it true, and no screen said so.
-        # The note beside it is about a withdrawal that cannot be confirmed, which is the
-        # other direction, and is why an operator who had just added somebody read nothing
-        # that was about them.
-        "material_doubt": console.material_doubt(
+        # The nodes that are behind, as the block every screen draws with its own Apply
+        # button — M32, out of M26's first walk's note. The note beside it is about a
+        # withdrawal that cannot be confirmed, which is the other direction.
+        "not_pushed": console.not_pushed(
             await console.nodes_missing_what_they_would_be_given(session)
         ),
         # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
@@ -390,9 +388,7 @@ async def nodes_screen(
             "the machines a user's link resolves to, and whether each is running "
             "what you told it to"
         ),
-        context={
-            "nodes": await console.node_rows(session, request.app.state.settings)
-        },
+        context=await _nodes_context(request, session),
     )
 
 
@@ -402,10 +398,14 @@ async def nodes_table(
 ):
     """The nodes table on its own, for the refresh after a mutation."""
     return TEMPLATES.TemplateResponse(
-        request,
-        "panel/nodes_table.html",
-        {"nodes": await console.node_rows(session, request.app.state.settings)},
+        request, "panel/nodes_table.html", await _nodes_context(request, session)
     )
+
+
+async def _nodes_context(request: Request, session: AsyncSession) -> dict:
+    """The rows, and the not-pushed block composed from those same rows (M32)."""
+    rows = await console.node_rows(session, request.app.state.settings)
+    return {"nodes": rows, "not_pushed": console.fleet_not_pushed(rows)}
 
 
 @router.get("/nodes/new", response_class=HTMLResponse)
@@ -2753,24 +2753,40 @@ def _mutation(
 @router.post("/users", response_class=HTMLResponse)
 async def create_user(
     request: Request,
+    nicknames: str = Form(""),
     nickname: str = Form(""),
     session: AsyncSession = Depends(session_dependency),
 ):
-    """Create a user and hand back their link, in one exchange.
+    """Create one or more users, hand back their links, and start reaching their nodes.
 
-    M8.5's whole behaviour is in the return values: on success the response REPLACES
-    the add-user dialog with the subscription-link dialog, so the operator never has
-    to go looking for the thing they just created — which is the primary job the
-    design optimises for. ``users-created`` additionally routes the console to
-    Users, and ``users-changed`` refreshes whichever tables are on screen.
+    M8.5's behaviour is still in the return values: on success the response REPLACES the
+    add-user dialog with the dialog that hands the links over, so the operator never has
+    to go looking for what they just created. ``users-created`` routes the console to
+    Users, and the screen it lands on renders its table fresh.
 
-    A refusal comes back as the same dialog with the message under the field it is
-    about, at 422. Field-level and not a toast: a toast is gone in 2200ms and would
-    leave the operator staring at a form that will not submit.
+    SINCE M32 IT ALSO REACHES THE NODES, and not inside this request. The users are
+    created and committed here and the dialog comes back at once with one row per node
+    they were given, the first of which asks ``reach_node`` to apply it as soon as it is
+    on screen; each answer brings the next node's row with it. Rejected: applying every
+    node inside this request — one apply is 20–40 s and an add touching two nodes would
+    hold a single request for over a minute behind no progress at all, where a closed tab
+    or an impatient second press would leave the operator unable to tell what landed.
+    One node per request is the length of the Nodes screen's own apply, which already
+    crosses the same proxy and the same browser, and it is what lets each row say its own
+    result and carry its own retry.
+
+    ``nicknames`` is the dialog's box, one per line. ``nickname`` is the single field the
+    dialog had before M32, still accepted so a request built against it keeps working; the
+    two are read as one list.
+
+    A refusal comes back as the same dialog with the message under the box, at 422.
+    Field-level and not a toast: a toast is gone in 2200ms and would leave the operator
+    staring at a form that will not submit.
     """
-    nickname = nickname.strip()
+    typed = "\n".join(part for part in (nickname, nicknames) if part.strip())
+    wanted = [line.strip() for line in typed.splitlines() if line.strip()]
     try:
-        user = await users.create_user(session, nickname=nickname)
+        created = await users.create_users(session, nicknames=wanted)
     except DomainError as exc:
         return TEMPLATES.TemplateResponse(
             request,
@@ -2781,14 +2797,14 @@ async def create_user(
             # nickname (``{value!r}``), and quoted text is data it never rewrites.
             #
             # THE POOLS ARE ASKED ABOUT AGAIN HERE, after the service — M17.2, and it is
-            # required rather than tidy. A refusal from ``grant_everywhere`` rolls the
-            # session back, so this dialog has to be composed from what the database says
+            # required rather than tidy. A refusal from ``grant_on`` rolls the session
+            # back, so this dialog has to be composed from what the database says
             # AFTERWARDS; ``_add_user_form`` does that in fresh queries and reads no
             # object this route was holding. It is also the one refusal whose honest
             # answer is "there is no room at all", which renders the dialog with no form
             # rather than with a message under the nickname.
             await _add_user_form(
-                session, nickname=nickname, error=wording.for_the_page(exc.message)
+                session, nickname=typed, error=wording.for_the_page(exc.message)
             ),
             # 422 rather than 200, and htmx is configured in static/app.js to swap
             # this one status: an invalid form is not a success, and saying so is
@@ -2796,31 +2812,103 @@ async def create_user(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
+    names = [user.nickname for user in created.users]
+    base = request.app.state.settings.public_base_url
     return _mutation(
         request,
-        dialog="panel/subscription_dialog.html",
-        toast=f"{user.nickname} added",
-        keeping=user.nickname,
+        dialog="panel/added_dialog.html",
+        toast=(f"{names[0]} added" if len(names) == 1 else f"{len(names)} users added"),
+        keeping=names[0] if len(names) == 1 else None,
         # Only ``users-created``. It routes the console to Users (see the listener
         # on #main in pages/console.html), and the screen it lands on renders the
         # table fresh — so also firing ``users-changed`` would start a second
         # refresh of a table that is about to be replaced under it.
         events="users-created",
         context={
-            "user": user,
-            "handed": await console.links_for(
-                session, request.app.state.settings.public_base_url, user
-            ),
-            # THE SENTENCE THAT HAD TO BE HERE — M26's first acceptance walk. This is the
-            # exchange that hands over a link for a user nobody has pushed yet, so it is
-            # the exchange that has to say what that link will not carry until the nodes
-            # are applied. Asked AFTER the user was created, so the nodes it names are
-            # the ones now holding nothing for them.
-            "material_doubt": console.material_doubt(
-                await console.nodes_missing_what_they_would_be_given(session)
+            "added": [
+                {"user": user, "handed": await console.links_for(session, base, user)}
+                for user in created.users
+            ],
+            "user_ids": [user.id for user in created.users],
+            "pending": await _pending_rows(session, created.node_ids),
+            # What the links do right now, BEFORE any node is reached: the rows below it
+            # replace it with a fresh reading after every node they apply.
+            "works": await console.where_their_link_works(
+                session, [user.id for user in created.users]
             ),
         },
     )
+
+
+async def _pending_rows(session: AsyncSession, node_ids: list[str]) -> list[dict]:
+    """The nodes an add will reach, as the rows the dialog draws before reaching them."""
+    named = {
+        node.id: node.name
+        for node in await nodes.list_nodes(session)
+        if node.id in set(node_ids)
+    }
+    return [{"id": node_id, "name": named.get(node_id, node_id)} for node_id in node_ids]
+
+
+@router.post("/reach", response_class=HTMLResponse)
+async def reach_node(
+    request: Request,
+    node: list[str] = Form(default_factory=list),
+    user: list[str] = Form(default_factory=list),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Apply ONE node through the fan-out, and answer with its row — M32.
+
+    Pressed three ways, all with the same meaning: by the add dialog for each node its new
+    users were given (``node`` carries the ones still to do, first is applied now), by a
+    row's retry, and by the "Apply <node>" button in the not-pushed block inside the link
+    dialog. Always ``onboarding.reach``, so always ``only_if_serving``: nothing on this
+    path puts a node into service — that is the Nodes screen's apply, and a node not
+    serving is reported here and left alone.
+
+    The answer is the node's result row, then — when ``node`` named more — the next
+    node's pending row, which asks for itself the moment it is swapped in; so the dialog
+    reaches its nodes one after another with each result on screen as it lands. When
+    ``user`` is given (the add dialog), the line saying where their link works is
+    re-measured and swapped out of band after every node.
+
+    The row's sentence is composed from the node's NAME and the failure's KIND only
+    (``onboarding.why_not_reached``): a failure's own message can carry an upstream
+    checker's output, which is known to quote the node's private key. The Nodes screen's
+    apply is where the full reason is read, and every sentence ends there.
+    """
+    if not node:
+        return HTMLResponse("")
+    this, rest = node[0], node[1:]
+    outcome = await onboarding.reach(session, [this])
+    name = outcome.names.get(this, this)
+    kind = outcome.why_failed.get(this)
+    response = TEMPLATES.TemplateResponse(
+        request,
+        "panel/reach_step.html",
+        {
+            "row": {
+                "id": this,
+                "name": name,
+                "ok": this in outcome.nodes_updated,
+                "why": (
+                    wording.for_the_page(onboarding.why_not_reached(kind, name=name))
+                    if kind
+                    else None
+                ),
+                "retry": kind in onboarding.RETRYABLE,
+            },
+            "pending": await _pending_rows(session, rest),
+            "user_ids": user,
+            "works": (
+                await console.where_their_link_works(session, user) if user else None
+            ),
+        },
+    )
+    # The screens behind the dialog re-read themselves: a node that took its
+    # configuration leaves the not-pushed block, and its row's config cell changes.
+    response.headers["HX-Trigger"] = "nodes-changed"
+    return response
 
 
 @router.get("/users/{user_id}/subscription", response_class=HTMLResponse)
@@ -2847,9 +2935,12 @@ async def user_subscription(
             # after the user was added is a link to a fleet that has moved since, and the
             # question "does every serving host hold what we would give it" has to be
             # answered now rather than remembered from the exchange that created them.
-            "material_doubt": console.material_doubt(
+            # The same block the screens draw (M32), with its buttons answering inside
+            # this dialog rather than closing it — see ``panel/not_pushed.html``.
+            "not_pushed": console.not_pushed(
                 await console.nodes_missing_what_they_would_be_given(session)
             ),
+            "in_dialog": True,
         },
     )
 
