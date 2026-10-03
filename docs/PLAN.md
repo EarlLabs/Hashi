@@ -3809,6 +3809,77 @@ command to get there.
 
 ---
 
+## → M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · PROPOSED
+
+**What the owner wants.** On the VLESS path (phone → entry → hop → leaf), traffic to sites
+that refuse foreign addresses (state services, banks, …) leaves directly from the entry's
+Russian address. Everything else goes through the hop as today. The lists come from public,
+automatically released sources and are refreshed by themselves. The owner adds their own
+entries, switches the feature on and off at any time, and can see which entries are in effect.
+
+**Shape, settled with the owner on 2026-10-03.**
+- **Server-side, on the entry's Xray, not on the client.** Xray already sees each
+  connection's destination (SNI, IP) and picks an outbound by rule, so no phone needs a
+  routing profile. That keeps "a user never touches their device" true. Rejected: shipping
+  rule files to clients for every engine, which a known operator does — more formats, more
+  places to go stale, and the subscription becomes app-specific.
+- **NARROW by default (owner's choice):** only destinations that do not open from abroad go
+  direct. Rejected as the default: the broad "every Russian site" (`geosite:ru` +
+  `geoip:ru`), which puts far more traffic on the entry's own address.
+- **Sources are configuration, not code** (CLAUDE.md: no hardcoded domain). The defaults
+  offered in the panel are `itdoginfo/allow-domains` (`Russia/outside-raw.lst`, also
+  published as `geosite:russia-outside`), `hydraponique/roscomvpn-geosite` and
+  `roscomvpn-geoip`, and `runetfreedom` (refreshed every 6 h). Read each source's licence
+  and format before relying on it.
+- **The control plane fetches, never the node** (control → node, always). If a source is
+  unreachable (for example GitHub behind a whitelist), the last good version stays in force.
+- **Updates apply by themselves, at night (owner accepted).** Applying restarts Xray, which
+  drops connected users for 1–2 s, so it runs in the same quiet hour as the backup. **A
+  suspicious change waits for the owner**: a source that grows or shrinks by more than a set
+  ratio, fails its format check, or changes past a size bound is held with its diff shown,
+  and is not applied.
+- **DNS (owner accepted):** names that go direct are resolved by a Russian resolver, so they
+  get the answers a Russian client gets. Every other lookup stays on the hop (M16). The
+  resolver is node data, never hardcoded.
+- **The owner's own lists:** *always direct* adds entries. *never direct* forces entries
+  through the hop even when a source lists them, and it wins over everything.
+
+**What the panel shows.** An on/off switch per entry. A "Routing" screen listing each source
+with its last fetch, version, entry count and diff since the last fetch, plus the two owner
+lists. A lookup ("where would `example.ru` go?" → "direct, from <source>"). **No statistics
+of use**: no hit counters, no "top sites", nothing about which user went where. That is the
+charter's one hard record, and this feature must not become the first thing that keeps it.
+The screen shows the lists, never their use.
+
+**What it does not do.** It changes nothing for config-file (AmneziaWG) users, whose tunnel
+goes straight to the leaf. Traffic to a listed site carries the entry's address, not the
+leaf's. That is the point of the feature and also its cost, so it is stated on the switch.
+**A side effect worth keeping:** while the hop is down, listed sites still open.
+
+**Open before building.**
+- `CLAUDE.md`'s rule "no `if transport ==` outside a transport's package": the routing rules
+  belong to the vless-reality transport's rendering, and the lists reach `edge` as data,
+  because rendering stays pure (no fetch, no clock).
+- Where the list versions are stored (database rows vs files on the control host), and
+  whether they are in the backup.
+- Check the charter for anything this conflicts with before the first step.
+
+**Done when**
+- [ ] With the switch on, a listed site opened from a phone sees the entry's address, and an
+      unlisted one sees the leaf's. With it off, both see the leaf's.
+- [ ] An entry on *never direct* goes through the hop even when a source lists it.
+- [ ] A nightly refresh that changes a source is applied without the owner. One that trips
+      the bounds is held, with its diff shown on the Routing screen.
+- [ ] Every source unreachable → the last good lists stay in force and the screen says how
+      old they are.
+- [ ] Nothing records which user reached which destination: the logs, the database and the
+      screen are checked for it.
+- [ ] Hop down → listed sites still open, everything else stops (no silent fallback).
+
+acceptance: yes — on the real hosts, from a phone on a Russian mobile network.
+
+---
+
 ## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · PROPOSED
 
 **Why.** Today the console is reachable only through `ssh -L` from a laptop. The tunnel
