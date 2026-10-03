@@ -9,7 +9,10 @@ __pycache__/
 .env
 *.key
 *.pem
-secrets/
+secrets/*
+# ...except the templates that say how to fill them in (secrets/README.md).
+!secrets/README.md
+!secrets/*.example
 
 # e2e artifacts are per-run output, never history.
 .e2e/artifacts/
