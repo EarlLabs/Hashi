@@ -5353,6 +5353,15 @@ EVENT_SENTENCES = {
     AuditAction.NODE_SSH_KEY_SET: f"ssh key set for {TRAIL_NODE}",
     AuditAction.KEYS_ROTATED: f"keys rotated for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
     AuditAction.PARAMS_REPLACED: f"parameters replaced for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
+    AuditAction.DIRECT_ROUTING_SET: f"direct sites switched {TRAIL_TRANSPORT} on {TRAIL_NODE}",
+    AuditAction.ROUTING_SOURCE_ADDED: f"routing source {TRAIL_NODE} added",
+    AuditAction.ROUTING_SOURCE_SWITCHED: (
+        f"routing source {TRAIL_NODE} switched {TRAIL_TRANSPORT}"
+    ),
+    AuditAction.ROUTING_SOURCE_REMOVED: f"routing source {TRAIL_NODE} removed",
+    AuditAction.ROUTING_UPDATE_APPROVED: f"held update to {TRAIL_NODE} approved",
+    AuditAction.ROUTING_UPDATE_REJECTED: f"held update to {TRAIL_NODE} rejected",
+    AuditAction.ROUTING_LIST_CHANGED: f"{TRAIL_NODE} list changed",
 }
 
 

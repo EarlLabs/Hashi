@@ -66,7 +66,7 @@ from control.app.errors import (
     NothingToApply,
     ParamsRefused,
 )
-from control.app.models import NodeState, TransportPurpose
+from control.app.models import NodeState, OwnerList, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
     addresses,
@@ -79,6 +79,8 @@ from control.app.services import (
     relay,
     revocation,
     rotation,
+    routing,
+    routing_refresh,
     transports,
     users,
 )
@@ -149,6 +151,9 @@ NAV = (
     {"key": "users", "label": "Users", "url": "/panel/users"},
     {"key": "nodes", "label": "Nodes", "url": "/panel/nodes"},
     {"key": "hops", "label": "Hops", "url": "/panel/hops"},
+    # M34's, beside Hops because it is about the same question — which way out a user's
+    # traffic takes — and it shows the lists, never their use.
+    {"key": "routing", "label": "Routing", "url": "/panel/routing"},
     {"key": "transports", "label": "Transports", "url": "/panel/transports"},
     {"key": "keys", "label": "Keys & configs", "url": "/panel/keys"},
     # M10.4's, in the design's own order: before Settings, so the two screens that are
@@ -3097,4 +3102,368 @@ async def settings_screen(request: Request) -> Response:
             "secrets_withheld": console.SETTINGS_SECRETS_WITHHELD,
             "one_operator": console.ONE_OPERATOR,
         },
+    )
+
+
+# --- routing: which sites leave an entry from its own address (M34) --------------------
+#
+# One screen and one node dialog. The screen shows the LISTS — sources, versions, the
+# owner's entries, a held update's diff — and never their use: nothing on it, and nothing
+# any route below reads, counts what a user reached.
+
+
+async def _routing_context(request: Request, session: AsyncSession) -> dict:
+    """What the Routing screen and its refresh draw, read once so the two agree."""
+    settings = request.app.state.settings
+    view = await routing.screen(session, settings)
+    drift = {}
+    for entry in view.switched_on:
+        drift[entry.id] = await console.drift_of(session, await nodes.get_node(session, entry.id))
+    return {
+        "routing": view,
+        "drift": drift,
+        "in_sync": console.IN_SYNC,
+        "schedule": routing_refresh.schedule_line(settings),
+        "last_run": await routing_refresh.last_run_on(session),
+        "fetching": request.app.state.routing_fetch.running,
+        "owner_lists": [
+            (OwnerList.ALWAYS, routing.LIST_NAMES[OwnerList.ALWAYS], view.always),
+            (OwnerList.NEVER, routing.LIST_NAMES[OwnerList.NEVER], view.never),
+        ],
+    }
+
+
+@router.get("/routing", response_class=HTMLResponse)
+async def routing_screen(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """Routing — the lists that decide which sites an entry opens from its own address."""
+    return _screen(
+        request,
+        screen="panel/screens/routing.html",
+        current="routing",
+        title="Routing",
+        subtitle=(
+            "which sites an entry opens from its own Russian address instead of through "
+            "the hop, and the lists that say so"
+        ),
+        context=await _routing_context(request, session),
+    )
+
+
+@router.get("/routing/body", response_class=HTMLResponse)
+async def routing_body(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """The screen's content on its own, for the refresh after a change or during a fetch."""
+    return TEMPLATES.TemplateResponse(
+        request, "panel/routing_body.html", await _routing_context(request, session)
+    )
+
+
+@router.post("/routing/fetch", response_class=HTMLResponse)
+async def routing_fetch(request: Request):
+    """Start fetching every source that is on, BESIDE this request rather than in it.
+
+    A fetch can take a list host's whole timeout per source, and a page that waits for
+    it is a page an operator reloads mid-run. The answer comes back at once; the screen
+    polls while the run is going and redraws from the rows it writes. Nothing is applied:
+    a fetch changes the lists, and "apply" is a separate press.
+    """
+    started = request.app.state.routing_fetch.start(
+        request.app.state.database, request.app.state.settings
+    )
+    return _mutation(
+        request,
+        toast=(
+            "fetching the routing lists — this screen updates when it is done"
+            if started
+            else "a fetch is already running"
+        ),
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/apply", response_class=HTMLResponse)
+async def routing_apply(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """Apply every entry with the switch on whose config differs from what it holds.
+
+    What the nightly run does after its fetch, pressed by hand. Each apply restarts that
+    entry's proxy, which drops anyone connected through it for a second or two.
+    """
+    applied = await routing_refresh.apply_changed(session)
+    if not applied:
+        return _mutation(
+            request,
+            notice="every entry with direct sites on already holds what the lists say",
+            events="routing-changed nodes-changed",
+        )
+    failed = [a for a in applied if a.failure]
+    if failed:
+        return _mutation(
+            request,
+            banner="; ".join(f"{a.node} was not updated: {a.failure}" for a in failed),
+            events="routing-changed nodes-changed",
+        )
+    return _mutation(
+        request,
+        toast="applied " + ", ".join(a.node for a in applied),
+        events="routing-changed nodes-changed",
+    )
+
+
+@router.get("/routing/sources/new", response_class=HTMLResponse)
+async def routing_source_dialog(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request, "panel/routing_source_dialog.html", {"values": {"enabled": True}, "error": None}
+    )
+
+
+@router.post("/routing/sources", response_class=HTMLResponse)
+async def routing_add_source(
+    request: Request,
+    name: str = Form(""),
+    url: str = Form(""),
+    enabled: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Add a source by name and https address. Nothing is fetched until "fetch now"."""
+    values = {"name": name.strip(), "url": url.strip(), "enabled": bool(enabled)}
+    try:
+        source = await routing.add_source(
+            session, name=values["name"], url=values["url"], enabled=values["enabled"]
+        )
+    except DomainError as exc:
+        return TEMPLATES.TemplateResponse(
+            request,
+            "panel/routing_source_dialog.html",
+            {"values": values, "error": wording.for_the_page(exc.message)},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return _mutation(
+        request,
+        toast=f"source {source.name} added — press fetch now to read it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/suggestions", response_class=HTMLResponse)
+async def routing_add_suggestion(
+    request: Request,
+    name: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    try:
+        source = await routing.add_suggested(
+            session, name=name, settings=request.app.state.settings
+        )
+    except DomainError as exc:
+        return _mutation(request, banner=exc.message, banner_label="refused")
+    return _mutation(
+        request,
+        toast=f"source {source.name} added — press fetch now to read it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/sources/{source_id}/switch", response_class=HTMLResponse)
+async def routing_switch_source(
+    source_id: str,
+    request: Request,
+    enabled: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    source = await routing.switch_source(session, source_id, enabled=enabled == "on")
+    return _mutation(
+        request,
+        toast=f"source {source.name} switched {'on' if source.enabled else 'off'} — "
+        "apply the entries to carry it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.get("/routing/sources/{source_id}/remove", response_class=HTMLResponse)
+async def routing_remove_dialog(
+    source_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/routing_remove_dialog.html",
+        {"source": await routing.get_source(session, source_id)},
+    )
+
+
+@router.post("/routing/sources/{source_id}/remove", response_class=HTMLResponse)
+async def routing_remove_source(
+    source_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    name = await routing.remove_source(session, source_id)
+    return _mutation(
+        request,
+        toast=f"source {name} removed — apply the entries to carry it",
+        keeping=name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/updates/{version_id}/approve", response_class=HTMLResponse)
+async def routing_approve(
+    version_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Put a held update into force. Entries carry it at their next apply."""
+    try:
+        source = await routing.approve(session, version_id)
+    except DomainError as exc:
+        return _mutation(request, banner=exc.message, banner_label="refused",
+                         events="routing-changed")
+    return _mutation(
+        request,
+        toast=f"the held update to {source.name} is in force — apply the entries to carry it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/updates/{version_id}/reject", response_class=HTMLResponse)
+async def routing_reject(
+    version_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Refuse a held update: the version in force stays, and this one is not asked again."""
+    try:
+        source = await routing.reject(session, version_id)
+    except DomainError as exc:
+        return _mutation(request, banner=exc.message, banner_label="refused",
+                         events="routing-changed")
+    return _mutation(
+        request,
+        toast=f"the held update to {source.name} was rejected — the list in force stays",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.get("/routing/entries/new", response_class=HTMLResponse)
+async def routing_entry_dialog(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request, "panel/routing_entry_dialog.html", {"values": {}, "error": None}
+    )
+
+
+@router.post("/routing/entries", response_class=HTMLResponse)
+async def routing_add_entry(
+    request: Request,
+    which: str = Form(""),
+    value: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Add a destination to *always direct* or *never direct*; a refusal stays in the dialog."""
+    values = {"which": which, "value": value.strip()}
+    try:
+        chosen = OwnerList(which)
+        entry = await routing.add_owner_entry(session, which=chosen, value=value)
+    except (ValueError, DomainError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else "choose one of the two lists."
+        return TEMPLATES.TemplateResponse(
+            request,
+            "panel/routing_entry_dialog.html",
+            {"values": values, "error": wording.for_the_page(message)},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return _mutation(
+        request,
+        toast=f"{entry.value} added to {routing.LIST_NAMES[chosen]} — apply the entries "
+        "to carry it",
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/entries/{entry_id}/remove", response_class=HTMLResponse)
+async def routing_remove_entry(
+    entry_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    entry = await routing.remove_owner_entry(session, entry_id)
+    return _mutation(
+        request,
+        toast=f"{entry.value} removed from {routing.LIST_NAMES[entry.list]} — apply the "
+        "entries to carry it",
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/lookup", response_class=HTMLResponse)
+async def routing_lookup(
+    request: Request,
+    destination: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Where an entry with the switch on would send one destination. Answers; records nothing.
+
+    Not logged, not audited and not stored: a lookup is a question about the lists, and a
+    record of the destinations an owner asked about would be the start of the record this
+    feature must never keep.
+    """
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/routing_lookup.html",
+        {"verdict": await routing.where(session, destination)},
+    )
+
+
+@router.get("/nodes/{node_id}/direct", response_class=HTMLResponse)
+async def node_direct_dialog(
+    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """A node's direct-sites switch, with its entry-side resolver."""
+    node = await nodes.get_node(session, node_id)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_direct_dialog.html",
+        await _direct_dialog_context(session, node, values={}, error=None),
+    )
+
+
+async def _direct_dialog_context(session, node, *, values: dict, error: str | None) -> dict:
+    lists = await routing.lists_in_force(session)
+    return {
+        "node": node,
+        "has_hop": await relay.exit_through_hop(session, node) is not None,
+        "size": lists.size(),
+        "sources_on": [name for name, _ in lists.sources],
+        "values": values,
+        "error": error,
+    }
+
+
+@router.post("/nodes/{node_id}/direct", response_class=HTMLResponse)
+async def set_node_direct(
+    node_id: str,
+    request: Request,
+    on: str = Form(""),
+    resolver: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Switch a node's direct sites on or off. Changes the record; the next apply carries it."""
+    node = await nodes.get_node(session, node_id)
+    has_hop = await relay.exit_through_hop(session, node) is not None
+    try:
+        node = await routing.set_direct_routing(
+            session, node_id=node_id, on=bool(on), resolver=resolver, has_hop=has_hop
+        )
+    except DomainError as exc:
+        return TEMPLATES.TemplateResponse(
+            request,
+            "panel/node_direct_dialog.html",
+            await _direct_dialog_context(
+                session,
+                node,
+                values={"on": bool(on), "resolver": resolver.strip()},
+                error=wording.for_the_page(exc.message),
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return _mutation(
+        request,
+        toast=f"direct sites switched {'on' if node.direct_routing else 'off'} for "
+        f"{node.name} — apply it to carry the change",
+        keeping=node.name,
+        events="nodes-changed routing-changed",
     )

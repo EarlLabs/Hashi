@@ -91,6 +91,18 @@ class AuditAction(enum.StrEnum):
     HOP_DISSOLVED = "hop-dissolved"
     KEYS_ROTATED = "keys-rotated"
     PARAMS_REPLACED = "params-replaced"
+    # M34. Each moves because the OWNER acted on the routing lists or on a node's switch;
+    # the nightly refresh is not an operator and writes none of them. A label is a node
+    # name, a source name or the name of one of the owner's two lists — never a
+    # destination, which is free text up to 253 characters and is shown on the Routing
+    # screen instead.
+    DIRECT_ROUTING_SET = "direct-routing-set"
+    ROUTING_SOURCE_ADDED = "routing-source-added"
+    ROUTING_SOURCE_SWITCHED = "routing-source-switched"
+    ROUTING_SOURCE_REMOVED = "routing-source-removed"
+    ROUTING_UPDATE_APPROVED = "routing-update-approved"
+    ROUTING_UPDATE_REJECTED = "routing-update-rejected"
+    ROUTING_LIST_CHANGED = "routing-list-changed"
 
 
 class AuditEntry(Base):

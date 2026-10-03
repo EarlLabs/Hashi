@@ -378,6 +378,24 @@ class NodeRow:
     # OPERATOR enables or withdraws a protocol and never when a user connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
     transports: tuple[TransportChip, ...] = ()
+    # M34: the direct-sites switch, as a sentence, and ``None`` while it is off — which is
+    # every node until its owner turns it on, so an untouched fleet's screen is unchanged.
+    direct: str | None = None
+
+
+def direct_note(node: Node) -> str | None:
+    """The Nodes screen's line for a node with direct sites on, or ``None``.
+
+    Configuration only: that the switch is on and where listed names are looked up. What
+    the lists hold is the Routing screen's, and what anyone reached through them is
+    nowhere.
+    """
+    if not node.direct_routing:
+        return None
+    return (
+        f"direct sites: on — the sites on the Routing screen's lists leave this node from "
+        f"its own address, looked up at {node.direct_resolver or 'no resolver (set one)'}."
+    )
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1888,6 +1906,7 @@ async def node_rows(session: AsyncSession, settings: Settings) -> list[NodeRow]:
             drift=await drift_of(session, node),
             probe=probe_note(node),
             delivery=delivery_note(node, settings),
+            direct=direct_note(node),
             transports=tuple(
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),

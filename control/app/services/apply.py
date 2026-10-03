@@ -54,7 +54,16 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, delivery, nodes, placement, relay, serving
+from control.app.services import (
+    addresses,
+    audit,
+    delivery,
+    nodes,
+    placement,
+    relay,
+    routing,
+    serving,
+)
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, delivery_site, node_stack
@@ -552,6 +561,20 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     # back is an address and nothing else, so nothing below learns what carries the hop.
     hop_exit = await relay.exit_through_hop(session, node)
 
+    # What this node opens by its OWN route instead of through the hop — M34. Read only
+    # for a node that has a hop AND whose owner switched it on: every other node takes
+    # ``None`` and renders, byte for byte, what it rendered before the feature existed. A
+    # node switched on whose hop was later taken away is the same "nothing to choose"
+    # case, and renders as off rather than refusing. The bound is read only here, past
+    # that test, so nothing that renders a node with the switch off reads it at all.
+    direct = None
+    if hop_exit is not None and node.direct_routing:
+        direct = await routing.direct_routes_for(
+            session,
+            node,
+            max_entries=settings_module.bound_settings().routing_max_entries,
+        )
+
     # Queried rather than read off ``node.transports``. The relationship loads eagerly
     # when the node is freshly selected, but this function is also called right after a
     # revocation has deleted rows in the same session — at which point touching the
@@ -624,6 +647,14 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
                 # renders nothing for either, so this call stays blind to which is which.
                 egress=nodes.egress_for(node_transport, hop_exit),
                 exit_via=hop_exit,
+                # Only to a transport that DECLARES it can split (``edge.registry``) — a
+                # declaration read, never a name — and only when there is something to
+                # pass, so a transport that cannot split is called exactly as before.
+                **(
+                    {"direct": direct}
+                    if direct is not None and transport.meta.splits_by_destination
+                    else {}
+                ),
             )
         except NodeOperationFailed:
             raise

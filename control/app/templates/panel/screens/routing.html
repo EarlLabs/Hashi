@@ -1,0 +1,17 @@
+{#
+  Routing — M34. Which sites an entry node opens from its own Russian address instead of
+  through its hop, and the lists that decide it.
+
+  What is on this screen: the entries that have the switch on, each source with the
+  version in force and how old it is, any update held for the owner with its diff, the
+  owner's two lists, and a lookup. What is NOT on it, and must never be: anything that
+  moves when a user connects. No hit counter, no "top sites", no per-user anything — the
+  charter's one hard record. The screen shows the lists, never their use.
+
+  Everything lives in panel/routing_body.html so the first paint and every refresh are
+  one file.
+#}
+{% include "panel/console_header.html" %}
+<div class="panel">
+  {% include "panel/routing_body.html" %}
+</div>

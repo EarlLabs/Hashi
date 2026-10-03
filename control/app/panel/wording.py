@@ -205,6 +205,15 @@ _EVENTS: dict[AuditAction, str] = {
     AuditAction.HOP_DISSOLVED: "hop torn down from {first} to {second}",
     AuditAction.KEYS_ROTATED: "keys rotated for {second} on {first}",
     AuditAction.PARAMS_REPLACED: "parameters replaced for {second} on {first}",
+    # M34. A destination is never a label (free text, up to 253 characters): the list it
+    # went on is, and the Routing screen shows the list itself.
+    AuditAction.DIRECT_ROUTING_SET: "direct sites switched {second} on {first}",
+    AuditAction.ROUTING_SOURCE_ADDED: "routing source {first} added",
+    AuditAction.ROUTING_SOURCE_SWITCHED: "routing source {first} switched {second}",
+    AuditAction.ROUTING_SOURCE_REMOVED: "routing source {first} removed",
+    AuditAction.ROUTING_UPDATE_APPROVED: "held update to {first} approved",
+    AuditAction.ROUTING_UPDATE_REJECTED: "held update to {first} rejected",
+    AuditAction.ROUTING_LIST_CHANGED: "{first} list changed",
 }
 
 # The one recorded change that legitimately arrives with a single label: tearing down a

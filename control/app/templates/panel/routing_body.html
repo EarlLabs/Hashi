@@ -1,0 +1,238 @@
+{#
+  The Routing screen's content, on its own so a change — or a fetch running beside the
+  request that started it — can redraw it. Listens for `routing-changed`; while a fetch is
+  running it also asks again every two seconds, and stops asking the moment the redraw
+  says the fetch is done (the attribute is only written while `fetching`).
+
+  `hx-disinherit="hx-indicator"` for hops_table.html's reason: the skeleton belongs to
+  this element's own refresh and to nothing inside it.
+#}
+<div id="routing-body" class="stack-8"
+     hx-get="/panel/routing/body"
+     hx-trigger="routing-changed from:body{% if fetching %}, every 2s{% endif %}"
+     hx-target="this" hx-swap="outerHTML" hx-indicator="this"
+     hx-disinherit="hx-indicator">
+  <div class="loading" aria-hidden="true">
+    <div class="skeleton-row"></div>
+    <div class="skeleton-row"></div>
+  </div>
+  <div class="loaded stack-8">
+
+    {# --- the entries this applies to, and the cost, said where it is decided --- #}
+    <section class="card blueprint stack-6">
+      <div class="card-head"><h4>Entries with direct sites on</h4></div>
+      <div class="section-head">
+        <p class="text-muted section-note">
+          On an entry with this switched on, a site on the lists below is opened from the
+          entry's own address — it sees a Russian visitor — and everything else goes
+          through the hop exactly as before. While the hop is down, listed sites still
+          open and nothing else does. The cost is the point: a listed site sees the
+          entry's address, not the leaf's. Switch it per node on the Nodes screen
+          ("direct sites").
+        </p>
+        <span class="row-actions">
+          <button class="btn btn-secondary" type="button"
+                  hx-post="/panel/routing/fetch"
+                  hx-target="#dialog-slot" hx-swap="innerHTML"
+                  {% if fetching %}disabled{% endif %}>{{ "fetching…" if fetching else "fetch now" }}</button>
+          <button class="btn btn-secondary" type="button"
+                  hx-post="/panel/routing/apply"
+                  hx-target="#dialog-slot" hx-swap="innerHTML">apply entries</button>
+        </span>
+      </div>
+      {% if routing.switched_on %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr><th>entry</th><th>state</th><th>config</th><th>resolver for listed sites</th></tr>
+          </thead>
+          <tbody>
+            {% for entry in routing.switched_on %}
+            <tr>
+              <td class="wraps">{{ entry.name }}</td>
+              <td>
+                {% if entry.has_hop %}
+                <span class="tag tag-accent">on</span>
+                {% else %}
+                <span class="tag tag-outline">on — no hop, so no effect</span>
+                {% endif %}
+              </td>
+              <td class="mono text-muted">{{ drift[entry.id] }}</td>
+              <td class="mono wraps">{{ entry.resolver or "none" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        <div class="empty-title">No entry has direct sites on</div>
+        <p class="empty-body text-muted">
+          Every site goes through the hop. The lists below are kept, and fetched at night
+          only while some entry uses them.
+        </p>
+      </div>
+      {% endif %}
+      <p class="text-muted section-note">{{ schedule }}
+        Last nightly run: {{ last_run.strftime("%d %b %Y") if last_run else "not yet" }}.
+        Together the lists in force hold {{ routing.size }} of the {{ routing.max_entries }}
+        entries an entry's config may carry.</p>
+      {% include "panel/corners.html" %}
+    </section>
+
+    {# --- held updates: the owner's decision, with the diff --- #}
+    {% for held in routing.held %}
+    <section class="card blueprint stack-6">
+      <div class="card-head"><h4>Held: an update to {{ held.source }}</h4></div>
+      <p class="section-note">
+        Fetched {{ held.fetched }}, {{ held.count }} entries, and NOT in force: {{ held.reason }}
+        Until you decide, the version in force stays.
+      </p>
+      <div class="grid-2">
+        <div class="stack-6">
+          <div class="text-muted">{{ held.diff.added_count }} added{% if held.diff.added_count > held.diff.added|length %} (first {{ held.diff.added|length }}){% endif %}</div>
+          <div class="mono wraps">{% for line in held.diff.added %}<div>+ {{ line }}</div>{% else %}<div class="text-muted">none</div>{% endfor %}</div>
+        </div>
+        <div class="stack-6">
+          <div class="text-muted">{{ held.diff.removed_count }} removed{% if held.diff.removed_count > held.diff.removed|length %} (first {{ held.diff.removed|length }}){% endif %}</div>
+          <div class="mono wraps">{% for line in held.diff.removed %}<div>− {{ line }}</div>{% else %}<div class="text-muted">none</div>{% endfor %}</div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button"
+                hx-post="/panel/routing/updates/{{ held.id }}/reject"
+                hx-target="#dialog-slot" hx-swap="innerHTML">reject</button>
+        <button class="btn btn-secondary" type="button"
+                hx-post="/panel/routing/updates/{{ held.id }}/approve"
+                hx-target="#dialog-slot" hx-swap="innerHTML">approve</button>
+      </div>
+      {% include "panel/corners.html" %}
+    </section>
+    {% endfor %}
+
+    {# --- sources --- #}
+    <section class="card blueprint stack-6">
+      <div class="card-head"><h4>Sources</h4></div>
+      <div class="section-head">
+        <p class="text-muted section-note">
+          Published lists this control plane fetches — never the node. If a source cannot
+          be fetched, the version in force stays, and its age below says how old it is.
+          A change past the bounds (HASHI_ROUTING_MAX_CHANGE, HASHI_ROUTING_MAX_ENTRIES, or
+          any line that is not a site) is held above instead of applied.
+        </p>
+        <button class="btn btn-secondary" type="button"
+                hx-get="/panel/routing/sources/new"
+                hx-target="#dialog-slot" hx-swap="innerHTML">add source</button>
+      </div>
+      {% if routing.sources %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>source</th><th>state</th><th>in force</th><th>entries</th>
+              <th>fetched</th><th>since the last version</th><th class="right">actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for source in routing.sources %}
+            <tr>
+              <td class="wraps">{{ source.name }}<div class="mono text-muted wraps">{{ source.url }}</div></td>
+              <td><span class="tag {{ 'tag-accent' if source.enabled else 'tag-neutral' }}">{{ "on" if source.enabled else "off" }}</span></td>
+              <td class="mono">{{ source.version or "nothing yet" }}</td>
+              <td class="mono">{{ source.count }}{% if source.skipped %}<div class="text-muted">{{ source.skipped }} not carried</div>{% endif %}</td>
+              <td class="text-muted">{{ source.fetched }}</td>
+              <td class="mono text-muted">{% if source.changed %}+{{ source.changed.added_count }} / −{{ source.changed.removed_count }}{% else %}—{% endif %}</td>
+              <td class="right">
+                <span class="row-actions">
+                  <button class="btn btn-secondary" type="button"
+                          hx-post="/panel/routing/sources/{{ source.id }}/switch"
+                          hx-vals='{"enabled": "{{ "off" if source.enabled else "on" }}"}'
+                          hx-target="#dialog-slot" hx-swap="innerHTML">{{ "switch off" if source.enabled else "switch on" }}</button>
+                  <button class="btn btn-secondary" type="button"
+                          hx-get="/panel/routing/sources/{{ source.id }}/remove"
+                          hx-target="#dialog-slot" hx-swap="innerHTML">remove</button>
+                </span>
+              </td>
+            </tr>
+            {% if source.error %}
+            <tr class="row-detail">
+              <td class="text-muted wraps" colspan="7">last fetch {{ source.attempted }} failed: {{ source.error }} The version in force is {{ source.fetched }} old.</td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        <div class="empty-title">No sources yet</div>
+        <p class="empty-body text-muted">Add one of the suggestions below, or any https list of sites, one per line.</p>
+      </div>
+      {% endif %}
+      {% if routing.suggestions %}
+      <div class="stack-6">
+        <div class="text-muted">Suggested by this control plane's configuration (HASHI_ROUTING_SUGGESTED_SOURCES):</div>
+        {% for suggestion in routing.suggestions %}
+        <div class="section-head">
+          <div><span>{{ suggestion.name }}</span> <span class="text-muted">— {{ "switched on once added" if suggestion.on else "added switched off" }}</span>
+            <div class="mono text-muted wraps">{{ suggestion.url }}</div></div>
+          <button class="btn btn-secondary" type="button"
+                  hx-post="/panel/routing/suggestions"
+                  hx-vals='{"name": {{ suggestion.name | tojson }}}'
+                  hx-target="#dialog-slot" hx-swap="innerHTML">add</button>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% include "panel/corners.html" %}
+    </section>
+
+    {# --- the owner's two lists --- #}
+    <section class="card blueprint stack-6">
+      <div class="card-head"><h4>Your lists</h4></div>
+      <div class="section-head">
+        <p class="text-muted section-note">
+          <b>always direct</b> adds sites to what the sources list. <b>never direct</b>
+          keeps a site on the hop even when a source lists it, and it wins over
+          everything. A name covers every name under it; a network is an address range.
+        </p>
+        <button class="btn btn-secondary" type="button"
+                hx-get="/panel/routing/entries/new"
+                hx-target="#dialog-slot" hx-swap="innerHTML">add entry</button>
+      </div>
+      <div class="grid-2">
+        {% for which, label, entries in owner_lists %}
+        <div class="stack-6">
+          <div class="text-muted">{{ label }} — {{ entries|length }}</div>
+          {% for entry in entries %}
+          <div class="section-head">
+            <span class="mono wraps">{{ entry.value }}</span>
+            <button class="btn btn-secondary btn-sm" type="button"
+                    hx-post="/panel/routing/entries/{{ entry.id }}/remove"
+                    hx-target="#dialog-slot" hx-swap="innerHTML">remove</button>
+          </div>
+          {% else %}
+          <div class="text-muted">empty</div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+      {% include "panel/corners.html" %}
+    </section>
+
+    {# --- the lookup: a question about the lists, answered from them and recorded nowhere --- #}
+    <section class="card blueprint stack-6">
+      <div class="card-head"><h4>Where would it go?</h4></div>
+      <form class="section-head" hx-post="/panel/routing/lookup"
+            hx-target="#routing-lookup-answer" hx-swap="innerHTML">
+        <input class="input" name="destination" type="text" autocomplete="off"
+               aria-label="a site's name or an address" placeholder="a site's name or an address">
+        <button class="btn btn-secondary" type="submit">look up</button>
+      </form>
+      <div id="routing-lookup-answer" aria-live="polite"></div>
+      <p class="text-muted section-note">Answered from the lists in force, for an entry
+        with direct sites on. Nothing you type here is kept.</p>
+      {% include "panel/corners.html" %}
+    </section>
+  </div>
+</div>

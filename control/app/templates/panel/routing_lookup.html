@@ -1,0 +1,8 @@
+{# The lookup's answer. Composed in services/routing.py (`where`); this file only lays it out. #}
+<div class="stack-6">
+  <div><span class="mono wraps">{{ verdict.destination }}</span> —
+    {% if verdict.direct is none %}<span class="text-muted">{{ verdict.sentence }}</span>
+    {% else %}<span class="tag {{ 'tag-accent' if verdict.direct else 'tag-neutral' }}">{{ "direct" if verdict.direct else "via hop" }}</span>
+    {{ verdict.sentence }}{% endif %}</div>
+  {% if verdict.note %}<div class="text-muted">{{ verdict.note }}</div>{% endif %}
+</div>

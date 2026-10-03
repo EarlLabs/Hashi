@@ -24,7 +24,7 @@ from control.app.crypto import SecretBox, session_secret
 from control.app.db import Database
 from control.app.models.base import bind_secret_box
 from control.app.panel import routes as panel_routes
-from control.app.services import apply, audit, health
+from control.app.services import apply, audit, health, routing_refresh
 from control.app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -96,9 +96,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.finding_remeasurer = health.start_remeasurer(
             app.state.database, interval=settings.finding_remeasure_interval
         )
+        # M34: the routing lists' nightly refresh, in the backup's quiet hour, and the one
+        # "fetch now" run the Routing screen may have going. Both are the control plane
+        # polling outward — a node is only ever applied, never asked to fetch anything.
+        app.state.routing_refresher = routing_refresh.start_refresher(
+            app.state.database, settings
+        )
         try:
             yield
         finally:
+            await routing_refresh.stop_refresher(app.state.routing_refresher)
+            await app.state.routing_fetch.stop()
             await health.stop_remeasurer(app.state.finding_remeasurer)
             # Cancelled BEFORE the pool is disposed: the sweeper holds a session while
             # it runs, and disposing an engine out from under it is how a clean
@@ -127,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bind_secret_box(box)
     app.state.secret_box = box
     app.state.database = Database(settings.database_url)
+    app.state.routing_fetch = routing_refresh.FetchNow()
     apply.bind_settings(settings)
 
     app.add_middleware(

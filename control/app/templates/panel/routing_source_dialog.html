@@ -1,0 +1,44 @@
+{# Add a routing source — M34. A name and an https address; nothing is fetched until "fetch now". #}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true" aria-labelledby="routing-source-title">
+    <div class="dialog-title" id="routing-source-title">Add a routing source</div>
+    <form class="dialog-form" hx-post="/panel/routing/sources"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="routing-source-name">name</label>
+        <input class="input" id="routing-source-name" name="name" type="text"
+               value="{{ values.get('name', '') }}" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="routing-source-url">address</label>
+        <input class="input" id="routing-source-url" name="url" type="text"
+               value="{{ values.get('url', '') }}" autocomplete="off"
+               aria-describedby="routing-source-hint{% if error %} routing-source-error{% endif %}"
+               {% if error %}aria-invalid="true"{% endif %}>
+        <div class="field-hint" id="routing-source-hint">
+          An https address of a text list: one site per line (a name covers every name
+          under it), or an address range. Lines in the domain-list format
+          (<span class="mono">domain:</span>, <span class="mono">full:</span>) are read
+          too; patterns are counted and left out.
+        </div>
+        {% if error %}<div class="field-error" id="routing-source-error" role="alert">{{ error }}</div>{% endif %}
+      </div>
+      <div class="field">
+        <label for="routing-source-enabled">once fetched</label>
+        <select class="input" id="routing-source-enabled" name="enabled">
+          <option value="on"{% if values.get('enabled') %} selected{% endif %}>on — its sites go direct</option>
+          <option value=""{% if not values.get('enabled') %} selected{% endif %}>off — kept, not used</option>
+        </select>
+      </div>
+      <div class="dialog-body">
+        Adding fetches nothing: press fetch now on the Routing screen, then apply the
+        entries. Every site on it will see an entry's own address.
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">add source</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>
