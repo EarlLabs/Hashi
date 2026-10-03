@@ -1,5 +1,117 @@
 # Deploying hashi
 
+## Короткая памятка
+
+Команды выполнять из каталога проекта на сервере панели, если не указано другое.
+
+### Развернуть панель
+
+1. Установить Docker с Compose, Git, Make и Bash.
+2. Скопировать `.env.example` в `.env`; заполнить домены, параметры БД,
+   `HASHI_SECRET_KEY` и хеш пароля (`make hash-password`). Секретный ключ
+   сгенерировать на своём компьютере и сохранить отдельно от сервера и бэкапов.
+3. Направить DNS домена на сервер; открыть SSH и порты HTTP/HTTPS.
+4. Выполнить `make panel-bootstrap`, затем `make up-panel-over-ssh`.
+   Если управляющий туннель уже настроен — `make up-panel`.
+
+### Открыть панель
+
+Через управляющий туннель либо SSH с вашего компьютера:
+
+```bash
+ssh -L PORT:127.0.0.1:PORT USER@SERVER
+```
+
+Открыть `https://PRIVATE_HOST:PORT/panel/`; значения взять из
+`HASHI_PRIVATE_HOST` и `HASHI_PRIVATE_PORT`. Для SSH имя `PRIVATE_HOST`
+должно разрешаться на вашем компьютере в `127.0.0.1`.
+На публичном домене `/panel/` отвечает **404 — это нормально**.
+
+### Добавить ноду
+
+1. Подготовить сервер с компьютера, где есть проект:
+   ```bash
+   make node-bootstrap NODE=USER@HOST \
+     ARGS="--authorized-key '<публичный SSH-ключ панели>' --port <порт>/udp"
+   ```
+   Для TCP-протокола указать `/tcp`; добавить `--port` для каждого нужного порта.
+2. **Nodes → Add node**: адрес, SSH-пользователь из результата bootstrap,
+   SSH-порт и приватный SSH-ключ.
+3. Включить транспорт и нажать **Apply**.
+4. Для отдельного входа и выхода: **Hops**, связать entry → leaf;
+   затем **Apply** обеих нод. Entry с hop требует resolver;
+   пользовательский транспорт — обычно `vless-reality`, hop — `amneziawg`.
+   Без hop можно использовать `amneziawg` для пользователей.
+
+### Добавить или отключить человека
+
+- **Добавить:** **Users → Add user** → выбрать доступ → **Apply на каждой его
+  ноде** → передать ссылку. Для AmneziaWG скачать архив по ссылке конфигурации,
+  распаковать и импортировать `.conf`.
+- **Отключить:** **Users → revoke** → подтвердить → **Apply на каждой его
+  ноде**. Возврат доступа — добавить заново и выдать новую ссылку.
+
+### Где смотреть
+
+- **Overview** — общее состояние и бэкапы.
+- **Nodes** — состояние нод, ошибки и неприменённые изменения.
+- **Users** — доступ и ссылки; **Hops** — связи; **Audit** — действия администратора.
+- `make ps` — контейнеры панели; `make logs` — ошибки.
+- На ноде: `cd /opt/hashi && docker compose ps`.
+
+### Бэкапы
+
+Настроить `HASHI_BACKUP_*` в `.env`, затем:
+
+```bash
+make backup             # сделать сейчас
+make backup-schedule    # включить расписание
+make backup-status      # проверить результат
+```
+
+Отдельно сохранить **исходный `HASHI_SECRET_KEY`**, приватный ключ **age**
+и доступ **на чтение** S3. `.env` в бэкап не входит.
+
+### Восстановить из файла
+
+В `.env` должен стоять исходный `HASHI_SECRET_KEY`.
+**Восстановление заменяет текущую БД:**
+
+```bash
+HASHI_RESTORE_AGE_IDENTITY=/path/to/age-key.txt \
+  make restore FROM=backups/hashi-<дата>.sql.gz.age
+```
+
+Команда сама перезапускает панель. После — проверить **Users** и **Nodes**.
+
+### Восстановить после потери сервера
+
+На новом сервере установить зависимости, клонировать проект и заполнить `.env`
+с **исходным `HASHI_SECRET_KEY`**. Хеш пароля получить через `make hash-password`.
+Затем:
+
+```bash
+HASHI_RESTORE_AGE_IDENTITY=/path/to/age-key.txt \
+HASHI_RESTORE_S3_ENDPOINT=https://<endpoint> \
+HASHI_RESTORE_S3_REGION=<region> \
+HASHI_RESTORE_S3_BUCKET=<bucket> \
+HASHI_RESTORE_S3_PREFIX=<prefix> \
+HASHI_RESTORE_S3_ACCESS_KEY_ID=<read-key> \
+HASHI_RESTORE_S3_SECRET_ACCESS_KEY=<secret> \
+make restore-from-bucket
+```
+
+После: обновить DNS, выполнить `make up-panel-over-ssh`, проверить ноды,
+заново заполнить параметры бэкапов и вернуть расписание (`make backup-schedule`).
+Управляющий туннель и сертификаты доставки на нодах восстанавливаются отдельно.
+
+**Главное:** после изменения доступа нажимать **Apply**. После повторного
+`panel-bootstrap` снова выполнять `up-panel` или `up-panel-over-ssh`.
+Для добавления и удаления устройств управляющего туннеля менять список в `.env`
+и выполнять `make mgmt-tunnel`.
+
+---
+
 **WHAT:** the commands to bring hashi up on real hosts — one installation procedure,
 whichever machines the three roles end up on — and the traps that are known, named and
 not yet fixed.
