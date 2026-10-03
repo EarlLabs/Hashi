@@ -12,11 +12,9 @@ WHY:  `security.box: gray` in `aikit.yml` means the hunter is given partial
 HOW:  §1 the assets, §2 the surfaces, §3 the boundaries that must hold, §4 what
       is out of scope and why, §5 what a finding has to show.
 
-STATUS: DRAFT — written by /aikit:init on 2026-09-22, NOT yet approved by the
-        owner. `docs/security-audit.md` in the plugin requires this file to be
-        owner-approved before a gray-box hunt; until the owner replaces this line
-        with an approval, a finding that rests on §3 is a ranked line, not a
-        blocker.
+STATUS: APPROVED by the owner 2026-10-03. Written by /aikit:init on 2026-09-22 and
+        extended on 2026-10-03 for the surfaces M24, M32 and M34 added. A finding
+        that crosses a §3 boundary is a blocker.
 -->
 
 ## 1. What is worth protecting
@@ -45,7 +43,8 @@ Ordered by what it costs a real person, not by how interesting the bug is.
 
 ## 2. The surfaces the hunter is told about
 
-Four, and that is all of them. `control/app/main.py` mounts nothing else.
+The original four, plus what M24, M32 and M34 added. `control/app/main.py` mounts
+nothing else.
 
 | Surface | Auth | Shape |
 |---|---|---|
@@ -54,6 +53,9 @@ Four, and that is all of them. `control/app/main.py` mounts nothing else.
 | `/api/**` | operator session, same cookie, router-level | JSON |
 | `/sub/{token}` | the token in the path, nothing else | base64 document or a ZIP of config files |
 | `/healthz`, `/`, `/robots.txt` | none | fixed responses; `/` redirects to the login page |
+| `/sub/{token}?format=client-config-file` (M24) | the token in the path | a ZIP of WireGuard-family `.conf` files, each holding a client private key |
+| `/api/users`, `/api/users/batch`, `/panel/users`, `/panel/reach` (M32) | operator session | an add applies nodes over SSH by itself, one request per node, retryable |
+| `/panel/routing/**`, `/panel/nodes/{id}/direct` (M34) | operator session | the operator adds list **source URLs that the control plane itself fetches**, approves held list versions, and asks where a name would go |
 
 Two things worth knowing that a black-box run would spend budget learning:
 
@@ -88,6 +90,24 @@ A crossing of any of these is a finding. This is the list the audit is for.
 6. **the operator cannot be impersonated by a forged session.** The cookie is
    signed with a key derived from `HASHI_SECRET_KEY`; a session accepted without
    that key is critical.
+7. **a config-file archive is its holder's and nobody else's (M24).** The ZIP behind
+   `?format=client-config-file` carries private keys. It must obey §3.2 to §3.5
+   exactly as the subscription document does, it must never be cacheable, and a
+   revoked token's archive request must be indistinguishable from a never-issued one.
+8. **a list source cannot turn the control plane against its own network (M34).**
+   The control plane fetches operator-supplied https URLs. Fetching an internal or
+   loopback host was **accepted** as operator-only (decisions 2026-10-03). The
+   boundary that must still hold: no fetched body, error text or redirect target
+   reaches a page or a log beyond the bounded hold reason, the size cap and deadline
+   hold, and a hostile list can neither break rendering for other sources nor put a
+   destination into a log.
+9. **routing never records use (M34).** The lookup, the nightly refresh and the
+   held-update review write nothing about which destination anybody asked for: not
+   to a log, not to the audit table, not to the `routing_*` tables.
+10. **an add or a retry cannot be replayed into something it was not (M32).** The
+    per-node `/panel/reach` request applies exactly the node it names, for the
+    session that asked. It cannot be pointed at a node or a user the form did not
+    produce, and it cannot be fired cross-site (see the CSRF note in §2).
 
 ## 4. Out of scope, and why
 
