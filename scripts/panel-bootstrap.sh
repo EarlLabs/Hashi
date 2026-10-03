@@ -577,6 +577,10 @@ if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
   'Reaching the panel'. Nothing here published it either way."
 elif has_value HASHI_MGMT_ADDRESS; then
   say "generating the management tunnel the panel is reached over"
+  # No --out and no --configs-to on purpose: HASHI_MGMT_DIR and HASHI_MGMT_CONFIGS_TO
+  # reach the generator through this process's environment, so `HASHI_MGMT_CONFIGS_TO=dir
+  # make panel-bootstrap` is a choice about one run that never has to be written into the
+  # env file (M33). The generator refuses either inside the checkout.
   "${REPO_ROOT}/scripts/management-tunnel.sh" --env-file "${ENV_FILE}"
 else
   say "no HASHI_MGMT_ADDRESS in ${ENV_FILE}, so no management tunnel was generated. The
