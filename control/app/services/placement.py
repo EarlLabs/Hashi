@@ -294,11 +294,11 @@ async def delivery_socket_is_free(
 
     WHETHER THIS NODE IS ONE IS ``delivery.listener_for``, the same call the apply makes
     and the same one the Nodes screen composes its sentence from — so the refusal and the
-    screen cannot come to different views of one host. A fleet holding no certificate
-    serves no refreshes from anywhere, and reserving the socket there would tax every
-    operator who never asked for the feature with a sentence that is not true of their
-    fleet: the screen would say "not served from any host" while the form said the host
-    answers refreshes on that port.
+    screen cannot come to different views of one host. In a fleet holding no certificate
+    no node runs a refresh listener of its own, and reserving the socket there would tax
+    every operator who never asked for the feature with a sentence that is not true of
+    their fleet: the form would say the host answers refreshes on that port while the
+    screen said no node does.
 
     It is the DATABASE and CONFIGURATION halves of the question and never the reading of
     the host: this runs on a form submission, and a check that dialled the node would make

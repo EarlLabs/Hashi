@@ -863,18 +863,34 @@ async def where(session: AsyncSession, destination: str) -> Verdict:
 # below is read from.
 
 
-def age(then: datetime.datetime | None, now: datetime.datetime) -> str:
-    """How long ago, in the coarse words an owner reads a list's age in."""
-    if then is None:
-        return "never"
+def _span(then: datetime.datetime, now: datetime.datetime) -> str:
+    """A length of time in the coarse words an owner reads a list's age in, with no
+    "ago" and no "old" — so each sentence that uses it says which of the two it means."""
     seconds = (now - then).total_seconds()
     if seconds < 3600:
-        return "less than an hour ago"
+        return "less than an hour"
     if seconds < 86400:
         hours = int(seconds // 3600)
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        return f"{hours} hour{'s' if hours != 1 else ''}"
     days = int(seconds // 86400)
-    return f"{days} day{'s' if days != 1 else ''} ago"
+    return f"{days} day{'s' if days != 1 else ''}"
+
+
+def age(then: datetime.datetime | None, now: datetime.datetime) -> str:
+    """When something happened: "3 days ago", "less than an hour ago", or "never"."""
+    return "never" if then is None else f"{_span(then, now)} ago"
+
+
+def in_force_sentence(then: datetime.datetime | None, now: datetime.datetime) -> str:
+    """The sentence a failed fetch's row ends with: how old the version still in force is.
+
+    Composed here, whole, rather than in the template as "is {{ age }} old" — that pasted
+    `age`'s "ago" into "old" and the real-host walk of M34 read "less than an hour ago old"
+    (M34.5). A source with no version in force says so, rather than "is never old".
+    """
+    if then is None:
+        return "No version of this list is in force yet."
+    return f"The version in force is {_span(then, now)} old."
 
 
 @dataclasses.dataclass(frozen=True)
@@ -907,6 +923,7 @@ class SourceRow:
     count: int
     skipped: int
     fetched: str  # age of the version in force
+    in_force: str  # a whole sentence: how old the version in force is, or that none is
     attempted: str  # age of the last attempt
     error: str | None
     changed: Diff | None  # the version in force against the one before it
@@ -976,6 +993,7 @@ async def screen(
                 count=current.count if current else 0,
                 skipped=current.skipped if current else 0,
                 fetched=age(current.fetched_at if current else None, now),
+                in_force=in_force_sentence(current.fetched_at if current else None, now),
                 attempted=age(source.last_attempt_at, now),
                 error=source.last_error,
                 changed=diff(before.entries, current.entries) if before and current else None,

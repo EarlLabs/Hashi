@@ -156,7 +156,7 @@
             </tr>
             {% if source.error %}
             <tr class="row-detail">
-              <td class="text-muted wraps" colspan="7">last fetch {{ source.attempted }} failed: {{ source.error }} The version in force is {{ source.fetched }} old.</td>
+              <td class="text-muted wraps" colspan="7">last fetch {{ source.attempted }} failed: {{ source.error }} {{ source.in_force }}</td>
             </tr>
             {% endif %}
             {% endfor %}

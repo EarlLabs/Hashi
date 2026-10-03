@@ -1710,17 +1710,35 @@ DELIVERY_NO_NAME = (
     "control plane instead. Register this host under a name that resolves to it to "
     "serve refreshes from the host itself."
 )
+# The three below hold for EVERY node at once — the certificate is the control plane's,
+# not this host's — and each says what does serve refreshes in that state. They used to
+# open "not served from any host", which is true of the nodes and was read on the real
+# host (M34 walk, M34.5) as "users cannot fetch their links", on a co-located box whose
+# control plane was delivering every link under its public site's own certificate. A
+# sentence about behaviour names the state it holds for: here, "no node runs a listener
+# of its own, and the control plane serves every refresh".
+DELIVERY_BY_THE_CONTROL_PLANE = (
+    " Refreshes are served by this control plane, at {public}/sub/…, under its public "
+    "site's own certificate — enough while that address is reachable from where your "
+    "users are."
+)
 DELIVERY_NO_CERTIFICATE = (
-    "delivery — not served from any host: this control plane holds no delivery "
-    "certificate. Users refresh from this control plane instead, which is behind "
-    "whichever border it is on."
+    "delivery — no node runs a refresh listener of its own, this one included, because no "
+    "delivery certificate is configured (HASHI_DELIVERY_CERTIFICATE_PATH and _KEY_PATH)."
+    + DELIVERY_BY_THE_CONTROL_PLANE
+    + " Configure one only if nodes should answer refreshes too, for the day the control "
+    "plane's address is blocked."
 )
 DELIVERY_EXPIRED = (
-    "delivery — not served from any host: the delivery certificate expired {until} UTC, "
-    "and every client refuses an expired one. The next apply takes the listener and its "
-    "private key off this host. Users refresh from this control plane instead."
+    "delivery — no node runs a refresh listener of its own, this one included: the delivery "
+    "certificate expired {until} UTC, and every client refuses an expired one. The next "
+    "apply takes the listener and its private key off this host."
+    + DELIVERY_BY_THE_CONTROL_PLANE
 )
-DELIVERY_UNUSABLE = "delivery — not served from any host: {problem}"
+DELIVERY_UNUSABLE = (
+    "delivery — no node runs a refresh listener of its own, this one included: {problem}."
+    + DELIVERY_BY_THE_CONTROL_PLANE
+)
 
 
 def _expiry_and_countdown(until: datetime.datetime) -> tuple[str, str]:
@@ -1769,7 +1787,7 @@ def delivery_note(node: Node, settings: Settings) -> str | None:
     try:
         listener = delivery.listener_for(node, settings)
     except delivery.DeliveryCertificateUnusable as exc:
-        return DELIVERY_UNUSABLE.format(problem=exc)
+        return DELIVERY_UNUSABLE.format(problem=exc, public=settings.public_base_url)
     if listener is not None:
         name = delivery.delivery_site_address(node)
         until, countdown = _expiry_and_countdown(listener.certificate.not_after)
@@ -1811,9 +1829,10 @@ def delivery_note(node: Node, settings: Settings) -> str | None:
         return DELIVERY_NO_NAME.format(address=node.address)
     certificate = delivery.configured_certificate(settings)
     if certificate is None:
-        return DELIVERY_NO_CERTIFICATE
+        return DELIVERY_NO_CERTIFICATE.format(public=settings.public_base_url)
     return DELIVERY_EXPIRED.format(
-        until=certificate.not_after.strftime("%Y-%m-%d %H:%M")
+        until=certificate.not_after.strftime("%Y-%m-%d %H:%M"),
+        public=settings.public_base_url,
     )
 
 

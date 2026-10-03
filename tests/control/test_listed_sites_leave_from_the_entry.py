@@ -376,6 +376,36 @@ async def test_a_failed_fetch_keeps_the_last_good_version_and_says_how_old(
     row = view.sources[0]
     assert row.error.startswith("the list's host could not be reached")
     assert row.fetched == "3 days ago"
+    assert row.in_force == "The version in force is 3 days old."
+
+    # The row as the owner reads it, at the real clock: found on the real host as "is less
+    # than an hour ago old" (M34.5), because the template pasted "ago" into "old".
+    page = (await client.get("/panel/routing")).text
+    assert "The version in force is less than an hour old." in page
+    assert "ago old" not in page
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "sentence"),
+    [
+        (datetime.timedelta(minutes=5), "The version in force is less than an hour old."),
+        (datetime.timedelta(hours=1), "The version in force is 1 hour old."),
+        (datetime.timedelta(hours=5), "The version in force is 5 hours old."),
+        (datetime.timedelta(days=1), "The version in force is 1 day old."),
+        (datetime.timedelta(days=3), "The version in force is 3 days old."),
+        (None, "No version of this list is in force yet."),
+    ],
+)
+def test_the_age_of_the_version_in_force_is_said_as_an_age(elapsed, sentence) -> None:
+    """Every span the age words have, in the "old" form and the "ago" form both."""
+    now = datetime.datetime(2026, 10, 3, 12, tzinfo=datetime.UTC)
+    then = None if elapsed is None else now - elapsed
+    assert routing.in_force_sentence(then, now) == sentence
+    assert "ago" not in sentence
+    expected_ago = "never" if then is None else sentence.split(" is ", 1)[1].replace(
+        " old.", " ago"
+    )
+    assert routing.age(then, now) == expected_ago
 
 
 # --- fetching, for real, over HTTPS on loopback -----------------------------------------
