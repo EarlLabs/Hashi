@@ -1348,6 +1348,74 @@ place, and its configuration does not change.
 
 ---
 
+## Sites that only open from Russia (direct sites)
+
+Some sites refuse every visitor whose address is not Russian — state services, banks, a few
+shops. A user on the VLESS path reaches the internet from the LEAF's foreign address, so
+those sites refuse them. **Direct sites** (M34) lets an entry node open the sites on a list
+from its OWN Russian address instead, and everything else goes through the hop as before.
+It changes nothing on anyone's phone and nothing for config-file (AmneziaWG) users, whose
+tunnel goes straight to the leaf.
+
+The cost is the point and is worth saying out loud: **a listed site sees the entry's
+address, not the leaf's.** While the hop is down, listed sites still open and nothing else
+does — there is no fallback for unlisted sites.
+
+### Switching it on
+
+1. **Routing** screen → *Suggested* → **add** `itdoginfo-russia-outside`. That is the narrow
+   list the owner chose: sites that do not open from abroad (about forty names). The three
+   broader roscomvpn lists are offered too and are added switched off. Any https text list
+   with one site per line can be added with **add source**. The suggestions come from
+   `HASHI_ROUTING_SUGGESTED_SOURCES` (default in `deploy/docker-compose.yml`; `.env` may
+   replace it).
+2. **fetch now**. Adding fetches nothing. The control plane fetches — never a node — and the
+   screen updates when it is done. A source that cannot be fetched keeps whatever version was
+   in force, and its row says how old that is.
+3. **Nodes** screen → the entry → **direct sites**. Give the **resolver for listed sites**:
+   an IPv4 resolver on the entry's own side of the border, so a listed site answers as it
+   would a Russian visitor. The resolver the entry's hosting provider hands the host is the
+   natural choice (`resolvectl status` on the entry shows it — not `127.0.0.53`, which is the
+   host's stub and is refused). It must differ from the node's other resolver (the M16 one,
+   reached through the hop); the dialog refuses the same address for both. **switch on**.
+4. **apply** the entry. Applying restarts its proxy: anyone connected through it is dropped
+   for a second or two.
+
+Your own lists, on the same screen (**add entry**): *always direct* adds sites; *never
+direct* keeps a site on the hop even when a source lists it, and wins over everything. A
+name covers every name under it. **Where would it go?** answers for one site or address
+from the lists alone; nothing typed there is kept.
+
+### What happens at night
+
+Every night at `HASHI_BACKUP_AT` in `HASHI_BACKUP_TZ` — the backup's hour, read by the
+control plane too — the sources that are on are fetched (only while some entry has direct
+sites on), and every entry whose config changed is applied. A fetched list that looks wrong
+is **held** instead, with its diff on the Routing screen, until you **approve** or
+**reject** it: any line that is not a site or an address range (an error page in place of a
+list), an empty list, more than `HASHI_ROUTING_MAX_ENTRIES` (20000) entries, or a list that
+grew or shrank by more than `HASHI_ROUTING_MAX_CHANGE` (half) in one fetch. A rejected
+content is not asked about again. `HASHI_ROUTING_CHECK_INTERVAL=0` turns the nightly run
+off. A malformed hour or an unknown zone falls back the way the backup does (04:00, UTC) and
+the Routing screen says so.
+
+An entry that was behind for another reason when the night comes gets that change too; turn
+its switch off if it must be left alone.
+
+### Checking it on the real hosts
+
+From a phone on the entry's VLESS link: open a site on the narrow list that shows the
+visitor's address (`showip.net` is on it) — it must show the **entry's** address. Open an
+address-echo site that is on no list (for example `ifconfig.me`) — it must show the
+**leaf's**. Put the first site on *never direct*, apply, and it shows the leaf's. Stop the
+hop — `docker ps` on the leaf lists its hop container; `docker stop` it — and the listed site
+still opens while the unlisted one does not; `docker start` it again afterwards.
+
+Nothing records who reached what: the entry's container log stays at `warning` with access
+and DNS logging off, the Routing screen shows the lists and never their use, and the lookup
+writes nothing. The lists themselves are in the control database and therefore in every
+backup — they are public data and your own two lists, not anything about a user.
+
 ## Upgrading an install that predates the rename
 
 **The person who uses hashi is a `user`. They used to be a `friend`** — in the API, in

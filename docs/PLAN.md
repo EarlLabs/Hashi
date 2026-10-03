@@ -3809,6 +3809,99 @@ command to get there.
 
 ---
 
+## → M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M34` · acceptance: yes (a real-host walk, run by the orchestrator, then the owner's phone on a Russian mobile network — not by the implementer), PENDING
+
+**What the owner wants.** On the VLESS path (phone → entry → hop → leaf), traffic to sites
+that refuse foreign addresses (state services, banks, …) leaves directly from the entry's
+Russian address. Everything else goes through the hop as today. The lists come from public,
+automatically released sources and are refreshed by themselves. The owner adds their own
+entries, switches the feature on and off at any time, and can see which entries are in effect.
+
+**Shape, settled with the owner on 2026-10-03.**
+- **Server-side, on the entry's Xray, not on the client.** Xray already sees each
+  connection's destination (SNI, IP) and picks an outbound by rule, so no phone needs a
+  routing profile. That keeps "a user never touches their device" true. Rejected: shipping
+  rule files to clients for every engine, which a known operator does — more formats, more
+  places to go stale, and the subscription becomes app-specific.
+- **NARROW by default (owner's choice):** only destinations that do not open from abroad go
+  direct. Rejected as the default: the broad "every Russian site" (`geosite:ru` +
+  `geoip:ru`), which puts far more traffic on the entry's own address.
+- **Sources are configuration, not code** (CLAUDE.md: no hardcoded domain). The defaults
+  offered in the panel are `itdoginfo/allow-domains` (`Russia/outside-raw.lst`, also
+  published as `geosite:russia-outside`), `hydraponique/roscomvpn-geosite` and
+  `roscomvpn-geoip`, and `runetfreedom` (refreshed every 6 h). Read each source's licence
+  and format before relying on it.
+- **The control plane fetches, never the node** (control → node, always). If a source is
+  unreachable (for example GitHub behind a whitelist), the last good version stays in force.
+- **Updates apply by themselves, at night (owner accepted).** Applying restarts Xray, which
+  drops connected users for 1–2 s, so it runs in the same quiet hour as the backup. **A
+  suspicious change waits for the owner**: a source that grows or shrinks by more than a set
+  ratio, fails its format check, or changes past a size bound is held with its diff shown,
+  and is not applied.
+- **DNS (owner accepted):** names that go direct are resolved by a Russian resolver, so they
+  get the answers a Russian client gets. Every other lookup stays on the hop (M16). The
+  resolver is node data, never hardcoded.
+- **The owner's own lists:** *always direct* adds entries. *never direct* forces entries
+  through the hop even when a source lists them, and it wins over everything.
+
+**What the panel shows.** An on/off switch per entry. A "Routing" screen listing each source
+with its last fetch, version, entry count and diff since the last fetch, plus the two owner
+lists. A lookup ("where would `example.ru` go?" → "direct, from <source>"). **No statistics
+of use**: no hit counters, no "top sites", nothing about which user went where. That is the
+charter's one hard record, and this feature must not become the first thing that keeps it.
+The screen shows the lists, never their use.
+
+**What it does not do.** It changes nothing for config-file (AmneziaWG) users, whose tunnel
+goes straight to the leaf. Traffic to a listed site carries the entry's address, not the
+leaf's. That is the point of the feature and also its cost, so it is stated on the switch.
+**A side effect worth keeping:** while the hop is down, listed sites still open.
+
+**Open before building — answered 2026-10-03 (docs/decisions.md, the eleven M34 rows).**
+- *No `if transport ==`*: a transport DECLARES it can split (`TransportMeta.splits_by_destination`);
+  `control` hands `direct=` only to one that does. The lists reach `edge` as plain canonical
+  values (`edge/direct.py`); rendering stays pure.
+- *Where the versions live*: four tables in the control database (migration `0011`), and so in
+  every backup — deliberately (the owner's own entries exist nowhere else; a restored control
+  plane behind a closed border needs the last good lists).
+- *The charter*: no conflict; the one widening (listed sites see the entry's address) is the
+  feature and is said on the switch.
+
+**Steps**
+- **M34.1 (edge)** — `edge/direct.py`; the declaration; both Xray transports render never →
+  direct → hop, direct names looked up at the entry-side resolver. Golden files from `ecd15c5`
+  prove "off" byte for byte; a live harness runs the rendered file in the pinned Xray.
+- **M34.2 (control)** — models + migration `0011`; `services/routing.py` (parse, fetch, hold,
+  approve/reject, owner lists, the switch, render data, lookup, screen);
+  `services/routing_refresh.py` (nightly run in the backup's hour, "fetch now"); the Routing
+  screen, the Nodes screen's "direct sites" dialog; seven audit actions.
+- **M34.3 (infra)** — the backup hour and the routing settings passed into the control
+  container; the suggested sources as a compose default; `.env.example`; an e2e scenario.
+- **M34.4 (docs)** — decisions, this section, the runbook ("Sites that only open from Russia"),
+  `docs/tracker/M34/`.
+
+**Done when** — what this branch proves, and what only the real hosts can
+- [ ] With the switch on, a listed site opened from a phone sees the entry's address, and an
+      unlisted one sees the leaf's. With it off, both see the leaf's. *Built and measured on
+      loopback against the pinned Xray (which address a connection leaves from, and which
+      resolver a name is asked at); "off" is byte-identical to the pre-M34 render. The phone
+      half is the walk's.*
+- [ ] An entry on *never direct* goes through the hop even when a source lists it. *Measured
+      on loopback, by name and by address; the walk repeats it on a real listed site.*
+- [ ] A nightly refresh that changes a source is applied without the owner. One that trips
+      the bounds is held, with its diff shown on the Routing screen. *Built and tested with
+      the fetch replaced; the first real night is the walk's.*
+- [ ] Every source unreachable → the last good lists stay in force and the screen says how
+      old they are. *Tested; the walk can block the list host on the control box to see it.*
+- [ ] Nothing records which user reached which destination: the logs, the database and the
+      screen are checked for it. *Asserted on the config, the schema, the captured logs and the
+      lookup; the walk reads the entry's container log and the control log after use.*
+- [ ] Hop down → listed sites still open, everything else stops (no silent fallback).
+      *Measured on loopback with the hop's address gone; the walk stops the hop for real.*
+
+acceptance: yes — on the real hosts, from a phone on a Russian mobile network.
+
+---
+
 ## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · code and docs built 2026-10-03 on `task/M33` · acceptance: yes (the real-host walk, run by the orchestrator — not by the implementer), PENDING
 
 **Why.** Today the console is reachable only through `ssh -L` from a laptop. The tunnel
