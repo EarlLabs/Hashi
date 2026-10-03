@@ -74,4 +74,7 @@ META = TransportMeta(
     # offer its users (M25, proven end to end on a real leaf), and it fails closed: with
     # the hop down the connection cannot be opened from that address at all.
     datapath=Datapath.RE_ORIGINATING,
+    # M34: it opens every connection itself, so it can open some of them from this
+    # node's own address — see ``render._direct_for_xray``.
+    splits_by_destination=True,
 )

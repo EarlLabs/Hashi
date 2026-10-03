@@ -9,7 +9,14 @@ result the second transport was built to demonstrate.
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlencode
 
-from edge.egress import NOT_THE_INTERNET, Egress, exit_origin, lookup_resolver
+from edge.direct import DirectRoutes, direct_resolver_problem
+from edge.egress import (
+    NOT_THE_INTERNET,
+    Egress,
+    EgressNotRenderable,
+    exit_origin,
+    lookup_resolver,
+)
 from edge.node import Credential, NodeView
 from edge.registry import ClientEntry
 from edge.templating import environment_for
@@ -26,6 +33,7 @@ def render_server(
     *,
     egress: Egress = Egress.NONE,
     exit_via: str | None = None,
+    direct: DirectRoutes | None = None,
 ) -> str:
     """The node's complete Xray config, authorising exactly ``clients``.
 
@@ -56,17 +64,29 @@ def render_server(
     user happened to send. The list is ``edge.egress``'s one copy, shared with the kernel
     tunnels that drop the same ranges; the rule expressing it is this package's, in its own
     template.
+
+    ``direct`` is M34: the destinations this node opens by its OWN route while everything
+    else leaves through the hop, with the resolver their names are looked up at. ``None``
+    (and an empty direct list) renders exactly the file this function rendered before the
+    feature existed — asserted byte for byte, because "off" must mean off. See
+    ``_direct_for_xray`` for the refusals and the template's header for the rule order.
     """
+    origin = exit_origin(egress, exit_via)
+    resolver = lookup_resolver(egress, node.resolver)
     return _TEMPLATES.get_template("server.j2").render(
         node=node,
         params=params,
         # The address every outgoing connection is opened from, or ``None`` for this
         # node's own route. Checked by ``edge/egress.py`` rather than here: that a policy
         # and an address agree is a question about the policy, not about this protocol.
-        exit_origin=exit_origin(egress, exit_via),
+        exit_origin=origin,
         # Where the names in those connections are looked up — M16. ``None`` with no hop;
         # refused, never defaulted, on a node with one. See ``edge/egress.py``.
-        resolver=lookup_resolver(egress, node.resolver),
+        resolver=resolver,
+        # What leaves by this node's own route instead of the hop — M34. ``None`` renders
+        # the file byte for byte as it was before the feature existed, and so does a
+        # ``DirectRoutes`` with nothing in its direct list: see ``_direct_for_xray``.
+        direct=_direct_for_xray(direct, origin, resolver),
         # What a user may NOT ask this node to dial — M23's ninth round, and the mirror
         # of the finding a kernel tunnel closed in its own firewall rules. ``edge.egress``
         # owns the list and both kinds of data plane read that one copy; what differs is
@@ -111,6 +131,49 @@ def render_client(
         country_label=node.location_label,
         node_id=node.id,
     )
+
+
+def _direct_for_xray(
+    direct: DirectRoutes | None, origin: str | None, resolver: str | None
+) -> dict | None:
+    """``direct`` in Xray's own grammar, or ``None`` when nothing leaves directly.
+
+    The grammar is this package's business and nobody else's: ``domain:`` is Xray's word
+    for "this name and every name under it" and ``full:`` for "exactly this name", which
+    is what ``Destinations.suffixes`` and ``.names`` mean. Measured against the pinned
+    Xray (``tests/edge/test_listed_sites_leave_from_the_entry.py``).
+
+    An EMPTY direct list renders as no list at all, never as a rule with an empty
+    condition: a routing rule whose only condition is its inbound matches everything, so
+    an empty ``domain`` list here would have sent every user out of the entry.
+
+    Refused rather than rendered when there is no hop to leave by instead — the whole
+    feature is a choice between two ways out, and without the hop there is one — and when
+    the direct resolver cannot be told apart from the hop's (``direct_resolver_problem``).
+    """
+    if direct is None or direct.direct.empty:
+        return None
+    if origin is None:
+        raise EgressNotRenderable(
+            "this transport was given destinations to send out directly, and its node has "
+            "no hop: there is only one way out, so there is nothing to choose between."
+        )
+    problem = direct_resolver_problem(direct.resolver, resolver)
+    if problem:
+        raise EgressNotRenderable(problem)
+
+    def names(destinations) -> list[str]:
+        return [f"domain:{suffix}" for suffix in destinations.suffixes] + [
+            f"full:{name}" for name in destinations.names
+        ]
+
+    return {
+        "resolver": direct.resolver.strip(),
+        "direct_names": names(direct.direct),
+        "direct_networks": list(direct.direct.networks),
+        "never_names": names(direct.never),
+        "never_networks": list(direct.never.networks),
+    }
 
 
 __all__ = ["META", "render_client", "render_server"]

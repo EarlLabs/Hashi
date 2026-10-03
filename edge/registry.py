@@ -90,6 +90,7 @@ HOW:  each ``edge/transports/<name>/`` package exposes ``META`` in ``meta.py``
 """
 
 import importlib
+import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -662,6 +663,20 @@ class TransportMeta:
     # question exists — which is why the walk that found the hole is named in the type.
     serving_question: ServingQuestion | None = None
 
+    # Whether this transport can send some destinations out by its node's OWN route while
+    # everything else leaves through the hop — M34, and see ``edge/direct.py``. When True,
+    # ``render_server`` takes a keyword ``direct`` (an ``edge.direct.DirectRoutes`` or
+    # ``None``), and `control` passes it only to a transport that says so here: a
+    # declaration read, never a name compared.
+    #
+    # Defaulting to False for ``retired``'s reason, and the default is a statement: a
+    # transport that says nothing is never handed a list, so a package added later cannot
+    # be asked to honour one it ignores — which would be a switch in the panel that is on
+    # and changes nothing. Only a re-originating data plane can choose a way out per
+    # destination (``Datapath``); declaring this on a kernel-routed one is refused at
+    # discovery.
+    splits_by_destination: bool = False
+
     @property
     def subscription_expressible(self) -> bool:
         """Whether this transport rides in the v1 subscription — a base64 URI list.
@@ -1115,6 +1130,14 @@ def _check_declaration(package: str, meta: object) -> TransportMeta:
             "and never forms a tunnel."
         )
 
+    if meta.splits_by_destination and meta.datapath is not Datapath.RE_ORIGINATING:
+        raise ContractViolation(
+            f"transport {meta.name!r} declares that it sends some destinations out by its "
+            "node's own route, and its data plane hands what it decrypts to the kernel. "
+            "Only a data plane that opens each connection itself can choose a way out per "
+            "destination; the switch would be on and change nothing."
+        )
+
     return meta
 
 
@@ -1146,6 +1169,15 @@ def _check_contract(meta: TransportMeta, render: ModuleType, params_model: type)
                     "range, and every user would be allocated an address out of a pool "
                     "whose bounds cannot be read."
                 )
+
+    if meta.splits_by_destination and (
+        "direct" not in inspect.signature(render.render_server).parameters
+    ):
+        raise ContractViolation(
+            f"transport {meta.name!r} declares that it sends some destinations out by its "
+            "node's own route, and its render_server takes no `direct` keyword. The list "
+            "would be handed to a function that cannot receive it."
+        )
 
     for declared in sorted(meta.subscription_formats):
         function = SERIALISERS[declared]

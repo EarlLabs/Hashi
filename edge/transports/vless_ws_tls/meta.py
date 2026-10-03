@@ -45,4 +45,7 @@ META = TransportMeta(
     # offer this to its users at all (M25). Declared per package rather than per family:
     # what a transport does with a user's packets is its own answer.
     datapath=Datapath.RE_ORIGINATING,
+    # M34: it opens every connection itself, so it can open some of them from this
+    # node's own address — see ``render._direct_for_xray``.
+    splits_by_destination=True,
 )
