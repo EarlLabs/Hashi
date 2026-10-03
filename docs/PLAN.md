@@ -3811,6 +3811,60 @@ command to get there.
 
 ---
 
+## → M35 — Russian destinations bypass the tunnel on the user's device, by rules the subscription delivers · asked for by the owner 2026-10-03 · PROPOSED
+
+**Found on 2026-10-03, on the owner's phone, right after the fresh install.** With M34 on,
+the Ozon, hh and Gosuslugi apps still said "you are using a VPN". The cause is the
+**address** the request arrives from:
+- M34 (server-side) sends a listed destination out of the entry. Gosuslugi therefore sees
+  **a Yandex Cloud data-centre address**, which these services treat as a VPN.
+- Ozon and hh are not on the narrow list, so they see **the leaf's Dutch address**.
+
+**Measured on the owner's phone.** The owner added one routing rule by hand in V2Box,
+`domain:ru`, `domain:su`, `domain:xn--p1ai` → **Direct**. Those apps then reach the
+service from **the phone's own mobile address**, and they work. The owner's earlier
+AmneziaWG setup with on-device routing worked for the same reason.
+
+**What this changes in M34's settled shape.** M34 chose server-side routing so that no
+client needs a profile. For apps that judge the address, that is the wrong place: only the
+device can make a request leave from the user's own address. M34 stays as the path for a
+client that cannot take rules. Record the reversal in `docs/decisions.md`. Do not rewrite
+M34's rows.
+
+**What to build (shape to settle in the first step)**
+- **VLESS clients:** the subscription carries a routing profile that the common iOS and
+  Android apps apply without the user touching it. Find out per app (Happ, V2Box,
+  Streisand, Hiddify, v2rayNG) what each accepts. Candidates: a full Xray JSON
+  subscription with `routing`, Happ's routing header or deeplink (the format
+  `hydraponique/roscomvpn-routing` publishes), and the sing-box `route` block. The rule is
+  the owner's: **Russian zones (`.ru`, `.su`, `.рф`) plus the M34 lists → direct on the
+  device**, everything else → proxy. Prefer domain rules that need no geo database. A
+  client that lacked its `geoip`/`geosite` file would not start, and the owner's first
+  attempt showed what that costs: no internet at all.
+- **AmneziaWG config files:** `AllowedIPs` that leaves out Russian networks, aggregated to
+  a size the iOS and Android apps accept. Measure that limit; a list too long is refused
+  or slow. Or document AmneziaVPN's split tunnelling as the route, if the file cannot carry
+  it.
+- **Panel:** one switch per user-facing transport, "Russian destinations bypass the
+  tunnel on the device", plus the owner's always-direct and never-direct lists from M34,
+  so both places use one source of truth.
+- **Charter and privacy.** The bypassed traffic leaves from the user's own address, which
+  is exactly what these services demand. It is visible to the user's ISP **without the
+  tunnel**, so the switch says so. Nothing is logged, as in M34.
+
+**Done when**
+- [ ] A fresh user imports only the subscription link into each supported app. Ozon, hh
+      and Gosuslugi open without a VPN warning, and `ifconfig.me` shows the leaf.
+- [ ] An app that cannot take rules still works as before, through M34.
+- [ ] A client given a profile it cannot parse is never left with no internet. Test the
+      failure the owner hit.
+- [ ] The AmneziaWG file route is either working or documented as the app's own setting,
+      with the measured limit stated.
+
+acceptance: yes — the owner's phone on a Russian mobile network, with each supported app.
+
+---
+
 ## ✅ M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M34` · acceptance: yes (a real-host walk, run by the orchestrator, then the owner's phone on a Russian mobile network — not by the implementer), PENDING · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **What the owner wants.** On the VLESS path (phone → entry → hop → leaf), traffic to sites
