@@ -3,16 +3,27 @@
 ## Короткая памятка
 
 Команды выполнять из каталога проекта на сервере панели, если не указано другое.
+`make` — от владельца каталога, без `sudo`; `ufw`, `sysctl`, `systemctl` — через `sudo`.
 
 ### Развернуть панель
 
-1. Установить Docker с Compose, Git, Make и Bash.
-2. Скопировать `.env.example` в `.env`; заполнить домены, параметры БД,
+1. Установить Docker с Compose, Make, Bash и `amneziawg-tools`.
+2. Доставить код со своего компьютера (репозиторий закрытый, на сервере нет доступа к нему):
+   ```bash
+   ssh -t USER@SERVER 'sudo install -d -o USER -g USER /opt/hashi-control'
+   git archive HEAD | ssh USER@SERVER 'tar -x -C /opt/hashi-control'
+   ```
+   Обновление кода — та же вторая строка.
+3. Скопировать `.env.example` в `.env`; заполнить домены, параметры БД,
    `HASHI_SECRET_KEY` и хеш пароля (`make hash-password`). Секретный ключ
    сгенерировать на своём компьютере и сохранить отдельно от сервера и бэкапов.
-3. Направить DNS домена на сервер; открыть SSH и порты HTTP/HTTPS.
-4. Выполнить `make panel-bootstrap`, затем `make up-panel-over-ssh`.
-   Если управляющий туннель уже настроен — `make up-panel`.
+4. Направить DNS домена на сервер; открыть SSH и порты HTTP/HTTPS.
+5. Выполнить `HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make panel-bootstrap`. Он же создаёт
+   управляющий туннель (если заполнены `HASHI_MGMT_*`) и в конце печатает строки
+   `sudo …`, чтобы поднять туннель и сохранить его после перезагрузки. Выполнить их
+   как напечатано. Конфиги устройств забрать из `~/mgmt-devices` и удалить там.
+   Затем `HASHI_PRIVATE_BIND_ADDR` в `.env` = адрес туннеля и `make up-panel`.
+   Без туннеля — `make up-panel-over-ssh`.
 
 ### Открыть панель
 
@@ -35,6 +46,7 @@ ssh -L PORT:127.0.0.1:PORT USER@SERVER
      ARGS="--authorized-key '<публичный SSH-ключ панели>' --port <порт>/udp"
    ```
    Для TCP-протокола указать `/tcp`; добавить `--port` для каждого нужного порта.
+   Сервер панели, если он же нода, готовить так же, с `--user <аккаунт>`.
 2. **Nodes → Add node**: адрес, SSH-пользователь из результата bootstrap,
    SSH-порт и приватный SSH-ключ.
 3. Включить транспорт и нажать **Apply**.
@@ -51,7 +63,8 @@ ssh -L PORT:127.0.0.1:PORT USER@SERVER
   Затем передать ссылку. Для AmneziaWG скачать архив по ссылке конфигурации,
   распаковать и импортировать `.conf`.
 - **Отключить:** **Users → revoke** → подтвердить. Изменения применяются на
-  нодах сразу и сами. Возврат доступа — добавить заново и выдать новую ссылку.
+  нодах сразу и сами. Вернуть доступ — добавить под **новым** именем (старое
+  занято, панель откажет) и выдать новую ссылку.
 
 ### Где смотреть
 
@@ -88,7 +101,7 @@ HASHI_RESTORE_AGE_IDENTITY=/path/to/age-key.txt \
 
 ### Восстановить после потери сервера
 
-На новом сервере установить зависимости, клонировать проект и заполнить `.env`
+На новом сервере установить зависимости, доставить код (как в «Развернуть панель») и заполнить `.env`
 с **исходным `HASHI_SECRET_KEY`**. Хеш пароля получить через `make hash-password`.
 Затем:
 
@@ -111,8 +124,8 @@ make restore-from-bucket
 после изменения настроек транспорта, маскировки или резолвера: панель
 показывает это блоком **NOT APPLIED** с кнопкой. После повторного
 `panel-bootstrap` снова выполнять `up-panel` или `up-panel-over-ssh`.
-Для добавления и удаления устройств управляющего туннеля менять список в `.env`
-и выполнять `make mgmt-tunnel`.
+Для добавления и удаления устройств управляющего туннеля менять список в `.env`,
+выполнять `make mgmt-tunnel`, затем `sudo systemctl reload awg-quick@awg-mgmt`.
 
 ---
 
@@ -230,25 +243,40 @@ fails it stops and says so (`edge/bootstrap/node_stack.py`). You do not need to 
 SSH host keys: the first successful connect learns the node's host key and pins it from
 then on, so a later connection cannot be silently intercepted.
 
-**The control-plane box needs four more things, and a genuinely bare one may have none of
-them:** a container runtime with the compose plugin, `git` — the stack is built from a
-clone of this repository, not from a published image — `make`, because every command
-in the block below is a Make target, and `bash`, because every script those targets run
-is a bash script. An acceptance walk on a bare host found the first three missing and the
-runbook listing none of them; the restore walk of 2026-10-02 met a minimal image without
-the fourth, and `make restore-from-bucket` died on `env: can't execute 'bash'` before any
-of its own checks could speak. Every such target now asks for bash first and says so in a
-sentence (M31.7), but install it with the others: `apt-get install bash`, `apk add bash`.
+**The control-plane box needs five more things, and a genuinely bare one may have none of
+them:** a container runtime with the compose plugin; `make`, because every command in the
+block below is a Make target; `bash`, because every script those targets run is a bash
+script; `amneziawg-tools` — with the AmneziaWG kernel module or `amneziawg-go` for it to
+drive — because the management tunnel the console is reached over is an `awg-quick@` unit
+from that package (*Bringing it up, and keeping it up across a reboot*, below); and `git`
+**only if** the box is to fetch the code itself with a deploy key — shipped from your own
+machine as *Ship the code to the control-plane box* shows, it needs none. An acceptance
+walk on a bare host found the runtime, `git` and `make` missing and the runbook listing
+none of them; the restore walk of 2026-10-02 met a minimal image without `bash`, and
+`make restore-from-bucket` died on `env: can't execute 'bash'` before any of its own
+checks could speak. Every such target now asks for bash first and says so in a sentence
+(M31.7), but install it with the others: `apt-get install bash`, `apk add bash`.
 
-**On a node, do neither of those by hand.** `scripts/node-bootstrap.sh` installs the
-runtime, authorises the key and brings the firewall up in one run that asks no questions,
-and running it again changes nothing — see *Preparing a leaf* below. The block it replaces
-is here because a control-plane box that is not also a node still does it this way:
+**Which boxes need `amneziawg-tools`:** the control plane's box, whatever else it carries,
+whenever it is to have a management tunnel — and no other. A node's AmneziaWG runs from
+the container image the control plane pushes (`edge/bootstrap/node_stack.py`), so a box
+that is only a node needs nothing of it.
+
+**The runtime goes on the control-plane box by hand, before its block**, and the account
+that will own the checkout goes in the `docker` group — on a box that is also a node too,
+because the control plane comes up before that box is prepared as a node:
 
 ```bash
-curl -fsSL https://get.docker.com | sh && docker version
-cat >> ~/.ssh/authorized_keys      # paste ~/.ssh/hashi-node.pub, then Ctrl-D
+curl -fsSL https://get.docker.com | sudo sh && sudo docker version
+sudo usermod -aG docker ACCOUNT      # then log in again, so the group applies
 ```
+
+**On a node, install nothing else by hand and authorise no key by hand — the control
+plane's own box included, when it is also a node.** `scripts/node-bootstrap.sh` installs
+the runtime where there is none (and leaves one that is there alone), authorises the
+control plane's key and brings the firewall up in one run that asks no questions, and
+running it again changes nothing — see *Preparing a node* below. A control-plane box that
+is **not** a node has no key to authorise at all: nothing dials it over SSH.
 
 ### The env file
 
@@ -597,11 +625,11 @@ you would actually be on.
 
 ---
 
-## Preparing a leaf
+## Preparing a node
 
-A rented host, an SSH session, and ten minutes. This section is every node — the leaf
+A rented host, an SSH session, and ten minutes. This section is **every** node — the leaf
 abroad, the entry in Russia, and the control plane's own box when it is also a node — because
-they are prepared the same way: **one script, `scripts/node-bootstrap.sh`, and nothing by
+they are all prepared the same way: **one script, `scripts/node-bootstrap.sh`, and nothing by
 hand.** A hand-prepared host is a host you cannot rebuild at three in the morning, which
 is precisely when you rebuild one.
 
@@ -747,6 +775,26 @@ needed or wanted. The half it cannot do is change which account the control plan
 and that is where the cost is — read that section before you change the account of a node
 that is serving.
 
+### The control plane's own box, when it is also a node
+
+On C+E+L, C+E | L and C+L | E the control plane reaches its own box the way it reaches any
+other node — over SSH, out through the box's public address and back in — so that box gets
+**the same run as every other node**, with nothing authorised by hand. That is the version
+that worked on a from-scratch install; there is no shortcut through the control-plane block
+for it. Run it from your own machine like any other:
+
+```bash
+make node-bootstrap NODE=ADMIN_ACCOUNT@THIS_BOX \
+  ARGS="--user NODE_ACCOUNT --authorized-key '$(cat ~/.ssh/hashi-node.pub)' --port TRANSPORT_PORT/tcp"
+```
+
+`ADMIN_ACCOUNT` is whoever can run the script — root, or an account with passwordless
+`sudo`. `NODE_ACCOUNT` is the account the control plane will log in as, and the one you
+register as `ssh_user`: the run's `register it in the panel` line names it. It needs no
+`sudo` of its own — only the three things *Which accounts work* lists, which the run gives
+it. **Choose an account other than root** unless you want root logging in by key (M31.10,
+from the field walk of 2026-10-02).
+
 ### What a finished run says
 
 ```
@@ -884,42 +932,92 @@ open the whole time.
 
 One procedure for every arrangement in *Where the three roles go*. Where a step reads
 differently on a box that carries more than one role, the step says so; there is no other
-branch. On a one-box install, the steps that name a second box (the hop, the leaf's
-preparation) are the ones you skip, and the rest are typed on that one box.
+branch. On a one-box install, the steps that name a second box (the hop, a second box's
+preparation) are the ones you skip, and the rest are typed on that one box — its own node
+preparation included.
+
+### Ship the code to the control-plane box
+
+From your own machine, in your checkout. A `git clone` on the box fails twice over: the
+repository is private and the box holds no credential for it, and `/opt` belongs to root, so
+an ordinary account cannot create the directory. This ships one commit's tree over the SSH
+access you already have, and needs nothing on the box but `tar`:
+
+```bash
+ssh -t ACCOUNT@THE_PANEL_HOST 'sudo install -d -o ACCOUNT -g ACCOUNT /opt/hashi-control'
+git archive REF | ssh ACCOUNT@THE_PANEL_HOST 'tar -x -C /opt/hashi-control'
+```
+
+`ACCOUNT` is the ordinary account every `make` target below runs as, and it owns the
+checkout; it has to be in the `docker` group (*What every box must already have*). `REF` is
+the commit you ran `make verify` on — `main`, or a tag. **Upgrading is the second line
+again with the new ref.** `tar` adds and overwrites and removes nothing, so a file the new
+tree deleted stays on the box: `git diff --name-only --diff-filter=D OLD_REF NEW_REF` lists
+them, and they are yours to delete.
+
+The box gets the tree and no `.git`, and that is the point: nothing on the most exposed
+machine in the fleet can read the repository. **If you want `git pull` on the box
+instead**, give it a deploy key — a key generated on the box and added to the repository as
+a read-only deploy key — and `git clone` into the directory the first line made. That box
+then holds a credential that reads the code (never the secrets, which are not in it); the
+choice is recorded in `docs/decisions.md`, 2026-10-03.
 
 ### Bring up the control plane
 
-On the box you chose for **C**.
+On the box you chose for **C**, in `/opt/hashi-control`. **Every `make` line runs as the
+account that owns the checkout, never under `sudo`**: a target run as root writes root-owned
+files into a checkout the owner then cannot update, and the management tunnel's host file
+lands in root's home rather than the owner's. Every line that changes the host — the firewall, the tunnel, `sysctl` —
+is `sudo`, and says so.
 
-**This is 13 commands on 11 lines, and `panel-bootstrap.sh` is one of them.** It is the
+**This is 17 commands on 16 lines, and `panel-bootstrap.sh` is one of them.** It is the
 honest one — it refuses to invent your secret key, it verifies the control plane answers
 before it claims success, and a second run changes nothing — but it is a step inside this
 block and not the whole of it, and the charter's *one script per host* is about nodes
-before it is about this box. On a host that is genuinely bare, two more come first: the
-docker install line above, and your package manager's `git` and `make`.
+before it is about this box. On a host that is genuinely bare, the prerequisites in *What
+every box must already have* come first, and the code (*Ship the code*, above).
 
 ```bash
-git clone <this repo> /opt/hashi-control && cd /opt/hashi-control
-cp .env.example .env && "${EDITOR:-vi}" .env        # see the table above
+cd /opt/hashi-control                                # as ACCOUNT, the checkout's owner
+cp .env.example .env && "${EDITOR:-vi}" .env         # see the table above
 
-ufw logging off                                # FIRST, always — see below
-ufw allow <the port sshd listens on>/tcp       # sshd -T | awk '/^port /{print $2}'
-ufw allow <Caddy's plain-HTTP port>/tcp        # the ACME challenge and the redirect
-ufw allow <Caddy's HTTPS port>/tcp             # the DELIVERY endpoint, not the console
-ufw allow <this node's transport port>/udp     # only where this box is also a node
-ufw enable
+sudo ufw logging off                                 # FIRST, always — see below
+sudo ufw allow <the port sshd listens on>/tcp        # sshd -T | awk '/^port /{print $2}'
+sudo ufw allow <Caddy's plain-HTTP port>/tcp         # the ACME challenge and the redirect
+sudo ufw allow <Caddy's HTTPS port>/tcp              # the DELIVERY endpoint, not the console
+sudo ufw enable
 
-make panel-bootstrap
-make up-panel
+HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make panel-bootstrap      # as ACCOUNT
+
+# The next six lines are the SHAPE of what the run just printed. Copy them from its output:
+# it prints them with this host's real path, and that path is not one to guess.
+sudo install -d -m 700 /etc/amnezia/amneziawg
+sudo ln -sfn <the path the run printed>/awg-mgmt.conf /etc/amnezia/amneziawg/awg-mgmt.conf
+sudo ufw allow <HASHI_MGMT_PORT>/udp
+echo 'net.ipv4.ip_nonlocal_bind = 1' | sudo tee /etc/sysctl.d/60-hashi-mgmt.conf
+sudo sysctl --system
+sudo systemctl enable --now awg-quick@awg-mgmt
+
+make up-panel                       # as ACCOUNT, once HASHI_PRIVATE_BIND_ADDR is the tunnel's
 
 curl -o /dev/null -w "%{http_code}\n" https://<your panel host>/panel/    # expect 404
 ```
+
+**The six tunnel lines sit between the two `make` lines because `make up-panel` needs
+them.** With `HASHI_PRIVATE_BIND_ADDR` set, it publishes the console on the tunnel's
+address, and docker binds that address only if the host holds it or `ip_nonlocal_bind` is
+on — a block that went straight from the bootstrap to `make up-panel` failed there on a
+from-scratch install. What each line is for is *Bringing it up, and keeping it up across a
+reboot*; the device configs land in `~/mgmt-devices`, and moving them to your devices is
+*The management tunnel*. **With no `HASHI_MGMT_*` values there is no tunnel**: the run
+prints none of those lines, skip them, leave `HASHI_PRIVATE_BIND_ADDR` unset, and publish
+with `make up-panel-over-ssh` instead.
 
 **That `404` is the milestone working.** The console is not on the public hostname — it is
 on the private site, reached over the management tunnel or over the SSH forward. See
 *Reaching the panel* above, which is also where the console's own port is opened.
 
-Clone to `/opt/hashi-control`, **not** `/opt/hashi` — that path is the node stack's own
+Ship to `/opt/hashi-control`, **not** `/opt/hashi` — that path is the node stack's own
 root, and on a box that is also a node both live on the same disk.
 
 **`ufw logging off` comes first and is not optional.** `ufw enable` turns connection
@@ -934,14 +1032,16 @@ Off before up is the only version of this that works.
 **None of those ports is a number to copy from here.** They are the ports your own
 configuration uses: read them from `sshd -T`, from your Caddyfile's site addresses, and
 from the transport in the node record. A port written into a runbook becomes a port the
-fleet cannot move away from — the same rule that keeps one out of the code. On a box that
-is only a node, `scripts/node-bootstrap.sh` does this whole block for you, in the right
-order, from arguments.
+fleet cannot move away from — the same rule that keeps one out of the code. **No
+transport port is in this block**, on a box that is also a node either: that box gets a
+run of `scripts/node-bootstrap.sh` like any other node (*Prepare every node*, below), and
+that run opens each transport's port from its `--port` arguments, in the right order.
 
-### Prepare every other box
+### Prepare every node
 
-Each box that carries **E** or **L** and is not the control plane's box gets one run of
-*Preparing a leaf* above — the script is the same whichever end a node turns out to be.
+Each box that carries **E** or **L** gets one run of *Preparing a node* above — the
+control plane's own box too, when it carries one of them (*The control plane's own box, when
+it is also a node*, there). The script is the same whichever end a node turns out to be.
 
 **Choose the hop's UDP port before you run the script on the leaf**, and pass it as a
 `--port` there: the leaf is the end that listens, `node-bootstrap.sh` is what opens the
@@ -950,23 +1050,6 @@ acceptance walk did it in the other order, reached the hop form with a port noth
 opened, and had to run the script on the leaf a second time — safe, purely additive, and
 one more command than the procedure needs. Nothing in the product warns you, because the
 script is not told which role the host will be registered in.
-
-**On the control plane's own box, when it is also a node** (C+E+L, C+E | L, C+L | E), the
-firewall lines in the block above, and the key authorised under *What every box must
-already have*, already let the control plane reach it as root. **When
-you do not want root logging in by key** (M31.10, from the field walk of 2026-10-02),
-prepare that box with the node script like any other node, naming an ordinary account that
-has passwordless `sudo`:
-
-```bash
-make node-bootstrap NODE=<admin-account>@<this box's public address> \
-  ARGS="--user <node-account> --authorized-key '<the control plane's public key>' --port <port>/tcp"
-```
-
-and register it, below, with **`ssh_user` = `<node-account>`** — the account the run's last
-line names, not root. The control plane never escalates on a node (*Which accounts work*),
-so that account needs only what the script gave it: `/opt/hashi`, the `docker` group and
-the key.
 
 ### What each role lets in
 
@@ -998,8 +1081,8 @@ are the arrangement; the form is the same for all of them.
   fallback if the public address is awkward. For any other box, its real remote address;
   the control container needs outbound SSH to each.
 - **`ssh_user`, `ssh_port`** — from the `register it in the panel` line of that box's
-  script run, or `root` and the port sshd listens on for a box prepared by the control-plane
-  block alone. The private key is the contents of `~/.ssh/hashi-node`.
+  script run, the control plane's own box included. The private key is the contents of
+  `~/.ssh/hashi-node`.
 - **`address`** — what a user's device dials. **A name or an IP, and on the entry the
   choice is not cosmetic:** a node registered under a name is one that can answer its own
   users' refreshes (*Which host answers a refresh*, below), and one registered by IP never
@@ -1049,27 +1132,40 @@ and re-pointing this one hop at it, with nobody touching their device.
 A hop is never granted to a user and never appears in a subscription: a user holding the
 entry↔leaf tunnel would route straight past the entry the topology exists to hide behind.
 
-### Apply, add users, apply again
+### Apply, then add users — adding and revoking apply themselves
 
 1. **Apply every node.** Until you do, the hop exists only in the database. Each node is
    serving at this point and nobody is on it yet.
-2. **Add a user**, and read the dialog that opens. A user holding a link-shaped protocol
-   (the VLESS pair) is handed one link. The WireGuard family is a config *file* rather than a
-   URI, so a user holding `amneziawg` is shown **two links**: the *subscription link*, and
-   beneath it the *config-file link* — the same token asking `?format=client-config-file`.
-   The config-file link downloads an archive; unzip it and import the `.conf` into the
-   AmneziaWG app. The subscription link is empty for a user whose nodes offer only
-   `amneziawg` — the dialog says so under it — and empty is not an error. Hand the user both:
-   a link-shaped protocol offered later arrives in the first on its own. **"show link"** on
-   the Users screen opens the same dialog again.
-3. **Apply again**, on every node that serves them. This is the step an acceptance walk had
-   to work out for itself, and the one that costs a user an evening: adding a user changes
-   what the panel *would* push and touches no host. Their configuration is complete and
-   correct the moment it is issued — their own address, the node's real public key — while
-   the node holds nothing for them and their client handshakes into nothing. The panel says
-   so: the Users screen and the dialog that hands the link over both name the nodes that are
-   not running what this panel would give them. **Any change to who may use a node — a user
-   added, a user revoked, a pool resized — is an apply, on every node that serves them.**
+2. **Add a user**, and read the dialog that opens. **The add applies by itself** (M32): the
+   dialog lists one row per serving node the user was given access on, and applies each in
+   turn — `✓` when that node is running the new configuration, `✗` with the reason and,
+   where pressing again can change the outcome, a **retry**. Every apply restarts what
+   changed on that node, so whoever is connected there drops for a second or two; adding
+   several people at once (one nickname per line) costs that once per node, not once per
+   person. A user holding a link-shaped protocol (the VLESS pair) is handed one link. The
+   WireGuard family is a config *file* rather than a URI, so a user holding `amneziawg` is
+   shown **two links**: the *subscription link*, and beneath it the *config-file link* —
+   the same token asking `?format=client-config-file`. The config-file link downloads an
+   archive; unzip it and import the `.conf` into the AmneziaWG app. The subscription link
+   is empty for a user whose nodes offer only `amneziawg` — the dialog says so under it —
+   and empty is not an error. Hand the user both: a link-shaped protocol offered later
+   arrives in the first on its own. **"show link"** on the Users screen opens the same
+   dialog again.
+3. **Revoking applies by itself too**, on every node the user held access on.
+
+**A manual Apply is for every other change** — a transport's parameters, a decoy, a
+resolver, a pool resized, a hop built or re-pointed. Each of those changes what the panel
+*would* push and touches no host until that node is applied — by you, or, on an entry with
+direct sites switched on, by the nightly run (*What happens at night*, below). The panel says which nodes are behind in
+one block, labelled **not applied**, on the Overview, the Users screen, the Nodes screen and
+the link dialog, with an **Apply** button per node; a `✗` row in the add dialog, or a dialog
+closed before every row answered, leaves its node in that block too. Until that node is
+applied, a user added since has a link that names it and nothing of theirs on it.
+
+**Bringing someone back after a revoke is a new user under a new name.** The panel refuses
+an add whose nickname is already taken — `a user called '<name>' already exists` — and a
+revoked user keeps theirs, so add them as, say, `<name>2` and hand over the new link; the
+old one stays dead.
 
 ### Verify on the box
 
@@ -1200,7 +1296,7 @@ both enabled, and every user on the first row goes on connecting. Two rows on on
 need two ports and two ranges of their own (*Rules that are not optional*, below); nothing
 else about them collides, and neither has to be taken away for the other to exist.
 
-1. **Prepare the new box** with *Preparing a leaf* above — the script is the same
+1. **Prepare the new box** with *Preparing a node* above — the script is the same
    whichever end a node turns out to be — and register it. Give it a `resolver` as you
    register it: it is about to dial a hop, and such a node does not render without one
    (*A node that dials a hop needs a resolver*, below). Register it under a **name** if you
@@ -2045,9 +2141,10 @@ The day this is used is the day the box is gone. What you have is a bare machine
 repository, and three things you are carrying. One command does the rest:
 
 ```bash
-# the runtime first — a genuinely bare host has none of docker, git or make; see
+# the runtime first — a genuinely bare host has none of docker, make or bash; see
 # "What every box must already have" above. This command does not install one for you.
-git clone <this repo> hashi && cd hashi
+# Then the code, from your own machine: "Ship the code to the control-plane box" above.
+cd /opt/hashi-control
 cp .env.example .env
 
 make hash-password      # prints the whole HASHI_OPERATOR_PASSWORD_HASH line to paste in.
