@@ -378,7 +378,9 @@ async def test_the_works_line_is_grammatical_for_one_node_and_for_several(
     The pronoun was one word for both of its jobs — the object of "picks" and the
     subject of "is applied" — and "them" is only right for the first.
     """
-    await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
+    entry = await a_serving_node(
+        client, reality_params, name="entry-ru", address=ENTRY_ADDRESS
+    )
     await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
     user_id = await a_user_no_node_was_told_about(session, "mira")
 
@@ -386,11 +388,10 @@ async def test_the_works_line_is_grammatical_for_one_node_and_for_several(
     assert "them is" not in several, several
     assert "a client that picks them gets no connection until they are applied." in several
 
-    entry_only = await client.post(
-        "/panel/reach",
-        data={"node": [(await client.get("/api/nodes")).json()[0]["id"]], "user": [user_id]},
-    )
+    entry_only = await client.post("/panel/reach", data={"node": [entry], "user": [user_id]})
     assert entry_only.status_code == 200, entry_only.text
+    # Measured fresh: this session read both nodes before the reach applied one.
+    session.expire_all()
     one = await console.where_their_link_works(session, [user_id])
     assert "a client that picks it gets no connection until it is applied." in one, one
 
