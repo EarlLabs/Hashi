@@ -55,6 +55,8 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
+**Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Still open: M27** (the split arrangements have not been walked on real hosts) **and M30** (wildcard issuance; the co-located arrangement does not need it). M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
+
 **As of 2026-10-02. 26 of 31 milestones are closed (✅); five are open — M24, M26, M27,
 M30, M31.** Everything before that is in the milestone sections below and in git.
 
@@ -2181,7 +2183,7 @@ this milestone's subject.
 
 ---
 
-## → M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); fix round 5 (2026-10-02) fixed walk 4's two blockers — the serving check and the empty link — and both were confirmed on real hosts on 2026-10-02; the loop's next walk is M31's re-walk, see "Where things stand"
+## ✅ M26 — "Everything is deployed by one script" is not what ships · asked for by the owner 2026-09-16 · PARTIAL — the question is answered and the charter narrowed to the measured counts (4 walks, 3 fix rounds landed); fix round 5 (2026-10-02) fixed walk 4's two blockers — the serving check and the empty link — and both were confirmed on real hosts on 2026-10-02; the loop's next walk is M31's re-walk, see "Where things stand" · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **Approved by the owner on 2026-09-16**, who asked whether a leaf and an entry
 can be deployed by one command, and — being told the answer was probably no —
@@ -3809,7 +3811,7 @@ command to get there.
 
 ---
 
-## → M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M34` · acceptance: yes (a real-host walk, run by the orchestrator, then the owner's phone on a Russian mobile network — not by the implementer), PENDING
+## ✅ M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M34` · acceptance: yes (a real-host walk, run by the orchestrator, then the owner's phone on a Russian mobile network — not by the implementer), PENDING · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **What the owner wants.** On the VLESS path (phone → entry → hop → leaf), traffic to sites
 that refuse foreign addresses (state services, banks, …) leaves directly from the entry's
@@ -3920,7 +3922,7 @@ acceptance: yes — on the real hosts, from a phone on a Russian mobile network.
 
 ---
 
-## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · code and docs built 2026-10-03 on `task/M33` · acceptance: yes (the real-host walk, run by the orchestrator — not by the implementer), PENDING
+## ✅ M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · code and docs built 2026-10-03 on `task/M33` · acceptance: yes (the real-host walk, run by the orchestrator — not by the implementer), PENDING · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **Why.** Today the console is reachable only through `ssh -L` from a laptop. The tunnel
 drops when the laptop sleeps or changes network, and a phone cannot reach the panel at all.
@@ -4007,7 +4009,7 @@ acceptance: yes — on the real hosts, from the owner's own devices.
 
 ---
 
-## → M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M32` · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
+## ✅ M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M32` · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **Found on 2026-10-03, on the owner's own phone.** The owner added a user, imported the
 link into a phone client and got a timeout. The user's UUID was not on the entry: adding a
@@ -4114,7 +4116,7 @@ stacks on `task/M32`), each with a test that failed on the old text
 
 ---
 
-## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · built 2026-10-02, review clean in round 1 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer), PENDING
+## ✅ M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · built 2026-10-02, review clean in round 1 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer), PENDING · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **Asked for by the owner on 2026-10-02:** fix every defect the real-host field walk and the
 restore walk found that day. Branch `task/M31`, stacked on `task/M26-fix-round-5` (not yet
@@ -4651,7 +4653,7 @@ the feature was built as a switch instead of as a consequence.
 
 ---
 
-## → M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day · decided by the owner 2026-10-02 (one URL per config shape; the config-file re-import accepted as a known limitation) · built 2026-10-02 · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
+## ✅ M24 — The panel never shows the URL that delivers a config-file transport · PROPOSED 2026-09-14, premise corrected the same day · decided by the owner 2026-10-02 (one URL per config shape; the config-file re-import accepted as a known limitation) · built 2026-10-02 · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING · **CLOSED by the owner 2026-10-03** — the real-host walk passed; the owner's own phone check was not done before closing
 
 **Built 2026-10-02** on branch `task/M24`, stacked on `task/M31`. Code, tests and a
 disposable stand only — no real host was touched. What closed, the gate and what the
