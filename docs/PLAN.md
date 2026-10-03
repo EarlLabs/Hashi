@@ -3856,6 +3856,13 @@ code-and-docs half (M33.5) answers all seven; the walk below is what proves it.
   Three rows in `docs/decisions.md` (2026-10-03, M33). What the walk must check:
   `docs/tracker/M33/carry-over.md`.
 
+  Gate: infra 577 passed; control 1148 passed / 2 skipped (throwaway Postgres; includes
+  M32.4); edge 968 passed / 14 skipped / 3 failed (the known environmental cases in
+  `test_upstream_validation.py`); `make e2e-verify` 231 passed / 16 skipped. Review:
+  `reviewer-strict`, round 1, CLEAN. One low carried: peers are removed before new keys
+  are generated, so a key-generation failure mid-run leaves the removals without the
+  additions — a valid file, and a re-run completes it.
+
 **Done when**
 - [ ] The owner opens the panel from the laptop and from the phone over the tunnel, with no
       `ssh -L` running. *(field)*
