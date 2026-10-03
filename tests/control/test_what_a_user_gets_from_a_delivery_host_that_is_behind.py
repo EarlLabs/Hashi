@@ -39,7 +39,7 @@ from edge.bootstrap import delivery as node_delivery
 from edge.egress import NOT_THE_INTERNET_IPV4
 from edge.registry import SubscriptionFormat, discover
 
-from .conftest import GENERATED_SSH_KEY, pinned
+from .conftest import GENERATED_SSH_KEY, a_user_no_node_was_told_about, pinned
 
 # Reserved documentation NAMES, and the name half is the subject since M27.6: a host
 # registered by address can hold no certificate, so it serves no delivery and is handed
@@ -362,7 +362,8 @@ async def test_a_host_and_its_material_go_out_of_date_together_and_come_back_tog
     pushes = handed.pushes
 
     # A change this panel knows about and no apply has carried — the state M25 named.
-    await add_user(client, "kolya")
+    # The database half of an add only, since an add through the API applies (M32).
+    await a_user_no_node_was_told_about(session, "kolya")
 
     session.expire_all()
     node = await nodes.get_node(session, node_id)

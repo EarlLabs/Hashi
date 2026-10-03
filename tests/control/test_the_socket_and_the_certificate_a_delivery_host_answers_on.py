@@ -601,10 +601,14 @@ async def test_no_certificate_means_the_socket_is_the_transports(
 ) -> None:
     """The shipped default, and the refusal must not fire in it.
 
-    With no certificate configured no host serves refreshes from anywhere — the Nodes
-    screen says exactly that — so reserving the socket would tax every operator who
-    never asked for the feature, and would answer them with a sentence the screen
+    With no certificate configured no node runs a refresh listener of its own — the
+    Nodes screen says exactly that — so reserving the socket would tax every operator
+    who never asked for the feature, and would answer them with a sentence the screen
     contradicts on the same host in the same second.
+
+    And the screen says what DOES serve refreshes in that state (M34.5): on the real
+    host its old "not served from any host" was read as "users cannot fetch their
+    links", on a co-located box delivering every link from the control plane's own site.
     """
     object.__setattr__(settings, "delivery_certificate_path", "")
     object.__setattr__(settings, "delivery_key_path", "")
@@ -612,7 +616,10 @@ async def test_no_certificate_means_the_socket_is_the_transports(
     accepted = await enable(client, node_id, TCP_TRANSPORTS[0], delivery_site.DELIVERY_PORT)
     assert accepted.status_code == 201, accepted.text
     body = (await client.get("/panel/nodes")).text
-    assert "this control plane holds no delivery certificate" in body
+    assert "no node runs a refresh listener of its own" in body
+    assert "no delivery certificate is configured" in body
+    assert f"Refreshes are served by this control plane, at {settings.public_base_url}/sub/" in body
+    assert "not served from any host" not in body
 
 
 @pytest.mark.skipif(not TCP_TRANSPORTS, reason="this image ships no TCP transport")

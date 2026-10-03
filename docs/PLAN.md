@@ -3809,7 +3809,7 @@ command to get there.
 
 ---
 
-## → M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · PROPOSED
+## → M34 — Sites that only open from Russia leave from the entry, not through the hop · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M34` · acceptance: yes (a real-host walk, run by the orchestrator, then the owner's phone on a Russian mobile network — not by the implementer), PENDING
 
 **What the owner wants.** On the VLESS path (phone → entry → hop → leaf), traffic to sites
 that refuse foreign addresses (state services, banks, …) leaves directly from the entry's
@@ -3856,31 +3856,71 @@ goes straight to the leaf. Traffic to a listed site carries the entry's address,
 leaf's. That is the point of the feature and also its cost, so it is stated on the switch.
 **A side effect worth keeping:** while the hop is down, listed sites still open.
 
-**Open before building.**
-- `CLAUDE.md`'s rule "no `if transport ==` outside a transport's package": the routing rules
-  belong to the vless-reality transport's rendering, and the lists reach `edge` as data,
-  because rendering stays pure (no fetch, no clock).
-- Where the list versions are stored (database rows vs files on the control host), and
-  whether they are in the backup.
-- Check the charter for anything this conflicts with before the first step.
+**Open before building — answered 2026-10-03 (docs/decisions.md, the eleven M34 rows).**
+- *No `if transport ==`*: a transport DECLARES it can split (`TransportMeta.splits_by_destination`);
+  `control` hands `direct=` only to one that does. The lists reach `edge` as plain canonical
+  values (`edge/direct.py`); rendering stays pure.
+- *Where the versions live*: four tables in the control database (migration `0011`), and so in
+  every backup — deliberately (the owner's own entries exist nowhere else; a restored control
+  plane behind a closed border needs the last good lists).
+- *The charter*: no conflict; the one widening (listed sites see the entry's address) is the
+  feature and is said on the switch.
 
-**Done when**
+**Steps**
+- **M34.1 (edge)** — `edge/direct.py`; the declaration; both Xray transports render never →
+  direct → hop, direct names looked up at the entry-side resolver. Golden files from `ecd15c5`
+  prove "off" byte for byte; a live harness runs the rendered file in the pinned Xray.
+- **M34.2 (control)** — models + migration `0011`; `services/routing.py` (parse, fetch, hold,
+  approve/reject, owner lists, the switch, render data, lookup, screen);
+  `services/routing_refresh.py` (nightly run in the backup's hour, "fetch now"); the Routing
+  screen, the Nodes screen's "direct sites" dialog; seven audit actions.
+- **M34.3 (infra)** — the backup hour and the routing settings passed into the control
+  container; the suggested sources as a compose default; `.env.example`; an e2e scenario.
+- **M34.4 (docs)** — decisions, this section, the runbook ("Sites that only open from Russia"),
+  `docs/tracker/M34/`.
+- **M34.5 (control)** — **two wording defects found in the real-host walk** (2026-10-03).
+  The Routing screen's failed-fetch row read "The version in force is less than an hour ago
+  old": `routing.age` ("… ago") was pasted into "is … old" by the template. The sentence is
+  now composed whole (`routing.in_force_sentence`; "No version of this list is in force yet."
+  when there is none). And the Nodes screen said delivery was "not served from any host:
+  this control plane holds no delivery certificate" on the co-located box, whose control
+  plane was delivering every link at its public name — read as "users cannot fetch links".
+  The sentence (M27.6's) and its two siblings (expired, unusable certificate) now say that
+  no node runs a refresh listener of its own and that this control plane serves refreshes
+  at `<public base URL>/sub/…`. Tests fail on the old text (8 red before).
+
+**Real-host walk (orchestrator, 2026-10-03)** — `docs/tracker/M34/carry-over.md` items 1–9
+PASS: "off" byte-identical on the real host; `showip.net` → entry address, `ifconfig.me` →
+leaf address, `gosuslugi.ru` 200; never-direct wins; hop down → listed sites still open,
+others time out; switch off → digest back to the pre-switch value; a fetch failure keeps the
+last good version; nothing recorded in logs, tables or audit. Item 10 (the first nightly run,
+due 2026-10-04 04:00 Europe/Moscow) not yet observable. The phone check on a Russian mobile
+network is pending the owner.
+
+**Done when** — what this branch proves, and what only the real hosts can
 - [ ] With the switch on, a listed site opened from a phone sees the entry's address, and an
-      unlisted one sees the leaf's. With it off, both see the leaf's.
-- [ ] An entry on *never direct* goes through the hop even when a source lists it.
+      unlisted one sees the leaf's. With it off, both see the leaf's. *Built and measured on
+      loopback against the pinned Xray (which address a connection leaves from, and which
+      resolver a name is asked at); "off" is byte-identical to the pre-M34 render. The phone
+      half is the walk's.*
+- [ ] An entry on *never direct* goes through the hop even when a source lists it. *Measured
+      on loopback, by name and by address; the walk repeats it on a real listed site.*
 - [ ] A nightly refresh that changes a source is applied without the owner. One that trips
-      the bounds is held, with its diff shown on the Routing screen.
+      the bounds is held, with its diff shown on the Routing screen. *Built and tested with
+      the fetch replaced; the first real night is the walk's.*
 - [ ] Every source unreachable → the last good lists stay in force and the screen says how
-      old they are.
+      old they are. *Tested; the walk can block the list host on the control box to see it.*
 - [ ] Nothing records which user reached which destination: the logs, the database and the
-      screen are checked for it.
+      screen are checked for it. *Asserted on the config, the schema, the captured logs and the
+      lookup; the walk reads the entry's container log and the control log after use.*
 - [ ] Hop down → listed sites still open, everything else stops (no silent fallback).
+      *Measured on loopback with the hop's address gone; the walk stops the hop for real.*
 
 acceptance: yes — on the real hosts, from a phone on a Russian mobile network.
 
 ---
 
-## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · PROPOSED
+## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · code and docs built 2026-10-03 on `task/M33` · acceptance: yes (the real-host walk, run by the orchestrator — not by the implementer), PENDING
 
 **Why.** Today the console is reachable only through `ssh -L` from a laptop. The tunnel
 drops when the laptop sleeps or changes network, and a phone cannot reach the panel at all.
@@ -3897,28 +3937,77 @@ interface at the private address from the 2026-09-09 deployment. Nothing in the 
 install created it. Find out what keeps it up, and either adopt it or remove it — two
 tunnels answering on one address is not a state to leave a host in.
 
+**Found switching it on, on the real host (2026-10-03).** Seven findings, each a gap
+between the script, the runbook and a host that has to keep working: a re-run kept an old
+host file whatever `.env` now said; the runbook's `awg-quick up ~/...` "as root" pointed at
+`/root`; nothing survived a reboot, and the missing interface then failed the whole Caddy
+container — the public delivery endpoint with it; removing a device from the list removed
+nothing; adding one did not say how to load it; configs came out in the SSH stream with an
+em dash a QR decoder misread; and an old port's firewall rule was nobody's to remove. The
+code-and-docs half (M33.5) answers all seven; the walk below is what proves it.
+
 **Steps**
 - M33.1 — Decide the device list with the owner (at least laptop and phone) and fill the
   `HASHI_MGMT_*` block for this deployment; open its UDP port in the host firewall.
+  *(done on the real host by the orchestrator, 2026-10-03)*
 - M33.2 — Re-run `make panel-bootstrap` and move the stack to `make up-panel`; hand each
-  device its config once, as the script prints it. Consider a QR code for the phone.
-- M33.3 — Resolve the leftover `awg-mgmt` interface (above).
+  device its config once. *(walked on the real host; the findings above came out of it)*
+- M33.3 — Resolve the leftover `awg-mgmt` interface (above). *(orchestrator, on the host)*
 - M33.4 — Adding or removing a device later is a re-run with one entry more or less: walk
-  it, and make the runbook say so.
+  it, and make the runbook say so. *(runbook: done in M33.5; the walk: orchestrator)*
+- M33.5 — **built on `task/M33`** (code + docs, no host touched).
+  `scripts/management-tunnel.sh` converges the host file's peers to `HASHI_MGMT_PEERS`
+  (removes unlisted ones and says so, keeps listed keys, refuses a listed device whose
+  address changed); refuses a host file whose Address/ListenPort/MTU disagree with `.env`,
+  naming both values and the retire sequence; writes device configs to private files with
+  `--configs-to` / `HASHI_MGMT_CONFIGS_TO`; prints ASCII-only configs; and prints the root
+  commands with the real path — `/etc/amnezia/amneziawg` symlink, `ufw`, `ip_nonlocal_bind`,
+  `systemctl enable --now` / `reload awg-quick@awg-mgmt`. Runbook: "Bringing it up, and
+  keeping it up across a reboot", "Adding or removing a device", "Starting the tunnel over".
+  Three rows in `docs/decisions.md` (2026-10-03, M33). What the walk must check:
+  `docs/tracker/M33/carry-over.md`.
+
+  Gate: infra 577 passed; control 1148 passed / 2 skipped (throwaway Postgres; includes
+  M32.4); edge 968 passed / 14 skipped / 3 failed (the known environmental cases in
+  `test_upstream_validation.py`); `make e2e-verify` 231 passed / 16 skipped. Review:
+  `reviewer-strict`, round 1, CLEAN. One low carried: peers are removed before new keys
+  are generated, so a key-generation failure mid-run leaves the removals without the
+  additions — a valid file, and a re-run completes it.
+- M33.4 follow-up — **two real-host walk findings, fixed on `task/M34`** (no host touched).
+  D1: re-running `make panel-bootstrap` to add a device — which the runbook said to do —
+  converged a serving stack to the base compose file and took user delivery down until
+  `make up-panel`. Now `make mgmt-tunnel` runs the generator alone and touches no
+  container, and the runbook's device and start-over sections use it. D2: a changed
+  `HASHI_MGMT_PORT` was refused with "nothing was changed" after the stack step had
+  unpublished Caddy; the generator gained `--check` (every refusal, nothing written) and
+  the bootstrap runs it before `compose up`. Decision row 2026-10-03 (M33.4). Tests:
+  `tests/infra/test_a_device_change_keeps_delivery_up.py` (stub docker; three of four
+  red before the fix) and two `--check` cases in `test_management_tunnel_script.py`.
+  Walk to repeat: carry-over items 4–6 with `make mgmt-tunnel`, and `curl /sub/` from
+  outside before and after each.
+  Gate (with M34.5): infra 585 passed; control 1209 passed / 2 skipped (throwaway
+  Postgres); edge unchanged (3 known env failures); `make e2e-verify` 234 passed / 16
+  skipped. Review: `reviewer-strict`, round 1, CLEAN (two lows fixed).
 
 **Done when**
 - [ ] The owner opens the panel from the laptop and from the phone over the tunnel, with no
-      `ssh -L` running.
+      `ssh -L` running. *(field)*
 - [ ] Removing a device from `HASHI_MGMT_PEERS` and re-running takes that device's access
-      away, and the other devices keep theirs.
-- [ ] The `ssh -L` fallback still works, so a lost tunnel never locks the owner out.
-- [ ] Exactly one management interface on the host, and the runbook says which.
+      away, and the other devices keep theirs. *(the script half is tested —
+      `tests/infra/test_management_tunnel_script.py`; that the device actually loses the
+      console after `systemctl reload` is field)*
+- [ ] The `ssh -L` fallback still works, so a lost tunnel never locks the owner out. *(field)*
+- [ ] Exactly one management interface on the host, and the runbook says which. *(runbook:
+      `ip -brief link | grep awg`, one `awg-mgmt`; the host: field)*
+- [ ] After a reboot of the panel host the tunnel is back and the delivery endpoint answers;
+      with the tunnel deliberately stopped and Caddy restarted, delivery still answers.
+      *(field — added by M33.5; the docker half was shown in a disposable dind only)*
 
 acceptance: yes — on the real hosts, from the owner's own devices.
 
 ---
 
-## → M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · PROPOSED
+## → M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M32` · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
 
 **Found on 2026-10-03, on the owner's own phone.** The owner added a user, imported the
 link into a phone client and got a timeout. The user's UUID was not on the entry: adding a
@@ -3950,15 +4039,78 @@ eye does not go. **A warning the operator does not see is not a warning.**
 4. **Unchanged:** revocation, and the manual Apply button on the Nodes screen.
 
 **Done when**
-- [ ] A user added in the panel connects from a phone with no other press.
-- [ ] A failed node is named in the add dialog with its reason and a retry, and the user's
-      link still works through every node that did take it.
-- [ ] Adding N users in one go applies each affected node once.
-- [ ] After a transport change, the warning is visible without reading a paragraph, and
-      its button applies the node it names.
-- [ ] `docs/decisions.md` records that adding a user now applies, and why.
+- [ ] A user added in the panel connects from a phone with no other press. *(Built: the
+      add applies every node it granted on. Not proven — a phone connecting is a field
+      observation, the orchestrator's real-host walk.)*
+- [x] A failed node is named in the add dialog with its reason and a retry, and the user's
+      link still works through every node that did take it. *(Tests: the row names the
+      node and what to do from the failure's kind, offers a retry for an unreached or
+      not-yet-serving node, and the node stays `active` and in every link.)*
+- [x] Adding N users in one go applies each affected node once. *(Panel: one nickname per
+      line; API: `POST /api/users/batch`. A test counts one session per node for five
+      users.)*
+- [x] After a transport change, the warning is visible without reading a paragraph, and
+      its button applies the node it names. *(The block is drift-driven, so any change
+      no apply has followed raises it; tested on the four surfaces with a user nobody
+      pushed, which is the same reading. Its look on a real screen is for the walk.)*
+- [x] `docs/decisions.md` records that adding a user now applies, and why. *(Four rows,
+      2026-10-03.)*
 
 acceptance: yes — on the real hosts: add a user, import the link on a phone, connect.
+
+### What was built (2026-10-03)
+
+- **Add → apply.** `services/onboarding.py`: `users.create_users` (one transaction,
+  committed first) then `apply.apply_nodes` — the fan-out revocation uses, now callable
+  by node id — over the serving nodes the add granted on. `POST /api/users` answers the
+  user plus `complete`, `nodes_updated`, `nodes_failed`, `summary` (the revocation
+  response's names); `POST /api/users/batch` `{"nicknames": [...]}` adds a list, all or
+  none, each node applied once.
+- **The add dialog.** One nickname per line. The answer hands every link over at once
+  and lists the nodes; each node is applied by its own request (`POST /panel/reach`), one
+  after another: "… entry-ru — applying; this takes up to a minute / then leaf-ams", then
+  `✓ entry-ru — took the new configuration` or `✗ leaf-ams — <what to do> [retry]`. Under
+  the rows, re-measured after each node: "Their link works through entry-ru now. It does
+  not work through leaf-ams yet: …". Why one request per node rather than one long
+  request: `docs/decisions.md`, 2026-10-03.
+- **The not-applied block.** Overview, Users, Nodes and the link dialog draw one block
+  (`panel/not_pushed.html`, from `console.NotPushed`): a steel-accent edge and ground, the
+  label NOT APPLIED, the line "<node> is still on the old configuration: your changes have
+  not reached it.", an **Apply <node>** button per node (it reads "applying <node>…" while
+  in flight), and the long account behind "details". In the link dialog the block sits
+  above the link and its button answers in place instead of closing the dialog.
+- **A fan-out never degrades a serving node over a record that dialled nothing** (no SSH
+  key) — found because the add's fan-out would otherwise have emptied links of such a
+  node. Affects revocation too; recorded.
+- **Unchanged:** revocation's own flow, and the Nodes screen's Apply button.
+
+Gate: control 1145 passed / 2 skipped (throwaway Postgres); edge 968 passed / 14 skipped /
+3 failed (the known environmental cases in `test_upstream_validation.py`); infra 557
+passed; `make e2e-verify` 231 passed / 16 skipped. Review: `reviewer-strict`, round 1,
+CLEAN; one low carried — no browser-level test pins the htmx include semantics the
+per-node chain relies on (correct for the vendored htmx 2.0.4). What the walk must see:
+`docs/tracker/M32/carry-over.md`.
+
+### The real-host walk (2026-10-03, orchestrator) — PASSED, except the phone import
+
+Passed: one add with no other press, and a stock client then exits at the leaf; a batch of
+three, each node started once; an unreachable leaf gives `✗` with a retry, the leaf stays
+`active` and in every link, and the retry turns it `✓`; the NOT APPLIED block on Overview,
+Users and Nodes and in the link dialog above the link, both buttons working; the per-node
+requests over the management tunnel and over loopback; closing the dialog midway leaves
+the rest in the block; the API's single and batch fields; logs clean. **NOT PROVEN:** the
+import on the owner's own phone — the owner's field observation, still pending.
+
+Two wording defects **found in the real-host walk, fixed in M32.4** (`task/M33`, which
+stacks on `task/M32`), each with a test that failed on the old text
+(`tests/control/test_adding_a_user_reaches_the_nodes.py`, end of file):
+- With more than one node pending the dialog read "…so a client that picks them gets no
+  connection until **them is** applied." The subject now has its own placeholder: "until
+  they are applied" / "until it is applied" (`console.LINK_NOT_YET_THROUGH`).
+- A failed row read "✗ leaf-ams — 'leaf-ams' was not updated — …", naming the node twice.
+  The row now renders the reason without its leading name
+  (`onboarding.why_not_reached_after_its_name`): "✗ leaf-ams was not updated — …". The
+  API's `summary` keeps the named sentence, where it is the only name.
 
 ---
 

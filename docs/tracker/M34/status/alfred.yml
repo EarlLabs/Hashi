@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M34 — sites that only open from Russia leave from the entry, not through the hop"
+state: in_progress
+progress: "M34.5 (control): two wording fixes from the real-host walk; walk items 1-9 PASS, item 10 and the phone pending (carry-over.md)"
+blockers: null
+updated_at: 2026-10-03T21:00:00Z

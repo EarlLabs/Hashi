@@ -1,0 +1,33 @@
+{# Add to one of the owner's two lists — M34. #}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true" aria-labelledby="routing-entry-title">
+    <div class="dialog-title" id="routing-entry-title">Add to your lists</div>
+    <form class="dialog-form" hx-post="/panel/routing/entries"
+          hx-target="#dialog-slot" hx-swap="innerHTML">
+      <div class="field">
+        <label for="routing-entry-list">list</label>
+        <select class="input" id="routing-entry-list" name="which">
+          <option value="always"{% if values.get('which') == 'always' %} selected{% endif %}>always direct — open from the entry</option>
+          <option value="never"{% if values.get('which') == 'never' %} selected{% endif %}>never direct — keep on the hop, whatever a source says</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="routing-entry-value">site or network</label>
+        <input class="input" id="routing-entry-value" name="value" type="text"
+               value="{{ values.get('value', '') }}" autocomplete="off"
+               aria-describedby="routing-entry-hint{% if error %} routing-entry-error{% endif %}"
+               {% if error %}aria-invalid="true"{% endif %}>
+        <div class="field-hint" id="routing-entry-hint">
+          A name, which covers every name under it, or an address range.
+        </div>
+        {% if error %}<div class="field-error" id="routing-entry-error" role="alert">{{ error }}</div>{% endif %}
+      </div>
+      <div class="dialog-body">This changes the lists, not the entries: apply them afterwards.</div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+        <button class="btn btn-primary" type="submit">add entry</button>
+      </div>
+    </form>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

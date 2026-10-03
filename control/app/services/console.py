@@ -378,6 +378,24 @@ class NodeRow:
     # OPERATOR enables or withdraws a protocol and never when a user connects, which
     # is the test docs/decisions.md sets for whether a cell may be on a screen at all.
     transports: tuple[TransportChip, ...] = ()
+    # M34: the direct-sites switch, as a sentence, and ``None`` while it is off — which is
+    # every node until its owner turns it on, so an untouched fleet's screen is unchanged.
+    direct: str | None = None
+
+
+def direct_note(node: Node) -> str | None:
+    """The Nodes screen's line for a node with direct sites on, or ``None``.
+
+    Configuration only: that the switch is on and where listed names are looked up. What
+    the lists hold is the Routing screen's, and what anyone reached through them is
+    nowhere.
+    """
+    if not node.direct_routing:
+        return None
+    return (
+        f"direct sites: on — the sites on the Routing screen's lists leave this node from "
+        f"its own address, looked up at {node.direct_resolver or 'no resolver (set one)'}."
+    )
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1475,6 +1493,9 @@ class Overview:
     # sentences, empty on a fleet this panel has nothing to correct about, and composed
     # from the rows beside them so the cards and the warning cannot disagree.
     doubts: list[str]
+    # The nodes that are behind, as the block every screen draws — M32. Composed from the
+    # same rows as ``doubts``, for the same reason.
+    not_pushed: NotPushed | None
     # And the standing limit of the counts, said whatever the fleet looks like. Carried on
     # the value object rather than written into the template for the same reason every
     # other sentence here is: a screen may not compose its own account of what it knows.
@@ -1689,17 +1710,35 @@ DELIVERY_NO_NAME = (
     "control plane instead. Register this host under a name that resolves to it to "
     "serve refreshes from the host itself."
 )
+# The three below hold for EVERY node at once — the certificate is the control plane's,
+# not this host's — and each says what does serve refreshes in that state. They used to
+# open "not served from any host", which is true of the nodes and was read on the real
+# host (M34 walk, M34.5) as "users cannot fetch their links", on a co-located box whose
+# control plane was delivering every link under its public site's own certificate. A
+# sentence about behaviour names the state it holds for: here, "no node runs a listener
+# of its own, and the control plane serves every refresh".
+DELIVERY_BY_THE_CONTROL_PLANE = (
+    " Refreshes are served by this control plane, at {public}/sub/…, under its public "
+    "site's own certificate — enough while that address is reachable from where your "
+    "users are."
+)
 DELIVERY_NO_CERTIFICATE = (
-    "delivery — not served from any host: this control plane holds no delivery "
-    "certificate. Users refresh from this control plane instead, which is behind "
-    "whichever border it is on."
+    "delivery — no node runs a refresh listener of its own, this one included, because no "
+    "delivery certificate is configured (HASHI_DELIVERY_CERTIFICATE_PATH and _KEY_PATH)."
+    + DELIVERY_BY_THE_CONTROL_PLANE
+    + " Configure one only if nodes should answer refreshes too, for the day the control "
+    "plane's address is blocked."
 )
 DELIVERY_EXPIRED = (
-    "delivery — not served from any host: the delivery certificate expired {until} UTC, "
-    "and every client refuses an expired one. The next apply takes the listener and its "
-    "private key off this host. Users refresh from this control plane instead."
+    "delivery — no node runs a refresh listener of its own, this one included: the delivery "
+    "certificate expired {until} UTC, and every client refuses an expired one. The next "
+    "apply takes the listener and its private key off this host."
+    + DELIVERY_BY_THE_CONTROL_PLANE
 )
-DELIVERY_UNUSABLE = "delivery — not served from any host: {problem}"
+DELIVERY_UNUSABLE = (
+    "delivery — no node runs a refresh listener of its own, this one included: {problem}."
+    + DELIVERY_BY_THE_CONTROL_PLANE
+)
 
 
 def _expiry_and_countdown(until: datetime.datetime) -> tuple[str, str]:
@@ -1748,7 +1787,7 @@ def delivery_note(node: Node, settings: Settings) -> str | None:
     try:
         listener = delivery.listener_for(node, settings)
     except delivery.DeliveryCertificateUnusable as exc:
-        return DELIVERY_UNUSABLE.format(problem=exc)
+        return DELIVERY_UNUSABLE.format(problem=exc, public=settings.public_base_url)
     if listener is not None:
         name = delivery.delivery_site_address(node)
         until, countdown = _expiry_and_countdown(listener.certificate.not_after)
@@ -1790,9 +1829,10 @@ def delivery_note(node: Node, settings: Settings) -> str | None:
         return DELIVERY_NO_NAME.format(address=node.address)
     certificate = delivery.configured_certificate(settings)
     if certificate is None:
-        return DELIVERY_NO_CERTIFICATE
+        return DELIVERY_NO_CERTIFICATE.format(public=settings.public_base_url)
     return DELIVERY_EXPIRED.format(
-        until=certificate.not_after.strftime("%Y-%m-%d %H:%M")
+        until=certificate.not_after.strftime("%Y-%m-%d %H:%M"),
+        public=settings.public_base_url,
     )
 
 
@@ -1885,6 +1925,7 @@ async def node_rows(session: AsyncSession, settings: Settings) -> list[NodeRow]:
             drift=await drift_of(session, node),
             probe=probe_note(node),
             delivery=delivery_note(node, settings),
+            direct=direct_note(node),
             transports=tuple(
                 TransportChip(
                     name=placed_as(row.transport_name, row.config_name),
@@ -2080,44 +2121,145 @@ def withdrawal_doubt(unconfirmed: Sequence[UnconfirmedNode]) -> str | None:
     )
 
 
-# WHAT ADDING A USER DOES NOT DO — M26's first acceptance walk, and the finding is the
-# shape this project keeps producing: every signal green and nothing carried.
+# WHAT A NODE THAT IS BEHIND MEANS, said ONCE for every surface that names one — M32.
 #
-# The walk added a user and fetched their configuration file. It was complete and
-# correct — the node's real public key, an address out of that row's pool — while on the
-# host the rendered config held ZERO peer blocks and the daemon listed none. A user's
-# client would have handshaked into nothing. Only a SECOND apply, three minutes later, put
-# the peer on the node and made the traffic flow.
+# M26's first acceptance walk added a user, fetched their configuration file — complete,
+# correct, the node's real key — and found ZERO peers on the host. M26 answered with two
+# long sentences, one per kind of screen, and on 2026-10-03 the owner added a user,
+# imported the link on a phone, got a timeout, and had seen neither: in the link dialog it
+# was a grey paragraph under the link, where the eye does not go. A warning the operator
+# does not see is not a warning.
 #
-# Adding a user changes what this panel WOULD push and touches no host, which is correct
-# and is the whole of the defect: nowhere the operator was standing said so. The Users
-# screen's other standing note is about access that was WITHDRAWN and cannot be confirmed
-# gone — the exact opposite direction — so a reader who had just pressed "add user" had no
-# reason to read it as being about them.
+# So since M32 this is ONE value (``NotPushed``) for every surface — a short line, the
+# nodes it names (each with its id, for the button that applies exactly that node), and
+# the long account for behind "details" — and the two old sentences are gone, so no two
+# surfaces can come to different accounts of one fact. Rejected: keeping a sentence per
+# screen with the button added, which is M26's arrangement with one more thing to drift.
 #
-# It is said on the Users screen and again in the dialog that hands the link over, because
-# that dialog is the moment the false promise is delivered. ONE CONSTANT for both, so the
-# screen and the dialog cannot come to different accounts of one fact.
-#
-# It names the nodes, like every other sentence on these screens that asks the operator to
-# go and do something, and it ends where the press is.
-MATERIAL_NOT_ON = (
-    "A user added here is not on {nodes} yet: {this} not running the configuration this "
-    "panel would give {it}, and adding a user changes only what this panel would push. "
-    "So anyone added or granted since {it} was last applied has no credential on {it} — "
-    "their link carries {it}, their client would find nothing of theirs there, and "
-    "nothing about the link itself would look wrong. Apply {it} on the Nodes screen."
+# The short line is about the NODE and not about any one cause. Since M32 an add is
+# followed by an apply of what it touched (``docs/decisions.md``, 2026-10-03), so what
+# leaves a node behind now is mostly a change no apply has followed yet — a parameter, the
+# decoy, the resolver — or an apply that could not reach it; the node cannot tell which.
+NOT_PUSHED = (
+    "{nodes} {is_} still on the old configuration: your changes have not reached {it}."
 )
 
-# The same reading on the Overview, where what it has to correct is a COUNTER rather than
-# a link. Same list, different sentence, for the reason M23 split its two: the operator's
-# next move is the same press, but what they are reading it against is not.
-FLEET_NOT_PUSHED = (
-    "Not yet pushed to {nodes}: {this} not running the configuration this panel would "
-    "give {it}, so something has changed here since {it} was last applied. The counts "
-    "above are counts of configuration, so {it} is still in them and still in every "
-    "user's link. Apply {it} on the Nodes screen."
+# The long account, behind "details". It names the state it holds for (a serving node
+# whose host is not running what this panel would give it) and what that costs a person,
+# because the cost is the half nobody sees: the link looks right.
+NOT_PUSHED_DETAILS = (
+    "{this} in service and not running the configuration this panel would give {it}: "
+    "something was changed here since {it} was last applied, or an apply could not reach "
+    "{it}. Until {it} is applied, anyone added or granted since then has no credential on "
+    "{it} — their link names {it}, their client finds nothing of theirs there, and nothing "
+    "about the link itself looks wrong — and a parameter changed here is not what {it} "
+    "runs. {it_} still counts as serving and stays in every user's link. The button "
+    "applies exactly the node it names; the Nodes screen has the same press on each row."
 )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BehindNode:
+    """A serving node whose host is not running what this panel would give it."""
+
+    # The id is what the block's button applies; the name is what it says.
+    id: str
+    name: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class NotPushed:
+    """The one block every screen draws about nodes that are behind — M32."""
+
+    nodes: list[BehindNode]
+    short: str
+    details: str
+
+
+def not_pushed(behind: Sequence[BehindNode]) -> NotPushed | None:
+    """The block for these nodes, or ``None`` when there is nothing to say.
+
+    ``None`` on a fleet holding everything we would give it, so no screen carries a
+    standing warning — a block that is always there is a block nobody reads on the day
+    it means something.
+    """
+    if not behind:
+        return None
+    names = [node.name for node in behind]
+    one = len(names) == 1
+    return NotPushed(
+        nodes=list(behind),
+        short=NOT_PUSHED.format(
+            nodes=", ".join(names), is_="is" if one else "are", it="it" if one else "them"
+        ),
+        details=NOT_PUSHED_DETAILS.format(
+            this="That node is" if one else "Those nodes are",
+            it="it" if one else "them",
+            it_="It" if one else "They",
+        ),
+    )
+
+
+# Which nodes a link just handed over works through, said in the add dialog after each
+# node it applies — M32. The "honest statement" half of the dialog: the per-node results
+# say what each apply did, and this says what that leaves the people just added with,
+# measured fresh rather than added up from the results, so a retry pressed a minute later
+# is counted and a node somebody else applied in between is too.
+LINK_WORKS_THROUGH = "Their link works through {nodes} now."
+LINK_NOT_YET_THROUGH = (
+    "It does not work through {nodes} yet: {this} still on the old configuration and "
+    "{does} not know them. The link still names {it}, so a client that picks {it} gets "
+    "no connection until {this_} applied."
+)
+# ``{it}`` is the OBJECT pronoun and ``{this_}`` the subject with its verb: one word for
+# both read "until them is applied" in the M32 walk (fixed in M32.4).
+LINK_THROUGH_NOTHING = (
+    "No node in service holds a credential for them, so their link resolves to an empty "
+    "configuration. Put a node into service and the same link starts working — nobody "
+    "re-imports anything."
+)
+
+
+async def where_their_link_works(session: AsyncSession, user_ids: Sequence[str]) -> str:
+    """Which serving nodes hold these users' credentials in what their hosts run, and which not.
+
+    A node counts as working for them when it is serving, it carries a credential of
+    theirs on an enabled user-facing row, and its host runs exactly what this panel would
+    give it (``drift_of`` is ``IN_SYNC``) — the configuration that includes them. Any other
+    serving node they hold something on is named as not yet. Users revoked since are left
+    out: a revoked person holds no credential, so they add nothing either way.
+    """
+    held = await session.execute(
+        select(Node)
+        .join(NodeTransport, NodeTransport.node_id == Node.id)
+        .join(Credential, Credential.node_transport_id == NodeTransport.id)
+        .where(Credential.user_id.in_(list(user_ids)))
+        .where(NodeTransport.enabled.is_(True))
+        .where(NodeTransport.purpose == TransportPurpose.USERS)
+        .where(Node.state.in_(NodeState.serving()))
+        .order_by(Node.location_label, Node.name)
+    )
+    works, behind = [], []
+    for node in dict.fromkeys(held.scalars().unique()):
+        (works if await drift_of(session, node) == IN_SYNC else behind).append(node.name)
+    if not works and not behind:
+        return LINK_THROUGH_NOTHING
+    said = []
+    if works:
+        said.append(LINK_WORKS_THROUGH.format(nodes=", ".join(works)))
+    if behind:
+        one = len(behind) == 1
+        said.append(
+            LINK_NOT_YET_THROUGH.format(
+                nodes=", ".join(behind),
+                this="it is" if one else "they are",
+                does="does" if one else "do",
+                it="it" if one else "them",
+                this_="it is" if one else "they are",
+            )
+        )
+    return " ".join(said)
+
 
 # And what the last probe found, on the screen whose subtitle promises to say whether the
 # nodes are running what they were told to — M26's first acceptance walk, the other half
@@ -2156,7 +2298,7 @@ COUNTERS_COUNT_CONFIGURATION = (
 )
 
 
-async def nodes_missing_what_they_would_be_given(session: AsyncSession) -> list[str]:
+async def nodes_missing_what_they_would_be_given(session: AsyncSession) -> list[BehindNode]:
     """Serving nodes whose host does not hold the configuration this panel would push.
 
     THE SUPERSET OF "a user was added and nobody applied", which is what M26's walk found,
@@ -2184,18 +2326,26 @@ async def nodes_missing_what_they_would_be_given(session: AsyncSession) -> list[
             continue
         if await drift_of(session, node) in (IN_SYNC, NOTHING_ENABLED):
             continue
-        behind.append(node.name)
+        behind.append(BehindNode(id=node.id, name=node.name))
     return behind
 
 
-def material_doubt(behind: Sequence[str]) -> str | None:
-    """What a link handed over now cannot promise, or ``None`` when it can.
+def fleet_not_pushed(rows: Sequence[NodeRow]) -> NotPushed | None:
+    """The block for the rows a screen is already showing, without reading the fleet again.
 
-    ``None`` on a fleet holding everything we would give it, so neither the Users screen
-    nor the subscription dialog carries a standing warning — the same rule
-    ``withdrawal_doubt`` keeps, and for the same reason.
+    The Overview and the Nodes screen hold ``node_rows`` already; composing from them keeps
+    the row's own ``config`` cell and the block above the table one answer seen twice. The
+    rule is ``nodes_missing_what_they_would_be_given``'s: serving, and neither in sync nor
+    with nothing enabled.
     """
-    return _about(list(behind), MATERIAL_NOT_ON) if behind else None
+    return not_pushed(
+        [
+            BehindNode(id=row.id, name=row.name)
+            for row in rows
+            if row.state in NodeState.serving()
+            and row.drift not in (IN_SYNC, NOTHING_ENABLED)
+        ]
+    )
 
 
 def fleet_doubt(rows: Sequence[NodeRow]) -> list[str]:
@@ -2206,21 +2356,12 @@ def fleet_doubt(rows: Sequence[NodeRow]) -> list[str]:
     three ways, and there is no arrangement of them in which the preview says a node is
     behind and the sentence under the cards does not.
 
-    Up to two, in the order an operator acts on them: a host that was MEASURED not serving
-    is worse news than one that is merely behind, and it is the one the walk watched the
-    product forget.
+    A host that was MEASURED not serving, which is the one the walk watched the product
+    forget. A host merely BEHIND was the second sentence here until M32 and is now the
+    block every screen shares (``fleet_not_pushed``), so this list holds at most one.
     """
     found = [row.name for row in rows if row.probe]
-    behind = [
-        row.name
-        for row in rows
-        if row.state in NodeState.serving() and row.drift not in (IN_SYNC, NOTHING_ENABLED)
-    ]
-    return [
-        _about(names, sentence)
-        for names, sentence in ((found, FLEET_NOT_SERVING), (behind, FLEET_NOT_PUSHED))
-        if names
-    ]
+    return [_about(found, FLEET_NOT_SERVING)] if found else []
 
 
 async def user_rows(session: AsyncSession) -> list[UserRow]:
@@ -3137,6 +3278,7 @@ async def overview(
 
     return Overview(
         doubts=fleet_doubt(rows),
+        not_pushed=fleet_not_pushed(rows),
         limit=COUNTERS_COUNT_CONFIGURATION,
         backup=backup_standing(backup),
         stats=[

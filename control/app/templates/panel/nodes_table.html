@@ -40,6 +40,13 @@
               hx-target="#dialog-slot" hx-swap="innerHTML">add node</button>
     </div>
 
+    {#
+      The not-applied block — M32, the same one the Overview, the Users screen and the
+      link dialog draw, composed from these rows so the block and each row's config
+      cell are one reading.
+    #}
+    {% include "panel/not_pushed.html" %}
+
     {% if nodes %}
     <div class="table-scroll">
       <table class="table">
@@ -139,6 +146,14 @@
                 <button class="btn btn-secondary" type="button"
                         hx-get="/panel/nodes/{{ node.id }}/ssh-key"
                         hx-target="#dialog-slot" hx-swap="innerHTML">ssh key</button>
+                {#
+                  M34's: whether this node, while it dials a hop, opens the sites on the
+                  Routing screen's lists from its own address. About the node's way out
+                  rather than about any one transport, so it is the node's own dialog.
+                #}
+                <button class="btn btn-secondary" type="button"
+                        hx-get="/panel/nodes/{{ node.id }}/direct"
+                        hx-target="#dialog-slot" hx-swap="innerHTML">direct sites</button>
               </span>
             </td>
           </tr>
@@ -188,6 +203,13 @@
           #}
           <tr class="row-detail">
             <td class="text-muted wraps" colspan="7">{{ node.probe }}</td>
+          </tr>
+          {% endif %}
+          {% if node.direct %}
+          {# M34: the direct-sites switch, said only while it is on (services/console.py,
+             `direct_note`). #}
+          <tr class="row-detail">
+            <td class="text-muted wraps" colspan="7">{{ node.direct }}</td>
           </tr>
           {% endif %}
           {% endfor %}

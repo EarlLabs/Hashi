@@ -54,7 +54,16 @@ from control.app.models import (
     NodeTransport,
     TransportPurpose,
 )
-from control.app.services import addresses, audit, delivery, nodes, placement, relay, serving
+from control.app.services import (
+    addresses,
+    audit,
+    delivery,
+    nodes,
+    placement,
+    relay,
+    routing,
+    serving,
+)
 from control.app.settings import Settings
 from edge import checker
 from edge.bootstrap import NodeConnection, NodeTarget, NodeUnreachable, delivery_site, node_stack
@@ -552,6 +561,20 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
     # back is an address and nothing else, so nothing below learns what carries the hop.
     hop_exit = await relay.exit_through_hop(session, node)
 
+    # What this node opens by its OWN route instead of through the hop — M34. Read only
+    # for a node that has a hop AND whose owner switched it on: every other node takes
+    # ``None`` and renders, byte for byte, what it rendered before the feature existed. A
+    # node switched on whose hop was later taken away is the same "nothing to choose"
+    # case, and renders as off rather than refusing. The bound is read only here, past
+    # that test, so nothing that renders a node with the switch off reads it at all.
+    direct = None
+    if hop_exit is not None and node.direct_routing:
+        direct = await routing.direct_routes_for(
+            session,
+            node,
+            max_entries=settings_module.bound_settings().routing_max_entries,
+        )
+
     # Queried rather than read off ``node.transports``. The relationship loads eagerly
     # when the node is freshly selected, but this function is also called right after a
     # revocation has deleted rows in the same session — at which point touching the
@@ -624,6 +647,14 @@ async def render_for_node(session: AsyncSession, node: Node) -> dict[str, str]:
                 # renders nothing for either, so this call stays blind to which is which.
                 egress=nodes.egress_for(node_transport, hop_exit),
                 exit_via=hop_exit,
+                # Only to a transport that DECLARES it can split (``edge.registry``) — a
+                # declaration read, never a name — and only when there is something to
+                # pass, so a transport that cannot split is called exactly as before.
+                **(
+                    {"direct": direct}
+                    if direct is not None and transport.meta.splits_by_destination
+                    else {}
+                ),
             )
         except NodeOperationFailed:
             raise
@@ -1325,10 +1356,14 @@ async def apply_node(
     ``node.state`` and ``NodeState.allowed_from``.
 
     ``only_if_serving`` is the SECOND guard and it is about the caller rather than the
-    node: set by ``apply_many`` and by nothing else, it refuses a node that is not already
-    serving instead of taking it into service. The operator's own apply button leaves it
-    false, because taking a node into service is exactly what that button is for. See
-    ``NOT_IN_SERVICE_TO_PUSH`` for the walk that made the distinction necessary.
+    node: set by the fan-out (``apply_nodes``) and by nothing else, it refuses a node that
+    is not already serving instead of taking it into service. The operator's own apply
+    button leaves it false, because taking a node into service is exactly what that button
+    is for. See ``NOT_IN_SERVICE_TO_PUSH`` for the walk that made the distinction necessary.
+
+    Since M32 it also works the other way: a serving node whose record cannot produce a
+    session is left in service by a fan-out rather than degraded — see the ``target_for``
+    arm below.
     """
     node = await nodes.get_node(session, node_id)
 
@@ -1538,6 +1573,22 @@ async def apply_node(
     try:
         target = target_for(node, node_settings)
     except NodeOperationFailed as exc:
+        if only_if_serving:
+            # A FAN-OUT LEAVES A SERVING NODE IN SERVICE HERE — M32. Nothing has been
+            # written to the host and nothing on it changed, and a fan-out is aimed at
+            # people or at one row's material, never at this node's state: the guard
+            # above already refuses to take a node INTO service for that reason, and this
+            # is the same rule the other way. Before M32 only revocation fanned out, and a
+            # serving node whose record cannot produce a session was degraded by it; since
+            # adding a user applies too, the same branch would have taken such a node out
+            # of every user's link because somebody was added — which is the outcome the
+            # owner's 2026-10-02 rules forbid for a host an apply could not reach. The
+            # operator's own apply still degrades it (below): that press is aimed at this
+            # node, and the record is theirs to fix.
+            logger.error(
+                "fan-out could not dial node %s, left in service: %s", node.id, exc.message
+            )
+            raise
         await _record_failure(session, node, exc.message, granted)
         raise
 
@@ -2208,8 +2259,22 @@ async def apply_many(
     ``NOT_IN_SERVICE_TO_PUSH`` for what that was measured to cost and for what refusing
     it costs in return.
     """
+    return await apply_nodes(session, [nt.node_id for nt in node_transports])
+
+
+async def apply_nodes(
+    session: AsyncSession, node_ids: Sequence[str]
+) -> dict[str, NodeNotUpdated | None]:
+    """``apply_many``'s fan-out over node ids rather than over the rows that name them.
+
+    Split out in M32 for callers that hold node ids rather than rows
+    (``services/onboarding.py``): a node retried on its own is named by its id, and
+    there is no row to hand in for it. Every rule ``apply_many`` states is this loop's
+    — each node at most once, every node attempted, a node not serving refused rather
+    than taken into service — so there is one copy of it and two ways in.
+    """
     outcomes: dict[str, NodeNotUpdated | None] = {}
-    for node_id in dict.fromkeys(nt.node_id for nt in node_transports):
+    for node_id in dict.fromkeys(node_ids):
         try:
             # ``only_if_serving`` — M23, round 4, and this call is the only place it is
             # ever set. A fan-out is a consequence of an operation aimed at somebody's

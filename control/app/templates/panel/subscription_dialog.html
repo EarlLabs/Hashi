@@ -14,47 +14,23 @@
     the string goes.
 #}
 <div class="dialog-backdrop">
-  <div class="dialog blueprint" role="dialog" aria-modal="true"
+  <div class="dialog blueprint dialog-wide" role="dialog" aria-modal="true"
        aria-labelledby="subscription-title">
     <div class="dialog-title" id="subscription-title">
       {{ user.nickname }}'s {{ "links" if handed and handed.links|length > 1 else "link" }}
     </div>
     {% if handed %}
     {#
-      ONE URL PER CONFIG SHAPE — M24, the owner's decision (docs/decisions.md,
-      2026-10-02). Every link is the same token; a person holding a protocol that is a
-      config file gets a second one asking for that shape. Each is printed under its own
-      heading with the app it is for and what it carries for this person, because the two
-      differ only by a query string and each is useless to the other's app. The words
-      are all services/console.py's (``links_for``), keyed by shape and never by a
-      protocol, so this template chooses nothing.
-    #}
-    <div class="dialog-body">{{ handed.intro }}</div>
-    {% for link in handed.links %}
-    <div class="dialog-body"><strong>{{ link.heading }}</strong></div>
-    <div class="mono dialog-code" id="subscription-url-{{ loop.index }}">{{ link.url }}</div>
-    <div class="dialog-body text-muted">{{ link.use }} {{ link.carries }}</div>
-    {% endfor %}
-    <div class="dialog-body text-muted">{{ handed.credential }}</div>
-    {% if material_doubt %}
-    {#
       AND WHAT IT WILL NOT CARRY YET — M26's first acceptance walk, said at the moment
-      the link is handed over because that is the moment the promise is made. The walk
-      fetched exactly this URL and got a file that was correct in every field for a node
-      that had never been told the user existed.
-
-      The same sentence as the Users screen's standing note, from the same constant in
-      services/console.py: this dialog is opened from three places and none of them may
-      make a different claim about the same fleet.
+      the link is handed over because that is the moment the promise is made. Since M32
+      it is the block every screen draws (panel/not_pushed.html), ABOVE the link rather
+      than in grey under it — the owner read past the grey paragraph on 2026-10-03 and
+      imported a link that timed out — and its buttons apply the node from here.
     #}
-    <div class="dialog-body text-muted">{{ material_doubt }}</div>
-    {% endif %}
+    {% include "panel/not_pushed.html" %}
+    {% with prefix = "subscription" %}{% include "panel/links.html" %}{% endwith %}
     <div class="dialog-actions">
       <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
-      {% for link in handed.links %}
-      <button class="btn btn-primary" type="button"
-              data-copy-from="subscription-url-{{ loop.index }}">copy {{ link.heading if handed.links|length > 1 else "link" }}</button>
-      {% endfor %}
     </div>
     {% else %}
     <div class="dialog-body">

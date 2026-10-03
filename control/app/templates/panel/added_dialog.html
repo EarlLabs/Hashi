@@ -1,0 +1,49 @@
+{#
+  What an add answers with — M32: the links, and the nodes being applied for them.
+
+  Replaces the add-user dialog the moment the users exist (panel/routes.py's
+  `create_user`), so the operator never goes looking for what they just created. Three
+  parts, in the order they are read:
+
+  * THE NODES, one row each, applied one request at a time by panel/reach_pending.html
+    and answered by panel/reach_row.html: `✓ name`, or `✗ name — why` with a retry when a
+    retry can change it. Each node once for everybody added, because every apply restarts
+    that node's daemons and drops whoever is connected there for a second or two.
+  * WHERE THEIR LINK WORKS, re-measured after every node (`#reach-works`, swapped out of
+    band) — what the rows leave these people with right now, not a sum of the rows.
+  * THE LINKS, one set per person (panel/links.html), handed over at once: the link is
+    the same before and after the nodes take it, and what changes is which nodes answer.
+
+  `aria-live` on the rows and on the line under them: the answers arrive while focus is
+  on a copy button, and a screen-reader user must hear them land.
+#}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint dialog-wide" role="dialog" aria-modal="true"
+       aria-labelledby="added-title">
+    <div class="dialog-title" id="added-title">
+      {% if added|length == 1 %}{{ added[0].user.nickname }}'s {{ "links" if added[0].handed and added[0].handed.links|length > 1 else "link" }}{% else %}{{ added|length }} users added{% endif %}
+    </div>
+    {% if pending %}
+    <div class="reach" aria-live="polite">
+      <div class="dialog-body">
+        Applying {{ "the node" if pending|length == 1 else "each node" }} they were given,
+        once for {{ "them" if added|length > 1 else "this user" }}. Each apply restarts
+        that node's daemons, so whoever is connected there drops for a second or two.
+        Keep this open until every node has an answer.
+      </div>
+      {% include "panel/reach_pending.html" %}
+    </div>
+    {% endif %}
+    <div id="reach-works" class="dialog-body reach-works" aria-live="polite">{{ works }}</div>
+    {% for item in added %}
+    {% if added|length > 1 %}<div class="dialog-subtitle">{{ item.user.nickname }}</div>{% endif %}
+    {% if item.handed %}
+    {% with handed = item.handed, prefix = "added-" ~ loop.index %}{% include "panel/links.html" %}{% endwith %}
+    {% endif %}
+    {% endfor %}
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>close</button>
+    </div>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

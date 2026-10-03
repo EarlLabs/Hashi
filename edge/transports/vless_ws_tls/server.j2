@@ -147,6 +147,33 @@
   It is one lookup per NAME rather than per connection (Xray caches it for the answer's TTL,
   measured at one query for three connections), and nothing writes it down: `log.dnsLog` is
   `false`, `sniffing` is off, and a `blackhole` has nowhere to record what it refused.
+
+  AND M34, the one place this file deliberately gives an entry node a SECOND way out. With
+  `direct` (the render's `_direct_for_xray`) the file grows an outbound `direct` that is
+  bound to nothing — this node's own, Russian, route — and the rules send the listed
+  destinations to it. That breaks M3's "every outbound is bound to the hop" on purpose and
+  only while the switch is on; with it off, or with nothing listed, not one byte below
+  changes. What keeps the rest of M3 true, each measured against the pinned Xray:
+    - ORDER. The refusal stays first, so a listed destination still cannot be a private
+      address. Then *never direct* (names, then networks) to `hop`, then the direct names
+      and networks to `direct`, then everything else to `hop`. Xray takes the first rule
+      that matches, so the owner's *never* beats a source's listing, by name or by address
+      — a listed name whose address is on *never* still goes through the hop, because
+      `IpOnDemand` resolves it at the first rule that carries addresses.
+    - NO FALLBACK. An unlisted destination still has exactly one way out, the hop; while
+      the hop is down it cannot be opened, and a listed one still can.
+    - LOOKUPS. A direct name is looked up at the entry-side resolver (`direct.resolver`,
+      node data) and that query leaves by `direct`, matched by the resolver's ADDRESS —
+      which is why the two resolvers may never be one address. `skipFallback` keeps that
+      resolver from ever being asked an unlisted name. *Never direct* names are pinned to
+      the hop's resolver by a `domains` list of their own: without it a never-direct name
+      under a listed suffix was MEASURED being looked up at the direct resolver, while its
+      traffic correctly went through the hop. Every other name is looked up exactly as M16
+      left it.
+    - NO EMPTY CONDITION. A rule is rendered only for a list that has something in it: a
+      rule whose only condition is its inbound matches everything.
+  Nothing is counted and nothing is written down: no rule here has a statistic attached,
+  and `log` is unchanged.
 #}
 {
   "log": {
@@ -195,7 +222,25 @@
   ],
 {% if exit_origin %}
   "dns": {
+{% if direct and direct.direct_names %}
+    "servers": [
+{% if direct.never_names %}
+      {
+        "address": {{ resolver | tojson }},
+        "domains": {{ direct.never_names | tojson }}
+      },
+{% else %}
+      {{ resolver | tojson }},
+{% endif %}
+      {
+        "address": {{ direct.resolver | tojson }},
+        "domains": {{ direct.direct_names | tojson }},
+        "skipFallback": true
+      }
+    ],
+{% else %}
     "servers": [{{ resolver | tojson }}],
+{% endif %}
     "queryStrategy": "UseIPv4",
     "tag": "lookup"
   },
@@ -213,12 +258,35 @@
         ],
         "outboundTag": "refused"
       },
+{% if direct %}
+{% for condition, values, way in [
+     ("domain", direct.never_names, "hop"),
+     ("ip", direct.never_networks, "hop"),
+     ("domain", direct.direct_names, "direct"),
+     ("ip", direct.direct_networks, "direct"),
+   ] if values %}
+      {
+        "type": "field",
+        "inboundTag": ["in"],
+        {{ condition | tojson }}: {{ values | tojson }},
+        "outboundTag": {{ way | tojson }}
+      },
+{% endfor %}
+{% endif %}
       {
         "type": "field",
         "inboundTag": ["in"],
         "outboundTag": {{ ("hop" if exit_origin else "direct") | tojson }}
 {% if exit_origin %}
       },
+{% if direct %}
+      {
+        "type": "field",
+        "inboundTag": ["lookup"],
+        "ip": [{{ direct.resolver | tojson }}],
+        "outboundTag": "direct"
+      },
+{% endif %}
       {
         "type": "field",
         "inboundTag": ["lookup"],
@@ -243,6 +311,15 @@
       "protocol": "freedom"
 {% endif %}
     },
+{% if direct %}
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      }
+    },
+{% endif %}
     {
       "tag": "refused",
       "protocol": "blackhole",

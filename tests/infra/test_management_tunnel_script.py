@@ -70,7 +70,11 @@ def env_file(directory: pathlib.Path, **overrides: str | None) -> pathlib.Path:
 
 
 def run(
-    env_path: pathlib.Path, out: pathlib.Path, *, raw: bool = False
+    env_path: pathlib.Path,
+    out: pathlib.Path,
+    *,
+    raw: bool = False,
+    extra: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
     """Run it exactly as the bootstrap does, with no TTY and no input.
 
@@ -83,7 +87,7 @@ def run(
     exact byte M28.13 is about — a test that cannot see the defect cannot pin it.
     """
     return subprocess.run(
-        [str(SCRIPT), "--env-file", str(env_path), "--out", str(out)],
+        [str(SCRIPT), "--env-file", str(env_path), "--out", str(out), *extra],
         capture_output=True,
         text=not raw,
         timeout=120,
@@ -548,3 +552,374 @@ def test_a_trailing_comment_is_not_part_of_the_value(tmp_path) -> None:
     assert "default" not in (out / "awg-mgmt.conf").read_text(), (
         "the comment became part of the MTU"
     )
+
+
+
+# --- M33: a host end that follows the env file, in both directions ---------------------
+#
+# Found switching the tunnel on, on the real host, 2026-10-03. Everything above proves
+# the first run and the run that adds a device. What the field walk needed next was the
+# run that REMOVES one, the run after the operator changed the port, and a device config
+# a phone's QR decoder could read.
+
+
+def peer_names(conf: pathlib.Path) -> list[str]:
+    return re.findall(r"^# peer: (\S+)$", conf.read_text(), re.M)
+
+
+def test_removing_a_device_removes_exactly_that_device_and_says_so(tmp_path) -> None:
+    """Finding 4: deleting a name used to change nothing, so a lost phone kept its access.
+
+    The run converges the host file to HASHI_MGMT_PEERS. Everything that is not the
+    removed peer is byte-for-byte what it was — the host's keys, the obfuscation values
+    and the other device's keys — because each of those is inside a config already on a
+    device, and the other devices must keep working.
+    """
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    three = f"{PEERS},tablet=10.77.0.4/32"
+    assert run(env_file(tmp_path, HASHI_MGMT_PEERS=three), out).returncode == 0
+    before = conf.read_text()
+
+    result = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.2/32,tablet=10.77.0.4/32"), out
+    )
+    assert result.returncode == 0, result.stderr
+    after = conf.read_text()
+
+    assert peer_names(conf) == ["laptop", "tablet"]
+    assert "10.77.0.3/32" not in after, "the removed device's route is still allowed"
+    assert re.search(r"^==> removed phone \(10\.77\.0\.3/32\)", result.stdout, re.M), (
+        "the run removed a device without saying which"
+    )
+    assert "PrivateKey" not in result.stdout.replace(str(conf), ""), (
+        "removing a device handed out key material"
+    )
+    assert "systemctl reload awg-quick@awg-mgmt" in result.stdout, (
+        "the run does not say how to load the removal into the running interface, so the "
+        "device keeps its access until the next reboot"
+    )
+
+    def blocks(text: str) -> dict[str, str]:
+        return {
+            m.group(1): m.group(0)
+            for m in re.finditer(r"^\[Peer\]\n# peer: (\S+)\n(?:[^\n]+\n?)*", text, re.M)
+        }
+
+    interface = before.split("\n[Peer]")[0]
+    assert after.startswith(interface), "removing a device changed this host's own end"
+    for name in ("laptop", "tablet"):
+        assert blocks(after)[name].strip() == blocks(before)[name].strip(), (
+            f"removing phone changed {name}'s peer, so {name} would stop working"
+        )
+    assert not after.endswith("\n\n"), "the rewrite left blank lines behind"
+    assert "\n\n\n" not in after, "the rewrite left a double blank line where phone was"
+
+    # And the converged file is a fixed point: the next run with the same list is a no-op.
+    again = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.2/32,tablet=10.77.0.4/32"), out
+    )
+    assert again.returncode == 0, again.stderr
+    assert conf.read_text() == after, "a converged file changed on the next identical run"
+    assert "==> removed" not in again.stdout
+
+
+def test_removing_the_last_listed_peer_leaves_a_file_the_next_add_extends_cleanly(
+    tmp_path,
+) -> None:
+    """The last block is the one whose trailing blank line the rewrite has to drop."""
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    assert run(env_file(tmp_path), out).returncode == 0
+    assert run(env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.2/32"), out).returncode == 0
+    assert peer_names(conf) == ["laptop"]
+    assert conf.read_text().endswith("AllowedIPs = 10.77.0.2/32\n")
+
+    result = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.2/32,phone2=10.77.0.3/32"), out
+    )
+    assert result.returncode == 0, result.stderr
+    assert peer_names(conf) == ["laptop", "phone2"]
+    assert "\n\n\n" not in conf.read_text()
+    assert len(client_configs(result.stdout)) == 1
+
+
+def test_a_device_can_take_a_removed_device_s_address(tmp_path) -> None:
+    """The field collision: a new peer's address was "already used" by a retired one.
+
+    Removal happens before addition, so swapping one device for another at the same
+    address is one run rather than two — and no error about a device the operator has
+    already taken out of the list.
+    """
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    assert run(env_file(tmp_path), out).returncode == 0
+    result = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.2/32,newphone=10.77.0.3/32"), out
+    )
+    assert result.returncode == 0, result.stderr
+    assert peer_names(conf) == ["laptop", "newphone"]
+    assert len(re.findall(r"^AllowedIPs = 10\.77\.0\.3/32$", conf.read_text(), re.M)) == 1
+
+
+def test_a_peer_written_by_hand_is_converged_away_and_named_by_its_key(tmp_path) -> None:
+    """The file says not to edit it; a block somebody added anyway is still a peer.
+
+    It has no ``# peer:`` line, so it cannot be listed in HASHI_MGMT_PEERS, so it is
+    not a device this deployment declares — and an undeclared way into the console is
+    exactly what convergence is for. The message names it by public key, the one field
+    every block has.
+    """
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    assert run(env_file(tmp_path), out).returncode == 0
+    stray = "STRAYSTRAYSTRAYSTRAYSTRAYSTRAYSTRAYSTRAY000="
+    conf.write_text(
+        conf.read_text() + f"\n[Peer]\nPublicKey = {stray}\nAllowedIPs = 10.77.0.9/32\n"
+    )
+
+    result = run(env_file(tmp_path), out)
+    assert result.returncode == 0, result.stderr
+    assert stray not in conf.read_text()
+    assert stray in result.stdout and "removed an unnamed peer" in result.stdout
+    assert peer_names(conf) == ["laptop", "phone"]
+
+
+def test_moving_a_listed_device_to_a_new_address_is_refused_and_changes_nothing(
+    tmp_path,
+) -> None:
+    """The address is inside the config on that device; "moving" it is a new config."""
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    assert run(env_file(tmp_path), out).returncode == 0
+    before = conf.read_bytes()
+    result = run(env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.9/32,phone=10.77.0.3/32"), out)
+    assert result.returncode == 1
+    assert "laptop" in result.stderr and "NEW name" in result.stderr
+    assert conf.read_bytes() == before
+    assert "PrivateKey" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "file_value"),
+    [
+        ("HASHI_MGMT_PORT", "51999", "51821"),
+        ("HASHI_MGMT_MTU", "1280", "1420"),
+        ("HASHI_MGMT_ADDRESS", "10.88.0.1/24", "10.77.0.1/24"),
+    ],
+)
+def test_an_env_file_that_no_longer_describes_the_host_end_is_refused(
+    tmp_path, key: str, value: str, file_value: str
+) -> None:
+    """Finding 1: the old tunnel came back with a "kept" message after the port changed.
+
+    Refused rather than rewritten, because each of the three is inside every device
+    config already handed out. The message has to carry both values and the way out —
+    the operator on the real host had neither.
+    """
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    assert run(env_file(tmp_path), out).returncode == 0
+    before = conf.read_bytes()
+
+    peers = PEERS.replace("10.77.", "10.88.") if key == "HASHI_MGMT_ADDRESS" else PEERS
+    result = run(env_file(tmp_path, **{key: value, "HASHI_MGMT_PEERS": peers}), out)
+    assert result.returncode == 1, "a host end the env file disagrees with was kept"
+    assert conf.read_bytes() == before, "the refusal changed the host file anyway"
+    assert key in result.stderr
+    assert file_value in result.stderr and value in result.stderr, (
+        "the refusal does not show both values, so the operator cannot tell which is wrong"
+    )
+    assert f"mv {conf} {conf}.retired-" in result.stderr, (
+        "the refusal does not say how to retire the old host end"
+    )
+    if key == "HASHI_MGMT_PORT":
+        assert f"ufw delete allow {file_value}/udp" in result.stderr, (
+            "the refusal does not name the OLD port's firewall rule"
+        )
+    assert "PrivateKey" not in result.stdout
+
+
+def test_a_retired_host_end_is_started_over_with_new_keys(tmp_path) -> None:
+    """The way out the refusal names: move the file aside and run again."""
+    out = tmp_path / "management"
+    conf = out / "awg-mgmt.conf"
+    assert run(env_file(tmp_path), out).returncode == 0
+    old_key = re.search(r"^PrivateKey = (\S+)$", conf.read_text(), re.M).group(1)
+
+    conf.rename(out / "awg-mgmt.conf.retired-20261003")
+    result = run(env_file(tmp_path, HASHI_MGMT_PORT="51999"), out)
+    assert result.returncode == 0, result.stderr
+    assert "ListenPort = 51999" in conf.read_text()
+    assert re.search(r"^PrivateKey = (\S+)$", conf.read_text(), re.M).group(1) != old_key
+    assert len(client_configs(result.stdout)) == 2, "every device needs its new config"
+
+
+def test_a_name_listed_twice_is_refused(tmp_path) -> None:
+    """A name is how a device is matched on every later run."""
+    result = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS="laptop=10.77.0.2/32,laptop=10.77.0.3/32"),
+        tmp_path / "management",
+    )
+    assert result.returncode == 1
+    assert "twice" in result.stderr
+    assert not (tmp_path / "management" / "awg-mgmt.conf").exists(), (
+        "a refused list still created the host end"
+    )
+
+
+@pytest.mark.parametrize("name", ["../evil", ".hidden", "my phone", "a/b"])
+def test_a_device_name_that_is_not_a_plain_token_is_refused(tmp_path, name: str) -> None:
+    """With --configs-to a name becomes a file name, so it must not be a path."""
+    result = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS=f"laptop=10.77.0.2/32,{name}=10.77.0.3/32"),
+        tmp_path / "management",
+    )
+    # A space is stripped by the split (it was before M33 too), so "my phone" arrives
+    # as "myphone" and is a legal name; every other case is refused.
+    if name == "my phone":
+        assert result.returncode == 0, result.stderr
+        return
+    assert result.returncode == 1
+    assert "device name" in result.stderr
+
+
+def test_every_byte_of_a_printed_device_config_is_ascii(tmp_path) -> None:
+    """Finding 6: a phone's QR decoder misread the em dash in the config's first comment."""
+    result = run(env_file(tmp_path), tmp_path / "management", raw=True)
+    assert result.returncode == 0, result.stderr.decode()
+    configs = re.findall(
+        rb"^# hashi - management tunnel, device: .*?^PersistentKeepalive = 25$",
+        result.stdout, re.M | re.S,
+    )
+    assert len(configs) == 2
+    for config in configs:
+        assert all(byte < 0x80 for byte in config), (
+            "a device config carries a non-ASCII byte, which a QR decoder can misread"
+        )
+
+
+def test_configs_to_writes_one_private_file_per_new_device_and_prints_no_key(
+    tmp_path,
+) -> None:
+    """Finding 6, the option: a file per device instead of the SSH session's scrollback.
+
+    Property 3 holds in its exact form: the script writes each new device's config
+    once, never a second time, and keeps nothing it could reprint — a re-run writes no
+    file for a device that already has a peer.
+    """
+    out = tmp_path / "management"
+    devices = tmp_path / "devices"
+    result = run(env_file(tmp_path), out, extra=("--configs-to", str(devices)))
+    assert result.returncode == 0, result.stderr
+    assert "PrivateKey" not in result.stdout, "a key went to the terminal as well"
+    assert sorted(p.name for p in devices.iterdir()) == ["laptop.conf", "phone.conf"]
+    assert stat.S_IMODE(devices.stat().st_mode) == 0o700
+    for path in devices.iterdir():
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        text = path.read_bytes()
+        assert all(byte < 0x80 for byte in text)
+        assert b"AllowedIPs = 10.77.0.1/32" in text
+    host = (out / "awg-mgmt.conf").read_text()
+    for path in devices.iterdir():
+        key = re.search(r"^PrivateKey = (\S+)$", path.read_text(), re.M).group(1)
+        assert key not in host, "a device's private key reached the host file"
+
+    # The operator moved them to their devices. A re-run writes nothing.
+    for path in devices.iterdir():
+        path.unlink()
+    again = run(env_file(tmp_path), out, extra=("--configs-to", str(devices)))
+    assert again.returncode == 0, again.stderr
+    assert list(devices.iterdir()) == []
+
+
+def test_configs_to_never_overwrites_a_config_nobody_has_moved_yet(tmp_path) -> None:
+    out = tmp_path / "management"
+    devices = tmp_path / "devices"
+    devices.mkdir()
+    (devices / "phone.conf").write_text("an earlier device config\n")
+    result = run(env_file(tmp_path), out, extra=("--configs-to", str(devices)))
+    assert result.returncode == 1
+    assert "already exists" in result.stderr
+    assert (devices / "phone.conf").read_text() == "an earlier device config\n"
+    assert not (out / "awg-mgmt.conf").exists(), "the refusal still created the host end"
+
+
+def test_configs_to_is_refused_inside_the_repository(tmp_path) -> None:
+    result = run(env_file(tmp_path), tmp_path / "management",
+                 extra=("--configs-to", str(REPO / "not-a-real-directory")))
+    assert result.returncode == 1
+    assert "inside the repository" in result.stderr
+    assert not (REPO / "not-a-real-directory").exists()
+
+
+def test_the_root_commands_it_prints_name_the_real_file_and_survive_a_reboot(
+    tmp_path,
+) -> None:
+    """Findings 2, 3 and 5, as the text an operator copies.
+
+    ``~`` in a root shell is /root, so the path printed is absolute; the interface is a
+    systemd unit, so it comes back after a reboot and a later change is a ``reload``;
+    and ip_nonlocal_bind is what keeps a missing tunnel from failing the caddy
+    container and the public delivery endpoint with it.
+    """
+    out = tmp_path / "management"
+    result = run(env_file(tmp_path), out)
+    assert result.returncode == 0, result.stderr
+    conf = out / "awg-mgmt.conf"
+    assert f"ln -sfn {conf} /etc/amnezia/amneziawg/awg-mgmt.conf" in result.stdout
+    assert "~/" not in result.stdout
+    for command in (
+        "sudo systemctl enable --now awg-quick@awg-mgmt",
+        "sudo systemctl reload awg-quick@awg-mgmt",
+        "sudo ufw allow 51821/udp",
+        "net.ipv4.ip_nonlocal_bind = 1",
+    ):
+        assert command in result.stdout, f"the run does not print {command!r}"
+
+
+def test_a_relative_output_directory_is_printed_as_an_absolute_path(tmp_path) -> None:
+    """The symlink root creates is resolved from root's directory, not the operator's."""
+    env_path = env_file(tmp_path)
+    result = subprocess.run(
+        [str(SCRIPT), "--env-file", str(env_path), "--out", "management"],
+        capture_output=True, text=True, timeout=120, cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"ln -sfn {tmp_path}/management/awg-mgmt.conf " in result.stdout
+
+
+def test_a_check_run_creates_nothing_on_a_host_with_no_tunnel(tmp_path) -> None:
+    """``--check`` reads and refuses; it does not even make the output directory.
+
+    M33.4: panel-bootstrap calls it before touching the stack, and "nothing was created
+    or changed" is only true if the check itself wrote nothing.
+    """
+    out = tmp_path / "management"
+    result = run(env_file(tmp_path), out, extra=("--check",))
+    assert result.returncode == 0, result.stderr
+    assert not out.exists(), "a --check run created the output directory"
+    assert "PrivateKey" not in result.stdout
+
+
+def test_a_check_run_refuses_what_a_real_run_refuses_and_changes_nothing(tmp_path) -> None:
+    """The drift refusal is in the checked half — and a passing check adds no peer."""
+    out = tmp_path / "management"
+    assert run(env_file(tmp_path), out).returncode == 0
+    conf = out / "awg-mgmt.conf"
+    before = conf.read_bytes()
+
+    refused = run(env_file(tmp_path, HASHI_MGMT_PORT="51822"), out, extra=("--check",))
+    assert refused.returncode == 1
+    assert "HASHI_MGMT_PORT" in refused.stderr
+    assert conf.read_bytes() == before
+
+    more = run(
+        env_file(tmp_path, HASHI_MGMT_PEERS=PEERS + ",tablet=10.77.0.4/32"),
+        out, extra=("--check",),
+    )
+    assert more.returncode == 0, more.stderr
+    assert conf.read_bytes() == before, "a --check run added a peer"
+    assert "PrivateKey" not in more.stdout

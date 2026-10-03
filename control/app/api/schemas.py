@@ -205,6 +205,51 @@ class UserResponse(BaseModel):
     created_at: datetime.datetime
 
 
+class UsersCreate(BaseModel):
+    """Several people in one add — M32. Each node is applied once for all of them.
+
+    A NEW ENDPOINT rather than ``UserCreate`` taking a list, so the single add keeps its
+    request and its response exactly as every existing caller sends and reads them, and
+    gains fields rather than changing shape. All or none: a nickname refused anywhere in
+    the list refuses the add, and nothing is written.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # No upper bound here: ``users.MAX_USERS_PER_ADD`` is the one, refused with a sentence
+    # by the service both surfaces share, so the two cannot come to different limits.
+    nicknames: list[str] = Field(min_length=1)
+
+
+class Reached(BaseModel):
+    """What applying the nodes an add touched did — the shape ``RevocationResponse`` has.
+
+    The add is DONE whatever these say: the users exist and their links are live. What
+    these report is which nodes know them yet. A node in ``nodes_failed`` is not taken out
+    of anybody's link by this — a serving node an apply could not reach stays in every
+    link — so a user's link can name a node that does not hold their credential until that
+    node is applied, and ``summary`` names each one.
+    """
+
+    # Every node attempted now runs a configuration that includes the users this call
+    # added. True with nothing attempted (no node serving), and ``summary`` then says the
+    # link is empty rather than working.
+    complete: bool
+    nodes_updated: list[str]
+    nodes_failed: dict[str, str]
+    summary: str
+
+
+class UserCreated(UserResponse, Reached):
+    """``POST /api/users``: the user, and what reaching their nodes did (M32)."""
+
+
+class UsersCreated(Reached):
+    """``POST /api/users/batch``: every user added, and the one push for all of them."""
+
+    users: list[UserResponse]
+
+
 class SubscriptionIssued(BaseModel):
     """The one response that contains a bearer credential.
 

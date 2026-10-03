@@ -1,0 +1,57 @@
+{#
+  THE ONE BLOCK every screen draws about nodes that are behind — M32.
+
+  On the Overview, the Users screen, the Nodes screen and in the link dialog, from one
+  value composed in services/console.py (`console.NotPushed`), so none of the four can
+  come to a different account of one fact. It replaced two long grey paragraphs: the owner
+  added a user on 2026-10-03, imported the link on a phone, got a timeout, and had read
+  neither — in the link dialog the sentence sat in `text-muted` under the link, which is
+  exactly where the eye does not go.
+
+  So: one short line, in the steel accent (`.banner-pending` in app.css — not the danger
+  hue, which is for a request that failed, and this is a fleet that is behind); one
+  "Apply <node>" button per node it names, applying exactly that node; and the long
+  account behind "details", for whoever wants it.
+
+  `in_dialog` decides only where a button's answer goes. On a screen it is the Nodes
+  screen's own apply (`/panel/nodes/{id}/apply`), whose banner or toast lands in the
+  screen's slots and whose `nodes-changed` re-reads this block. In a dialog that press
+  would close the dialog holding the link, so there the button asks `/panel/reach`, the
+  fan-out's apply of one node, and its row answers in place of the button.
+#}
+{% if not_pushed %}
+<div class="banner banner-pending" role="status">
+  <span class="banner-label">not applied</span>
+  <div class="banner-body">
+    <div class="banner-lead">{{ not_pushed.short }}</div>
+    <div class="banner-actions">
+      {% for node in not_pushed.nodes %}
+      {% if in_dialog %}
+      <div class="reach-slot">
+        <input type="hidden" name="node" value="{{ node.id }}">
+        <button class="btn btn-primary btn-sm" type="button"
+                hx-post="/panel/reach" hx-include="closest .reach-slot"
+                hx-target="closest .reach-slot" hx-swap="outerHTML"
+                hx-disabled-elt="this">
+          <span class="when-idle">Apply {{ node.name }}</span>
+          <span class="when-busy">applying {{ node.name }}…</span>
+        </button>
+      </div>
+      {% else %}
+      <button class="btn btn-primary btn-sm" type="button"
+              hx-post="/panel/nodes/{{ node.id }}/apply"
+              hx-target="#dialog-slot" hx-swap="innerHTML"
+              hx-disabled-elt="this">
+        <span class="when-idle">Apply {{ node.name }}</span>
+        <span class="when-busy">applying {{ node.name }}…</span>
+      </button>
+      {% endif %}
+      {% endfor %}
+    </div>
+    <details class="banner-details">
+      <summary>details</summary>
+      <p>{{ not_pushed.details }}</p>
+    </details>
+  </div>
+</div>
+{% endif %}

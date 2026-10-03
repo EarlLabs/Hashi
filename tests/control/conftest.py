@@ -797,3 +797,20 @@ def assert_plain_reason(reason: str | None, *addresses: str) -> None:
         assert address not in text, (
             f"the node's address travelled with the reason: {text!r}"
         )
+
+
+async def a_user_no_node_was_told_about(session, nickname: str) -> str:
+    """Register a user through the DATABASE HALF of an add only, and return their id — M32.
+
+    Since M32 ``POST /api/users`` and the panel's add both apply every node the user was
+    given, so neither leaves a node behind any more. Several tests here used an add as
+    the cheapest way to make a serving node's rendered configuration move away from what
+    its host was last given — the state a parameter change, a decoy change or an add whose
+    push failed still leaves. This is that move, said for what it is: the users service's
+    own ``create_user``, which writes the user, their subscription and their credentials
+    and pushes nothing.
+    """
+    from control.app.services import users
+
+    user = await users.create_user(session, nickname=nickname)
+    return user.id

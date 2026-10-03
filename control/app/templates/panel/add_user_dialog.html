@@ -76,22 +76,30 @@
     </div>
     {% else %}
     <form hx-post="/panel/users" hx-target="#dialog-slot" hx-swap="innerHTML">
+      {#
+        SEVERAL AT ONCE, ONE PER LINE — M32. Each node an add touches is applied once for
+        everybody on the list, and every apply drops whoever is connected to that node for
+        a second or two, so five people added together cost one drop per node, not five.
+        A textarea rather than a repeating field: a list pasted from a chat is the case it
+        is for. The service reads one nickname per non-empty line and refuses the whole
+        list — writing nothing — when any line is refused, and says which.
+      #}
       <div class="field">
-        <label for="user-nickname">nickname</label>
-        <input class="input" id="user-nickname" name="nickname" type="text"
-               value="{{ nickname or "" }}" placeholder="mira"
-               autocomplete="off" required
-               aria-describedby="user-nickname-hint{% if error %} user-nickname-error{% endif %}"
-               {% if error %}aria-invalid="true"{% endif %}>
-        <div class="field-hint" id="user-nickname-hint">64 characters or fewer</div>
+        <label for="user-nicknames">nicknames, one per line</label>
+        <textarea class="input" id="user-nicknames" name="nicknames" rows="4"
+                  placeholder="mira" autocomplete="off" required
+                  aria-describedby="user-nicknames-hint{% if error %} user-nicknames-error{% endif %}"
+                  {% if error %}aria-invalid="true"{% endif %}>{{ nickname or "" }}</textarea>
+        <div class="field-hint" id="user-nicknames-hint">64 characters or fewer each</div>
         {% if error %}
-        <div class="field-error" id="user-nickname-error" role="alert">{{ error }}</div>
+        <div class="field-error" id="user-nicknames-error" role="alert">{{ error }}</div>
         {% endif %}
       </div>
       <div class="dialog-body">
-        They get one subscription covering every serving node — one URL, and a second
+        Each gets one subscription covering every serving node — one URL, and a second
         beside it if they hold a protocol whose configuration is a file. Nothing else
-        is stored about them.
+        is stored about them. Every node they are given is then applied once for all of
+        them, which drops whoever is connected to it for a second or two.
       </div>
       {#
         "issue subscription", NOT "add user" — the header's own primary is called "add

@@ -55,6 +55,14 @@ STORED_KEYS = (
     "transport-removed",
     # M16's, in the change that adds it, for the same reason as the one above.
     "node-resolver-set",
+    # M34's, in the change that adds them.
+    "direct-routing-set",
+    "routing-source-added",
+    "routing-source-switched",
+    "routing-source-removed",
+    "routing-update-approved",
+    "routing-update-rejected",
+    "routing-list-changed",
 )
 
 

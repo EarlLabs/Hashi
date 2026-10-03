@@ -31,6 +31,7 @@ from control.app.models import NodeState
 from control.app.services import apply, health, nodes
 
 from ._serving_host import PEERS_EMPTY, ServingHost
+from .conftest import a_user_no_node_was_told_about
 from .test_a_verdict_warns_and_never_empties_a_link import (
     AWG,
     AWG_PARAMS,
@@ -122,7 +123,9 @@ async def test_a_container_this_apply_just_started_is_given_time_not_a_restart(
     throw that start away. Not restarted, and the advice is still to probe in a minute.
     """
     host, node_id = await a_serving_wg_node(client, monkeypatch)
-    await a_user_token(client, "masha")
+    # The database half of an add only: since M32 an add through the API applies, and
+    # this test needs the NEXT apply to be the one that recreates the container.
+    await a_user_no_node_was_told_about(session, "masha")
     host.peers = PEERS_EMPTY
 
     applied = await client.post(f"/api/nodes/{node_id}/apply")

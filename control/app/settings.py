@@ -188,6 +188,55 @@ class Settings(BaseSettings):
     # honest that the value is read at all.
     backup_record: pathlib.Path = pathlib.Path("/var/lib/hashi/backup/last-run.json")
 
+    # THE BACKUP'S QUIET HOUR, read here too — M34. ``HASHI_BACKUP_AT`` (HH:MM) in
+    # ``HASHI_BACKUP_TZ`` (an IANA zone name) is when scripts/backup-run.sh takes the day's
+    # backup, and it is also when this control plane refreshes the routing lists and
+    # applies the entries whose config they changed: applying restarts Xray, which drops
+    # every connected user for a second or two, so it belongs in the one hour the owner
+    # has already said is quiet. One setting for both, so the two jobs cannot drift into
+    # two "quiet" hours.
+    #
+    # NOT VALIDATED HERE, and that is deliberate: scripts/backup-run.sh tolerates a
+    # malformed hour (it uses 04:00) and an unknown or empty zone (it uses the host's
+    # clock) and records which, so a typo there must not become a control plane that
+    # refuses to boot. ``services/routing_refresh.quiet_hour`` reads them with the same
+    # tolerance and the Routing screen says which fallback it took.
+    backup_at: str = "04:00"
+    backup_tz: str = ""
+
+    # How often, in seconds, the routing refresh asks whether tonight's run is due. It
+    # decides nothing about the hour — ``backup_at`` does — so a control plane that was
+    # down at that hour still runs the day's refresh when it comes back that day. ``0``
+    # turns the nightly refresh off entirely; "fetch now" on the Routing screen still works.
+    routing_check_interval: float = Field(default=900.0, ge=0)
+
+    # The bounds a fetched list is held by (``services/routing``). A version that breaks
+    # one is HELD for the owner with its diff, never applied — the owner's rule for a
+    # suspicious change. Settings rather than constants so a fleet can loosen them and the
+    # suite can tighten them.
+    #
+    # ``routing_max_change``: the largest fraction a list may grow or shrink by in one
+    # fetch. 0.5 means a list of 40 may become 20–60.
+    routing_max_change: float = Field(default=0.5, gt=0)
+    # ``routing_max_entries``: the most entries one list may hold, and the most a node's
+    # rendered config may carry across every list together. The lists are written into
+    # the config inline (``edge/direct.py``), twice for names (routing and lookup), so this
+    # is what bounds the file a node is sent; 20000 was measured to load in the pinned Xray
+    # in well under a second (docs/decisions.md, M34).
+    routing_max_entries: int = Field(default=20000, ge=1)
+    # ``routing_max_bytes``: the most a single fetch may download. A body past it is a
+    # failed fetch and the version in force stays — never a truncated list.
+    routing_max_bytes: int = Field(default=4_000_000, ge=1024)
+    # ``routing_fetch_timeout``: seconds for one fetch, connect and read together.
+    routing_fetch_timeout: float = Field(default=30.0, gt=0)
+
+    # The sources the Routing screen OFFERS to add, as ``name|https-url|on-or-off`` entries
+    # separated by ``;``. Configuration and not code (``CLAUDE.md``: no hardcoded domain):
+    # the defaults are in deploy/docker-compose.yml, an empty value offers nothing, and an
+    # entry becomes a source only when the owner adds it. ``on`` is whether it is switched
+    # on once added — the narrow list is, the broader ones are not.
+    routing_suggested_sources: str = ""
+
     @field_validator("operator_password_hash")
     @classmethod
     def _hash_must_be_well_formed(cls, value: str) -> str:

@@ -26,7 +26,7 @@ COMPOSE_PANEL := $(COMPOSE_PANEL_SSH) -f deploy/docker-compose.tunnel.yml
 .PHONY: setup env verify e2e-verify test test-control test-edge test-infra test-e2e lint \
         up up-dev up-panel up-panel-over-ssh restart-control down logs ps \
         e2e-up e2e-down e2e-reset e2e-psql \
-        e2e-secrets e2e-secrets-live panel-bootstrap node-bootstrap hash-password
+        e2e-secrets e2e-secrets-live panel-bootstrap mgmt-tunnel node-bootstrap hash-password
 
 ## --- setup ------------------------------------------------------------------
 
@@ -242,6 +242,25 @@ ps:
 panel-bootstrap:
 	$(need_bash)
 	@scripts/panel-bootstrap.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
+
+# The management tunnel ALONE: writes the host file, hands out new devices' configs,
+# removes unlisted ones — and touches no container. This is what adding or removing a
+# device runs on a host that is already serving (M33.4, finding D1).
+#
+# It exists because a device change used to be a re-run of `make panel-bootstrap`, and
+# on the real host (2026-10-03) that re-run took Caddy's 80/443 and the console away:
+# users' /sub/ answered "connection refused" until `make up-panel`. Rejected: having panel-bootstrap re-publish what it
+# found — which overlay a host was published with is not something the running stack
+# says reliably, and guessing wrong publishes the console somewhere it was not.
+#
+# HASHI_MGMT_DIR and HASHI_MGMT_CONFIGS_TO are read from this command's environment by
+# the script, so `HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make mgmt-tunnel` works as it does
+# for panel-bootstrap.
+.PHONY: mgmt-tunnel
+
+mgmt-tunnel:
+	$(need_bash)
+	@scripts/management-tunnel.sh $(if $(ENV_FILE),--env-file $(ENV_FILE),)
 
 # The one value in .env that cannot be typed, on a host where nothing can produce it.
 #

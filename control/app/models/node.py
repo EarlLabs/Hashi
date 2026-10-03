@@ -179,6 +179,20 @@ class Node(Base, TimestampMixin):
     # would leave every existing entry unable to render, with no way back in the product.
     resolver: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # M34: whether this node, while it dials a hop, opens the destinations on the routing
+    # lists by its OWN route (``services/routing``). Off by default and off on every row the
+    # upgrade finds, so a fleet that never touches the switch renders byte for byte what it
+    # did before. Configuration the owner sets; it records nothing about anybody's use.
+    direct_routing: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    # Where those direct destinations' NAMES are looked up: a resolver on this node's own
+    # side of the border, so a listed site answers as it would a Russian client. Node data
+    # for ``resolver``'s reason — never a project default — and refused while it is the
+    # same address as ``resolver`` (``edge.direct.direct_resolver_problem``).
+    direct_resolver: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # Indexed: every subscription render filters nodes by state, and that is the one
     # query that must stay fast when a node has just been blocked and every user is
     # refreshing at once.

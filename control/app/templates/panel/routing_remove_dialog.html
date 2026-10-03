@@ -1,0 +1,17 @@
+{# Remove a routing source — M34. Destructive, so it confirms (UI-PATTERNS §3). #}
+<div class="dialog-backdrop">
+  <div class="dialog blueprint" role="dialog" aria-modal="true" aria-labelledby="routing-remove-title">
+    <div class="dialog-title" id="routing-remove-title">Remove {{ source.name }}?</div>
+    <div class="dialog-body">
+      The source and every version of it that was fetched go. Its sites go back through
+      the hop at each entry's next apply, unless another list names them.
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" data-close-dialog>cancel</button>
+      <button class="btn btn-primary" type="button"
+              hx-post="/panel/routing/sources/{{ source.id }}/remove"
+              hx-target="#dialog-slot" hx-swap="innerHTML">remove source</button>
+    </div>
+    {% include "panel/corners.html" %}
+  </div>
+</div>

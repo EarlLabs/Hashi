@@ -66,7 +66,7 @@ from control.app.errors import (
     NothingToApply,
     ParamsRefused,
 )
-from control.app.models import NodeState, TransportPurpose
+from control.app.models import NodeState, OwnerList, TransportPurpose
 from control.app.panel import wording
 from control.app.services import (
     addresses,
@@ -75,9 +75,12 @@ from control.app.services import (
     console,
     health,
     nodes,
+    onboarding,
     relay,
     revocation,
     rotation,
+    routing,
+    routing_refresh,
     transports,
     users,
 )
@@ -148,6 +151,9 @@ NAV = (
     {"key": "users", "label": "Users", "url": "/panel/users"},
     {"key": "nodes", "label": "Nodes", "url": "/panel/nodes"},
     {"key": "hops", "label": "Hops", "url": "/panel/hops"},
+    # M34's, beside Hops because it is about the same question — which way out a user's
+    # traffic takes — and it shows the lists, never their use.
+    {"key": "routing", "label": "Routing", "url": "/panel/routing"},
     {"key": "transports", "label": "Transports", "url": "/panel/transports"},
     {"key": "keys", "label": "Keys & configs", "url": "/panel/keys"},
     # M10.4's, in the design's own order: before Settings, so the two screens that are
@@ -296,13 +302,10 @@ async def _users_context(session: AsyncSession) -> dict:
     return {
         "users": rows,
         "serving": len(await nodes.serving_transports(session)),
-        # What adding a user does NOT do — M26's first acceptance walk. The walk added a
-        # user, opened their link and got a correct configuration file for a node that
-        # held no peer for them; only a second apply made it true, and no screen said so.
-        # The note beside it is about a withdrawal that cannot be confirmed, which is the
-        # other direction, and is why an operator who had just added somebody read nothing
-        # that was about them.
-        "material_doubt": console.material_doubt(
+        # The nodes that are behind, as the block every screen draws with its own Apply
+        # button — M32, out of M26's first walk's note. The note beside it is about a
+        # withdrawal that cannot be confirmed, which is the other direction.
+        "not_pushed": console.not_pushed(
             await console.nodes_missing_what_they_would_be_given(session)
         ),
         # What a withdrawal on this screen cannot promise — M23, round 2. Composed in
@@ -390,9 +393,7 @@ async def nodes_screen(
             "the machines a user's link resolves to, and whether each is running "
             "what you told it to"
         ),
-        context={
-            "nodes": await console.node_rows(session, request.app.state.settings)
-        },
+        context=await _nodes_context(request, session),
     )
 
 
@@ -402,10 +403,14 @@ async def nodes_table(
 ):
     """The nodes table on its own, for the refresh after a mutation."""
     return TEMPLATES.TemplateResponse(
-        request,
-        "panel/nodes_table.html",
-        {"nodes": await console.node_rows(session, request.app.state.settings)},
+        request, "panel/nodes_table.html", await _nodes_context(request, session)
     )
+
+
+async def _nodes_context(request: Request, session: AsyncSession) -> dict:
+    """The rows, and the not-pushed block composed from those same rows (M32)."""
+    rows = await console.node_rows(session, request.app.state.settings)
+    return {"nodes": rows, "not_pushed": console.fleet_not_pushed(rows)}
 
 
 @router.get("/nodes/new", response_class=HTMLResponse)
@@ -2753,24 +2758,40 @@ def _mutation(
 @router.post("/users", response_class=HTMLResponse)
 async def create_user(
     request: Request,
+    nicknames: str = Form(""),
     nickname: str = Form(""),
     session: AsyncSession = Depends(session_dependency),
 ):
-    """Create a user and hand back their link, in one exchange.
+    """Create one or more users, hand back their links, and start reaching their nodes.
 
-    M8.5's whole behaviour is in the return values: on success the response REPLACES
-    the add-user dialog with the subscription-link dialog, so the operator never has
-    to go looking for the thing they just created — which is the primary job the
-    design optimises for. ``users-created`` additionally routes the console to
-    Users, and ``users-changed`` refreshes whichever tables are on screen.
+    M8.5's behaviour is still in the return values: on success the response REPLACES the
+    add-user dialog with the dialog that hands the links over, so the operator never has
+    to go looking for what they just created. ``users-created`` routes the console to
+    Users, and the screen it lands on renders its table fresh.
 
-    A refusal comes back as the same dialog with the message under the field it is
-    about, at 422. Field-level and not a toast: a toast is gone in 2200ms and would
-    leave the operator staring at a form that will not submit.
+    SINCE M32 IT ALSO REACHES THE NODES, and not inside this request. The users are
+    created and committed here and the dialog comes back at once with one row per node
+    they were given, the first of which asks ``reach_node`` to apply it as soon as it is
+    on screen; each answer brings the next node's row with it. Rejected: applying every
+    node inside this request — one apply is 20–40 s and an add touching two nodes would
+    hold a single request for over a minute behind no progress at all, where a closed tab
+    or an impatient second press would leave the operator unable to tell what landed.
+    One node per request is the length of the Nodes screen's own apply, which already
+    crosses the same proxy and the same browser, and it is what lets each row say its own
+    result and carry its own retry.
+
+    ``nicknames`` is the dialog's box, one per line. ``nickname`` is the single field the
+    dialog had before M32, still accepted so a request built against it keeps working; the
+    two are read as one list.
+
+    A refusal comes back as the same dialog with the message under the box, at 422.
+    Field-level and not a toast: a toast is gone in 2200ms and would leave the operator
+    staring at a form that will not submit.
     """
-    nickname = nickname.strip()
+    typed = "\n".join(part for part in (nickname, nicknames) if part.strip())
+    wanted = [line.strip() for line in typed.splitlines() if line.strip()]
     try:
-        user = await users.create_user(session, nickname=nickname)
+        created = await users.create_users(session, nicknames=wanted)
     except DomainError as exc:
         return TEMPLATES.TemplateResponse(
             request,
@@ -2781,14 +2802,14 @@ async def create_user(
             # nickname (``{value!r}``), and quoted text is data it never rewrites.
             #
             # THE POOLS ARE ASKED ABOUT AGAIN HERE, after the service — M17.2, and it is
-            # required rather than tidy. A refusal from ``grant_everywhere`` rolls the
-            # session back, so this dialog has to be composed from what the database says
+            # required rather than tidy. A refusal from ``grant_on`` rolls the session
+            # back, so this dialog has to be composed from what the database says
             # AFTERWARDS; ``_add_user_form`` does that in fresh queries and reads no
             # object this route was holding. It is also the one refusal whose honest
             # answer is "there is no room at all", which renders the dialog with no form
             # rather than with a message under the nickname.
             await _add_user_form(
-                session, nickname=nickname, error=wording.for_the_page(exc.message)
+                session, nickname=typed, error=wording.for_the_page(exc.message)
             ),
             # 422 rather than 200, and htmx is configured in static/app.js to swap
             # this one status: an invalid form is not a success, and saying so is
@@ -2796,31 +2817,104 @@ async def create_user(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
+    names = [user.nickname for user in created.users]
+    base = request.app.state.settings.public_base_url
     return _mutation(
         request,
-        dialog="panel/subscription_dialog.html",
-        toast=f"{user.nickname} added",
-        keeping=user.nickname,
+        dialog="panel/added_dialog.html",
+        toast=(f"{names[0]} added" if len(names) == 1 else f"{len(names)} users added"),
+        keeping=names[0] if len(names) == 1 else None,
         # Only ``users-created``. It routes the console to Users (see the listener
         # on #main in pages/console.html), and the screen it lands on renders the
         # table fresh — so also firing ``users-changed`` would start a second
         # refresh of a table that is about to be replaced under it.
         events="users-created",
         context={
-            "user": user,
-            "handed": await console.links_for(
-                session, request.app.state.settings.public_base_url, user
-            ),
-            # THE SENTENCE THAT HAD TO BE HERE — M26's first acceptance walk. This is the
-            # exchange that hands over a link for a user nobody has pushed yet, so it is
-            # the exchange that has to say what that link will not carry until the nodes
-            # are applied. Asked AFTER the user was created, so the nodes it names are
-            # the ones now holding nothing for them.
-            "material_doubt": console.material_doubt(
-                await console.nodes_missing_what_they_would_be_given(session)
+            "added": [
+                {"user": user, "handed": await console.links_for(session, base, user)}
+                for user in created.users
+            ],
+            "user_ids": [user.id for user in created.users],
+            "pending": await _pending_rows(session, created.node_ids),
+            # What the links do right now, BEFORE any node is reached: the rows below it
+            # replace it with a fresh reading after every node they apply.
+            "works": await console.where_their_link_works(
+                session, [user.id for user in created.users]
             ),
         },
     )
+
+
+async def _pending_rows(session: AsyncSession, node_ids: list[str]) -> list[dict]:
+    """The nodes an add will reach, as the rows the dialog draws before reaching them."""
+    named = {
+        node.id: node.name
+        for node in await nodes.list_nodes(session)
+        if node.id in set(node_ids)
+    }
+    return [{"id": node_id, "name": named.get(node_id, node_id)} for node_id in node_ids]
+
+
+@router.post("/reach", response_class=HTMLResponse)
+async def reach_node(
+    request: Request,
+    node: list[str] = Form(default_factory=list),
+    user: list[str] = Form(default_factory=list),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Apply ONE node through the fan-out, and answer with its row — M32.
+
+    Pressed three ways, all with the same meaning: by the add dialog for each node its new
+    users were given (``node`` carries the ones still to do, first is applied now), by a
+    row's retry, and by the "Apply <node>" button in the not-pushed block inside the link
+    dialog. Always ``onboarding.reach``, so always ``only_if_serving``: nothing on this
+    path puts a node into service — that is the Nodes screen's apply, and a node not
+    serving is reported here and left alone.
+
+    The answer is the node's result row, then — when ``node`` named more — the next
+    node's pending row, which asks for itself the moment it is swapped in; so the dialog
+    reaches its nodes one after another with each result on screen as it lands. When
+    ``user`` is given (the add dialog), the line saying where their link works is
+    re-measured and swapped out of band after every node.
+
+    The row's sentence is composed from the failure's KIND only, after the node's NAME the
+    row already shows (``onboarding.why_not_reached_after_its_name``): a failure's own
+    message can carry an upstream checker's output, which is known to quote the node's
+    private key. The Nodes screen's
+    apply is where the full reason is read, and every sentence ends there.
+    """
+    if not node:
+        return HTMLResponse("")
+    this, rest = node[0], node[1:]
+    outcome = await onboarding.reach(session, [this])
+    name = outcome.names.get(this, this)
+    kind = outcome.why_failed.get(this)
+    response = TEMPLATES.TemplateResponse(
+        request,
+        "panel/reach_step.html",
+        {
+            "row": {
+                "id": this,
+                "name": name,
+                "ok": this in outcome.nodes_updated,
+                "why": (
+                    wording.for_the_page(onboarding.why_not_reached_after_its_name(kind))
+                    if kind
+                    else None
+                ),
+                "retry": kind in onboarding.RETRYABLE,
+            },
+            "pending": await _pending_rows(session, rest),
+            "user_ids": user,
+            "works": (
+                await console.where_their_link_works(session, user) if user else None
+            ),
+        },
+    )
+    # The screens behind the dialog re-read themselves: a node that took its
+    # configuration leaves the not-pushed block, and its row's config cell changes.
+    response.headers["HX-Trigger"] = "nodes-changed"
+    return response
 
 
 @router.get("/users/{user_id}/subscription", response_class=HTMLResponse)
@@ -2847,9 +2941,12 @@ async def user_subscription(
             # after the user was added is a link to a fleet that has moved since, and the
             # question "does every serving host hold what we would give it" has to be
             # answered now rather than remembered from the exchange that created them.
-            "material_doubt": console.material_doubt(
+            # The same block the screens draw (M32), with its buttons answering inside
+            # this dialog rather than closing it — see ``panel/not_pushed.html``.
+            "not_pushed": console.not_pushed(
                 await console.nodes_missing_what_they_would_be_given(session)
             ),
+            "in_dialog": True,
         },
     )
 
@@ -3005,4 +3102,368 @@ async def settings_screen(request: Request) -> Response:
             "secrets_withheld": console.SETTINGS_SECRETS_WITHHELD,
             "one_operator": console.ONE_OPERATOR,
         },
+    )
+
+
+# --- routing: which sites leave an entry from its own address (M34) --------------------
+#
+# One screen and one node dialog. The screen shows the LISTS — sources, versions, the
+# owner's entries, a held update's diff — and never their use: nothing on it, and nothing
+# any route below reads, counts what a user reached.
+
+
+async def _routing_context(request: Request, session: AsyncSession) -> dict:
+    """What the Routing screen and its refresh draw, read once so the two agree."""
+    settings = request.app.state.settings
+    view = await routing.screen(session, settings)
+    drift = {}
+    for entry in view.switched_on:
+        drift[entry.id] = await console.drift_of(session, await nodes.get_node(session, entry.id))
+    return {
+        "routing": view,
+        "drift": drift,
+        "in_sync": console.IN_SYNC,
+        "schedule": routing_refresh.schedule_line(settings),
+        "last_run": await routing_refresh.last_run_on(session),
+        "fetching": request.app.state.routing_fetch.running,
+        "owner_lists": [
+            (OwnerList.ALWAYS, routing.LIST_NAMES[OwnerList.ALWAYS], view.always),
+            (OwnerList.NEVER, routing.LIST_NAMES[OwnerList.NEVER], view.never),
+        ],
+    }
+
+
+@router.get("/routing", response_class=HTMLResponse)
+async def routing_screen(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """Routing — the lists that decide which sites an entry opens from its own address."""
+    return _screen(
+        request,
+        screen="panel/screens/routing.html",
+        current="routing",
+        title="Routing",
+        subtitle=(
+            "which sites an entry opens from its own Russian address instead of through "
+            "the hop, and the lists that say so"
+        ),
+        context=await _routing_context(request, session),
+    )
+
+
+@router.get("/routing/body", response_class=HTMLResponse)
+async def routing_body(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """The screen's content on its own, for the refresh after a change or during a fetch."""
+    return TEMPLATES.TemplateResponse(
+        request, "panel/routing_body.html", await _routing_context(request, session)
+    )
+
+
+@router.post("/routing/fetch", response_class=HTMLResponse)
+async def routing_fetch(request: Request):
+    """Start fetching every source that is on, BESIDE this request rather than in it.
+
+    A fetch can take a list host's whole timeout per source, and a page that waits for
+    it is a page an operator reloads mid-run. The answer comes back at once; the screen
+    polls while the run is going and redraws from the rows it writes. Nothing is applied:
+    a fetch changes the lists, and "apply" is a separate press.
+    """
+    started = request.app.state.routing_fetch.start(
+        request.app.state.database, request.app.state.settings
+    )
+    return _mutation(
+        request,
+        toast=(
+            "fetching the routing lists — this screen updates when it is done"
+            if started
+            else "a fetch is already running"
+        ),
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/apply", response_class=HTMLResponse)
+async def routing_apply(request: Request, session: AsyncSession = Depends(session_dependency)):
+    """Apply every entry with the switch on whose config differs from what it holds.
+
+    What the nightly run does after its fetch, pressed by hand. Each apply restarts that
+    entry's proxy, which drops anyone connected through it for a second or two.
+    """
+    applied = await routing_refresh.apply_changed(session)
+    if not applied:
+        return _mutation(
+            request,
+            notice="every entry with direct sites on already holds what the lists say",
+            events="routing-changed nodes-changed",
+        )
+    failed = [a for a in applied if a.failure]
+    if failed:
+        return _mutation(
+            request,
+            banner="; ".join(f"{a.node} was not updated: {a.failure}" for a in failed),
+            events="routing-changed nodes-changed",
+        )
+    return _mutation(
+        request,
+        toast="applied " + ", ".join(a.node for a in applied),
+        events="routing-changed nodes-changed",
+    )
+
+
+@router.get("/routing/sources/new", response_class=HTMLResponse)
+async def routing_source_dialog(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request, "panel/routing_source_dialog.html", {"values": {"enabled": True}, "error": None}
+    )
+
+
+@router.post("/routing/sources", response_class=HTMLResponse)
+async def routing_add_source(
+    request: Request,
+    name: str = Form(""),
+    url: str = Form(""),
+    enabled: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Add a source by name and https address. Nothing is fetched until "fetch now"."""
+    values = {"name": name.strip(), "url": url.strip(), "enabled": bool(enabled)}
+    try:
+        source = await routing.add_source(
+            session, name=values["name"], url=values["url"], enabled=values["enabled"]
+        )
+    except DomainError as exc:
+        return TEMPLATES.TemplateResponse(
+            request,
+            "panel/routing_source_dialog.html",
+            {"values": values, "error": wording.for_the_page(exc.message)},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return _mutation(
+        request,
+        toast=f"source {source.name} added — press fetch now to read it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/suggestions", response_class=HTMLResponse)
+async def routing_add_suggestion(
+    request: Request,
+    name: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    try:
+        source = await routing.add_suggested(
+            session, name=name, settings=request.app.state.settings
+        )
+    except DomainError as exc:
+        return _mutation(request, banner=exc.message, banner_label="refused")
+    return _mutation(
+        request,
+        toast=f"source {source.name} added — press fetch now to read it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/sources/{source_id}/switch", response_class=HTMLResponse)
+async def routing_switch_source(
+    source_id: str,
+    request: Request,
+    enabled: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    source = await routing.switch_source(session, source_id, enabled=enabled == "on")
+    return _mutation(
+        request,
+        toast=f"source {source.name} switched {'on' if source.enabled else 'off'} — "
+        "apply the entries to carry it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.get("/routing/sources/{source_id}/remove", response_class=HTMLResponse)
+async def routing_remove_dialog(
+    source_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/routing_remove_dialog.html",
+        {"source": await routing.get_source(session, source_id)},
+    )
+
+
+@router.post("/routing/sources/{source_id}/remove", response_class=HTMLResponse)
+async def routing_remove_source(
+    source_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    name = await routing.remove_source(session, source_id)
+    return _mutation(
+        request,
+        toast=f"source {name} removed — apply the entries to carry it",
+        keeping=name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/updates/{version_id}/approve", response_class=HTMLResponse)
+async def routing_approve(
+    version_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Put a held update into force. Entries carry it at their next apply."""
+    try:
+        source = await routing.approve(session, version_id)
+    except DomainError as exc:
+        return _mutation(request, banner=exc.message, banner_label="refused",
+                         events="routing-changed")
+    return _mutation(
+        request,
+        toast=f"the held update to {source.name} is in force — apply the entries to carry it",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/updates/{version_id}/reject", response_class=HTMLResponse)
+async def routing_reject(
+    version_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """Refuse a held update: the version in force stays, and this one is not asked again."""
+    try:
+        source = await routing.reject(session, version_id)
+    except DomainError as exc:
+        return _mutation(request, banner=exc.message, banner_label="refused",
+                         events="routing-changed")
+    return _mutation(
+        request,
+        toast=f"the held update to {source.name} was rejected — the list in force stays",
+        keeping=source.name,
+        events="routing-changed",
+    )
+
+
+@router.get("/routing/entries/new", response_class=HTMLResponse)
+async def routing_entry_dialog(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request, "panel/routing_entry_dialog.html", {"values": {}, "error": None}
+    )
+
+
+@router.post("/routing/entries", response_class=HTMLResponse)
+async def routing_add_entry(
+    request: Request,
+    which: str = Form(""),
+    value: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Add a destination to *always direct* or *never direct*; a refusal stays in the dialog."""
+    values = {"which": which, "value": value.strip()}
+    try:
+        chosen = OwnerList(which)
+        entry = await routing.add_owner_entry(session, which=chosen, value=value)
+    except (ValueError, DomainError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else "choose one of the two lists."
+        return TEMPLATES.TemplateResponse(
+            request,
+            "panel/routing_entry_dialog.html",
+            {"values": values, "error": wording.for_the_page(message)},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return _mutation(
+        request,
+        toast=f"{entry.value} added to {routing.LIST_NAMES[chosen]} — apply the entries "
+        "to carry it",
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/entries/{entry_id}/remove", response_class=HTMLResponse)
+async def routing_remove_entry(
+    entry_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    entry = await routing.remove_owner_entry(session, entry_id)
+    return _mutation(
+        request,
+        toast=f"{entry.value} removed from {routing.LIST_NAMES[entry.list]} — apply the "
+        "entries to carry it",
+        events="routing-changed",
+    )
+
+
+@router.post("/routing/lookup", response_class=HTMLResponse)
+async def routing_lookup(
+    request: Request,
+    destination: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Where an entry with the switch on would send one destination. Answers; records nothing.
+
+    Not logged, not audited and not stored: a lookup is a question about the lists, and a
+    record of the destinations an owner asked about would be the start of the record this
+    feature must never keep.
+    """
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/routing_lookup.html",
+        {"verdict": await routing.where(session, destination)},
+    )
+
+
+@router.get("/nodes/{node_id}/direct", response_class=HTMLResponse)
+async def node_direct_dialog(
+    node_id: str, request: Request, session: AsyncSession = Depends(session_dependency)
+):
+    """A node's direct-sites switch, with its entry-side resolver."""
+    node = await nodes.get_node(session, node_id)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "panel/node_direct_dialog.html",
+        await _direct_dialog_context(session, node, values={}, error=None),
+    )
+
+
+async def _direct_dialog_context(session, node, *, values: dict, error: str | None) -> dict:
+    lists = await routing.lists_in_force(session)
+    return {
+        "node": node,
+        "has_hop": await relay.exit_through_hop(session, node) is not None,
+        "size": lists.size(),
+        "sources_on": [name for name, _ in lists.sources],
+        "values": values,
+        "error": error,
+    }
+
+
+@router.post("/nodes/{node_id}/direct", response_class=HTMLResponse)
+async def set_node_direct(
+    node_id: str,
+    request: Request,
+    on: str = Form(""),
+    resolver: str = Form(""),
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Switch a node's direct sites on or off. Changes the record; the next apply carries it."""
+    node = await nodes.get_node(session, node_id)
+    has_hop = await relay.exit_through_hop(session, node) is not None
+    try:
+        node = await routing.set_direct_routing(
+            session, node_id=node_id, on=bool(on), resolver=resolver, has_hop=has_hop
+        )
+    except DomainError as exc:
+        return TEMPLATES.TemplateResponse(
+            request,
+            "panel/node_direct_dialog.html",
+            await _direct_dialog_context(
+                session,
+                node,
+                values={"on": bool(on), "resolver": resolver.strip()},
+                error=wording.for_the_page(exc.message),
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return _mutation(
+        request,
+        toast=f"direct sites switched {'on' if node.direct_routing else 'off'} for "
+        f"{node.name} — apply it to carry the change",
+        keeping=node.name,
+        events="nodes-changed routing-changed",
     )

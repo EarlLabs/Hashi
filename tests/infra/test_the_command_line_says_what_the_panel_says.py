@@ -831,7 +831,13 @@ def test_no_management_tunnel_is_generated_from_the_templates_own_values(
         assert key in checked
     # Skipped and not refused: a host with no tunnel is a real mode and is the mode every
     # restored machine is in, so this must not be able to stop a rebuild.
-    skip = bootstrap.split("mgmt_is_the_template; then", 1)[1].split("elif", 1)[0]
+    # Two places since M33.4: the mode is decided before the stack step (where the
+    # tunnel's refusals now run), and said after the verification.
+    decided = bootstrap.split("mgmt_is_the_template; then", 1)[1].split("elif", 1)[0]
+    assert "exit" not in decided and "fail" not in decided, (
+        "an unfilled tunnel block stops the install"
+    )
+    skip = bootstrap.split('"${MGMT_MODE}" = template ]; then', 1)[1].split("elif", 1)[0]
     assert "exit" not in skip, "an unfilled tunnel block stops the install"
     assert "NO" in skip and "management tunnel" in skip
 
