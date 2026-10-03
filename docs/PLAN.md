@@ -3809,6 +3809,88 @@ command to get there.
 
 ---
 
+## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · PROPOSED
+
+**Why.** Today the console is reachable only through `ssh -L` from a laptop. The tunnel
+drops when the laptop sleeps or changes network, and a phone cannot reach the panel at all.
+The owner remembered correctly that this was already designed: M7 built a management tunnel
+(`scripts/management-tunnel.sh`, decision 2026-09-09) — obfuscated AmneziaWG, one client
+config per device listed in `HASHI_MGMT_PEERS`, no forwarding and no NAT.
+
+**What is missing is the switch, not the feature.** The 2026-10-02 install left the
+`HASHI_MGMT_*` block at the template's values, so `make panel-bootstrap` deliberately
+generated no tunnel and the stack was published with `make up-panel-over-ssh`.
+
+**Also found and not yet understood:** the RU test host still carries an `awg-mgmt`
+interface at the private address from the 2026-09-09 deployment. Nothing in the current
+install created it. Find out what keeps it up, and either adopt it or remove it — two
+tunnels answering on one address is not a state to leave a host in.
+
+**Steps**
+- M33.1 — Decide the device list with the owner (at least laptop and phone) and fill the
+  `HASHI_MGMT_*` block for this deployment; open its UDP port in the host firewall.
+- M33.2 — Re-run `make panel-bootstrap` and move the stack to `make up-panel`; hand each
+  device its config once, as the script prints it. Consider a QR code for the phone.
+- M33.3 — Resolve the leftover `awg-mgmt` interface (above).
+- M33.4 — Adding or removing a device later is a re-run with one entry more or less: walk
+  it, and make the runbook say so.
+
+**Done when**
+- [ ] The owner opens the panel from the laptop and from the phone over the tunnel, with no
+      `ssh -L` running.
+- [ ] Removing a device from `HASHI_MGMT_PEERS` and re-running takes that device's access
+      away, and the other devices keep theirs.
+- [ ] The `ssh -L` fallback still works, so a lost tunnel never locks the owner out.
+- [ ] Exactly one management interface on the host, and the runbook says which.
+
+acceptance: yes — on the real hosts, from the owner's own devices.
+
+---
+
+## → M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · PROPOSED
+
+**Found on 2026-10-03, on the owner's own phone.** The owner added a user, imported the
+link into a phone client and got a timeout. The user's UUID was not on the entry: adding a
+user writes only to the database, and the node learns about it only on an apply. The panel
+does say so — "Not yet pushed to …" on the Overview, "A user added here is not on … yet"
+on the Users screen and in the link dialog — and the owner did not see it. In the link
+dialog it is a grey (`text-muted`) paragraph under the link, which is exactly where the
+eye does not go. **A warning the operator does not see is not a warning.**
+
+**The asymmetry this removes.** Revoking a user already applies by itself
+(`services/revocation.py` → `apply.apply_many`). Adding one does not, and nothing in
+`docs/decisions.md` says why. Record the reversal as a decision.
+
+**How it will work**
+1. **Add → apply.** Creating a user applies every node where the user just got a
+   credential, through `apply.apply_many`, the same fan-out revocation uses. The dialog
+   shows progress per node, then a per-node result: `✓ entry-ru`, or
+   `✗ leaf-ams — <reason> [retry]` with what the link does in the meantime. A node that
+   could not be reached stays in every other user's link (M26 round 5).
+2. **Several users at once.** Each apply restarts the daemon and drops connected users for a
+   second or two, so the add dialog takes several nicknames (one per line) and applies once
+   for all of them.
+3. **Visible warnings, with the press inside them.** Manual apply is still needed after
+   other changes (transport parameters, the decoy, the resolver). For those, the
+   not-yet-pushed sentences become one short, coloured block — "<node> is still on the old
+   configuration: your changes have not reached it" — with an **Apply <node>** button in it
+   and the long text behind "details". Same block on Overview, Users, Nodes and the link
+   dialog.
+4. **Unchanged:** revocation, and the manual Apply button on the Nodes screen.
+
+**Done when**
+- [ ] A user added in the panel connects from a phone with no other press.
+- [ ] A failed node is named in the add dialog with its reason and a retry, and the user's
+      link still works through every node that did take it.
+- [ ] Adding N users in one go applies each affected node once.
+- [ ] After a transport change, the warning is visible without reading a paragraph, and
+      its button applies the node it names.
+- [ ] `docs/decisions.md` records that adding a user now applies, and why.
+
+acceptance: yes — on the real hosts: add a user, import the link on a phone, connect.
+
+---
+
 ## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · built 2026-10-02, review clean in round 1 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer), PENDING
 
 **Asked for by the owner on 2026-10-02:** fix every defect the real-host field walk and the
