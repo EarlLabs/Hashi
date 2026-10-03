@@ -54,3 +54,17 @@ Steps:
 
 Not provable by any test or walk here: that the narrow list is the RIGHT list for the owner's
 users — that is learned by use, and the owner's own *always direct* list is where it is fixed.
+
+## Gate and review (2026-10-03)
+
+- `make test-edge`: 1025 passed, 3 failed — the known env-only `test_upstream_validation.py`
+  failures (wg-quick needs sudo here). The live Xray measurement tests ran (pinned xray in `.tools/`).
+- `make test-infra`: 579 passed (+2 new, run separately).
+- `make test-control` (throwaway Postgres 16.4): 1202 passed, 2 skipped; the round-2 fix's
+  file afterwards: 44 passed.
+- `make e2e-verify`: 234 passed, 16 skipped.
+- Review-loop, `reviewer-strict`: round 1 `0 critical, 0 high` (Medium: a hostile list could
+  overflow the hold reason and stop every refresh — fixed; Lows: wall-clock fetch deadline —
+  fixed; owner-only SSRF — accepted in decisions.md; day recorded before the run — by design).
+  Round 2: 1 high (`refresh_all` used sources expired by its own rollback) — fixed with a test
+  that fails without it. Round 3: CLEAN. No open findings.
