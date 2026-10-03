@@ -604,7 +604,8 @@ if [ "${MGMT_MODE}" = template ]; then
 
       make mgmt-tunnel
 
-  which touches no container, so a host that is already serving keeps serving. Until then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
+  which touches no container, so a host that is already serving keeps serving. Until
+  then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
   'Reaching the panel'. Nothing here published it either way."
 elif [ "${MGMT_MODE}" = generate ]; then
   say "generating the management tunnel the panel is reached over"

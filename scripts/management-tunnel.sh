@@ -35,9 +35,8 @@
 #       for adding or removing a device on a host that is already serving (M33.4).
 #
 #       --check runs every refusal below and then stops, having created and changed
-#       nothing. panel-bootstrap calls it BEFORE it touches the stack, so a tunnel the
-#       env file no longer describes stops an install while "nothing was changed" is
-#       still true (M33.4, finding D2).
+#       nothing, so a caller can ask "would this run refuse?" before doing anything of
+#       its own (scripts/panel-bootstrap.sh is that caller; M33.4, finding D2).
 #
 # The properties this script holds itself to, each asserted by
 # tests/infra/test_management_tunnel_script.py rather than promised here:
