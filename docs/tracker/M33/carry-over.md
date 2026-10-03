@@ -19,16 +19,18 @@ bootstrap user's home; the bootstrap prints the real ones.
    `awg-mgmt`; delivery answers from outside; the console answers over the tunnel from the
    laptop and the phone with no `ssh -L` running. The docker drop-in can stay or go — the
    decision row says it is not needed; if it is removed, reboot once more and re-check.
-4. **Removing a device.** Take one device out of `HASHI_MGMT_PEERS`, re-run: `==> removed
+4. **Removing a device.** Take one device out of `HASHI_MGMT_PEERS`, run `make mgmt-tunnel`: `==> removed
    <name> (<route>)`. Before the reload that device still reaches the console; after
    `sudo systemctl reload awg-quick@awg-mgmt` it does not, and `sudo awg show awg-mgmt
    peers` no longer lists its key. The other device stays connected through the reload.
-5. **Adding a device**, with `HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make panel-bootstrap`:
+5. **Adding a device**, with `HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make mgmt-tunnel` (M33.4 —
+   not the bootstrap, which on a serving host took delivery down):
    one `0600` file appears, nothing secret in the terminal; `qrencode -t ansiutf8 <
    <file>` on the laptop scans cleanly into the AmneziaWG phone app (finding 6's em dash
    is gone); after `reload` the new device reaches the console. Delete the directory.
-6. **The refusal.** Change `HASHI_MGMT_PORT` in `.env` and re-run: the bootstrap stops at
-   the tunnel step naming the port with both values, the `mv ... .retired-<date>` line and
+6. **The refusal.** Change `HASHI_MGMT_PORT` in `.env` and re-run `make panel-bootstrap`:
+   it stops BEFORE its stack step (M33.4 — `curl /sub/` from outside still answers, and
+   `docker compose ps` shows Caddy's ports unchanged), naming the port naming the port with both values, the `mv ... .retired-<date>` line and
    `ufw delete allow <old port>/udp`; `awg-mgmt.conf` is unchanged. Put the port back.
    (Optionally walk the full "Starting the tunnel over" sequence from the runbook.)
 7. **Old firewall rules.** `sudo ufw status` lists exactly one rule for the management
@@ -37,3 +39,10 @@ bootstrap user's home; the bootstrap prints the real ones.
 
 Not provable by any test here: that the tunnel survives the owner's home or mobile network
 (the charter's first criterion stays a field observation).
+
+## M33.4 follow-up (2026-10-03) — what the next walk checks
+
+- D1: `make mgmt-tunnel` with one device more; `curl -sS -o /dev/null -w '%{http_code}'
+  https://<public host>/sub/<real token>` from outside answers 200 before, during and
+  after, and `docker compose ps` shows no container recreated.
+- D2: item 6 above — the refused bootstrap leaves 80/443 and the console published.

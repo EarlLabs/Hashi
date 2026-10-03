@@ -277,6 +277,11 @@ bootstrap. It hands out one config per device, **once**:
 make panel-bootstrap
 ```
 
+On a host that is **already installed and serving**, switch the tunnel on with
+`make mgmt-tunnel` instead: the same generator and the same device configs, and no container is
+touched, so delivery stays up (see "Adding or removing a device" for what the bootstrap
+costs such a host).
+
 You will see `generating the management tunnel the panel is reached over`, then, for each
 device, `Its configuration follows ONCE and is not stored anywhere` followed by the file
 itself. **Copy each one to its device before you close that terminal.** Nothing stores it:
@@ -339,7 +344,7 @@ What each line is for, because each one was missing on the first real host:
 
 - **The symlink and the unit.** `awg-quick@` ships with `amneziawg-tools` and reads
   `/etc/amnezia/amneziawg/<name>.conf`. Linking rather than copying keeps one file: every
-  later re-run of the bootstrap changes the file the unit reads, and nothing has to be
+  later run of the tunnel step changes the file the unit reads, and nothing has to be
   copied again. `enable` is what brings the tunnel back after a reboot — `awg-quick up` by
   hand does not survive one.
 - **`ip_nonlocal_bind`.** `make up-panel` publishes the console on the tunnel's address,
@@ -379,8 +384,21 @@ and it is what a freshly restored machine has: no tunnel, therefore no address, 
 
 #### Adding or removing a device
 
-Edit `HASHI_MGMT_PEERS` — one entry more, or one fewer — and run the bootstrap again. The
-host file is **converged** to the list: a new name gets a peer and its config, handed out
+Edit `HASHI_MGMT_PEERS` — one entry more, or one fewer — and run the tunnel step on its
+own:
+
+```bash
+make mgmt-tunnel                                          # or, for a new device's file:
+HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make mgmt-tunnel
+```
+
+**Not `make panel-bootstrap`.** That is an install, and on a host that is already serving
+it converges the stack to the base compose file on its way to the tunnel step: Caddy loses
+80/443 and the console, and every user's `/sub/` link answers "connection refused" until
+`make up-panel` — which is what happened on the real host the first time a device was
+added this way. `make mgmt-tunnel` runs the same generator and touches no container.
+
+The host file is **converged** to the list: a new name gets a peer and its config, handed out
 once; a name you deleted loses its peer, and the run says `removed <name>`; every other
 device keeps its keys and stays connected. Then load the change into the running
 interface — it is `awg syncconf` underneath, so nobody else's session drops:
@@ -399,8 +417,10 @@ and changes nothing.
 #### Starting the tunnel over
 
 `HASHI_MGMT_ADDRESS`, `HASHI_MGMT_PORT` and `HASHI_MGMT_MTU` are inside every device
-config already handed out, so the bootstrap **refuses** to keep a host file that disagrees
-with them — it names each key with both values and changes nothing. (An earlier version
+config already handed out, so the tunnel step **refuses** to keep a host file that disagrees
+with them — it names each key with both values and changes nothing. `make panel-bootstrap`
+runs that refusal before it touches the stack, so there too a refused run has taken nothing
+off the air. (An earlier version
 kept the old file and said so in a line that read like success, and the first new device
 then collided with an old one's address.) Either put the old values back, or retire the
 host end and start over:
@@ -409,7 +429,7 @@ host end and start over:
 sudo systemctl disable --now awg-quick@awg-mgmt
 mv ~/.hashi/management/awg-mgmt.conf ~/.hashi/management/awg-mgmt.conf.retired-$(date +%Y%m%d)
 sudo ufw delete allow <the OLD HASHI_MGMT_PORT>/udp     # if the port changed
-make panel-bootstrap                                     # with the new values in .env
+make mgmt-tunnel                                         # with the new values in .env
 sudo systemctl enable --now awg-quick@awg-mgmt
 ```
 

@@ -1,7 +1,7 @@
 agent: alfred
 role: overseer
 task: "M33 — the management tunnel, switched on: code and docs half (2026-10-03)"
-state: done
-progress: "built, gated (infra, control, edge, e2e-verify), review-loop clean in round 1; awaits the orchestrator's real-host walk"
+state: in_progress
+progress: "M33.4 follow-up (D1 make mgmt-tunnel, D2 tunnel check before the stack step) built on task/M34; awaits the next real-host walk"
 blockers: null
-updated_at: 2026-10-03T14:00:00Z
+updated_at: 2026-10-03T20:00:00Z

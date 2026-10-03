@@ -3955,6 +3955,18 @@ code-and-docs half (M33.5) answers all seven; the walk below is what proves it.
   `reviewer-strict`, round 1, CLEAN. One low carried: peers are removed before new keys
   are generated, so a key-generation failure mid-run leaves the removals without the
   additions — a valid file, and a re-run completes it.
+- M33.4 follow-up — **two real-host walk findings, fixed on `task/M34`** (no host touched).
+  D1: re-running `make panel-bootstrap` to add a device — which the runbook said to do —
+  converged a serving stack to the base compose file and took user delivery down until
+  `make up-panel`. Now `make mgmt-tunnel` runs the generator alone and touches no
+  container, and the runbook's device and start-over sections use it. D2: a changed
+  `HASHI_MGMT_PORT` was refused with "nothing was changed" after the stack step had
+  unpublished Caddy; the generator gained `--check` (every refusal, nothing written) and
+  the bootstrap runs it before `compose up`. Decision row 2026-10-03 (M33.4). Tests:
+  `tests/infra/test_a_device_change_keeps_delivery_up.py` (stub docker; three of four
+  red before the fix) and two `--check` cases in `test_management_tunnel_script.py`.
+  Walk to repeat: carry-over items 4–6 with `make mgmt-tunnel`, and `curl /sub/` from
+  outside before and after each.
 
 **Done when**
 - [ ] The owner opens the panel from the laptop and from the phone over the tunnel, with no
