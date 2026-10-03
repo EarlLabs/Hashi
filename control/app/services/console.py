@@ -2171,8 +2171,10 @@ LINK_WORKS_THROUGH = "Their link works through {nodes} now."
 LINK_NOT_YET_THROUGH = (
     "It does not work through {nodes} yet: {this} still on the old configuration and "
     "{does} not know them. The link still names {it}, so a client that picks {it} gets "
-    "no connection until {it} is applied."
+    "no connection until {this_} applied."
 )
+# ``{it}`` is the OBJECT pronoun and ``{this_}`` the subject with its verb: one word for
+# both read "until them is applied" in the M32 walk (fixed in M32.4).
 LINK_THROUGH_NOTHING = (
     "No node in service holds a credential for them, so their link resolves to an empty "
     "configuration. Put a node into service and the same link starts working — nobody "
@@ -2215,6 +2217,7 @@ async def where_their_link_works(session: AsyncSession, user_ids: Sequence[str])
                 this="it is" if one else "they are",
                 does="does" if one else "do",
                 it="it" if one else "them",
+                this_="it is" if one else "they are",
             )
         )
     return " ".join(said)

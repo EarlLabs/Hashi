@@ -365,3 +365,61 @@ async def test_an_add_never_takes_a_serving_node_out_of_the_links(
     session.expire_all()
     assert (await nodes.get_node(session, node_id)).state == NodeState.ACTIVE
     assert "vless://" in await link_names(client, anonymous, created.json()["id"])
+
+
+# --- found in the real-host walk of M32, fixed in M32.4 ---------------------------------
+
+
+async def test_the_works_line_is_grammatical_for_one_node_and_for_several(
+    client, session, reality_params, some_hosts_unreachable
+) -> None:
+    """The walk read "…gets no connection until them is applied." with two nodes pending.
+
+    The pronoun was one word for both of its jobs — the object of "picks" and the
+    subject of "is applied" — and "them" is only right for the first.
+    """
+    await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
+    await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+    user_id = await a_user_no_node_was_told_about(session, "mira")
+
+    several = await console.where_their_link_works(session, [user_id])
+    assert "them is" not in several, several
+    assert "a client that picks them gets no connection until they are applied." in several
+
+    entry_only = await client.post(
+        "/panel/reach",
+        data={"node": [(await client.get("/api/nodes")).json()[0]["id"]], "user": [user_id]},
+    )
+    assert entry_only.status_code == 200, entry_only.text
+    one = await console.where_their_link_works(session, [user_id])
+    assert "a client that picks it gets no connection until it is applied." in one, one
+
+
+async def test_a_failed_row_names_its_node_once(
+    client, session, reality_params, some_hosts_unreachable
+) -> None:
+    """The walk read "✗ leaf-ams — 'leaf-ams' was not updated — …": the name twice."""
+    import re
+
+    down, _ = some_hosts_unreachable
+    leaf = await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+    user_id = await a_user_no_node_was_told_about(session, "mira")
+    down.add(LEAF_ADDRESS)
+
+    failed = await client.post("/panel/reach", data={"node": [leaf], "user": [user_id]})
+
+    row = re.search(r'<div class="reach-row reach-failed">(.*?)</div>', failed.text, re.S)
+    assert row, failed.text
+    text = " ".join(row.group(1).split())
+    assert text.count("leaf-ams") == 1, f"the row names its node more than once: {text}"
+    assert "could not be reached" in text, text
+
+
+def test_every_reason_opens_with_the_node_and_names_it_nowhere_else() -> None:
+    """What lets the row drop the leading name without a second table of wordings."""
+    from control.app.services import onboarding
+
+    for kind, template in onboarding._WHY_NOT_REACHED.items():
+        assert template.startswith("{node} "), kind
+        assert "{node}" not in template[len("{node}"):], kind
+        assert "{node}" not in onboarding.why_not_reached_after_its_name(kind)

@@ -87,6 +87,18 @@ def why_not_reached(kind: NotUpdated, *, name: str) -> str:
     return _WHY_NOT_REACHED[kind].format(node=repr(name), where=apply.WHERE_TO_RETRY)
 
 
+def why_not_reached_after_its_name(kind: NotUpdated) -> str:
+    """The same sentence without its leading node name, for a row that already shows it.
+
+    The add dialog's row is "✗ <name> <this>". Rendering the whole sentence there read
+    "✗ leaf-ams — 'leaf-ams' was not updated — …" in the M32 walk (fixed in M32.4).
+    Every sentence above opens with ``{node} `` and names it nowhere else, so dropping
+    that prefix is the whole change — a second table of row wordings would be one more
+    place for the two to drift apart. A test holds every sentence to that shape.
+    """
+    return _WHY_NOT_REACHED[kind].removeprefix("{node} ").format(where=apply.WHERE_TO_RETRY)
+
+
 @dataclass
 class ReachOutcome:
     """What applying the nodes an add touched did, node by node.

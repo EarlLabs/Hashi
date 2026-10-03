@@ -2872,9 +2872,10 @@ async def reach_node(
     ``user`` is given (the add dialog), the line saying where their link works is
     re-measured and swapped out of band after every node.
 
-    The row's sentence is composed from the node's NAME and the failure's KIND only
-    (``onboarding.why_not_reached``): a failure's own message can carry an upstream
-    checker's output, which is known to quote the node's private key. The Nodes screen's
+    The row's sentence is composed from the failure's KIND only, after the node's NAME the
+    row already shows (``onboarding.why_not_reached_after_its_name``): a failure's own
+    message can carry an upstream checker's output, which is known to quote the node's
+    private key. The Nodes screen's
     apply is where the full reason is read, and every sentence ends there.
     """
     if not node:
@@ -2892,7 +2893,7 @@ async def reach_node(
                 "name": name,
                 "ok": this in outcome.nodes_updated,
                 "why": (
-                    wording.for_the_page(onboarding.why_not_reached(kind, name=name))
+                    wording.for_the_page(onboarding.why_not_reached_after_its_name(kind))
                     if kind
                     else None
                 ),
