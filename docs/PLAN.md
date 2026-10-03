@@ -3809,7 +3809,7 @@ command to get there.
 
 ---
 
-## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · PROPOSED
+## → M33 — The owner reaches the panel from any of their devices without `ssh -L` · asked for by the owner 2026-10-03 · code and docs built 2026-10-03 on `task/M33` · acceptance: yes (the real-host walk, run by the orchestrator — not by the implementer), PENDING
 
 **Why.** Today the console is reachable only through `ssh -L` from a laptop. The tunnel
 drops when the laptop sleeps or changes network, and a phone cannot reach the panel at all.
@@ -3826,22 +3826,49 @@ interface at the private address from the 2026-09-09 deployment. Nothing in the 
 install created it. Find out what keeps it up, and either adopt it or remove it — two
 tunnels answering on one address is not a state to leave a host in.
 
+**Found switching it on, on the real host (2026-10-03).** Seven findings, each a gap
+between the script, the runbook and a host that has to keep working: a re-run kept an old
+host file whatever `.env` now said; the runbook's `awg-quick up ~/...` "as root" pointed at
+`/root`; nothing survived a reboot, and the missing interface then failed the whole Caddy
+container — the public delivery endpoint with it; removing a device from the list removed
+nothing; adding one did not say how to load it; configs came out in the SSH stream with an
+em dash a QR decoder misread; and an old port's firewall rule was nobody's to remove. The
+code-and-docs half (M33.5) answers all seven; the walk below is what proves it.
+
 **Steps**
 - M33.1 — Decide the device list with the owner (at least laptop and phone) and fill the
   `HASHI_MGMT_*` block for this deployment; open its UDP port in the host firewall.
+  *(done on the real host by the orchestrator, 2026-10-03)*
 - M33.2 — Re-run `make panel-bootstrap` and move the stack to `make up-panel`; hand each
-  device its config once, as the script prints it. Consider a QR code for the phone.
-- M33.3 — Resolve the leftover `awg-mgmt` interface (above).
+  device its config once. *(walked on the real host; the findings above came out of it)*
+- M33.3 — Resolve the leftover `awg-mgmt` interface (above). *(orchestrator, on the host)*
 - M33.4 — Adding or removing a device later is a re-run with one entry more or less: walk
-  it, and make the runbook say so.
+  it, and make the runbook say so. *(runbook: done in M33.5; the walk: orchestrator)*
+- M33.5 — **built on `task/M33`** (code + docs, no host touched).
+  `scripts/management-tunnel.sh` converges the host file's peers to `HASHI_MGMT_PEERS`
+  (removes unlisted ones and says so, keeps listed keys, refuses a listed device whose
+  address changed); refuses a host file whose Address/ListenPort/MTU disagree with `.env`,
+  naming both values and the retire sequence; writes device configs to private files with
+  `--configs-to` / `HASHI_MGMT_CONFIGS_TO`; prints ASCII-only configs; and prints the root
+  commands with the real path — `/etc/amnezia/amneziawg` symlink, `ufw`, `ip_nonlocal_bind`,
+  `systemctl enable --now` / `reload awg-quick@awg-mgmt`. Runbook: "Bringing it up, and
+  keeping it up across a reboot", "Adding or removing a device", "Starting the tunnel over".
+  Three rows in `docs/decisions.md` (2026-10-03, M33). What the walk must check:
+  `docs/tracker/M33/carry-over.md`.
 
 **Done when**
 - [ ] The owner opens the panel from the laptop and from the phone over the tunnel, with no
-      `ssh -L` running.
+      `ssh -L` running. *(field)*
 - [ ] Removing a device from `HASHI_MGMT_PEERS` and re-running takes that device's access
-      away, and the other devices keep theirs.
-- [ ] The `ssh -L` fallback still works, so a lost tunnel never locks the owner out.
-- [ ] Exactly one management interface on the host, and the runbook says which.
+      away, and the other devices keep theirs. *(the script half is tested —
+      `tests/infra/test_management_tunnel_script.py`; that the device actually loses the
+      console after `systemctl reload` is field)*
+- [ ] The `ssh -L` fallback still works, so a lost tunnel never locks the owner out. *(field)*
+- [ ] Exactly one management interface on the host, and the runbook says which. *(runbook:
+      `ip -brief link | grep awg`, one `awg-mgmt`; the host: field)*
+- [ ] After a reboot of the panel host the tunnel is back and the delivery endpoint answers;
+      with the tunnel deliberately stopped and Caddy restarted, delivery still answers.
+      *(field — added by M33.5; the docker half was shown in a disposable dind only)*
 
 acceptance: yes — on the real hosts, from the owner's own devices.
 

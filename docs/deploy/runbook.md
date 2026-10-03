@@ -271,7 +271,7 @@ rather than **through** it, and forwarding rules would quietly turn your admin t
 an exit.
 
 Fill in the `HASHI_MGMT_*` keys **with this deployment's own values** and run the
-bootstrap. It prints one config per device, **once**:
+bootstrap. It hands out one config per device, **once**:
 
 ```bash
 make panel-bootstrap
@@ -285,6 +285,31 @@ nowhere else. A device whose config was lost gets a new entry in `HASHI_MGMT_PEE
 new key — a re-run says `already a peer of this tunnel` and prints nothing, because there
 is nothing left to print.
 
+**Over SSH, prefer a file per device to the scrollback.** The configs arrive in the same
+stream as every progress line, and a phone wants a file or a QR code rather than text
+selected out of a terminal. Name a directory for this one run and each new device's config
+is written there instead — `0600`, one file per device, and never into the checkout:
+
+```bash
+HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make panel-bootstrap
+```
+
+Then, from your laptop (both tools are yours, not the project's: `qrencode` from your
+package manager, and the AmneziaWG app on the phone imports from a QR code or a file):
+
+```bash
+scp 'USER@THE_PANEL_HOST:mgmt-devices/*.conf' .     # the laptop's own goes into its client
+qrencode -t ansiutf8 < phone.conf                   # scan it with the phone's AmneziaWG app
+rm phone.conf laptop.conf
+ssh USER@THE_PANEL_HOST 'rm -r ~/mgmt-devices'
+```
+
+That directory is the hand-over, exactly as the scrollback was, and deleting it is yours:
+the script never reads such a file back and refuses to overwrite one that is still there,
+so a config nobody has moved yet is never silently replaced. Every byte of a device config
+is ASCII on purpose — a QR decoder read the em dash an earlier version put in its first
+comment as something else.
+
 **Left as `.env.example` ships them, those keys generate nothing**, and that is deliberate:
 the template's block is a complete one, so a machine rebuilt by copying that file used to
 get a tunnel and two printed private keys for devices nobody owns, aimed at the template's
@@ -292,14 +317,51 @@ example endpoint. The bootstrap compares the block against `.env.example`'s own 
 the generation and says which mode it left the host in — which for a freshly restored host
 is the SSH fallback below.
 
+#### Bringing it up, and keeping it up across a reboot
+
 The run ends with `NOT done, and not yet true: the tunnel is not up and this host is not
 listening.` That is accurate: it wrote a file and printed text. Bringing the tunnel up is
-yours, as root, and needs `amneziawg-tools` on the host:
+yours, as root, and needs `amneziawg-tools` on the host. **The run prints these lines with
+this host's real path in them — copy them from there**, not from here: `~` in a root shell
+is `/root`, not the home of the user who ran the bootstrap, and an earlier version of this
+page said `awg-quick up ~/.hashi/...` and pointed at a file that did not exist.
 
 ```bash
-ufw allow <the management tunnel's UDP port>/udp   # HASHI_MGMT_PORT in your env file
-awg-quick up ~/.hashi/management/awg-mgmt.conf
+sudo install -d -m 700 /etc/amnezia/amneziawg
+sudo ln -sfn /home/<bootstrap user>/.hashi/management/awg-mgmt.conf /etc/amnezia/amneziawg/awg-mgmt.conf
+sudo ufw allow <HASHI_MGMT_PORT>/udp
+echo 'net.ipv4.ip_nonlocal_bind = 1' | sudo tee /etc/sysctl.d/60-hashi-mgmt.conf
+sudo sysctl --system
+sudo systemctl enable --now awg-quick@awg-mgmt
 ```
+
+What each line is for, because each one was missing on the first real host:
+
+- **The symlink and the unit.** `awg-quick@` ships with `amneziawg-tools` and reads
+  `/etc/amnezia/amneziawg/<name>.conf`. Linking rather than copying keeps one file: every
+  later re-run of the bootstrap changes the file the unit reads, and nothing has to be
+  copied again. `enable` is what brings the tunnel back after a reboot — `awg-quick up` by
+  hand does not survive one.
+- **`ip_nonlocal_bind`.** `make up-panel` publishes the console on the tunnel's address,
+  and docker refuses to bind an address the host does not hold. Without this line a
+  tunnel that is late or broken at boot — a reboot, a kernel upgrade the AmneziaWG module
+  was not rebuilt for — fails **the whole Caddy container**, and the public delivery
+  endpoint goes down with the console. That happened on the real host. With it, docker
+  binds the address before it exists, Caddy starts, delivery is served, and the console
+  answers on the tunnel the moment the interface comes up. It lets any process on the
+  host bind an address it does not hold yet, which is the whole of its cost
+  (`docs/decisions.md`, 2026-10-03). On an IPv6 tunnel the run prints the
+  `net.ipv6.` form instead.
+- A drop-in that orders docker after the tunnel (`Wants=`/`After=awg-quick@awg-mgmt` in
+  `/etc/systemd/system/docker.service.d/`) is **not needed** with the line above. It is
+  harmless if you already have one; it does not replace `ip_nonlocal_bind`, because
+  ordering does nothing for a tunnel that fails to come up at all.
+
+**If the interface is already up from an earlier `awg-quick up <file>` by hand**, the unit
+cannot start over it: `sudo awg-quick down <that same file>` first, then `enable --now`.
+And check there is exactly one management interface — `ip -brief link | grep awg` lists
+one `awg-mgmt` line and no other you cannot account for; a second interface answering on
+the same address is not a state to leave a host in.
 
 Set `HASHI_PRIVATE_BIND_ADDR` to the tunnel address the interface now holds — that
 publication is the whole of "the console is off the public internet", because Caddy inside
@@ -309,10 +371,58 @@ appears on. Then `make up-panel`, and open the console from a device on the tunn
 **Never `HASHI_PRIVATE_BIND_ADDR=127.0.0.1`.** Loopback is already claimed for that port
 by the fallback below, and docker refuses the second bind with "port is already
 allocated"; `panel-bootstrap.sh` checks for it and says so, because that error names
-neither the cause nor the cure. **And never an address this host does not hold** — that
-is the same mistake wearing different clothes, and it is what a freshly restored machine
-has: no tunnel, therefore no address, therefore `make up-panel` fails on the bind. Leave
-the variable unset and publish with `make up-panel-over-ssh` until the tunnel is up.
+neither the cause nor the cure. **And never an address this host does not hold, without
+the `ip_nonlocal_bind` line above** — that is the same mistake wearing different clothes,
+and it is what a freshly restored machine has: no tunnel, therefore no address, therefore
+`make up-panel` fails on the bind. Leave the variable unset and publish with
+`make up-panel-over-ssh` until the tunnel is up.
+
+#### Adding or removing a device
+
+Edit `HASHI_MGMT_PEERS` — one entry more, or one fewer — and run the bootstrap again. The
+host file is **converged** to the list: a new name gets a peer and its config, handed out
+once; a name you deleted loses its peer, and the run says `removed <name>`; every other
+device keeps its keys and stays connected. Then load the change into the running
+interface — it is `awg syncconf` underneath, so nobody else's session drops:
+
+```bash
+sudo systemctl reload awg-quick@awg-mgmt
+```
+
+Until that reload a removed device **still has access**, because the running interface
+still holds its peer. A device's name is how it is matched on every later run, so
+**moving a device to another address is a new name**, not an edit: write
+`phone2=<new address>` in place of `phone=<old address>`, and the run removes the old peer
+and hands out a new config in one go. Editing the address under the same name is refused
+and changes nothing.
+
+#### Starting the tunnel over
+
+`HASHI_MGMT_ADDRESS`, `HASHI_MGMT_PORT` and `HASHI_MGMT_MTU` are inside every device
+config already handed out, so the bootstrap **refuses** to keep a host file that disagrees
+with them — it names each key with both values and changes nothing. (An earlier version
+kept the old file and said so in a line that read like success, and the first new device
+then collided with an old one's address.) Either put the old values back, or retire the
+host end and start over:
+
+```bash
+sudo systemctl disable --now awg-quick@awg-mgmt
+mv ~/.hashi/management/awg-mgmt.conf ~/.hashi/management/awg-mgmt.conf.retired-$(date +%Y%m%d)
+sudo ufw delete allow <the OLD HASHI_MGMT_PORT>/udp     # if the port changed
+make panel-bootstrap                                     # with the new values in .env
+sudo systemctl enable --now awg-quick@awg-mgmt
+```
+
+(the `mv` runs as the bootstrap user, so `~` is right there). **Remove the old port's
+firewall rule** whenever the port changes — a rule for a port nothing listens on any more
+is an opening nobody remembers the reason for. Every device then needs its **new** config,
+and its old tunnel should be deleted from it. If the tunnel address changed, change
+`HASHI_PRIVATE_BIND_ADDR` and `HASHI_PRIVATE_HOST` to match and `make up-panel` again. The
+retired file still holds the old private key; delete it once the new tunnel works.
+`HASHI_MGMT_ENDPOINT` is not in the host file, so changing it is not refused — but every
+device already handed a config still dials the old one. Give each device a new name in
+`HASHI_MGMT_PEERS` (the run removes the old peers and hands out new configs), or retire
+the host end as above.
 
 ### The way back in when the tunnel is unavailable
 
