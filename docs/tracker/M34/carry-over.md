@@ -93,3 +93,6 @@ users — that is learned by use, and the owner's own *always direct* list is wh
    control plane serves refreshes at `<public base URL>/sub/…`.
 
 Re-walk: a failed fetch's row and the entry's delivery line on the Nodes screen.
+
+Gate: control 1209 passed / 2 skipped; infra 585; `make e2e-verify` 234 passed / 16
+skipped. Review: `reviewer-strict`, round 1, CLEAN.

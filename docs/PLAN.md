@@ -3985,6 +3985,9 @@ code-and-docs half (M33.5) answers all seven; the walk below is what proves it.
   red before the fix) and two `--check` cases in `test_management_tunnel_script.py`.
   Walk to repeat: carry-over items 4–6 with `make mgmt-tunnel`, and `curl /sub/` from
   outside before and after each.
+  Gate (with M34.5): infra 585 passed; control 1209 passed / 2 skipped (throwaway
+  Postgres); edge unchanged (3 known env failures); `make e2e-verify` 234 passed / 16
+  skipped. Review: `reviewer-strict`, round 1, CLEAN (two lows fixed).
 
 **Done when**
 - [ ] The owner opens the panel from the laptop and from the phone over the tunnel, with no
