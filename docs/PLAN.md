@@ -3924,6 +3924,13 @@ acceptance: yes — on the real hosts: add a user, import the link on a phone, c
   node. Affects revocation too; recorded.
 - **Unchanged:** revocation's own flow, and the Nodes screen's Apply button.
 
+Gate: control 1145 passed / 2 skipped (throwaway Postgres); edge 968 passed / 14 skipped /
+3 failed (the known environmental cases in `test_upstream_validation.py`); infra 557
+passed; `make e2e-verify` 231 passed / 16 skipped. Review: `reviewer-strict`, round 1,
+CLEAN; one low carried — no browser-level test pins the htmx include semantics the
+per-node chain relies on (correct for the vendored htmx 2.0.4). What the walk must see:
+`docs/tracker/M32/carry-over.md`.
+
 ---
 
 ## → M31 — What the real-host field walk and the restore walk found on 2026-10-02 · asked for by the owner 2026-10-02 · built 2026-10-02, review clean in round 1 · acceptance: yes (a real-host re-walk, run by the orchestrator after this milestone — not by the implementer), PENDING
