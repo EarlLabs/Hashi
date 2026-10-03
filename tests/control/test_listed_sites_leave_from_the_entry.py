@@ -708,3 +708,12 @@ async def test_switching_a_source_off_takes_its_sites_out_of_the_render(
 async def test_an_owner_entry_that_is_not_a_destination_is_refused(session) -> None:
     with pytest.raises(DomainError):
         await routing.add_owner_entry(session, which=OwnerList.ALWAYS, value="0.0.0.0/0")
+
+
+async def test_a_list_of_escape_heavy_garbage_is_held_and_written(session, settings, monkeypatch):
+    """A remote body must not be able to make the hold itself fail to be written (review r1)."""
+    source = await a_source_in_force(session, settings, monkeypatch)
+    monkeypatch.setattr(routing, "fetch_text", serving(("\\" * 80 + " x\n") * 3))
+    outcome = await routing.refresh_source(session, source, settings)
+    assert outcome.outcome == "held"
+    assert len(outcome.detail) <= 500

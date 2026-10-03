@@ -29,6 +29,7 @@ import hashlib
 import ipaddress
 import logging
 import ssl
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -64,6 +65,10 @@ logger = logging.getLogger(__name__)
 # to read what a list looked like last week; a source refreshed nightly that changes nightly
 # would otherwise grow without end.
 KEPT_VERSIONS = 10
+
+# How much of a held list's offending lines a hold sentence quotes, in characters. The
+# sentence around it is under 200, and the column it is stored in holds 500.
+REASON_SHOWN = 250
 
 # How many added and removed entries a diff shows by name. The counts are always whole.
 DIFF_SHOWN = 30
@@ -194,7 +199,10 @@ def hold_reason(
     """
     count = len(parsed.entries)
     if parsed.invalid:
-        shown = "; ".join(repr(example) for example in parsed.invalid_examples)
+        # Remote text, so its length is bounded AFTER ``repr`` (which can double it) and the
+        # whole sentence is kept inside ``RoutingListVersion.hold_reason``'s column: a list
+        # host must not be able to make the hold itself fail to be written.
+        shown = "; ".join(repr(example) for example in parsed.invalid_examples)[:REASON_SHOWN]
         return (
             f"{parsed.invalid} line(s) are not a name or a network ({shown}). A list host "
             "that answers with something other than its list looks exactly like this."
@@ -264,7 +272,22 @@ def fetch_text(url: str, *, timeout: float, max_bytes: int) -> str:
         with opener.open(urllib.request.Request(url), timeout=timeout) as response:
             if response.status != 200:
                 raise FetchFailed(f"the list's host answered HTTP {response.status}.")
-            body = response.read(max_bytes + 1)
+            # Read in chunks against a WALL-CLOCK deadline: the socket timeout is per
+            # operation, so a host that trickles bytes would otherwise hold this thread
+            # far past ``timeout`` while staying under the size cap.
+            deadline = time.monotonic() + timeout
+            chunks, size = [], 0
+            while size <= max_bytes:
+                if time.monotonic() > deadline:
+                    raise FetchFailed(
+                        f"the list's host did not finish sending within {timeout:.0f} seconds."
+                    )
+                chunk = response.read(min(65536, max_bytes + 1 - size))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            body = b"".join(chunks)
     except FetchFailed:
         raise
     except urllib.error.HTTPError as exc:
@@ -447,12 +470,22 @@ async def refresh_source(
 
 async def refresh_all(session: AsyncSession, settings) -> list[Refreshed]:
     """Refresh every source that is switched on, one after another."""
-    sources = await list_sources(session)
-    return [
-        await refresh_source(session, source, settings)
-        for source in sources
-        if source.enabled
-    ]
+    sources = [source for source in await list_sources(session) if source.enabled]
+    results = []
+    for source in sources:
+        name = source.name
+        try:
+            results.append(await refresh_source(session, source, settings))
+        except Exception as exc:
+            # One source that cannot be taken in must not starve the others. Its version
+            # in force stays; the type only is logged, never a message that could quote
+            # the list.
+            await session.rollback()
+            logger.exception("routing source %s could not be taken in", name)
+            results.append(
+                Refreshed(name, "failed", f"could not be taken in ({type(exc).__name__}).")
+            )
+    return results
 
 
 # --- the owner's decisions ---------------------------------------------------------------
