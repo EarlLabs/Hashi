@@ -42,6 +42,7 @@ CADDYFILE = REPO / "deploy" / "caddy" / "Caddyfile"
 NODES_TABLE = REPO / "control" / "app" / "templates" / "panel" / "nodes_table.html"
 MIGRATIONS = REPO / "control" / "migrations" / "versions"
 ENV_EXAMPLE = REPO / ".env.example"
+USERS_SERVICE = REPO / "control" / "app" / "services" / "users.py"
 
 # M16's section, by its exact title: the shapes that build a hop and the migration that
 # empties the field both point at it by these words.
@@ -63,11 +64,16 @@ def runbook() -> str:
 
 @pytest.fixture(scope="module")
 def leaf_section(runbook: str) -> str:
-    """The section that takes an operator from a rented host to a drivable node."""
-    section = re.search(r"^## Preparing a leaf\n(?:.*\n)*?(?=^## )", runbook, re.M)
+    """The section that takes an operator from a rented host to a drivable node.
+
+    Still called the leaf section here because M11 wrote it for the leaf; its title is
+    *Preparing a node* since the 2026-10-03 fresh install, because it is every node's —
+    the entry's and the control plane's own box's as well.
+    """
+    section = re.search(r"^## Preparing a node\n(?:.*\n)*?(?=^## )", runbook, re.M)
     assert section, (
-        "the runbook has no leaf section — every leaf is then prepared by hand, which is "
-        "the thing M11 exists to end"
+        "the runbook has no node-preparation section — every node is then prepared by "
+        "hand, which is the thing M11 exists to end"
     )
     return section.group(0)
 
@@ -1296,26 +1302,26 @@ def test_no_paragraph_states_the_kernel_tunnel_rule_without_naming_which_end(
 # --- M26's first acceptance walk: what a shape leaves out ---------------------
 
 
-def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str]) -> None:
+def test_every_shape_that_adds_a_user_says_the_add_reaches_the_nodes(
+    shapes: dict[str, str],
+) -> None:
     """The step the walk had to work out for itself, in the pages it worked from.
 
-    It added a user and fetched their configuration file: complete, correct, importable
-    — the node's real public key, an address out of that row's pool — while the node held
-    no peer for them and their client would have handshaked into nothing. A second apply,
-    three minutes later, is what made it true.
+    M26's walk added a user and fetched their configuration file: complete, correct,
+    importable, while the node held no peer for them and their client would have
+    handshaked into nothing. Until M32 the cure was an apply AFTER the add, and this test
+    asserted that order. Since M32 the add applies every node it granted on by itself
+    (``services/onboarding.add_users``; ``docs/decisions.md``, 2026-10-03), and a runbook
+    still telling an operator that an add "touches no host" is what the fresh install of
+    2026-10-03 found. So an add step passes in one of two ways: it says the add applies by
+    itself, or an apply follows it. What it may never do is neither.
 
-    Both shapes that added users read *"Apply … Add users"*, in that order, which is the
-    right order for a node and the wrong one for a person. So a procedure whose steps add
-    a user has to apply AFTER it, and this asserts the order rather than the presence of the
-    word: an apply above the add-user step is the version the walk followed.
-
-    THE ORDER CHECK SKIPS A PROCEDURE WHOSE ADD STEP IT CANNOT RECOGNISE, so it is bracketed
-    by two assertions that can fail on their own — "a verification that cannot fail" is
-    this repository's signature defect and the skip is one waiting to happen. One end
-    catches the specific way it would happen (a step reverting to the retired word, which
-    M29 took out of this page and which this regex no longer matches); the other catches
-    the general one (no procedure matched at all, so nothing below ran), and is the same
-    ``assert steps`` the two ``user-facing`` filters above carry for the same reason.
+    THE CHECK SKIPS A PROCEDURE WHOSE ADD STEP IT CANNOT RECOGNISE, so it is bracketed by
+    two assertions that can fail on their own — "a verification that cannot fail" is this
+    repository's signature defect and the skip is one waiting to happen. One end catches
+    the specific way it would happen (a step reverting to the retired word, which M29 took
+    out of this page and which this regex no longer matches); the other catches the general
+    one (no procedure matched at all, so nothing below ran).
     """
     covered = set()
     for title, body in shapes.items():
@@ -1325,8 +1331,8 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
         ]
         assert not retired, (
             f"{title!r} tells an operator to add a friend. The word is `user` "
-            "(docs/decisions.md, 2026-09-22) — and the order check below does not "
-            f"recognise this step, so it skips the shape silently: "
+            "(docs/decisions.md, 2026-09-22) — and the check below does not recognise "
+            f"this step, so it skips the shape silently: "
             f"{[step.strip() for step in retired]!r}"
         )
         adding = [
@@ -1337,19 +1343,55 @@ def test_every_shape_that_adds_a_user_applies_afterwards(shapes: dict[str, str])
         if not adding:
             continue
         covered.add(title)
-        applying = [
-            index
+        says_it_applies = re.search(r"applies (?:by )?itself", _flat(steps[adding[0]]), re.I)
+        applies_after = any(
+            index > adding[0] and re.search(r"\bapply\b", step, re.I)
             for index, step in enumerate(steps)
-            if re.search(r"\bapply\b", step, re.I)
-        ]
-        assert any(index > adding[0] for index in applying), (
-            f"{title!r} adds a user and never applies afterwards, so the user it "
-            "hands a link to is on no node until the operator works that out themselves"
+        )
+        assert says_it_applies or applies_after, (
+            f"{title!r} adds a user and neither says the add applies by itself nor applies "
+            "afterwards, so the operator cannot tell whether the user's link names a node "
+            "that holds anything for them"
         )
     assert covered, (
-        "no procedure adds a user at all, so the order this test exists to check was not "
-        "checked anywhere — either the runbook stopped telling an operator to add one, "
-        "or it words it in a way this no longer matches"
+        "no procedure adds a user at all, so the check this test exists for was not made "
+        "anywhere — either the runbook stopped telling an operator to add one, or it words "
+        "it in a way this no longer matches"
+    )
+
+
+def test_no_sentence_says_adding_a_user_touches_no_host(runbook: str) -> None:
+    """The stale half the fresh install of 2026-10-03 met: true before M32, false after.
+
+    Since M32 an add applies every serving node it granted on. A paragraph that still says
+    the add "touches no host" sends an operator to a manual apply the panel has already
+    made, and teaches them that the dialog's per-node rows are not the answer.
+    """
+    for paragraph in _prose_paragraphs(runbook):
+        if re.search(r"adding a user", paragraph, re.I):
+            assert "touches no host" not in paragraph, (
+                f"a paragraph still says adding a user touches no host: {paragraph}"
+            )
+
+
+def test_the_runbook_says_a_revoked_user_comes_back_under_a_new_name(runbook: str) -> None:
+    """Re-adding a nickname after a revoke is refused, and the runbook said "add them
+    again" — the fresh install of 2026-10-03 met the 409.
+
+    The refusal is quoted as ``create_users`` raises it, with the runbook's placeholder for
+    the name, so a reworded refusal turns this red before the page quotes a sentence the
+    panel no longer says.
+    """
+    source = USERS_SERVICE.read_text()
+    assert "a user called {taken[0]!r} already exists" in source, (
+        "the refusal for a taken nickname changed; the runbook quotes it"
+    )
+    said = _flat(runbook)
+    assert "a user called '<name>' already exists" in said, (
+        "the runbook does not quote the refusal a re-added nickname gets"
+    )
+    assert "under a new name" in said, (
+        "the runbook does not say a revoked user comes back under a new name"
     )
 
 
@@ -1419,13 +1461,135 @@ def test_the_prerequisites_name_what_the_control_plane_box_needs(runbook: str) -
     )
     assert section, "the runbook no longer says what a box must already have"
     said = _flat(section.group(1))
-    for needed in ("git", "make"):
+    for needed in ("git", "make", "amneziawg-tools"):
         assert re.search(rf"`{needed}`", said), (
             f"the prerequisites do not name {needed}, which the control-plane block needs "
             "before its first command"
         )
     assert re.search(r"control.plane box", said, re.I), (
         "the section answers for a node only, and the control-plane box is not a node"
+    )
+
+
+# --- the fresh install of 2026-10-03: the block a literal follower types ---------------
+
+
+def _control_plane_fence(runbook: str) -> list[str]:
+    """The command lines of the control-plane block, comments and blanks dropped."""
+    section = re.search(
+        r"^### Bring up the control plane\n((?:.*\n)*?)^### ", runbook, re.M
+    )
+    assert section, "the runbook no longer has a control-plane block"
+    fence = re.search(r"```bash\n((?:.*\n)*?)```", section.group(1))
+    assert fence, "the control-plane section no longer has a command block"
+    return [
+        line.strip()
+        for line in fence.group(1).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def test_the_control_plane_block_brings_the_tunnel_up_before_it_publishes_on_it(
+    runbook: str,
+) -> None:
+    """A literal follower with ``HASHI_PRIVATE_BIND_ADDR`` set failed at ``make up-panel``.
+
+    The block went straight from ``make panel-bootstrap`` to ``make up-panel``; the lines
+    that bring the tunnel up and let docker bind its address were under another heading.
+    They are in the block now, between the two, and they are the lines the generator
+    prints — compared with its own ``${...}`` values as wildcards, because the runbook can
+    only show their shape and says so.
+    """
+    lines = _control_plane_fence(runbook)
+    bootstrap = next(
+        (i for i, line in enumerate(lines) if "make panel-bootstrap" in line), None
+    )
+    publish = next(
+        (i for i, line in enumerate(lines) if re.search(r"make up-panel(?:\s|$)", line)),
+        None,
+    )
+    assert bootstrap is not None and publish is not None and bootstrap < publish, (
+        "the block no longer runs the bootstrap and then publishes"
+    )
+    assert "HASHI_MGMT_CONFIGS_TO=" in lines[bootstrap], (
+        "the bootstrap line does not hand the device configs out as files"
+    )
+    between = lines[bootstrap + 1 : publish]
+
+    printed = TUNNEL_SCRIPT.read_text()
+    printed = printed[printed.index("As root, once per host") :]
+    printed = printed[: printed.index("After a later run")]
+    shapes = [
+        line.strip()
+        for line in printed.splitlines()
+        if line.strip().startswith(("sudo ", "echo "))
+    ]
+    assert len(shapes) == 6, f"the generator's bring-up lines changed: {shapes!r}"
+    for shape in shapes:
+        pattern = ".+".join(re.escape(part) for part in re.split(r"\$\{[A-Z_]+\}", shape))
+        assert any(re.fullmatch(pattern, line.split("#")[0].strip()) for line in between), (
+            f"the block does not carry {shape!r} between the bootstrap and `make up-panel`"
+        )
+
+
+def test_the_control_plane_block_says_which_lines_are_root(runbook: str) -> None:
+    """The block wrote ``ufw …`` bare while its ``make`` lines must run as the owner.
+
+    Every line that changes the host is ``sudo``; no ``make`` line is — a target run as
+    root leaves root-owned files in the checkout and the tunnel's host file in root's home.
+    """
+    for line in _control_plane_fence(runbook):
+        command = line.split("#")[0]
+        if re.search(r"\b(?:ufw|sysctl|systemctl|tee|ln|install)\b", command):
+            assert "sudo " in command, f"a host-changing line is not marked root: {line!r}"
+        if re.search(r"\bmake\b", command):
+            assert "sudo" not in command, f"a make line runs under sudo: {line!r}"
+
+
+def test_the_code_reaches_the_control_plane_box_without_a_credential_on_it(
+    runbook: str,
+) -> None:
+    """``git clone`` of a private repository on a box with no credential, into root's /opt.
+
+    Both failed on the fresh install. The page ships the tree from the operator's machine
+    into a directory made for the owning account first, and names the deploy key as the
+    alternative rather than as the default.
+    """
+    section = re.search(
+        r"^### Ship the code to the control-plane box\n((?:.*\n)*?)^### ", runbook, re.M
+    )
+    assert section, "the runbook no longer says how the code reaches the control-plane box"
+    body = section.group(1)
+    fence = re.search(r"```bash\n((?:.*\n)*?)```", body)
+    assert fence, "the shipping section shows no command"
+    commands = fence.group(1)
+    assert "install -d" in commands and "git archive" in commands, (
+        "the shipping block does not make the directory and ship the tree"
+    )
+    assert commands.index("install -d") < commands.index("git archive"), (
+        "the tree is shipped before the directory it lands in exists"
+    )
+    assert "deploy key" in _flat(body), "the deploy-key alternative is not named"
+    installing = runbook.split("## Installing hashi")[1].split("\n## ")[0]
+    for block in re.findall(r"```bash\n(.*?)```", installing, re.S):
+        assert "git clone" not in block, (
+            "the installation still clones on the box, which has no credential for a "
+            "private repository"
+        )
+
+
+def test_the_cheat_sheet_says_where_the_tunnel_comes_from_and_how_a_device_change_lands(
+    runbook: str,
+) -> None:
+    """The owner's Russian cheat sheet never said the tunnel comes from the bootstrap, and
+    its device line stopped before the reload that takes a removed device's access away."""
+    sheet = runbook.split("## Короткая памятка")[1].split("\n## ")[0]
+    assert "git archive" in sheet, "the cheat sheet still clones on the box"
+    assert re.search(r"panel-bootstrap`[^\n]*\n[^\n]*туннел", sheet), (
+        "the cheat sheet does not say the bootstrap makes the management tunnel"
+    )
+    assert "sudo systemctl reload awg-quick@awg-mgmt" in sheet, (
+        "the cheat sheet's device line omits the reload, so a removed device keeps access"
     )
 
 
