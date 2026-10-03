@@ -55,7 +55,7 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
-**Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Still open: M27** (the split arrangements have not been walked on real hosts). **M30 was dropped** and **M35 deferred** by the owner on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
+**Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Nothing is open.** The owner dropped **M27** and **M30** and deferred **M35** on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
 
 **As of 2026-10-02. 26 of 31 milestones are closed (✅); five are open — M24, M26, M27,
 M30, M31.** Everything before that is in the milestone sections below and in git.
@@ -4383,7 +4383,7 @@ delivery host picks the new pair up on the next apply without an operator touchi
 
 ---
 
-## → M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · built 2026-09-26 to 2026-10-02 (27.1–27.7 and 27.9 merged to `develop` in PR #4; 27.8 on `task/M27.8`) · acceptance: yes, NOT WALKED — it needs real hosts in the C+L | E arrangement
+## ✖ M27 — The delivery endpoint cannot leave Russia with the control plane · asked for by the owner 2026-09-22 · scope broadened by the owner the same day: every arrangement of the three roles, on one, two or three machines · built 2026-09-26 to 2026-10-02 (27.1–27.7 and 27.9 merged to `develop` in PR #4; 27.8 on `task/M27.8`) · acceptance: yes, NOT WALKED — it needs real hosts in the C+L | E arrangement · **DROPPED by the owner 2026-10-03**: the owner keeps the control plane on the Russian entry. The built steps stay in the code, off unless a delivery certificate is configured. The real-host walk of the split arrangements will not be done
 
 **Status, 2026-10-02.** Every step is built. 27.1–27.7 and 27.9 are on `develop` (PR #4);
 27.8 — the runbook — is on `task/M27.8`, stacked on `task/M24`. What each step settled is in
