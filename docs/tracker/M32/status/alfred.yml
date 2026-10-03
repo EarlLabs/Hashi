@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M32 — adding a user reaches the nodes by itself (2026-10-03)"
+state: in_progress
+progress: "built and gated; review-loop running"
+blockers: null
+updated_at: 2026-10-03T00:00:00Z

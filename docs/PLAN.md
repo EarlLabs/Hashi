@@ -3847,7 +3847,7 @@ acceptance: yes — on the real hosts, from the owner's own devices.
 
 ---
 
-## → M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · PROPOSED
+## → M32 — Adding a user reaches the nodes by itself · asked for by the owner 2026-10-03 · built 2026-10-03 on `task/M32` · acceptance: yes (a real-host walk, run by the orchestrator after this milestone — not by the implementer), PENDING
 
 **Found on 2026-10-03, on the owner's own phone.** The owner added a user, imported the
 link into a phone client and got a timeout. The user's UUID was not on the entry: adding a
@@ -3879,15 +3879,50 @@ eye does not go. **A warning the operator does not see is not a warning.**
 4. **Unchanged:** revocation, and the manual Apply button on the Nodes screen.
 
 **Done when**
-- [ ] A user added in the panel connects from a phone with no other press.
-- [ ] A failed node is named in the add dialog with its reason and a retry, and the user's
-      link still works through every node that did take it.
-- [ ] Adding N users in one go applies each affected node once.
-- [ ] After a transport change, the warning is visible without reading a paragraph, and
-      its button applies the node it names.
-- [ ] `docs/decisions.md` records that adding a user now applies, and why.
+- [ ] A user added in the panel connects from a phone with no other press. *(Built: the
+      add applies every node it granted on. Not proven — a phone connecting is a field
+      observation, the orchestrator's real-host walk.)*
+- [x] A failed node is named in the add dialog with its reason and a retry, and the user's
+      link still works through every node that did take it. *(Tests: the row names the
+      node and what to do from the failure's kind, offers a retry for an unreached or
+      not-yet-serving node, and the node stays `active` and in every link.)*
+- [x] Adding N users in one go applies each affected node once. *(Panel: one nickname per
+      line; API: `POST /api/users/batch`. A test counts one session per node for five
+      users.)*
+- [x] After a transport change, the warning is visible without reading a paragraph, and
+      its button applies the node it names. *(The block is drift-driven, so any change
+      no apply has followed raises it; tested on the four surfaces with a user nobody
+      pushed, which is the same reading. Its look on a real screen is for the walk.)*
+- [x] `docs/decisions.md` records that adding a user now applies, and why. *(Four rows,
+      2026-10-03.)*
 
 acceptance: yes — on the real hosts: add a user, import the link on a phone, connect.
+
+### What was built (2026-10-03)
+
+- **Add → apply.** `services/onboarding.py`: `users.create_users` (one transaction,
+  committed first) then `apply.apply_nodes` — the fan-out revocation uses, now callable
+  by node id — over the serving nodes the add granted on. `POST /api/users` answers the
+  user plus `complete`, `nodes_updated`, `nodes_failed`, `summary` (the revocation
+  response's names); `POST /api/users/batch` `{"nicknames": [...]}` adds a list, all or
+  none, each node applied once.
+- **The add dialog.** One nickname per line. The answer hands every link over at once
+  and lists the nodes; each node is applied by its own request (`POST /panel/reach`), one
+  after another: "… entry-ru — applying; this takes up to a minute / then leaf-ams", then
+  `✓ entry-ru — took the new configuration` or `✗ leaf-ams — <what to do> [retry]`. Under
+  the rows, re-measured after each node: "Their link works through entry-ru now. It does
+  not work through leaf-ams yet: …". Why one request per node rather than one long
+  request: `docs/decisions.md`, 2026-10-03.
+- **The not-applied block.** Overview, Users, Nodes and the link dialog draw one block
+  (`panel/not_pushed.html`, from `console.NotPushed`): a steel-accent edge and ground, the
+  label NOT APPLIED, the line "<node> is still on the old configuration: your changes have
+  not reached it.", an **Apply <node>** button per node (it reads "applying <node>…" while
+  in flight), and the long account behind "details". In the link dialog the block sits
+  above the link and its button answers in place instead of closing the dialog.
+- **A fan-out never degrades a serving node over a record that dialled nothing** (no SSH
+  key) — found because the add's fan-out would otherwise have emptied links of such a
+  node. Affects revocation too; recorded.
+- **Unchanged:** revocation's own flow, and the Nodes screen's Apply button.
 
 ---
 
