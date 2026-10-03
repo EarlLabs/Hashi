@@ -1,7 +1,7 @@
 agent: alfred
 role: overseer
 task: "M34 — sites that only open from Russia leave from the entry, not through the hop"
-state: done
-progress: "built on task/M34 (edge, control, infra, docs); gate green (edge 1025 + 3 known env-only, infra 579+2, control 1202→1203, e2e-verify 234 passed); review-loop 3 rounds: r1 0/0 (1 medium, 3 low — fixed/recorded), r2 1 high (refresh_all after rollback) — fixed, r3 CLEAN; awaits the orchestrator's real-host walk and the owner's phone (carry-over.md)"
+state: in_progress
+progress: "M34.5 (control): two wording fixes from the real-host walk; walk items 1-9 PASS, item 10 and the phone pending (carry-over.md)"
 blockers: null
-updated_at: 2026-10-03T19:00:00Z
+updated_at: 2026-10-03T21:00:00Z

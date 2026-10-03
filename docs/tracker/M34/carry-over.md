@@ -68,3 +68,28 @@ users — that is learned by use, and the owner's own *always direct* list is wh
   fixed; owner-only SSRF — accepted in decisions.md; day recorded before the run — by design).
   Round 2: 1 high (`refresh_all` used sources expired by its own rollback) — fixed with a test
   that fails without it. Round 3: CLEAN. No open findings.
+
+## Real-host walk (orchestrator, 2026-10-03)
+
+- Items 1–9: **PASS.** "Off" byte-identical on the real host; `showip.net` → the entry's
+  address, `ifconfig.me` → the leaf's, `gosuslugi.ru` 200; never direct wins over a source;
+  hop down → listed sites still open, everything else times out; switch off → the digest is
+  back to its pre-switch value; a fetch failure keeps the last good version; nothing recorded
+  in the logs, the `routing_*` tables or the audit trail.
+- Item 10 (the first nightly run, due 2026-10-04 04:00 Europe/Moscow): not yet observable.
+- The phone on a Russian mobile network: pending the owner.
+
+### Found in the walk, fixed in M34.5 (control)
+
+1. Routing screen, failed fetch: "The version in force is less than an hour ago old." The
+   template pasted `routing.age`'s "… ago" into "is … old". Now one sentence composed in
+   `routing.in_force_sentence` ("… is less than an hour old.", "… is 3 days old.", or "No
+   version of this list is in force yet."). The other age uses ("Fetched … ago", "last fetch
+   … ago failed", the column) read correctly and are unchanged.
+2. Nodes screen, co-located box, no `HASHI_DELIVERY_*` certificate: "not served from any
+   host: this control plane holds no delivery certificate" while the control plane delivered
+   every link at its public name. Written in M27.6; it and its two siblings (expired,
+   unusable certificate) now say no node runs a refresh listener of its own and that this
+   control plane serves refreshes at `<public base URL>/sub/…`.
+
+Re-walk: a failed fetch's row and the entry's delivery line on the Nodes screen.

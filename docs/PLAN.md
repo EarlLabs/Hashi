@@ -3878,6 +3878,24 @@ leaf's. That is the point of the feature and also its cost, so it is stated on t
   container; the suggested sources as a compose default; `.env.example`; an e2e scenario.
 - **M34.4 (docs)** — decisions, this section, the runbook ("Sites that only open from Russia"),
   `docs/tracker/M34/`.
+- **M34.5 (control)** — **two wording defects found in the real-host walk** (2026-10-03).
+  The Routing screen's failed-fetch row read "The version in force is less than an hour ago
+  old": `routing.age` ("… ago") was pasted into "is … old" by the template. The sentence is
+  now composed whole (`routing.in_force_sentence`; "No version of this list is in force yet."
+  when there is none). And the Nodes screen said delivery was "not served from any host:
+  this control plane holds no delivery certificate" on the co-located box, whose control
+  plane was delivering every link at its public name — read as "users cannot fetch links".
+  The sentence (M27.6's) and its two siblings (expired, unusable certificate) now say that
+  no node runs a refresh listener of its own and that this control plane serves refreshes
+  at `<public base URL>/sub/…`. Tests fail on the old text (8 red before).
+
+**Real-host walk (orchestrator, 2026-10-03)** — `docs/tracker/M34/carry-over.md` items 1–9
+PASS: "off" byte-identical on the real host; `showip.net` → entry address, `ifconfig.me` →
+leaf address, `gosuslugi.ru` 200; never-direct wins; hop down → listed sites still open,
+others time out; switch off → digest back to the pre-switch value; a fetch failure keeps the
+last good version; nothing recorded in logs, tables or audit. Item 10 (the first nightly run,
+due 2026-10-04 04:00 Europe/Moscow) not yet observable. The phone check on a Russian mobile
+network is pending the owner.
 
 **Done when** — what this branch proves, and what only the real hosts can
 - [ ] With the switch on, a listed site opened from a phone sees the entry's address, and an
