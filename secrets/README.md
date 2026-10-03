@@ -14,7 +14,7 @@ Nothing here belongs on a node. The only file that also lives on a server is
 | `operator-password.txt` | The panel password, one line. The server holds only its hash | Choose one of 12+ characters, then put the line `make hash-password` prints into `server.env` | Only here |
 | `hashi-backup-identity.txt` | The **secret** half of the backup encryption key. Without it no backup can be read | `age-keygen -o secrets/hashi-backup-identity.txt`. The public key it prints goes into `HASHI_BACKUP_AGE_RECIPIENT` | **Never on the server.** Here and in the second copy |
 | `restore.env` | What `make restore-from-bucket` needs on a new machine | Copy `restore.env.example` and fill it in | Only here |
-| `mgmt/<device>.conf`, `mgmt/*-qr.png` | One management-tunnel config per device (laptop, phone, …) | `HASHI_MGMT_CONFIGS_TO=<dir> make mgmt-tunnel` on the control-plane host, then copy the files here. The script keeps no copy | On the device that uses it |
+| `mgmt/<device>.conf`, `mgmt/*-qr.png` | One management-tunnel config per device (laptop, phone, …) | On a fresh install, `HASHI_MGMT_CONFIGS_TO=<dir> make panel-bootstrap` on the control-plane host; for a device added later, the same variable with `make mgmt-tunnel`. Then copy the files here. The script keeps no copy | On the device that uses it |
 
 Also keep: `~/.ssh/hashi-node`, the private key the control plane uses to reach nodes.
 The panel holds an encrypted copy. It is the only copy outside the database.
@@ -26,4 +26,9 @@ The panel holds an encrypted copy. It is the only copy outside the database.
   the same key, whoever seizes the server can read or delete every backup.
 - **Never paste a value from here into a chat, an issue or a log.** That includes a
   subscription URL: it is a bearer credential.
-- Files stay mode `600` and the directory stays `700`.
+- Files stay mode `600` and the directory stays `700`. A fresh checkout creates the
+  directory with your default mode (often `775`), so once, from the checkout:
+
+  ```bash
+  chmod 700 secrets
+  ```
