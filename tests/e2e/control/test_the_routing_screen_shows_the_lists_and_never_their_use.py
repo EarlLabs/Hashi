@@ -17,6 +17,7 @@ Boundary: real control, postgres, caddy. Whether a listed site actually opens fr
 entry's address is a field observation on real hosts; nothing here stands in for it.
 """
 
+import html
 import re
 import uuid
 
@@ -38,7 +39,7 @@ async def operator(client):
 
 
 def visible(markup: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", markup))
+    return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", markup)))
 
 
 async def test_the_routing_screen_offers_the_configured_lists_and_counts_no_use(operator):
