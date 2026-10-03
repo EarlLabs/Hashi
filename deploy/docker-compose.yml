@@ -82,6 +82,27 @@ services:
       HASHI_NODE_CONNECT_TIMEOUT: ${HASHI_NODE_CONNECT_TIMEOUT:-}
       HASHI_SESSION_MAX_AGE: ${HASHI_SESSION_MAX_AGE:-}
       HASHI_AUDIT_RETENTION_DAYS: ${HASHI_AUDIT_RETENTION_DAYS:-}
+      # M34. The backup's quiet hour is read by the control plane too: the routing lists
+      # are refreshed, and the entries they changed applied, in that hour — applying
+      # restarts an entry's proxy, so it goes where the owner already said is quiet.
+      HASHI_BACKUP_AT: ${HASHI_BACKUP_AT:-}
+      HASHI_BACKUP_TZ: ${HASHI_BACKUP_TZ:-}
+      HASHI_ROUTING_CHECK_INTERVAL: ${HASHI_ROUTING_CHECK_INTERVAL:-}
+      HASHI_ROUTING_MAX_CHANGE: ${HASHI_ROUTING_MAX_CHANGE:-}
+      HASHI_ROUTING_MAX_ENTRIES: ${HASHI_ROUTING_MAX_ENTRIES:-}
+      HASHI_ROUTING_MAX_BYTES: ${HASHI_ROUTING_MAX_BYTES:-}
+      HASHI_ROUTING_FETCH_TIMEOUT: ${HASHI_ROUTING_FETCH_TIMEOUT:-}
+      # The routing sources the Routing screen OFFERS (it adds none by itself), as
+      # `name|https-url|on-or-off` entries separated by `;`. THE ONE OPTIONAL SETTING
+      # WHOSE DEFAULT LIVES HERE rather than in control/app/settings.py, and on purpose:
+      # each is a URL, and a URL in code is a domain in code (CLAUDE.md). The settings
+      # model's own default is "offer nothing"; this file is configuration, and .env can
+      # replace the whole list. Each was read before it was offered (docs/decisions.md,
+      # M34): the first is the NARROW list the owner chose — Russian sites that refuse
+      # foreign addresses — and is switched on once added; the other three are broader
+      # lists of sites to send direct and are added switched off. A list of BLOCKED sites
+      # is never offered: its meaning is the opposite of "send direct".
+      HASHI_ROUTING_SUGGESTED_SOURCES: ${HASHI_ROUTING_SUGGESTED_SOURCES:-itdoginfo-russia-outside|https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-raw.lst|on;roscomvpn-whitelist|https://raw.githubusercontent.com/hydraponique/roscomvpn-geosite/master/data/whitelist|off;roscomvpn-category-ru|https://raw.githubusercontent.com/hydraponique/roscomvpn-geosite/master/data/category-ru|off;roscomvpn-geoip-whitelist|https://raw.githubusercontent.com/hydraponique/roscomvpn-geoip/master/release/text/whitelist.txt|off}
     volumes:
       # The backup schedule's record, READ-ONLY — M28.5. It is written on the host by
       # scripts/backup-run.sh and holds dates, exit codes and the schedule's own settings:
