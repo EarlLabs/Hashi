@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M36 — two commands rebuild a lost entry+panel box: restore-panel and restore-node"
+state: done
+progress: "built, walked on a container stand, gate green except 3 pre-existing sandbox wireguard-checker failures in test-edge; review-loop converged clean in 2 rounds; PR to develop"
+blockers: null
+updated_at: 2026-10-13T11:00:57+03:00

@@ -5351,6 +5351,7 @@ EVENT_SENTENCES = {
     AuditAction.HOP_ESTABLISHED: f"hop established from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
     AuditAction.HOP_DISSOLVED: f"hop torn down from {TRAIL_NODE} to {TRAIL_TRANSPORT}",
     AuditAction.NODE_SSH_KEY_SET: f"ssh key set for {TRAIL_NODE}",
+    AuditAction.NODE_RELOCATED: f"{TRAIL_NODE} moved to a new host",
     AuditAction.KEYS_ROTATED: f"keys rotated for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
     AuditAction.PARAMS_REPLACED: f"parameters replaced for {TRAIL_TRANSPORT} on {TRAIL_NODE}",
     AuditAction.DIRECT_ROUTING_SET: f"direct sites switched {TRAIL_TRANSPORT} on {TRAIL_NODE}",

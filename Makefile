@@ -294,6 +294,74 @@ node-bootstrap:
 	@test -n "$(NODE)" || { echo "usage: make node-bootstrap NODE=user@host ARGS=\"--authorized-key '<public key>' --port <number>/udp\""; exit 2; }
 	@ssh $(if $(SSH_PORT),-p $(SSH_PORT),) $(NODE) "bash -s -- $(ARGS)" < scripts/node-bootstrap.sh
 
+## --- the control plane's own node commands (see control/cli.py) ------------
+
+# Run INSIDE the running control container, on the control-plane host, where the database
+# and HASHI_SECRET_KEY already are: no operator password, no browser. They exist for
+# `make restore-node` (below), which calls them over SSH from the operator's machine, and
+# they are ordinary verbs on the host for the same three steps by hand. NAME is a node's
+# name as the panel shows it. Each prints `key=value` lines and exits 1 with a sentence.
+.PHONY: node-plan node-relocate node-apply
+
+node-plan:
+	@test -n "$(NAME)" || { echo "usage: make node-plan NAME=<node name>"; exit 2; }
+	@$(COMPOSE) exec -T control python -m control.cli node-plan "$(NAME)"
+
+# ARGS carries --ssh-host, --ssh-user and --ssh-port (all three required), and optionally
+# --address and --host-key '<one public host-key line>'. Quote it.
+node-relocate:
+	@test -n "$(NAME)" || { echo "usage: make node-relocate NAME=<node name> ARGS=\"--ssh-host H --ssh-user U --ssh-port N\""; exit 2; }
+	@$(COMPOSE) exec -T control python -m control.cli relocate-node "$(NAME)" $(ARGS)
+
+node-apply:
+	@test -n "$(NAME)" || { echo "usage: make node-apply NAME=<node name>"; exit 2; }
+	@$(COMPOSE) exec -T control python -m control.cli apply-node "$(NAME)"
+
+## --- rebuilding a lost host, from YOUR machine (M36) -------------------------
+
+# The two commands for the day a box is gone. Both run on the operator's own machine,
+# from this checkout, and reach the new host over SSH — nothing needs to be typed on it.
+#
+#   make restore-panel HOST=root@NEW_IP
+#       the control plane, from the bucket: prerequisites, code, .env, restore, publish,
+#       backup schedule. Reads secrets/server.env, secrets/restore.env and
+#       secrets/hashi-backup-identity.txt (override with SERVER_ENV=, RESTORE_ENV=,
+#       IDENTITY=); the identity is on the new host only for the restore and is shredded
+#       after it, failure included.
+#   make restore-node NODE=entry-1 HOST=root@NEW_IP [ACCOUNT=hashi] [PANEL=root@PANEL_IP]
+#       one node, onto a fresh host, from the restored control plane's record: account,
+#       key, firewall, the record moved to the new host (audited), apply.
+#
+# Move DNS first: the panel command waits for HASHI_PUBLIC_HOST to resolve to HOST
+# before it asks a public CA for a certificate. See docs/deploy/runbook.md, the cheat
+# sheet's "Восстановить после потери сервера".
+.PHONY: restore-panel restore-node
+
+restore-panel:
+	$(need_bash)
+	@test -n "$(HOST)" || { echo "usage: make restore-panel HOST=user@new-host [SSH_PORT=N] [OBJECT=name]"; exit 2; }
+	@scripts/restore-panel.sh --host "$(HOST)" \
+	  $(if $(SSH_PORT),--ssh-port "$(SSH_PORT)",) \
+	  $(if $(DIR),--dir "$(DIR)",) \
+	  $(if $(SERVER_ENV),--server-env "$(SERVER_ENV)",) \
+	  $(if $(RESTORE_ENV),--restore-env "$(RESTORE_ENV)",) \
+	  $(if $(IDENTITY),--identity "$(IDENTITY)",) \
+	  $(if $(OBJECT),--object "$(OBJECT)",)
+
+restore-node:
+	$(need_bash)
+	@test -n "$(NODE)" -a -n "$(HOST)" || { echo "usage: make restore-node NODE=<node name> HOST=user@new-host [ACCOUNT=hashi] [PANEL=user@panel-host]"; exit 2; }
+	@scripts/restore-node.sh --node "$(NODE)" --host "$(HOST)" \
+	  $(if $(SSH_PORT),--ssh-port "$(SSH_PORT)",) \
+	  $(if $(ACCOUNT),--account "$(ACCOUNT)",) \
+	  $(if $(PANEL),--panel "$(PANEL)",) \
+	  $(if $(PANEL_SSH_PORT),--panel-ssh-port "$(PANEL_SSH_PORT)",) \
+	  $(if $(DIR),--dir "$(DIR)",) \
+	  $(if $(NODE_SSH_HOST),--node-ssh-host "$(NODE_SSH_HOST)",) \
+	  $(if $(NODE_SSH_PORT),--node-ssh-port "$(NODE_SSH_PORT)",) \
+	  $(if $(ADDRESS),--address "$(ADDRESS)",) \
+	  $(if $(KEY),--key "$(KEY)",)
+
 ## --- backup / restore (see scripts/backup.sh) -------------------------------
 
 # The control database is the single source of truth, so it is the one thing whose

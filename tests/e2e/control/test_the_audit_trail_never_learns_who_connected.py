@@ -68,6 +68,9 @@ PERMITTED_ACTIONS = {
     # records the node's name only — the resolver is an address, and this list admitting
     # the action is not the same as the trail admitting the address.
     "node-resolver-set",
+    # M36's, in the change that added it: a node's record moved onto a new host. The node's
+    # name only — the new SSH host and address are addresses, which the trail never holds.
+    "node-relocated",
 }
 
 

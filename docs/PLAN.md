@@ -3811,6 +3811,49 @@ command to get there.
 
 ---
 
+## → M36 — Losing the entry box costs two commands and a DNS change · asked for by the owner 2026-10-13 · built 2026-10-13 on `task/M36` · acceptance: walk on a local container stand (docs/tracker/M36); the real-host walk is the owner's
+
+**Why.** On 2026-10-13 the box carrying the control plane and the entry node died. The
+rebuild onto a fresh Ubuntu took a dozen hand-typed steps: docker and make by hand, the
+code by `git archive`, the restore with secrets staged by hand, a refused bootstrap
+(fresh Ubuntu's ufw logs), a management-tunnel block commented out by hand (the bootstrap
+would have printed new device keys for the dead endpoint), an account named after the
+dead box re-created on the new one, a raw `UPDATE nodes` (the record's SSH host, account
+and host-key pin could not be changed, and the trail never saw it), an apply driven with a
+cookie jar, and the backup schedule reinstalled by hand. The owner: one command for the
+panel, one for the first hop, a sensible node account, "only two commands and DNS".
+
+**Steps.**
+1. *(control)* `services/relocation.py`: `relocate_node` (ssh host/user/port, optional
+   address, the pin always replaced, audited `node-relocated` by name; returns the nodes
+   to apply — the entries dialling a leaf whose address moved) and `host_plan` (the
+   record's public key, the ports an apply will bind). `POST /api/nodes/{id}/relocate`.
+   `control.cli node-plan | relocate-node | apply-node`.
+2. *(infra)* `make node-plan | node-relocate | node-apply` on the control-plane host;
+   `make restore-panel HOST=` and `make restore-node NODE= HOST= [ACCOUNT=hashi] [PANEL=]`
+   from the operator's machine (`scripts/restore-panel.sh`, `scripts/restore-node.sh`,
+   `scripts/lib/remote.sh`); `restore-from-bucket` skips the management tunnel
+   (`PANEL_SKIP_MGMT_TUNNEL=1`). Runbook cheat sheet: switch DNS, two commands; the
+   console URL over `ssh -L` is `https://127.0.0.1:PORT/panel/`.
+
+**Done when.**
+- [x] `make restore-panel` on a bare Ubuntu 22.04 container stand (systemd, sshd, ufw
+      logging low, no docker, no make) restores the newest backup from an S3 bucket,
+      shreds the identity, publishes over SSH, takes a backup, installs the schedule and
+      prints the `ssh -L` line; the console answers on `https://127.0.0.1:PORT/panel/`.
+- [x] `make restore-node` on the same stand creates `hashi`, bootstraps, relocates
+      (audited `node-relocated`), pins the host key it read and applies the node to
+      `active`, serving.
+- [x] A re-run of either changes nothing that matters (no second restore, "nothing to
+      move"); a name that does not point at the host stops before publishing.
+- [ ] The delivery probe's success path (a public CA's certificate) — the stand uses
+      `localhost`, where no CA issues, and reports "not verified" (exit 3) as designed.
+- [ ] The owner's own run on a real host, from a real DNS change — not done here: both
+      real hosts are serving users and are not touched by this milestone.
+
+**Not covered, and never claimed:** that a tunnel carries traffic from Russia (a field
+observation), and a public CA issuing for the real name (the stand uses `localhost`).
+
 ## → M35 — Russian destinations bypass the tunnel on the user's device, by rules the subscription delivers · asked for by the owner 2026-10-03 · PROPOSED · **DEFERRED by the owner 2026-10-03** (not now; the owner's phone uses a hand-added V2Box rule meanwhile)
 
 **Found on 2026-10-03, on the owner's phone, right after the fresh install.** With M34 on,

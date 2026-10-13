@@ -1042,7 +1042,11 @@ MSG
   # and wrong inside this. Everything this command says to the operator is on stderr, and
   # a rebuild that puts a build log on the other stream makes the operator read one
   # narrative out of two interleaved ones (M28.12).
-  if ! "${REPO_ROOT}/scripts/panel-bootstrap.sh" --env-file "${ENV_FILE}" 1>&2; then
+  #
+  # PANEL_SKIP_MGMT_TUNNEL=1 because the env file here is the lost host's, and its
+  # management-tunnel block would otherwise be generated afresh — new keys, printed, for
+  # an endpoint that may be the dead machine (M36; the bootstrap's section 1c says why).
+  if ! PANEL_SKIP_MGMT_TUNNEL=1 "${REPO_ROOT}/scripts/panel-bootstrap.sh" --env-file "${ENV_FILE}" 1>&2; then
     cat >&2 <<MSG
 
 the control plane did not come up, so there is nothing to restore into. Nothing was

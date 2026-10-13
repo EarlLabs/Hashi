@@ -414,8 +414,20 @@ mgmt_is_the_template() {
   [ -n "${MGMT_TEMPLATE_KEYS}" ]
 }
 
+# PANEL_SKIP_MGMT_TUNNEL=1 is the fourth answer, and the restore is what sets it — M36,
+# from the 2026-10-13 rebuild. A restored host is handed the env file of the host it
+# replaces, and that file's HASHI_MGMT_* block is REAL rather than the template's, so the
+# check above does not catch it: the generator would mint a new tunnel against the old
+# host's endpoint and print a private key for every device in the list, at an operator
+# who was restoring a database. The keys of the old tunnel were on the machine that was
+# lost either way, so a rebuild has no tunnel to keep; building a new one is
+# `make mgmt-tunnel`, a separate and deliberate step. Rejected: having the restore strip
+# the block out of the env file — this script never rewrites the file that holds the
+# operator's secrets, and the block is what that later step reads.
 MGMT_MODE=none
-if has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
+if [ "${PANEL_SKIP_MGMT_TUNNEL:-0}" = "1" ] && has_value HASHI_MGMT_ADDRESS; then
+  MGMT_MODE=skipped
+elif has_value HASHI_MGMT_ADDRESS && mgmt_is_the_template; then
   MGMT_MODE=template
 elif has_value HASHI_MGMT_ADDRESS; then
   MGMT_MODE=generate
@@ -607,6 +619,17 @@ if [ "${MGMT_MODE}" = template ]; then
   which touches no container, so a host that is already serving keeps serving. Until
   then the panel is reachable only over the SSH fallback — docs/deploy/runbook.md,
   'Reaching the panel'. Nothing here published it either way."
+elif [ "${MGMT_MODE}" = skipped ]; then
+  say "NO management tunnel was generated: this run was asked not to
+  (PANEL_SKIP_MGMT_TUNNEL=1, which a restore sets), although ${ENV_FILE} carries a
+  HASHI_MGMT_* block. That block came from the host this one replaces, and the old
+  tunnel's keys went with that host. When you want a tunnel on THIS host, check the block
+  describes it (HASHI_MGMT_ENDPOINT in particular) and run
+
+      HASHI_MGMT_CONFIGS_TO=~/mgmt-devices make mgmt-tunnel
+
+  which touches no container. Until then the panel is reachable only over the SSH
+  fallback — docs/deploy/runbook.md, 'Reaching the panel'."
 elif [ "${MGMT_MODE}" = generate ]; then
   say "generating the management tunnel the panel is reached over"
   # No --out and no --configs-to on purpose: HASHI_MGMT_DIR and HASHI_MGMT_CONFIGS_TO

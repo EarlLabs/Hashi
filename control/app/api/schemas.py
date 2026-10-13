@@ -518,6 +518,34 @@ class ResolverChange(BaseModel):
     resolver: str = Field(min_length=1, max_length=255)
 
 
+class NodeRelocation(BaseModel):
+    """Pointing a node at the host that replaced its old one — M36.
+
+    Every coordinate is required rather than defaulted: a relocation that silently kept
+    the old account or port would be dialled at a value nobody chose for the new host.
+    ``address`` is optional because the usual case keeps it — users dial a name, and the
+    name was moved in DNS. ``host_key`` is optional because an apply can learn it on first
+    contact; given, it is the pin. Whether it is a key is the service's check
+    (``services/relocation.py``), so a refusal is a sentence rather than an echo.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ssh_host: str = Field(min_length=1, max_length=255)
+    ssh_user: str = Field(min_length=1, max_length=32)
+    ssh_port: int = Field(ge=1, le=65535)
+    address: str | None = Field(default=None, min_length=1, max_length=255)
+    host_key: str | None = Field(default=None, max_length=1024)
+
+
+class RelocationResponse(BaseModel):
+    """What a relocation changed, and which nodes to apply now — this one first."""
+
+    node: NodeResponse
+    changed: bool
+    needs_apply: list[str]
+
+
 class TransportEnabledChange(BaseModel):
     """Switching one node-transport in or out of what users are offered.
 
