@@ -78,6 +78,11 @@ class AuditAction(enum.StrEnum):
     # fingerprint, not whether it replaced one, because a credential for every host in the
     # fleet has no safe shape in a durable record.
     NODE_SSH_KEY_SET = "node-ssh-key-set"
+    # M36. The node record pointed at the host that replaced its old one: SSH host,
+    # account and port, optionally its address, and the host-key pin replaced. Recorded
+    # by the node's NAME only — the new host and the new address are both addresses, and
+    # an address against a time is the record this trail was shaped to refuse.
+    NODE_RELOCATED = "node-relocated"
     TRANSPORT_ENABLED = "transport-enabled"
     TRANSPORT_OFFERED = "transport-offered"
     TRANSPORT_WITHDRAWN = "transport-withdrawn"

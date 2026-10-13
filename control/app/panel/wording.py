@@ -194,6 +194,7 @@ _EVENTS: dict[AuditAction, str] = {
     AuditAction.NODE_APPLIED: "config applied to {first}",
     AuditAction.NODE_RESOLVER_SET: "resolver set for {first}",
     AuditAction.NODE_SSH_KEY_SET: "ssh key set for {first}",
+    AuditAction.NODE_RELOCATED: "{first} moved to a new host",
     AuditAction.TRANSPORT_ENABLED: "{second} enabled on {first}",
     AuditAction.TRANSPORT_OFFERED: "{second} offered again on {first}",
     AuditAction.TRANSPORT_WITHDRAWN: "{second} withdrawn on {first}",

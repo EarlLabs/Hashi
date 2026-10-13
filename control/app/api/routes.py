@@ -25,6 +25,7 @@ from control.app.services import (
     nodes,
     onboarding,
     relay,
+    relocation,
     revocation,
     rotation,
     transports,
@@ -169,6 +170,35 @@ async def set_node_resolver(
     registration. It changes the record, not the host — apply the node afterwards.
     """
     return await nodes.set_resolver(session, node_id=node_id, resolver=payload.resolver)
+
+
+@router.post("/nodes/{node_id}/relocate", response_model=schemas.RelocationResponse)
+async def relocate_node(
+    node_id: str,
+    payload: schemas.NodeRelocation,
+    session: AsyncSession = Depends(session_dependency),
+):
+    """Point a node at the host that replaced its old one — M36.
+
+    Sets the SSH host, account and port (and the address, when given) and replaces the
+    pinned host key. It changes the record, not the host: apply every node in
+    ``needs_apply`` afterwards. ``control.cli relocate-node`` is the same service for a
+    shell on the control-plane host.
+    """
+    moved = await relocation.relocate_node(
+        session,
+        node_id=node_id,
+        ssh_host=payload.ssh_host,
+        ssh_user=payload.ssh_user,
+        ssh_port=payload.ssh_port,
+        address=payload.address,
+        host_key=payload.host_key,
+    )
+    return schemas.RelocationResponse(
+        node=schemas.NodeResponse.model_validate(moved.node),
+        changed=moved.changed,
+        needs_apply=list(moved.needs_apply),
+    )
 
 
 @router.post("/nodes/{node_id}/apply", response_model=schemas.ApplyResponse)
