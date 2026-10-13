@@ -308,6 +308,13 @@ else
     resolved="$(resolve_ipv4 "${PUBLIC_HOST}" | tr '\n' ' ')"
     if [ -n "${resolved}" ] && [ "${resolved% }" = "$(printf '%s\n' ${HOST_IPS} | sort -u | tr '\n' ' ' | sed 's/ $//')" ]; then
       say "${PUBLIC_HOST} resolves to ${resolved% } — this host"
+      # IPv4 is what is compared; an AAAA record is only named. A CA that reaches the name
+      # over IPv6 validates against wherever that record points, which this command cannot
+      # check against the host from here — so it says so rather than passing in silence.
+      v6="$(getent ahostsv6 "${PUBLIC_HOST}" 2>/dev/null | awk '$1 !~ /^::ffff:/ {print $1}' | sort -u | tr '\n' ' ' || true)"
+      [ -n "${v6// /}" ] && say "NOTE: ${PUBLIC_HOST} also has IPv6 address(es): ${v6% }. A CA may
+  validate over IPv6. If that record still points at the lost host, remove or move it
+  first — otherwise the certificate request fails against the old address."
       break
     fi
     if [ "${waited}" -ge "${DNS_WAIT}" ]; then
