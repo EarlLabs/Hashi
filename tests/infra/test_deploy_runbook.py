@@ -1101,7 +1101,9 @@ def test_the_account_change_section_sends_the_operator_to_a_surface_that_exists(
     ):
         assert f"make {verb}" in account, f"the section does not name `make {verb}`"
         assert f"\n{verb}:" in makefile, f"the section names `make {verb}`, which does not exist"
-        assert f'"{command}"' in cli, f"`make {verb}` runs control.cli {command}, which does not exist"
+        assert f'"{command}"' in cli, (
+            f"`make {verb}` runs control.cli {command}, which does not exist"
+        )
     assert "cannot be changed today" not in account, (
         "the section still says the record cannot be changed, beside the verb that changes it"
     )

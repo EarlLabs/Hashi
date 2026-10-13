@@ -59,7 +59,8 @@ def test_both_scripts_exist_are_executable_and_stop_on_any_error(script) -> None
 
 def test_the_owner_has_one_make_verb_for_each() -> None:
     makefile = MAKEFILE.read_text()
-    for verb, script in (("restore-panel", "restore-panel.sh"), ("restore-node", "restore-node.sh")):
+    pairs = (("restore-panel", "restore-panel.sh"), ("restore-node", "restore-node.sh"))
+    for verb, script in pairs:
         recipe = makefile.split(f"\n{verb}:\n", 1)[1].split("\n\n", 1)[0]
         assert "$(need_bash)" in recipe, f"make {verb} runs bash without asking for it"
         assert f"scripts/{script}" in recipe
@@ -165,7 +166,8 @@ def test_the_restore_asks_the_bootstrap_to_skip_the_tunnel() -> None:
 def test_a_skipped_tunnel_never_reaches_the_generator(tmp_path) -> None:
     """Section 1c, run: a REAL block (not the template's) plus the skip — no generator call."""
     bootstrap = BOOTSTRAP.read_text()
-    decision = "MGMT_MODE=none\n" + bootstrap.split("MGMT_MODE=none\n", 1)[1].split("\nfi\n", 1)[0] + "\nfi\n"
+    body = bootstrap.split("MGMT_MODE=none\n", 1)[1].split("\nfi\n", 1)[0]
+    decision = "MGMT_MODE=none\n" + body + "\nfi\n"
     (tmp_path / "scripts").mkdir()
     generator = tmp_path / "scripts" / "management-tunnel.sh"
     generator.write_text("#!/bin/sh\ntouch \"$(dirname \"$0\")/called\"\n")
@@ -245,6 +247,7 @@ def test_the_cheat_sheet_is_dns_and_two_commands() -> None:
     sheet = RUNBOOK.read_text().split("## Короткая памятка")[1].split("\n## ")[0]
     section = sheet.split("### Восстановить после потери сервера")[1].split("\n### ")[0]
     dns = section.index("DNS")
-    assert dns < section.index("make restore-panel HOST=") < section.index("make restore-node NODE=")
+    panel_at = section.index("make restore-panel HOST=")
+    assert dns < panel_at < section.index("make restore-node NODE=")
     assert "https://127.0.0.1:PORT/panel/" in sheet
     assert "https://PRIVATE_HOST:PORT/panel/` и" not in sheet

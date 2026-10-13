@@ -37,13 +37,14 @@ host_part_of() {
   printf '%s' "${target%]}"
 }
 
-# IPv4 only, sorted and unique, one per line; empty when the name does not resolve.
-# getent first (it asks the resolver every program on this machine uses), python3 where
-# there is no getent.
+# IPv4 only, sorted and unique, one per line; empty — and exit 0 — when the name does not
+# resolve. getent first (it asks the resolver every program on this machine uses), python3
+# where there is no getent. getent's own "no such name" is exit 2, which under `pipefail`
+# in a caller's `$(…)` would end that caller's run with no sentence; it is an answer here.
 resolve_ipv4() {
   local name="$1"
   if command -v getent >/dev/null 2>&1; then
-    getent ahostsv4 "${name}" 2>/dev/null | awk '{print $1}' | sort -u
+    { getent ahostsv4 "${name}" 2>/dev/null || true; } | awk '{print $1}' | sort -u
   elif command -v python3 >/dev/null 2>&1; then
     python3 -I -c 'import socket,sys
 try:

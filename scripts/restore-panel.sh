@@ -177,11 +177,11 @@ missing="$(on host "$(q sh -c 'for c in make curl crontab; do command -v "$c" >/
 if [ -n "${missing}" ]; then
   on host 'command -v apt-get >/dev/null 2>&1' </dev/null || fail "${HOST} lacks: ${missing}
   and has no apt-get to install them with. Install them and run this again."
-  say "installing on the host: ${missing}"
   packages=""
   for c in ${missing}; do
     case "${c}" in crontab) packages="${packages} cron" ;; *) packages="${packages} ${c}" ;; esac
   done
+  say "installing on the host:${packages}"
   # shellcheck disable=SC2086 # the package list is words on purpose
   on_as_root host "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null && apt-get install -y -qq $(q ${packages}) >/dev/null" </dev/null \
     || fail "installing${packages} on ${HOST} failed — apt-get's own words are above."
@@ -312,9 +312,9 @@ else
     fi
     if [ "${waited}" -ge "${DNS_WAIT}" ]; then
       fail "${PUBLIC_HOST} resolves to '${resolved% }' from this machine, not to ${HOST_IPS}.
-  The control plane IS restored and nothing has been published, so no CA has been asked for
-  anything. Point the record at this host and run this same command again — it will not
-  restore a second time. (Resolvers cache: a record changed a minute ago can take its TTL
+  The control plane IS restored. This run published nothing and asked no CA for anything
+  (a publication an earlier run made is left exactly as it was). Point the record at this
+  host and run this same command again — it will not restore a second time. (Resolvers cache: a record changed a minute ago can take its TTL
   to show here. DNS_WAIT=<seconds> waits longer.)"
     fi
     [ "${waited}" -eq 0 ] && say "waiting up to ${DNS_WAIT}s for ${PUBLIC_HOST} to resolve to ${HOST_IPS} (now: '${resolved% }')"
