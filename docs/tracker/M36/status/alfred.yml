@@ -1,0 +1,7 @@
+agent: alfred
+role: overseer
+task: "M36 — two commands rebuild a lost entry+panel box: restore-panel and restore-node"
+state: in_progress
+progress: "built and walked on a container stand; running the gate and the review loop"
+blockers: null
+updated_at: 2026-10-13T10:32:34+03:00

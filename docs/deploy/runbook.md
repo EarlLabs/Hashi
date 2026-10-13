@@ -33,9 +33,9 @@
 ssh -L PORT:127.0.0.1:PORT USER@SERVER
 ```
 
-Открыть `https://PRIVATE_HOST:PORT/panel/`; значения взять из
-`HASHI_PRIVATE_HOST` и `HASHI_PRIVATE_PORT`. Для SSH имя `PRIVATE_HOST`
-должно разрешаться на вашем компьютере в `127.0.0.1`.
+Через туннель открыть `https://PRIVATE_HOST:PORT/panel/`, через SSH —
+`https://127.0.0.1:PORT/panel/` (Caddy отвечает консолью и на этом адресе);
+значения взять из `HASHI_PRIVATE_HOST` и `HASHI_PRIVATE_PORT`.
 На публичном домене `/panel/` отвечает **404 — это нормально**.
 
 ### Добавить ноду
@@ -101,24 +101,46 @@ HASHI_RESTORE_AGE_IDENTITY=/path/to/age-key.txt \
 
 ### Восстановить после потери сервера
 
-На новом сервере установить зависимости, доставить код (как в «Развернуть панель») и заполнить `.env`
-с **исходным `HASHI_SECRET_KEY`**. Хеш пароля получить через `make hash-password`.
-Затем:
+Если потерян сервер, где стоят панель и первый хоп (entry), — со своего компьютера,
+из каталога проекта:
+
+1. **Переключить DNS** `HASHI_PUBLIC_HOST` (и имя, по которому пользователи
+   подключаются к entry) на новый сервер.
+2. **Панель:**
+   ```bash
+   make restore-panel HOST=root@НОВЫЙ_IP
+   ```
+   Берёт `secrets/server.env`, `secrets/restore.env` и
+   `secrets/hashi-backup-identity.txt` (другие пути: `SERVER_ENV=`, `RESTORE_ENV=`,
+   `IDENTITY=`). Сам ставит Docker, Make, cron, выключает логирование `ufw`,
+   доставляет код, кладёт `.env`, восстанавливает последний бэкап из бакета, ждёт,
+   пока DNS укажет на сервер, публикует панель и возвращает расписание бэкапов.
+   Ключ age лежит на сервере только во время восстановления и затем удаляется
+   (`shred`), в том числе при ошибке. В конце печатает строку `ssh -L …` и адрес
+   консоли `https://127.0.0.1:PORT/panel/`.
+3. **Первый хоп:**
+   ```bash
+   make restore-node NODE=<имя ноды> HOST=root@НОВЫЙ_IP
+   ```
+   Читает запись ноды из восстановленной панели, создаёт на сервере аккаунт
+   `hashi` (другой — `ACCOUNT=`), ставит ключ панели, открывает порты ноды
+   и порты Caddy, если панель на том же сервере. Затем переносит запись ноды на
+   новый сервер (запись в **Audit**) и применяет конфигурацию. Если панель на
+   другом сервере, добавить `PANEL=root@IP_ПАНЕЛИ`.
+
+Обе команды можно запускать повторно. Если DNS ещё не обновился, панель уже
+восстановлена: дождаться DNS и запустить ту же команду ещё раз, второй раз бэкап
+не восстанавливается. Ссылки пользователей не меняются, если они используют имена
+и ключи остались прежними. Управляющий туннель создаётся заново отдельно, и
+команда `restore-panel` подсказывает как.
+
+Только сама панель, без нод (вручную, на новом сервере, после установки
+зависимостей, доставки кода и заполнения `.env` с **исходным `HASHI_SECRET_KEY`**):
 
 ```bash
-HASHI_RESTORE_AGE_IDENTITY=/path/to/age-key.txt \
-HASHI_RESTORE_S3_ENDPOINT=https://<endpoint> \
-HASHI_RESTORE_S3_REGION=<region> \
-HASHI_RESTORE_S3_BUCKET=<bucket> \
-HASHI_RESTORE_S3_PREFIX=<prefix> \
-HASHI_RESTORE_S3_ACCESS_KEY_ID=<read-key> \
-HASHI_RESTORE_S3_SECRET_ACCESS_KEY=<secret> \
-make restore-from-bucket
+set -a; . /path/to/restore.env; set +a
+HASHI_RESTORE_AGE_IDENTITY=/path/to/age-key.txt make restore-from-bucket
 ```
-
-После: обновить DNS, выполнить `make up-panel-over-ssh`, проверить ноды,
-заново заполнить параметры бэкапов и вернуть расписание (`make backup-schedule`).
-Управляющий туннель и сертификаты доставки на нодах восстанавливаются отдельно.
 
 **Главное:** добавление и отзыв людей применяются сами. **Apply** вручную нужен
 после изменения настроек транспорта, маскировки или резолвера: панель
@@ -771,9 +793,9 @@ install -d -m 700 -o THE_SSH_USER /opt/hashi
 **Changing the account of a node that has already been applied to** has its own section
 below — *Changing the account a node is driven as*. Re-running this script with the new
 `--user` is now enough for the **host** half, and no recursive chown typed by hand is
-needed or wanted. The half it cannot do is change which account the control plane dials,
-and that is where the cost is — read that section before you change the account of a node
-that is serving.
+needed or wanted. The half it cannot do is change which account the control plane dials:
+that is `make node-relocate`, in that section — read it before you change the account of a
+node that is serving.
 
 ### The control plane's own box, when it is also a node
 
@@ -794,6 +816,15 @@ register as `ssh_user`: the run's `register it in the panel` line names it. It n
 `sudo` of its own — only the three things *Which accounts work* lists, which the run gives
 it. **Choose an account other than root** unless you want root logging in by key (M31.10,
 from the field walk of 2026-10-02).
+
+**What the firewall this run brings up does to the control plane on the same box** —
+measured on the M36 stand (a fresh Ubuntu container with docker and ufw default-deny, 2026-10-13): Caddy's
+published ports kept answering from another machine with **no** ufw rule for them, because
+docker publishes through its own iptables chains and ufw's INPUT policy never sees that
+traffic; a data plane, which runs on the host's network, stopped answering the moment its
+rule was removed. So the `--port` that matters on this box is the node's own transport port,
+as above. `make restore-node` opens Caddy's published ports as well, read off the running
+container, so that the answer does not depend on docker's iptables staying where they are.
 
 ### What a finished run says
 
@@ -861,27 +892,25 @@ host**. It takes ownership of the directory's contents along with the directory,
 none of them and removing none of them; the account it prepares can then replace every
 file an earlier apply left.
 
-**The control plane's half cannot be changed today, and it is the expensive half.** A
-node's `ssh_user` is written once, at registration: nothing in the panel or the API
-updates it, no screen displays it, and there is no way to delete a node record either. So
-a host handed to a new account and a record still naming the old one disagree for ever —
-the record is what decides which account is dialled, and every apply fails on an account
-that no longer owns `/opt/hashi`. There are two repairs and neither is the one the last
-paragraph of this section used to promise:
+**The control plane's half is a relocation since M36.** A node's `ssh_host`, `ssh_user`
+and `ssh_port` used to be written once, at registration, with no way to change them and
+no way to reset the pinned host key — so a host handed to a new account and a record still
+naming the old one disagreed for ever. Now one audited operation moves the record:
 
-- **Prepare the host for the account the record already names.** Run this script again
-  with that `--user`. Cheapest by far, and the right answer whenever the new account was
-  a convenience rather than the point.
-- **Or register the host a second time**, as a new node with the new `ssh_user`, enable
-  the same transports on it, apply *it*, and then set the old record to `retired`. Two
-  records may point at one host — the node table allows a repeated address precisely for
-  a migration like this — but only one of them may ever be applied, because both push
-  into the same `/opt/hashi` and the later apply overwrites the earlier one. The cost is
-  that this is a **new node in every user's subscription**: everyone picks it up at their
-  next refresh, and loses the retired one at the same refresh.
+```bash
+make node-relocate NAME=NODE_NAME ARGS="--ssh-host NODE_HOST --ssh-user NODE_ACCOUNT --ssh-port SSH_PORT"
+make node-apply NAME=NODE_NAME
+```
 
-If you no longer know which account a record names, nothing in the product will tell you —
-take the second repair.
+on the control-plane host (or `POST /api/nodes/{id}/relocate`). It records
+`<node> moved to a new host` on the **Audit** screen, replaces the pinned host key (pass
+`--host-key '<line of /etc/ssh/ssh_host_ed25519_key.pub>'` to pin the new one, or leave it
+out and the next apply learns it), and changes nothing on the host — the apply does.
+`make restore-node` (the cheat sheet's *Восстановить после потери сервера*) is all of this
+plus the bootstrap, for a host that was lost.
+
+`make node-plan NAME=NODE_NAME` prints which account the record names today, so the
+disagreement can be read rather than guessed.
 
 ### The layer the script cannot see, and the evening it costs
 
