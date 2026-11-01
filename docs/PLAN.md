@@ -55,7 +55,7 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
-**Update 2026-11-01.** **M37 is PROPOSED and awaits the owner's approval** — an owner-only Telegram bot that adds a user and replies with the panel's links; five steps, five decisions listed at its foot (scope, the `httpx` dependency, the fake Telegram on the stand, the acceptance line, the command's name). Nothing of it is built. M36 is merged to `develop` (PR #10) and still marked `→`: its real-host walk is the owner's. M35 stays deferred.
+**Update 2026-11-01.** **M37 and M38 are PROPOSED and await the owner's approval** — M37 is an owner-only Telegram bot that adds a user, pushes them to every serving node by itself and replies with the panel's links (five steps, five decisions at its foot: scope, the `httpx` dependency, the fake Telegram on the stand, the acceptance line, the command's name); M38 adds `/nodes`, the panel's "behind" block in the bot's words, and `/apply <name>`, the Nodes screen's Apply from a phone (three steps, three decisions). Nothing of either is built. M36 is merged to `develop` (PR #10) and still marked `→`: its real-host walk is the owner's. M35 stays deferred.
 
 **Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Nothing is open.** The owner dropped **M27** and **M30** and deferred **M35** on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
 
@@ -3813,6 +3813,109 @@ command to get there.
 
 ---
 
+## → M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval · after M37
+
+**What the owner asked for.** "Suggest me nodes for apply new config." The console
+already answers that question on every screen: since M32 a block names the serving nodes
+whose host does not hold the configuration the panel would push, and carries its own
+Apply button. This milestone puts the same block, and the same button, in the bot.
+
+**Why it is shaped this way.**
+- **The reading is the console's own.** `console.nodes_missing_what_they_would_be_given`
+  — serving nodes, neither in sync nor with nothing enabled, by comparing a fresh render
+  against the digest last pushed. It touches no network, so a `/nodes` reply is instant,
+  true at the moment it is read, and never dials the fleet. Not the probe's `drifted` and
+  `stale`: those need SSH to every host and are the Nodes screen's business, not a chat
+  command's.
+- **`/apply <node>` is the Nodes screen's Apply, not the add's fan-out.** The add
+  refuses a node that is not serving rather than taking it into service — an add is
+  aimed at people, not at a node's state — so the node an add could not reach is very
+  often one that only the Nodes screen's Apply can bring back. That Apply is
+  `apply.apply_node`: it may take a node into service, and it marks the node degraded on
+  a failure after the first byte. The bot calls that one, so what the owner does from the
+  Nodes screen today is what `/apply` does from a phone.
+- **One node per command, like the panel.** An apply is 20–40 s. The bot answers
+  "applying <node> — about a minute", runs it, then answers with the result; M37.3's
+  serial loop means the next command waits, which is the right order for a fleet of a
+  handful of hosts and one operator.
+- **Nothing an apply knows reaches the chat except the panel's own sentences.** A
+  failure's raw message can carry an upstream checker's output, which is known to quote
+  a node's private key; a rendered config is a credential bundle. The reply is composed
+  from the same service sentences the panel and the API envelope use, and never from
+  `str(exc)`, never from a config.
+- **The owner's gate is M37.2's.** Every command, including these two, is dropped in
+  silence from anyone else; nothing here adds a second door.
+
+### M38.1 — (control) `/nodes`, and the add's reply learns to point at it
+
+`handle_update` gains `/nodes`: the serving nodes behind what would be pushed, one per
+line, each followed by `apply it: /apply <name>`; when the list is empty, one sentence
+saying every serving node holds what it would be given. The add's reply changes in one
+place: a node the add could not update is named with the panel's reason sentence and
+`/apply <name>`, instead of pointing at the panel. Tests: a fleet with one node behind
+lists exactly that node; a fleet in sync gets the sentence; the reply after an add that
+could not reach a node offers `/apply` for it and nothing for the nodes it did reach.
+The e2e test from M37.4 gains: `/nodes` on the stand, which has no node, answers the
+empty sentence.
+
+### M38.2 — (control) `/apply <name>`: the Nodes screen's Apply, from the phone
+
+Resolve the name to one node, exactly as typed; an unknown name is refused with a
+sentence naming it. Reply "applying", call `apply.apply_node(session, node_id=...)`,
+then reply with what was applied and, when the apply could not measure a transport, the
+API's own sentence for it; a refusal (nothing to apply, a node the state machine will
+not let serve) or a failure is answered with the sentence the API envelope would carry.
+Tests on the accepting fake nodes: an apply from the bot leaves the node in the state
+the API's apply would, with the same trail entries; the reply never contains a config, a
+key or a raw exception string, checked against a failure that quotes one; a stranger's
+`/apply` changes nothing and answers nothing. The e2e test gains: `/apply` of a name the
+stand does not have is refused in words.
+
+### M38.3 — (docs) Two more commands in the runbook, one row in the journal
+
+The runbook's bot section gains `/nodes` and `/apply <name>`, with the one sentence
+that matters: `/apply` is the Nodes screen's Apply and can take a node into service, so
+read `/nodes` first. A row in `docs/decisions.md`: the bot's apply is the Nodes screen's,
+not the add's, and why.
+
+**E2E:** the M37.4 scenario, extended in M38.1 and M38.2 with `/nodes` and a refused
+`/apply` on the empty stand; the rest of `tests/e2e/control` green. Static gate:
+`make test-control`.
+
+**Done when.**
+- [ ] `/nodes` names exactly the nodes the panel's "behind" block names at that moment,
+      says so in one sentence when there are none, and dials nothing.
+- [ ] After an add that could not update a node, the reply names that node, says why in
+      the panel's sentence, and offers `/apply <name>` for it and for nothing else.
+- [ ] `/apply <name>` does what the Nodes screen's Apply does — including taking a node
+      into service and marking it degraded on a failure — and the reply says what was
+      applied and what could not be measured, in the panel's sentences.
+- [ ] No config, no key and no raw error text ever reaches the chat, including on a
+      failure whose message quotes one.
+- [ ] An unknown node name is refused in words; a message from any other account is
+      dropped in silence, as in M37.
+- [ ] On the stand, `/nodes` answers the empty sentence and `/apply <unknown>` refuses.
+- [ ] Not checkable on a stand: a real node applied from the owner's phone. The owner's
+      own run, after the merge.
+
+acceptance: yes
+The stand walk, on the stand's fake Telegram: as the owner, send `/nodes` and read the
+empty sentence; send `/apply` with a name that does not exist and read the refusal; send
+`/adduser` with a new name and confirm the reply holds the links and no `/apply` offer,
+because the stand has no node to be behind. The real walk is the owner's: on the real
+control plane, after an add, send `/nodes`, see the node the panel's block also names,
+send `/apply <name>`, and watch the Nodes screen agree.
+
+**Deliberately not in this milestone.** `/apply all`: one node per command keeps every
+reply about one host and keeps the bot from holding the fleet for several minutes on one
+message. A probe (`drifted`/`stale`) from the bot: it needs SSH to every host and belongs
+to the Nodes screen. Revoking: a different milestone if ever.
+
+**Decisions this milestone needs from the owner at the gate.**
+1. A second milestone after M37, so M37 can ship alone — or fold it into M37.
+2. The two names: `/nodes` and `/apply <name>`.
+3. The acceptance line: `yes`, with the scenario above.
+
 ## → M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval
 
 **What the owner asked for.** "A telegram bot for adding new users. It should work only
@@ -3824,6 +3927,16 @@ owner; the panel visit is the only part of that walk that needs a laptop.
 **What this is, in one sentence.** A long-polling bot inside the control plane that
 accepts one command from one Telegram account, calls the same service the panel's add
 dialog calls, and replies with the same links the panel hands over. Nothing else.
+
+**The push is part of the add, not a second step.** The owner's second ask on
+2026-11-01: "I always need to apply the new link into the nodes manually; the bot should
+do it automatically." It does, by construction: `onboarding.add_users` is one operation
+— create, commit, then apply every serving node the people were just given a credential
+on, reporting per node (M32). The bot calls that, so when its reply arrives the nodes
+already hold the new user, or the reply says which one does not and why. There is
+nothing left for a hand to apply when the push lands. Which nodes to push to is not a
+choice either: a user gets a credential on every serving node and transport. What the
+owner can be *offered* is the node the push could not reach, and that is M38.
 
 **Why it is shaped this way.**
 - **Inside `control`, as one more lifespan task.** The control plane already runs three
@@ -3987,10 +4100,11 @@ both settings blank and confirm the log holds no Telegram line at all. The real 
 the owner's, with a real bot and their own phone, against the real control plane after
 the merge; the stand cannot reach Telegram and must not pretend to.
 
-**Deliberately not in this milestone.** Revoking, listing or re-sending a link from the
-bot (on "already exists" the bot points at the panel, it does not re-send credentials);
-a second allowed account; webhook mode; a bot menu; any bot library. Each is a line the
-owner can add, and each would widen the one surface this milestone keeps narrow.
+**Deliberately not in this milestone.** `/nodes` and `/apply <name>` — M38, right after
+this one. Revoking, listing or re-sending a link from the bot (on "already exists" the
+bot points at the panel, it does not re-send credentials); a second allowed account;
+webhook mode; a bot menu; any bot library. Each is a line the owner can add, and each
+would widen the one surface this milestone keeps narrow.
 
 **Decisions this milestone needs from the owner at the gate.**
 1. The scope above — add, and only add.
