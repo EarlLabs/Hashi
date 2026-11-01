@@ -49,3 +49,11 @@ intended design. Do not fix them as part of another step.
 - Low — `ScriptedApi` in the poller tests mirrors `TelegramApi`'s three methods but not `async with`; fine because those tests drive `poll_forever` directly.
 - Low (round 1) — after a failed boot the "polling as" line is the only recovery signal; documented and tested.
 - Note — `restore_levels` is copy-pasted in three test files (M37.1, M37.2, M37.3); a conftest fixture would fold them. Not this milestone's step.
+
+## M37.4 (round 1: clean + 2 Medium fixed in round-1 fixes; round 2: clean, nothing open)
+
+- Low (round 1, left) — `tests/infra/test_images_are_pinned` inspects only `BASE`; the e2e overlay's `python:3.14-slim` is held instead by `test_the_fake_runs_on_the_control_images_own_python`. Extending the pin test to overlays would be unrelated refactoring.
+- Note — the fake is bind-mounted, not built: on a remote docker engine (the fleet's dind) the mount arrives empty and the stand fails loudly with `control` held down by `depends_on`. CI's local engine and laptops are unaffected. Recorded in the overlay comment; revisit if the fleet's engine ever runs the e2e stand.
+- Note — nine pre-existing ruff E501s in `tests/e2e/**` files that no target lints (red on the untouched baseline too). Not this milestone's.
+- Note — `aikit.yml`'s acceptance `entrypoints` and `stand.sh`'s banner do not mention the fake's injection endpoint (unzoned config; the orchestrator adds the entrypoint before acceptance).
+- Note — the acceptance scenario's last line ("stop the stand's control plane with both settings blank and confirm no Telegram line") needs an env override on the stand, which the overlay sets; not provided by this step — the unit test for the unconfigured lifespan covers it.
