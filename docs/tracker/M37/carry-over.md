@@ -22,3 +22,23 @@ intended design. Do not fix them as part of another step.
   what a reply that long does.
 - Note — the client's timeouts are module constants, not settings; a field run from the entry
   box is what would justify promoting them.
+
+## M37.2 (review round 1: clean; 2 Medium, 2 Low from the reviewer, 3 notes from the implementer)
+
+- Medium — `services/telegram_bot.py` `_adduser` answers `exc.message` where the panel answers
+  `wording.for_the_page(exc.message)`. Identical today (no add refusal carries a direction the
+  console rewrites), but the coupling is implicit; a one-line comment naming it would help.
+- Medium — `NOTHING_ADDED` is attached to every `DomainError` on the strength of a comment that
+  `add_users` raises no `DomainError` after its commit (verified true: `apply_nodes` records
+  per-node refusals in the outcome). No test pins that claim about another module; if `reach`
+  ever raised one, the bot would say "Nothing was added" about users who exist.
+- Low — `/adduser@BotName mira` parses as `/adduser` with argument `@BotName mira`. Telegram
+  appends `@Bot` only in groups and menu picks, and groups are refused. Theoretical.
+- Low — `_pieces`' hard-slice path (a single line over 4096) cannot occur for any block built
+  here; tested with a synthetic limit, harmless.
+- Note — the duplicate-name path sends two messages ("adding…" then the refusal) because
+  validation lives inside `add_users`, per plan; a pre-check would duplicate the service.
+- Note — a non-domain failure after "adding…" leaves the owner with no reply (the poller logs
+  it); a fixed "the add did not complete" sentence would be a one-liner if ever wanted.
+- Note — the `chat.type == "private"` check is pinned by a synthetic case; Telegram never sends
+  `chat.id == owner_id` with a non-private type, so the chat-id check alone already refuses groups.
