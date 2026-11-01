@@ -42,3 +42,10 @@ intended design. Do not fix them as part of another step.
   it); a fixed "the add did not complete" sentence would be a one-liner if ever wanted.
 - Note — the `chat.type == "private"` check is pinned by a synthetic case; Telegram never sends
   `chat.id == owner_id` with a non-private type, so the chat-id check alone already refuses groups.
+
+## M37.3 (round 1: clean + 2 Medium fixed in round-1 fixes; round 2: clean, 2 Low)
+
+- Low — a recurring unexpected bug in a poll is one ERROR line per episode (the "failing" state resets only on success), the same rule as an unreachable Telegram; the ERROR level is what tells them apart. Judged right; recorded so nobody expects a line per retry.
+- Low — `ScriptedApi` in the poller tests mirrors `TelegramApi`'s three methods but not `async with`; fine because those tests drive `poll_forever` directly.
+- Low (round 1) — after a failed boot the "polling as" line is the only recovery signal; documented and tested.
+- Note — `restore_levels` is copy-pasted in three test files (M37.1, M37.2, M37.3); a conftest fixture would fold them. Not this milestone's step.
