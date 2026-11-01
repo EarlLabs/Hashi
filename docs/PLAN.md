@@ -55,6 +55,8 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
+**Update 2026-11-01.** **M37 is PROPOSED and awaits the owner's approval** — an owner-only Telegram bot that adds a user and replies with the panel's links; five steps, five decisions listed at its foot (scope, the `httpx` dependency, the fake Telegram on the stand, the acceptance line, the command's name). Nothing of it is built. M36 is merged to `develop` (PR #10) and still marked `→`: its real-host walk is the owner's. M35 stays deferred.
+
 **Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Nothing is open.** The owner dropped **M27** and **M30** and deferred **M35** on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
 
 **As of 2026-10-02. 26 of 31 milestones are closed (✅); five are open — M24, M26, M27,
@@ -3810,6 +3812,194 @@ was already on. The walk fails if the operator had to read anything other than t
 command to get there.
 
 ---
+
+## → M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval
+
+**What the owner asked for.** "A telegram bot for adding new users. It should work only
+with my telegram account." Today an add is a panel visit: reach the console over the
+tunnel or `ssh -L`, open the dialog, type the name, wait for the push, copy the links,
+paste them into a chat with the friend. The friend is already on Telegram and so is the
+owner; the panel visit is the only part of that walk that needs a laptop.
+
+**What this is, in one sentence.** A long-polling bot inside the control plane that
+accepts one command from one Telegram account, calls the same service the panel's add
+dialog calls, and replies with the same links the panel hands over. Nothing else.
+
+**Why it is shaped this way.**
+- **Inside `control`, as one more lifespan task.** The control plane already runs three
+  background tasks from its lifespan (the trail sweeper, the re-measurer, the routing
+  refresher) in one uvicorn process; the poller is a fourth, started the same way,
+  cancelled the same way, and runs once because there is one process. A separate compose
+  service would hold a second copy of the database wiring for one loop. Rejected.
+- **Long polling, never a webhook.** A webhook is an inbound HTTPS route on the public
+  site — one more matcher in a Caddyfile that today exposes `/sub/*` and nothing else,
+  and one more place a path gets handled. Polling is the control plane dialling out, which
+  is the direction every other channel in this product already runs, and needs no Caddy
+  change at all.
+- **The owner is a numeric id, not a username.** A Telegram username can be changed and
+  reassigned; the numeric user id cannot. Two settings, `HASHI_TELEGRAM_BOT_TOKEN` and
+  `HASHI_TELEGRAM_OWNER_ID`; both blank is the default and means *off*, which is what the
+  stand and every existing install get without a change. One set without the other
+  refuses to boot — a bot that answers everyone must not be one typo away.
+- **Everyone else gets silence.** Anyone can find a bot by name and message it. A message
+  from any other account — any id, a group, a channel, a forward, an edit — gets no reply
+  and creates nothing, the same way the login screen gives one generic refusal. It also
+  leaves **no log line naming the sender**: a record of who tried is a record about a
+  person, and this product keeps none. `getUpdates` is asked for `message` updates only,
+  so Telegram does not even deliver the rest.
+- **The bot's API URL is configuration, not a constant.** `HASHI_TELEGRAM_API_URL`
+  defaults to Telegram's own Bot API and is overridable. "Never hardcode a domain"
+  applies; and the control plane sits on the entry box, in Russia, where whether
+  `api.telegram.org` answers at all is a field fact the stand cannot see. If it does not,
+  the setting is where a relay goes — building one is not this milestone.
+- **The token is a credential in a URL path, again.** Every Bot API call is
+  `https://…/bot<token>/<method>`, so the trap this project already has with `/sub/` is
+  back for an outbound call: an HTTP library's own error message names the URL. The
+  client wraps every failure into one domain exception whose text carries neither the
+  URL nor the token, and a test fails a request and checks the log.
+- **The trail records the add as `USER_ADDED`, like the panel's.** `AuditEntry` has no
+  source column by its own written decision; the trail says *what*, not *through which
+  door*. Not relitigated here.
+- **One dependency question, for the architect.** Control's only outbound HTTP today is
+  `urllib` in the routing refresher. A poll loop with a 30-second long-poll is an async
+  client's job; `httpx` is already a dev dependency and `tests/control` already runs on
+  it. Recommended: promote it to runtime. The fallback with no new dependency is
+  `urllib` in a thread, the routing refresher's precedent, with worse tests. A bot
+  library (aiogram, python-telegram-bot) brings a framework for a bot with one command —
+  not recommended.
+
+**What the owner does not need to tell me.** Their Telegram id and the bot token go
+into `.env`, which no agent reads. The plan never needs either.
+
+### M37.1 — (control) Two settings, and a Telegram client that never shows its token
+
+`settings.py` gains `telegram_bot_token` (secret, optional), `telegram_owner_id`
+(integer, optional) and `telegram_api_url` (defaulting to Telegram's Bot API); a model
+validator refuses one of the first two without the other, at boot, with a sentence naming
+both. `services/telegram_api.py` is a small async client over the Bot API —
+`get_me`, `get_updates(offset, timeout, allowed_updates=["message"])`,
+`send_message(chat_id, text)` as plain text with no parse mode — and every failure it
+raises is one domain exception whose message contains neither the URL nor the token.
+Tests: the validator's three cases; a fake transport that fails, after which no log
+record and no exception string contains the token. Carries the dependency decision
+above — if the owner says no to `httpx`, the client is `urllib` in `asyncio.to_thread`,
+same interface.
+
+### M37.2 — (control) The owner's commands, and silence for everyone else
+
+`services/telegram_bot.py`: `handle_update(...)`. An update is acted on only when
+`message.from.id` and `message.chat.id` both equal the owner id and the chat is private;
+anything else returns before any call is made and before any log line is written.
+`/adduser` followed by text — one nickname per line, exactly what the panel's add dialog
+accepts — replies "adding, about a minute per node", calls `onboarding.add_users` (the
+same validation, the same `USER_ADDED` trail entry, the same push to every serving
+node), then replies with the links the panel hands over after an add (`console.links_for`
+per user) and, when a node could not be told, the outcome's own summary. A `DomainError`
+or `Conflict` is answered with the sentence the panel would show. `/start`, `/help`, a
+bare `/adduser` and anything else from the owner answer with the usage line. Commands
+are handled one at a time, in order. Tests: the owner adds and the reply holds a link
+that answers on `/sub/`; a stranger gets no reply, no user and no log record naming
+their id; a duplicate name gets the sentence and no second user; no reply text reaches a
+log.
+
+### M37.3 — (control) A polling task that lives and dies with the app
+
+`start_poller` in the lifespan beside the three existing tasks, only when both settings
+are set. At start one `get_me` and one log line ("telegram: polling as @name"). The loop
+long-polls with the last offset, handles each update in turn, and **acknowledges an
+update after one attempt whether that attempt returned or raised** — a handler failure is
+one log line without the message text, never a poison update that Telegram redelivers
+for a day. Only a process death between the attempt and the next poll makes Telegram
+deliver it again, and the nickname's uniqueness turns that into an "already exists"
+reply rather than a second user. When Telegram cannot be reached: backoff capped at a
+minute, one log line when polling starts failing and one when it recovers, not one per
+retry; the panel and `/sub/` are never affected. One `AsyncSession` per update from the
+app's sessionmaker, never a request's. Cancelled cleanly at shutdown. Tests: configured
+starts, unconfigured starts nothing; a fake transport delivers an update and the offset
+advances; a failing transport produces exactly two log lines across many retries.
+
+### M37.4 — (infra) The stand gets a fake Telegram, and `make verify` adds a user through it
+
+`.e2e/fake_telegram.py`: a stdlib-only HTTP server answering `getMe`, `getUpdates`
+(long-poll, draining a queue) and `sendMessage` (recorded), plus two test-only routes to
+inject an update and to read what was sent. A `telegram` service in the e2e compose
+overlay, publishing the injection side on a loopback port from the e2e block, driven
+from `.env` like every other port. The base compose file passes the three
+`HASHI_TELEGRAM_*` variables through to `control`; the e2e overlay points the API URL at
+the fake with a throwaway token and the fake owner id the kit's secret generator already
+names. `tests/e2e/control/test_the_owner_adds_a_user_from_telegram.py`: the owner's id
+sends `/adduser`, a message containing `/sub/` is recorded, the user is listed by
+`/api/users`, and the link answers; a stranger's id sends the same and nothing is
+recorded and no user exists. The existing `tests/e2e/control` suite stays green with the
+bot off, which is what the stand runs unless the overlay turns it on.
+
+### M37.5 — (docs) The runbook says how to wire it, and the journal says why it is shaped this way
+
+A runbook section: create the bot at BotFather; find your own numeric id by messaging the
+bot once and reading `from.id` from a `getUpdates` call with `curl` (no third-party bot
+needed); the two `.env` lines; `make up`; the log line that says it is polling; what the
+bot answers. Two cautions, in words: the links the bot sends you transit Telegram's
+servers, exactly as they do when you paste them into a chat today, and the chat now
+holds every friend's link in your account; the bot token is a credential — whoever holds
+it can read your commands and write to you as the bot — rotate it at BotFather if it
+leaks. "Known-unproven" gains: that the Bot API answers from a Russian control-plane
+box. Rows in `docs/decisions.md` for the four decisions above (in-process polling, the
+numeric id and silence, the dependency, the trail entry). One line in the threat model's
+surfaces list, marked as M37's, since that document is still the owner's draft.
+
+**E2E:** `tests/e2e/control/test_the_owner_adds_a_user_from_telegram.py` (new, M37.4)
+green on the stand, and the existing `tests/e2e/control` suite green with the bot off.
+Static gate for the control steps: `make test-control`; for M37.4: `make test-infra`.
+
+**Done when.**
+- [ ] With both settings blank nothing changes: no task starts, no log line, the panel
+      and delivery work as before. This is the stand's default and every existing
+      install's.
+- [ ] A token without an owner id, or an owner id without a token, stops the control
+      plane at boot with one sentence naming the missing setting.
+- [ ] From the owner's own account, `/adduser <name>` creates the user, pushes them to
+      every serving node, and replies with the same links the panel hands over after an
+      add; the link opens, the user appears in the panel, the trail shows `USER_ADDED`.
+- [ ] `/adduser` of a name that exists answers with the panel's sentence and creates
+      nothing; a bare `/adduser`, `/start`, `/help` and any other text answer with the
+      usage line.
+- [ ] A message from any other account — any id, a group, a channel, a forward, an edit —
+      gets no reply, creates nothing, and leaves no log line naming the sender.
+- [ ] The bot token appears in no log record, no exception message and no reply,
+      including when Telegram is unreachable or answers an error.
+- [ ] When Telegram cannot be reached the panel keeps working, the log carries one line
+      when polling starts failing and one when it recovers, and the bot resumes without
+      a restart.
+- [ ] `make verify` runs the whole loop on the stand through the fake Telegram: the
+      owner's id adds a user and gets a working link; a stranger's id gets nothing.
+- [ ] The runbook tells the owner how to create the bot, find their numeric id, fill the
+      two lines and see that it is polling.
+- [ ] Not checkable on a stand, and never claimed by one: that the Bot API answers from
+      the control-plane box in Russia. The owner's own run, after the merge.
+
+acceptance: yes
+The stand walk, on the stand's fake Telegram: as the owner's id, send `/adduser` with a
+new name, read the reply, open the link it holds, then find the user in the panel and the
+`USER_ADDED` line in the trail; send a second `/adduser` with the same name and read the
+refusal; as a stranger's id, send `/adduser` with a third name and confirm that nothing
+was sent back and that no third user exists. Then stop the stand's control plane with
+both settings blank and confirm the log holds no Telegram line at all. The real walk is
+the owner's, with a real bot and their own phone, against the real control plane after
+the merge; the stand cannot reach Telegram and must not pretend to.
+
+**Deliberately not in this milestone.** Revoking, listing or re-sending a link from the
+bot (on "already exists" the bot points at the panel, it does not re-send credentials);
+a second allowed account; webhook mode; a bot menu; any bot library. Each is a line the
+owner can add, and each would widen the one surface this milestone keeps narrow.
+
+**Decisions this milestone needs from the owner at the gate.**
+1. The scope above — add, and only add.
+2. The dependency: promote `httpx` to runtime (recommended), or `urllib` in a thread.
+3. M37.4, the fake Telegram on the stand — keep it (recommended: it is the only way
+   `make verify` ever runs the loop) or drop it and rely on unit tests plus the owner's
+   field run.
+4. The acceptance line: `yes`, with the scenario above.
+5. The command's name: `/adduser`.
 
 ## → M36 — Losing the entry box costs two commands and a DNS change · asked for by the owner 2026-10-13 · built 2026-10-13 on `task/M36` · acceptance: walk on a local container stand (docs/tracker/M36); the real-host walk is the owner's
 
