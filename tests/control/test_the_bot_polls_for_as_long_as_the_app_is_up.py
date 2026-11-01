@@ -145,6 +145,35 @@ class FakeTelegram:
         return [payload["text"] for payload in self.sends]
 
 
+class ScriptedApi:
+    """A stand-in for the client whose polls answer from a script, in order.
+
+    Each entry is what one ``getUpdates`` does: a list is returned as it is, an exception
+    is raised; past the script's end a poll is held open the way Telegram holds one.
+    For the two things the real client never lets through — an answer it would have
+    refused, and an exception it would have wrapped — which is what the loop's last
+    resort is for.
+    """
+
+    def __init__(self, *polls: list[Any] | BaseException) -> None:
+        self.polls = list(polls)
+        self.texts: list[str] = []
+
+    async def get_me(self) -> dict[str, Any]:
+        return {"id": 110201543, "is_bot": True, "username": BOT_USERNAME}
+
+    async def get_updates(self, offset: int | None, timeout: int) -> list[Any]:
+        if not self.polls:
+            await asyncio.Event().wait()
+        answer = self.polls.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    async def send_message(self, chat_id: int, text: str) -> None:
+        self.texts.append(text)
+
+
 class ClosingTransport(httpx.MockTransport):
     """A ``MockTransport`` that remembers being closed: ``AsyncClient.aclose`` closes it."""
 
@@ -248,14 +277,16 @@ async def polling(app, settings, api: TelegramApi, *, sleep=asyncio.sleep):
         await stop_poller(task)
 
 
-def sleeper(telegram: FakeTelegram, *, back_after: Iterable[int] = ()) -> tuple[list[float], Any]:
+def sleeper(
+    telegram: FakeTelegram | None = None, *, back_after: Iterable[int] = ()
+) -> tuple[list[float], Any]:
     """The backoff's clock: records each wait, and brings Telegram back after so many."""
     delays: list[float] = []
     comebacks = set(back_after)
 
     async def sleep(seconds: float) -> None:
         delays.append(seconds)
-        if len(delays) in comebacks:
+        if len(delays) in comebacks and telegram is not None:
             telegram.down = False
         await asyncio.sleep(0)
 
@@ -469,6 +500,53 @@ async def test_an_answer_whose_update_has_no_id_is_a_failed_call_not_a_dead_loop
     assert len(lines) == 3 and "polling as" in lines[0], lines
     assert "polling is failing" in lines[1] and "no id" in lines[1], lines
     assert "answers again" in lines[2], lines
+    assert_nothing_leaked(caplog)
+
+
+async def test_an_answer_with_something_that_is_not_an_update_is_a_failed_call_not_a_dead_loop(
+    app, bot_settings, caplog
+) -> None:
+    """A number where an update should be, then an id that is a string: each is the call
+    having failed — one line, backoff — and not an ``AttributeError`` the loop dies of."""
+    api = ScriptedApi([1], [{"update_id": "100"}], [an_update("/help", update_id=100)])
+    delays, sleep = sleeper()
+    configure_logging()
+    with caplog.at_level(logging.DEBUG):
+        async with polling(app, bot_settings, api, sleep=sleep):
+            await until(lambda: api.texts == [USAGE], "the real update being handled")
+
+    assert delays == [1, 2]
+    lines = [line.getMessage() for line in said_after_polling_as(caplog)]
+    assert len(lines) == 2, lines
+    assert "polling is failing" in lines[0] and "no id" in lines[0], lines
+    assert "answers again" in lines[1], lines
+    assert_nothing_leaked(caplog)
+
+
+async def test_an_unexpected_exception_from_a_poll_is_one_line_naming_its_type_and_the_loop_goes_on(
+    app, bot_settings, caplog
+) -> None:
+    """The last resort: what the client did not wrap still does not kill the task. The
+    line is an ERROR naming the type and nothing of the text, once per episode, with
+    the same backoff; the next poll that answers is handled."""
+    api = ScriptedApi(
+        RuntimeError(f"a request line: POST {API_URL}/bot{TOKEN}/getUpdates"),
+        RuntimeError("and again"),
+        [an_update("/help", update_id=100)],
+    )
+    delays, sleep = sleeper()
+    configure_logging()
+    with caplog.at_level(logging.DEBUG):
+        async with polling(app, bot_settings, api, sleep=sleep):
+            await until(lambda: api.texts == [USAGE], "the real update being handled")
+
+    assert delays == [1, 2]
+    lines = said_after_polling_as(caplog)
+    assert [line.levelno for line in lines] == [logging.ERROR, logging.INFO], lines
+    said = lines[0].getMessage()
+    assert "polling is failing" in said and "An unexpected RuntimeError." in said, said
+    assert "request line" not in said, said
+    assert lines[1].getMessage() == "telegram: Telegram answers again; polling resumed"
     assert_nothing_leaked(caplog)
 
 

@@ -107,29 +107,38 @@ async def poll_forever(
             updates = await api.get_updates(offset, timeout=LONG_POLL_SECONDS)
             _each_has_an_id(updates)
         except TelegramCallFailed as exc:
-            if not failing:
-                # The failure's own sentence, which names the method and a type or a
-                # status and nothing else — the client's contract, not this module's
-                # assumption.
-                logger.warning(
-                    "telegram: polling is failing: %s Retrying, up to a minute apart, "
-                    "until Telegram answers; this is said once, not per retry.",
-                    exc,
-                )
-                failing = True
-            await sleep(delay)
-            delay = min(delay * 2, BACKOFF_MAX_SECONDS)
+            # The failure's own sentence, which names the method and a type or a status
+            # and nothing else — the client's contract, not this module's assumption.
+            what, level = str(exc), logging.WARNING
+        except Exception as exc:
+            # The last resort, for the header's promise that this task does not die.
+            # The client wraps every failure of a call, so nothing is expected here —
+            # which is why it is an ERROR, and why it is the type only: a sentence
+            # nobody composed can carry anything. Same backoff, same one line per
+            # episode. ``CancelledError`` is not an ``Exception`` and is not caught.
+            what, level = f"An unexpected {type(exc).__name__}.", logging.ERROR
+        else:
+            if failing:
+                logger.info("telegram: Telegram answers again; polling resumed")
+                failing = False
+            delay = BACKOFF_FIRST_SECONDS
+            for update in updates:
+                await _attempt(database, settings, api, update)
+                # Acknowledged here, after the one attempt, whatever it did: the next
+                # poll asks for everything after this one. See the header for why a
+                # failure does not hold the offset back.
+                offset = update["update_id"] + 1
             continue
-        if failing:
-            logger.info("telegram: Telegram answers again; polling resumed")
-            failing = False
-        delay = BACKOFF_FIRST_SECONDS
-        for update in updates:
-            await _attempt(database, settings, api, update)
-            # Acknowledged here, after the one attempt, whatever it did: the next poll
-            # asks for everything after this one. See the header for why a failure does
-            # not hold the offset back.
-            offset = update["update_id"] + 1
+        if not failing:
+            logger.log(
+                level,
+                "telegram: polling is failing: %s Retrying, up to a minute apart, "
+                "until Telegram answers; this is said once, not per retry.",
+                what,
+            )
+            failing = True
+        await sleep(delay)
+        delay = min(delay * 2, BACKOFF_MAX_SECONDS)
 
 
 def _each_has_an_id(updates: list[dict[str, Any]]) -> None:
@@ -141,7 +150,10 @@ def _each_has_an_id(updates: list[dict[str, Any]]) -> None:
     Handling such a batch and then not advancing past it would be the poison update
     the header rules out, one poll after another.
     """
-    if any(type(update.get("update_id")) is not int for update in updates):
+    if any(
+        not isinstance(update, dict) or type(update.get("update_id")) is not int
+        for update in updates
+    ):
         raise TelegramCallFailed("Telegram answered getUpdates with an update that has no id.")
 
 
