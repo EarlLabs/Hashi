@@ -495,6 +495,9 @@ checkers:
 E2E_PROJECT  := hashi-e2e
 E2E_API_PORT ?= 54200
 E2E_DB_PORT  ?= 54232
+# The fake Telegram's injection side (deploy/docker-compose.e2e.yml) — M37.4. On the e2e
+# block like the two above, and overridable the same way.
+E2E_TELEGRAM_PORT ?= 54280
 # Loopback by default, exactly like the dev stack. Override ONLY when the engine
 # is not the machine you are sitting at — the fleet's dind engine, where
 # 127.0.0.1 is dind's own loopback and no test runner can reach it:
@@ -523,7 +526,7 @@ COMPOSE_E2E  = docker compose --env-file .env --env-file deploy/e2e.env -p $(E2E
                 -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml \
                 -f deploy/docker-compose.e2e.yml
 E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
-                DEV_BIND_ADDR=$(E2E_BIND_ADDR)
+                DEV_BIND_ADDR=$(E2E_BIND_ADDR) E2E_TELEGRAM_PORT=$(E2E_TELEGRAM_PORT)
 
 # EVERY profile the e2e overlay defines — what `down` has to know about, whatever
 # `up` was asked for. `docker compose down` only touches services in the profiles

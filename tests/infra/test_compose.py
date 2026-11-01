@@ -30,6 +30,10 @@ PUBLIC = DEPLOY / "docker-compose.public.yml"
 # mapping with no bind address is exactly as dangerous in one as in the other.
 TUNNEL = DEPLOY / "docker-compose.tunnel.yml"
 PANEL_OVERLAYS = [PUBLIC, TUNNEL]
+# The e2e overlay publishes since M37.4 — the fake Telegram's injection side — so the two
+# rules on a laptop's published ports apply to it as they do to the dev overlay.
+E2E = DEPLOY / "docker-compose.e2e.yml"
+LAPTOP_OVERLAYS = [DEV, E2E]
 
 # Ports the host is likely to already be using. Publishing on one is how two
 # projects collide on the same laptop, and the collision shows up as a confusing
@@ -135,7 +139,8 @@ def test_dockerfile_base_images_are_pinned(path: pathlib.Path) -> None:
         assert_pinned(path.name, resolved)
 
 
-def test_dev_overlay_binds_loopback_by_default() -> None:
+@pytest.mark.parametrize("overlay", LAPTOP_OVERLAYS, ids=lambda p: p.name)
+def test_dev_overlay_binds_loopback_by_default(overlay: pathlib.Path) -> None:
     """Published ports must not reach another machine unless someone says so.
 
     The bind address may be an interpolation (``${DEV_BIND_ADDR:-127.0.0.1}``),
@@ -144,7 +149,7 @@ def test_dev_overlay_binds_loopback_by_default() -> None:
     be loopback. A literal ``0.0.0.0`` here, or a default that is anything else,
     is a database on a café network.
     """
-    for name, service in load(DEV)["services"].items():
+    for name, service in load(overlay)["services"].items():
         for mapping in service.get("ports", []):
             match = HOST_PORT.match(str(mapping))
             assert match, f"{name}: cannot read a bind address out of {mapping!r}"
@@ -154,10 +159,11 @@ def test_dev_overlay_binds_loopback_by_default() -> None:
             )
 
 
-def test_published_ports_avoid_service_defaults() -> None:
+@pytest.mark.parametrize("overlay", LAPTOP_OVERLAYS, ids=lambda p: p.name)
+def test_published_ports_avoid_service_defaults(overlay: pathlib.Path) -> None:
     """A published port must not be one the host probably already runs."""
     offenders = []
-    for name, service in load(DEV)["services"].items():
+    for name, service in load(overlay)["services"].items():
         for mapping in service.get("ports", []):
             match = HOST_PORT.match(str(mapping))
             assert match, f"{name}: cannot read a host port out of {mapping!r}"

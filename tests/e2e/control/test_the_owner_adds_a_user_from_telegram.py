@@ -1,0 +1,196 @@
+"""The owner adds a user from Telegram, and a stranger gets nothing — M37.
+
+WHAT: through the stand's fake Telegram, the owner's id sends ``/adduser``; the bot's
+      reply is read back, the link in it is fetched the way a client would fetch it,
+      and the user is found through the API. Then a stranger's id sends the same, and
+      nothing is sent back and nobody is created.
+WHY:  M37's three control steps are each proven against a transport they fake
+      themselves. What none of them can say is that the real poller, the real client,
+      the real add and the real delivery endpoint compose inside the BOOTED control
+      plane — that the container reads the three variables, dials the configured URL,
+      and the message that comes back carries a link the stand answers. This is that
+      loop, once, with only the far end replaced.
+HOW:  the fake's test-only side is published on the e2e block (``telegram_url``); an
+      update is injected there and the recorded ``sendMessage`` bodies are polled until
+      the one that matters appears. The stranger case needs a way to know the bot has
+      SEEN the stranger's update and chosen silence, which silence cannot signal — so
+      the owner's ``/help`` is injected behind it: updates are handled in order, and the
+      usage reply to that one is the proof the stranger's was handled first and answered
+      nothing.
+
+Boundary: real control + postgres + caddy; Telegram is STUBBED by .e2e/fake_telegram.py.
+No node on this stand is ever reachable: the stand starts with none, and the scenarios
+that run before this one leave stub nodes nothing answers on. So the push never
+completes, and the reply carries the add's own summary of what the push did — this file
+asserts the summary is there and never which nodes it names, because the e2e database is
+shared by every scenario in a run and "which nodes" is whatever ran first.
+"""
+
+import asyncio
+import time
+import uuid
+from collections.abc import Callable
+
+import httpx
+import pytest
+
+OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
+
+# The line the poller writes once Telegram — here the fake — has answered ``getMe``.
+# Without it an injected update sits in the fake's queue with nobody polling for it,
+# and every assertion below would be about a bot that was never up.
+READY = "telegram: polling as @"
+
+# Not the owner, and not a number that could turn up in a log line by accident: the
+# last assertion of this file is that the control plane's log never names it.
+STRANGER = 987654321
+
+
+@pytest.fixture
+def unique() -> str:
+    """A per-run suffix, so a second run against a warm stack does not collide."""
+    return uuid.uuid4().hex[:8]
+
+
+@pytest.fixture
+async def telegram(telegram_url: str):
+    """A client for the fake's test-only side — injecting updates, reading what was sent."""
+    async with httpx.AsyncClient(base_url=telegram_url, timeout=30.0) as c:
+        yield c
+
+
+@pytest.fixture(scope="module")
+def polling(logs_of) -> None:
+    """Block until the stand's control plane reports that it is polling, once per module."""
+    deadline = time.monotonic() + 90
+    while READY not in logs_of("control"):
+        assert time.monotonic() < deadline, (
+            "the control plane never wrote `telegram: polling as` — is the bot switched on "
+            "and pointed at the fake in deploy/docker-compose.e2e.yml?"
+        )
+        time.sleep(1)
+
+
+async def inject(telegram: httpx.AsyncClient, *, sender: int, text: str) -> int:
+    """Put one private message from ``sender`` in front of the bot; the update's id."""
+    answer = await telegram.post(
+        "/_test/updates",
+        json={"from_id": sender, "chat_id": sender, "chat_type": "private", "text": text},
+    )
+    assert answer.status_code == 200, answer.text
+    return answer.json()["result"]["update_id"]
+
+
+async def sent(telegram: httpx.AsyncClient) -> list[dict]:
+    """Every ``sendMessage`` body the bot has sent since the stand came up, in order."""
+    answer = await telegram.get("/_test/sent")
+    assert answer.status_code == 200, answer.text
+    return answer.json()["result"]
+
+
+async def replies_after(
+    telegram: httpx.AsyncClient,
+    count: int,
+    *,
+    until: Callable[[list[dict]], bool],
+    timeout: float = 120.0,
+) -> list[dict]:
+    """The bodies recorded after the first ``count``, once ``until`` holds of them.
+
+    Polled rather than awaited on an event: the bot's side of this is the real poller
+    in the real container, and the only thing a scenario can observe is the fake's
+    record. An injected update wakes the poller's long poll at once, so the wait here
+    is the add itself, not a poll period — and the add pushes to every stub node earlier
+    scenarios left, each of which runs out its own connect timeout before the reply can
+    be sent. The ceiling is sized for that, the way the ``client`` fixture's is.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        new = (await sent(telegram))[count:]
+        if until(new):
+            return new
+        assert time.monotonic() < deadline, (
+            f"the bot did not answer within {timeout:.0f}s; recorded so far: {new}"
+        )
+        await asyncio.sleep(0.5)
+
+
+async def logged_in(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """The same client, now holding a real operator session from the login form."""
+    response = await client.post("/panel/login", data=OPERATOR)
+    assert response.status_code == 303, (
+        f"the operator could not log in ({response.status_code}) — check "
+        "deploy/e2e.env against deploy/docker-compose.e2e.yml"
+    )
+    return client
+
+
+async def nicknames(operator: httpx.AsyncClient) -> list[str]:
+    listed = await operator.get("/api/users")
+    assert listed.status_code == 200, listed.text
+    return [user["nickname"] for user in listed.json()]
+
+
+async def test_the_owner_adds_a_user_and_the_link_in_the_reply_answers(
+    polling, telegram, telegram_owner_id: int, client, unique: str
+) -> None:
+    nickname = f"tgowner-{unique}"
+    before = len(await sent(telegram))
+
+    await inject(telegram, sender=telegram_owner_id, text=f"/adduser {nickname}")
+
+    # "adding…" comes first and the links follow; the one with a link is the one that
+    # matters here, and its words are the control zone's to choose.
+    replies = await replies_after(
+        telegram, before, until=lambda new: any("/sub/" in reply["text"] for reply in new)
+    )
+    assert all(reply["chat_id"] == telegram_owner_id for reply in replies), replies
+    links = next(reply["text"] for reply in replies if "/sub/" in reply["text"])
+    assert nickname in links, links
+    # The push could not have completed — nothing on this stand answers — so the reply
+    # has to carry the add's own summary rather than read like a finished add. Its first
+    # words are the same whichever way the push fell short; which nodes it goes on to
+    # name is the fleet other scenarios left behind, and is not asserted.
+    assert "user(s) added" in links, links
+
+    # Fetched with NO session, exactly as the friend's client would: the token in the
+    # path is the whole credential.
+    token = next(word for word in links.split() if "/sub/" in word).rsplit("/", 1)[-1]
+    delivered = await client.get(f"/sub/{token}")
+    assert delivered.status_code == 200, delivered.text
+
+    operator = await logged_in(client)
+    assert nickname in await nicknames(operator), (
+        "the bot replied with a link to a user the API does not list"
+    )
+
+
+async def test_a_stranger_gets_no_reply_and_creates_nobody(
+    polling, telegram, telegram_owner_id: int, client, logs_of, unique: str
+) -> None:
+    assert STRANGER != telegram_owner_id
+    nickname = f"tgstranger-{unique}"
+    before = len(await sent(telegram))
+
+    await inject(telegram, sender=STRANGER, text=f"/adduser {nickname}")
+    # The marker: handled after the stranger's, and answered — see the module header.
+    await inject(telegram, sender=telegram_owner_id, text="/help")
+
+    replies = await replies_after(
+        telegram,
+        before,
+        until=lambda new: any(reply["chat_id"] == telegram_owner_id for reply in new),
+    )
+    to_anyone_else = [reply for reply in replies if reply["chat_id"] != telegram_owner_id]
+    assert to_anyone_else == [], (
+        f"the bot answered an account that is not the owner: {to_anyone_else}"
+    )
+    assert len(replies) == 1, f"more than the owner's one usage reply was sent: {replies}"
+    assert nickname not in replies[0]["text"], replies
+
+    operator = await logged_in(client)
+    assert nickname not in await nicknames(operator), "a stranger's /adduser created a user"
+    assert str(STRANGER) not in logs_of("control"), (
+        "a line in the control plane's log names the stranger — a record of who tried is "
+        "a record about a person, and this product keeps none"
+    )

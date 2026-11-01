@@ -46,6 +46,22 @@ services:
       # password, and the scenario would look like a credentials bug rather than a
       # quoting one. `$$` is compose's escape and arrives as a single `$`.
       HASHI_OPERATOR_PASSWORD_HASH: "scrypt$$32768$$8$$1$$QO/d/qvoYxARMag5H46vug==$$RK2Hhwuh2AIM0lympYvnnDhv6MrAHIyoV7KuOV4Y6pU="
+      # The bot, ON for this stand and pointed at the fake Telegram below — M37.4. The
+      # token and the owner id are FIXTURES, not credentials: no bot exists behind this
+      # token and no account behind this id, and the only thing they ever reach is the
+      # fake below. Committed on the same grounds as the hash above. The id is also what
+      # a scenario sends as "the owner" (tests/e2e/conftest.py carries the same default),
+      # and 8081 is the port the `telegram` service listens on INSIDE the compose network
+      # — the name and the port are both compose's, and neither is dialled from outside.
+      HASHI_TELEGRAM_API_URL: http://telegram:8081
+      HASHI_TELEGRAM_BOT_TOKEN: e2e-not-a-real-bot-token
+      HASHI_TELEGRAM_OWNER_ID: "424242"
+    # Boot after the fake answers, so the poller's first call succeeds and its "polling
+    # as" line is in the log from the start rather than after a backoff. Compose merges
+    # this with the base file's own dependency on the database.
+    depends_on:
+      telegram:
+        condition: service_healthy
 
   caddy:
     environment:
@@ -61,6 +77,47 @@ services:
       # because the base file requires the variable, and a placeholder here is
       # honest about the fact that nothing reaches a CA from this stack.
       CADDY_ACME_EMAIL: e2e@localhost
+
+  # A fake Telegram Bot API, for the control plane to poll and the scenarios to drive —
+  # M37.4. No profile: the control plane above is configured to poll it, and its
+  # `depends_on` holds it back until this answers — a stand is never up without its bot.
+  #
+  # The base image the control image is built from, with the one file it runs MOUNTED
+  # rather than baked in — the opposite call from the browser below, for a reason that
+  # is specific to this file: `.e2e/` is kept out of every build context on purpose
+  # (.dockerignore), and un-excluding one file to COPY it would widen what the control
+  # image's own build can see for the sake of a test instrument. The trade is the one
+  # the control service's bind mounts already take: on a remote engine the mount
+  # resolves on the daemon's filesystem, arrives as an empty directory, and the
+  # container cannot start — loudly, as a service that never goes healthy and so holds
+  # `control` back too, rather than as a stand that quietly has no bot.
+  #
+  # It publishes ONE side, the injection side, on this project's e2e block and on
+  # loopback by default. `DEV_BIND_ADDR` is the variable `make e2e-up` sets, so the dind
+  # opt-in reaches this mapping the way it reaches the other two. 54280 is nothing's
+  # default port.
+  telegram:
+    image: python:3.14-slim
+    restart: unless-stopped
+    environment:
+      # Where the fake listens inside the compose network. The same number is in the
+      # control service's HASHI_TELEGRAM_API_URL, the mapping and the healthcheck below:
+      # compose cannot name it once, and it is data in this file rather than a default
+      # in the script.
+      FAKE_TELEGRAM_PORT: "8081"
+    volumes:
+      - ../.e2e/fake_telegram.py:/srv/fake_telegram.py:ro
+    # `-u`: the one line it prints reaches the container log when it is printed, not
+    # when a buffer fills.
+    command: ["python", "-u", "/srv/fake_telegram.py"]
+    ports:
+      - "${DEV_BIND_ADDR:-127.0.0.1}:${E2E_TELEGRAM_PORT:-54280}:8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/_test/sent').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   # The acceptance agent's browser. Behind a PROFILE, so `make e2e-up` is unchanged
   # for everyone who is not walking a milestone — the image is large and a test run

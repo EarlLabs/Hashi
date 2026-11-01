@@ -103,6 +103,16 @@ services:
       # lists of sites to send direct and are added switched off. A list of BLOCKED sites
       # is never offered: its meaning is the opposite of "send direct".
       HASHI_ROUTING_SUGGESTED_SOURCES: ${HASHI_ROUTING_SUGGESTED_SOURCES:-itdoginfo-russia-outside|https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-raw.lst|on;roscomvpn-whitelist|https://raw.githubusercontent.com/hydraponique/roscomvpn-geosite/master/data/whitelist|off;roscomvpn-category-ru|https://raw.githubusercontent.com/hydraponique/roscomvpn-geosite/master/data/category-ru|off;roscomvpn-geoip-whitelist|https://raw.githubusercontent.com/hydraponique/roscomvpn-geoip/master/release/text/whitelist.txt|off}
+      # The owner's Telegram bot — M37. Three more of the kind above: blank is "not set",
+      # and the first two both blank is the shipped shape, a control plane with no bot.
+      # Listed for the reason the rest are — this list is the whole of what the container
+      # can read — and the token is a credential, so this line is the ONLY way it reaches
+      # the container: from .env, never through a build argument or an image layer. The
+      # URL is where the Bot API is dialled; blank takes the settings model's default,
+      # Telegram's own, and the e2e overlay points it at a fake on the stand's network.
+      HASHI_TELEGRAM_BOT_TOKEN: ${HASHI_TELEGRAM_BOT_TOKEN:-}
+      HASHI_TELEGRAM_OWNER_ID: ${HASHI_TELEGRAM_OWNER_ID:-}
+      HASHI_TELEGRAM_API_URL: ${HASHI_TELEGRAM_API_URL:-}
     volumes:
       # The backup schedule's record, READ-ONLY — M28.5. It is written on the host by
       # scripts/backup-run.sh and holds dates, exit codes and the schedule's own settings:

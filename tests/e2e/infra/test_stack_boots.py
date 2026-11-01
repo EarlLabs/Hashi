@@ -10,7 +10,8 @@ HOW:  asks compose for the state of the project named by E2E_PROJECT. Boots
       nothing: an unbooted stack is a failed scenario, not something to fix by
       starting one mid-test.
 
-Boundary: real control + postgres + caddy. Nothing stubbed, nothing external.
+Boundary: real control + postgres + caddy, plus the fake Telegram the e2e overlay runs
+beside them (M37.4) — stubbed, and part of every stand. Nothing external.
 """
 
 import json
@@ -33,7 +34,7 @@ def test_every_service_is_running(compose) -> None:
     """Caddy is the one that used to be missing here: its config arrived as a
     bind mount, which exists only on the machine holding this checkout."""
     state = services(compose)
-    assert set(state) == {"control", "db", "caddy"}, (
+    assert set(state) == {"control", "db", "caddy", "telegram"}, (
         f"unexpected set of running services: {sorted(state)}"
     )
     stopped = {name: entry["State"] for name, entry in state.items()
