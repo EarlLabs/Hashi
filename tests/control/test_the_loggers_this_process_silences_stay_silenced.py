@@ -45,8 +45,10 @@ import pytest
 from control.app.main import configure_logging
 
 # Every logger this process pins, and the level it may not be louder than. asyncssh is
-# M27.3's; the other two were pinned long before and were equally untested.
-PINNED = ("asyncssh", "sqlalchemy.engine")
+# M27.3's; the other two were pinned long before and were equally untested. httpx and
+# httpcore are M37.1's: the control plane now dials the Telegram Bot API through them,
+# and httpx's request line at INFO is a URL with the bot token in its path.
+PINNED = ("asyncssh", "sqlalchemy.engine", "httpx", "httpcore")
 
 # Every logger these three inherit from, root included — the set this file has to drive
 # loud before it can claim the pin is what keeps them quiet, and the set it has to put

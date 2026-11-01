@@ -35,13 +35,18 @@ dependencies = [
     # Form parsing, for the panel's login and its HTMX POSTs. FastAPI needs it
     # present to accept a `Form(...)` parameter at all.
     "python-multipart",
+    # The owner's Telegram bot dials the Bot API from inside the control plane
+    # (M37), and a 30-second long poll is an async client's job. Promoted from the
+    # dev extra on the owner's decision of 2026-11-01: it was already what the test
+    # suite drives the app with, so nothing new enters the image's trust that the
+    # suite had not already exercised.
+    "httpx",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "httpx",
     "ruff",
     "pyyaml",
     # Acceptance hands, and ONLY when the operator's own Chrome is not reachable:
