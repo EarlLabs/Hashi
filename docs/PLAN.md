@@ -3813,7 +3813,7 @@ command to get there.
 
 ---
 
-## → M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval · after M37
+## → M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 (a second milestone after M37, `/nodes` and `/apply <name>`, acceptance yes) · after M37
 
 **What the owner asked for.** "Suggest me nodes for apply new config." The console
 already answers that question on every screen: since M32 a block names the serving nodes
@@ -3916,7 +3916,7 @@ to the Nodes screen. Revoking: a different milestone if ever.
 2. The two names: `/nodes` and `/apply <name>`.
 3. The acceptance line: `yes`, with the scenario above.
 
-## → M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval
+## → M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 ("gogogo": every recommended option taken — `httpx` promoted to runtime, the fake Telegram kept, `/adduser`, acceptance yes) · building on `task/M37`
 
 **What the owner asked for.** "A telegram bot for adding new users. It should work only
 with my telegram account." Today an add is a panel visit: reach the console over the
