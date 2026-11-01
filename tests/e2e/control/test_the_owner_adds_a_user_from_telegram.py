@@ -139,19 +139,21 @@ async def test_the_owner_adds_a_user_and_the_link_in_the_reply_answers(
 
     await inject(telegram, sender=telegram_owner_id, text=f"/adduser {nickname}")
 
-    # "adding…" comes first and the links follow; the one with a link is the one that
-    # matters here, and its words are the control zone's to choose.
+    # "adding…" comes first, the links follow, and the add's own summary is the LAST
+    # block the bot sends — so waiting for it is waiting for the add to finish talking,
+    # and nothing of this add can land in the fake's record after this test returns.
+    # That is what keeps the stranger test below exact. The push could not have
+    # completed — nothing on this stand answers — so the summary is always there; its
+    # first words are the same whichever way the push fell short, and which nodes it goes
+    # on to name is the fleet other scenarios left behind, which is not asserted.
     replies = await replies_after(
-        telegram, before, until=lambda new: any("/sub/" in reply["text"] for reply in new)
+        telegram,
+        before,
+        until=lambda new: any("user(s) added" in reply["text"] for reply in new),
     )
     assert all(reply["chat_id"] == telegram_owner_id for reply in replies), replies
     links = next(reply["text"] for reply in replies if "/sub/" in reply["text"])
     assert nickname in links, links
-    # The push could not have completed — nothing on this stand answers — so the reply
-    # has to carry the add's own summary rather than read like a finished add. Its first
-    # words are the same whichever way the push fell short; which nodes it goes on to
-    # name is the fleet other scenarios left behind, and is not asserted.
-    assert "user(s) added" in links, links
 
     # Fetched with NO session, exactly as the friend's client would: the token in the
     # path is the whole credential.
@@ -174,6 +176,9 @@ async def test_a_stranger_gets_no_reply_and_creates_nobody(
 
     await inject(telegram, sender=STRANGER, text=f"/adduser {nickname}")
     # The marker: handled after the stranger's, and answered — see the module header.
+    # "After" is control/app/services/telegram_poller.py's promise, one update at a time
+    # in the order Telegram numbered them; if it ever handled a batch concurrently this
+    # would prove a race rather than silence.
     await inject(telegram, sender=telegram_owner_id, text="/help")
 
     replies = await replies_after(
@@ -190,7 +195,9 @@ async def test_a_stranger_gets_no_reply_and_creates_nobody(
 
     operator = await logged_in(client)
     assert nickname not in await nicknames(operator), "a stranger's /adduser created a user"
-    assert str(STRANGER) not in logs_of("control"), (
+    log = logs_of("control")
+    assert READY in log, "the log being read is not the bot's — the ready line is missing"
+    assert str(STRANGER) not in log, (
         "a line in the control plane's log names the stranger — a record of who tried is "
         "a record about a person, and this product keeps none"
     )
