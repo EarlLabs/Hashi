@@ -132,15 +132,27 @@ class ReachOutcome:
         """
         return not self.nodes_failed
 
-    def clauses(self) -> list[str]:
-        """One sentence per node not reached, sorted so a reload does not reshuffle them."""
+    def not_updated(self) -> list[tuple[str, NotUpdated]]:
+        """Each node not updated as its name and the kind of failure, sorted by name.
+
+        The two things a sentence about such a node is built from (``why_not_reached``),
+        handed out together for a caller that lays the nodes out one by one with
+        something of its own under each, so it reads them off here rather than joining
+        ``nodes_failed``, ``why_failed`` and ``names`` by id itself. A node the fan-out
+        never kinded is ``UNREACHED`` and one it never named is named by its id: a gap in
+        either record drops no node.
+        """
         return sorted(
-            why_not_reached(
+            (
+                self.names.get(node_id, node_id),
                 self.why_failed.get(node_id, NotUpdated.UNREACHED),
-                name=self.names.get(node_id, node_id),
             )
             for node_id in self.nodes_failed
         )
+
+    def clauses(self) -> list[str]:
+        """One sentence per node not reached, sorted so a reload does not reshuffle them."""
+        return sorted(why_not_reached(kind, name=name) for name, kind in self.not_updated())
 
 
 @dataclass
@@ -151,6 +163,20 @@ class AddOutcome(ReachOutcome):
 
     def summary(self) -> str:
         """One line for whoever added them. Names each node that does not know them yet."""
+        if self.complete:
+            return self.headline()
+        return f"{self.headline()} {'; '.join(self.clauses())}."
+
+    def headline(self) -> str:
+        """``summary`` in numbers only: how many were added, and what the push did.
+
+        The whole of ``summary`` when every node took them, or none was there to; when a
+        node did not, its opening up to the colon the per-node sentences follow. On its
+        own for a caller that lays those sentences out one per block rather than on the
+        one line, composing each from ``not_updated``. Here rather than copied there: this
+        is the one text the counts are said in, and a second copy would read the same
+        only until this one was reworded.
+        """
         added = f"{len(self.users)} user(s) added"
         if not self.nodes_updated and not self.nodes_failed:
             return (
@@ -165,7 +191,7 @@ class AddOutcome(ReachOutcome):
         return (
             f"{added} and pushed to {len(self.nodes_updated)} node(s), but "
             f"{len(self.nodes_failed)} node(s) could NOT be updated and do not know them "
-            f"yet: {'; '.join(self.clauses())}."
+            "yet:"
         )
 
 

@@ -1,9 +1,13 @@
-"""The bot acts on the owner's commands and on nothing else — M37.2.
+"""The bot acts on the owner's commands and on nothing else — M37.2, M38.1.
 
 WHAT: that ``/adduser`` from the owner's own account adds the people named, pushes them
       and replies with links that answer on ``/sub/``; that a refusal is the panel's
       sentence, creates nothing and points at the panel only when the name is taken;
-      that ``/adduser@<bot>`` is ``/adduser``; that everything else the owner sends
+      that ``/adduser@<bot>`` is ``/adduser``; that a node the add could not update is
+      named with the panel's sentence and ``/apply`` under it, and a node it did update
+      is not; that ``/nodes`` names exactly the serving nodes that are behind, each with
+      its ``/apply``, or says in one sentence that none is, and dials nothing for it;
+      that everything else the owner sends
       gets the usage line; that a stranger — any other id, the owner's id in a group, a
       forward, an edit — gets no call, no user and no log record naming them; that no
       reply text reaches a log; and that a reply too long for one Telegram message is
@@ -32,10 +36,13 @@ import pytest
 from control.app.main import configure_logging
 from control.app.models import AuditAction, AuditEntry
 from control.app.services import apply, onboarding, telegram_bot, users
+from control.app.services.apply import NotUpdated
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
 from control.app.services.telegram_bot import (
     ADDING,
+    APPLY_IT,
     NOTHING_ADDED,
+    NOTHING_BEHIND,
     SEE_THE_PANEL,
     TELEGRAM_MESSAGE_LIMIT,
     USAGE,
@@ -226,8 +233,10 @@ async def test_the_owner_adds_and_the_reply_holds_a_link_that_answers(
         )
     )).all()
     assert len(entries) == 1, "the add through the bot is not on the trail"
-    # The ordinary add carries no summary: the links arriving is the confirmation.
+    # The ordinary add carries no summary: the links arriving is the confirmation —
+    # and no offer to apply, since the one node took them.
     assert "node(s) updated" not in reply and "pushed" not in reply, reply
+    assert "/apply" not in reply, reply
 
 
 async def test_several_names_one_per_line_are_added_together(
@@ -266,21 +275,54 @@ async def test_a_command_addressed_to_the_bot_by_name_is_the_same_command(
     assert len(links_in(reply, settings.public_base_url)) == 1, reply
 
 
-async def test_a_node_that_could_not_be_told_is_named_in_the_reply(
+async def test_a_node_that_could_not_be_told_is_named_with_why_and_its_apply(
     client, session, settings, api, telegram, reality_params, hosts_down
 ) -> None:
-    """The outcome's own summary follows the links, and the links are still there."""
+    """After the links: the add's numbers, then the node not updated — the panel's
+    sentence for it with ``/apply`` under it — and nothing for the node that took them.
+    The numbers line keeps the summary's opening words, which the e2e scenario waits on."""
     await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
     await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
     hosts_down.add(LEAF_ADDRESS)
 
     await the_bot_gets(session, api, settings, an_update("/adduser mira"))
 
+    assert len(telegram.texts) == 2, telegram.texts
     reply = telegram.texts[-1]
     assert len(links_in(reply, settings.public_base_url)) == 1
-    assert "'leaf-ams'" in reply and "could not be reached" in reply, reply
-    assert "1 node(s) could NOT be updated" in reply, reply
+    blocks = reply.split("\n\n")
+    assert blocks[0].startswith("mira\n"), reply
+    assert blocks[1] == (
+        "1 user(s) added and pushed to 1 node(s), but 1 node(s) could NOT be updated and "
+        "do not know them yet:"
+    ), reply
+    why = onboarding.why_not_reached(NotUpdated.UNREACHED, name="leaf-ams")
+    assert "'leaf-ams'" in why and "could not be reached" in why, why
+    assert blocks[2] == f"{why}\napply it: /apply leaf-ams", reply
+    assert len(blocks) == 3, reply
+    assert "/apply entry-ru" not in reply and reply.count("/apply") == 1, reply
     assert LEAF_ADDRESS not in reply and "connection timed out" not in reply
+
+
+async def test_every_node_the_add_could_not_update_gets_its_own_offer(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """Two nodes down: two blocks, sorted by name, one offer each, no offer for anything
+    else — and the headline counts them."""
+    await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+    await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
+    hosts_down.update({ENTRY_ADDRESS, LEAF_ADDRESS})
+
+    await the_bot_gets(session, api, settings, an_update("/adduser mira"))
+
+    reply = telegram.texts[-1]
+    blocks = reply.split("\n\n")
+    assert blocks[1].startswith("1 user(s) added and pushed to 0 node(s), but 2 node(s)"), reply
+    assert [block.splitlines()[-1] for block in blocks[2:]] == [
+        APPLY_IT.format(name="entry-ru"),
+        APPLY_IT.format(name="leaf-ams"),
+    ], reply
+    assert blocks[2].startswith("'entry-ru' ") and blocks[3].startswith("'leaf-ams' "), reply
 
 
 async def test_an_add_no_node_is_serving_says_the_link_resolves_to_nothing(
@@ -352,7 +394,6 @@ async def test_a_refused_list_is_the_services_sentence_and_writes_nothing(
         "/adduser",
         "/adduser   \n  \n",
         "hello",
-        "/nodes",
         "/Adduser mira",
         # Addressed to the bot by name, as a client does for a menu pick: still bare.
         "/adduser@hashi_e2e_bot",
@@ -378,6 +419,92 @@ async def test_a_message_with_no_text_gets_the_usage_line(
     assert telegram.texts == [USAGE]
 
 
+# --- /nodes: which serving nodes are behind, each with its apply ------------------------
+
+
+async def a_node_left_behind(client, hosts_down: set[str], *, address: str) -> None:
+    """Leave the serving node at ``address`` behind what would be pushed, through the API.
+
+    An add whose push could not reach it: the user is on its record and not on its host,
+    which is the state ``/nodes`` is about. Through the API rather than the suite's
+    session on purpose — a node the bot then reads is loaded fresh, not from an identity
+    map that saw it before the push.
+    """
+    hosts_down.add(address)
+    created = await client.post("/api/users", json={"nickname": "mira"})
+    assert created.status_code == 201, created.text
+    hosts_down.discard(address)
+
+
+async def test_nodes_names_exactly_the_serving_node_that_is_behind(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """One of two serving nodes does not hold what would be pushed: the reply is that
+    node in the console's own sentence with ``/apply`` under it, nothing of the one in
+    sync — and nothing is dialled, which every host being unreachable would show."""
+    await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
+    await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+    await a_node_left_behind(client, hosts_down, address=ENTRY_ADDRESS)
+    hosts_down.update({ENTRY_ADDRESS, LEAF_ADDRESS})
+
+    await the_bot_gets(session, api, settings, an_update("/nodes"))
+
+    assert telegram.texts == [
+        "entry-ru is still on the old configuration: your changes have not reached it.\n"
+        "apply it: /apply entry-ru"
+    ], telegram.texts
+    assert telegram.sends[0]["chat_id"] == OWNER
+    assert ENTRY_ADDRESS not in telegram.texts[0]
+
+
+async def test_nodes_with_nothing_behind_is_one_sentence(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """With no node at all, with a serving node holding what it would be given, and
+    addressed to the bot by name with a stray word after it: the same one sentence."""
+    await the_bot_gets(session, api, settings, an_update("/nodes"))
+    await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
+    hosts_down.add(ENTRY_ADDRESS)
+    await the_bot_gets(session, api, settings, an_update("/nodes"))
+    await the_bot_gets(session, api, settings, an_update("/nodes@hashi_e2e_bot please"))
+
+    assert telegram.texts == [NOTHING_BEHIND] * 3, telegram.texts
+    assert "/apply" not in NOTHING_BEHIND
+
+
+async def test_a_node_that_is_behind_is_named_in_the_reply_and_in_no_log_record(
+    client, session, settings, api, telegram, reality_params, hosts_down, caplog
+) -> None:
+    """``/nodes`` naming a node, at DEBUG: no record carries the node's name or the reply."""
+    await a_serving_node(client, reality_params, name="entry-ru", address=ENTRY_ADDRESS)
+    await a_node_left_behind(client, hosts_down, address=ENTRY_ADDRESS)
+    configure_logging()
+
+    with caplog.at_level(logging.DEBUG):
+        await the_bot_gets(session, api, settings, an_update("/nodes"))
+
+    assert len(telegram.texts) == 1 and "apply it: /apply entry-ru" in telegram.texts[0]
+    leaked = sorted(
+        {
+            record.name
+            for record in caplog.records
+            if "entry-ru" in record.getMessage()
+            or telegram.texts[0] in record.getMessage()
+            or "apply it" in record.getMessage()
+        }
+    )
+    assert leaked == [], f"a node's name or the reply reached a log record from: {leaked}"
+
+
+def test_the_usage_line_names_every_command_the_bot_dispatches() -> None:
+    """What the owner is told the bot does is what it dispatches, plus the one command
+    every ``apply it`` line promises."""
+    for command in telegram_bot._COMMANDS:
+        assert command in USAGE, command
+    assert "/apply <name>" in USAGE, USAGE
+    assert APPLY_IT.format(name="leaf-ams") == "apply it: /apply leaf-ams"
+
+
 # --- silence for everyone else ---------------------------------------------------------
 
 
@@ -398,6 +525,9 @@ STRANGERS = {
     ),
     "a forward, the older shape": an_update(forward_date=1, forward_from={"id": STRANGER}),
     "no sender at all": an_update(sender=None),
+    # The gate sits before the dispatch, so a command added later gets it for free —
+    # asserted anyway on the one that reads the fleet.
+    "a stranger's /nodes": an_update("/nodes", sender=STRANGER, chat=STRANGER),
     "an id that is a string": an_update(sender=str(OWNER)),
     "no message at all": {"update_id": 100, "channel_post": {"text": "/adduser mira"}},
 }

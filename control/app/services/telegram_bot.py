@@ -1,10 +1,11 @@
-"""The owner's Telegram commands, and silence for everyone else — M37.2.
+"""The owner's Telegram commands, and silence for everyone else — M37.2, M38.1.
 
 WHAT: ``handle_update`` — given one Telegram update, decide whether it is the owner's
-      own message and, if it is, carry out the one command the bot has (``/adduser``) or
-      answer with the usage line. Everything else about the bot — polling, sessions,
-      backoff, the lifespan task — is the caller's (``services/telegram_poller``): this
-      module opens no session, dials nothing but the replies, and starts no task.
+      own message and, if it is, carry out the command it names (``/adduser``, and since
+      M38.1 ``/nodes``) or answer with the usage line. Everything else about the bot —
+      polling, sessions, backoff, the lifespan task — is the caller's
+      (``services/telegram_poller``): this module opens no session, dials nothing but
+      the replies, and starts no task.
 WHY:  anyone can find a bot by name and message it, so the first thing this module does
       with an update is decide whether it is from the owner, and the decision is taken
       BEFORE any call is made and before any log line is written. A message from anybody
@@ -44,6 +45,16 @@ HOW:  the add is ``onboarding.add_users``, exactly what the panel's dialog calls
       interleave their replies. The serialisation lives where the updates are read, and a
       lock here would state the same rule a second time in the wrong place.
 
+      ``/nodes`` — M38.1 — is the console's own reading of which serving nodes are behind
+      what would be pushed (``console.nodes_missing_what_they_would_be_given``), which
+      dials nothing: the reply is instant and true at the moment it is read, and a bot
+      command never holds an SSH session to the fleet open. Each such node is said in the
+      console's own sentence for a node that is behind (``console.NOT_PUSHED``) with the
+      command that applies it under it; one sentence when there is none. The same offer
+      closes the add's reply for every node the add could
+      not update, under the panel's sentence saying why: the owner is reading on a phone,
+      and the next thing to do is a line in the chat they are in rather than a screen.
+
       THE LOG gets one line from this module, and only when the add has completed and the
       reply carrying the links could not be sent — the one state a person reading the log
       cannot otherwise reconstruct (the users exist and are pushed; the owner never saw
@@ -62,6 +73,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.app.errors import DomainError
 from control.app.models import User
 from control.app.services import console, onboarding, users
+from control.app.services.apply import NotUpdated
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
 
 logger = logging.getLogger(__name__)
@@ -78,9 +90,19 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 # do", rather than a second sentence per way of asking.
 USAGE = (
     "/adduser <nickname> — one nickname per line — adds them, pushes them to every "
-    "serving node and replies with their links. Everything else is on the panel."
+    "serving node and replies with their links. /nodes — which serving nodes are behind "
+    "what would be pushed, with the /apply for each. /apply <name> — the Nodes screen's "
+    "Apply, for that one node. Everything else is on the panel."
 )
 ADDING = "adding, about a minute per node"
+# ``/nodes`` when nothing is behind. "Serving" is the state the sentence holds for —
+# ``console.nodes_missing_what_they_would_be_given`` reads no other kind of node — and a
+# fleet with no serving node at all gets it too, truthfully.
+NOTHING_BEHIND = "Every serving node holds the configuration it would be given."
+# Under a node that is behind — in ``/nodes`` and in the add's reply alike — the command
+# that applies exactly that node, its name written out so the line is sent as it is.
+# ``/apply`` is M38.2's: this step prints the line that step answers.
+APPLY_IT = "apply it: /apply {name}"
 # Under every refusal. True of each one: ``onboarding.add_users`` refuses before it
 # commits, and the one refusal raised after a write has rolled that write back.
 NOTHING_ADDED = "Nothing was added."
@@ -202,10 +224,18 @@ async def _adduser(
         return
 
     blocks = [await _links_block(session, base_url, user) for user in outcome.users]
-    # The outcome's own summary when a node does not know them yet — and when no node was
+    # The outcome's own account when a node does not know them yet — and when no node was
     # told at all, which is the add whose link resolves to nothing until a node serves.
     # Not on the ordinary add: the links arriving after "adding" is the confirmation.
-    if not outcome.complete or not outcome.nodes_updated:
+    if not outcome.complete:
+        # Its numbers first, then one block per node not updated: the panel's sentence
+        # for it, and the command that applies it. Rather than ``outcome.summary()`` as
+        # one block: in a chat each node gets its own, so the offer sits under the node it
+        # is for — and a node that took them is not offered, because there is nothing to
+        # apply to it.
+        blocks.append(outcome.headline())
+        blocks.extend(_not_updated_block(name, kind) for name, kind in outcome.not_updated())
+    elif not outcome.nodes_updated:
         blocks.append(outcome.summary())
     try:
         for text in _messages(blocks):
@@ -217,6 +247,46 @@ async def _adduser(
             len(outcome.users),
             exc,
         )
+
+
+def _not_updated_block(name: str, kind: NotUpdated) -> str:
+    """One node the add could not update: why, in the panel's sentence, then how to apply it.
+
+    Composed from the node's name and the failure's KIND only — ``onboarding``'s rule
+    for the same sentence — never from the failure's own text, which can quote an
+    upstream checker's output and with it a private key.
+    """
+    return f"{onboarding.why_not_reached(kind, name=name)}\n{APPLY_IT.format(name=name)}"
+
+
+def _behind_block(node: console.BehindNode) -> str:
+    """One node that is behind: the console's sentence for it alone, then how to apply it.
+
+    Once per node rather than once for all of them (``console.not_pushed`` composes the
+    same sentence that way): the offer under a line has to be about the node that line
+    names, and a lead naming them all, then a name with an offer under each, said the
+    common one-node reply's name three times. The singular is filled in by hand because
+    the line is being said of exactly one node.
+    """
+    sentence = console.NOT_PUSHED.format(nodes=node.name, is_="is", it="it")
+    return f"{sentence}\n{APPLY_IT.format(name=node.name)}"
+
+
+async def _nodes(
+    session: AsyncSession, api: TelegramApi, chat_id: int, argument: str, *, base_url: str
+) -> None:
+    """Name the serving nodes whose host does not hold what would be pushed, each with the
+    command that applies it; one sentence when there is none.
+
+    What follows ``/nodes`` on the line is ignored: the command takes nothing, and a
+    stray word after it is not a reason to withhold the answer.
+    """
+    behind = await console.nodes_missing_what_they_would_be_given(session)
+    if not behind:
+        await api.send_message(chat_id, NOTHING_BEHIND)
+        return
+    for text in _messages([_behind_block(node) for node in behind]):
+        await api.send_message(chat_id, text)
 
 
 def _refusal(exc: DomainError) -> str:
@@ -290,4 +360,5 @@ def _pieces(blocks: Sequence[str], limit: int) -> Iterator[tuple[str, str]]:
 
 _COMMANDS: dict[str, Handler] = {
     "/adduser": _adduser,
+    "/nodes": _nodes,
 }

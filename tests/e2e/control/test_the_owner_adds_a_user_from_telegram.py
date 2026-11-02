@@ -1,9 +1,11 @@
-"""The owner adds a user from Telegram, and a stranger gets nothing — M37.
+"""The owner adds a user from Telegram, and a stranger gets nothing — M37, M38.
 
 WHAT: through the stand's fake Telegram, the owner's id sends ``/adduser``; the bot's
       reply is read back, the link in it is fetched the way a client would fetch it,
       and the user is found through the API. Then a stranger's id sends the same, and
-      nothing is sent back and nobody is created.
+      nothing is sent back and nobody is created. Then the owner sends ``/nodes`` and
+      gets what the Nodes screen's own block says — on the stand the plan describes,
+      which has no node, the one sentence (M38.1).
 WHY:  M37's three control steps are each proven against a transport they fake
       themselves. What none of them can say is that the real poller, the real client,
       the real add and the real delivery endpoint compose inside the BOOTED control
@@ -27,6 +29,8 @@ shared by every scenario in a run and "which nodes" is whatever ran first.
 """
 
 import asyncio
+import html
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -131,6 +135,24 @@ async def nicknames(operator: httpx.AsyncClient) -> list[str]:
     return [user["nickname"] for user in listed.json()]
 
 
+# The Nodes screen's not-pushed block, one "Apply <name>" button per node it names. The
+# row's own button is lowercase "apply", so the capital is what tells the block's apart.
+APPLY_BUTTON = re.compile(r'<span class="when-idle">Apply ([^<]+)</span>')
+
+
+async def the_nodes_screens_behind_block(operator: httpx.AsyncClient) -> list[str]:
+    """The node names the Nodes screen's block offers an Apply for, as the owner reads it."""
+    table = await operator.get("/panel/nodes/table")
+    assert table.status_code == 200, table.text
+    return [html.unescape(name) for name in APPLY_BUTTON.findall(table.text)]
+
+
+def offered_in(text: str) -> list[str]:
+    """The node names a bot reply offers ``/apply`` for, one line each, in order."""
+    offer = "apply it: /apply "
+    return [line.removeprefix(offer) for line in text.splitlines() if line.startswith(offer)]
+
+
 async def test_the_owner_adds_a_user_and_the_link_in_the_reply_answers(
     polling, telegram, telegram_owner_id: int, client, unique: str
 ) -> None:
@@ -201,3 +223,31 @@ async def test_a_stranger_gets_no_reply_and_creates_nobody(
         "a line in the control plane's log names the stranger — a record of who tried is "
         "a record about a person, and this product keeps none"
     )
+
+
+async def test_nodes_answers_what_the_nodes_screens_block_says(
+    polling, telegram, telegram_owner_id: int, client
+) -> None:
+    """On the stand the plan describes — no node — ``/nodes`` is the one sentence. In a
+    full run this file is not the first, and earlier scenarios leave stub nodes, some of
+    them serving and, once this file's own add has failed to reach them, behind; so what
+    is held is the milestone's own claim: the bot offers ``/apply`` for exactly the nodes
+    the Nodes screen's block names at that moment, and when the block is empty it says
+    the sentence. It dials nothing, so the ceiling is for the poll, not for a push."""
+    before = len(await sent(telegram))
+
+    await inject(telegram, sender=telegram_owner_id, text="/nodes")
+
+    replies = await replies_after(
+        telegram,
+        before,
+        until=lambda new: any(reply["chat_id"] == telegram_owner_id for reply in new),
+        timeout=30,
+    )
+    assert len(replies) == 1, replies
+    text = replies[0]["text"]
+    operator = await logged_in(client)
+    behind = await the_nodes_screens_behind_block(operator)
+    assert sorted(offered_in(text)) == sorted(behind), (text, behind)
+    if not behind:
+        assert text == "Every serving node holds the configuration it would be given.", text
