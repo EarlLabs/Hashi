@@ -1,4 +1,4 @@
-"""The bot acts on the owner's commands and on nothing else — M37.2, M38.1.
+"""The bot acts on the owner's commands and on nothing else — M37.2, M38.1, M38.2.
 
 WHAT: that ``/adduser`` from the owner's own account adds the people named, pushes them
       and replies with links that answer on ``/sub/``; that a refusal is the panel's
@@ -7,11 +7,16 @@ WHAT: that ``/adduser`` from the owner's own account adds the people named, push
       named with the panel's sentence and ``/apply`` under it, and a node it did update
       is not; that ``/nodes`` names exactly the serving nodes that are behind, each with
       its ``/apply``, or says in one sentence that none is, and dials nothing for it;
-      that everything else the owner sends
-      gets the usage line; that a stranger — any other id, the owner's id in a group, a
-      forward, an edit — gets no call, no user and no log record naming them; that no
-      reply text reaches a log; and that a reply too long for one Telegram message is
-      split where a person's links stay together.
+      that ``/apply <name>`` is the Nodes screen's Apply — the node ends in the state
+      and with the trail the API's apply leaves, the reply is the panel's sentence for
+      what was applied and what could not be measured, a refusal or a failure is the
+      sentence the API envelope carries, and nothing of a checker's words or a key ever
+      reaches the chat, even when the envelope's own sentence quotes one; that an
+      unknown name is refused naming what was typed; that everything else the owner
+      sends gets the usage line; that a stranger — any other id, the owner's id in a
+      group, a forward, an edit — gets no call, no user, no apply and no log record
+      naming them; that no reply text reaches a log; and that a reply too long for one
+      Telegram message is split where a person's links stay together.
 WHY:  anyone can find a bot by name and message it. The gate and the silence are what
       make a bot that creates VPN users safe to leave reachable, and silence is the one
       property a green run cannot show by accident: these tests record every request the
@@ -28,19 +33,23 @@ HOW:  ``handle_update`` is driven directly with updates shaped as Telegram shape
 import base64
 import json
 import logging
+import types
 from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from control.app.main import configure_logging
-from control.app.models import AuditAction, AuditEntry
-from control.app.services import apply, onboarding, telegram_bot, users
+from control.app.models import AuditAction, AuditEntry, NodeTransport
+from control.app.services import apply, console, nodes, onboarding, telegram_bot, users
 from control.app.services.apply import NotUpdated
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
 from control.app.services.telegram_bot import (
     ADDING,
+    APPLY_DID_NOT_COMPLETE,
     APPLY_IT,
+    APPLYING,
     NOTHING_ADDED,
     NOTHING_BEHIND,
     SEE_THE_PANEL,
@@ -49,6 +58,7 @@ from control.app.services.telegram_bot import (
     handle_update,
 )
 from edge.bootstrap.ssh import NodeUnreachable
+from edge.health import listening
 
 from .conftest import GENERATED_SSH_KEY, AcceptingNode, a_user_no_node_was_told_about
 
@@ -167,8 +177,8 @@ def hosts_down(accepting_nodes, monkeypatch) -> set[str]:
     return down
 
 
-async def a_serving_node(client, reality_params, *, name: str, address: str) -> str:
-    """One node with one transport, applied and in service."""
+async def a_node(client, *, name: str, address: str) -> str:
+    """One node registered with a key and nothing enabled on it — a draft."""
     created = await client.post(
         "/api/nodes",
         json={
@@ -180,12 +190,23 @@ async def a_serving_node(client, reality_params, *, name: str, address: str) -> 
         },
     )
     assert created.status_code == 201, created.text
-    node_id = created.json()["id"]
+    return created.json()["id"]
+
+
+async def a_node_with_a_transport(client, reality_params, *, name: str, address: str) -> str:
+    """One node with one transport enabled and never applied — still a draft."""
+    node_id = await a_node(client, name=name, address=address)
     enabled = await client.post(
         f"/api/nodes/{node_id}/transports",
         json={"transport_name": "vless-reality", "params": reality_params},
     )
     assert enabled.status_code == 201, enabled.text
+    return node_id
+
+
+async def a_serving_node(client, reality_params, *, name: str, address: str) -> str:
+    """One node with one transport, applied and in service."""
+    node_id = await a_node_with_a_transport(client, reality_params, name=name, address=address)
     applied = await client.post(f"/api/nodes/{node_id}/apply")
     assert applied.status_code == 200, applied.text
     return node_id
@@ -398,6 +419,9 @@ async def test_a_refused_list_is_the_services_sentence_and_writes_nothing(
         # Addressed to the bot by name, as a client does for a menu pick: still bare.
         "/adduser@hashi_e2e_bot",
         "/help@hashi_e2e_bot",
+        "/apply",
+        "/apply   \n",
+        "/apply@hashi_e2e_bot",
     ],
 )
 async def test_everything_else_from_the_owner_gets_the_usage_line(
@@ -497,12 +521,291 @@ async def test_a_node_that_is_behind_is_named_in_the_reply_and_in_no_log_record(
 
 
 def test_the_usage_line_names_every_command_the_bot_dispatches() -> None:
-    """What the owner is told the bot does is what it dispatches, plus the one command
-    every ``apply it`` line promises."""
+    """What the owner is told the bot does is what it dispatches — and the command every
+    ``apply it`` line promises is one of them."""
     for command in telegram_bot._COMMANDS:
         assert command in USAGE, command
     assert "/apply <name>" in USAGE, USAGE
+    assert "/apply" in telegram_bot._COMMANDS
     assert APPLY_IT.format(name="leaf-ams") == "apply it: /apply leaf-ams"
+
+
+# --- /apply <name>: the Nodes screen's Apply, from the phone ----------------------------
+
+
+async def trail_for(session, name: str) -> list[tuple[AuditAction, str | None]]:
+    """Every trail entry about the node called ``name``, as a sorted list.
+
+    Sorted by content rather than by time: one apply writes its two entries in one
+    transaction with one timestamp, and ids are random, so a time order is not one."""
+    table = AuditEntry.__table__
+    rows = await session.execute(table.select().where(table.c.first_label == name))
+    return sorted((row.action, row.second_label or "") for row in rows.all())
+
+
+async def the_node(client, node_id: str) -> dict[str, Any]:
+    shown = await client.get(f"/api/nodes/{node_id}")
+    assert shown.status_code == 200, shown.text
+    return shown.json()
+
+
+async def test_an_apply_from_the_bot_leaves_the_node_as_the_apis_apply_would(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """Two drafts, one applied through the API and one through the bot: both end active
+    with the same trail — a node taken INTO service, which is the move the add's fan-out
+    refuses — and the reply is "applying" first, then the panel's sentence naming what
+    the API says was applied, and nothing else."""
+    entry = await a_node_with_a_transport(
+        client, reality_params, name="entry-ru", address=ENTRY_ADDRESS
+    )
+    leaf = await a_node_with_a_transport(
+        client, reality_params, name="leaf-ams", address=LEAF_ADDRESS
+    )
+    through_the_api = await client.post(f"/api/nodes/{entry}/apply")
+    assert through_the_api.status_code == 200, through_the_api.text
+
+    await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert telegram.texts == [
+        "applying leaf-ams — about a minute",
+        console.applied_toast("leaf-ams", through_the_api.json()["transports_applied"]),
+    ], telegram.texts
+    assert telegram.texts[1] == "config applied to leaf-ams — vless-reality"
+    assert all(payload["chat_id"] == OWNER for payload in telegram.sends)
+    by_api, by_bot = await the_node(client, entry), await the_node(client, leaf)
+    assert by_bot["state"] == "active" == by_api["state"], (by_bot, by_api)
+    for field in ("state_detail", "last_probe_finding", "last_probe_at"):
+        assert by_bot[field] == by_api[field], field
+    trail = await trail_for(session, "leaf-ams")
+    assert trail == await trail_for(session, "entry-ru"), trail
+    assert {(AuditAction.NODE_STATE_CHANGED, "active"), (AuditAction.NODE_APPLIED, "")} <= set(
+        trail
+    ), trail
+
+
+async def test_an_apply_that_could_not_measure_a_transport_says_so_in_the_panels_sentence(
+    client, session, settings, api, telegram, reality_params, hosts_down, monkeypatch
+) -> None:
+    """A host whose socket table cannot be read: the apply lands and the node is active,
+    and the reply is the panel's qualified sentence, not the one for a measured apply."""
+    node_id = await a_node_with_a_transport(
+        client, reality_params, name="leaf-ams", address=LEAF_ADDRESS
+    )
+
+    async def unreadable(connection):
+        return None
+
+    monkeypatch.setattr(listening, "bound_ports", unreadable)
+
+    await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert len(telegram.texts) == 2, telegram.texts
+    reply = telegram.texts[1]
+    assert reply == console.applied_unmeasured("leaf-ams", ["vless-reality"], ("vless-reality",))
+    assert reply.startswith(
+        "config applied to leaf-ams — vless-reality. Not measured serving: vless-reality."
+    ), reply
+    assert (await the_node(client, node_id))["state"] == "active"
+
+
+@pytest.mark.parametrize("parked", ["nothing enabled", "retired"])
+async def test_a_refusal_is_the_sentence_the_api_envelope_carries_and_moves_nothing(
+    client, session, settings, api, telegram, reality_params, hosts_down, parked
+) -> None:
+    """The two refusals the plan names, each answered with the very sentence the API's
+    own apply of the same node answers — and the node as it was, both times."""
+    node_id = await a_node(client, name="leaf-ams", address=LEAF_ADDRESS)
+    if parked == "retired":
+        retired = await client.post(f"/api/nodes/{node_id}/state", json={"state": "retired"})
+        assert retired.status_code == 200, retired.text
+    envelope = await client.post(f"/api/nodes/{node_id}/apply")
+    assert envelope.status_code == 409, envelope.text
+    before = await the_node(client, node_id)
+
+    await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert telegram.texts == [
+        APPLYING.format(name="leaf-ams"),
+        envelope.json()["error"]["message"],
+    ], telegram.texts
+    assert SEE_THE_PANEL not in telegram.texts[1] and NOTHING_ADDED not in telegram.texts[1]
+    assert await the_node(client, node_id) == before
+
+
+async def test_a_host_that_could_not_be_reached_is_answered_as_the_api_answers_it(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """A serving node the apply cannot reach: the API's own sentence, which says the node
+    stays in users' links — and it does. The reply names no address."""
+    node_id = await a_serving_node(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+    hosts_down.add(LEAF_ADDRESS)
+    envelope = await client.post(f"/api/nodes/{node_id}/apply")
+    assert envelope.status_code == 502, envelope.text
+
+    await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert telegram.texts == [
+        APPLYING.format(name="leaf-ams"),
+        envelope.json()["error"]["message"],
+    ], telegram.texts
+    assert telegram.texts[1].startswith("the node could not be reached, so nothing was pushed")
+    assert LEAF_ADDRESS not in telegram.texts[1]
+    assert (await the_node(client, node_id))["state"] == "active"
+
+
+def fragments(secret: str, size: int = 12) -> list[str]:
+    """Every run of ``size`` characters in ``secret`` — what a partial leak looks like."""
+    return [secret[i : i + size] for i in range(len(secret) - size + 1)]
+
+
+async def test_a_failure_whose_message_quotes_a_key_reaches_the_chat_without_it(
+    client, session, settings, api, telegram, reality_params, hosts_down, monkeypatch, caplog
+) -> None:
+    """The premise first — the API's envelope for this apply really does carry the node's
+    private key, the shape ``apply.validate_before_push`` warns of — then the claim: the
+    bot's reply is the panel's sentence for the KIND and holds neither a fragment of the
+    key nor the checker's words. ``pytest.fail`` with a label rather than ``assert`` on
+    the reply, so a failure never prints the value into the CI log."""
+    node_id = await a_node_with_a_transport(
+        client, reality_params, name="leaf-ams", address=LEAF_ADDRESS
+    )
+    row = (
+        await session.execute(select(NodeTransport).where(NodeTransport.node_id == node_id))
+    ).scalars().one()
+    secret = nodes.render_params(row)["private_key"]
+
+    def the_checker(config: str, *, config_format):
+        # What Xray's own checker prints about a Reality key, the key first so the
+        # 300-character cut in ``apply.validate_before_push`` keeps all of it.
+        return types.SimpleNamespace(
+            available=True, ok=False, output=f'invalid "privateKey": {secret}'
+        )
+
+    monkeypatch.setattr(apply.checker, "validate", the_checker)
+    envelope = await client.post(f"/api/nodes/{node_id}/apply")
+    assert envelope.status_code == 502, envelope.status_code
+    if secret not in envelope.json()["error"]["message"]:
+        pytest.fail("premise failed: the API's envelope did not carry the key; nothing is proven")
+    configure_logging()
+
+    with caplog.at_level(logging.DEBUG):
+        await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert len(telegram.texts) == 2, len(telegram.texts)
+    for text in telegram.texts:
+        if "privateKey" in text or any(fragment in text for fragment in fragments(secret)):
+            pytest.fail("a reply carries the checker's words or part of the node's private key")
+    for record in caplog.records:
+        if any(fragment in record.getMessage() for fragment in fragments(secret)):
+            pytest.fail(f"a log record from {record.name} carries part of the node's key")
+    reply = telegram.texts[1]
+    assert reply == onboarding.why_not_reached(NotUpdated.REFUSED, name="leaf-ams"), reply
+    assert reply.startswith("'leaf-ams' could not be given a configuration"), reply
+    assert "the Nodes screen" in reply, reply
+    assert (await the_node(client, node_id))["state"] == "draft"
+
+
+MARKER = "MARKER-a-private-key-would-be-in-here-7f3a9c"
+
+
+async def test_a_failure_that_is_not_in_words_gets_the_fixed_sentence_and_propagates(
+    client, session, settings, api, telegram, reality_params, hosts_down, monkeypatch, caplog
+) -> None:
+    """A non-domain failure out of the apply: the one fixed sentence naming the node and
+    the Nodes screen, then the failure itself for the caller to log — and its text, at
+    root DEBUG, in no reply and no log record."""
+    await a_node_with_a_transport(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+
+    async def broken(session, *, node_id, only_if_serving=False):
+        raise RuntimeError(MARKER)
+
+    monkeypatch.setattr(apply, "apply_node", broken)
+    configure_logging()
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(RuntimeError):
+        await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert telegram.texts == [
+        APPLYING.format(name="leaf-ams"),
+        "applying leaf-ams did not complete — the Nodes screen shows the state it was "
+        "left in; what failed is in the control plane's log.",
+    ], telegram.texts
+    assert telegram.texts[1] == APPLY_DID_NOT_COMPLETE.format(name="leaf-ams")
+    leaked = sorted({r.name for r in caplog.records if MARKER in r.getMessage()})
+    assert leaked == [], f"the failure's text reached a log record from: {leaked}"
+
+    # And when that sentence cannot be sent either, what propagates is still the apply's
+    # own failure, not Telegram's.
+    telegram.failing.add(3)  # the fourth sendMessage: the second command's fixed sentence
+    with pytest.raises(RuntimeError):
+        await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+    assert len(telegram.texts) == 4, telegram.texts
+
+
+async def test_the_name_is_the_whole_argument_matched_exactly_and_an_unknown_one_is_refused(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """A name with a space in it applies when typed as it is — addressed to the bot by
+    name too — and any other spelling is refused in a sentence naming what was typed,
+    with no "applying" before it and nothing dialled, which the host being down for the
+    refused two would otherwise show."""
+    node_id = await a_node_with_a_transport(
+        client, reality_params, name="leaf ams", address=LEAF_ADDRESS
+    )
+
+    await the_bot_gets(session, api, settings, an_update("/apply@hashi_e2e_bot leaf ams"))
+    hosts_down.add(LEAF_ADDRESS)
+    await the_bot_gets(session, api, settings, an_update("/apply Leaf ams"))
+    await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert telegram.texts == [
+        "applying leaf ams — about a minute",
+        "config applied to leaf ams — vless-reality",
+        "no node named 'Leaf ams'",
+        "no node named 'leaf-ams'",
+    ], telegram.texts
+    assert (await the_node(client, node_id))["last_probe_finding"] is None
+
+
+async def test_a_strangers_apply_changes_nothing_and_answers_nothing(
+    client, session, settings, api, telegram, reality_params, hosts_down
+) -> None:
+    """The gate sits before the dispatch; asserted on the command that changes a host."""
+    node_id = await a_node_with_a_transport(
+        client, reality_params, name="leaf-ams", address=LEAF_ADDRESS
+    )
+
+    await the_bot_gets(
+        session, api, settings, an_update("/apply leaf-ams", sender=STRANGER, chat=STRANGER)
+    )
+
+    assert telegram.requests == [], "the bot called Telegram about a stranger"
+    assert (await the_node(client, node_id))["state"] == "draft"
+    actions = {action for action, _ in await trail_for(session, "leaf-ams")}
+    assert AuditAction.NODE_APPLIED not in actions and AuditAction.NODE_STATE_CHANGED not in actions
+
+
+async def test_an_apply_is_named_in_the_reply_and_in_no_log_record(
+    client, session, settings, api, telegram, reality_params, hosts_down, caplog
+) -> None:
+    """``/apply`` at DEBUG: no record carries the node's name or either reply."""
+    await a_node_with_a_transport(client, reality_params, name="leaf-ams", address=LEAF_ADDRESS)
+    configure_logging()
+
+    with caplog.at_level(logging.DEBUG):
+        await the_bot_gets(session, api, settings, an_update("/apply leaf-ams"))
+
+    assert len(telegram.texts) == 2 and telegram.texts[1].startswith("config applied to")
+    leaked = sorted(
+        {
+            record.name
+            for record in caplog.records
+            if "leaf-ams" in record.getMessage()
+            or any(sent in record.getMessage() for sent in telegram.texts)
+        }
+    )
+    assert leaked == [], f"a node's name or a reply reached a log record from: {leaked}"
 
 
 # --- silence for everyone else ---------------------------------------------------------
@@ -526,8 +829,9 @@ STRANGERS = {
     "a forward, the older shape": an_update(forward_date=1, forward_from={"id": STRANGER}),
     "no sender at all": an_update(sender=None),
     # The gate sits before the dispatch, so a command added later gets it for free —
-    # asserted anyway on the one that reads the fleet.
+    # asserted anyway on the one that reads the fleet and the one that changes a host.
     "a stranger's /nodes": an_update("/nodes", sender=STRANGER, chat=STRANGER),
+    "a stranger's /apply": an_update("/apply entry-ru", sender=STRANGER, chat=STRANGER),
     "an id that is a string": an_update(sender=str(OWNER)),
     "no message at all": {"update_id": 100, "channel_post": {"text": "/adduser mira"}},
 }

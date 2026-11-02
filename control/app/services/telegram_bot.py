@@ -1,8 +1,9 @@
-"""The owner's Telegram commands, and silence for everyone else — M37.2, M38.1.
+"""The owner's Telegram commands, and silence for everyone else — M37.2, M38.1, M38.2.
 
 WHAT: ``handle_update`` — given one Telegram update, decide whether it is the owner's
-      own message and, if it is, carry out the command it names (``/adduser``, and since
-      M38.1 ``/nodes``) or answer with the usage line. Everything else about the bot —
+      own message and, if it is, carry out the command it names (``/adduser``; since
+      M38.1 ``/nodes``; since M38.2 ``/apply``) or answer with the usage line. Everything
+      else about the bot —
       polling, sessions, backoff, the lifespan task — is the caller's
       (``services/telegram_poller``): this module opens no session, dials nothing but
       the replies, and starts no task.
@@ -51,9 +52,36 @@ HOW:  the add is ``onboarding.add_users``, exactly what the panel's dialog calls
       command never holds an SSH session to the fleet open. Each such node is said in the
       console's own sentence for a node that is behind (``console.NOT_PUSHED``) with the
       command that applies it under it; one sentence when there is none. The same offer
-      closes the add's reply for every node the add could
-      not update, under the panel's sentence saying why: the owner is reading on a phone,
-      and the next thing to do is a line in the chat they are in rather than a screen.
+      closes the add's reply for every node the add could not update, under the panel's
+      sentence saying why: the owner is reading on a phone, and the next thing to do is a
+      line in the chat they are in rather than a screen.
+
+      ``/apply <name>`` — M38.2 — is the Nodes screen's Apply and not the add's fan-out:
+      ``apply.apply_node`` with the fan-out's guard left off, so it may take a node into
+      service and marks it degraded on a failure after the first byte, exactly as the
+      button does. One node per command, named by its name as typed and nothing looser —
+      a name that matches nothing is refused in a sentence naming it, before anything is
+      said about applying. The two-reply shape is ``/adduser``'s, for the same reason: an
+      apply is tens of seconds and the phone has no spinner. THE SECOND REPLY IS NEVER
+      ``str(exc)`` AND NEVER A CONFIG. A success is said in the panel's own sentence for
+      it, which names the configs applied and, when the apply could not take the serving
+      reading, which ones. A refusal or a failure is the sentence the API envelope would
+      carry — except ``ConfigRefused``, the one failure whose own type says its message
+      may carry an upstream checker's words, and with them a node's private key
+      (``errors.ConfigRefused``; ``apply.validate_before_push``). The panel shows that
+      one on a banner behind the operator's session; a chat passes through a third
+      party's servers and stays on every device the owner is logged in on, so here it is
+      said the way the add's reply says a node it could not update — from the failure's
+      KIND and the node's name (``onboarding.why_not_reached``), a sentence that ends by
+      sending the owner to the Nodes screen to read the words. Rejected: the kind's
+      sentence for every failure, which would lose the API's own account of a host that
+      could not be reached or has nothing to apply. Anything else out of the apply — not
+      a refusal, not a failure the apply itself put into words — is answered with one
+      fixed sentence naming the node and the screen that shows what became of it, and
+      then re-raised untouched for the caller to log by type: unlike the add, whose
+      links reply is the whole point and whose absence the log explains, an apply that
+      stopped mid-way has left a node in SOME state, and the owner holding a phone needs
+      to be told to go and look rather than left waiting for a second reply.
 
       THE LOG gets one line from this module, and only when the add has completed and the
       reply carrying the links could not be sent — the one state a person reading the log
@@ -63,6 +91,7 @@ HOW:  the add is ``onboarding.add_users``, exactly what the panel's dialog calls
       is, for the caller to log once.
 """
 
+import contextlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterator, Sequence
@@ -70,9 +99,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import DomainError
+from control.app.errors import ConfigRefused, DomainError, NotFound
 from control.app.models import User
-from control.app.services import console, onboarding, users
+from control.app.services import apply, console, onboarding, relocation, users
 from control.app.services.apply import NotUpdated
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
 
@@ -95,13 +124,23 @@ USAGE = (
     "Apply, for that one node. Everything else is on the panel."
 )
 ADDING = "adding, about a minute per node"
+# ``/apply`` before the apply, naming the node as the reply after it will. "About a
+# minute" is the apply's own settle window plus the dial, and it is a promise about this
+# one host — the command takes one.
+APPLYING = "applying {name} — about a minute"
+# ``/apply`` when the apply raised something that is not a sentence of its own. It claims
+# nothing about the node's state — a failure inside the push has marked it degraded, one
+# before the push has not — and says where the state is read instead.
+APPLY_DID_NOT_COMPLETE = (
+    "applying {name} did not complete — the Nodes screen shows the state it was left in; "
+    "what failed is in the control plane's log."
+)
 # ``/nodes`` when nothing is behind. "Serving" is the state the sentence holds for —
 # ``console.nodes_missing_what_they_would_be_given`` reads no other kind of node — and a
 # fleet with no serving node at all gets it too, truthfully.
 NOTHING_BEHIND = "Every serving node holds the configuration it would be given."
 # Under a node that is behind — in ``/nodes`` and in the add's reply alike — the command
 # that applies exactly that node, its name written out so the line is sent as it is.
-# ``/apply`` is M38.2's: this step prints the line that step answers.
 APPLY_IT = "apply it: /apply {name}"
 # Under every refusal. True of each one: ``onboarding.add_users`` refuses before it
 # commits, and the one refusal raised after a write has rolled that write back.
@@ -262,8 +301,8 @@ def _not_updated_block(name: str, kind: NotUpdated) -> str:
 def _behind_block(node: console.BehindNode) -> str:
     """One node that is behind: the console's sentence for it alone, then how to apply it.
 
-    Once per node rather than once for all of them (``console.not_pushed`` composes the
-    same sentence that way): the offer under a line has to be about the node that line
+    Once per node rather than once for all of them, which is ``console.not_pushed``'s
+    shape: the offer under a line has to be about the node that line
     names, and a lead naming them all, then a name with an offer under each, said the
     common one-node reply's name three times. The singular is filled in by hand because
     the line is being said of exactly one node.
@@ -287,6 +326,75 @@ async def _nodes(
         return
     for text in _messages([_behind_block(node) for node in behind]):
         await api.send_message(chat_id, text)
+
+
+async def _apply(
+    session: AsyncSession, api: TelegramApi, chat_id: int, argument: str, *, base_url: str
+) -> None:
+    """Apply the one node named — the Nodes screen's Apply — and say what that did.
+
+    The whole of what follows ``/apply`` is the name (a name may hold spaces); only the
+    whitespace around it is the separator. Nothing is lowered and nothing is matched
+    loosely: ``relocation.node_by_name`` finds the node called exactly that, which is
+    the lookup the shell's ``relocate-node`` resolves a name with, and its refusal is the
+    sentence sent back. ``name`` is read off the row before the apply and never off the
+    object after it, for the reason the panel's button gives: a refusal out of the
+    fan-out an apply runs rolls the session back, and ``node.name`` on an expired object
+    is lazy IO on an async session.
+    """
+    name = argument.strip()
+    if not name:
+        await api.send_message(chat_id, USAGE)
+        return
+    try:
+        node = await relocation.node_by_name(session, name)
+    except NotFound as exc:
+        await api.send_message(chat_id, exc.message)
+        return
+    node_id, node_name = node.id, node.name
+    # Sent BEFORE the apply, and not inside a ``try``, for ``ADDING``'s reason: an
+    # acknowledgement that could not reach its author means no apply, and the failure
+    # propagates for the caller to log.
+    await api.send_message(chat_id, APPLYING.format(name=node_name))
+    try:
+        applied = await apply.apply_node(session, node_id=node_id)
+    except ConfigRefused as exc:
+        # The one message that may carry a checker's words, and with them a key — the
+        # module header says why it is the exception. Said from the kind and the name, as
+        # the add's reply says it; the kind is asked of ``apply`` rather than fixed here,
+        # so a render refused for a missing resolver gets the sentence naming the resolver.
+        await api.send_message(
+            chat_id, onboarding.why_not_reached(apply.why_not_updated(exc), name=node_name)
+        )
+        return
+    except DomainError as exc:
+        # A refusal (nothing to apply, a state the machine will not let serve) or a
+        # failure (not reached, not serving what it was given): the sentence the API
+        # envelope carries, which is the one the panel's banner shows, and the node's row
+        # already records whatever the apply did to its state.
+        await api.send_message(chat_id, exc.message)
+        return
+    except Exception:
+        # One fixed sentence, then the failure itself, untouched, for the caller to log —
+        # the module header says why this differs from the add. Best effort: a Telegram
+        # that cannot be reached here must not replace the apply's own failure as the
+        # thing that propagates.
+        with contextlib.suppress(TelegramCallFailed):
+            await api.send_message(chat_id, APPLY_DID_NOT_COMPLETE.format(name=node_name))
+        raise
+    # The panel's own two answers, chosen the way its button chooses: an apply that
+    # could not take the serving reading for a config is not said the way a measured one
+    # is — "applied" alone reads as "applied and checked".
+    if applied.unmeasured:
+        text = console.applied_unmeasured(
+            node_name, sorted(applied.configs), applied.unmeasured
+        )
+    else:
+        text = console.applied_toast(node_name, sorted(applied.configs), applied.restarted)
+    # Not guarded the way the links reply is: the apply's own log line already says what
+    # happened to the node, and the Nodes screen shows it, so a reply that could not be
+    # sent is the caller's one line and nothing a reader of the log cannot reconstruct.
+    await api.send_message(chat_id, text)
 
 
 def _refusal(exc: DomainError) -> str:
@@ -361,4 +469,5 @@ def _pieces(blocks: Sequence[str], limit: int) -> Iterator[tuple[str, str]]:
 _COMMANDS: dict[str, Handler] = {
     "/adduser": _adduser,
     "/nodes": _nodes,
+    "/apply": _apply,
 }

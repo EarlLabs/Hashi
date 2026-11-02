@@ -3,9 +3,10 @@
 WHAT: through the stand's fake Telegram, the owner's id sends ``/adduser``; the bot's
       reply is read back, the link in it is fetched the way a client would fetch it,
       and the user is found through the API. Then a stranger's id sends the same, and
-      nothing is sent back and nobody is created. Then the owner sends ``/nodes`` and
-      gets what the Nodes screen's own block says — on the stand the plan describes,
-      which has no node, the one sentence (M38.1).
+      nothing is sent back and nobody is created. Then the owner sends ``/apply`` with
+      a name no node has and is refused in a sentence naming it (M38.2). Then the owner
+      sends ``/nodes`` and gets what the Nodes screen's own block says — on the stand
+      the plan describes, which has no node, the one sentence (M38.1).
 WHY:  M37's three control steps are each proven against a transport they fake
       themselves. What none of them can say is that the real poller, the real client,
       the real add and the real delivery endpoint compose inside the BOOTED control
@@ -223,6 +224,28 @@ async def test_a_stranger_gets_no_reply_and_creates_nobody(
         "a line in the control plane's log names the stranger — a record of who tried is "
         "a record about a person, and this product keeps none"
     )
+
+
+async def test_apply_of_a_name_the_stand_does_not_have_is_refused_in_words(
+    polling, telegram, telegram_owner_id: int, unique: str
+) -> None:
+    """``/apply`` of a node that does not exist: exactly one reply, the sentence naming
+    what was typed, and no "applying" before it. The name carries the run's suffix so no
+    node an earlier scenario left can be the one it names; nothing is dialled for an
+    unknown name, so the ceiling is for the poll."""
+    name = f"no-such-node-{unique}"
+    before = len(await sent(telegram))
+
+    await inject(telegram, sender=telegram_owner_id, text=f"/apply {name}")
+
+    replies = await replies_after(
+        telegram,
+        before,
+        until=lambda new: any(reply["chat_id"] == telegram_owner_id for reply in new),
+        timeout=30,
+    )
+    assert len(replies) == 1, replies
+    assert replies[0]["text"] == f"no node named '{name}'", replies[0]["text"]
 
 
 async def test_nodes_answers_what_the_nodes_screens_block_says(
