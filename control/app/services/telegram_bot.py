@@ -21,8 +21,9 @@ HOW:  the add is ``onboarding.add_users``, exactly what the panel's dialog calls
       to and the owner is looking at a phone with no spinner on it; then the links, one
       block per person, built from ``console.links_for`` so the bot and the panel cannot
       hand a link over differently. A refusal — a ``DomainError`` out of the add — is
-      answered with the service's own sentence, the one the panel shows, and one line
-      pointing at the panel for what the bot does not do (re-send an existing user's
+      answered with the service's own sentence, the one the panel shows, and that nothing
+      was added; when what was refused already exists (a ``Conflict``), one more sentence
+      points at the panel for what the bot does not do (re-send an existing user's
       links). The order of the two replies is load-bearing: if the "adding" message cannot
       be sent, the add is NOT started and the failure propagates — a command whose
       acknowledgement could not reach its author is re-sent by its author when Telegram is
@@ -58,7 +59,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import DomainError
+from control.app.errors import Conflict, DomainError
 from control.app.models import User
 from control.app.services import console, onboarding
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
@@ -82,15 +83,17 @@ USAGE = (
 ADDING = "adding, about a minute per node"
 # Under every refusal. True of each one: ``onboarding.add_users`` refuses before it
 # commits, and the one refusal raised after a write has rolled that write back.
-NOTHING_ADDED = (
-    "Nothing was added. The panel shows every user and their links; the bot never "
-    "re-sends a link."
-)
+NOTHING_ADDED = "Nothing was added."
+# After NOTHING_ADDED, and only when what was refused already exists — the one refusal
+# whose answer is on the panel. It used to close every refusal, where under "a nickname
+# must be 64 characters or fewer" it read as a non-sequitur (M37 acceptance).
+SEE_THE_PANEL = "The panel shows every user and their links; the bot never re-sends a link."
 
-# A command is the first token when it starts with ``/``: the name, then the rest of the
-# text — whatever follows on the same line and every line after it. Nothing is lowered or
-# trimmed off the name, so ``/adduser`` is the command and ``/Adduser`` is text.
-_COMMAND = re.compile(r"\A\s*(/\w+)(.*)\Z", re.DOTALL)
+# A command is the first token when it starts with ``/``: everything up to the first
+# whitespace, then the rest of the text — whatever follows on the same line and every
+# line after it. Nothing is lowered, so ``/adduser`` is the command and ``/Adduser`` is
+# text; the one thing cut off the token is an ``@…`` tail, and ``_parse`` says why.
+_COMMAND = re.compile(r"\A\s*(/\S+)(.*)\Z", re.DOTALL)
 
 # One handler per command, all with ``_adduser``'s signature, so a command is one entry
 # here and one function. The dispatch is a mapping rather than a chain of ``if`` so that
@@ -161,11 +164,22 @@ def _id_of(record: dict[str, Any]) -> int | None:
 
 
 def _parse(text: str) -> tuple[str | None, str]:
-    """The command the text starts with and what follows it; ``None`` when it is not one."""
+    """The command the text starts with and what follows it; ``None`` when it is not one.
+
+    ``/command@botname`` is Telegram's own form for a command aimed at one bot — what a
+    client sends in a group, and some send for a pick from the bot's menu — so the ``@``
+    and everything after it on the token are dropped before dispatch: ``/adduser@x hank``
+    adds ``hank``, and ``/adduser@x`` alone is a bare ``/adduser``. The tail is NOT
+    compared to the bot's username: this module is never told it, and the only chat a
+    message reaches here from is the owner's private one, where there is no second bot
+    the tail could be telling apart. Before this, the token ended at the first
+    non-word character and ``@hashi_e2e_bot`` went on to be the nickname.
+    """
     match = _COMMAND.match(text)
     if match is None:
         return None, text
-    return match.group(1), match.group(2)
+    token, rest = match.group(1), match.group(2)
+    return token.partition("@")[0], rest
 
 
 async def _adduser(
@@ -184,7 +198,7 @@ async def _adduser(
     try:
         outcome = await onboarding.add_users(session, nicknames=wanted)
     except DomainError as exc:
-        await api.send_message(chat_id, f"{exc.message}\n\n{NOTHING_ADDED}")
+        await api.send_message(chat_id, _refusal(exc))
         return
 
     blocks = [await _links_block(session, base_url, user) for user in outcome.users]
@@ -203,6 +217,22 @@ async def _adduser(
             len(outcome.users),
             exc,
         )
+
+
+def _refusal(exc: DomainError) -> str:
+    """The service's own sentence, then that nothing was added — and, when what was
+    refused already exists, where it is.
+
+    Told apart by the exception's TYPE, not its sentence: ``Conflict`` is the service's
+    word for a request that contradicts something that exists, which is what the panel
+    shows; a plain ``DomainError`` is the list itself being wrong, and the panel has
+    nothing to show for that. Matching the sentence was rejected — it would hold until
+    the service reworded it, and nothing here would go red. Since the trigger is the
+    class, a ``Conflict`` that is not a taken name carries the pointer too; a type of the
+    taken name's own would be the service's to add, not this module's to guess at.
+    """
+    closing = f"{NOTHING_ADDED} {SEE_THE_PANEL}" if isinstance(exc, Conflict) else NOTHING_ADDED
+    return f"{exc.message}\n\n{closing}"
 
 
 async def _links_block(session: AsyncSession, base_url: str, user: User) -> str:

@@ -2,11 +2,12 @@
 
 WHAT: that ``/adduser`` from the owner's own account adds the people named, pushes them
       and replies with links that answer on ``/sub/``; that a refusal is the panel's
-      sentence and creates nothing; that everything else the owner sends gets the usage
-      line; that a stranger — any other id, the owner's id in a group, a forward, an
-      edit — gets no call, no user and no log record naming them; that no reply text
-      reaches a log; and that a reply too long for one Telegram message is split where
-      a person's links stay together.
+      sentence, creates nothing and points at the panel only when the name is taken;
+      that ``/adduser@<bot>`` is ``/adduser``; that everything else the owner sends
+      gets the usage line; that a stranger — any other id, the owner's id in a group, a
+      forward, an edit — gets no call, no user and no log record naming them; that no
+      reply text reaches a log; and that a reply too long for one Telegram message is
+      split where a person's links stay together.
 WHY:  anyone can find a bot by name and message it. The gate and the silence are what
       make a bot that creates VPN users safe to leave reachable, and silence is the one
       property a green run cannot show by accident: these tests record every request the
@@ -30,11 +31,12 @@ import pytest
 
 from control.app.main import configure_logging
 from control.app.models import AuditAction, AuditEntry
-from control.app.services import apply, onboarding, telegram_bot
+from control.app.services import apply, onboarding, telegram_bot, users
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
 from control.app.services.telegram_bot import (
     ADDING,
     NOTHING_ADDED,
+    SEE_THE_PANEL,
     TELEGRAM_MESSAGE_LIMIT,
     USAGE,
     handle_update,
@@ -244,6 +246,26 @@ async def test_several_names_one_per_line_are_added_together(
     assert len(reply) <= TELEGRAM_MESSAGE_LIMIT
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["/adduser@hashi_e2e_bot hank", "/adduser@hashi_e2e_bot\nhank"],
+    ids=["on the same line", "on the next line"],
+)
+async def test_a_command_addressed_to_the_bot_by_name_is_the_same_command(
+    client, session, settings, api, telegram, text
+) -> None:
+    """``/adduser@<bot>`` is Telegram's form for a command aimed at one bot: the ``@…``
+    is dropped, not taken as the nickname — the M37 acceptance walk had it add a user
+    called ``@hashi_e2e_bot``. The token ends at the first whitespace, newline included."""
+    await the_bot_gets(session, api, settings, an_update(text))
+
+    assert telegram.texts[0] == ADDING, telegram.texts
+    assert await nicknames(client) == ["hank"], telegram.texts
+    reply = telegram.texts[1]
+    assert reply.startswith("hank\n"), reply
+    assert len(links_in(reply, settings.public_base_url)) == 1, reply
+
+
 async def test_a_node_that_could_not_be_told_is_named_in_the_reply(
     client, session, settings, api, telegram, reality_params, hosts_down
 ) -> None:
@@ -284,9 +306,28 @@ async def test_a_duplicate_name_gets_the_panels_sentence_and_no_second_user(
     assert telegram.texts[0] == ADDING
     refusal = telegram.texts[1]
     assert refusal.startswith("a user called 'mira' already exists\n"), refusal
-    assert refusal.endswith(NOTHING_ADDED), refusal
+    assert refusal.endswith(f"{NOTHING_ADDED} {SEE_THE_PANEL}"), refusal
     assert "/sub/" not in refusal, "an existing user's link was re-sent"
     assert await nicknames(client) == ["mira"]
+
+
+async def test_a_name_too_long_is_refused_without_the_pointer_at_the_panel(
+    client, session, settings, api, telegram
+) -> None:
+    """Every refusal says nothing was added; only one about a name that exists goes on
+    to say where. Under this one the panel sentence was a non-sequitur (M37 acceptance)."""
+    too_long = "x" * (users.NICKNAME_MAX_LENGTH + 1)
+
+    await the_bot_gets(session, api, settings, an_update(f"/adduser {too_long}"))
+
+    assert telegram.texts[0] == ADDING, telegram.texts
+    refusal = telegram.texts[1]
+    assert refusal.startswith(
+        f"a nickname must be {users.NICKNAME_MAX_LENGTH} characters or fewer\n"
+    ), refusal
+    assert refusal.endswith(NOTHING_ADDED), refusal
+    assert SEE_THE_PANEL not in refusal, refusal
+    assert await nicknames(client) == []
 
 
 async def test_a_refused_list_is_the_services_sentence_and_writes_nothing(
@@ -301,7 +342,18 @@ async def test_a_refused_list_is_the_services_sentence_and_writes_nothing(
 
 @pytest.mark.parametrize(
     "text",
-    ["/start", "/help", "/adduser", "/adduser   \n  \n", "hello", "/nodes", "/Adduser mira"],
+    [
+        "/start",
+        "/help",
+        "/adduser",
+        "/adduser   \n  \n",
+        "hello",
+        "/nodes",
+        "/Adduser mira",
+        # Addressed to the bot by name, as a client does for a menu pick: still bare.
+        "/adduser@hashi_e2e_bot",
+        "/help@hashi_e2e_bot",
+    ],
 )
 async def test_everything_else_from_the_owner_gets_the_usage_line(
     client, session, settings, api, telegram, text
