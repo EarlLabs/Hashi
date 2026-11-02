@@ -56,6 +56,7 @@ nothing else.
 | `/sub/{token}?format=client-config-file` (M24) | the token in the path | a ZIP of WireGuard-family `.conf` files, each holding a client private key |
 | `/api/users`, `/api/users/batch`, `/panel/users`, `/panel/reach` (M32) | operator session | an add applies nodes over SSH by itself, one request per node, retryable |
 | `/panel/routing/**`, `/panel/nodes/{id}/direct` (M34) | operator session | the operator adds list **source URLs that the control plane itself fetches**, approves held list versions, and asks where a name would go |
+| the Bot API, outbound (M37; added 2026-11-02, after the 2026-10-03 approval above, so this row is not yet the owner's) | `HASHI_TELEGRAM_OWNER_ID`: `message.from.id` and `chat.id` must both be the owner's numeric id in a private chat; everyone else gets silence and no log line | **no route**: a long poll from the control plane to `HASHI_TELEGRAM_API_URL` (blank = Telegram's own), with the bot token as a bearer in that outbound URL path — §3.5's rule reaches it; an owner's `/adduser` is the same add as `/api/users` and replies with the same links |
 
 Two things worth knowing that a black-box run would spend budget learning:
 
