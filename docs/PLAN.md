@@ -55,6 +55,8 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
+**Update 2026-11-02.** **M37 is done** — built, reviewed (nothing stopped at a cap) and accepted on the stand in two rounds; the branch `task/M37` is pushed and its PR targets `develop`. The owner's own walk remains: a real bot from the Russian control-plane box, then the phone. **M38 is next** on the same branch. The 2026-11-01 text below is history.
+
 **Update 2026-11-01.** **M37 and M38 are PROPOSED and await the owner's approval** — M37 is an owner-only Telegram bot that adds a user, pushes them to every serving node by itself and replies with the panel's links (five steps, five decisions at its foot: scope, the `httpx` dependency, the fake Telegram on the stand, the acceptance line, the command's name); M38 adds `/nodes`, the panel's "behind" block in the bot's words, and `/apply <name>`, the Nodes screen's Apply from a phone (three steps, three decisions). Nothing of either is built. M36 is merged to `develop` (PR #10) and still marked `→`: its real-host walk is the owner's. M35 stays deferred.
 
 **Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Nothing is open.** The owner dropped **M27** and **M30** and deferred **M35** on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
@@ -3916,7 +3918,7 @@ to the Nodes screen. Revoking: a different milestone if ever.
 2. The two names: `/nodes` and `/apply <name>`.
 3. The acceptance line: `yes`, with the scenario above.
 
-## → M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 ("gogogo": every recommended option taken — `httpx` promoted to runtime, the fake Telegram kept, `/adduser`, acceptance yes) · building on `task/M37`
+## ✅ M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 ("gogogo": every recommended option taken — `httpx` promoted to runtime, the fake Telegram kept, `/adduser`, acceptance yes) · built 2026-11-01/02 on `task/M37` · done 2026-11-02 (acceptance: good — 2 rounds on the stand's fake Telegram, 3 clumsy lines in docs/tracker/M37/carry-over.md; the real bot from a Russian box and the owner's phone are the owner's walk)
 
 **What the owner asked for.** "A telegram bot for adding new users. It should work only
 with my telegram account." Today an add is a panel visit: reach the console over the
@@ -4065,27 +4067,27 @@ green on the stand, and the existing `tests/e2e/control` suite green with the bo
 Static gate for the control steps: `make test-control`; for M37.4: `make test-infra`.
 
 **Done when.**
-- [ ] With both settings blank nothing changes: no task starts, no log line, the panel
+- [x] With both settings blank nothing changes: no task starts, no log line, the panel
       and delivery work as before. This is the stand's default and every existing
-      install's.
-- [ ] A token without an owner id, or an owner id without a token, stops the control
-      plane at boot with one sentence naming the missing setting.
-- [ ] From the owner's own account, `/adduser <name>` creates the user, pushes them to
+      install's. *(unit-tested; the stand runs with both set, so acceptance could not observe it)*
+- [x] A token without an owner id, or an owner id without a token, stops the control
+      plane at boot with one sentence naming the missing setting. *(unit-tested; same)*
+- [x] From the owner's own account, `/adduser <name>` creates the user, pushes them to
       every serving node, and replies with the same links the panel hands over after an
-      add; the link opens, the user appears in the panel, the trail shows `USER_ADDED`.
-- [ ] `/adduser` of a name that exists answers with the panel's sentence and creates
+      add; the link opens, the user appears in the panel, the trail shows `USER_ADDED`. *(acceptance rounds 1 and 2; the push to a real serving node is not observable on the stand)*
+- [x] `/adduser` of a name that exists answers with the panel's sentence and creates
       nothing; a bare `/adduser`, `/start`, `/help` and any other text answer with the
       usage line.
-- [ ] A message from any other account — any id, a group, a channel, a forward, an edit —
-      gets no reply, creates nothing, and leaves no log line naming the sender.
-- [ ] The bot token appears in no log record, no exception message and no reply,
+- [x] A message from any other account — any id, a group, a channel, a forward, an edit —
+      gets no reply, creates nothing, and leaves no log line naming the sender. *(channel post and edited message: unit-tested; the stand's fake delivers only messages)*
+- [x] The bot token appears in no log record, no exception message and no reply,
       including when Telegram is unreachable or answers an error.
-- [ ] When Telegram cannot be reached the panel keeps working, the log carries one line
+- [x] When Telegram cannot be reached the panel keeps working, the log carries one line
       when polling starts failing and one when it recovers, and the bot resumes without
       a restart.
-- [ ] `make verify` runs the whole loop on the stand through the fake Telegram: the
-      owner's id adds a user and gets a working link; a stranger's id gets nothing.
-- [ ] The runbook tells the owner how to create the bot, find their numeric id, fill the
+- [x] `make verify` runs the whole loop on the stand through the fake Telegram: the
+      owner's id adds a user and gets a working link; a stranger's id gets nothing. *(the scenario is green in every full run since M37.4)*
+- [x] The runbook tells the owner how to create the bot, find their numeric id, fill the
       two lines and see that it is polling.
 - [ ] Not checkable on a stand, and never claimed by one: that the Bot API answers from
       the control-plane box in Russia. The owner's own run, after the merge.
