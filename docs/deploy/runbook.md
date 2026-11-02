@@ -64,7 +64,10 @@ ssh -L PORT:127.0.0.1:PORT USER@SERVER
   распаковать и импортировать `.conf`.
 - **Из Telegram:** если бот включён (раздел *Adding a user from Telegram*, ниже), написать
   ему `/adduser <имя>` (несколько — по одному в строке); ответом придут те же ссылки, что
-  показывает панель. Отзыв и повторный показ ссылки — только в панели.
+  показывает панель. `/nodes` — какие ноды отстают (тот же блок **NOT APPLIED**), под
+  каждой готовая строка `apply it: /apply <имя ноды>`; `/apply <имя ноды>` — та же кнопка
+  **Apply** с экрана Nodes для одной ноды: она вводит ноду в строй (draft или degraded),
+  поэтому сначала `/nodes`. Отзыв и повторный показ ссылки — только в панели.
 - **Отключить:** **Users → revoke** → подтвердить. Изменения применяются на
   нодах сразу и сами. Вернуть доступ — добавить под **новым** именем (старое
   занято, панель откажет) и выдать новую ссылку.
@@ -1755,19 +1758,63 @@ Every reply below is to a message from your id, in your private chat with the bo
   `user <name> added`, and nothing says through which door — *Apply, then add users*,
   above). The second reply holds the links the panel hands over after an add — per
   person, the nickname, then `subscription link: <url>` and, where the person holds
-  `amneziawg`, `config-file link: <url>` beneath it — and, when no node is serving or one
-  could not be told, the dialog's own outcome sentence as the last block (`<n> user(s)
-  added and pushed to <k> node(s), but <m> node(s) could NOT be updated and do not know
-  them yet: …`). A reply longer than Telegram's 4096-character limit arrives as several
-  messages, never splitting one person's links across two. The links show no preview:
-  the bot asks Telegram not to fetch them.
+  `amneziawg`, `config-file link: <url>` beneath it — and, when no node is serving, the
+  dialog's own outcome sentence as the last block. When a node could not be updated, the
+  links are followed by the dialog's opening — `<n> user(s) added and pushed to <k>
+  node(s), but <m> node(s) could NOT be updated and do not know them yet:` — and then one
+  block per such node: the reason the dialog's `✗` row shows, with the node's name in
+  front (`'<name>' was not updated — it could not be reached, or the push did not finish
+  — so it does not know them yet; retry, and if it fails again apply it from the Nodes
+  screen to read why`, or the sentence for whatever else went wrong), and beneath it
+  `apply it: /apply <name>` — the command to send as it stands (`/apply <name>`, below).
+  A node the add did reach gets no such block. A reply longer than Telegram's
+  4096-character limit arrives as several messages, never splitting one person's links
+  across two. The links show no preview: the bot asks Telegram not to fetch them.
 - **A nickname that is taken** gets, after the `adding` line, the sentence the panel
   shows — `a user called '<name>' already exists` — followed by `Nothing was added. The
   panel shows every user and their links; the bot never re-sends a link.` A revoked
   user's name is taken too; bring them back under a new name, as the panel section says.
-- **`/start`, `/help`, a bare `/adduser` and anything else** get the usage line:
-  `/adduser <nickname> — one nickname per line — adds them, pushes them to every serving
-  node and replies with their links. Everything else is on the panel.`
+- **`/nodes`** — which serving nodes are behind what the panel would push: the nodes the
+  panel's **not applied** block names at that moment, read from the record with nothing
+  dialled, so the answer is immediate. One block per node that is behind — the block's
+  own sentence said of that one node, `<name> is still on the old configuration: your
+  changes have not reached it.`, and beneath it `apply it: /apply <name>`, the command to
+  send as it stands. When no serving node is behind, the one sentence
+  `Every serving node holds the configuration it would be given.` — *serving* is the
+  state it is about: a draft or degraded node is not in this answer, and the Nodes
+  screen is where those are read. Anything typed after `/nodes` is ignored.
+- **`/apply <name>`** — **the Nodes screen's Apply, for that one node — not the add's
+  push. It can take a draft or degraded node into service, and a failure after the first
+  byte is written leaves the node `degraded`; so read `/nodes` first and apply a node it
+  names.** The name is everything after `/apply`, exactly as the Nodes screen spells it
+  (a name may hold spaces); nothing is matched loosely, and a name no node has gets
+  `no node named '<name>'` as the only reply, with nothing dialled. Otherwise the first
+  reply is `applying <name> — about a minute`, and the second is what the button's toast
+  says: `config applied to <name> — <the configs applied>`, with a clause naming what
+  was restarted when something was; or, when the host would not answer the serving
+  check, the button's unmeasured sentence (`config applied to <name> — <configs>. Not
+  measured serving: <configs>. …`), which names configs and never their contents. A
+  refusal or a failure is the sentence the panel's banner shows for the same press —
+  nothing to apply (`… so there is nothing to apply — nothing was pushed and nothing on
+  the node was changed. …`), a retired node (`this node is retired, and applying a node
+  is what puts it into service — which is the one move a retired node is refused. …`), a
+  host not reached (`the node could not be reached, so nothing was pushed and nothing on
+  it changed: <reason>. …`) — and the node's row on the Nodes screen records what the
+  apply did to its state. The one sentence that is not the banner's: a configuration
+  refused by its checker before anything was pushed gets
+  `'<name>' could not be given a configuration: it was refused before anything was
+  pushed, and retrying will not change that — apply it from the Nodes screen to read
+  why`, because the banner's sentence can quote the checker's output and a checker is
+  known to quote a private key — the Nodes screen shows it, the chat never does. A
+  failure that is no sentence of its own gets
+  `applying <name> did not complete — the Nodes screen shows the state it was left in;
+  what failed is in the control plane's log.` One node per command; there is no
+  apply-everything.
+- **`/start`, `/help`, a bare `/adduser` or `/apply`, and anything else** get the usage
+  line: `/adduser <nickname> — one nickname per line — adds them, pushes them to every
+  serving node and replies with their links. /nodes — which serving nodes are behind what
+  would be pushed, with the /apply for each. /apply <name> — the Nodes screen's Apply,
+  for that one node. Everything else is on the panel.`
 - **Anyone else** — any other id, a group, a channel, a forwarded message — gets
   **silence, by design**: no reply, nothing created, and no log line naming who tried.
   Anybody can find a bot by its username and write to it; a refusal would confirm the bot
@@ -1775,16 +1822,18 @@ Every reply below is to a message from your id, in your private chat with the bo
 
 What it does not do, on purpose: revoke, list, re-send a link, serve a second account.
 Those are the panel's — **show link** on the Users screen is where a link is read again.
-M38 adds `/nodes` (which nodes are behind) and `/apply <name>`.
+And it applies one named node per command: there is no apply-everything, and the Nodes
+screen has no such press either.
 
 Commands are handled one at a time, in the order Telegram delivers them, and each is
-attempted once. A command that fails inside the control plane is answered with nothing
-and logged as `ERROR … telegram: an update was not handled (<reason>). It is
-acknowledged and not retried; a command the owner sent is theirs to send again.` — send
-it again if you want it. A command sent while the control plane was down is held by
-Telegram (for up to a day) and delivered when polling resumes; the one case that delivers
-a command twice — a process death between the attempt and the next poll — turns into an
-`already exists` reply rather than a second user.
+attempted once. A command that fails inside the control plane is answered with nothing —
+`/apply` with its did-not-complete sentence, above — and logged as `ERROR … telegram: an
+update was not handled (<reason>). It is acknowledged and not retried; a command the
+owner sent is theirs to send again.` — send it again if you want it. A command sent while
+the control plane was down is held by Telegram (for up to a day) and delivered when
+polling resumes; the one case that delivers a command twice — a process death between
+the attempt and the next poll — turns an `/adduser` into an `already exists` reply rather
+than a second user, and an `/apply` into the same node applied once more.
 
 ### Two things to know before the first `/adduser`
 
