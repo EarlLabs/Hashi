@@ -43,8 +43,8 @@ Ordered by what it costs a real person, not by how interesting the bug is.
 
 ## 2. The surfaces the hunter is told about
 
-The original four, plus what M24, M32 and M34 added. `control/app/main.py` mounts
-nothing else.
+The original four, plus what M24, M32 and M34 added, and M37's (outbound only).
+`control/app/main.py` mounts nothing else.
 
 | Surface | Auth | Shape |
 |---|---|---|
