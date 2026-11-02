@@ -333,10 +333,14 @@ async def test_a_name_too_long_is_refused_without_the_pointer_at_the_panel(
 async def test_a_refused_list_is_the_services_sentence_and_writes_nothing(
     client, session, settings, api, telegram
 ) -> None:
-    """The same validation as the dialog — here, a name on the list twice."""
+    """The same validation as the dialog — here, a name on the list twice. Nobody exists,
+    so nothing points at the panel: a conflict, but not the one the pointer is for."""
     await the_bot_gets(session, api, settings, an_update("/adduser mira\nmira"))
 
-    assert telegram.texts[1].startswith("'mira' is in this list twice\n")
+    refusal = telegram.texts[1]
+    assert refusal.startswith("'mira' is in this list twice\n"), refusal
+    assert refusal.endswith(NOTHING_ADDED), refusal
+    assert SEE_THE_PANEL not in refusal, refusal
     assert await nicknames(client) == []
 
 

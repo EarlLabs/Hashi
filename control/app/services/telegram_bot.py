@@ -22,8 +22,8 @@ HOW:  the add is ``onboarding.add_users``, exactly what the panel's dialog calls
       block per person, built from ``console.links_for`` so the bot and the panel cannot
       hand a link over differently. A refusal — a ``DomainError`` out of the add — is
       answered with the service's own sentence, the one the panel shows, and that nothing
-      was added; when what was refused already exists (a ``Conflict``), one more sentence
-      points at the panel for what the bot does not do (re-send an existing user's
+      was added; when the person already exists (``users.NicknameTaken``), one more
+      sentence points at the panel for what the bot does not do (re-send an existing user's
       links). The order of the two replies is load-bearing: if the "adding" message cannot
       be sent, the add is NOT started and the failure propagates — a command whose
       acknowledgement could not reach its author is re-sent by its author when Telegram is
@@ -59,9 +59,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control.app.errors import Conflict, DomainError
+from control.app.errors import DomainError
 from control.app.models import User
-from control.app.services import console, onboarding
+from control.app.services import console, onboarding, users
 from control.app.services.telegram_api import TelegramApi, TelegramCallFailed
 
 logger = logging.getLogger(__name__)
@@ -84,9 +84,9 @@ ADDING = "adding, about a minute per node"
 # Under every refusal. True of each one: ``onboarding.add_users`` refuses before it
 # commits, and the one refusal raised after a write has rolled that write back.
 NOTHING_ADDED = "Nothing was added."
-# After NOTHING_ADDED, and only when what was refused already exists — the one refusal
-# whose answer is on the panel. It used to close every refusal, where under "a nickname
-# must be 64 characters or fewer" it read as a non-sequitur (M37 acceptance).
+# After NOTHING_ADDED, and only when the person already exists — the one refusal whose
+# answer is on the panel. It used to close every refusal, where under "a nickname must
+# be 64 characters or fewer" it read as a non-sequitur (M37 acceptance).
 SEE_THE_PANEL = "The panel shows every user and their links; the bot never re-sends a link."
 
 # A command is the first token when it starts with ``/``: everything up to the first
@@ -220,19 +220,19 @@ async def _adduser(
 
 
 def _refusal(exc: DomainError) -> str:
-    """The service's own sentence, then that nothing was added — and, when what was
-    refused already exists, where it is.
+    """The service's own sentence, then that nothing was added — and, when the person
+    already exists, where they are.
 
-    Told apart by the exception's TYPE, not its sentence: ``Conflict`` is the service's
-    word for a request that contradicts something that exists, which is what the panel
-    shows; a plain ``DomainError`` is the list itself being wrong, and the panel has
-    nothing to show for that. Matching the sentence was rejected — it would hold until
-    the service reworded it, and nothing here would go red. Since the trigger is the
-    class, a ``Conflict`` that is not a taken name carries the pointer too; a type of the
-    taken name's own would be the service's to add, not this module's to guess at.
+    Told apart by the exception's TYPE, not its sentence: ``users.NicknameTaken`` is the
+    service's own word for "this person exists", which is what the panel shows; every
+    other refusal is the list itself being wrong, and the panel has nothing to show for
+    that. Matching the sentence was rejected — it would hold until the service reworded
+    it, and nothing here would go red. So was keying on ``Conflict``: a name twice on one
+    list is a conflict too, and the pointer under it was the same non-sequitur.
     """
-    closing = f"{NOTHING_ADDED} {SEE_THE_PANEL}" if isinstance(exc, Conflict) else NOTHING_ADDED
-    return f"{exc.message}\n\n{closing}"
+    if isinstance(exc, users.NicknameTaken):
+        return f"{exc.message}\n\n{NOTHING_ADDED} {SEE_THE_PANEL}"
+    return f"{exc.message}\n\n{NOTHING_ADDED}"
 
 
 async def _links_block(session: AsyncSession, base_url: str, user: User) -> str:

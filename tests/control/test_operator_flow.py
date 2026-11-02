@@ -405,4 +405,11 @@ async def test_the_delivery_response_is_never_cacheable(
 async def test_a_duplicate_nickname_is_refused(client) -> None:
     """Revoking "the right one" must be unambiguous at the moment it matters."""
     assert (await client.post("/api/users", json={"nickname": "kolya"})).status_code == 201
-    assert (await client.post("/api/users", json={"nickname": "kolya"})).status_code == 409
+
+    duplicate = await client.post("/api/users", json={"nickname": "kolya"})
+
+    # The same ``conflict`` envelope as before the refusal had a type of its own
+    # (``users.NicknameTaken``): the type is for the Telegram bot, not for this surface.
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "conflict"
+    assert duplicate.json()["error"]["message"] == "a user called 'kolya' already exists"
