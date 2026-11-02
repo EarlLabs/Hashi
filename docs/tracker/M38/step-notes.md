@@ -22,3 +22,8 @@ M37's bot.
 - **Divergences recorded in the module:** `/apply` answers a non-domain failure with a fixed sentence then re-raises, where `/adduser` answers nothing; the post-apply result reply is not guarded against `TelegramCallFailed` (the apply's own log line precedes the poller's "not handled" line — read together).
 - **Test harness:** `a_node`, `a_node_with_a_transport` (draft), `a_serving_node`, `the_node(client, id)`, `trail_for(session, name)` (sorted by content), `fragments(secret)`, `MARKER`; an unmeasured apply = `monkeypatch.setattr(listening, "bound_ports", …)` after `hosts_down`; a checker-refusal premise is asserted on the API envelope first, and the reply is checked with `pytest.fail` and fixed labels so a failure never prints sensitive text.
 - **e2e:** `/apply <unknown>` refused in words, placed before the `/nodes` test, which stays last.
+
+## From M38.3 (docs) — commit ead32ac, review clean in round 1
+
+- The runbook's *What the bot answers* subsection now quotes `USAGE`, `APPLYING`, `NOTHING_BEHIND`, `APPLY_IT`, `APPLY_DID_NOT_COMPLETE`, the `/nodes` block sentence, the success/unmeasured openings, `no node named '<name>'` and the refusal openings verbatim; the cheat-sheet bullet **Из Telegram:** lists all three commands. No test ties the two — a rewording in `telegram_bot.py` must land there too.
+- The journal row's phrase for the decision: "the Nodes screen's Apply, not the add's fan-out; one node per command". Reuse it rather than restating.

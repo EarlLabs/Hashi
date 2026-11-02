@@ -16,3 +16,7 @@ intended design. Do not fix them as part of another step.
 - Low — the new e2e test's docstring says "the ceiling is for the poll"; odd wording, not wrong.
 - Note, by design — "applying …" precedes the two 409 refusals, the same shape as `/adduser`'s "adding…" (validation lives in the service).
 - **For the owner — pre-existing, outside M37/M38, found while building M38.2:** `POST /api/nodes/{id}/apply` answers a checker refusal (`ConfigRefused`) with a sentence built to quote the upstream checker's output, and that output can carry the node's key material; the M38.2 test establishes this on the API envelope as its premise. The bot deliberately does not relay that sentence. The operator-only API and the panel still do. Also pre-existing: `apply._record_failure` logs a failure's full reason at ERROR (not reached by a checker refusal). A milestone of its own, if the owner wants it: the checker's output should never join a sentence a person or a log sees.
+
+## M38.3 (review round 1: clean; 1 Low)
+
+- Low — the Russian cheat-sheet writes "NOT APPLIED" in capitals where the panel's label is lowercase `not applied` (CSS may uppercase it on screen). Cosmetic.
