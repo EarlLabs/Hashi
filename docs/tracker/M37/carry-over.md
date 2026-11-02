@@ -57,3 +57,9 @@ intended design. Do not fix them as part of another step.
 - Note — nine pre-existing ruff E501s in `tests/e2e/**` files that no target lints (red on the untouched baseline too). Not this milestone's.
 - Note — `aikit.yml`'s acceptance `entrypoints` and `stand.sh`'s banner do not mention the fake's injection endpoint (unzoned config; the orchestrator adds the entrypoint before acceptance).
 - Note — the acceptance scenario's last line ("stop the stand's control plane with both settings blank and confirm no Telegram line") needs an env override on the stand, which the overlay sets; not provided by this step — the unit test for the unconfigured lifespan covers it.
+
+## M37.5 (round 1: clean + 1 Medium fixed in round-1 fixes; round 2: clean)
+
+- Low — the runbook's `curl getUpdates` recipe would answer 409 if a webhook were set on the token; a fresh BotFather bot has none.
+- Low — the cheat-sheet bullet keeps the English section name in italics, as the cheat sheet already does for its cross-references.
+- Note — the threat model's new row and intro clause are marked as added after the owner's 2026-10-03 approval; the owner has not approved them.
