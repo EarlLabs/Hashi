@@ -63,3 +63,11 @@ intended design. Do not fix them as part of another step.
 - Low — the runbook's `curl getUpdates` recipe would answer 409 if a webhook were set on the token; a fresh BotFather bot has none.
 - Low — the cheat-sheet bullet keeps the English section name in italics, as the cheat sheet already does for its cross-references.
 - Note — the threat model's new row and intro clause are marked as added after the owner's 2026-10-03 approval; the owner has not approved them.
+
+## Acceptance round 1 (verdict GOOD, 3 "works, but awkward"; two fixed in the acceptance fix step, one left by design)
+
+- Fixed — `/adduser@<botname> …` was taken as part of the nickname (a user called `@hashi_e2e_bot` got created). Now the `@…` tail is cut before dispatch.
+- Fixed — the over-long-name (and list-twice) refusal ended with the already-exists sentence about the panel. Now only a taken name gets the pointer.
+- Left, by the plan's design — "adding, about a minute per node" is sent before the command is validated, so a duplicate or an over-long name is answered "adding…" then "Nothing was added."; on a fleet with no serving node it announces a wait that never comes. Validation lives inside the add service on purpose (the plan rejected pre-checking outside it). A line for the owner.
+- Could not check on the stand (acceptance's own list): both settings blank / one without the other at boot (the stand's settings are fixed; unit tests cover both); `make verify` through the fake (a gate run, done by the orchestrator); the Bot API answering from the Russian box (field only); a real push to a serving node from the bot and how a node that could not be updated is named (the stand has no node); silence on a channel post or an edited message (the stand's fake only delivers `message` updates; unit tests cover both); Telegram answering an error status (only unreachability was simulated; unit tests cover the statuses); replies over 4096 characters splitting (unit-tested); rendering in a real Telegram client.
+- Note — the acceptance fix step's reviewer (round 1, Low): the runbook's "What the bot answers" does not say that refusals other than the taken name end at "Nothing was added." Optional.
