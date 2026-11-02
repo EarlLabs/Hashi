@@ -189,6 +189,16 @@ acceptance:
     - name: "Delivery endpoint"
       url: "http://127.0.0.1:54200/sub/{token}"
       note: "a user's subscription; the token comes from the panel. Tokens shorter than 16 characters are refused on format before any lookup happens, so a short string is not a test of whether the token exists"
+    - name: "Fake Telegram (the stand's stand-in for the Bot API — M37)"
+      url: "http://127.0.0.1:54280/_test/updates"
+      note: >-
+        POST a JSON body {"from_id": <int>, "chat_id": <int>, "chat_type": "private",
+        "text": "..."} to send the bot a message as that Telegram account; the owner's id
+        on this stand is 424242, any other id is a stranger. GET
+        http://127.0.0.1:54280/_test/sent lists every message the bot has sent, in order,
+        never cleared while the stand is up. The bot is polling when the control
+        container's log holds "telegram: polling as @hashi_e2e_bot". The real Telegram is
+        never reached from the stand.
   seed: >-
     an empty control plane — the operator account exists and nothing else does:
     no nodes, no transports, no users, no relay hops. Every awkward first-time
