@@ -260,10 +260,17 @@ def test_a_setting_the_operator_is_told_to_fill_reaches_the_container() -> None:
     through, or is named in ``NOT_FOR_A_DEPLOYMENT`` with the reason it must not be.
     Where the operator happened to read about a variable no longer decides whether it
     works.
+
+    ASKED OF BOTH PROCESSES SINCE M39.1: the bot runs as its own container built from the
+    same image and the same ``Settings``, and the three Telegram settings reach the
+    deployment ONLY through it — the control service no longer carries them. A setting is
+    reachable if either process passes it through, so a typo in the bot's env block is
+    caught here exactly as one in the control plane's always was.
     """
     readable = {f"HASHI_{name.upper()}" for name in Settings.model_fields}
-    passed_through = set(
-        yaml.safe_load(BASE.read_text())["services"]["control"]["environment"]
+    services = yaml.safe_load(BASE.read_text())["services"]
+    passed_through = set(services["control"]["environment"]) | set(
+        services["telegram-bot"]["environment"]
     )
     unreachable = sorted(readable - passed_through - NOT_FOR_A_DEPLOYMENT)
     assert unreachable == [], (

@@ -9,7 +9,13 @@
 PYTHON      ?= python3.14
 VENV        := .venv
 PY          := $(VENV)/bin/python
-COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
+# PROFILES names compose profiles to switch on, space separated — empty by default, so
+# `make up` and every other verb behave exactly as before. The only optional service today
+# is the Telegram bot (deploy/docker-compose.yml, `telegram-bot`): turn it on with
+# `make up PROFILES=telegram-bot` (or the same on `up-panel`), the way E2E_PROFILES turns on
+# the acceptance browser. A profile-less `up` leaves the bot off and the install untouched.
+PROFILES    ?=
+COMPOSE     := docker compose --env-file .env $(foreach p,$(PROFILES),--profile $(p)) -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 # The deployed shape: the base stack plus the only overlays that open a port on a
 # real host. Never the dev overlay — that publishes the database.

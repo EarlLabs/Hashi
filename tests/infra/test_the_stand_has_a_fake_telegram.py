@@ -141,17 +141,56 @@ def test_the_fake_is_in_the_e2e_overlay_alone(path: pathlib.Path) -> None:
     )
 
 
-def test_the_base_file_passes_the_three_settings_through() -> None:
-    """Each one explicitly, and blank-tolerant: the shipped shape has no bot.
+def test_the_bot_service_carries_the_three_settings_and_control_does_not() -> None:
+    """Each one explicitly on the bot, blank-tolerant, and none on the control plane — M39.1.
 
-    The derived rule in test_compose.py already demands every setting be reachable;
-    this names the three so the plan's own sentence is held by name.
+    The derived rule in test_compose.py demands every setting be reachable through either
+    process; this names the three so the plan's own sentence is held by name, and pins WHICH
+    process reads them: the bot alone, because a control plane that polled too would be a
+    second poller on one token — 409 from Telegram, every update handled twice.
     """
-    environment = load(BASE)["services"]["control"]["environment"]
+    services = load(BASE)["services"]
+    bot = services["telegram-bot"]["environment"]
+    control = services["control"]["environment"]
     for name in TELEGRAM_SETTINGS:
-        assert environment.get(name) == f"${{{name}:-}}", (
-            f"{name} does not reach the container as `${{{name}:-}}`"
+        assert bot.get(name) == f"${{{name}:-}}", (
+            f"{name} does not reach the telegram-bot container as `${{{name}:-}}`"
         )
+        assert name not in control, (
+            f"{name} still reaches the control service — the web process must not poll"
+        )
+
+
+def test_the_bot_runs_as_its_own_container_off_by_default() -> None:
+    """The service that replaced the in-process bot — M39.1: the control image, the `bot`
+    command, behind a profile so `make up` is unchanged, outbound-only, waiting for the
+    control plane that runs the shared schema's migrations.
+    """
+    services = load(BASE)["services"]
+    bot = services["telegram-bot"]
+    assert bot["build"] == services["control"]["build"], (
+        "the bot is not built from the control image"
+    )
+    assert bot["command"] == ["bot"], bot.get("command")
+    assert bot.get("profiles") == ["telegram-bot"], (
+        "the bot is not behind the telegram-bot profile, so `make up` would start it"
+    )
+    assert "ports" not in bot, "the bot publishes a port; it is outbound-only"
+    assert bot["depends_on"]["control"]["condition"] == "service_healthy", (
+        "the bot does not wait for the control plane, which runs the shared schema's migrations"
+    )
+
+
+def test_make_turns_the_bot_on_through_a_profile() -> None:
+    """`make up PROFILES=telegram-bot` has to actually switch the profile on. A COMPOSE that
+    did not carry PROFILES would take the variable and start nothing — the silent shape of
+    the E2E_PROFILES bug this project already met once.
+    """
+    makefile = MAKEFILE.read_text()
+    assert re.search(r"^PROFILES\s*\?=", makefile, re.M), "the Makefile declares no PROFILES"
+    assert re.search(
+        r"^COMPOSE\s*:?=.*foreach\s+\w+,\s*\$\(PROFILES\).*--profile", makefile, re.M
+    ), "COMPOSE does not turn PROFILES into --profile flags, so `make up PROFILES=…` is a no-op"
 
 
 def test_env_example_names_the_three_settings_and_leaves_them_blank() -> None:

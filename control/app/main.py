@@ -24,7 +24,7 @@ from control.app.crypto import SecretBox, session_secret
 from control.app.db import Database
 from control.app.models.base import bind_secret_box
 from control.app.panel import routes as panel_routes
-from control.app.services import apply, audit, health, routing_refresh, telegram_poller
+from control.app.services import apply, audit, health, routing_refresh
 from control.app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -112,14 +112,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.routing_refresher = routing_refresh.start_refresher(
             app.state.database, settings
         )
-        # M37: the owner's Telegram bot, the control plane dialling out to poll — a
-        # webhook would be an inbound route on the public site. ``None`` with both
-        # settings blank, which is the stand's default and every existing install's.
-        app.state.telegram_poller = telegram_poller.start_poller(app.state.database, settings)
+        # The owner's Telegram bot is NOT started here — M39.1. It used to be the lifespan's
+        # fourth task (M37.3), but it now runs in its own process (control/app/botmain.py),
+        # a separate container tied to this one by the shared database. The web process must
+        # not poll: two pollers on one bot token is a 409 from Telegram and every update
+        # handled twice. The poller's module and its functions stay (the bot process uses
+        # them); only this call is gone, so nothing here holds a poller on ``app.state``.
         try:
             yield
         finally:
-            await telegram_poller.stop_poller(app.state.telegram_poller)
             await routing_refresh.stop_refresher(app.state.routing_refresher)
             await app.state.routing_fetch.stop()
             await health.stop_remeasurer(app.state.finding_remeasurer)

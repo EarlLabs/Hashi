@@ -36,7 +36,13 @@ services:
       context: ..
       dockerfile: deploy/docker/control.Dockerfile
     restart: unless-stopped
-    environment:
+    # Anchored so the `telegram-bot` service below reads the SAME configuration — M39.1. The
+    # bot runs on this host beside the control plane and on the same trust boundary, so it
+    # is built from the same ``Settings``: one list, not two that drift (the reason
+    # HASHI_DATABASE_URL is composed once above a service that also needs it). The bot adds
+    # the Telegram credentials to this; the Telegram settings themselves are NOT on this
+    # list, because the web process must never poll (see the service below).
+    environment: &control-environment
       HASHI_SECRET_KEY: ${HASHI_SECRET_KEY:?set HASHI_SECRET_KEY in .env}
       HASHI_PUBLIC_HOST: ${HASHI_PUBLIC_HOST:?set HASHI_PUBLIC_HOST in .env}
       # Composed from the same POSTGRES_* values the db service uses, so the two
@@ -103,16 +109,11 @@ services:
       # lists of sites to send direct and are added switched off. A list of BLOCKED sites
       # is never offered: its meaning is the opposite of "send direct".
       HASHI_ROUTING_SUGGESTED_SOURCES: ${HASHI_ROUTING_SUGGESTED_SOURCES:-itdoginfo-russia-outside|https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-raw.lst|on;roscomvpn-whitelist|https://raw.githubusercontent.com/hydraponique/roscomvpn-geosite/master/data/whitelist|off;roscomvpn-category-ru|https://raw.githubusercontent.com/hydraponique/roscomvpn-geosite/master/data/category-ru|off;roscomvpn-geoip-whitelist|https://raw.githubusercontent.com/hydraponique/roscomvpn-geoip/master/release/text/whitelist.txt|off}
-      # The owner's Telegram bot — M37. Three more of the kind above: blank is "not set",
-      # and the first two both blank is the shipped shape, a control plane with no bot.
-      # Listed for the reason the rest are — this list is the whole of what the container
-      # can read — and the token is a credential, so this line is the ONLY way it reaches
-      # the container: from .env, never through a build argument or an image layer. The
-      # URL is where the Bot API is dialled; blank takes the settings model's default,
-      # Telegram's own, and the e2e overlay points it at a fake on the stand's network.
-      HASHI_TELEGRAM_BOT_TOKEN: ${HASHI_TELEGRAM_BOT_TOKEN:-}
-      HASHI_TELEGRAM_OWNER_ID: ${HASHI_TELEGRAM_OWNER_ID:-}
-      HASHI_TELEGRAM_API_URL: ${HASHI_TELEGRAM_API_URL:-}
+      # The three HASHI_TELEGRAM_* settings are deliberately NOT here — M39.1. They moved to
+      # the `telegram-bot` service below, which is now the only process that polls: the web
+      # process holding them while the poller lived in its lifespan was M37.4's shape, and
+      # the lifespan no longer starts a poller (control/app/main.py). A token that reached
+      # this service would configure nothing here.
     volumes:
       # The backup schedule's record, READ-ONLY — M28.5. It is written on the host by
       # scripts/backup-run.sh and holds dates, exit codes and the schedule's own settings:
@@ -159,6 +160,64 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # The owner's Telegram add-user bot, as its own process beside the control plane — M39.1.
+  #
+  # OFF BY DEFAULT: it is behind the `telegram-bot` profile, so `make up` (and every verb
+  # that does not pass PROFILES) never starts it and an install with no bot is untouched —
+  # exactly the shipped shape. Turn it on with `make up PROFILES=telegram-bot` (or the same
+  # on `up-panel`), the way the acceptance browser is turned on with E2E_PROFILES.
+  #
+  # SAME IMAGE AS THE CONTROL PLANE, different command: the control image's entrypoint runs
+  # uvicorn, and `command: ["bot"]` makes it run control/app/botmain.py — the poller alone —
+  # instead (deploy/docker/entrypoint.sh dispatches). It is built from the identical
+  # Dockerfile rather than sharing one `image:` tag, because an `image:` on a locally-built
+  # service would have to carry a version string the pinning rule (tests/infra/test_compose
+  # .py) otherwise rejects; the two builds are byte-identical through the cache.
+  #
+  # TIED TO THE CONTROL PLANE BY THE SHARED DATABASE and nothing else: same network, no new
+  # protocol, no port. It reads the same Settings (the anchor), plus the three Telegram
+  # settings that are now ONLY here — the web process must not also poll (one bot token, one
+  # poller, or Telegram answers 409). It decrypts tokens to render the links it replies with
+  # and to reach nodes on `/adduser`/`/apply`, which is why it holds the secret key and the
+  # delivery material, same as the control plane: same host, same trust boundary, not a new
+  # one. It waits for the control service to be healthy, by which point that service has run
+  # the migrations this one deliberately does not.
+  telegram-bot:
+    profiles: ["telegram-bot"]
+    build:
+      context: ..
+      dockerfile: deploy/docker/control.Dockerfile
+    command: ["bot"]
+    restart: unless-stopped
+    environment:
+      <<: *control-environment
+      # The credentials and the dial target, the ONLY way the token reaches the container:
+      # from .env, never a build argument or an image layer. Blank-tolerant like every
+      # optional setting — a profile turned on with a blank token is refused loudly by
+      # botmain, not silently idled — and the e2e overlay points the URL at the stand's fake.
+      HASHI_TELEGRAM_BOT_TOKEN: ${HASHI_TELEGRAM_BOT_TOKEN:-}
+      HASHI_TELEGRAM_OWNER_ID: ${HASHI_TELEGRAM_OWNER_ID:-}
+      HASHI_TELEGRAM_API_URL: ${HASHI_TELEGRAM_API_URL:-}
+    volumes:
+      # The delivery certificate and its key, READ-ONLY — the same mount the control plane
+      # takes, for the same reason: a `/adduser` or `/apply` that pushes to a node serving
+      # its own delivery reads this pair (services/delivery), and the bot does that push
+      # itself. No backup-record mount: the bot never reads the backup history.
+      - ../deploy/delivery:/etc/hashi/delivery:ro
+    depends_on:
+      control:
+        condition: service_healthy
+    # No HTTP here to probe, so the healthcheck reads the heartbeat botmain rewrites while the
+    # poll loop is alive (control/app/botmain.py HEARTBEAT_PATH) and calls it stale once it
+    # stops — the one thing that distinguishes a wedged poller from a live one. The path is
+    # shared between the two and has to agree.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pathlib, sys, time; p = pathlib.Path('/tmp/hashi-telegram-bot.alive'); sys.exit(0 if p.exists() and time.time() - p.stat().st_mtime < 60 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   caddy:
     # Built, not pulled, so the Caddyfile is IN the image: a bind mount of

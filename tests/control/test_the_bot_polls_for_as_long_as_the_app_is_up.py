@@ -1,7 +1,9 @@
 """The polling task starts with the app, acknowledges after one attempt, and backs off — M37.3.
 
-WHAT: that both settings set starts the task in the lifespan and both blank starts
-      nothing and says nothing; that an update is handled with its own session and the
+WHAT: that the WEB application starts no poller and holds none on ``app.state`` whether the
+      bot is configured or not — the bot now runs in its own process (control/app/botmain.py)
+      and the web process polling too would be a second poller on one token (M39.1); that an
+      update is handled with its own session and the
       next poll asks past it, whether the attempt returned or raised; that a handler's
       failure is one log line carrying no text from the message; that Telegram being
       unreachable — at boot or mid-polling — is one line when it starts and one when it
@@ -19,9 +21,10 @@ HOW:  ``poll_forever`` is run as a task against the suite's real schema and a
       ``getMe``, long-polls ``getUpdates`` from a queue and holds an empty poll open the
       way Telegram does, records ``sendMessage``, and fails every call while ``down``.
       The backoff's clock is the loop's injectable sleeper, so a minute of retries costs
-      nothing. The lifespan tests build the app with the bot on and patch the client the
-      poller constructs onto the same fake. Logging is configured as the process
-      configures it and driven to DEBUG at the root, the way the bot's own tests do.
+      nothing. The lifespan tests build the app — bot configured and bot blank — and assert
+      it polls nothing and holds no poller; the loop itself is driven directly below through
+      ``poll_forever``. Logging is configured as the process configures it and driven to
+      DEBUG at the root, the way the bot's own tests do.
 """
 
 import asyncio
@@ -33,7 +36,6 @@ from typing import Any
 
 import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
 from control.app.main import configure_logging, create_app
@@ -326,39 +328,42 @@ async def nicknames(client) -> list[str]:
 # --- the lifespan -----------------------------------------------------------------------
 
 
-async def test_with_both_settings_set_the_application_polls_for_as_long_as_it_is_up(
-    bot_settings, fake_bot_api, telegram, transport, caplog
+async def test_the_web_app_starts_no_poller_even_with_the_bot_configured(
+    bot_settings, fake_bot_api, telegram, caplog
 ) -> None:
-    """Started in the lifespan with the secret unwrapped, one ``getMe``, one line naming
-    the bot, then a poll; cancelled with the lifespan, its client closed behind it."""
+    """The poll moved out of the lifespan — M39.1. Even with both settings set, the web
+    process builds no client, dials nothing, says nothing, and holds no poller on
+    ``app.state``: the ``telegram-bot`` container is the only thing that polls now, and a
+    second poller on one token is a 409 from Telegram and every update handled twice."""
     app = create_app(bot_settings)
     configure_logging()
     with caplog.at_level(logging.DEBUG):
         async with app.router.lifespan_context(app):
-            task = app.state.telegram_poller
-            await until(lambda: "getUpdates" in telegram.methods, "the first poll")
-            assert not task.done(), "the poller stopped on its own"
-            assert telegram.methods == ["getMe", "getUpdates"]
-        assert task.done(), "the poller outlived the application that started it"
-    assert fake_bot_api.calls == [{"token": TOKEN, "api_url": API_URL}]
-    assert transport.closed, "the lifespan ended with the Bot API client still open"
-    assert len(telegram.requests) == 2, "a poll was sent after the cancel"
+            await asyncio.sleep(0.02)
+            assert not hasattr(app.state, "telegram_poller"), (
+                "the lifespan still holds a poller on app.state"
+            )
 
-    lines = said_by_the_poller(caplog)
-    assert [(line.levelno, line.getMessage()) for line in lines] == [
-        (logging.INFO, f"telegram: polling as @{BOT_USERNAME}")
+    assert fake_bot_api.calls == [], "the web process built a Bot API client"
+    assert telegram.requests == [], "the web process dialled Telegram"
+    mentioned = [
+        record.name
+        for record in caplog.records
+        if record.name == telegram_poller.__name__ or "telegram" in record.getMessage().lower()
     ]
-    assert_nothing_leaked(caplog)
+    assert mentioned == [], f"the web process logged about Telegram: {mentioned}"
 
 
-async def test_with_both_settings_blank_nothing_starts_and_nothing_is_said(
+async def test_with_both_settings_blank_the_web_app_still_starts_no_poller(
     app, fake_bot_api, telegram, caplog
 ) -> None:
-    """The stand's default and every existing install's: no task, no call, no line."""
+    """The shipped shape, and the same outcome as the configured one above: no task, no
+    call, no line. Kept as its own case so the behaviour is proven independent of the
+    settings, not only for the install that happens to leave the bot off."""
     configure_logging()
     with caplog.at_level(logging.DEBUG):
         async with app.router.lifespan_context(app):
-            assert app.state.telegram_poller is None
+            assert not hasattr(app.state, "telegram_poller")
             await asyncio.sleep(0.02)
 
     assert fake_bot_api.calls == [], "a client was built with the bot off"
@@ -369,23 +374,6 @@ async def test_with_both_settings_blank_nothing_starts_and_nothing_is_said(
         if record.name == telegram_poller.__name__ or "telegram" in record.getMessage().lower()
     ]
     assert mentioned == [], f"the log mentions Telegram with the bot off: {mentioned}"
-
-
-async def test_the_panel_answers_while_telegram_is_unreachable(
-    bot_settings, fake_bot_api, telegram
-) -> None:
-    """The task is on its own: a Telegram that never answers is a line in the log and
-    nothing a request can feel."""
-    telegram.down = True
-    app = create_app(bot_settings)
-    async with app.router.lifespan_context(app):
-        await until(lambda: telegram.methods == ["getMe"], "the first, failing, getMe")
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://control.test"
-        ) as http:
-            assert (await http.get("/healthz")).status_code == 200
-            assert (await http.get("/panel/")).status_code == 303
-        assert not app.state.telegram_poller.done(), "the poller died on a failed getMe"
 
 
 async def test_stopping_returns_promptly_mid_poll_and_closes_the_client(
