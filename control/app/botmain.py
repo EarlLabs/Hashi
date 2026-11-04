@@ -51,14 +51,20 @@ HEARTBEAT_INTERVAL_SECONDS = 15.0
 async def _beat_while_polling(poller: asyncio.Task, stop: asyncio.Event) -> None:
     """Rewrite the heartbeat on a beat; ask for shutdown if the poll loop ever ends.
 
-    ``poll_forever`` only returns when it is cancelled — its own contract — so a poller
-    that is ``done()`` while we did not ask for it has taken the bot off the air. That is
-    surfaced by setting ``stop``: the process exits and ``restart: unless-stopped`` brings a
-    fresh one up, rather than a container that is up with nothing polling behind it.
+    ``poll_forever`` only returns when it is cancelled — its own contract — so a poller that
+    is ``done()`` while we did not cancel it is a bug that has taken the bot off the air. It
+    ends two ways and the log says which: it RAISED (its exception is re-raised from
+    ``stop_poller`` during the shutdown below, so the process exits non-zero WITH the
+    traceback — it did not stop cleanly) or it RETURNED (a clean exit). Either way
+    ``restart: unless-stopped`` brings a fresh one up; this only takes the wedged process
+    down so that can happen, rather than a container that is up with nothing polling behind it.
     """
     while not stop.is_set():
         if poller.done():
-            logger.error("telegram-bot: the poll loop stopped on its own; exiting to be restarted.")
+            if poller.cancelled() or poller.exception() is None:
+                logger.error("telegram-bot: the poll loop ended on its own; exiting to restart.")
+            else:
+                logger.error("telegram-bot: the poll loop crashed; exiting to restart.")
             stop.set()
             return
         HEARTBEAT_PATH.write_text(str(time.time()))
@@ -106,9 +112,12 @@ async def _run() -> None:
         heartbeat.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat
-        # Cancel the poll loop before the pool is disposed, telegram_poller.stop_poller's
+        # Cancel the poll loop before the pool is disposed — telegram_poller.stop_poller's
         # and audit.stop_sweeper's rule: the loop may hold a session, and disposing the
-        # engine out from under it turns a clean shutdown into a traceback nobody reads.
+        # engine out from under it turns a clean shutdown into a traceback nobody reads. If
+        # the loop already ended by crashing, stop_poller re-raises its exception here on
+        # purpose — the failure belongs in the log and in the non-zero exit, not swallowed —
+        # and dispose still runs, from the inner finally.
         try:
             await telegram_poller.stop_poller(poller)
         finally:

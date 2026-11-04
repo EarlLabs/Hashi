@@ -173,7 +173,7 @@ services:
   # instead (deploy/docker/entrypoint.sh dispatches). It is built from the identical
   # Dockerfile rather than sharing one `image:` tag, because an `image:` on a locally-built
   # service would have to carry a version string the pinning rule (tests/infra/test_compose
-  # .py) otherwise rejects; the two builds are byte-identical through the cache.
+  # .py) otherwise rejects; both are built from the same context and Dockerfile.
   #
   # TIED TO THE CONTROL PLANE BY THE SHARED DATABASE and nothing else: same network, no new
   # protocol, no port. It reads the same Settings (the anchor), plus the three Telegram

@@ -42,6 +42,7 @@ CONTROL_DOCKERFILE = DEPLOY / "docker" / "control.Dockerfile"
 FAKE = REPO / ".e2e" / "fake_telegram.py"
 ENV_EXAMPLE = REPO / ".env.example"
 MAKEFILE = REPO / "Makefile"
+BOTMAIN = REPO / "control" / "app" / "botmain.py"
 
 TELEGRAM_SETTINGS = (
     "HASHI_TELEGRAM_BOT_TOKEN",
@@ -191,6 +192,39 @@ def test_make_turns_the_bot_on_through_a_profile() -> None:
     assert re.search(
         r"^COMPOSE\s*:?=.*foreach\s+\w+,\s*\$\(PROFILES\).*--profile", makefile, re.M
     ), "COMPOSE does not turn PROFILES into --profile flags, so `make up PROFILES=…` is a no-op"
+
+
+def _heartbeat_path_in_botmain() -> str:
+    """The ``HEARTBEAT_PATH`` literal in control/app/botmain.py, read from the source so this
+    test needs none of the bot process's own imports."""
+    tree = ast.parse(BOTMAIN.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "HEARTBEAT_PATH"
+            for target in node.targets
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and call.args, (
+                "HEARTBEAT_PATH is no longer pathlib.Path(<literal>)"
+            )
+            literal = call.args[0]
+            assert isinstance(literal, ast.Constant), "HEARTBEAT_PATH is not a plain string literal"
+            return str(literal.value)
+    raise AssertionError("control/app/botmain.py no longer defines HEARTBEAT_PATH")
+
+
+def test_the_bot_healthcheck_reads_the_heartbeat_the_bot_writes() -> None:
+    """The one file botmain rewrites while polling and the one the healthcheck reads have to
+    be the same — M39.1. They live in two files whose own comments say they must agree, and a
+    drift would make the healthcheck read a file nothing writes and call a live bot unhealthy.
+    """
+    path = _heartbeat_path_in_botmain()
+    test = load(BASE)["services"]["telegram-bot"]["healthcheck"]["test"]
+    healthcheck = " ".join(test) if isinstance(test, list) else str(test)
+    assert path in healthcheck, (
+        f"botmain writes {path!r} but the telegram-bot healthcheck reads {healthcheck!r} — "
+        "the two have drifted"
+    )
 
 
 def test_env_example_names_the_three_settings_and_leaves_them_blank() -> None:
