@@ -55,6 +55,8 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
+**Update 2026-11-04.** **M37 and M38 are both done** — the owner-only Telegram bot (`/adduser`, pushes to the nodes, replies with links) and its two follow-on commands (`/nodes` lists the serving nodes that are behind; `/apply <name>` is the Nodes screen's Apply from the phone). Each was built step by step, reviewed with nothing stopped at a cap, and accepted on the stand's fake Telegram. Branches `task/M37` (PR #11) and `task/M38` (PR open) both target `develop`. The owner's own walk is all that remains for either: a real bot reached from the Russian control-plane box, then a user added and a node applied from the phone — neither observable on a stand. M35 stays deferred; M36's real-host walk is the owner's. **Nothing else is queued.** The 2026-11-02 text below is history.
+
 **Update 2026-11-02.** **M37 is done** — built, reviewed (nothing stopped at a cap) and accepted on the stand in two rounds; the branch `task/M37` is pushed and its PR targets `develop`. The owner's own walk remains: a real bot from the Russian control-plane box, then the phone. **M38 is next** on the same branch. The 2026-11-01 text below is history.
 
 **Update 2026-11-01.** **M37 and M38 are PROPOSED and await the owner's approval** — M37 is an owner-only Telegram bot that adds a user, pushes them to every serving node by itself and replies with the panel's links (five steps, five decisions at its foot: scope, the `httpx` dependency, the fake Telegram on the stand, the acceptance line, the command's name); M38 adds `/nodes`, the panel's "behind" block in the bot's words, and `/apply <name>`, the Nodes screen's Apply from a phone (three steps, three decisions). Nothing of either is built. M36 is merged to `develop` (PR #10) and still marked `→`: its real-host walk is the owner's. M35 stays deferred.
@@ -3815,7 +3817,7 @@ command to get there.
 
 ---
 
-## → M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 (a second milestone after M37, `/nodes` and `/apply <name>`, acceptance yes) · after M37
+## ✅ M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 · built 2026-11-02/04 on `task/M38` · done 2026-11-04 (acceptance: good — 1 round on the stand's fake Telegram, 1 clumsy line; a real node applied from the owner's phone is the owner's walk)
 
 **What the owner asked for.** "Suggest me nodes for apply new config." The console
 already answers that question on every screen: since M32 a block names the serving nodes
@@ -3885,18 +3887,18 @@ not the add's, and why.
 `make test-control`.
 
 **Done when.**
-- [ ] `/nodes` names exactly the nodes the panel's "behind" block names at that moment,
+- [x] `/nodes` names exactly the nodes the panel's "behind" block names at that moment,
       says so in one sentence when there are none, and dials nothing.
-- [ ] After an add that could not update a node, the reply names that node, says why in
+- [x] After an add that could not update a node, the reply names that node, says why in
       the panel's sentence, and offers `/apply <name>` for it and for nothing else.
-- [ ] `/apply <name>` does what the Nodes screen's Apply does — including taking a node
+- [x] `/apply <name>` does what the Nodes screen's Apply does — including taking a node
       into service and marking it degraded on a failure — and the reply says what was
-      applied and what could not be measured, in the panel's sentences.
-- [ ] No config, no key and no raw error text ever reaches the chat, including on a
+      applied and what could not be measured, in the panel's sentences. *(the refusal and degraded-on-failure paths on the stand; a successful apply needs a reachable host — the owner's walk)*
+- [x] No config, no key and no raw error text ever reaches the chat, including on a
       failure whose message quotes one.
-- [ ] An unknown node name is refused in words; a message from any other account is
+- [x] An unknown node name is refused in words; a message from any other account is
       dropped in silence, as in M37.
-- [ ] On the stand, `/nodes` answers the empty sentence and `/apply <unknown>` refuses.
+- [x] On the stand, `/nodes` answers the empty sentence and `/apply <unknown>` refuses.
 - [ ] Not checkable on a stand: a real node applied from the owner's phone. The owner's
       own run, after the merge.
 
