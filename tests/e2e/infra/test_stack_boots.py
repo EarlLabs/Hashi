@@ -11,7 +11,8 @@ HOW:  asks compose for the state of the project named by E2E_PROJECT. Boots
       starting one mid-test.
 
 Boundary: real control + postgres + caddy, plus the fake Telegram the e2e overlay runs
-beside them (M37.4) — stubbed, and part of every stand. Nothing external.
+beside them (M37.4) — stubbed, and part of every stand — and the add-user bot as its own
+container (M39), switched on for the stand behind the `telegram-bot` profile. Nothing external.
 """
 
 import json
@@ -34,7 +35,7 @@ def test_every_service_is_running(compose) -> None:
     """Caddy is the one that used to be missing here: its config arrived as a
     bind mount, which exists only on the machine holding this checkout."""
     state = services(compose)
-    assert set(state) == {"control", "db", "caddy", "telegram"}, (
+    assert set(state) == {"control", "db", "caddy", "telegram", "telegram-bot"}, (
         f"unexpected set of running services: {sorted(state)}"
     )
     stopped = {name: entry["State"] for name, entry in state.items()

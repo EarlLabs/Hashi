@@ -62,6 +62,12 @@ COMPOSE = [
     # stack it is talking to is up and healthy, which reads as "the stack is broken".
     "--env-file", ".env", "--env-file", "deploy/e2e.env",
     "-p", PROJECT,
+    # The bot runs behind the `telegram-bot` profile (deploy/docker-compose.yml), which the
+    # stand switches on (Makefile `e2e-up`) — M39. Name it here too: on some compose versions
+    # a profiled service is outside the set `docker compose ps` reports on unless its profile
+    # is active, so without this `logs_of("telegram-bot")` could not find the bot's container
+    # and `test_stack_boots.py` would not see the bot running.
+    "--profile", "telegram-bot",
     "-f", "deploy/docker-compose.yml",
     "-f", "deploy/docker-compose.dev.yml",
     "-f", "deploy/docker-compose.e2e.yml",

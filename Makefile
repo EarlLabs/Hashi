@@ -541,10 +541,19 @@ E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
 # gigabyte of shared memory. Worse, it defeated `stand.sh up`'s own safety check —
 # that refuses to continue if anything still answers /healthz, and a leaked
 # browser answers nothing, so it passed and accumulated.
-# tests/infra/test_the_hands_can_take_an_action.py fails if the overlay grows a
-# profile this list does not have.
-E2E_ALL_PROFILES := browser
+# `telegram-bot` joined the list in M39: the bot is always part of the stand (see
+# e2e-up below), and it is declared in docker-compose.e2e.yml so this set and the
+# overlay's own profiles agree — tests/infra/test_the_hands_can_take_an_action.py
+# fails if they drift, which is what would leave a bot container behind on teardown.
+E2E_ALL_PROFILES := browser telegram-bot
 
+# The bot is always part of the stand — tests/e2e/control/test_the_owner_adds_a_user
+# _from_telegram.py needs it polling the fake — so its profile is forced on here, ON
+# TOP of whatever the caller asked for (scripts/acceptance/stand.sh passes
+# E2E_PROFILES=browser). `override ... +=` is what appends it to a command-line
+# E2E_PROFILES rather than letting that value replace it; e2e-down tears it down
+# through E2E_ALL_PROFILES the same way.
+e2e-up: override E2E_PROFILES += telegram-bot
 e2e-up: env
 	$(NO_ATTESTATIONS) $(E2E_PORTS) $(COMPOSE_E2E) up -d --build
 

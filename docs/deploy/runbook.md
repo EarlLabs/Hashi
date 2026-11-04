@@ -1685,12 +1685,15 @@ backup — they are public data and your own two lists, not anything about a use
 
 ## Adding a user from Telegram (the owner's bot)
 
-A long-polling bot inside the control plane (M37) that takes one command from one
-Telegram account — yours — and runs the add the panel's dialog runs: create the user,
-push them to every serving node, hand back the links. Nothing else, from nobody else. It
-is **off** until two lines are in `.env`, and an install without them is unchanged: no
-task starts and the log holds no Telegram line. The control plane dials Telegram;
-nothing listens, nothing is published, and Caddy is not touched.
+A long-polling bot that takes one command from one Telegram account — yours — and runs
+the add the panel's dialog runs: create the user, push them to every serving node, hand
+back the links. Nothing else, from nobody else. Since M39 it is **its own container**
+beside the control plane (`telegram-bot` in `deploy/docker-compose.yml`), tied to the
+panel only by the shared database — the control plane itself no longer polls. It is
+**off** until the `telegram-bot` profile is switched on with the two lines below in
+`.env`; an install that does neither is unchanged — the container is never started, no
+task runs and no log holds a Telegram line. The bot dials Telegram outbound; nothing
+listens, nothing is published, and Caddy is not touched.
 
 ### Switching it on
 
@@ -1709,43 +1712,56 @@ nothing listens, nothing is published, and Caddy is not touched.
    be changed and reassigned, the number cannot). No third-party "what is my id" bot is
    needed, and none should be handed this token. If `result` is `[]`, send the bot another
    message and run the `curl` again.
-   **The order matters.** Once the control plane polls, it confirms every update it reads
-   by offset, so your message is gone from the next `getUpdates` — and Telegram answers a
-   second poller on the same token with `409 Conflict`. The `curl` runs first, and nothing
-   else may poll this token while the control plane does.
+   **The order matters.** Once the bot polls, it confirms every update it reads by offset,
+   so your message is gone from the next `getUpdates` — and Telegram answers a second poller
+   on the same token with `409 Conflict`. The `curl` runs first, and nothing else may poll
+   this token while the bot does.
 3. **The `.env` lines**, on the control-plane box (`.env.example` carries the same three
    under *the owner's Telegram bot*):
    ```
    HASHI_TELEGRAM_BOT_TOKEN=<the token from step 1>
    HASHI_TELEGRAM_OWNER_ID=<the number from step 2>
    ```
-   Both or neither. One without the other stops the control plane at boot with a sentence
-   that begins `HASHI_TELEGRAM_BOT_TOKEN and HASHI_TELEGRAM_OWNER_ID are set together or
-   not at all` and ends `Refusing to start.` — `make logs` shows it under `control`. A
-   third line, `HASHI_TELEGRAM_API_URL`, is where the Bot API is dialled; blank means
-   Telegram's own, `https://api.telegram.org`, and it is set only to a relay you run
-   yourself, on a box from which Telegram's address does not answer (*Known-unproven*,
-   below). Building that relay is not this project's.
-4. **Bring the panel up again with the command this host was published with** —
-   `make up-panel` over the management tunnel, `make up-panel-over-ssh` without one;
-   `make up` only on an install that publishes nothing, because on a published host it
-   takes the published ports away. compose recreates `control` for the changed
-   environment. Not `make restart-control`: a restart keeps the environment the container
-   already had.
-5. **Watch it start**, in `make logs`:
+   Both or neither. One without the other stops the **bot container** at boot with a
+   sentence that begins `HASHI_TELEGRAM_BOT_TOKEN and HASHI_TELEGRAM_OWNER_ID are set
+   together or not at all` and ends `Refusing to start.` — `make logs PROFILES=telegram-bot`
+   shows it under `telegram-bot`. The control plane no longer reads these two, so it boots
+   either way; it is the bot that refuses half a pair. A third line, `HASHI_TELEGRAM_API_URL`,
+   is where the Bot API is dialled; blank means Telegram's own, `https://api.telegram.org`,
+   and it is set only to a relay you run yourself, on a box from which Telegram's address
+   does not answer (*Known-unproven*, below). Building that relay is not this project's.
+4. **Switch the bot on with the command this host was published with, plus
+   `PROFILES=telegram-bot`** — `make up-panel PROFILES=telegram-bot` over the management
+   tunnel, `make up-panel-over-ssh PROFILES=telegram-bot` without one; `make up
+   PROFILES=telegram-bot` only on an install that publishes nothing, because on a published
+   host plain `make up` takes the published ports away. compose starts the `telegram-bot`
+   container and leaves the rest converged — the control plane is not recreated, because its
+   environment has not changed (the Telegram settings reach the bot, not it). A later `up`
+   without `PROFILES=telegram-bot` leaves the running bot in place; to take it down, stop the
+   `telegram-bot` service by name.
+5. **Watch it start**, in the bot container's log — `make logs PROFILES=telegram-bot` (plain
+   `make logs` does not follow a profiled service):
    ```
    INFO control.app.services.telegram_poller: telegram: polling as @<your bot's username>
    ```
    That line is the bot: it has reached Telegram, learned its own name and is polling. It
-   is written once per start of the control plane. If Telegram does not answer from this
+   is written once per start of the bot container. If Telegram does not answer from this
    box, the log holds one WARNING instead — `telegram: polling is failing: Telegram could
    not be reached for getMe (ConnectError). Retrying, up to a minute apart, until Telegram
    answers; this is said once, not per retry.` (the sentence after the colon names the
    call and the reason; it never names the address or the token) — and the panel and
-   `/sub/` are unaffected: the bot is a background task, and the control plane does not
-   wait for it. The bot resumes by itself when Telegram answers again, without a restart:
-   while it was still starting, the signal is the `polling as` line itself; once it had
-   been polling, it is `INFO … telegram: Telegram answers again; polling resumed`.
+   `/sub/` are unaffected: the bot is a separate container, and nothing waits for it. The
+   bot resumes by itself when Telegram answers again, without a restart: while it was still
+   starting, the signal is the `polling as` line itself; once it had been polling, it is
+   `INFO … telegram: Telegram answers again; polling resumed`.
+
+   **On a Russian entry box, expect the WARNING, not the `polling as` line — for now.**
+   Reaching `api.telegram.org` from that box is the border this whole fleet exists to cross,
+   and the route the bot is meant to take — out through a leaf — is the leaf egress of M40,
+   which has not landed. So until M40 the bot on the real host sits in `polling is failing`
+   and answers no command, while the panel and `/sub/` serve normally. On the e2e stand the
+   bot polls a fake Bot API on the compose network, so there the `polling as` line appears at
+   once — the stand proves the bot composes, never that Telegram answers from Russia.
 
 ### What the bot answers
 
@@ -2241,16 +2257,17 @@ show a border. Whether a refresh from inside Russia reaches it while the control
 unreachable is a field observation nobody has made yet. The arrangement walked on real
 hosts is C+E | L (2026-10-02), where no delivery host exists by construction.
 
-**The Bot API has never been polled from a Russian control-plane box.** The owner's
-Telegram bot (*Adding a user from Telegram*, above) is the control plane dialling
-`api.telegram.org` from the entry box, and whether that address answers from there is a
-field observation nobody has made: the stand runs the whole loop against a fake Bot API
-(`.e2e/profile.yml` lists `telegram` under `stubbed`), which proves the bot composes
-inside the real control plane and says nothing about a border. The first `make logs` after
-the two lines go in is what turns it into a fact — the `polling as` line, or the one
-WARNING. If it is the WARNING, the panel and delivery are unaffected, and
-`HASHI_TELEGRAM_API_URL` is where a relay you run yourself would go; that is a finding,
-not a mistake on your side.
+**The Bot API has never been polled from a Russian entry box.** The owner's Telegram bot
+(*Adding a user from Telegram*, above) is the `telegram-bot` container dialling
+`api.telegram.org` from the entry box — and reaching that address from there is the border
+this fleet exists to cross. The route the bot is meant to take, out through a leaf, is the
+leaf egress of M40, which has not landed; until it does, expect the `polling is failing`
+WARNING on the real host and no command answered, with the panel and delivery unaffected.
+The stand runs the whole loop against a fake Bot API (`.e2e/profile.yml` lists `telegram`
+under `stubbed`), which proves the bot composes beside the real control plane and says
+nothing about a border. `make logs PROFILES=telegram-bot` is what shows which line it is;
+`HASHI_TELEGRAM_API_URL` is where a relay you run yourself would go if you build one before
+M40 — but the route M40 adds is the fleet's own answer, not a mistake on your side.
 
 ## Backups
 

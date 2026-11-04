@@ -69,6 +69,14 @@ def telegram(overlay: dict) -> dict:
     return overlay["telegram"]
 
 
+@pytest.fixture(scope="module")
+def bot(overlay: dict) -> dict:
+    """The bot service the overlay switches on — M39. It is the process that polls now,
+    so the fixtures that pointed the stand at the fake live on it, not on `control`."""
+    assert "telegram-bot" in overlay, "the e2e overlay runs no `telegram-bot` service"
+    return overlay["telegram-bot"]
+
+
 # --- the wiring ---------------------------------------------------------------------
 
 
@@ -102,34 +110,49 @@ def test_the_fake_has_a_healthcheck_and_a_restart_policy(telegram: dict) -> None
     assert "restart" in telegram, "telegram: no restart policy"
 
 
-def test_the_control_plane_is_pointed_at_the_fake(overlay: dict, telegram: dict) -> None:
-    """The three variables, set to the fake, the fixture token and the fixture id."""
-    environment = overlay["control"]["environment"]
+def test_the_bot_is_pointed_at_the_fake_and_the_control_plane_is_not(
+    overlay: dict, telegram: dict, bot: dict
+) -> None:
+    """The three variables, set to the fake, the fixture token and the fixture id — on the
+    BOT service now (M39), the one process that polls, and gone from `control`."""
+    environment = bot["environment"]
+    control = overlay["control"]["environment"]
     port = telegram["environment"]["FAKE_TELEGRAM_PORT"]
     assert environment["HASHI_TELEGRAM_API_URL"] == f"http://telegram:{port}", (
-        "the control plane dials somewhere other than the `telegram` service on the port "
-        "the fake was told to listen on"
+        "the bot dials somewhere other than the `telegram` service on the port the fake was "
+        "told to listen on"
     )
     assert environment["HASHI_TELEGRAM_BOT_TOKEN"], "no token, so the bot is off on the stand"
     owner = str(environment["HASHI_TELEGRAM_OWNER_ID"])
     assert owner.isdigit() and int(owner) > 0, f"the owner id {owner!r} is not a positive integer"
+    for name in TELEGRAM_SETTINGS:
+        assert name not in control, (
+            f"{name} still reaches the control service on the stand — the web process must "
+            "not poll (a second poller on one token is a 409 from Telegram)"
+        )
+    # Links the bot renders must match what this plain-HTTP stand serves, or the scenario's
+    # link-equality check fails: the overlay sets HASHI_PUBLIC_HTTPS=false on control and the
+    # bot has to carry the same, since the base anchor leaves it at the shipped https default.
+    assert environment["HASHI_PUBLIC_HTTPS"] == "false", (
+        "the bot would render https links the stand does not serve"
+    )
     # The mapping's container side and the healthcheck have to name the same port.
     (mapping,) = telegram["ports"]
     assert str(mapping).endswith(f":{port}"), mapping
     assert f":{port}/" in " ".join(telegram["healthcheck"]["test"]), telegram["healthcheck"]
 
 
-def test_the_control_plane_waits_for_the_fake(overlay: dict) -> None:
+def test_the_bot_waits_for_the_fake(bot: dict) -> None:
     """So the poller's first call lands and its ready line is in the log from boot."""
-    assert overlay["control"]["depends_on"]["telegram"]["condition"] == "service_healthy"
+    assert bot["depends_on"]["telegram"]["condition"] == "service_healthy"
 
 
-def test_the_fixture_values_are_not_the_shape_of_real_ones(overlay: dict) -> None:
+def test_the_fixture_values_are_not_the_shape_of_real_ones(bot: dict) -> None:
     """A token that could be mistaken for a real one is one somebody copies into .env.
 
     A real Bot API token is ``<digits>:<35 characters>``; the stand's must not be.
     """
-    token = str(overlay["control"]["environment"]["HASHI_TELEGRAM_BOT_TOKEN"])
+    token = str(bot["environment"]["HASHI_TELEGRAM_BOT_TOKEN"])
     assert not re.fullmatch(r"\d+:[A-Za-z0-9_-]{35}", token), token
     assert "not-a-real" in token, "the token does not say what it is"
 

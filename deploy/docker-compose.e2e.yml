@@ -46,19 +46,45 @@ services:
       # password, and the scenario would look like a credentials bug rather than a
       # quoting one. `$$` is compose's escape and arrives as a single `$`.
       HASHI_OPERATOR_PASSWORD_HASH: "scrypt$$32768$$8$$1$$QO/d/qvoYxARMag5H46vug==$$RK2Hhwuh2AIM0lympYvnnDhv6MrAHIyoV7KuOV4Y6pU="
-      # The bot, ON for this stand and pointed at the fake Telegram below — M37.4. The
-      # token and the owner id are FIXTURES, not credentials: no bot exists behind this
-      # token and no account behind this id, and the only thing they ever reach is the
-      # fake below. Committed on the same grounds as the hash above. The id is also what
-      # a scenario sends as "the owner" (tests/e2e/conftest.py carries the same default),
-      # and 8081 is the port the `telegram` service listens on INSIDE the compose network
-      # — the name and the port are both compose's, and neither is dialled from outside.
+      # The three HASHI_TELEGRAM_* settings are NOT here — M39. The web process no longer
+      # polls (the poller moved into the telegram-bot container, M39.1); on this stand the
+      # bot is the `telegram-bot` service below, and the fixtures that used to sit here moved
+      # there with it. A token on this service would configure nothing — and a second poller
+      # on one token is a 409 from Telegram.
+
+  # The owner's add-user bot, ON for this stand — M39. In the base file it is off behind the
+  # `telegram-bot` profile and tied to the panel ONLY by the shared database; here it is
+  # switched on (the Makefile's `e2e-up` forces the profile) and pointed at the fake Telegram
+  # below. It is the ONLY process that polls — the control service above no longer carries the
+  # Telegram settings.
+  #
+  # The profile is repeated so this overlay's OWN profile set names it: `make e2e-down` tears
+  # down every profile in E2E_ALL_PROFILES, which
+  # tests/infra/test_the_hands_can_take_an_action.py holds equal to the profiles THIS file
+  # declares — a profile only in the base file would then leave a bot container behind on
+  # teardown.
+  telegram-bot:
+    profiles: ["telegram-bot"]
+    environment:
+      # The fake Bot API, the fixture token and the fixture owner id — M37.4, moved here from
+      # the control service with the poller (M39). FIXTURES, not credentials: no bot exists
+      # behind this token and no account behind this id, and the only thing they ever reach is
+      # the fake below. Committed on the same grounds as the operator hash above. The id is
+      # also what a scenario sends as "the owner" (tests/e2e/conftest.py carries the same
+      # default), and 8081 is the port the `telegram` service listens on INSIDE the compose
+      # network — the name and the port are both compose's, and neither is dialled from outside.
       HASHI_TELEGRAM_API_URL: http://telegram:8081
       HASHI_TELEGRAM_BOT_TOKEN: e2e-not-a-real-bot-token
       HASHI_TELEGRAM_OWNER_ID: "424242"
-    # Boot after the fake answers, so the poller's first call succeeds and its "polling
-    # as" line is in the log from the start rather than after a backoff. Compose merges
-    # this with the base file's own dependency on the database.
+      # The e2e overlay sets HASHI_PUBLIC_HTTPS=false on `control` and nowhere else, so the
+      # bot would otherwise inherit the shipped default (https) and reply with
+      # `https://localhost/sub/...` — a link this plain-HTTP stand does not serve, which breaks
+      # the scenario's check that the bot's link resolves and matches the panel's. Off here for
+      # the same reason, and with the same value, as on control.
+      HASHI_PUBLIC_HTTPS: "false"
+    # Boot after the fake answers, so the poller's first getMe succeeds and its "polling as"
+    # line is in the log from the start rather than after a backoff. Compose merges this with
+    # the base file's own dependency on the control service (which runs the shared migrations).
     depends_on:
       telegram:
         condition: service_healthy

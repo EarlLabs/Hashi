@@ -41,6 +41,13 @@ import pytest
 
 OPERATOR = {"username": "owner", "password": "e2e-operator-password"}
 
+# The container the poller runs in — M39. The bot left the control plane's process and is
+# now its own service (deploy/docker-compose.yml, switched on for the stand by the e2e
+# overlay), so its readiness line and any line that might name a sender live in THIS log,
+# not control's. The control plane no longer polls, so reading its log for either would be
+# reading a log the bot never writes to.
+BOT = "telegram-bot"
+
 # The line the poller writes once Telegram — here the fake — has answered ``getMe``.
 # Without it an injected update sits in the fake's queue with nobody polling for it,
 # and every assertion below would be about a bot that was never up.
@@ -66,12 +73,12 @@ async def telegram(telegram_url: str):
 
 @pytest.fixture(scope="module")
 def polling(logs_of) -> None:
-    """Block until the stand's control plane reports that it is polling, once per module."""
+    """Block until the bot container reports that it is polling, once per module."""
     deadline = time.monotonic() + 90
-    while READY not in logs_of("control"):
+    while READY not in logs_of(BOT):
         assert time.monotonic() < deadline, (
-            "the control plane never wrote `telegram: polling as` — is the bot switched on "
-            "and pointed at the fake in deploy/docker-compose.e2e.yml?"
+            "the bot container never wrote `telegram: polling as` — is the telegram-bot "
+            "profile up and pointed at the fake in deploy/docker-compose.e2e.yml?"
         )
         time.sleep(1)
 
@@ -218,10 +225,10 @@ async def test_a_stranger_gets_no_reply_and_creates_nobody(
 
     operator = await logged_in(client)
     assert nickname not in await nicknames(operator), "a stranger's /adduser created a user"
-    log = logs_of("control")
+    log = logs_of(BOT)
     assert READY in log, "the log being read is not the bot's — the ready line is missing"
     assert str(STRANGER) not in log, (
-        "a line in the control plane's log names the stranger — a record of who tried is "
+        "a line in the bot container's log names the stranger — a record of who tried is "
         "a record about a person, and this product keeps none"
     )
 
