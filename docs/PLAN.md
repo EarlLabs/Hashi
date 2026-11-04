@@ -3841,7 +3841,7 @@ The stand routes the bot through a stand leaf and shows the fake Telegram reache
 acceptance: yes (partial — the stand proves the plumbing; the border crossing is the owner's field walk)
 On the stand, bring the bot up with its egress routed through a stand leaf, confirm it polls the fake Telegram through that path and a user can be added. The real walk is the owner's, on the Russian host against real Telegram through a real leaf.
 
-## → M39 — The add-user bot moves into its own container, tied to the panel over the local docker network · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · supersedes the dropped gRPC/mTLS proposal
+## ✅ M39 — The add-user bot moves into its own container, tied to the panel over the local docker network · asked for by the owner 2026-11-04 · built 2026-11-04 on `task/M39` · done 2026-11-04 (acceptance: good — 1 round on the stand; the bot runs as its own container, the control plane polls nothing, stopping the bot leaves the panel and delivery up). Supersedes the dropped gRPC/mTLS proposal.
 
 **Why.** M37/M38 built the bot in-process. The owner wants it in its own container, co-located on the control-plane host, tied to the panel the simplest way that works: **the shared Postgres over the local docker network — no gRPC, no mTLS**, both dropped on 2026-11-04 as unnecessary while the bot and the panel share one host. The bot's Telegram-facing code from M37/M38 is reused verbatim; only its hosting changes. The point is to make it work, nothing more.
 
@@ -3857,11 +3857,11 @@ The e2e stand brings the bot up as its container against the stand's database an
 **E2E:** the M37/M38 control scenarios, re-pointed at the containerised bot (shared DB, fake Telegram), green on the stand; the suites stay green with the bot absent (its default).
 
 **Done when.**
-- [ ] The bot runs as its own container, shares the database over the docker network, and adds a user / lists behind nodes / applies one exactly as M37/M38, every reply unchanged.
-- [ ] The control plane starts no second poller: with the Telegram settings on the bot container only, the control container polls nothing.
-- [ ] With the bot absent (no settings), the control plane is exactly as before.
-- [ ] No token, config, key or raw error reaches the chat or any log — the M37/M38 property, preserved.
-- [ ] `make verify` runs the loop on the stand with the bot as its container.
+- [x] The bot runs as its own container, shares the database over the docker network, and adds a user / lists behind nodes / applies one exactly as M37/M38, every reply unchanged.
+- [x] The control plane starts no second poller: with the Telegram settings on the bot container only, the control container polls nothing.
+- [x] With the bot absent (no settings), the control plane is exactly as before.
+- [x] No token, config, key or raw error reaches the chat or any log — the M37/M38 property, preserved.
+- [x] `make verify` runs the loop on the stand with the bot as its container.
 - [ ] Not on a stand (and only once M40 lands): the bot on the real Russian host reaching Telegram and adding a user from the owner's phone.
 
 acceptance: yes
