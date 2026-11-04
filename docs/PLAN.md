@@ -3813,73 +3813,88 @@ command to get there.
 
 ---
 
-## → M40 — The add-user bot is its own container, reaching the control plane over mTLS gRPC, co-located or on its own machine · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · after M39
+## → M41 — The co-located bot reaches Telegram by leaving through a leaf · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · after M40
 
-**Why.** M37 and M38 built the bot in-process in the control plane, and that works only where the control plane can reach Telegram. The owner's control plane is on the Russian entry box, where `api.telegram.org` is blocked (confirmed in the field, 2026-11-04). The fix the owner chose: the bot is a separate container (the shape of `Zhuravli.team/telegram-bot`), so it can run **on a machine abroad** where Telegram is reachable and talk back to the control plane over a secured channel — and can still run **co-located** on the control-plane host for development or once Telegram is reachable from there. The in-process poller M37.3 built is superseded by this container; its Telegram-facing code is not — the client, the owner gate, the command handlers, the no-leak discipline and every reply's wording are reused verbatim, and only the integration changes from direct service calls to the gRPC stub M39 exposes.
+**Why.** M40 puts the bot in a container on the control-plane host, which is the Russian entry box, where `api.telegram.org` is blocked (confirmed in the field, 2026-11-04). For the same-machine deploy to work, the bot's traffic to Telegram must leave the country the way a user's does: out through a leaf abroad over an obfuscated transport that survives TSPU. This is the piece that turns the restructured bot from dormant into working, and it is the one piece no stand can prove carries — a real leaf on a real Russian network is the owner's field check.
 
-**The two deploys, and what each needs.**
-- **Separate machine (abroad).** The bot reaches Telegram directly; it reaches the control plane (Russia) over mTLS gRPC. The reach-back path is a **decision below** (the management tunnel, recommended, or a published `+90` port). This deploy is the standing answer to the Telegram block — no leaf relay needed.
-- **Co-located (one host, like now).** The bot and the control plane share a host; gRPC runs over the compose network (or loopback), still mTLS. Telegram must be reachable from that host, so this is the dev deploy or the once-unblocked deploy. Routing this deploy's egress out through a leaf is **explicitly deferred** (its own milestone if the owner ever wants the bot to run in Russia and still reach Telegram).
+### M41.1 — (infra/edge) An obfuscated egress for the bot container, exiting at a leaf
+The bot container's egress routes through an obfuscated client (AmneziaWG, the fleet's own obfuscation) whose exit is a leaf that forwards to the internet — a sidecar the bot shares a network namespace with, or the entry's existing hop reused; the implementation's call. ONLY the bot's traffic is routed this way; the control plane's own networking is untouched. Never plain WireGuard (charter: protocol-blocked from Russia). MTU is set deliberately — the owner's own field note records a PMTUD blackhole on this network that needed MTU 1280 — and the config carries no fleet-wide shared fingerprint.
 
-### M40.1 — (infra) The bot container, built and run both ways
-`deploy/telegram-bot/` (its own `Dockerfile`, compose and `.env.example`, the `Zhuravli.team/telegram-bot` layout): a non-root, long-polling, outbound-only container. A co-located compose overlay joins it to the stack's network; a separate-machine compose runs it alone with the control plane's address and its client cert. One image, both deploys, driven from env like every other published value — never a hardcoded host or port.
+### M41.2 — (control) The bot's egress peer is minted like any other credential
+The peer the bot uses on the leaf is minted and rendered by the control plane through the existing transport/credential machinery, not a hand-written config, so it rotates and revokes like anything else and keeps no secret in git.
 
-### M40.2 — (control) The handlers call the gRPC stub, not the services
-The command module M37/M38 built keeps `handle_update`, the owner gate, `_COMMANDS`, `_messages`, the no-leak rules and every reply string; its calls to `onboarding.add_users`, `console.*` and `apply.apply_node` become calls to the M39 stub over the mTLS channel. The in-process `telegram_poller` lifespan task is removed from the control plane (superseded). The bot process owns its own poll loop and one session-less gRPC channel.
+### M41.3 — (infra/docs) The stand proves the plumbing; the runbook names the field check
+The stand routes the bot through a stand leaf and shows the (fake) Telegram reached through it; the runbook says plainly that a real leaf carrying it from a real Russian network is the owner's walk, and how to watch the bot go from "polling is failing" to "polling as @…" once egress is up.
 
-### M40.3 — (infra) The stand runs the bot as the container, over real mTLS
-The e2e stand brings the bot up as its container against the control plane's gRPC servicer with stand-issued certs, keeping the fake Telegram from M37.4. The M37/M38 e2e scenarios are re-pointed at this shape; `make verify` proves the whole loop end to end over mTLS.
-
-### M40.4 — (docs) Runbook: the two deploys, and the certs
-The runbook gains how to run the bot abroad (its cert, the control plane's address, the reach-back path) and co-located, how certs are issued and rotated (M39), and what each deploy assumes about Telegram reachability. The M37/M38 bot sections are updated from "a task in the control plane" to "a container".
-
-**E2E:** the M37/M38 control scenarios, re-pointed at the containerised bot over mTLS gRPC, green on the stand; the existing suites stay green with the bot absent (its default).
+**E2E:** the M40 scenario with the bot's egress routed through a stand leaf, green on the stand.
 
 **Done when.**
-- [ ] The bot runs as a separate container and adds a user, lists behind nodes and applies one, exactly as M37/M38, with every reply unchanged.
-- [ ] It runs co-located (shares the host) and on a separate machine (reaches the control plane over the chosen path), from one image.
+- [ ] The co-located bot's traffic to Telegram leaves through a leaf over an obfuscated transport; the control plane's own networking is unchanged.
+- [ ] On the stand the bot reaches the fake Telegram through the leaf path and the whole add / nodes / apply loop works end to end.
+- [ ] The egress peer is minted and revocable through the control plane, no secret in git, no shared fingerprint.
+- [ ] Not on a stand, the owner's walk: the real bot on the Russian host reaching real Telegram through a real leaf — the "polling as @…" line appearing is the proof.
+
+acceptance: yes (partial — the stand proves the plumbing; the border crossing is the owner's field walk)
+On the stand, bring the bot up with its egress routed through a stand leaf, confirm it polls the fake Telegram through that path and a user can be added. The real walk is the owner's, on the Russian host against real Telegram through a real leaf.
+
+## → M40 — The add-user bot is its own container on the control-plane host, over mTLS gRPC · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · after M39
+
+**Why.** M37/M38 built the bot in-process. The owner wants it as its own container (the `Zhuravli.team/telegram-bot` shape), co-located on the control-plane host — **the only deploy supported now; a separate machine is a future milestone**. Its Telegram-facing code is reused verbatim — the client, the owner gate, the command handlers, the no-leak discipline and every reply's wording — and only the integration changes from direct service calls to the M39 gRPC stub. The in-process poller M37.3 built is removed. The container reaches Telegram through M41's leaf egress.
+
+### M40.1 — (infra) The bot container, co-located on the stack's network
+`deploy/telegram-bot/` (its own `Dockerfile`, compose overlay and `.env.example`, the `Zhuravli.team/telegram-bot` layout): a non-root, long-polling, outbound-only container joined to the stack's network, holding its client cert and the control plane's local gRPC address. One optional service; absent by default. Never a hardcoded host or port.
+
+### M40.2 — (control) The handlers call the gRPC stub, not the services
+The command module keeps `handle_update`, the owner gate, `_COMMANDS`, `_messages`, the no-leak rules and every reply string; its calls to `onboarding.add_users`, `console.*` and `apply.apply_node` become calls to the M39 stub over the local mTLS channel. The in-process `telegram_poller` lifespan task is removed from the control plane. The bot process owns its own poll loop and one gRPC channel.
+
+### M40.3 — (infra) The stand runs the bot as the container, over real mTLS
+The e2e stand brings the bot up as its container against the control plane's gRPC servicer with stand-issued certs, keeping the fake Telegram from M37.4. The M37/M38 e2e scenarios are re-pointed at this shape; `make verify` proves the loop end to end over mTLS (egress through a leaf is M41's addition).
+
+### M40.4 — (docs) Runbook: the container deploy and the certs
+The runbook gains how to run the bot container beside the control plane, how its client cert is issued and rotated (M39), and the M37/M38 bot sections move from "a task in the control plane" to "a container".
+
+**E2E:** the M37/M38 control scenarios, re-pointed at the containerised bot over mTLS gRPC, green on the stand; the suites stay green with the bot absent (its default).
+
+**Done when.**
+- [ ] The bot runs as a separate container co-located with the control plane and adds a user, lists behind nodes and applies one exactly as M37/M38, every reply unchanged.
 - [ ] Every call crosses an mTLS channel; a client with no cert, a wrong cert or an untrusted CA is refused, and the refusal names nothing secret.
 - [ ] No token, config, key or raw error reaches the chat, the bot's log or the control plane's log — the M37/M38 property, preserved across the new boundary.
 - [ ] With the bot absent, the control plane is exactly as before: the gRPC servicer may be up (M39) but nothing polls Telegram.
 - [ ] `make verify` runs the loop on the stand with the bot as its container over real mTLS.
-- [ ] Not on a stand, the owner's walk: the bot on a real machine abroad, reaching the real control plane in Russia, adding a user from the owner's phone.
+- [ ] Not on a stand (and only once M41 lands): the bot on the real Russian host reaching Telegram and adding a user from the owner's phone.
 
 acceptance: yes
-On the stand, with the bot running as its container over mTLS against the control plane: as the owner's id add a user and read the links; send `/nodes` and `/apply`; as a stranger get silence; then stop the bot container and confirm the control plane is untouched and nothing polls Telegram. The real walk is the owner's: the container on a machine abroad, the control plane in Russia, a user added and a node applied from the phone.
+On the stand, with the bot running as its container over mTLS against the control plane: as the owner's id add a user and read the links; send `/nodes` and `/apply`; as a stranger get silence; then stop the bot container and confirm the control plane is untouched and nothing polls Telegram. The real walk is the owner's, once M41's egress is in place.
 
-**Deliberately not here.** Leaf-egress for a co-located Russian bot (deferred, its own milestone); a second bot account; anything M37/M38 already excluded.
+**Deliberately not here.** The separate-machine deploy (future milestone); leaf-egress (M41); a second bot account; anything M37/M38 already excluded.
 
 ## → M39 — The control plane answers admin calls over gRPC, authenticated by mTLS · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · before M40
 
-**Why.** The bot is moving out of the control plane's process (M40), so it needs a way in from outside — one that is safe across a network and across the Russian border, because in the real deploy the bot is abroad and the control plane is not. The owner chose gRPC with mTLS: a typed contract on the `+90` port the architecture already reserved for exactly this (`CLAUDE.md`, never wired until now), and mutual-certificate auth, which nothing in the fleet has yet (the warden's own gRPC runs insecure over an assumed-trusted channel, so this is built fresh rather than copied). This milestone is the surface; M40 is its only caller. It changes nothing a person sees, so it carries no acceptance walk of its own — M40's walk exercises it.
+**Why.** The bot is moving out of the control plane's process (M40) into its own container, so it needs a way in — the owner chose gRPC with mTLS, on the `+90` port the architecture already reserved for exactly this (`CLAUDE.md`, never wired until now). Same-machine only for now, so the boundary is local (two containers on one host) rather than cross-border; mTLS is kept as the owner specified, defense in depth now and the thing that makes a separate-machine deploy a small later change rather than a rebuild. Nothing in the fleet has mTLS yet (the warden's own gRPC runs insecure over an assumed-trusted channel), so it is built fresh. This milestone is the surface; M40 is its only caller; it changes nothing a person sees, so it carries no acceptance walk of its own.
 
 ### M39.1 — (control) The proto, and a servicer over the same services the panel uses
-A `.proto` for the admin operations the bot needs and nothing more: add user(s) returning the handed links and the per-node push outcome; the serving nodes that are behind; apply one node; a readiness ping. The servicer calls the very functions the panel and `/api` already call (`onboarding.add_users`, `console.nodes_missing_what_they_would_be_given`, `console.links_for`, `apply.apply_node`), so there is one implementation behind three doors. It carries the control rulebook's no-leak discipline to the new surface: never a rendered config, a key or a raw exception across the wire, and never a log line about who called or who was added.
+A `.proto` for the admin operations the bot needs and nothing more: add user(s) returning the handed links and the per-node push outcome; the serving nodes that are behind; apply one node; a readiness ping. The servicer calls the very functions the panel and `/api` already call (`onboarding.add_users`, `console.nodes_missing_what_they_would_be_given`, `console.links_for`, `apply.apply_node`) — one implementation behind three doors — and carries the rulebook's no-leak discipline to the wire: never a rendered config, a key or a raw exception, and never a log line about who called or who was added.
 
 ### M39.2 — (control/infra) mTLS, and the certificate machinery
-The server requires and verifies a client certificate (a private CA, a server cert for the control plane, a client cert per bot; `CERT_REQUIRED`). A script issues and rotates them and prints the client bundle once, the way `scripts/management-tunnel.sh` prints a device config — the control plane never mints the private half it does not need. Certs are secrets: read from paths, never logged, never in git, `.example` templates only.
+The server requires and verifies a client certificate (a private CA, a server cert, a client cert per bot; `CERT_REQUIRED`). A script issues and rotates them and prints the client bundle once, the way `scripts/management-tunnel.sh` prints a device config — the control plane never mints the private half it does not need. Certs are secrets: read from paths, never logged, never in git, `.example` templates only.
 
 ### M39.3 — (infra) The port, and the dependency
-The servicer binds the reserved `+90` gRPC port, published as each deploy needs (loopback/compose network co-located; reachable over the chosen path for a separate machine) and never as a service default. `grpcio`, `protobuf` and the build-time `grpcio-tools` enter `pyproject.toml` — the architect dependency the owner is approving with this milestone, filling the slot the port block already named.
+The servicer binds the reserved `+90` gRPC port on loopback / the compose network (same-machine only — not published to the internet; a separate-machine deploy is the later milestone that changes where it is reachable). `grpcio`, `protobuf` and the build-time `grpcio-tools` enter `pyproject.toml` — the architect dependency the owner approved on 2026-11-04, filling the slot the port block already named.
 
-**E2E:** a gRPC/infra test that the servicer refuses a missing, wrong or untrusted client cert and answers a valid one; the operations themselves are proven through M40's scenarios.
+**E2E:** a gRPC/infra test that the servicer refuses a missing, wrong or untrusted client cert and answers a valid one; the operations are proven through M40's scenarios.
 
 **Done when.**
-- [ ] The control plane answers the admin operations over gRPC on the `+90` port, calling the same services the panel does.
+- [ ] The control plane answers the admin operations over gRPC on the `+90` port (loopback / compose network), calling the same services the panel does.
 - [ ] A caller with a valid client cert is served; a missing, wrong or untrusted-CA cert is refused before any operation runs.
 - [ ] No config, key or raw error crosses the wire, and no log line records who called or who was added.
 - [ ] The certificate script issues a server cert and a client bundle, prints the client half once, and rotates without downtime; the private key the host does not need never touches it.
 - [ ] `make verify`'s static zones stay green; the new deps are pinned.
-- [ ] Not on a stand, the owner's walk: a real client cert from a machine abroad reaching the real `+90` port over the chosen path.
 
 acceptance: no
-A machine-to-machine contract with no interface a person walks; it is verified by its own tests and exercised by M40's acceptance. (The owner confirms this `no` at the gate.)
+A machine-to-machine contract with no interface a person walks; verified by its own tests and exercised by M40's acceptance.
 
-**Decisions needed from you (M39–M40).**
-1. **Reach-back for the separate-machine deploy:** over the existing obfuscated **management tunnel** (recommended — no new public surface on the Russian host) or a **published `+90` port** reachable directly.
-2. **Leaf-egress for a co-located Russian bot:** deferred as above (recommended), or wanted now as its own milestone.
-3. **M37/M38 (PRs #11, #12):** keep as the reviewed foundation whose code M40 reuses, superseding only the in-process hosting (recommended), or close them and fold everything into M39–M40.
-4. **The dependency:** `grpcio` + `protobuf` + `grpcio-tools` into `pyproject.toml` (M39.3) — confirm.
+**Decided by the owner 2026-11-04 (supersedes the earlier decision block):** same-machine deploy only, a separate machine is a future milestone; leaf-egress in scope now (M41); mTLS kept as a local boundary; PRs #11/#12 kept as the reviewed code M40 reuses, superseding only the in-process hosting; `grpcio` + `protobuf` + `grpcio-tools` added to `pyproject.toml`.
+
 
 ## → M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval · after M37
 
