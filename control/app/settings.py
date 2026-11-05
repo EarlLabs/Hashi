@@ -10,8 +10,9 @@ HOW:  ``Settings()`` raises when a required value is absent. Nothing else in the
 """
 
 import pathlib
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from control.app.crypto import is_well_formed_hash
@@ -36,6 +37,22 @@ class OperatorHashMalformed(RuntimeError):
     container output — an offline brute-force target, published by the code that was
     trying to protect it. Raising something pydantic does not wrap keeps the message
     to what an operator needs and no more.
+    """
+
+
+class TelegramSettingsIncomplete(RuntimeError):
+    """A bot token without the owner's id, or the id without the token — M37.1.
+
+    Refused at boot rather than tolerated, because the two halves only make sense
+    together: a token with no owner is a bot that would answer whoever finds it, and an
+    owner id with no token is a bot nobody can start. Either is one typo away from the
+    other, and the sentence names both variables so the fix is the line that is missing.
+
+    A ``RuntimeError`` and not a pydantic ``ValueError``, for ``OperatorHashMalformed``'s
+    reason, measured again here: a ``ValueError`` out of a MODEL validator becomes a
+    ``ValidationError`` whose text quotes the whole input it was validating — this
+    process's secret key, the operator's hash and the bot token, on every failed boot,
+    into whatever collects container output. Pydantic leaves any other exception alone.
     """
 
 
@@ -236,6 +253,54 @@ class Settings(BaseSettings):
     # entry becomes a source only when the owner adds it. ``on`` is whether it is switched
     # on once added — the narrow list is, the broader ones are not.
     routing_suggested_sources: str = ""
+
+    # THE OWNER'S TELEGRAM BOT — M37. Both blank is the default and means OFF: no task
+    # starts, nothing dials out, and the stand and every existing install change nothing.
+    # Both set turns it on; one without the other is refused below.
+    #
+    # The token is a bearer credential — every Bot API call carries it in the URL path,
+    # the way ``/sub/`` carries a subscription's — so it is a ``SecretStr``: ``repr`` of
+    # these settings prints asterisks, and the one place that needs the value
+    # (``services/telegram_api``) asks for it explicitly. ``secret_key`` and the hash
+    # above predate this choice and are plain strings; nothing reads them through
+    # ``repr`` either, but the bot's token travels through more code than they do.
+    #
+    # The owner is a NUMERIC ID, not a username: a username can be changed and reassigned,
+    # the id cannot (docs/PLAN.md, M37). Positive because that is what a Telegram user's
+    # id is — a negative id names a group or a channel, which the bot must never take
+    # commands from, and zero names nobody.
+    telegram_bot_token: SecretStr | None = None
+    telegram_owner_id: int | None = Field(default=None, gt=0)
+
+    # Where the Bot API is dialled. A SETTING with a default rather than a constant in the
+    # client, because this process runs on the entry box, in Russia, and whether
+    # Telegram's own endpoint answers from there is a field fact no stand can see; if it
+    # does not, this is where a relay goes. The e2e stand points it at a fake.
+    telegram_api_url: str = "https://api.telegram.org"
+
+    @field_validator("telegram_bot_token", mode="before")
+    @classmethod
+    def _blank_token_is_no_token(cls, value: object) -> object:
+        """A blank token is OFF on every path, not just the environment's.
+
+        ``env_ignore_empty`` already reads a blank variable as unset; this makes a blank
+        passed by a caller — ``Settings(telegram_bot_token="")`` — mean the same thing,
+        so that "both blank means off" is one rule rather than one per source.
+        """
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def _telegram_is_both_or_neither(self) -> Self:
+        """Refuse half a pair at boot, naming both halves. See the exception."""
+        if (self.telegram_bot_token is None) != (self.telegram_owner_id is None):
+            raise TelegramSettingsIncomplete(
+                "HASHI_TELEGRAM_BOT_TOKEN and HASHI_TELEGRAM_OWNER_ID are set together or "
+                "not at all: the token is the bot and the id is the one account it answers, "
+                "and one without the other is either a bot that would answer anyone or a "
+                "bot nobody can start. Set the missing one, or blank both to leave the "
+                "bot off. Refusing to start."
+            )
+        return self
 
     @field_validator("operator_password_hash")
     @classmethod

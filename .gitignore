@@ -10,6 +10,9 @@ __pycache__/
 *.key
 *.pem
 secrets/*
+# The bot's egress client config (M40): a real one holds a WireGuard private key, so it is
+# never committed — only deploy/egress/README.md, which says where it goes, is.
+deploy/egress/*.conf
 # ...except the templates that say how to fill them in (secrets/README.md).
 !secrets/README.md
 !secrets/*.example

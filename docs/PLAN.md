@@ -55,6 +55,10 @@ Charter: `docs/product/charter.md`. Frozen acceptance criteria:
 
 ## Where things stand
 
+**Update 2026-11-04.** **M37 and M38 are both done** — the owner-only Telegram bot (`/adduser`, pushes to the nodes, replies with links) and its two follow-on commands (`/nodes` lists the serving nodes that are behind; `/apply <name>` is the Nodes screen's Apply from the phone). Each was built step by step, reviewed with nothing stopped at a cap, and accepted on the stand's fake Telegram. Branches `task/M37` (PR #11) and `task/M38` (PR open) both target `develop`. The owner's own walk is all that remains for either: a real bot reached from the Russian control-plane box, then a user added and a node applied from the phone — neither observable on a stand. M35 stays deferred; M36's real-host walk is the owner's. **Nothing else is queued.** The 2026-11-02 text below is history.
+
+**Update 2026-11-02.** **M37 is done** — built, reviewed (nothing stopped at a cap) and accepted on the stand in two rounds; the branch `task/M37` is pushed and its PR targets `develop`. The owner's own walk remains: a real bot from the Russian control-plane box, then the phone. **M38 is next** on the same branch. The 2026-11-01 text below is history.
+
 **Update 2026-11-01.** **M37 and M38 are PROPOSED and await the owner's approval** — M37 is an owner-only Telegram bot that adds a user, pushes them to every serving node by itself and replies with the panel's links (five steps, five decisions at its foot: scope, the `httpx` dependency, the fake Telegram on the stand, the acceptance line, the command's name); M38 adds `/nodes`, the panel's "behind" block in the bot's words, and `/apply <name>`, the Nodes screen's Apply from a phone (three steps, three decisions). Nothing of either is built. M36 is merged to `develop` (PR #10) and still marked `→`: its real-host walk is the owner's. M35 stays deferred.
 
 **Update 2026-10-03.** The owner closed M24, M26, M31, M32, M33 and M34 after their real-host walks. The owner has not yet checked any of them from a phone. `develop` holds all of it (PRs #5–#8). **Nothing is open.** The owner dropped **M27** and **M30** and deferred **M35** on 2026-10-03. M16.3's resolver findings are still not dispatched. The 2026-10-02 text below is history.
@@ -3813,11 +3817,12 @@ command to get there.
 
 ---
 
-## → M40 — The bot's traffic to Telegram leaves through a hashi leaf · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · after M39
+## ✅ M40 — The bot's traffic to Telegram leaves through a hashi leaf · asked for by the owner 2026-11-04 · built 2026-11-05 on `task/M40` · done 2026-11-05 (acceptance: good, partial — the stand proves the bot reaches the fake Telegram through the leaf, the DB stays direct, and it fails closed; the real crossing from Russia is the owner's field check). Egress is MANDATORY in the `telegram-bot` profile; control-plane minting of the egress peer is DEFERRED to a future milestone (operator supplies `deploy/egress/awg0.conf` by hand for now).
 
 **Why.** The bot container (M39) runs on the Russian control-plane host, where `api.telegram.org` is blocked (field, 2026-11-04). For it to work its outbound traffic must leave through a leaf abroad over an obfuscated transport, the way a user's does. This is the one piece no stand can prove carries — a real leaf on a real Russian network is the owner's field check.
 
 ### M40.1 — (infra/edge) Route the bot container's egress through a leaf
+**Owner's decision 2026-11-04: MANDATORY in the `telegram-bot` profile** — the egress sidecar is part of the profile, so whenever the bot runs (on the stand too) it runs behind the leaf; the bot has no network of its own. The stand restructure (M40.3's isolating the fake Telegram behind a stand leaf) is INSEPARABLE from this and lands in the same step. Everything internet-bound (Telegram AND the bot's SSH-to-nodes) exits through the leaf; only the compose subnet (the shared DB) stays direct. Mechanism (PoC-proven): a sidecar on the fleet's `amneziawg-go` image, `NET_ADMIN`+`/dev/net/tun`, `network_mode: service:` shared with the bot; AmneziaWG client with `Table = off` + `PostUp = ip route replace default dev %i` (awg-quick's `AllowedIPs=0.0.0.0/0` auto-route fails in a container — read-only `/proc/sys`), MTU 1280, per-host obfuscation. PoC blueprint: scratchpad/poc.
 An obfuscated client (AmneziaWG, the fleet's own obfuscation — never plain WireGuard, which TSPU blocks from Russia) whose exit is a leaf that forwards to the internet: a sidecar the bot shares a network namespace with, or the entry's existing hop reused — the implementation's call. ONLY the bot's traffic is routed this way; the control plane's own networking is untouched. MTU is set deliberately (the owner's field note: a PMTUD blackhole here needed MTU 1280); no fleet-wide shared fingerprint.
 
 ### M40.2 — (control) The egress peer is minted like any other credential
@@ -3829,15 +3834,15 @@ The stand routes the bot through a stand leaf and shows the fake Telegram reache
 **E2E:** the M39 scenario with the bot's egress routed through a stand leaf, green on the stand.
 
 **Done when.**
-- [ ] The co-located bot's traffic to Telegram leaves through a leaf over an obfuscated transport; the control plane's own networking is unchanged.
-- [ ] On the stand the bot reaches the fake Telegram through the leaf path and the whole add / nodes / apply loop works end to end.
-- [ ] The egress peer is minted and revocable through the control plane, no secret in git, no shared fingerprint.
+- [x] The co-located bot's traffic to Telegram leaves through a leaf over an obfuscated transport; the control plane's own networking is unchanged.
+- [x] On the stand the bot reaches the fake Telegram through the leaf path and the whole add / nodes / apply loop works end to end.
+- [~] No secret in git, no shared fingerprint (held). *Minting the egress peer THROUGH the control plane is deferred to a future milestone — the operator supplies `deploy/egress/awg0.conf` by hand for now, like the management tunnel.*
 - [ ] Not on a stand, the owner's walk: the real bot on the Russian host reaching real Telegram through a real leaf — the "polling as @…" line is the proof.
 
 acceptance: yes (partial — the stand proves the plumbing; the border crossing is the owner's field walk)
 On the stand, bring the bot up with its egress routed through a stand leaf, confirm it polls the fake Telegram through that path and a user can be added. The real walk is the owner's, on the Russian host against real Telegram through a real leaf.
 
-## → M39 — The add-user bot moves into its own container, tied to the panel over the local docker network · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · supersedes the dropped gRPC/mTLS proposal
+## ✅ M39 — The add-user bot moves into its own container, tied to the panel over the local docker network · asked for by the owner 2026-11-04 · built 2026-11-04 on `task/M39` · done 2026-11-04 (acceptance: good — 1 round on the stand; the bot runs as its own container, the control plane polls nothing, stopping the bot leaves the panel and delivery up). Supersedes the dropped gRPC/mTLS proposal.
 
 **Why.** M37/M38 built the bot in-process. The owner wants it in its own container, co-located on the control-plane host, tied to the panel the simplest way that works: **the shared Postgres over the local docker network — no gRPC, no mTLS**, both dropped on 2026-11-04 as unnecessary while the bot and the panel share one host. The bot's Telegram-facing code from M37/M38 is reused verbatim; only its hosting changes. The point is to make it work, nothing more.
 
@@ -3853,11 +3858,11 @@ The e2e stand brings the bot up as its container against the stand's database an
 **E2E:** the M37/M38 control scenarios, re-pointed at the containerised bot (shared DB, fake Telegram), green on the stand; the suites stay green with the bot absent (its default).
 
 **Done when.**
-- [ ] The bot runs as its own container, shares the database over the docker network, and adds a user / lists behind nodes / applies one exactly as M37/M38, every reply unchanged.
-- [ ] The control plane starts no second poller: with the Telegram settings on the bot container only, the control container polls nothing.
-- [ ] With the bot absent (no settings), the control plane is exactly as before.
-- [ ] No token, config, key or raw error reaches the chat or any log — the M37/M38 property, preserved.
-- [ ] `make verify` runs the loop on the stand with the bot as its container.
+- [x] The bot runs as its own container, shares the database over the docker network, and adds a user / lists behind nodes / applies one exactly as M37/M38, every reply unchanged.
+- [x] The control plane starts no second poller: with the Telegram settings on the bot container only, the control container polls nothing.
+- [x] With the bot absent (no settings), the control plane is exactly as before.
+- [x] No token, config, key or raw error reaches the chat or any log — the M37/M38 property, preserved.
+- [x] `make verify` runs the loop on the stand with the bot as its container.
 - [ ] Not on a stand (and only once M40 lands): the bot on the real Russian host reaching Telegram and adding a user from the owner's phone.
 
 acceptance: yes
@@ -3866,7 +3871,7 @@ On the stand, with the bot running as its container against the control plane's 
 **Dropped 2026-11-04, on the owner's instruction ("just make it work"):** gRPC and mTLS (the earlier M39), and the separate-machine deploy. The bot and the panel share one host and one docker network for now; if a separate machine is ever wanted, a secured remote tie comes back as its own milestone then.
 
 
-## → M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval · after M37
+## ✅ M38 — The bot says which nodes are behind, and applies one when told · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 · built 2026-11-02/04 on `task/M38` · done 2026-11-04 (acceptance: good — 1 round on the stand's fake Telegram, 1 clumsy line; a real node applied from the owner's phone is the owner's walk)
 
 **What the owner asked for.** "Suggest me nodes for apply new config." The console
 already answers that question on every screen: since M32 a block names the serving nodes
@@ -3936,18 +3941,18 @@ not the add's, and why.
 `make test-control`.
 
 **Done when.**
-- [ ] `/nodes` names exactly the nodes the panel's "behind" block names at that moment,
+- [x] `/nodes` names exactly the nodes the panel's "behind" block names at that moment,
       says so in one sentence when there are none, and dials nothing.
-- [ ] After an add that could not update a node, the reply names that node, says why in
+- [x] After an add that could not update a node, the reply names that node, says why in
       the panel's sentence, and offers `/apply <name>` for it and for nothing else.
-- [ ] `/apply <name>` does what the Nodes screen's Apply does — including taking a node
+- [x] `/apply <name>` does what the Nodes screen's Apply does — including taking a node
       into service and marking it degraded on a failure — and the reply says what was
-      applied and what could not be measured, in the panel's sentences.
-- [ ] No config, no key and no raw error text ever reaches the chat, including on a
+      applied and what could not be measured, in the panel's sentences. *(the refusal and degraded-on-failure paths on the stand; a successful apply needs a reachable host — the owner's walk)*
+- [x] No config, no key and no raw error text ever reaches the chat, including on a
       failure whose message quotes one.
-- [ ] An unknown node name is refused in words; a message from any other account is
+- [x] An unknown node name is refused in words; a message from any other account is
       dropped in silence, as in M37.
-- [ ] On the stand, `/nodes` answers the empty sentence and `/apply <unknown>` refuses.
+- [x] On the stand, `/nodes` answers the empty sentence and `/apply <unknown>` refuses.
 - [ ] Not checkable on a stand: a real node applied from the owner's phone. The owner's
       own run, after the merge.
 
@@ -3969,7 +3974,7 @@ to the Nodes screen. Revoking: a different milestone if ever.
 2. The two names: `/nodes` and `/apply <name>`.
 3. The acceptance line: `yes`, with the scenario above.
 
-## → M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · PROPOSED, awaiting the owner's approval
+## ✅ M37 — The owner adds a user from their own Telegram account · asked for by the owner 2026-11-01 · approved by the owner 2026-11-01 ("gogogo": every recommended option taken — `httpx` promoted to runtime, the fake Telegram kept, `/adduser`, acceptance yes) · built 2026-11-01/02 on `task/M37` · done 2026-11-02 (acceptance: good — 2 rounds on the stand's fake Telegram, 3 clumsy lines in docs/tracker/M37/carry-over.md; the real bot from a Russian box and the owner's phone are the owner's walk)
 
 **What the owner asked for.** "A telegram bot for adding new users. It should work only
 with my telegram account." Today an add is a panel visit: reach the console over the
@@ -4118,27 +4123,27 @@ green on the stand, and the existing `tests/e2e/control` suite green with the bo
 Static gate for the control steps: `make test-control`; for M37.4: `make test-infra`.
 
 **Done when.**
-- [ ] With both settings blank nothing changes: no task starts, no log line, the panel
+- [x] With both settings blank nothing changes: no task starts, no log line, the panel
       and delivery work as before. This is the stand's default and every existing
-      install's.
-- [ ] A token without an owner id, or an owner id without a token, stops the control
-      plane at boot with one sentence naming the missing setting.
-- [ ] From the owner's own account, `/adduser <name>` creates the user, pushes them to
+      install's. *(unit-tested; the stand runs with both set, so acceptance could not observe it)*
+- [x] A token without an owner id, or an owner id without a token, stops the control
+      plane at boot with one sentence naming the missing setting. *(unit-tested; same)*
+- [x] From the owner's own account, `/adduser <name>` creates the user, pushes them to
       every serving node, and replies with the same links the panel hands over after an
-      add; the link opens, the user appears in the panel, the trail shows `USER_ADDED`.
-- [ ] `/adduser` of a name that exists answers with the panel's sentence and creates
+      add; the link opens, the user appears in the panel, the trail shows `USER_ADDED`. *(acceptance rounds 1 and 2; the push to a real serving node is not observable on the stand)*
+- [x] `/adduser` of a name that exists answers with the panel's sentence and creates
       nothing; a bare `/adduser`, `/start`, `/help` and any other text answer with the
       usage line.
-- [ ] A message from any other account — any id, a group, a channel, a forward, an edit —
-      gets no reply, creates nothing, and leaves no log line naming the sender.
-- [ ] The bot token appears in no log record, no exception message and no reply,
+- [x] A message from any other account — any id, a group, a channel, a forward, an edit —
+      gets no reply, creates nothing, and leaves no log line naming the sender. *(channel post and edited message: unit-tested; the stand's fake delivers only messages)*
+- [x] The bot token appears in no log record, no exception message and no reply,
       including when Telegram is unreachable or answers an error.
-- [ ] When Telegram cannot be reached the panel keeps working, the log carries one line
+- [x] When Telegram cannot be reached the panel keeps working, the log carries one line
       when polling starts failing and one when it recovers, and the bot resumes without
       a restart.
-- [ ] `make verify` runs the whole loop on the stand through the fake Telegram: the
-      owner's id adds a user and gets a working link; a stranger's id gets nothing.
-- [ ] The runbook tells the owner how to create the bot, find their numeric id, fill the
+- [x] `make verify` runs the whole loop on the stand through the fake Telegram: the
+      owner's id adds a user and gets a working link; a stranger's id gets nothing. *(the scenario is green in every full run since M37.4)*
+- [x] The runbook tells the owner how to create the bot, find their numeric id, fill the
       two lines and see that it is polling.
 - [ ] Not checkable on a stand, and never claimed by one: that the Bot API answers from
       the control-plane box in Russia. The owner's own run, after the merge.

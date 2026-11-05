@@ -1,0 +1,11 @@
+# Verdict · M40 · round 1: GOOD — may merge
+
+## For the owner (not blocking)
+
+- **works, but awkward** — When the egress sidecar is stopped at runtime, the bot container's OWN healthcheck stays 'healthy' for the whole outage (observed 70s), even though the bot is completely cut off (no network, reaches nothing, sends nothing). The egress container correctly shows 'exited', and the runbook does tell the operator to watch the egress container ('look at make logs for the egress container, not just the bot'), so the documented signal works — but an operator glancing only at the bot's own `docker ps` health would not see that it is dead in the water. The security property (no clear-path leak to Telegram) is fully intact; this is a monitoring-clarity nit, not a blocker. It also means recovery needs a manual bot restart (the egress restart gives the bot a new netns the running bot does not pick up) — a limitation the runbook already flags. (hashi-e2e-telegram-bot-1 container healthcheck during an egress-sidecar outage) [screen:fail-closed.log]
+
+## Could not check
+
+(1) DONE-WHEN ITEM 4, could-not-observe by design: a real leaf carrying from inside a real Russian network to real Telegram, and the DNS lookup for api.telegram.org leaving through the tunnel (tcpdump) on the real host — this stand uses a fake Bot API and a stand leaf, so it proves only the plumbing, never that Telegram answers from Russia; these are the owner's field checks (runbook 'Checking it on the real hosts'). (2) Boot-time 'never starts' fail-closed (the bot container refusing to start at all when the egress sidecar is unhealthy at a COLD boot) was not exercised as a cold boot; instead the stronger runtime equivalent was observed — the egress was killed after the bot was already running, and the bot then had no network to anywhere, reached nothing and leaked nothing. (3) No node was registered/served on this empty stand, so a populated /nodes LIST and a happy-path /apply against a serving node were not exercised; the empty-fleet /nodes sentence and the /apply ghost refusal were both verified. (4) The charter's field criterion — surviving a real Russian mobile-whitelist shutdown — is not testable on any stand and was not claimed.
+
+Spend: 40 actions, 15 minutes.

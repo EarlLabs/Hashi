@@ -62,6 +62,12 @@ ssh -L PORT:127.0.0.1:PORT USER@SERVER
   показывает результат по каждой: ✓ — готово, ✗ — причина и кнопка **retry**.
   Затем передать ссылку. Для AmneziaWG скачать архив по ссылке конфигурации,
   распаковать и импортировать `.conf`.
+- **Из Telegram:** если бот включён (раздел *Adding a user from Telegram*, ниже), написать
+  ему `/adduser <имя>` (несколько — по одному в строке); ответом придут те же ссылки, что
+  показывает панель. `/nodes` — какие ноды отстают (тот же блок **NOT APPLIED**), под
+  каждой готовая строка `apply it: /apply <имя ноды>`; `/apply <имя ноды>` — та же кнопка
+  **Apply** с экрана Nodes для одной ноды: она вводит ноду в строй (draft или degraded),
+  поэтому сначала `/nodes`. Отзыв и повторный показ ссылки — только в панели.
 - **Отключить:** **Users → revoke** → подтвердить. Изменения применяются на
   нодах сразу и сами. Вернуть доступ — добавить под **новым** именем (старое
   занято, панель откажет) и выдать новую ссылку.
@@ -1677,6 +1683,211 @@ and DNS logging off, the Routing screen shows the lists and never their use, and
 writes nothing. The lists themselves are in the control database and therefore in every
 backup — they are public data and your own two lists, not anything about a user.
 
+## Adding a user from Telegram (the owner's bot)
+
+A long-polling bot that takes one command from one Telegram account — yours — and runs
+the add the panel's dialog runs: create the user, push them to every serving node, hand
+back the links. Nothing else, from nobody else. Since M39 it is **its own container**
+beside the control plane (`telegram-bot` in `deploy/docker-compose.yml`), tied to the
+panel only by the shared database — the control plane itself no longer polls. It is
+**off** until the `telegram-bot` profile is switched on with the two lines below in
+`.env`; an install that does neither is unchanged — the container is never started, no
+task runs and no log holds a Telegram line. The bot dials Telegram outbound; nothing
+listens, nothing is published, and Caddy is not touched.
+
+### Switching it on
+
+1. **Create the bot at BotFather.** In Telegram, open `@BotFather`, send `/newbot`, give
+   it a display name and a username ending in `bot`. BotFather answers with the token —
+   `<digits>:<a long string>` — which is the credential (the cautions below). Nothing
+   else needs setting there: no commands menu, no privacy mode, no group.
+2. **Find your own numeric id, and do it BEFORE the control plane polls.** Open the chat
+   with your new bot and send it anything — `/start` will do. Then, from any machine that
+   reaches Telegram:
+   ```bash
+   curl "https://api.telegram.org/bot<token>/getUpdates"
+   ```
+   The answer holds your message; read `result[0].message.from.id` — a plain number, the
+   same as `chat.id` in a private chat. That number is your id; a username is not (it can
+   be changed and reassigned, the number cannot). No third-party "what is my id" bot is
+   needed, and none should be handed this token. If `result` is `[]`, send the bot another
+   message and run the `curl` again.
+   **The order matters.** Once the bot polls, it confirms every update it reads by offset,
+   so your message is gone from the next `getUpdates` — and Telegram answers a second poller
+   on the same token with `409 Conflict`. The `curl` runs first, and nothing else may poll
+   this token while the bot does.
+3. **The `.env` lines**, on the control-plane box (`.env.example` carries the same three
+   under *the owner's Telegram bot*):
+   ```
+   HASHI_TELEGRAM_BOT_TOKEN=<the token from step 1>
+   HASHI_TELEGRAM_OWNER_ID=<the number from step 2>
+   ```
+   Both or neither. One without the other stops the **bot container** at boot with a
+   sentence that begins `HASHI_TELEGRAM_BOT_TOKEN and HASHI_TELEGRAM_OWNER_ID are set
+   together or not at all` and ends `Refusing to start.` — `make logs PROFILES=telegram-bot`
+   shows it under `telegram-bot`. The control plane no longer reads these two, so it boots
+   either way; it is the bot that refuses half a pair. A third line, `HASHI_TELEGRAM_API_URL`,
+   is where the Bot API is dialled; blank means Telegram's own, `https://api.telegram.org`.
+   Leave it blank: the bot reaches Telegram through the leaf egress (next), which carries that
+   address abroad, so no separate relay runs on the control-plane box.
+
+**Before switching on — supply the leaf egress (mandatory).** The `telegram-bot` profile also
+starts `telegram-bot-egress`, an obfuscated AmneziaWG client whose exit is one of your leaves;
+the bot shares that container's network, so everything it sends — Telegram, and the SSH it
+opens to nodes on an add or an apply — leaves through the leaf, while the database stays local.
+The sidecar reads one file you supply, `deploy/egress/awg0.conf` (gitignored, never baked into
+an image); `deploy/egress/README.md` gives the exact shape — an AmneziaWG client to a leaf,
+with `Table = off`, a `PostUp` that pins the leaf's address off the tunnel before it takes the
+default route, MTU 1280, and the same four obfuscation headers the leaf uses. Mint it the way
+you mint the management tunnel. **Without this file the egress container never comes up, so the
+bot never starts** — deliberately: the bot has no path to Telegram except through the leaf, so
+it can never fall back to dialling `api.telegram.org` in the clear from the box.
+
+4. **Switch the bot on with the command this host was published with, plus
+   `PROFILES=telegram-bot`** — `make up-panel PROFILES=telegram-bot` over the management
+   tunnel, `make up-panel-over-ssh PROFILES=telegram-bot` without one; `make up
+   PROFILES=telegram-bot` only on an install that publishes nothing, because on a published
+   host plain `make up` takes the published ports away. compose starts the `telegram-bot`
+   container and leaves the rest converged — the control plane is not recreated, because its
+   environment has not changed (the Telegram settings reach the bot, not it). A later `up`
+   without `PROFILES=telegram-bot` leaves the running bot in place; to take it down, stop the
+   `telegram-bot` service by name.
+5. **Watch it start**, in the bot container's log — `make logs PROFILES=telegram-bot` (plain
+   `make logs` does not follow a profiled service):
+   ```
+   INFO control.app.services.telegram_poller: telegram: polling as @<your bot's username>
+   ```
+   That line is the bot: it has reached Telegram, learned its own name and is polling. It
+   is written once per start of the bot container. If Telegram does not answer from this
+   box, the log holds one WARNING instead — `telegram: polling is failing: Telegram could
+   not be reached for getMe (ConnectError). Retrying, up to a minute apart, until Telegram
+   answers; this is said once, not per retry.` (the sentence after the colon names the
+   call and the reason; it never names the address or the token) — and the panel and
+   `/sub/` are unaffected: the bot is a separate container, and nothing waits for it. The
+   bot resumes by itself when Telegram answers again, without a restart: while it was still
+   starting, the signal is the `polling as` line itself; once it had been polling, it is
+   `INFO … telegram: Telegram answers again; polling resumed`.
+
+   **On a Russian entry box, the `polling as` line means the leaf egress is carrying.**
+   Reaching `api.telegram.org` from that box is the border this whole fleet exists to cross,
+   and the bot takes it the way a user does: out through the leaf you configured above. When
+   the egress handshake is up the bot reaches Telegram and logs `polling as`; if the egress is
+   not configured or its handshake is down, the `telegram-bot-egress` container is not healthy
+   and the bot does not start at all, so it never polls in the clear — look at
+   `make logs PROFILES=telegram-bot` for the egress container, not just the bot. Two checks are
+   yours, because no stand can make them: that the handshake completes against a real leaf, and
+   that the DNS lookup for `api.telegram.org` leaves through the tunnel rather than in the clear
+   (confirm with `tcpdump`; if your engine resolves from the host namespace, point the egress
+   `dns:` at a resolver reachable only past the leaf). On the e2e stand the bot polls a fake Bot
+   API through a stand leaf, which proves the plumbing, never that Telegram answers from Russia.
+
+### What the bot answers
+
+Every reply below is to a message from your id, in your private chat with the bot.
+
+- **`/adduser <nickname>`** — several people at once is one nickname per line in the same
+  message, exactly what the panel's add dialog accepts. The first reply is
+  `adding, about a minute per node`; the add runs with the same validation, the same push
+  to every serving node and the same trail entry as the panel's dialog (**Audit** shows
+  `user <name> added`, and nothing says through which door — *Apply, then add users*,
+  above). The second reply holds the links the panel hands over after an add — per
+  person, the nickname, then `subscription link: <url>` and, where the person holds
+  `amneziawg`, `config-file link: <url>` beneath it — and, when no node is serving, the
+  dialog's own outcome sentence as the last block. When a node could not be updated, the
+  links are followed by the dialog's opening — `<n> user(s) added and pushed to <k>
+  node(s), but <m> node(s) could NOT be updated and do not know them yet:` — and then one
+  block per such node: the reason the dialog's `✗` row shows, with the node's name in
+  front (`'<name>' was not updated — it could not be reached, or the push did not finish
+  — so it does not know them yet; retry, and if it fails again apply it from the Nodes
+  screen to read why`, or the sentence for whatever else went wrong), and beneath it
+  `apply it: /apply <name>` — the command to send as it stands (`/apply <name>`, below).
+  A node the add did reach gets no such block. A reply longer than Telegram's
+  4096-character limit arrives as several messages, never splitting one person's links
+  across two. The links show no preview: the bot asks Telegram not to fetch them.
+- **A nickname that is taken** gets, after the `adding` line, the sentence the panel
+  shows — `a user called '<name>' already exists` — followed by `Nothing was added. The
+  panel shows every user and their links; the bot never re-sends a link.` A revoked
+  user's name is taken too; bring them back under a new name, as the panel section says.
+- **`/nodes`** — which serving nodes are behind what the panel would push: the nodes the
+  panel's **not applied** block names at that moment, read from the record with nothing
+  dialled, so the answer is immediate. One block per node that is behind — the block's
+  own sentence said of that one node, `<name> is still on the old configuration: your
+  changes have not reached it.`, and beneath it `apply it: /apply <name>`, the command to
+  send as it stands. When no serving node is behind, the one sentence
+  `Every serving node holds the configuration it would be given.` — *serving* is the
+  state it is about: a draft or degraded node is not in this answer, and the Nodes
+  screen is where those are read. Anything typed after `/nodes` is ignored.
+- **`/apply <name>`** — **the Nodes screen's Apply, for that one node — not the add's
+  push. It can take a draft or degraded node into service, and a failure after the first
+  byte is written leaves the node `degraded`; so read `/nodes` first and apply a node it
+  names.** The name is everything after `/apply`, exactly as the Nodes screen spells it
+  (a name may hold spaces); nothing is matched loosely, and a name no node has gets
+  `no node named '<name>'` as the only reply, with nothing dialled. Otherwise the first
+  reply is `applying <name> — about a minute`, and the second is what the button's toast
+  says: `config applied to <name> — <the configs applied>`, with a clause naming what
+  was restarted when something was; or, when the host would not answer the serving
+  check, the button's unmeasured sentence (`config applied to <name> — <configs>. Not
+  measured serving: <configs>. …`), which names configs and never their contents. A
+  refusal or a failure is the sentence the panel's banner shows for the same press —
+  nothing to apply (`… so there is nothing to apply — nothing was pushed and nothing on
+  the node was changed. …`), a retired node (`this node is retired, and applying a node
+  is what puts it into service — which is the one move a retired node is refused. …`), a
+  host not reached (`the node could not be reached, so nothing was pushed and nothing on
+  it changed: <reason>. …`) — and the node's row on the Nodes screen records what the
+  apply did to its state. The one sentence that is not the banner's: a configuration
+  refused by its checker before anything was pushed gets
+  `'<name>' could not be given a configuration: it was refused before anything was
+  pushed, and retrying will not change that — apply it from the Nodes screen to read
+  why`, because the banner's sentence can quote the checker's output and a checker is
+  known to quote a private key — the Nodes screen shows it, the chat never does. A
+  failure that is no sentence of its own gets
+  `applying <name> did not complete — the Nodes screen shows the state it was left in;
+  what failed is in the control plane's log.` One node per command; there is no
+  apply-everything.
+- **`/start`, `/help`, a bare `/adduser` or `/apply`, and anything else** get the usage
+  line: `/adduser <nickname> — one nickname per line — adds them, pushes them to every
+  serving node and replies with their links. /nodes — which serving nodes are behind what
+  would be pushed, with the /apply for each. /apply <name> — the Nodes screen's Apply,
+  for that one node. Everything else is on the panel.`
+- **Anyone else** — any other id, a group, a channel, a forwarded message — gets
+  **silence, by design**: no reply, nothing created, and no log line naming who tried.
+  Anybody can find a bot by its username and write to it; a refusal would confirm the bot
+  acts for someone, and a log line would be a record about a person.
+
+What it does not do, on purpose: revoke, list, re-send a link, serve a second account.
+Those are the panel's — **show link** on the Users screen is where a link is read again.
+And it applies one named node per command: there is no apply-everything, and the Nodes
+screen has no such press either.
+
+Commands are handled one at a time, in the order Telegram delivers them, and each is
+attempted once. A command that fails inside the control plane is answered with nothing —
+`/apply` with its did-not-complete sentence, above — and logged as `ERROR … telegram: an
+update was not handled (<reason>). It is acknowledged and not retried; a command the
+owner sent is theirs to send again.` — send it again if you want it. A command sent while
+the control plane was down is held by Telegram (for up to a day) and delivered when
+polling resumes; the one case that delivers a command twice — a process death between
+the attempt and the next poll — turns an `/adduser` into an `already exists` reply rather
+than a second user, and an `/apply` into the same node applied once more.
+
+### Two things to know before the first `/adduser`
+
+- **The links the bot sends you transit Telegram's servers**, exactly as they do when you
+  paste them into a chat with a friend today — the bot adds no new path for a link — but
+  **the chat with the bot now holds every friend's link in your account**, in one place,
+  for as long as you keep the messages. Whoever reads that chat (a lost phone, a session
+  left open on a machine that is not yours) reads every link in it. Delete the messages
+  once a link is handed over if you want the chat to hold nothing; the panel keeps the
+  links.
+- **The bot token is a credential.** Whoever holds it reads your commands and writes to
+  you as the bot; it belongs in `.env` and nowhere else — not in a chat, a screenshot or a
+  ticket. If it leaks, revoke it at BotFather (`/mybots` → the bot → *API Token* →
+  *Revoke current token*), put the new one in `.env` and bring the panel up again; the old
+  token is dead the moment BotFather revokes it. The token travels in every call's URL
+  path — the same shape as a subscription token — so no line the control plane writes
+  names the address it dialled or the token, the failure lines above included; a token in
+  a log would be a finding. Your numeric id is not a secret: it is what the bot checks,
+  not what it trusts you by.
+
 ## Upgrading an install that predates the rename
 
 **The person who uses hashi is a `user`. They used to be a `friend`** — in the API, in
@@ -2063,6 +2274,18 @@ on the disposable stand only, which can show what is placed, served and recorded
 show a border. Whether a refresh from inside Russia reaches it while the control plane is
 unreachable is a field observation nobody has made yet. The arrangement walked on real
 hosts is C+E | L (2026-10-02), where no delivery host exists by construction.
+
+**The Bot API has never been polled from a Russian entry box.** The owner's Telegram bot
+(*Adding a user from Telegram*, above) is the `telegram-bot` container dialling
+`api.telegram.org`, and it takes that traffic out through a leaf — the `telegram-bot-egress`
+sidecar, mandatory in the profile — because reaching that address from across the border is the
+thing this fleet exists to do. The stand runs the whole loop against a fake Bot API reached
+through a stand leaf (`.e2e/profile.yml` lists `telegram` under `stubbed`), which proves the
+plumbing — the bot's traffic does leave through the leaf and the database stays local — and says
+nothing about whether a real leaf carries it from Russia. That last part is the owner's field
+check: bring the egress up against a real leaf, watch for `polling as`, and confirm with
+`tcpdump` that the DNS lookup leaves through the tunnel, not in the clear. `make logs
+PROFILES=telegram-bot` shows both the bot and its egress container.
 
 ## Backups
 

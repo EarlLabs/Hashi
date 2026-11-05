@@ -46,6 +46,117 @@ services:
       # password, and the scenario would look like a credentials bug rather than a
       # quoting one. `$$` is compose's escape and arrives as a single `$`.
       HASHI_OPERATOR_PASSWORD_HASH: "scrypt$$32768$$8$$1$$QO/d/qvoYxARMag5H46vug==$$RK2Hhwuh2AIM0lympYvnnDhv6MrAHIyoV7KuOV4Y6pU="
+      # The three HASHI_TELEGRAM_* settings are NOT here — M39. The web process no longer
+      # polls (the poller moved into the telegram-bot container, M39.1); on this stand the
+      # bot is the `telegram-bot` service below, and the fixtures that used to sit here moved
+      # there with it. A token on this service would configure nothing — and a second poller
+      # on one token is a 409 from Telegram.
+
+  # The owner's add-user bot, ON for this stand — M39. In the base file it is off behind the
+  # `telegram-bot` profile and tied to the panel ONLY by the shared database; here it is
+  # switched on (the Makefile's `e2e-up` forces the profile) and pointed at the fake Telegram
+  # below. It is the ONLY process that polls — the control service above no longer carries the
+  # Telegram settings.
+  #
+  # The profile is repeated so this overlay's OWN profile set names it: `make e2e-down` tears
+  # down every profile in E2E_ALL_PROFILES, which
+  # tests/infra/test_the_hands_can_take_an_action.py holds equal to the profiles THIS file
+  # declares — a profile only in the base file would then leave a bot container behind on
+  # teardown.
+  telegram-bot:
+    profiles: ["telegram-bot"]
+    environment:
+      # The fake Bot API, the fixture token and the fixture owner id — M37.4, moved here from
+      # the control service with the poller (M39). FIXTURES, not credentials: no bot exists
+      # behind this token and no account behind this id, and the only thing they ever reach is
+      # the fake below. Committed on the same grounds as the operator hash above. The id is
+      # also what a scenario sends as "the owner" (tests/e2e/conftest.py carries the same
+      # default).
+      #
+      # DIALLED BY ADDRESS, not by name — M40. The bot shares the egress sidecar's network
+      # namespace, and the fake lives on the ISOLATED egress network (10.90.1.0/24) with no
+      # presence the sidecar has a connected route to. So this address is reachable only
+      # through the tunnel to the leaf, which forwards it on — the stand's proof that the bot's
+      # Telegram traffic leaves abroad. A PRIVATE address, and the leaf renders Egress.RELAY
+      # (not LOCAL) so it forwards it: LOCAL would drop every private destination, which would
+      # force "the internet" address 192.88.99.0/24 and collide with the hop scenario that
+      # already owns that block (see the egress network at the end of this file). 8081 is the
+      # fake's listen port.
+      HASHI_TELEGRAM_API_URL: http://10.90.1.9:8081
+      HASHI_TELEGRAM_BOT_TOKEN: e2e-not-a-real-bot-token
+      HASHI_TELEGRAM_OWNER_ID: "424242"
+      # The e2e overlay sets HASHI_PUBLIC_HTTPS=false on `control` and nowhere else, so the
+      # bot would otherwise inherit the shipped default (https) and reply with
+      # `https://localhost/sub/...` — a link this plain-HTTP stand does not serve, which breaks
+      # the scenario's check that the bot's link resolves and matches the panel's. Off here for
+      # the same reason, and with the same value, as on control.
+      HASHI_PUBLIC_HTTPS: "false"
+    # Boot after the fake answers, so the poller's first getMe succeeds and its "polling as"
+    # line is in the log from the start rather than after a backoff. Compose merges this with
+    # the base file's own dependency on the control service (which runs the shared migrations)
+    # and on the egress sidecar being healthy (M40).
+    depends_on:
+      telegram:
+        condition: service_healthy
+
+  # The bot's egress sidecar, pointed at the STAND's leaf — M40. The service, its image, its
+  # supervisor command and its healthcheck all come from the base file; the stand overrides
+  # two things. The config it reads is the per-run one .e2e/gen_egress_configs.py generates
+  # (the base file's deploy/egress mount is for the operator's real leaf), and it waits for
+  # the stand's leaf to be up before it tries to handshake. It stays on the default network
+  # only — NOT on the egress network below — which is exactly what makes the fake's egress
+  # address route through the tunnel rather than direct.
+  telegram-bot-egress:
+    volumes:
+      - ../.e2e/artifacts/egress:/etc/amneziawg:ro
+    depends_on:
+      leaf:
+        condition: service_healthy
+
+  # The leaf abroad, for the stand — M40. The same AmneziaWG daemon a real node runs, with a
+  # server config the real edge renderer produced (render_server + Egress.RELAY — see
+  # .e2e/gen_egress_configs.py LEAF_EGRESS for why RELAY and not LOCAL; production must render
+  # LOCAL), so the stand exercises the forwarding and NAT a leaf carries. It sits on the default
+  # network (where the sidecar dials its ListenPort, and where that endpoint is a connected route
+  # that stays off the tunnel) and on the isolated egress network, where it masquerades the
+  # decrypted traffic on to the fake. ip_forward is on because it forwards; without it the
+  # handshake completes and nothing moves.
+  leaf:
+    image: docker.io/amneziavpn/amneziawg-go:3.0.3
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+    volumes:
+      - ../.e2e/artifacts/egress:/etc/amneziawg:ro
+    # Same supervisor as the sidecar (base file), on this end's config — the stem `leaf` is the
+    # interface name. Dollars doubled for the same reason the base file documents.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        trap '"$$0" down "$$1" || true; exit 0' INT TERM
+        "$$0" down "$$1" >/dev/null 2>&1 || true
+        "$$0" up "$$1"
+        while :; do sleep 86400 & wait $$!; done
+      - awg-quick
+      - /etc/amneziawg/leaf.conf
+    # Healthy once the interface is up, which is all the sidecar needs before it can handshake —
+    # the handshake itself is the sidecar's own healthcheck, one end further on.
+    healthcheck:
+      test: ["CMD-SHELL", "awg show leaf >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks:
+      default: {}
+      egress:
+        ipv4_address: 10.90.1.2
 
   caddy:
     environment:
@@ -61,6 +172,55 @@ services:
       # because the base file requires the variable, and a placeholder here is
       # honest about the fact that nothing reaches a CA from this stack.
       CADDY_ACME_EMAIL: e2e@localhost
+
+  # A fake Telegram Bot API, for the control plane to poll and the scenarios to drive —
+  # M37.4. No profile: the control plane above is configured to poll it, and its
+  # `depends_on` holds it back until this answers — a stand is never up without its bot.
+  #
+  # The base image the control image is built from, with the one file it runs MOUNTED
+  # rather than baked in — the opposite call from the browser below, for a reason that
+  # is specific to this file: `.e2e/` is kept out of every build context on purpose
+  # (.dockerignore), and un-excluding one file to COPY it would widen what the control
+  # image's own build can see for the sake of a test instrument. The trade is the one
+  # the control service's bind mounts already take: on a remote engine the mount
+  # resolves on the daemon's filesystem, arrives as an empty directory, and the
+  # container cannot start — loudly, as a service that never goes healthy and so holds
+  # `control` back too, rather than as a stand that quietly has no bot.
+  #
+  # It publishes ONE side, the injection side, on this project's e2e block and on
+  # loopback by default. `DEV_BIND_ADDR` is the variable `make e2e-up` sets, so the dind
+  # opt-in reaches this mapping the way it reaches the other two. 54280 is nothing's
+  # default port.
+  telegram:
+    image: python:3.14-slim
+    restart: unless-stopped
+    environment:
+      # Where the fake listens. The same number is in the bot's HASHI_TELEGRAM_API_URL (now
+      # an address on the egress network — M40), the mapping and the healthcheck below:
+      # compose cannot name it once, and it is data in this file rather than a default
+      # in the script.
+      FAKE_TELEGRAM_PORT: "8081"
+    volumes:
+      - ../.e2e/fake_telegram.py:/srv/fake_telegram.py:ro
+    # `-u`: the one line it prints reaches the container log when it is printed, not
+    # when a buffer fills.
+    command: ["python", "-u", "/srv/fake_telegram.py"]
+    ports:
+      - "${DEV_BIND_ADDR:-127.0.0.1}:${E2E_TELEGRAM_PORT:-54280}:8081"
+    # On TWO networks — M40. The egress network (as 10.90.1.9) is where the bot reaches it,
+    # through the leaf and never directly; an internal network cannot publish a port, so the
+    # default network is what carries the injection side above to the host. A scenario reaches
+    # the fake over the published port; the bot reaches the same server over the tunnel.
+    networks:
+      default: {}
+      egress:
+        ipv4_address: 10.90.1.9
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/_test/sent').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   # The acceptance agent's browser. Behind a PROFILE, so `make e2e-up` is unchanged
   # for everyone who is not walking a milestone — the image is large and a test run
@@ -96,3 +256,23 @@ services:
     depends_on:
       control:
         condition: service_healthy
+
+# The isolated "abroad" network — M40. INTERNAL, so nothing on it reaches out on its own and
+# the only way onto it is past the leaf, which is the property the bot's egress proof rests on:
+# the fake sits here at 10.90.1.9, and the bot (sharing the sidecar's namespace on the default
+# network only) has no route to it except the tunnel.
+#
+# A PRIVATE /24, deliberately not 192.88.99.0/24 — the block edge/egress.py blesses as "the
+# internet" and which the hop scenario (tests/e2e/edge/test_a_user_exits_at_the_leaf_and_not
+# _at_the_entry.py) creates as a docker network for its whole run. Two networks on one subnet
+# is docker's "Pool overlaps", so claiming that block here would break that scenario. The leaf
+# therefore renders Egress.RELAY, which forwards a private destination, instead of LOCAL, which
+# would drop it and force the shared block. 10.90.1.0/24 collides with nothing (the tunnel is
+# 10.90.0.0/24; docker's own pool allocates from 172.x). The default network is compose's own,
+# shared by the control plane, the database, the sidecar and the leaf's near side.
+networks:
+  egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.90.1.0/24

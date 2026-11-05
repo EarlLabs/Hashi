@@ -86,7 +86,11 @@ needs:
 # The honesty section. Copy it into each scenario's docstring.
 boundary:
   real:     [control, postgres, caddy]
-  stubbed:  []
+  # M37.4: a Bot API fake (.e2e/fake_telegram.py) the stand's control plane polls in
+  # place of Telegram, with a test-only side the scenarios inject through. It proves the
+  # bot's loop composes inside the real control plane; it says nothing about whether
+  # api.telegram.org answers from the entry box, which is the owner's own run.
+  stubbed:  [telegram]
   external: []
   # Deliberately absent, and the most important line here: NO real node, no real
   # tunnel and no Russian network are part of any e2e run. Charter criterion 1

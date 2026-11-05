@@ -50,6 +50,19 @@ NICKNAME_MAX_LENGTH = 64
 # is built for (the charter's 30–50), so no real add ever meets it.
 MAX_USERS_PER_ADD = 50
 
+
+class NicknameTaken(Conflict):
+    """A name on the list already belongs to somebody — revoked or not.
+
+    A ``Conflict`` (409) like every other refusal about what already exists, with the
+    same sentence, code and status as before it had a type, so no caller sees a change.
+    Its own type so that a caller can tell "this person exists" from the add's other
+    conflicts (a name twice on one list, a pool with no room) without reading the
+    sentence: the Telegram bot points at the panel for exactly this one, because the
+    panel is where an existing person's links are and the bot never re-sends them.
+    """
+
+
 # What the operator is told when two changes reached one address at the same instant —
 # M17. The allocator takes the lowest address nobody holds, which is a READ, and nothing
 # serialises two of them; ``uq_credential_tunnel_address`` is what stops the second one
@@ -152,7 +165,7 @@ async def create_users(session: AsyncSession, *, nicknames: Sequence[str]) -> Cr
     existing = await session.execute(select(User.nickname).where(User.nickname.in_(wanted)))
     taken = sorted(existing.scalars())
     if taken:
-        raise Conflict(
+        raise NicknameTaken(
             f"a user called {taken[0]!r} already exists"
             if len(taken) == 1
             else "users called " + ", ".join(repr(name) for name in taken) + " already exist"

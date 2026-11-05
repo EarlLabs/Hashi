@@ -34,6 +34,17 @@ asyncio.run(check())
   sleep 1
 done
 
+# The bot process reuses this image, waits for the same database, and then runs the
+# Telegram poller instead of uvicorn — M39.1. The dispatch is BEFORE the migrations: the
+# control service (no `command:`) owns `alembic upgrade head`, so the bot must not also run
+# it — two services racing the same migration is the kind of thing that works until the one
+# time it does not. The bot waits for the control service to be healthy (compose
+# `depends_on`), by which time the schema it shares is already there.
+if [ "${1:-}" = "bot" ]; then
+  echo "starting telegram bot"
+  exec python -m control.app.botmain
+fi
+
 # Found through the INSTALLED package rather than a copied path. The image
 # deliberately throws its sources away and runs from an empty /app, so there is no
 # checkout to point at — and hardcoding a site-packages path would break on a Python

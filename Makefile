@@ -9,7 +9,13 @@
 PYTHON      ?= python3.14
 VENV        := .venv
 PY          := $(VENV)/bin/python
-COMPOSE     := docker compose --env-file .env -f deploy/docker-compose.yml
+# PROFILES names compose profiles to switch on, space separated — empty by default, so
+# `make up` and every other verb behave exactly as before. The only optional service today
+# is the Telegram bot (deploy/docker-compose.yml, `telegram-bot`): turn it on with
+# `make up PROFILES=telegram-bot` (or the same on `up-panel`), the way E2E_PROFILES turns on
+# the acceptance browser. A profile-less `up` leaves the bot off and the install untouched.
+PROFILES    ?=
+COMPOSE     := docker compose --env-file .env $(foreach p,$(PROFILES),--profile $(p)) -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 # The deployed shape: the base stack plus the only overlays that open a port on a
 # real host. Never the dev overlay — that publishes the database.
@@ -43,7 +49,7 @@ setup:
 # could then never write the record it exists to write.
 env:
 	@test -f .env || { cp .env.example .env; echo ".env created from .env.example — fill it in"; }
-	@mkdir -p backups/state deploy/delivery
+	@mkdir -p backups/state deploy/delivery deploy/egress
 
 # Every script under scripts/ is a bash script (`#!/usr/bin/env bash`), and Make runs
 # recipes with /bin/sh — so a host without bash used to meet `env: can't execute 'bash'`,
@@ -495,6 +501,9 @@ checkers:
 E2E_PROJECT  := hashi-e2e
 E2E_API_PORT ?= 54200
 E2E_DB_PORT  ?= 54232
+# The fake Telegram's injection side (deploy/docker-compose.e2e.yml) — M37.4. On the e2e
+# block like the two above, and overridable the same way.
+E2E_TELEGRAM_PORT ?= 54280
 # Loopback by default, exactly like the dev stack. Override ONLY when the engine
 # is not the machine you are sitting at — the fleet's dind engine, where
 # 127.0.0.1 is dind's own loopback and no test runner can reach it:
@@ -523,7 +532,7 @@ COMPOSE_E2E  = docker compose --env-file .env --env-file deploy/e2e.env -p $(E2E
                 -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml \
                 -f deploy/docker-compose.e2e.yml
 E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
-                DEV_BIND_ADDR=$(E2E_BIND_ADDR)
+                DEV_BIND_ADDR=$(E2E_BIND_ADDR) E2E_TELEGRAM_PORT=$(E2E_TELEGRAM_PORT)
 
 # EVERY profile the e2e overlay defines — what `down` has to know about, whatever
 # `up` was asked for. `docker compose down` only touches services in the profiles
@@ -532,11 +541,25 @@ E2E_PORTS    := DEV_API_PORT=$(E2E_API_PORT) DEV_DB_PORT=$(E2E_DB_PORT) \
 # gigabyte of shared memory. Worse, it defeated `stand.sh up`'s own safety check —
 # that refuses to continue if anything still answers /healthz, and a leaked
 # browser answers nothing, so it passed and accumulated.
-# tests/infra/test_the_hands_can_take_an_action.py fails if the overlay grows a
-# profile this list does not have.
-E2E_ALL_PROFILES := browser
+# `telegram-bot` joined the list in M39: the bot is always part of the stand (see
+# e2e-up below), and it is declared in docker-compose.e2e.yml so this set and the
+# overlay's own profiles agree — tests/infra/test_the_hands_can_take_an_action.py
+# fails if they drift, which is what would leave a bot container behind on teardown.
+E2E_ALL_PROFILES := browser telegram-bot
 
+# The bot is always part of the stand — tests/e2e/control/test_the_owner_adds_a_user
+# _from_telegram.py needs it polling the fake — so its profile is forced on here, ON
+# TOP of whatever the caller asked for (scripts/acceptance/stand.sh passes
+# E2E_PROFILES=browser). `override ... +=` is what appends it to a command-line
+# E2E_PROFILES rather than letting that value replace it; e2e-down tears it down
+# through E2E_ALL_PROFILES the same way.
+e2e-up: override E2E_PROFILES += telegram-bot
 e2e-up: env
+	$(need_venv)
+	@# Mint this run's throwaway leaf + bot AmneziaWG configs — M40. The bot's egress sidecar
+	@# reads awg0.conf and the stand's leaf reads leaf.conf; both carry a private key, so they
+	@# are generated per run into .e2e/artifacts/ (gitignored) rather than committed.
+	$(PY) .e2e/gen_egress_configs.py
 	$(NO_ATTESTATIONS) $(E2E_PORTS) $(COMPOSE_E2E) up -d --build
 
 # `down` takes away everything any `up` could have started, not only what this

@@ -70,6 +70,16 @@ def configure_logging() -> None:
     # ``services/apply`` logs with the traceback names nothing.
     logging.getLogger("asyncssh").setLevel(logging.WARNING)
 
+    # And httpx, since M37.1 made it this process's own outbound HTTP rather than only the
+    # test suite's. ``httpx`` writes `HTTP Request: POST <url> "HTTP/1.1 200 OK"` at INFO
+    # on every call that got an answer, and for the Bot API that URL carries the bot
+    # token in its path — the same shape as ``/sub/<token>``, now dialled out rather than
+    # served. ``httpcore`` beneath it writes the host and every response header at DEBUG.
+    # Neither says anything at WARNING or above that the client's own exception does not
+    # say better, with no URL in it (``services/telegram_api``).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. Pass ``settings`` in tests; production reads env."""
@@ -102,6 +112,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.routing_refresher = routing_refresh.start_refresher(
             app.state.database, settings
         )
+        # The owner's Telegram bot is NOT started here — M39.1. It used to be the lifespan's
+        # fourth task (M37.3), but it now runs in its own process (control/app/botmain.py),
+        # a separate container tied to this one by the shared database. The web process must
+        # not poll: two pollers on one bot token is a 409 from Telegram and every update
+        # handled twice. The poller's module and its functions stay (the bot process uses
+        # them); only this call is gone, so nothing here holds a poller on ``app.state``.
         try:
             yield
         finally:
