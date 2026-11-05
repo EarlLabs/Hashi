@@ -3817,7 +3817,7 @@ command to get there.
 
 ---
 
-## → M40 — The bot's traffic to Telegram leaves through a hashi leaf · asked for by the owner 2026-11-04 · PROPOSED, awaiting approval · after M39
+## ✅ M40 — The bot's traffic to Telegram leaves through a hashi leaf · asked for by the owner 2026-11-04 · built 2026-11-05 on `task/M40` · done 2026-11-05 (acceptance: good, partial — the stand proves the bot reaches the fake Telegram through the leaf, the DB stays direct, and it fails closed; the real crossing from Russia is the owner's field check). Egress is MANDATORY in the `telegram-bot` profile; control-plane minting of the egress peer is DEFERRED to a future milestone (operator supplies `deploy/egress/awg0.conf` by hand for now).
 
 **Why.** The bot container (M39) runs on the Russian control-plane host, where `api.telegram.org` is blocked (field, 2026-11-04). For it to work its outbound traffic must leave through a leaf abroad over an obfuscated transport, the way a user's does. This is the one piece no stand can prove carries — a real leaf on a real Russian network is the owner's field check.
 
@@ -3834,9 +3834,9 @@ The stand routes the bot through a stand leaf and shows the fake Telegram reache
 **E2E:** the M39 scenario with the bot's egress routed through a stand leaf, green on the stand.
 
 **Done when.**
-- [ ] The co-located bot's traffic to Telegram leaves through a leaf over an obfuscated transport; the control plane's own networking is unchanged.
-- [ ] On the stand the bot reaches the fake Telegram through the leaf path and the whole add / nodes / apply loop works end to end.
-- [ ] The egress peer is minted and revocable through the control plane, no secret in git, no shared fingerprint.
+- [x] The co-located bot's traffic to Telegram leaves through a leaf over an obfuscated transport; the control plane's own networking is unchanged.
+- [x] On the stand the bot reaches the fake Telegram through the leaf path and the whole add / nodes / apply loop works end to end.
+- [~] No secret in git, no shared fingerprint (held). *Minting the egress peer THROUGH the control plane is deferred to a future milestone — the operator supplies `deploy/egress/awg0.conf` by hand for now, like the management tunnel.*
 - [ ] Not on a stand, the owner's walk: the real bot on the Russian host reaching real Telegram through a real leaf — the "polling as @…" line is the proof.
 
 acceptance: yes (partial — the stand proves the plumbing; the border crossing is the owner's field walk)

@@ -18,3 +18,7 @@ Non-blocking findings / deferrals, as background. Do not fix as part of another 
   production leaf rendered `Egress.LOCAL` and the container-client render variant. Until then
   the operator supplies `deploy/egress/awg0.conf` by hand (see `deploy/egress/README.md`),
   like the management tunnel.
+
+## M40 acceptance (round 1: GOOD — may merge; 1 clumsy, non-blocking)
+- Clumsy — when the egress sidecar is stopped at runtime, the BOT container's own healthcheck stays `healthy` for the whole outage even though the bot is fully cut off (the egress container correctly shows exited, and the runbook tells the operator to watch the egress container). Security property intact (no clear-path leak); a monitoring-clarity nit. A future tweak could tie the bot's health to the egress handshake.
+- Could-not-observe (owner's field checks, by design): a real leaf carrying from inside a real Russian network to real Telegram; DNS for api.telegram.org leaving through the tunnel on the real host; a populated /nodes + happy-path /apply against a serving node (the stand had no serving node).
