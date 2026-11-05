@@ -114,12 +114,13 @@ services:
         condition: service_healthy
 
   # The leaf abroad, for the stand — M40. The same AmneziaWG daemon a real node runs, with a
-  # server config the real edge renderer produced (render_server + Egress.LOCAL), so the stand
-  # exercises the forwarding and NAT a user-facing leaf carries. It sits on the default network
-  # (where the sidecar dials its ListenPort, and where that endpoint is a connected route that
-  # stays off the tunnel) and on the isolated egress network, where it masquerades the decrypted
-  # traffic on to the fake. ip_forward is on because it forwards; without it the handshake
-  # completes and nothing moves.
+  # server config the real edge renderer produced (render_server + Egress.RELAY — see
+  # .e2e/gen_egress_configs.py LEAF_EGRESS for why RELAY and not LOCAL; production must render
+  # LOCAL), so the stand exercises the forwarding and NAT a leaf carries. It sits on the default
+  # network (where the sidecar dials its ListenPort, and where that endpoint is a connected route
+  # that stays off the tunnel) and on the isolated egress network, where it masquerades the
+  # decrypted traffic on to the fake. ip_forward is on because it forwards; without it the
+  # handshake completes and nothing moves.
   leaf:
     image: docker.io/amneziavpn/amneziawg-go:3.0.3
     restart: unless-stopped

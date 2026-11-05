@@ -153,6 +153,61 @@ def test_the_bot_waits_for_the_fake(bot: dict) -> None:
     assert bot["depends_on"]["telegram"]["condition"] == "service_healthy"
 
 
+def _load_gen():
+    """The stand's egress-config generator, loaded from source (it is not a package)."""
+    spec = importlib.util.spec_from_file_location(
+        "gen_egress_configs", REPO / ".e2e" / "gen_egress_configs.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_sidecar_config_pins_the_endpoint_before_swapping_the_default() -> None:
+    """The egress sidecar's own transport packets must not go through its own tunnel — M40.
+
+    Swapping the default route to the tunnel without first pinning the leaf endpoint to the
+    original gateway routes the WireGuard UDP to the leaf back INTO the tunnel, so no handshake
+    completes on a real host (the stand hides it — its leaf is a connected route). Both the
+    generated config and the operator README must pin the endpoint before the swap; the README's
+    documented PostUp is held byte-for-byte against the generator so the two cannot drift.
+    """
+    gen = _load_gen()
+    postup = gen.BOT_POSTUP
+    pin_at = postup.find("via ")
+    swap_at = postup.find("default dev %i")
+    assert pin_at != -1, f"the sidecar PostUp pins no endpoint via a gateway:\n{postup}"
+    assert swap_at != -1, f"the sidecar PostUp never swaps the default to the tunnel:\n{postup}"
+    assert pin_at < swap_at, (
+        "the sidecar PostUp swaps the default before pinning the endpoint, so the tunnel's own "
+        f"transport packets route back into the tunnel and no handshake completes:\n{postup}"
+    )
+    # The generated config actually carries it, and the operator README documents the same line.
+    conf = gen._bot_config("k" * 43 + "=", "p" * 43 + "=", "s" * 43 + "=", gen._obfuscation())
+    assert gen.BOT_POSTUP in conf, "the generated awg0.conf does not use BOT_POSTUP"
+    readme = (DEPLOY / "egress" / "README.md").read_text()
+    assert gen.BOT_POSTUP in readme, (
+        "deploy/egress/README.md's documented PostUp has drifted from the generator — the "
+        "operator would write a config that pins the endpoint differently from the stand's"
+    )
+
+
+def test_the_sidecar_sends_dns_through_the_tunnel_not_the_host() -> None:
+    """Name resolution must not leak — M40 round 1.
+
+    Docker's embedded resolver forwards external lookups to the host resolver, so without this
+    the bot would look up api.telegram.org in the clear from the Russian host. The sidecar's
+    `dns:` repoints that upstream at a public resolver reached through the tunnel. The bot shares
+    the sidecar's netns and resolv.conf, so this is the one place it is set. (The stand dials the
+    fake by IP and makes no external lookup, so this is a static check; the field run validates
+    the egress path — see deploy/egress/README.md.)
+    """
+    sidecar = load(BASE)["services"]["telegram-bot-egress"]
+    assert sidecar.get("dns"), (
+        "the egress sidecar sets no dns:, so the bot's external lookups leak to the host resolver"
+    )
+
+
 def test_the_fixture_values_are_not_the_shape_of_real_ones(bot: dict) -> None:
     """A token that could be mistaken for a real one is one somebody copies into .env.
 

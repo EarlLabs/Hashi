@@ -178,12 +178,23 @@ services:
   # THE CLIENT CONFIG IS MOUNTED, never baked and never in git — like the delivery pair and
   # the management-tunnel file. The operator drops an awg0.conf into deploy/egress/ on the
   # host (see deploy/egress/README.md and .env.example); the e2e stand overrides this mount
-  # with a per-run generated one. The container-client shape it must have — Table = off plus
-  # a PostUp that points the default route at the tunnel, because awg-quick's own
-  # AllowedIPs=0.0.0.0/0 auto-routing fails against a container's read-only /proc/sys — is
-  # documented where it is generated for the stand (.e2e/gen_egress_configs.py) and where the
-  # operator is told to write it (deploy/egress/README.md). Minting it through the control
-  # plane's own credential machinery is M40.2; today it is operator-supplied or stand-scripted.
+  # with a per-run generated one. The container-client shape it must have — Table = off plus a
+  # PostUp that PINS THE LEAF ENDPOINT to the original gateway and THEN points the default route
+  # at the tunnel (awg-quick's own AllowedIPs=0.0.0.0/0 auto-routing fails against a container's
+  # read-only /proc/sys, and swapping the default without pinning the endpoint first routes the
+  # tunnel's own transport packets back into the tunnel, so no handshake completes) — is
+  # documented where it is generated for the stand (.e2e/gen_egress_configs.py BOT_POSTUP) and
+  # where the operator is told to write it (deploy/egress/README.md). Minting it through the
+  # control plane's own credential machinery is M40.2; today it is operator-supplied or
+  # stand-scripted.
+  #
+  # RESTART GAP, recorded rather than over-engineered — M40 round 1. If this sidecar restarts,
+  # the bot keeps a network namespace whose interface is gone and has no network until it too is
+  # restarted; compose's depends_on does not re-trigger it. It is fail-closed — the bot reaches
+  # nothing in the clear, it just reaches nothing — and the heartbeat healthcheck will call the
+  # bot unhealthy, but Docker does not restart on unhealthy. The operator's answer is to restart
+  # the bot after the sidecar (docs/deploy runbook, M40.3). Coupling them automatically needs an
+  # external supervisor this project does not run, so it is a documented limitation, not a line.
   telegram-bot-egress:
     profiles: ["telegram-bot"]
     image: docker.io/amneziavpn/amneziawg-go:3.0.3
@@ -192,6 +203,22 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
+    # Name resolution for the bot too — M40 round 1. The bot shares this container's netns and
+    # inherits its /etc/resolv.conf, so this is where the bot's resolver is decided. Without it,
+    # Docker's embedded resolver (127.0.0.11) forwards external lookups to the HOST's resolver —
+    # api.telegram.org would be looked up in the clear from the Russian host, which is the one
+    # thing the tunnel exists to prevent. Pointed at a public resolver so that, once the config's
+    # PostUp makes the tunnel the default route, the forwarded query leaves through the leaf
+    # rather than the host. Internal names (db, control) still resolve on 127.0.0.11 directly, so
+    # the database connection is unaffected. This cannot be shown on the stand (it dials the fake
+    # by IP and makes no external lookup) — the owner's field run on a real host is the
+    # validation, and must confirm the DNS egresses via the tunnel (e.g. tcpdump on the host);
+    # if an engine forwards from the host namespace instead, run a resolver reachable only past
+    # the leaf and point this there. Not a hardcoded node value — it is the egress resolver, the
+    # one address the operator may change.
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     volumes:
       # The operator's client config, READ-ONLY, from a directory on the host — a relative
       # path like every other mount here so the control plane stays relocatable, a directory

@@ -109,15 +109,38 @@ def _obfuscation() -> dict[str, int]:
     }
 
 
+# The sidecar's default-route hooks — the whole of M40 round 1's High. The leaf's endpoint
+# MUST be pinned to the original gateway BEFORE the default is swapped to the tunnel. Without
+# that, the tunnel's own transport packets (the UDP the sidecar sends to the leaf's public
+# endpoint) match the new default route and are sent INTO the tunnel — so no handshake ever
+# completes on a real host, the sidecar never goes healthy, and the bot never starts. The stand
+# hides it because its leaf endpoint is a connected route that the default swap never covers;
+# only a real host, where the leaf is reached via the gateway, shows the break.
+#
+# ``awg show %i endpoints`` is the resolved endpoint ip:port (known right after setconf, so no
+# DNS is needed for the pin); the gateway is the default route's current next hop, read before
+# anything changes it. ``ip route replace`` (not ``add``) keeps the supervisor's down-before-up
+# idempotent. IPv4 only, like the rest of this hop (edge/egress.py). The /32 and the swapped
+# default both live in the container's own netns and vanish with it, so PostDown only has to
+# undo the default — the netns teardown takes the /32.
+BOT_POSTUP = (
+    "GW=$(ip route show default | awk 'NR==1{print $3}'); "
+    "EP=$(awg show %i endpoints | awk 'NR==1{print $2}' | sed -E 's/:[0-9]+$//'); "
+    '[ -n "$GW" ] && [ -n "$EP" ] && ip route replace "$EP/32" via "$GW"; '
+    "ip route replace default dev %i"
+)
+BOT_POSTDOWN = "ip route del default dev %i 2>/dev/null || true"
+
+
 def _bot_config(private_key: str, leaf_public_key: str, preshared_key: str,
                 obfuscation: dict[str, int]) -> str:
     """The egress sidecar's own client config — the PoC's proven container-client shape.
 
-    NOT rendered by edge: ``Table = off`` plus ``ip route replace default dev %i`` is the
+    NOT rendered by edge: ``Table = off`` plus a PostUp that installs the default route is the
     answer to a container's read-only ``/proc/sys``, where awg-quick's own
     ``AllowedIPs = 0.0.0.0/0`` auto-routing fails. This is the hand-made/scripted end M40.2
     will replace with one the control plane mints. The junk/header values match the leaf's
-    because the handshake needs the four headers to.
+    because the handshake needs the four headers to. See ``BOT_POSTUP`` for the endpoint pin.
     """
     lines = [
         "# Generated per run by .e2e/gen_egress_configs.py — throwaway, never committed.",
@@ -127,11 +150,12 @@ def _bot_config(private_key: str, leaf_public_key: str, preshared_key: str,
         f"MTU = {MTU}",
         # The sidecar's routes are its own to install: Table = off stops awg-quick touching
         # the main table (which it cannot, read-only /proc/sys in a container), and the hook
-        # points the default route at the tunnel so everything but the connected compose
-        # subnet — the shared DB — leaves through the leaf.
+        # pins the leaf endpoint to the real gateway, then points the default at the tunnel —
+        # so everything but the endpoint and the connected compose subnet (the shared DB)
+        # leaves through the leaf. See BOT_POSTUP for why the order is load-bearing.
         "Table = off",
-        "PostUp = ip route replace default dev %i",
-        "PostDown = ip route del default dev %i || true",
+        f"PostUp = {BOT_POSTUP}",
+        f"PostDown = {BOT_POSTDOWN}",
         f"Jc = {obfuscation['junk_packet_count']}",
         f"Jmin = {obfuscation['junk_packet_min_size']}",
         f"Jmax = {obfuscation['junk_packet_max_size']}",
