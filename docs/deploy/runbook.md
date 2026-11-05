@@ -1727,9 +1727,22 @@ listens, nothing is published, and Caddy is not touched.
    together or not at all` and ends `Refusing to start.` — `make logs PROFILES=telegram-bot`
    shows it under `telegram-bot`. The control plane no longer reads these two, so it boots
    either way; it is the bot that refuses half a pair. A third line, `HASHI_TELEGRAM_API_URL`,
-   is where the Bot API is dialled; blank means Telegram's own, `https://api.telegram.org`,
-   and it is set only to a relay you run yourself, on a box from which Telegram's address
-   does not answer (*Known-unproven*, below). Building that relay is not this project's.
+   is where the Bot API is dialled; blank means Telegram's own, `https://api.telegram.org`.
+   Leave it blank: the bot reaches Telegram through the leaf egress (next), which carries that
+   address abroad, so no separate relay runs on the control-plane box.
+
+**Before switching on — supply the leaf egress (mandatory).** The `telegram-bot` profile also
+starts `telegram-bot-egress`, an obfuscated AmneziaWG client whose exit is one of your leaves;
+the bot shares that container's network, so everything it sends — Telegram, and the SSH it
+opens to nodes on an add or an apply — leaves through the leaf, while the database stays local.
+The sidecar reads one file you supply, `deploy/egress/awg0.conf` (gitignored, never baked into
+an image); `deploy/egress/README.md` gives the exact shape — an AmneziaWG client to a leaf,
+with `Table = off`, a `PostUp` that pins the leaf's address off the tunnel before it takes the
+default route, MTU 1280, and the same four obfuscation headers the leaf uses. Mint it the way
+you mint the management tunnel. **Without this file the egress container never comes up, so the
+bot never starts** — deliberately: the bot has no path to Telegram except through the leaf, so
+it can never fall back to dialling `api.telegram.org` in the clear from the box.
+
 4. **Switch the bot on with the command this host was published with, plus
    `PROFILES=telegram-bot`** — `make up-panel PROFILES=telegram-bot` over the management
    tunnel, `make up-panel-over-ssh PROFILES=telegram-bot` without one; `make up
@@ -1755,13 +1768,18 @@ listens, nothing is published, and Caddy is not touched.
    starting, the signal is the `polling as` line itself; once it had been polling, it is
    `INFO … telegram: Telegram answers again; polling resumed`.
 
-   **On a Russian entry box, expect the WARNING, not the `polling as` line — for now.**
+   **On a Russian entry box, the `polling as` line means the leaf egress is carrying.**
    Reaching `api.telegram.org` from that box is the border this whole fleet exists to cross,
-   and the route the bot is meant to take — out through a leaf — is the leaf egress of M40,
-   which has not landed. So until M40 the bot on the real host sits in `polling is failing`
-   and answers no command, while the panel and `/sub/` serve normally. On the e2e stand the
-   bot polls a fake Bot API on the compose network, so there the `polling as` line appears at
-   once — the stand proves the bot composes, never that Telegram answers from Russia.
+   and the bot takes it the way a user does: out through the leaf you configured above. When
+   the egress handshake is up the bot reaches Telegram and logs `polling as`; if the egress is
+   not configured or its handshake is down, the `telegram-bot-egress` container is not healthy
+   and the bot does not start at all, so it never polls in the clear — look at
+   `make logs PROFILES=telegram-bot` for the egress container, not just the bot. Two checks are
+   yours, because no stand can make them: that the handshake completes against a real leaf, and
+   that the DNS lookup for `api.telegram.org` leaves through the tunnel rather than in the clear
+   (confirm with `tcpdump`; if your engine resolves from the host namespace, point the egress
+   `dns:` at a resolver reachable only past the leaf). On the e2e stand the bot polls a fake Bot
+   API through a stand leaf, which proves the plumbing, never that Telegram answers from Russia.
 
 ### What the bot answers
 
@@ -2259,15 +2277,15 @@ hosts is C+E | L (2026-10-02), where no delivery host exists by construction.
 
 **The Bot API has never been polled from a Russian entry box.** The owner's Telegram bot
 (*Adding a user from Telegram*, above) is the `telegram-bot` container dialling
-`api.telegram.org` from the entry box — and reaching that address from there is the border
-this fleet exists to cross. The route the bot is meant to take, out through a leaf, is the
-leaf egress of M40, which has not landed; until it does, expect the `polling is failing`
-WARNING on the real host and no command answered, with the panel and delivery unaffected.
-The stand runs the whole loop against a fake Bot API (`.e2e/profile.yml` lists `telegram`
-under `stubbed`), which proves the bot composes beside the real control plane and says
-nothing about a border. `make logs PROFILES=telegram-bot` is what shows which line it is;
-`HASHI_TELEGRAM_API_URL` is where a relay you run yourself would go if you build one before
-M40 — but the route M40 adds is the fleet's own answer, not a mistake on your side.
+`api.telegram.org`, and it takes that traffic out through a leaf — the `telegram-bot-egress`
+sidecar, mandatory in the profile — because reaching that address from across the border is the
+thing this fleet exists to do. The stand runs the whole loop against a fake Bot API reached
+through a stand leaf (`.e2e/profile.yml` lists `telegram` under `stubbed`), which proves the
+plumbing — the bot's traffic does leave through the leaf and the database stays local — and says
+nothing about whether a real leaf carries it from Russia. That last part is the owner's field
+check: bring the egress up against a real leaf, watch for `polling as`, and confirm with
+`tcpdump` that the DNS lookup leaves through the tunnel, not in the clear. `make logs
+PROFILES=telegram-bot` shows both the bot and its egress container.
 
 ## Backups
 
