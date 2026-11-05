@@ -118,9 +118,15 @@ def test_the_bot_is_pointed_at_the_fake_and_the_control_plane_is_not(
     environment = bot["environment"]
     control = overlay["control"]["environment"]
     port = telegram["environment"]["FAKE_TELEGRAM_PORT"]
-    assert environment["HASHI_TELEGRAM_API_URL"] == f"http://telegram:{port}", (
-        "the bot dials somewhere other than the `telegram` service on the port the fake was "
-        "told to listen on"
+    # Dialled by ADDRESS on the isolated egress network, not by the `telegram` name — M40.
+    # The bot shares the egress sidecar's namespace and the fake sits on the internal egress
+    # network, reachable only through the leaf; so the bot dials the fake's egress IP, which
+    # has no connected route from the sidecar and therefore leaves through the tunnel. Read
+    # from the overlay's own network assignment so the two cannot drift.
+    egress_ip = telegram["networks"]["egress"]["ipv4_address"]
+    assert environment["HASHI_TELEGRAM_API_URL"] == f"http://{egress_ip}:{port}", (
+        "the bot dials somewhere other than the fake's address on the egress network, on the "
+        "port the fake was told to listen on — it must reach the fake only past the leaf"
     )
     assert environment["HASHI_TELEGRAM_BOT_TOKEN"], "no token, so the bot is off on the stand"
     owner = str(environment["HASHI_TELEGRAM_OWNER_ID"])

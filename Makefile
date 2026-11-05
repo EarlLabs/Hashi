@@ -49,7 +49,7 @@ setup:
 # could then never write the record it exists to write.
 env:
 	@test -f .env || { cp .env.example .env; echo ".env created from .env.example — fill it in"; }
-	@mkdir -p backups/state deploy/delivery
+	@mkdir -p backups/state deploy/delivery deploy/egress
 
 # Every script under scripts/ is a bash script (`#!/usr/bin/env bash`), and Make runs
 # recipes with /bin/sh — so a host without bash used to meet `env: can't execute 'bash'`,
@@ -555,6 +555,11 @@ E2E_ALL_PROFILES := browser telegram-bot
 # through E2E_ALL_PROFILES the same way.
 e2e-up: override E2E_PROFILES += telegram-bot
 e2e-up: env
+	$(need_venv)
+	@# Mint this run's throwaway leaf + bot AmneziaWG configs — M40. The bot's egress sidecar
+	@# reads awg0.conf and the stand's leaf reads leaf.conf; both carry a private key, so they
+	@# are generated per run into .e2e/artifacts/ (gitignored) rather than committed.
+	$(PY) .e2e/gen_egress_configs.py
 	$(NO_ATTESTATIONS) $(E2E_PORTS) $(COMPOSE_E2E) up -d --build
 
 # `down` takes away everything any `up` could have started, not only what this

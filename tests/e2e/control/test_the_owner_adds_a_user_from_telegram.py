@@ -57,6 +57,22 @@ READY = "telegram: polling as @"
 # last assertion of this file is that the control plane's log never names it.
 STRANGER = 987654321
 
+# The bot's egress sidecar and the stand's leaf — M40. The bot has no network of its own; it
+# rides the sidecar, which runs an AmneziaWG client to the leaf. Everything internet-bound
+# leaves through the leaf; only the compose subnet (the shared DB) stays direct.
+EGRESS = "telegram-bot-egress"
+LEAF = "leaf"
+# The two services the egress proof reaches into besides the sidecar — the control container
+# (it has getent, to resolve the DB) and the database itself.
+CONTROL = "control"
+DB = "db"
+# Where the fake Telegram sits on the isolated egress network (deploy/docker-compose.e2e.yml).
+# The bot dials it here, and this address has no connected route from the sidecar, so it can
+# only be reached through the tunnel. A private address the leaf's Egress.RELAY rules forward
+# (see that file for why RELAY and not LOCAL — it avoids colliding with the hop scenario's
+# 192.88.99.0/24 "internet" network).
+FAKE_EGRESS_IP = "10.90.1.9"
+
 
 @pytest.fixture
 def unique() -> str:
@@ -281,3 +297,43 @@ async def test_nodes_answers_what_the_nodes_screens_block_says(
     assert sorted(offered_in(text)) == sorted(behind), (text, behind)
     if not behind:
         assert text == "Every serving node holds the configuration it would be given.", text
+
+
+def test_the_bots_telegram_traffic_leaves_through_the_leaf(polling, exec_in) -> None:
+    """The egress itself, proven on the running stand — M40.
+
+    The scenarios above show the bot reaches the fake at all; this shows HOW. The sidecar's
+    route to the fake's address goes out the tunnel interface, the leaf has carried a handshake,
+    and — the other half of the carve-out — the sidecar's route to the shared database does NOT
+    go through the tunnel. ``polling`` first, so the bot is up, which means a getMe has already
+    crossed the tunnel by the time these are asked.
+    """
+    # The fake's egress address is reached through the tunnel. ``ip route get`` is the kernel's
+    # own answer to "which interface would carry a packet to here", and the sidecar's interface
+    # is awg0 (the config's stem).
+    to_fake = exec_in(EGRESS, "ip", "route", "get", FAKE_EGRESS_IP)
+    assert to_fake.returncode == 0, to_fake.stderr
+    assert "dev awg0" in to_fake.stdout, (
+        f"the sidecar does not route the fake's address through the tunnel:\n{to_fake.stdout}"
+    )
+
+    # The database stays DIRECT — the compose subnet is a connected route the tunnel's default
+    # does not cover. Resolve db from the control container (it has getent) and ask the sidecar
+    # how it would reach that address; it must not be the tunnel.
+    resolved = exec_in(CONTROL, "getent", "hosts", DB)
+    assert resolved.returncode == 0 and resolved.stdout.split(), resolved.stderr
+    db_ip = resolved.stdout.split()[0]
+    to_db = exec_in(EGRESS, "ip", "route", "get", db_ip)
+    assert to_db.returncode == 0, to_db.stderr
+    assert "dev awg0" not in to_db.stdout, (
+        f"the sidecar routes the database through the tunnel — the DB must stay direct:\n"
+        f"{to_db.stdout}"
+    )
+
+    # The leaf has actually carried the tunnel: a handshake with its one peer. awg omits the
+    # line entirely until a handshake has happened, so its presence is the proof.
+    leaf = exec_in(LEAF, "awg", "show")
+    assert leaf.returncode == 0, leaf.stderr
+    assert "latest handshake:" in leaf.stdout, (
+        f"the leaf shows no AmneziaWG handshake, so nothing crossed the tunnel:\n{leaf.stdout}"
+    )

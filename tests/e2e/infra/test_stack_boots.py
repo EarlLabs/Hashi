@@ -35,7 +35,12 @@ def test_every_service_is_running(compose) -> None:
     """Caddy is the one that used to be missing here: its config arrived as a
     bind mount, which exists only on the machine holding this checkout."""
     state = services(compose)
-    assert set(state) == {"control", "db", "caddy", "telegram", "telegram-bot"}, (
+    assert set(state) == {
+        "control", "db", "caddy", "telegram", "telegram-bot",
+        # M40: the bot's egress sidecar (its way out, over AmneziaWG to the leaf) and the
+        # stand's leaf itself. The bot has no network of its own — it rides the sidecar's.
+        "telegram-bot-egress", "leaf",
+    }, (
         f"unexpected set of running services: {sorted(state)}"
     )
     stopped = {name: entry["State"] for name, entry in state.items()

@@ -161,7 +161,77 @@ services:
       retries: 5
       start_period: 15s
 
-  # The owner's Telegram add-user bot, as its own process beside the control plane — M39.1.
+  # The bot's way out — a leaf abroad, over AmneziaWG — M40. MANDATORY in this profile
+  # (owner, 2026-11-04): whenever the bot runs it runs behind this sidecar, with no network
+  # of its own. The bot shares this container's network namespace
+  # (``network_mode: "service:telegram-bot-egress"`` below), so everything it sends —
+  # Telegram AND the SSH it opens to nodes on /adduser,/apply — leaves through the tunnel.
+  # Only the compose subnet stays direct: this sidecar is on the default network, so the
+  # route to the shared database is a connected route the tunnel's default route does not
+  # cover. That is the whole carve-out.
+  #
+  # THE FLEET'S PINNED AmneziaWG image, run directly — a leaf is a node, and this is the
+  # same daemon a node runs (edge/bootstrap/node_stack.py AMNEZIAWG_IMAGE). NET_ADMIN and
+  # /dev/net/tun are all it needs: awg-quick falls back to the userspace implementation the
+  # image ships when no kernel module is present, which is the normal case on a rented host.
+  #
+  # THE CLIENT CONFIG IS MOUNTED, never baked and never in git — like the delivery pair and
+  # the management-tunnel file. The operator drops an awg0.conf into deploy/egress/ on the
+  # host (see deploy/egress/README.md and .env.example); the e2e stand overrides this mount
+  # with a per-run generated one. The container-client shape it must have — Table = off plus
+  # a PostUp that points the default route at the tunnel, because awg-quick's own
+  # AllowedIPs=0.0.0.0/0 auto-routing fails against a container's read-only /proc/sys — is
+  # documented where it is generated for the stand (.e2e/gen_egress_configs.py) and where the
+  # operator is told to write it (deploy/egress/README.md). Minting it through the control
+  # plane's own credential machinery is M40.2; today it is operator-supplied or stand-scripted.
+  telegram-bot-egress:
+    profiles: ["telegram-bot"]
+    image: docker.io/amneziavpn/amneziawg-go:3.0.3
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      # The operator's client config, READ-ONLY, from a directory on the host — a relative
+      # path like every other mount here so the control plane stays relocatable, a directory
+      # (not a file) so replacing the config is a copy rather than a container recreate, and
+      # read-only because this sidecar reads it and never writes it. awg-quick takes the
+      # interface name (awg0) from the file's stem, so the file is awg0.conf.
+      - ../deploy/egress:/etc/amneziawg:ro
+    # The supervisor pattern from edge/bootstrap/node_stack.py (`_WG_QUICK_SUPERVISOR`): awg-quick
+    # up CONFIGURES and returns — it is not a daemon — so something has to hold the container open
+    # for the tunnel's life and take the tunnel DOWN when it is stopped. $0 is the tool and $1 the
+    # config, exactly as there; a `down` before the `up` recovers from a hard stop that left the
+    # interface behind, and `sleep & wait` makes the trap fire at once on `docker stop`.
+    # Every `$` is DOUBLED — `$$` is compose's escape and reaches the container as a single
+    # `$`, expanded by the shell there. A bare `$0` is a compose interpolation and the
+    # stricter Compose 5.x would empty it; `$$0` is the portable form (the db healthcheck
+    # above doubles `$${POSTGRES_USER}` for the same reason).
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        trap '"$$0" down "$$1" || true; exit 0' INT TERM
+        "$$0" down "$$1" >/dev/null 2>&1 || true
+        "$$0" up "$$1"
+        while :; do sleep 86400 & wait $$!; done
+      - awg-quick
+      - /etc/amneziawg/awg0.conf
+    # Healthy means the tunnel is CARRYING, not merely that the interface came up: a nonzero
+    # latest-handshake for the peer. The bot waits on this (depends_on below), so mandatory
+    # egress is enforced by ordering — the bot does not start until its way out exists. awk
+    # defaults to failure and succeeds only on a handshake, so an empty reading is unhealthy.
+    healthcheck:
+      test: ["CMD-SHELL", "awg show awg0 latest-handshakes | awk 'BEGIN{e=1} {if ($$2+0>0) e=0} END{exit e}'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+  # The owner's Telegram add-user bot, as its own process beside the control plane — M39.1,
+  # and behind the egress sidecar since M40.
   #
   # OFF BY DEFAULT: it is behind the `telegram-bot` profile, so `make up` (and every verb
   # that does not pass PROFILES) never starts it and an install with no bot is untouched —
@@ -190,6 +260,12 @@ services:
       dockerfile: deploy/docker/control.Dockerfile
     command: ["bot"]
     restart: unless-stopped
+    # The bot has NO network of its own — it shares the egress sidecar's, so every packet it
+    # sends (Telegram, and the SSH it opens to nodes on /adduser,/apply) leaves through the
+    # leaf — M40. The compose subnet stays direct because the sidecar's route to it is a
+    # connected route the tunnel's default does not cover: the shared DB is reached over that,
+    # the way it always was. This is why the bot declares no `ports`/`networks` of its own.
+    network_mode: "service:telegram-bot-egress"
     environment:
       <<: *control-environment
       # The credentials and the dial target, the ONLY way the token reaches the container:
@@ -207,6 +283,12 @@ services:
       - ../deploy/delivery:/etc/hashi/delivery:ro
     depends_on:
       control:
+        condition: service_healthy
+      # Mandatory egress — M40: the bot does not start until its way out is up and carrying.
+      # On a Russian host neither the bot nor control can reach api.telegram.org directly, so a
+      # bot that started before the tunnel would sit in "polling is failing"; waiting on the
+      # sidecar's handshake is what makes "the bot is up" mean "the bot can reach Telegram".
+      telegram-bot-egress:
         condition: service_healthy
     # No HTTP here to probe, so the healthcheck reads the heartbeat botmain rewrites while the
     # poll loop is alive (control/app/botmain.py HEARTBEAT_PATH) and calls it stale once it
