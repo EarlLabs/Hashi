@@ -30,7 +30,7 @@ WHY:  M3, and then M16 — the same failure asked twice, because the first answe
       lookup left by the leaf" are discriminating claims and not properties of the
       topology.
 HOW:  two networks the scenario creates and destroys. The hop runs over the first, whose
-      subnet is docker's own choice so that nothing on the host can collide; the
+      subnet comes from docker's own pool so that it misses what the host already uses; the
       destination, the resolver and the user sit on the second, which BOTH nodes can
       reach and which is addressed in ``THE_INTERNET`` — reserved, and globally routable,
       because since M23's tenth round a user's proxy refuses what is not. The exit
@@ -364,8 +364,8 @@ class Fleet:
         """Create one network and report the subnet it ended up with.
 
         Docker picks it from its own free pool unless a subnet is named, which means a
-        network created here cannot collide with one that already exists on the machine,
-        and no address range has to be written down.
+        network created here misses the ranges in use when it asked, and no address range
+        has to be written down.
 
         ``subnet`` is named for exactly one of the two networks below — see
         ``THE_INTERNET``, and read its reasoning before removing the argument. The cost of
@@ -377,7 +377,8 @@ class Fleet:
         fixed with ``--ip``, and engine 28.0.4 refuses ``--ip`` on a network that did not
         name its subnet (29.7.2 accepts it, which is how this stayed unseen on a laptop).
         ``free_subnet`` keeps the pool's choice while naming it; writing a range down here
-        instead was rejected, because that is the collision the pool exists to avoid.
+        instead was rejected, because that is the collision the pool exists to avoid. A
+        range something else takes between the probe and this create fails here loudly.
         """
         name = f"hashi-m5-{purpose}-{self.tag}"
         chosen = subnet or self.free_subnet(purpose)
