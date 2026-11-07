@@ -12,7 +12,7 @@
 #       M28.7 found that in `scripts/backup.sh`, where the output of a failed run is what
 #       cron mails — one stray quote put the master key in a mail spool, six times a day,
 #       for as long as the file stayed wrong. M28.8 found the same complaint reaching the
-#       terminal from `scripts/panel-bootstrap.sh`, whose `compose up -d --build` output is
+#       terminal from `scripts/panel-bootstrap.sh`, whose compose build and `up -d` output is
 #       printed as it comes. That one is not cron's mail; it is worse in a different way,
 #       because the output of a failed INSTALL is exactly what somebody pastes into a chat
 #       window when asking why their install did not work.

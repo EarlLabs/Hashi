@@ -30,7 +30,7 @@ WHY:  M3, and then M16 — the same failure asked twice, because the first answe
       lookup left by the leaf" are discriminating claims and not properties of the
       topology.
 HOW:  two networks the scenario creates and destroys. The hop runs over the first, whose
-      subnet is docker's own choice so that nothing on the host can collide; the
+      subnet comes from docker's own pool so that it misses what the host already uses; the
       destination, the resolver and the user sit on the second, which BOTH nodes can
       reach and which is addressed in ``THE_INTERNET`` — reserved, and globally routable,
       because since M23's tenth round a user's proxy refuses what is not. The exit
@@ -337,28 +337,54 @@ class Fleet:
         self.containers: list[str] = []
         self.networks: list[str] = []
 
+    def free_subnet(self, purpose: str) -> str:
+        """Ask docker's pool for a free range: create a network, read it, give it back.
+
+        The probe is removed in a ``finally`` and never joins ``self.networks``, so a
+        failed read cannot leave it holding the range the real network is about to ask for.
+        """
+        probe = f"hashi-m5-{purpose}-probe-{self.tag}"
+        created = run(["docker", "network", "create", probe])
+        assert created.returncode == 0, (
+            f"docker's pool has no free range for the {purpose} network:\n"
+            f"{created.stderr.strip()}"
+        )
+        try:
+            reported = run(
+                ["docker", "network", "inspect", "-f", "{{(index .IPAM.Config 0).Subnet}}", probe]
+            )
+            assert reported.returncode == 0, reported.stderr
+            return reported.stdout.strip()
+        finally:
+            run(["docker", "network", "rm", probe], timeout=120)
+
     def network(
         self, purpose: str, subnet: str | None = None
     ) -> tuple[str, ipaddress.IPv4Network]:
         """Create one network and report the subnet it ended up with.
 
         Docker picks it from its own free pool unless a subnet is named, which means a
-        network created here cannot collide with one that already exists on the machine,
-        and no address range has to be written down.
+        network created here misses the ranges in use when it asked, and no address range
+        has to be written down.
 
         ``subnet`` is named for exactly one of the two networks below — see
         ``THE_INTERNET``, and read its reasoning before removing the argument. The cost of
         naming one is real and is accepted rather than unnoticed: two runs of this file at
         the same time would both ask for that range and the second would fail here, loudly
         and with docker's own message, instead of quietly sharing a bridge.
+
+        ``--subnet`` is passed either way, because every address on these networks is
+        fixed with ``--ip``, and engine 28.0.4 refuses ``--ip`` on a network that did not
+        name its subnet (29.7.2 accepts it, which is how this stayed unseen on a laptop).
+        ``free_subnet`` keeps the pool's choice while naming it; writing a range down here
+        instead was rejected, because that is the collision the pool exists to avoid. A
+        range something else takes between the probe and this create fails here loudly.
         """
         name = f"hashi-m5-{purpose}-{self.tag}"
-        created = run(
-            ["docker", "network", "create", *(["--subnet", subnet] if subnet else []), name]
-        )
-        where = subnet or "the pool docker chooses from"
+        chosen = subnet or self.free_subnet(purpose)
+        created = run(["docker", "network", "create", "--subnet", chosen, name])
         assert created.returncode == 0, (
-            f"could not create the {purpose} network on {where}:\n"
+            f"could not create the {purpose} network on {chosen}:\n"
             f"{created.stderr.strip()}\nA named range is in use by something else on this "
             "machine — another run of this scenario, or a route that already exists."
         )
@@ -672,6 +698,38 @@ def test_a_hop_that_is_down_takes_the_exit_with_it(measured) -> None:
     assert measured["after_the_hop_returns"] == addresses["leaf_internet"], (
         "the exit did not come back when the leaf did, so a hop outage is permanent "
         "until somebody re-applies"
+    )
+
+
+def test_a_network_given_fixed_addresses_names_its_subnet(monkeypatch) -> None:
+    """Every network this scenario addresses by hand is created with ``--subnet``.
+
+    Asserted on the command rather than by starting a container, because an engine that
+    accepts ``--ip`` without one passes the fixture and proves nothing: this has to fail on
+    a laptop as well as on the engine that refuses it. The doubled ``docker`` is the point,
+    so no docker is needed and the scenario runs everywhere.
+    """
+    issued: list[list[str]] = []
+
+    def docker(arguments: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
+        issued.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, stdout="198.18.7.0/24\n", stderr="")
+
+    monkeypatch.setitem(globals(), "run", docker)
+    fleet = Fleet()
+
+    fleet.network("transit")
+    fleet.network("internet", THE_INTERNET)
+
+    made = [command for command in issued if command[:3] == ["docker", "network", "create"]]
+    kept = [command for command in made if "probe" not in command[-1]]
+    assert len(kept) == 2, f"expected the two networks the fleet keeps, saw {made}"
+    assert all("--subnet" in command for command in kept), (
+        f"a network that takes --ip was created without naming its subnet: {kept}"
+    )
+    probes = [command[-1] for command in issued if command[:3] == ["docker", "network", "rm"]]
+    assert probes == [command[-1] for command in made if "probe" in command[-1]], (
+        "a probe network was left holding the range it was created to find"
     )
 
 

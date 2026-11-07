@@ -78,7 +78,7 @@ fail() { printf 'panel-bootstrap: %s\n' "$1" >&2; exit 1; }
 #
 # This is M28.7's gate, and it is here because this script had the same leak one script
 # over: when compose cannot parse an env file it quotes the offending line's whole value
-# back, and section 2 below prints `compose up -d --build`'s output as it comes. So one
+# back, and section 2 below prints compose's build and `up -d` output as it comes. So one
 # unclosed quote on the HASHI_SECRET_KEY line put the master key on the terminal of a
 # failed install — which is the output somebody pastes into a chat window when asking why
 # their install did not work. Reproduced live, not reasoned about (M28.8).
@@ -445,13 +445,21 @@ fi
 # publishes ports, and a panel host must not publish its database to the internet
 # because someone copied a command from a laptop.
 #
-# `up -d --build` converges. It is the whole of property 1: run twice and the second run
-# recreates nothing, because compose compares the desired state with the running one.
+# A build, then `up -d`: that pair converges. It is the whole of property 1: run twice and
+# the second run recreates nothing, because compose compares the desired state with the
+# running one.
 # Note what is NOT here — no `down`, no `rm`, no `volume rm`, no `alembic` — because each
 # would make a second run destructive. Migrations run inside the container's own
 # entrypoint, which is also what makes them idempotent.
 #
-# BUILDX_NO_DEFAULT_ATTESTATIONS is what makes that true, and without it property 1 was
+# TWO STEPS RATHER THAN `up -d --build`, because the single call left property 1 false.
+# Measured on engine 28.0.4 with compose 2.38.2 (2026-11-07): a container created from an
+# image built in the same call had no `com.docker.compose.image` label, the next run read
+# the missing label as an outdated image, and `control` and `caddy` were recreated once
+# although both image IDs were identical. With the image already present when `up` runs,
+# the first containers carry the label, and three runs left the same three containers.
+#
+# BUILDX_NO_DEFAULT_ATTESTATIONS is the other half of that, and without it property 1 was
 # simply false. BuildKit attaches a provenance attestation to every image it exports, and
 # that attestation records when the build ran — so a FULLY CACHED rebuild still produces a
 # manifest with a new digest, which is the image ID compose compares against the running
@@ -470,7 +478,7 @@ mkdir -p "${REPO_ROOT}/backups/state"
 #
 # "A second run is safe" is true of the data and false of the publication. Every refusal
 # above ends with it, and the restore command repeats it — and on a host that is already
-# serving, `up -d --build` with the BASE file converges the stack to the base file's
+# serving, `up -d` with the BASE file converges the stack to the base file's
 # shape, which publishes nothing. So 80, 443 and the console go away, and the operator who
 # re-ran the command they were told was safe loses the panel and the delivery endpoint at
 # once. The only warning was in the runbook under a heading they had no reason to open,
@@ -527,7 +535,7 @@ say "building and starting the stack (this is the slow part on a fresh host)"
 # So the verification step below is the single place that decides whether this run
 # succeeded. That is also the charter's requirement stated exactly: success is what the
 # running control plane answers, not what an orchestrator's exit code says.
-if ! BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${COMPOSE[@]}" up -d --build; then
+if ! { BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${COMPOSE[@]}" build && "${COMPOSE[@]}" up -d; }; then
   say "compose reported a problem — continuing to the verification step, which is what
   decides whether this run succeeded"
 fi

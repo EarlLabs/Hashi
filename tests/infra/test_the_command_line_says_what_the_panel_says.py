@@ -523,9 +523,9 @@ def test_the_bootstrap_says_a_second_run_unpublishes_before_it_does_it(
     assert "ps --format json" in bootstrap, "nothing asks what this host publishes today"
     assert "PublishedPort" in bootstrap
     detect = bootstrap.index('PUBLISHED_BEFORE="no"')
-    # The command itself, not the paragraph explaining it: `up -d --build` is discussed in
-    # a comment long before it is run.
-    converge = bootstrap.index("BUILDX_NO_DEFAULT_ATTESTATIONS=1 \"${COMPOSE[@]}\" up -d")
+    # The command itself, not the paragraph explaining it: `up -d` is discussed in a
+    # comment long before it is run.
+    converge = bootstrap.index("BUILDX_NO_DEFAULT_ATTESTATIONS=1 \"${COMPOSE[@]}\" build")
     assert detect < converge, (
         "the publication is measured after the converge that takes it away"
     )
@@ -786,7 +786,7 @@ def test_a_compose_that_cannot_be_asked_says_so_rather_than_going_quiet(
         "a compose that cannot answer is read as a host that publishes nothing"
     )
     detect = bootstrap.index('PUBLISHED_BEFORE="no"')
-    converge = bootstrap.index('BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${COMPOSE[@]}" up -d')
+    converge = bootstrap.index('BUILDX_NO_DEFAULT_ATTESTATIONS=1 "${COMPOSE[@]}" build')
     before = bootstrap[detect:converge]
     assert "|| true" not in before, (
         "the failure is swallowed again, so the three answers collapse back into two"
