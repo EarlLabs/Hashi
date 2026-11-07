@@ -146,7 +146,7 @@ def test_an_unchanged_tunnel_lets_the_bootstrap_run_to_the_end(host) -> None:
     before = conf.read_bytes()
     result = bootstrap(directory, environment, "51821")
     assert result.returncode == 0, result.stderr
-    assert any(" up -d --build" in line for line in stack_commands(log))
+    assert any(line.endswith(" up -d") for line in stack_commands(log))
     assert conf.read_bytes() == before
     assert "PrivateKey" not in result.stdout
 

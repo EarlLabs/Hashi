@@ -274,7 +274,7 @@ def test_it_refuses_an_env_file_compose_cannot_parse_before_it_prints_anything(
 
     When ``docker compose`` cannot PARSE an env file it quotes the offending line's whole
     value straight back — ``failed to read <path>: line N: unterminated quoted value
-    "<the value>"``. Section 2 of this script prints ``compose up -d --build``'s output as
+    "<the value>"``. Section 2 of this script prints compose's build and ``up -d`` output as
     it comes, and the failure path then prints ``compose ps``, so one unclosed quote on the
     ``HASHI_SECRET_KEY`` line put the master key on the terminal TWICE and then waited
     three minutes. Reproduced live against this script before it was fixed.
@@ -424,12 +424,34 @@ def test_a_second_run_does_not_rebuild_its_way_into_recreating_containers(script
     Asserted on the build command rather than on the whole file, because exporting the
     variable would also change how anything else in the run behaves.
     """
-    build = re.search(r"^\s*if ! ([^\n]*up -d --build)", script, re.M)
-    assert build, "the script no longer brings the stack up with a single converging build"
+    build = re.search(r'^\s*if ! \{ ([^\n]*"\$\{COMPOSE\[@\]\}" build) && ', script, re.M)
+    assert build, "the script no longer builds the stack before it brings it up"
     assert "BUILDX_NO_DEFAULT_ATTESTATIONS=1" in build.group(1), (
         "the build does not disable BuildKit's default attestations, so every run exports "
         "a new image ID and compose recreates every built container — which makes the "
         "IDEMPOTENT property in this script's own header untrue"
+    )
+
+
+def test_the_images_exist_before_compose_creates_a_container(script: str) -> None:
+    """The first run has to leave the state the second run compares against.
+
+    Measured on engine 28.0.4 with compose 2.38.2: ``up -d --build`` gave a container
+    built in the same call no ``com.docker.compose.image`` label, so the next run read the
+    missing label as an outdated image and recreated ``control`` and ``caddy`` once, with
+    identical image IDs. That is what the end-to-end idempotence scenario caught on CI.
+
+    Asserted on the command as well because that scenario can only fail on a compose that
+    behaves this way, and this one fails on every host in the static tier.
+    """
+    command = re.search(r"^\s*if ! \{ ([^\n]*); \}; then$", script, re.M)
+    assert command, "the stack is no longer built and started by one guarded command"
+    built, started = command.group(1).split(" && ")
+    assert built.endswith('"${COMPOSE[@]}" build'), (
+        f"the first step does not build the images: {built!r}"
+    )
+    assert started == '"${COMPOSE[@]}" up -d', (
+        f"the second step must start what was built and build nothing itself: {started!r}"
     )
 
 
