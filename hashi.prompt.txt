@@ -1,0 +1,9 @@
+Generated with the built-in image_gen tool; opaque background.
+
+Use case: logo-brand
+Asset type: square project label image for Hashi, a private networking project.
+Primary request: Create a minimal Japanese calligraphy label that belongs to the same visual family as the existing Kaizen label: solid black calligraphy on a perfectly plain white square.
+Subject and exact text: one large Japanese kanji, "橋" (Hashi, bridge), correctly written with all components and strokes legible. This single character is the entire image content.
+Style/medium: elegant traditional Japanese brush calligraphy with bold smooth solid-black strokes, nuanced thick-to-thin transitions, tapered ends, clean edges, and the controlled appearance of a classic calligraphic typeface. Match the restrained, untextured black-on-white character of a Japanese dictionary-style calligraphy label.
+Composition/framing: square canvas, character optically centered horizontally and vertically, occupying roughly 60 percent of the canvas height and width with generous balanced white margins. Clear legibility at project thumbnail size.
+Constraints: only the character 橋 on pure white. No Latin letters, no additional Japanese characters, no stamp, no frame, no illustrations, no bridge drawing, no gradients, no shadow, no texture, no watermark. Opaque white background.
