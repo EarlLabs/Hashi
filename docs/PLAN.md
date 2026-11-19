@@ -3817,6 +3817,138 @@ command to get there.
 
 ---
 
+## → M41 — A user is a person who owns configs, and how many configs is a limit the owner sets · asked for by the owner 2026-11-20 · PROPOSED
+
+**Why.** Today a "user" row is one *device*: one subscription token, one credential per
+node transport, one AmneziaWG address. So the owner's own devices are four unrelated
+users (`earl-comp`, `earl-ipad`, `earl-iphone`, `earl-macbook`), Adel is two, and the
+owner's mother is three. Nothing in the product knows these belong to one person, so
+nothing can say "this person has four devices" or "nobody gets more than three". The
+owner wants the model to say what is true: **a user is a person; a person owns configs;
+a config is what one device imports.** Adding access is then one of two different acts —
+a new person (add a user) or another device for someone already here (add a config to
+that user).
+
+The owner also wants a ceiling on configs that can be set at three levels — **one user, a
+group of users, everyone** — and is unlimited until set. A limit may never be set below
+what a covered user already holds (the owner deletes configs first); deleting a config is
+always allowed.
+
+**What must not change.** Every device that works today keeps working with **nothing
+re-imported**: the migration moves each existing subscription token and every credential
+onto a config unchanged. That is the charter's "users never re-add anything", and it is
+the one property this milestone can break silently, so it is tested by name below. The
+charter's minimal record also holds: a user is a nickname, a config is a short label —
+no names, no emails, no phone numbers.
+
+**Proposed model** (decisions marked ◆ are the owner's to confirm at the plan gate):
+
+| entity | holds |
+|---|---|
+| `users` — a person | nickname (unique), optional `max_configs`, optional group, revoked_at |
+| `configs` — a device | user, label (unique within the user), revoked_at; owns the **subscription token**, the **credentials** and the **tunnel addresses** that today hang off the user |
+| `user_groups` | name (unique), optional `max_configs` |
+| fleet setting | optional global `max_configs` |
+
+- ◆ **A user is in at most one group.** Several groups would need a rule for which group's
+  limit wins; one group per user needs none.
+- ◆ **The most specific limit wins: user, then group, then global, else unlimited.** A user
+  with their own limit is not governed by the group's or the global one.
+- ◆ **"Cannot be set below current" means:** setting a limit `L` at any level is refused
+  when any user that limit would govern holds more than `L` live configs; the refusal
+  names those users and their counts, so the owner knows which configs to delete first.
+  Lowering a limit never deletes anything by itself.
+- ◆ **Existing rows migrate one-to-one** (each current user becomes a user with one config
+  of the same name), and the owner then regroups them with **Move config to user** —
+  e.g. the four `earl-*` configs under one user `earl`. Moving changes no token and no
+  credential.
+- ◆ **The bot:** `/adduser <name>` keeps its meaning (a new person with their first config);
+  a new `/addconfig <user> <label>` adds a device to someone existing. Deleting a config
+  stays on the panel only — a typo in a chat should not be able to cut someone off.
+- `bot-egress` (M40) is an ordinary user with one config and no limit set; nothing special.
+
+**Size.** Comparable to M29 (13 steps, about a day and a half of pipeline time): this is a
+data-model change under every surface — migration, services, panel, API, bot, docs — plus
+new behaviour on top. Estimate 2–3 days of pipeline time. The risky part is not the code
+but the migration on the real database; M41.1 is therefore proved on a restored copy of
+production (the M28 restore procedure) before it runs on the host.
+
+### M41.1 — (control) The model and the migration: configs carry what users carried
+New tables `configs` and `user_groups`, the fleet setting, and Alembic migration `0012`:
+every current user gets one config labelled with their nickname, and that config takes
+over the user's subscription row, credentials and tunnel addresses — same token, same keys,
+same address. Downgrade folds them back. Proved on a restored copy of production: every
+existing subscription URL returns the same body before and after.
+
+### M41.2 — (control) Services: add a user, add a config, delete a config, move a config
+Onboarding, grant, revocation, delivery, address pools and `console.links_for` work per
+config. Adding a config grants it on every serving node and applies them (the M32
+behaviour, per config). Deleting a config revokes exactly that device on every node and
+leaves the user's other configs untouched; revoking a user revokes all their configs. Each
+act is audited.
+
+### M41.3 — (control) Limits at three levels, with the refusal that names who is over
+Set and clear a limit on a user, a group, and the fleet; group membership; the
+effective-limit rule; adding a config past the effective limit is refused with the number
+and the level it came from; setting a limit below a governed user's live count is refused
+naming each such user.
+
+### M41.4 — (control) The panel: users with their configs, groups, limits
+The Users screen lists people with their configs nested under each; **Add user** (nickname
++ first config label), **Add config** on a user, **Delete config**, **Move config to user**;
+a limit field on the user; a Groups screen (create, rename, set limit, assign users); the
+global limit in fleet settings. Every refusal from M41.3 reads as a sentence on the screen,
+not a status code.
+
+### M41.5 — (control) The operator API and the bot follow the same model
+`/api/users` returns people with configs; endpoints to add, delete and move a config, and to
+set limits and groups. The bot gains `/addconfig <user> <label>`; `/adduser` creates a person
+with their first config; both answer a limit refusal in the same words as the panel.
+
+### M41.6 — (control/infra) End-to-end scenarios on the stand
+New scenarios under `tests/e2e/control/` (named below), and the existing user scenarios
+re-pointed at the new model.
+
+### M41.7 — (docs) Runbook and glossary
+The runbook's user sections describe users and configs, the limits, and how to regroup the
+migrated rows; the glossary says *user* = person, *config* = device.
+
+**E2E:** `test_existing_subscription_urls_survive_the_migration`,
+`test_a_config_added_to_a_user_reaches_every_serving_node`,
+`test_deleting_a_config_leaves_the_users_other_configs_working`,
+`test_a_limit_below_a_users_live_configs_is_refused_and_names_them`,
+`test_the_most_specific_limit_governs`, plus the existing add/revoke scenarios re-pointed —
+all green under `make verify`.
+
+**Done when**
+- Every device that worked before the upgrade works after it with nothing re-imported: the
+  subscription URL it holds returns the same routes.
+- The owner can put `earl-comp`, `earl-ipad`, `earl-iphone` and `earl-macbook` under one user
+  `earl` without any of those devices noticing.
+- Adding a config to an existing user hands over that device's links and reaches every
+  serving node by itself, as adding a user does today.
+- Deleting one config cuts off exactly that device; the same user's other devices keep
+  working.
+- With no limit set anywhere, a user can hold any number of configs.
+- A limit can be set on one user, on a group, and on everyone; the most specific one
+  governs; adding a config past it is refused with a sentence saying which limit and where
+  it was set.
+- Setting a limit below what a governed user already holds is refused, and the refusal
+  names each such user and how many configs they hold.
+- The panel, the API and the bot agree: each refuses the same things in the same words.
+- No user or config record holds anything but a nickname, a label and the credentials.
+
+acceptance: yes
+The owner opens the panel after the upgrade and sees every existing row as a user with one
+config. They create user `earl` and move their four devices under it; their phone and Mac
+keep working throughout. They add a config `earl-laptop` to `earl` and import its link on
+another device; it connects. They set `earl`'s limit to 3 and are told `earl` holds 5; they
+delete `earl-laptop` and an old config, then set 3 and it is accepted. They create group
+`family` with limit 2, put `mom` in it (3 configs) and are refused; they delete one of mom's
+configs and it is accepted. They set a global limit of 4 and try to add a fifth config to
+`adel`; it is refused naming the global limit. From Telegram they `/addconfig adel adel-ipad`
+and receive the links.
+
 ## ✅ M40 — The bot's traffic to Telegram leaves through a hashi leaf · asked for by the owner 2026-11-04 · built 2026-11-05 on `task/M40` · done 2026-11-05 (acceptance: good, partial — the stand proves the bot reaches the fake Telegram through the leaf, the DB stays direct, and it fails closed; the real crossing from Russia is the owner's field check). Egress is MANDATORY in the `telegram-bot` profile; control-plane minting of the egress peer is DEFERRED to a future milestone (operator supplies `deploy/egress/awg0.conf` by hand for now).
 
 **Why.** The bot container (M39) runs on the Russian control-plane host, where `api.telegram.org` is blocked (field, 2026-11-04). For it to work its outbound traffic must leave through a leaf abroad over an obfuscated transport, the way a user's does. This is the one piece no stand can prove carries — a real leaf on a real Russian network is the owner's field check.
